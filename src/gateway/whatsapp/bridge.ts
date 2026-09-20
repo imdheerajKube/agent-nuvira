@@ -21,9 +21,13 @@ export interface WhatsAppBridge {
   /**
    * Connect + start listening. Calls onMessage for every inbound text.
    * `participant` is the real sender inside a group (`key.participant`),
-   * undefined for DMs (the sender IS the fromJid).
+   * undefined for DMs (the sender IS the fromJid). `messageId` is WhatsApp's
+   * `key.id` — the gateway dedups on it so the bridge's offline-backfill
+   * replay is handled once instead of once per reconnect.
    */
-  connect(onMessage: (fromJid: string, text: string, participant?: string) => void): Promise<void>;
+  connect(
+    onMessage: (fromJid: string, text: string, participant?: string, messageId?: string) => void,
+  ): Promise<void>;
   /** Stop listening + disconnect (idempotent). */
   disconnect(): Promise<void>;
   /** Send a text message to a WhatsApp target (JID or E.164 / plain number). */

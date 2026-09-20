@@ -190,6 +190,8 @@ export interface HubData {
             chat: number;
             help: number;
             refused: number;
+            /** Re-deliveries recognised by the dedup ledger and not re-run. */
+            duplicate: number;
             recent: HubInboxEntry[];
         };
     };

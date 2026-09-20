@@ -146,7 +146,17 @@ describe('readHubData', () => {
     expect(hub.channels.delivery.recent).toEqual([]);
     expect(Array.isArray(hub.channels.aliases)).toBe(true);
     // P2 — inbound inbox is part of the hub channels payload (empty by default).
-    expect(hub.channels.inbox).toEqual({ total: 0, pipeline: 0, chat: 0, help: 0, refused: 0, recent: [] });
+    // `duplicate` counts re-deliveries the dedup ledger recognised and did NOT
+    // re-run, so an operator can see the bridge replay instead of guessing.
+    expect(hub.channels.inbox).toEqual({
+      total: 0,
+      pipeline: 0,
+      chat: 0,
+      help: 0,
+      refused: 0,
+      duplicate: 0,
+      recent: [],
+    });
     // P1 — per-platform policies ride along (empty by default).
     expect(hub.channels.policies.whatsapp).toEqual({});
     expect(hub.channels.policies.email).toEqual({});

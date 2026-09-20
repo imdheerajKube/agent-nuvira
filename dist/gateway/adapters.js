@@ -334,7 +334,7 @@ export class WhatsAppBridgeAdapter {
     }
     async start(onMessage) {
         this.handler = onMessage;
-        await this.bridge.connect((fromJid, text, participant) => {
+        await this.bridge.connect((fromJid, text, participant, messageId) => {
             // `||` (not `??`): Baileys 7 can deliver participant as an EMPTY string
             // for DMs — an empty string is not nullish, so `??` would blank the
             // sender id and the policy gate would refuse every sender.
@@ -347,6 +347,9 @@ export class WhatsAppBridgeAdapter {
                 // P1: the real author inside a group (participant) vs the chat itself.
                 senderId: sender,
                 isGroup: fromJid.endsWith('@g.us'),
+                // Idempotency: WhatsApp's `key.id` is stable across re-deliveries, so
+                // the gateway collapses the bridge's offline backfill into one turn.
+                messageId,
             });
         });
     }

@@ -12,7 +12,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths';
+import { envBuff, resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -59,9 +59,25 @@ interface HistoryData {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const MEMORY_DIR = join(resolveNuviraHome(), 'memory');
-const HISTORY_PATH = join(MEMORY_DIR, 'history.json');
 const CURRENT_VERSION = 1;
+
+/**
+ * Chat-history store location.
+ *
+ * Resolved LAZILY, never captured at module load, and through the standard
+ * `NUVIRA_MEMORY_DIR` override — the same convention every other persisted
+ * store in `learning/` and `memory/` follows. As module-load constants these
+ * ignored the override entirely, so a hermetic run (test, sandbox, isolated
+ * profile) still wrote its session history into the real
+ * `~/.nuvira/memory/history.json`.
+ */
+function memoryDir(): string {
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
+}
+
+function historyPath(): string {
+  return join(memoryDir(), 'history.json');
+}
 
 /** Default retention period in days */
 const DEFAULT_RETENTION_DAYS = 30;
@@ -72,18 +88,20 @@ const MAX_SESSIONS = 500;
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function ensureDir(): void {
-  if (!existsSync(MEMORY_DIR)) {
-    mkdirSync(MEMORY_DIR, { recursive: true });
+  const dir = memoryDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
 }
 
 function readHistory(): HistoryData {
   try {
     ensureDir();
-    if (!existsSync(HISTORY_PATH)) {
+    const path = historyPath();
+    if (!existsSync(path)) {
       return { sessions: {}, version: CURRENT_VERSION };
     }
-    const raw = readFileSync(HISTORY_PATH, 'utf-8');
+    const raw = readFileSync(path, 'utf-8');
     return JSON.parse(raw) as HistoryData;
   } catch {
     return { sessions: {}, version: CURRENT_VERSION };
@@ -92,7 +110,7 @@ function readHistory(): HistoryData {
 
 function writeHistory(data: HistoryData): void {
   ensureDir();
-  writeFileSync(HISTORY_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  writeFileSync(historyPath(), JSON.stringify(data, null, 2), 'utf-8');
 }
 
 function generateSessionId(): string {

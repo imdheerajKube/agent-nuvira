@@ -26,8 +26,8 @@
  *   - Tools: ctx.callLLM is already resilient (inherited from orchestrator)
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { resolveNuviraConfigDir, resolveNuviraDataPath } from '../config/paths.js';
 import { getAutoRouter } from './auto-router.js';
 import { analyzeComplexity } from './hybrid-router.js';
 import { buildAutoResolveOptions } from './resolve-options.js';
@@ -37,6 +37,7 @@ import { resolveWorkingModel } from '../inference/model-validator.js';
 import { getDefaultModel } from '../inference/provider-catalog.js';
 import { getModelRegistry } from './model-registry.js';
 import { recordActionFailure } from './failure-bookkeeping.js';
+import { sweepTransientFailures } from './provider-revival.js';
 import { getProviderFallback, recordRegistrySuccess } from './provider-fallback.js';
 import { ProviderFactory } from '../inference/factory.js';
 import { recordRoutingDecision } from './routing-history.js';
@@ -90,7 +91,11 @@ function exclusionDuration(kind) {
 }
 function loadPersistedFailures() {
     try {
-        const path = join(homedir(), '.nuvira', FAILURE_PERSIST_PATH);
+        // Resolved through the active config dir (`$NUVIRA_CONFIG_DIR` aware) — a
+        // hardcoded `~/.nuvira` here made an isolated process inherit (and mutate)
+        // the real profile's exclusions, so a cooldown earned by a live run
+        // silently suppressed models inside tests and sandboxes.
+        const path = resolveNuviraDataPath(FAILURE_PERSIST_PATH);
         if (!existsSync(path))
             return {};
         const raw = readFileSync(path, 'utf-8');
@@ -115,7 +120,7 @@ function loadPersistedFailures() {
  */
 function persistFailure(provider, kind, model) {
     try {
-        const dir = join(homedir(), '.nuvira');
+        const dir = resolveNuviraConfigDir();
         if (!existsSync(dir))
             mkdirSync(dir, { recursive: true });
         const path = join(dir, FAILURE_PERSIST_PATH);
@@ -166,6 +171,13 @@ export function createResilientCallLLM(configManager, options) {
         currentModel: '',
         exhausted: false,
     };
+    // Providers excluded by a TRANSIENT failure (server/network/timeout) during
+    // this session. Tracked separately from `state.sessionFailed` because a
+    // transient exclusion is PROVISIONAL: it is only upheld until a spot-check
+    // proves the provider is still down. The state previously allocated this
+    // marker for bookkeeping and never read it, so a provider that recovered kept
+    // being skipped for the entire task.
+    const transientProviders = new Set();
     // Load cross-pipeline failures
     const persistedFailures = options.crossPipelineMemory !== false ? loadPersistedFailures() : {};
     // Initial routing decision
@@ -194,6 +206,30 @@ export function createResilientCallLLM(configManager, options) {
     const callLLM = async (prompt, inferenceOptions) => {
         if (state.exhausted) {
             throw new Error(`All LLM providers exhausted. No more candidates available for: ${options.task.description}`);
+        }
+        // ── Re-verify before re-admit ──────────────────────────────────────────
+        // Before choosing a candidate, give any provider excluded by a TRANSIENT
+        // failure the one-more-round the state always intended: a 1-token
+        // spot-check. Verified → back in the pool for THIS call; still down → its
+        // exclusion is re-armed. Best-effort and bounded (the sweep stops at 3
+        // probes and skips still-active exclusions without a network call).
+        try {
+            await sweepTransientFailures({
+                transientProviders: () => transientProviders,
+                isExclusionActive: (provider, now) => expiryAt(state.sessionFailed.get(provider)) > now,
+                clearProvider: (provider) => {
+                    transientProviders.delete(provider);
+                    state.sessionFailed.delete(provider);
+                },
+                reArmProvider: (provider, until) => {
+                    state.sessionFailed.set(provider, { expiresAt: until, kind: 'unknown' });
+                    transientProviders.add(provider);
+                },
+                resolveProbeModel: (provider) => autoRouter.resolveModel(provider, options.task.agentType, configManager),
+            }, configManager, { agentType: options.task.agentType });
+        }
+        catch {
+            // Best-effort — revival must never break the call.
         }
         // Try current provider first, then walk all candidates
         const candidatesToTry = [
@@ -324,6 +360,15 @@ export function createResilientCallLLM(configManager, options) {
                         expiresAt: Date.now() + duration,
                         kind,
                     });
+                }
+                // TRANSIENT failures are PROVISIONAL: mark the provider as awaiting a
+                // spot-check so a later call re-verifies it instead of skipping it for
+                // the rest of the task. auth = the key is dead (never revives on its
+                // own), rate-limit = the provider's own reset window governs, and
+                // model-not-found is definitive for that model — none of those are
+                // helped by a probe, so they are deliberately NOT marked.
+                if (kind === 'network' || kind === 'timeout' || kind === 'unknown') {
+                    transientProviders.add(candidate.provider);
                 }
                 // Persist for cross-pipeline memory
                 if (options.crossPipelineMemory !== false) {

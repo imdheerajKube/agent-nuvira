@@ -117,3 +117,52 @@ describe('resolveProvider with provider "auto"', () => {
     expect(provider.name).toBeTruthy();
   });
 });
+
+/**
+ * Catalog providers and the no-substitution rule.
+ *
+ * Live defect (gateway probe): a failover candidate of `bedrock` — a CATALOG id
+ * with no dedicated adapter — skipped the built-in branch, was not a plugin and
+ * was not 'auto', so it hit the final "unknown provider" path, which returned
+ * the DEFAULT provider's adapter while callers kept using `bedrock` as the
+ * provider TYPE. The adapter's real model list was then attributed to bedrock:
+ *
+ *   "model 'anthropic.claude-3-5-sonnet-20241022-v1:0' is not available on
+ *    'bedrock' — using 'qwen2.5:0.5b'"   ← a LOCAL Ollama model
+ *
+ * Fix: catalog ids are resolved THROUGH the factory under their own identity;
+ * a genuinely unconstructible id throws instead of masquerading as another
+ * provider.
+ */
+describe('resolveProvider with a catalog provider', () => {
+  it('resolves a catalog provider AS ITSELF instead of substituting the default', () => {
+    // Guards against regressing to the old behavior: type must be the id that
+    // was asked for, not the configured default (openrouter here).
+    const cm = makeConfigManager({ defaultProvider: 'openrouter', providers: { bedrock: { model: 'default' } } });
+
+    const { type, provider } = resolveProvider(cm, 'bedrock');
+
+    expect(type).toBe('bedrock');
+    expect(type).not.toBe('openrouter');
+    expect(provider.name).toBeTruthy();
+  });
+
+  it('resolves another catalog provider (xai) under its own identity', () => {
+    const cm = makeConfigManager({ defaultProvider: 'groq' });
+    const { type } = resolveProvider(cm, 'xai');
+    expect(type).toBe('xai');
+  });
+
+  it('THROWS for a genuinely unconstructible provider rather than substituting', () => {
+    const cm = makeConfigManager({ defaultProvider: 'groq' });
+    expect(() => resolveProvider(cm, 'definitely-not-a-provider')).toThrow(
+      /not available in this build|no adapter/i,
+    );
+  });
+
+  it('keeps resolving built-ins unchanged', () => {
+    const cm = makeConfigManager({ defaultProvider: 'auto', creds: ['groq'] });
+    expect(resolveProvider(cm, 'local').type).toBe('local');
+    expect(resolveProvider(cm, 'groq').type).toBe('groq');
+  });
+});

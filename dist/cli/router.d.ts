@@ -1,10 +1,21 @@
-import { Command } from 'commander';
+/**
+ * Provider resolution SERVICE.
+ *
+ * This module exists to be imported INWARD: it resolves a CLI `--provider`
+ * value (built-in id, catalog id, plugin id, or the `auto` directive) to a
+ * concrete `InferenceProvider`. It must never import a command module — the
+ * dispatcher that wires commands lives in `./cli-program.ts`, and the two used
+ * to share one file, which put 28 modules into a single static import cycle
+ * (every command imported this file for `resolveProvider`, while this file
+ * imported every command for `createCLI`).
+ *
+ * Layering rule: `cli-program.ts` and `index.ts` may depend on this file; this
+ * file depends only on config / inference / learning / plugins.
+ *
+ * Verified with `node scripts/check-import-cycles.mjs`.
+ */
 import { ConfigManager } from '../config/manager.js';
 import { InferenceProvider } from '../inference/interface.js';
-/**
- * Create and configure the CLI program
- */
-export declare function createCLI(): Command;
 /**
  * Resolve the inference provider from CLI options.
  *

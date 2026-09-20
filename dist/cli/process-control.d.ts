@@ -34,8 +34,18 @@ export interface StopResult {
     reason?: string;
 }
 /**
+ * EVERY pid whose command line matches `pattern` (not just the first), newest
+ * scan order. Needed to stop a SUPERVISED gateway, which is two processes: the
+ * `--supervise` parent and the child it spawned.
+ */
+export declare function findPidsByCommandLine(pattern: RegExp): number[];
+/**
  * Stop a running gateway: locate the `gateway start` process (command-line
  * match first, then the webhook receiver port, default 8787) and SIGTERM it.
+ *
+ * `--supervise` runs TWO processes (a parent that restarts the child), so every
+ * matching node process is stopped — the supervisor forwards SIGTERM to its
+ * child, and an orphaned child (supervisor already gone) is caught directly.
  */
 export declare function stopGateway(opts?: {
     port?: number;

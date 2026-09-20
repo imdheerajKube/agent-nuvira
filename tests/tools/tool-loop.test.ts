@@ -146,9 +146,33 @@ describe('tool loop — end-turn semantics', () => {
   it('is bounded by maxSteps — never an infinite loop', async () => {
     const endless: StepResponse = { content: '', toolCalls: [{ id: 'c1', name: 'verify_requirement', arguments: {} }] };
     const deps = mockDeps([endless], async () => 'result');
-    const result = await runToolLoop({ messages: [{ role: 'user', content: 'q' }], context: ctx, deps, maxSteps: 3 });
+    // Continuations disabled: the original hard bound is untouched.
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'q' }],
+      context: ctx,
+      deps,
+      maxSteps: 3,
+      maxContinuations: 0,
+    });
     expect(result.bounded).toBe(true);
     expect(result.steps).toBe(3);
+  });
+
+  it('is STILL bounded when auto-continuation is on — the hard cap is maxSteps + budget', async () => {
+    const endless: StepResponse = { content: '', toolCalls: [{ id: 'c1', name: 'verify_requirement', arguments: {} }] };
+    const deps = mockDeps([endless], async () => 'result');
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'q' }],
+      context: ctx,
+      deps,
+      maxSteps: 3,
+      maxContinuations: 2,
+      continuationSteps: 4,
+    });
+    expect(result.bounded).toBe(true);
+    // 3 initial + 2 x 4 extended — never unbounded.
+    expect(result.steps).toBe(11);
+    expect(result.continuations).toBe(2);
   });
 
   it('returns a graceful message when generation fails', async () => {
@@ -157,10 +181,41 @@ describe('tool loop — end-turn semantics', () => {
       messages: [{ role: 'user', content: 'q' }],
       context: ctx,
       deps: { callModel, executeTool: async () => 'x' },
+      // This pins the EXHAUSTED path — the pause between resume attempts is
+      // irrelevant here and would only slow the suite down.
+      continuationDelayMs: 0,
     });
     expect(result.content).toContain("couldn't complete");
     expect(result.bounded).toBe(false);
     // E3c: generationFailed signals the no-model fallback decision.
+    expect(result.generationFailed).toBe(true);
+  });
+
+  it('NEVER leaks the raw provider error into the delivered content (live 429 regression)', async () => {
+    // Live incident: a WhatsApp/dashboard sender received
+    //   I couldn't complete that request (Gemini streaming tool-calling API
+    //   error (429): {"error":{"code":429,"message":"You exceeded your
+    //   current quota…","details":[…"quotaValue":"16000"…]}}).
+    // The raw provider payload is for the log/trace only.
+    const raw =
+      'Gemini streaming tool-calling API error (429): {"error":{"code":429,' +
+      '"message":"You exceeded your current quota","status":"RESOURCE_EXHAUSTED",' +
+      '"details":[{"quotaValue":"16000"}]}}';
+    const callModel = vi.fn().mockRejectedValue(new Error(raw));
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'q' }],
+      context: ctx,
+      deps: { callModel, executeTool: async () => 'x' },
+      continuationDelayMs: 0,
+    });
+    // No provider wire text anywhere in what the user sees.
+    expect(result.content).not.toContain('429');
+    expect(result.content).not.toContain('RESOURCE_EXHAUSTED');
+    expect(result.content).not.toContain('quotaValue');
+    expect(result.content).not.toContain('{"error"');
+    expect(result.content).not.toContain('Gemini');
+    // It is a short human sentence, and the turn is still a FAILURE.
+    expect(result.content).toMatch(/rate limit|try again/i);
     expect(result.generationFailed).toBe(true);
   });
 
@@ -225,10 +280,10 @@ describe('tool loop — end-turn semantics', () => {
     expect(result.content).toBe('Done.');
   });
 
-  it('does NOT flag generationFailed when a tool already ran (never re-runs work)', async () => {
-    // Step 1: the model calls `build` (tool executes). Step 2: generation dies.
-    // The turn MADE PROGRESS — the caller must not fall back to re-running the
-    // pipeline (that would double-execute the build).
+  it('never re-runs a dispatched pipeline: a successful `build` ends the step', async () => {
+    // Step 1 calls `build` (endsAgentStep). The loop must NOT request step 2 —
+    // so the dying generator below is never even reached, and the caller can
+    // never fall back to re-running the pipeline (double-executing the build).
     const callModel = vi.fn();
     callModel
       .mockResolvedValueOnce({
@@ -239,11 +294,74 @@ describe('tool loop — end-turn semantics', () => {
     const result = await runToolLoop({
       messages: [{ role: 'user', content: 'create a module' }],
       context: ctx,
-      deps: { callModel, executeTool: async () => 'built' },
+      deps: { callModel, executeTool: async () => '✅ build succeeded' },
     });
     expect(result.toolCalls).toEqual(['build']);
-    expect(result.generationFailed).toBe(false);
+    expect(result.content).toBe('✅ build succeeded');
+    expect(result.generationFailed).toBeFalsy();
     expect(result.bounded).toBe(false);
+    expect(callModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT flag generationFailed when a NON-terminal tool already ran', async () => {
+    // Step 1: an ordinary tool runs (the loop continues). Step 2: generation
+    // dies — the turn RESUMES (bounded) rather than handing back a failure,
+    // and the completed search is never repeated.
+    const callModel = vi.fn();
+    callModel
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'code_search', arguments: { pattern: 'x' } }],
+      })
+      .mockRejectedValueOnce(new Error('API down'))
+      .mockResolvedValueOnce({ content: 'Found x in a.ts.', toolCalls: [] });
+    const executeTool = vi.fn(async () => 'search hits');
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'find x' }],
+      context: ctx,
+      deps: { callModel, executeTool },
+      continuationDelayMs: 0,
+    });
+    expect(result.toolCalls).toEqual(['code_search']);
+    expect(result.content).toBe('Found x in a.ts.');
+    expect(result.continuations).toBe(1);
+    // The resumed turn SUCCEEDED — no generation failure is signalled (the
+    // field is only set on the exhausted path; consumers use `?? false`).
+    expect(result.generationFailed).toBeFalsy();
+    expect(result.bounded).toBe(false);
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a malformed step response as a recoverable failure mid-turn, not a crash', async () => {
+    // Step 1 gathers (progress); step 2 returns junk; the resume recovers it.
+    const callModel = vi.fn();
+    callModel
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [{ id: 'c1', name: 'code_search', arguments: { pattern: 'x' } }],
+      })
+      .mockResolvedValueOnce(undefined as unknown as StepResponse)
+      .mockResolvedValueOnce({ content: 'Recovered fine.', toolCalls: [] });
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'q' }],
+      context: ctx,
+      deps: { callModel, executeTool: async () => 'x' },
+      continuationDelayMs: 0,
+    });
+    expect(result.content).toBe('Recovered fine.');
+    expect(result.continuations).toBe(1);
+  });
+
+  it('a malformed FIRST step degrades gracefully instead of crashing the turn', async () => {
+    const callModel = vi.fn().mockResolvedValue(undefined as unknown as StepResponse);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'q' }],
+      context: ctx,
+      deps: { callModel, executeTool: async () => 'x' },
+      continuationDelayMs: 0,
+    });
+    expect(typeof result.content).toBe('string');
+    expect(result.generationFailed).toBe(true);
   });
 });
 
@@ -450,5 +568,138 @@ describe('tool loop — helpers', () => {
     expect(result.steps).toBe(2);
     expect(result.followups).toEqual([{ prompt: 'More?' }] as FollowupSuggestion[]);
     expect(result.bounded).toBe(false);
+  });
+});
+
+// ─── Bounded auto-continuation (mid-turn model death / step bound) ──────────
+// The user-facing contract: a turn that dies MID-WAY must be resumed rather
+// than handed back half-done — and the resume must never re-run work, never
+// loop forever, and never change the no-model-failure signalling.
+
+describe('tool loop — bounded auto-continuation', () => {
+  /** Deps whose callModel throws on the given 0-based attempt indices. */
+  function failingDeps(script: StepResponse[], failAt: number[]): ToolLoopDeps {
+    let i = 0;
+    const callModel = vi.fn(async () => {
+      const attempt = i++;
+      if (failAt.includes(attempt)) throw new Error('All LLM providers exhausted (429 on every candidate)');
+      return script[Math.min(attempt, script.length - 1)];
+    });
+    return { callModel, executeTool: vi.fn(async (name: string) => `executed ${name}`), onEvent: vi.fn() };
+  }
+
+  it('resumes the SAME turn after a mid-turn generation death (work is not repeated)', async () => {
+    // Step 1 gathers (tool runs); step 2's generation dies; the loop resumes
+    // and step 2 answers.
+    const deps = failingDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'tool_search', arguments: { action: 'load', toolset: 'media' } }] },
+        { content: 'Finished after the hiccup.', toolCalls: [] },
+      ],
+      [1],
+    );
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'do the thing' }],
+      context: ctx,
+      deps,
+      continuationDelayMs: 0,
+    });
+    expect(result.content).toBe('Finished after the hiccup.');
+    expect(result.continuations).toBe(1);
+    expect(result.generationFailed).toBeFalsy();
+    // The completed tool call ran EXACTLY once — the resume keeps the thread.
+    expect(deps.executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves partial progress when every attempt dies (bounded, no infinite retry)', async () => {
+    const deps = failingDeps(
+      [{ content: 'Partial answer so far.', toolCalls: [{ id: 'c1', name: 'tool_search', arguments: { action: 'load', toolset: 'media' } }] }],
+      [1, 2, 3, 4, 5, 6, 7],
+    );
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'go' }],
+      context: ctx,
+      deps,
+      maxContinuations: 2,
+      continuationDelayMs: 0,
+    });
+    expect(result.continuations).toBe(2);
+    expect(result.content).toBe('Partial answer so far.');
+    // Progress was made, so this is NOT the no-model path.
+    expect(result.generationFailed).toBe(false);
+    // 1 successful step + 3 failing attempts (initial + 2 continuations) — never unbounded.
+    expect(deps.callModel).toHaveBeenCalledTimes(4);
+  });
+
+  it('does NOT burn time resuming when nothing at all happened', async () => {
+    // callModel already walked every candidate — re-walking immediately gains
+    // nothing, so the turn surfaces generationFailed straight away for the
+    // caller's no-model path (and stays as fast as before on a hard outage).
+    const deps = failingDeps([{ content: 'unused', toolCalls: [] }], [0, 1, 2, 3, 4]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'go' }],
+      context: ctx,
+      deps,
+      maxContinuations: 1,
+      continuationDelayMs: 0,
+    });
+    expect(result.generationFailed).toBe(true);
+    expect(result.continuations).toBe(0);
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('maxContinuations: 0 keeps the previous behavior byte-identical', async () => {
+    const deps = failingDeps([{ content: 'unused', toolCalls: [] }], [0]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'go' }],
+      context: ctx,
+      deps,
+      maxContinuations: 0,
+      continuationDelayMs: 0,
+    });
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+    expect(result.continuations).toBe(0);
+    expect(result.generationFailed).toBe(true);
+  });
+
+  it('extends the step bound while the model still has work to do', async () => {
+    // maxSteps=2 is exhausted by two tool steps; the continuation grants more
+    // and the turn finishes with the real answer instead of "step limit".
+    const step = (n: number): StepResponse => ({
+      content: '',
+      toolCalls: [{ id: `c${n}`, name: 'tool_search', arguments: { action: 'load', toolset: 'media' } }],
+    });
+    const deps = mockDeps([step(1), step(2), step(3), { content: 'All four steps done.', toolCalls: [] }]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'long build' }],
+      context: ctx,
+      deps,
+      maxSteps: 2,
+      maxContinuations: 1,
+      continuationSteps: 4,
+    });
+    expect(result.content).toBe('All four steps done.');
+    expect(result.bounded).toBe(false);
+    expect(result.continuations).toBe(1);
+  });
+
+  it('is still honestly bounded once the continuation budget is spent', async () => {
+    const step: StepResponse = {
+      content: '',
+      toolCalls: [{ id: 'c', name: 'tool_search', arguments: { action: 'load', toolset: 'media' } }],
+    };
+    const deps = mockDeps([step]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'never ends' }],
+      context: ctx,
+      deps,
+      maxSteps: 2,
+      maxContinuations: 1,
+      continuationSteps: 2,
+    });
+    expect(result.bounded).toBe(true);
+    expect(result.continuations).toBe(1);
+    // 2 initial + 2 continuation steps; the model never terminates itself.
+    expect(deps.callModel).toHaveBeenCalledTimes(4);
   });
 });

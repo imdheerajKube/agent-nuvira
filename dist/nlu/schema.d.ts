@@ -13,9 +13,9 @@ import { z } from 'zod';
 /** The intent vocabulary — byte-identical to C1's NluIntent. */
 export declare const nluIntentSchema: z.ZodEnum<{
     unknown: "unknown";
-    fix: "fix";
     explain: "explain";
     create: "create";
+    fix: "fix";
     configure: "configure";
     continue: "continue";
 }>;
@@ -47,9 +47,9 @@ export declare const nluEntitiesSchema: z.ZodObject<{
 export declare const verifyResponseSchema: z.ZodObject<{
     intent: z.ZodEnum<{
         unknown: "unknown";
-        fix: "fix";
         explain: "explain";
         create: "create";
+        fix: "fix";
         configure: "configure";
         continue: "continue";
     }>;

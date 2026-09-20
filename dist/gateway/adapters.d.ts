@@ -30,6 +30,14 @@ export interface InboundMessage {
     senderId?: string;
     /** P1 — true when the message came from a group/channel, not a DM. */
     isGroup?: boolean;
+    /**
+     * The transport's own message id, when the adapter exposes one (WhatsApp
+     * `key.id`, Telegram `message_id`, Slack `ts`, …). The gateway dedups on it
+     * so a re-delivered message (bridge reconnect, offline backfill, webhook
+     * retry) is handled ONCE. Adapters that expose no id leave it undefined and
+     * every delivery is treated as new (content dedup is opt-in — see dedup.ts).
+     */
+    messageId?: string;
 }
 /** The handler an adapter calls for every inbound message. */
 export type MessageHandler = (msg: InboundMessage) => void | Promise<void>;
@@ -613,6 +621,8 @@ export interface WebhookPayload {
     senderId?: string;
     /** P1 — true when the message came from a group/channel, not a DM. */
     isGroup?: boolean;
+    /** The platform's message id, when the webhook body carries one (dedup). */
+    messageId?: string;
 }
 /**
  * Parse platform-specific webhook bodies into a normal InboundMessage.

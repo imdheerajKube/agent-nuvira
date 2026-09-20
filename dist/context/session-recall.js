@@ -162,6 +162,38 @@ export async function autoRecall(opts = {}) {
         facts = await getFactStore().retrieveFacts(projectId, project?.lastGoal || 'project context', undefined, { k: opts.maxFacts ?? 5, timeRange });
     }
     catch { /* best-effort */ }
+    // ── Union with the agent's own memory tool ──────────────────────────────
+    // `add_memory` writes to the memory-tool store, which this function never
+    // read: a memory the MODEL recorded was invisible to recall — and therefore
+    // to every later turn — while a fact learned by the extractor was invisible
+    // to `search_memory`. The same feature had two disjoint halves. Merge the
+    // entries here so both directions agree: best-effort, deduped by text, and
+    // capped so a project's recall block stays bounded.
+    try {
+        const { getMemoryStore } = await import('../tools/memory-tools.js');
+        const seen = new Set(facts.map((f) => f.text.trim().toLowerCase()));
+        const cap = opts.maxFacts ?? 5;
+        let added = 0;
+        for (const entry of getMemoryStore().list({ limit: 20 })) {
+            if (added >= cap)
+                break;
+            const text = (entry.content || '').trim();
+            if (!text || seen.has(text.toLowerCase()))
+                continue;
+            seen.add(text.toLowerCase());
+            facts.push({
+                id: entry.id,
+                text,
+                projectId,
+                agentRole: 'memory-tool',
+                tags: Array.isArray(entry.tags) ? entry.tags : [],
+                source: entry.type || 'memory',
+                timestamp: entry.createdAt ?? Date.now(),
+            });
+            added += 1;
+        }
+    }
+    catch { /* best-effort — recall must never break a turn */ }
     let checkpoint = null;
     try {
         checkpoint = listCheckpoints().find((c) => c.workingDirectory === cwd) ?? null;
@@ -204,6 +236,35 @@ export async function maybeAutoRecall(cwd, store) {
     return recall;
 }
 // ─── Presentation ───────────────────────────────────────────────────────────
+/**
+ * Recall policy — ambient awareness of what this project has already done.
+ *
+ * THE GAP THIS CLOSES: `chat` has always recalled prior project work on EVERY
+ * turn with a project attached, but edit, execute, plan and pipeline-tool gated
+ * recall behind a continue/resume signal (`intent === 'continue'`,
+ * `mode === 'recall'`). So the same request phrased as ordinary work — "fix the
+ * slugify parser bug" — began with no knowledge of the project's history: what
+ * was already built, what the agent itself had written in a previous session,
+ * or which facts had been learned about the codebase. The agent looked like it
+ * had amnesia about its own prior work, and only a user who happened to phrase
+ * the request as a continuation could unlock it.
+ *
+ * The gate bought nothing in return: `maybeAutoRecall` already returns null for
+ * a project with no history, and recall is local JSON reads — no network, no LLM
+ * call, no meaningful latency.
+ *
+ * Policy:
+ *   - ALWAYS recall when the project has prior work (ambient awareness);
+ *   - ANNOUNCE (print the visible card) only when the user explicitly asked to
+ *     continue/resume, because that is when the recall IS the answer rather than
+ *     background context — an unrequested card on every command is noise.
+ */
+export function recallPolicy(input) {
+    const intent = input?.intent ?? '';
+    const mode = input?.mode ?? '';
+    const explicitContinuation = intent === 'continue' || intent === 'resume' || mode === 'recall';
+    return { recall: true, announce: explicitContinuation };
+}
 /** One-line recall card shown to the user. */
 export function recallCard(r) {
     const label = r.project?.gitRepo || r.projectId.replace(/^cwd:/, '').slice(0, 24) || r.projectId;

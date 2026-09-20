@@ -64,6 +64,18 @@ export declare function classifyFallbackError(err: unknown): FallbackErrorType;
  * Unknown errors might or might not — we try anyway since we're failing over.
  */
 export declare function isRetryableError(errorType: FallbackErrorType): boolean;
+/** Should this error be retried against the SAME provider after a short backoff? */
+export declare function isTransientForRetry(err: unknown): boolean;
+/**
+ * Is this failure a harness fault (our request shape) rather than a provider or
+ * model failure?
+ *
+ * Callers use this to decide ATTRIBUTION, never retryability: a harness fault is
+ * provider-specific, so failing over to a different provider is still the right
+ * move — but the provider's health, the model's health score and the bandit
+ * prior must all stay untouched.
+ */
+export declare function isHarnessFault(err: unknown): boolean;
 /**
  * Floor for hint-derived quota parks — never re-admit faster than this, so a
  * 429 with a 1s reset hint can't hot-loop the router back into the same

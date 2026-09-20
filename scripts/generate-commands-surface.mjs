@@ -45,7 +45,7 @@ process.env.NUVIRA_CLI_NAME = process.env.NUVIRA_CLI_NAME || 'buff';
 const header = `<!-- GENERATED FILE — do not edit by hand. -->
 <!-- Regenerate: node scripts/generate-commands-surface.mjs -->
 <!-- Drift guard: node scripts/generate-commands-surface.mjs --check -->
-<!-- Source of truth: src/cli/router.ts (createCLI) — generated from the live commander tree. -->
+<!-- Source of truth: src/cli/cli-program.ts (createCLI) — generated from the live commander tree. -->
 
 # CLI Command Surface
 
@@ -111,9 +111,12 @@ function renderDoc(program) {
 async function main() {
   let createCLI;
   try {
-    ({ createCLI } = await import(join(repoRoot, 'dist', 'cli', 'router.js')));
+    // createCLI lives in its own module since 2026-09-16: `router.ts` became a
+    // pure provider-resolution service so the command dispatcher's ~35 command
+    // imports no longer formed a 28-module import cycle with it.
+    ({ createCLI } = await import(join(repoRoot, 'dist', 'cli', 'cli-program.js')));
   } catch (err) {
-    console.error('✗ could not import dist/cli/router.js — run `npm run build` first.');
+    console.error('✗ could not import dist/cli/cli-program.js — run `npm run build` first.');
     console.error(String(err?.message ?? err));
     process.exit(2);
   }

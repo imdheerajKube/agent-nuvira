@@ -18,11 +18,23 @@
  */
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { envBuff, resolveNuviraConfigDir } from '../config/paths.js';
 // ─── Default Configuration ───────────────────────────────────────────────
+/**
+ * Default audit directory — resolved LAZILY, on every use.
+ *
+ * This used to be `join(homedir(), '.nuvira', 'audit')` evaluated at MODULE LOAD,
+ * which meant the audit trail was written into the real user profile even for a
+ * hermetic run that had pointed NUVIRA_CONFIG_DIR somewhere else (tests, CI,
+ * isolated profiles) — the same isolation class already fixed for credentials
+ * and the routing-failure ledger. Resolving per call also makes an in-process
+ * override observable, which a load-time constant can never be.
+ */
+function defaultAuditDir() {
+    return envBuff('AUDIT_DIR') || join(resolveNuviraConfigDir(), 'audit');
+}
 const DEFAULT_CONFIG = {
     enabled: true,
-    logDir: join(homedir(), '.nuvira', 'audit'),
     logFile: 'skill-executions.log',
     maxLogSizeBytes: 10 * 1024 * 1024, // 10MB
     retentionDays: 30,
@@ -64,7 +76,7 @@ function generateEntryId() {
 async function writeAuditEntry(entry, config) {
     if (!config.enabled)
         return;
-    const logDir = config.logDir ?? DEFAULT_CONFIG.logDir;
+    const logDir = config.logDir ?? defaultAuditDir();
     const logFile = config.logFile ?? DEFAULT_CONFIG.logFile;
     const logPath = join(logDir, logFile);
     // Ensure log directory exists
@@ -106,7 +118,7 @@ export async function logExecution(params, config) {
  */
 export async function queryAuditEntries(filters, config) {
     const cfg = { ...DEFAULT_CONFIG, ...config };
-    const logDir = cfg.logDir ?? DEFAULT_CONFIG.logDir;
+    const logDir = cfg.logDir ?? defaultAuditDir();
     const logFile = cfg.logFile ?? DEFAULT_CONFIG.logFile;
     const logPath = join(logDir, logFile);
     try {
@@ -214,7 +226,7 @@ export async function cleanupAuditLog(config) {
         return 0; // Nothing to clean up
     }
     // Rewrite log file with retained entries
-    const logDir = cfg.logDir ?? DEFAULT_CONFIG.logDir;
+    const logDir = cfg.logDir ?? defaultAuditDir();
     const logFile = cfg.logFile ?? DEFAULT_CONFIG.logFile;
     const logPath = join(logDir, logFile);
     const { writeFile } = await import('node:fs/promises');

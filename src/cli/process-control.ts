@@ -137,21 +137,83 @@ export interface StopResult {
 }
 
 /**
+ * EVERY pid whose command line matches `pattern` (not just the first), newest
+ * scan order. Needed to stop a SUPERVISED gateway, which is two processes: the
+ * `--supervise` parent and the child it spawned.
+ */
+export function findPidsByCommandLine(pattern: RegExp): number[] {
+  const pids: number[] = [];
+  try {
+    if (process.platform === 'win32') {
+      const p = findPidByCommandLine(pattern);
+      return p === null ? [] : [p];
+    }
+    const out = execSync('ps -eo pid=,command=', { encoding: 'utf8' });
+    for (const line of out.split('\n')) {
+      const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+      if (!m) continue;
+      const pid = Number.parseInt(m[1], 10);
+      if (pid === process.pid) continue;
+      if (pattern.test(m[2])) pids.push(pid);
+    }
+  } catch {
+    /* ps unavailable — the port probe still covers it */
+  }
+  return pids;
+}
+
+/**
+ * A command line that IS a node process (`…/node …` or `…/nodejs …`). The
+ * gateway's own argv contains "gateway start", and so do the SHELLS that wrap
+ * it — `tmux new-session … "node dist/index.js gateway start --supervise"` and
+ * `bash -c cd … && node …` both match the text pattern. Signalling those kills
+ * the wrapper (or a whole tmux session) and can leave the gateway running, so
+ * the real node processes are preferred and the wrappers are ignored.
+ */
+function isNodeProcess(command: string): boolean {
+  return /(?:^|\s)\S*(?:\/|^)node(?:js)?\s/.test(command) || /^[^\s]*node(?:js)?\s/.test(command);
+}
+
+/**
  * Stop a running gateway: locate the `gateway start` process (command-line
  * match first, then the webhook receiver port, default 8787) and SIGTERM it.
+ *
+ * `--supervise` runs TWO processes (a parent that restarts the child), so every
+ * matching node process is stopped — the supervisor forwards SIGTERM to its
+ * child, and an orphaned child (supervisor already gone) is caught directly.
  */
 export async function stopGateway(opts?: { port?: number }): Promise<StopResult> {
   const port = opts?.port ?? 8787;
-  let pid = findPidByCommandLine(/\bgateway\s+start\b/);
-  if (pid === null) {
+  const pattern = /\bgateway\s+start\b/;
+  const candidates = findPidsByCommandLine(pattern);
+  // Prefer the node processes; fall back to whatever matched (a non-node
+  // launcher is better than refusing to stop at all).
+  const nodePids = candidates.filter((pid) => {
+    try {
+      const cmd = execSync(`ps -p ${pid} -o command=`, { encoding: 'utf8' });
+      return isNodeProcess(cmd);
+    } catch {
+      return false;
+    }
+  });
+  let targets = nodePids.length > 0 ? nodePids : candidates;
+  if (targets.length === 0) {
     const { findPidOnPort } = await import('./dashboard-restart.js');
-    pid = await findPidOnPort(port);
+    const onPort = await findPidOnPort(port);
+    if (onPort === null) {
+      return { stopped: false, reason: `no running gateway process found (port ${port} or \`gateway start\`)` };
+    }
+    targets = [onPort];
   }
-  if (pid === null) {
-    return { stopped: false, reason: `no running gateway process found (port ${port} or \`gateway start\`)` };
+  let stoppedAny = false;
+  let last: number | undefined;
+  for (const pid of targets) {
+    if (await stopProcess(pid)) stoppedAny = true;
+    last = pid;
   }
-  const ok = await stopProcess(pid);
-  return ok ? { stopped: true, pid } : { stopped: false, pid, reason: 'could not signal the gateway process' };
+  return stoppedAny
+    ? { stopped: true, pid: last }
+    : { stopped: false, pid: last, reason: 'could not signal the gateway process' };
 }
 
 /**

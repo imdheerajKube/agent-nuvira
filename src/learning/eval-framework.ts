@@ -1156,8 +1156,12 @@ export async function runEvalTask(
             provider: providerName,
             model,
             useMemory: false,
-            // writer-tc arm: the opt-in tool-calling writer/reviewer path.
-            useToolCalling: engine === 'writer-tc' ? true : undefined,
+            // writer-tc arm: the iterative tool-calling writer/reviewer path.
+            // Passed EXPLICITLY (never undefined): the orchestrator default is
+            // now tool-calling ON (audit W3), so `undefined` would silently
+            // collapse the 'pipeline' arm into the 'writer-tc' arm and the
+            // comparison would measure nothing.
+            useToolCalling: engine === 'writer-tc',
           }),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error(`Task timed out after ${timeoutMs / 1000}s`)), timeoutMs),

@@ -6,6 +6,33 @@ import { getCostTracker } from '../learning/cost-tracker.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
 import { attachHttpContext } from './http-error.js';
 const OLLAMA_API_BASE = 'http://localhost:11434';
+/**
+ * Normalize an Ollama host the way Ollama itself accepts it: `host:port` with
+ * an optional scheme. `OLLAMA_HOST=127.0.0.1:11434` is the documented form, so
+ * a bare host:port must not be treated as a missing scheme-less URL.
+ */
+function normalizeOllamaBase(raw) {
+    const trimmed = raw?.trim();
+    if (!trimmed)
+        return undefined;
+    const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+    return withScheme.replace(/\/+$/, '');
+}
+/**
+ * Base URL for the Ollama HTTP API.
+ *
+ * Precedence: `providers.local.baseUrl` → `$OLLAMA_HOST` (Ollama's own
+ * convention, honored here so a stock `ollama serve` on another host/port works
+ * without extra nuvira config) → `http://localhost:11434`.
+ *
+ * This used to be a hardcoded constant at five call sites: a remote Ollama
+ * (another machine, a container, `OLLAMA_HOST`) was unreachable, and nothing —
+ * tests included — could redirect local inference away from the developer's
+ * real install.
+ */
+function resolveOllamaBase(config) {
+    return normalizeOllamaBase(config.baseUrl) ?? normalizeOllamaBase(process.env.OLLAMA_HOST) ?? OLLAMA_API_BASE;
+}
 /** Ollama fetch timeout (ms) — prevents hanging when ollama is not running. */
 const OLLAMA_TIMEOUT_MS = 10_000;
 /** Fetch with timeout — fast-fails when ollama is not running. */
@@ -61,6 +88,10 @@ export class LocalAdapter {
     constructor(config) {
         this.config = config;
     }
+    /** Resolved Ollama API base (config → $OLLAMA_HOST → localhost). */
+    ollamaBase() {
+        return resolveOllamaBase(this.config);
+    }
     async generate(prompt, options) {
         const runner = this.config.runner || 'ollama';
         switch (runner) {
@@ -80,7 +111,7 @@ export class LocalAdapter {
         const model = options?.model || requireAdapterModel('local', this.config.model);
         const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
         logger.debug(`Ollama: Generating with model=${model}, temperature=${temperature}`);
-        const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/generate`, {
+        const response = await fetchWithTimeout(`${this.ollamaBase()}/api/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -111,7 +142,7 @@ export class LocalAdapter {
      * Ollama's streaming format returns one JSON object per line with a `response` field.
      */
     async generateOllamaStream(prompt, model, temperature, onToken) {
-        const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/generate`, {
+        const response = await fetchWithTimeout(`${this.ollamaBase()}/api/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -319,7 +350,7 @@ except Exception as e:
         const runner = this.config.runner || 'ollama';
         if (runner === 'ollama') {
             try {
-                const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/tags`, {});
+                const response = await fetchWithTimeout(`${this.ollamaBase()}/api/tags`, {});
                 return response.ok;
             }
             catch {
@@ -338,7 +369,7 @@ except Exception as e:
         if (runner !== 'ollama')
             return [];
         try {
-            const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/tags`, {});
+            const response = await fetchWithTimeout(`${this.ollamaBase()}/api/tags`, {});
             if (!response.ok)
                 return [];
             // Ollama exposes each model's context length in DIFFERENT places by
@@ -372,7 +403,7 @@ except Exception as e:
     /** POST /api/show for one model and read its advertised context window. */
     async fetchContextWindow(model) {
         try {
-            const response = await fetchWithTimeout(`${OLLAMA_API_BASE}/api/show`, {
+            const response = await fetchWithTimeout(`${this.ollamaBase()}/api/show`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model }),

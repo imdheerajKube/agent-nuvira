@@ -10,6 +10,9 @@ import {
   compactToolSchemas,
   buildJsonFallbackPrompt,
   looksLikeConfusedScaffoldingReply,
+  toUserFacingGenerationError,
+  isToolCallingUnsupported,
+  GENERATION_FAILURE_MESSAGE,
 } from '../../src/inference/tool-call-utils.js';
 import type { ToolJsonSchema } from '../../src/tools/registry.js';
 
@@ -160,5 +163,125 @@ describe('looksLikeConfusedScaffoldingReply', () => {
   it('flags provided information + directly interpret pattern', () => {
     const confused = "Sorry, but the given information doesn't look like a valid request. I cannot directly interpret this format.";
     expect(looksLikeConfusedScaffoldingReply(confused)).toBe(true);
+  });
+});
+
+/**
+ * The second confusion family — the model reads the suggest_followups
+ * INSTRUCTION as the user's request and answers by OFFERING to suggest things.
+ * Every string below is verbatim from the user's live WhatsApp inbox ledger
+ * (~/.nuvira/gateway/inbox.json) or the dashboard reply they reported; all of
+ * them were previously delivered to the sender, and the first was also CACHED
+ * as a successful answer (so every retry inside the hour replayed it).
+ *
+ * They cannot be caught by the literal tool name: the model PARAPHRASES it.
+ */
+describe('looksLikeConfusedScaffoldingReply — contract-as-request deflections', () => {
+  const liveDeflections = [
+    'Sure, I can help you with suggestions and followups. Please provide me with more details so I can assist you better.',
+    "Sure, I can help you with suggesting followups. Please provide some details or a specific query you'd like me to suggest.",
+    "I'm ready to help! Could you please provide more details about the tasks or actions you'd like to perform or discuss?",
+    'Sure, I can help you with your suggestions. What do you need help with?',
+    "Sure! Please provide the details for the action you want me to suggest, and I'll assist you with the suggestions.",
+  ];
+
+  it.each(liveDeflections)('flags the live deflection: %s', (reply) => {
+    expect(looksLikeConfusedScaffoldingReply(reply)).toBe(true);
+  });
+
+  it('still never flags real answers that merely mention suggestions/follow-ups', () => {
+    // A genuine answer that happens to use the vocabulary, but is not an
+    // offer-to-help + please-provide frame.
+    expect(
+      looksLikeConfusedScaffoldingReply(
+        'Division with a remainder: 20101 ÷ 2 = 10050 remainder 1. Follow-ups: more practice sums.',
+      ),
+    ).toBe(false);
+    expect(looksLikeConfusedScaffoldingReply('Follow-ups: 1. More examples 2. Harder sums')).toBe(false);
+    expect(
+      looksLikeConfusedScaffoldingReply('I suggest starting with counters, then move to long division.'),
+    ).toBe(false);
+    // A long real deliverable that happens to contain the vocabulary.
+    const long = `${'Teach it with counters and place value. '.repeat(20)}I suggest practice next.`;
+    expect(looksLikeConfusedScaffoldingReply(long)).toBe(false);
+  });
+
+  it('stays silent on an empty string and whitespace', () => {
+    expect(looksLikeConfusedScaffoldingReply('')).toBe(false);
+    expect(looksLikeConfusedScaffoldingReply('  \n ')).toBe(false);
+  });
+});
+
+describe('isToolCallingUnsupported', () => {
+  it('flags the live Groq 400 verbatim', () => {
+    const err = new Error(
+      'Tool-calling API error (400): {"error":{"message":"`tool calling` is not supported with this model","type":"invalid_request_error","param":"tool calling"}}',
+    );
+    expect(isToolCallingUnsupported(err)).toBe(true);
+  });
+
+  it('flags the other phrasing shapes providers use', () => {
+    expect(isToolCallingUnsupported(new Error('tools are not supported for this model'))).toBe(true);
+    expect(isToolCallingUnsupported(new Error('tool calling is not supported'))).toBe(true);
+    expect(isToolCallingUnsupported(new Error('function calling is unsupported'))).toBe(true);
+    expect(isToolCallingUnsupported(new Error('this model does not support tool calling'))).toBe(true);
+    expect(isToolCallingUnsupported(new Error('tools are not enabled for this request'))).toBe(true);
+  });
+
+  it('does NOT flag transient failures (they must fail over, not change transport)', () => {
+    expect(isToolCallingUnsupported(new Error('429 rate limit exceeded'))).toBe(false);
+    expect(isToolCallingUnsupported(new Error('fetch failed: ECONNREFUSED'))).toBe(false);
+    expect(isToolCallingUnsupported(new Error('401 Unauthorized'))).toBe(false);
+    expect(isToolCallingUnsupported(new Error('the tool result was too large'))).toBe(false);
+    expect(isToolCallingUnsupported(undefined)).toBe(false);
+    expect(isToolCallingUnsupported('plain string')).toBe(false);
+  });
+
+  it('does NOT flag a malformed tool call — the model supports tools, the CALL was bad', () => {
+    // `tool_use_failed` means the model CAN call tools but emitted bad syntax.
+    // Salvage (S3) recovers the content; otherwise the turn must FAIL OVER, not
+    // silently continue over another transport (pinned by the chat S3 test).
+    const body =
+      'Tool-calling API error (400): {"error":{"code":"tool_use_failed","failed_generation":"I will implement the login form. <function=build [{\\"goal\\": \\"login\\"}]</function>"}}';
+    expect(isToolCallingUnsupported(new Error(body))).toBe(false);
+  });
+});
+
+describe('toUserFacingGenerationError', () => {
+  const gemini429 =
+    'Gemini streaming tool-calling API error (429): {"error":{"code":429,' +
+    '"message":"You exceeded your current quota","status":"RESOURCE_EXHAUSTED",' +
+    '"details":[{"quotaValue":"16000","retryDelay":"34s"}]}}';
+
+  it('maps a provider quota/429 to a plain sentence with no wire text', () => {
+    const msg = toUserFacingGenerationError(new Error(gemini429));
+    expect(msg).toMatch(/rate limit|quota/i);
+    for (const leak of ['429', 'RESOURCE_EXHAUSTED', 'quotaValue', '{"error"', 'retryDelay', 'Gemini']) {
+      expect(msg).not.toContain(leak);
+    }
+  });
+
+  it('maps model-not-found to actionable guidance (the `default` sentinel 404)', () => {
+    const msg = toUserFacingGenerationError(
+      new Error(
+        'Tool-calling API error (404): {"error":{"message":"The model `default` does not exist or you do not have access to it.","code":"model_not_found"}}',
+      ),
+    );
+    expect(msg).toMatch(/isn't available|not available/i);
+    expect(msg).not.toContain('model_not_found');
+    expect(msg).not.toContain('does not exist');
+  });
+
+  it('maps auth, network, server and timeout errors distinctly', () => {
+    expect(toUserFacingGenerationError(new Error('401 Unauthorized: invalid api key'))).toMatch(/API key/);
+    expect(toUserFacingGenerationError(new Error('fetch failed: ECONNREFUSED'))).toMatch(/network/i);
+    expect(toUserFacingGenerationError(new Error('502 Bad Gateway'))).toMatch(/server error/i);
+    expect(toUserFacingGenerationError(new Error('request timed out'))).toMatch(/timed out/i);
+  });
+
+  it('falls back to the canonical line for anything unrecognized (and non-Errors)', () => {
+    expect(toUserFacingGenerationError(new Error('???'))).toBe(GENERATION_FAILURE_MESSAGE);
+    expect(toUserFacingGenerationError(undefined)).toBe(GENERATION_FAILURE_MESSAGE);
+    expect(toUserFacingGenerationError('plain string')).toBe(GENERATION_FAILURE_MESSAGE);
   });
 });

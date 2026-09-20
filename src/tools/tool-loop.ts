@@ -16,11 +16,13 @@
  *   blocks after its response text (contract in TOOL_CONTRACT_JSON).
  */
 
-import { getTool, toolJsonSchemas, type FollowupSuggestion, type ToolContext, type ToolJsonSchema } from './registry.js';
+import { getTool, toolJsonSchemas, type ToolContext, type ToolJsonSchema } from './registry.js';
+import { normalizeFollowups, type FollowupSuggestion } from './followup-utils.js';
 import { effectiveToolJsonSchemas, coreToolJsonSchemas, isToolEnabled, toolsetForTool } from './toolsets.js';
 import { appendToolArtifact } from './artifact-append.js';
 import type { ToolMessage } from '../inference/interface.js';
 import { logger } from '../utils/logger.js';
+import { toUserFacingGenerationError } from '../inference/tool-call-utils.js';
 
 export { type ToolMessage };
 
@@ -115,7 +117,13 @@ export function makeParallelSuggester(initialCounts: Record<string, number> = {}
 export interface StepResponse {
   content: string;
   /** Parsed tool calls (empty = end turn). */
-  toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+  toolCalls: Array<{
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+    /** Provider-owned opaque data echoed back on replay (Gemini thoughtSignature). */
+    providerMeta?: Record<string, unknown>;
+  }>;
 }
 
 /** What the caller injects — chat.ts wires providers/failover, tests use mocks. */
@@ -162,12 +170,32 @@ export interface ToolLoopOptions {
    */
   toolExposure?: 'all' | 'tiered';
   /**
+   * R1 — bound on concurrent read-only calls per step, from the model's harness
+   * profile. Omit for the default (4); pass 1 for tiny models.
+   */
+  maxParallelReads?: number;
+  /**
    * Mechanical thread budget in characters (deterministic compaction —
    * see trimThreadBudget). 0 disables (default: DEFAULT_THREAD_BUDGET_CHARS).
    */
   threadBudgetChars?: number;
   /** Bound on steps per turn (default: 8) — never an infinite loop. */
   maxSteps?: number;
+  /**
+   * Bounded auto-continuation budget (default: 2). A turn that dies MID-WAY —
+   * the provider walk exhausted every candidate at step N, or the step bound
+   * was reached while the model still had work to do — is RESUMED rather than
+   * handed back to the user half-done. Each continuation grants
+   * `continuationSteps` more steps and re-attempts the failed step. 0 disables
+   * (byte-identical to the previous behavior). Never unbounded: the loop still
+   * terminates after `maxSteps + maxContinuations * continuationSteps`. See
+   * {@link ToolLoopResult.continuations}.
+   */
+  maxContinuations?: number;
+  /** Extra steps granted per continuation (default: 8). */
+  continuationSteps?: number;
+  /** Pause before re-attempting a failed step (default: 1500ms; tests set 0). */
+  continuationDelayMs?: number;
   /** ToolContext for executions (configManager, followups sink, board, ...). */
   context: ToolContext;
   deps: ToolLoopDeps;
@@ -199,6 +227,12 @@ export interface ToolLoopResult {
   steps: number;
   /** True when the step bound was hit before an end turn. */
   bounded: boolean;
+  /**
+   * How many bounded auto-continuations were spent this turn (0 = the turn ran
+   * straight through). Telemetry only — a resumed turn reports the SAME content
+   * contract as one that never stalled.
+   */
+  continuations?: number;
   /**
    * True when generation failed entirely (no model answered, no tool ran) —
    * the E3c no-model signal: the caller may fall back to the rule decision
@@ -310,6 +344,75 @@ function findMatchingBrace(text: string, start: number): number {
   return -1;
 }
 
+// ─── Parallel read-only execution (W2) ──────────────────────────────────────
+/**
+ * Tools that are READ-ONLY and therefore safe to execute concurrently when the
+ * model emits several of them in ONE step. Everything else — writes, terminal
+ * commands, pipeline dispatch, delegation, `tool_search` (it mutates the
+ * tiering state), `plan_todo`, `ask_user` (it blocks on user input) — stays
+ * strictly serial and in the model's original order.
+ *
+ * Why this matters: tool results are fed back one step at a time and the step
+ * budget is bounded (16), so N independent reads used to cost N sequential
+ * round-trips of wall-clock. Reading several files/searches is the single most
+ * common investigation pattern, so it becomes one bounded fan-out.
+ *
+ * The list is deliberately an ALLOWLIST (never a denylist): a tool added to
+ * the registry later is SERIAL by default until it is reviewed as read-only.
+ */
+export const PARALLEL_SAFE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'read_file',
+  'list_dir',
+  'glob',
+  'code_search',
+  'web_search',
+  'read_page',
+]);
+
+/** Whether a tool may run concurrently with sibling calls in the same step. */
+export function isParallelSafeTool(name: string): boolean {
+  return PARALLEL_SAFE_TOOL_NAMES.has(name);
+}
+
+/** Max concurrent read-only calls per step (bounded fan-out) when the model
+ *  has no harness opinion — see `ModelHarnessProfile.maxParallelReads`, which
+ *  lowers this to 1 for tiny models that cannot use interleaved results. */
+const MAX_PARALLEL_READS = 4;
+
+// ─── Bounded auto-continuation (mid-turn model death / step bound) ──────────
+// The loop used to give up the MOMENT a step's generation failed (all provider
+// candidates exhausted) or the step bound was reached: the user got a partial
+// answer (or an error line) and had to re-ask, even though the work was
+// half-done and resumable in-context. These defaults resume the SAME turn a
+// bounded number of times — the model keeps its thread, completed tool calls
+// are never re-run, and the loop can never spin forever.
+
+/** Default continuations granted per turn when the option is omitted. */
+export const DEFAULT_MAX_CONTINUATIONS = 2;
+/** Default extra steps granted per continuation. */
+export const DEFAULT_CONTINUATION_STEPS = 8;
+/** Pause before re-attempting a failed step (lets a transient outage clear). */
+export const CONTINUATION_DELAY_MS = 1_500;
+
+/**
+ * Whether a generation failure looks TRANSIENT — the only case where waiting
+ * before the resume attempt helps. A 5xx / network / timeout / rate-limit spike
+ * can clear in seconds; a hard failure (no credentialed candidate, dead key,
+ * bad model id) cannot, so it resumes IMMEDIATELY. Waiting on a hard failure
+ * only delays the user's answer (and made the interactive/gateway paths
+ * measurably slower for no benefit).
+ */
+export function isTransientGenerationFailure(message: string): boolean {
+  return /(?:\b429\b|\b5\d\d\b|rate.?limit|quota|too many requests|timeout|timed out|etimedout|econn\w*|enotfound|socket hang up|network|fetch failed|dns|temporarily|overloaded|unavailable|try again)/i.test(
+    message,
+  );
+}
+
+/** Sleep helper for the bounded pre-continuation pause. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Run one tool-call turn:
  * generate → execute tools → feed results back → repeat until the model
@@ -317,10 +420,31 @@ function findMatchingBrace(text: string, start: number): number {
  */
 export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult> {
   const { messages, tools: toolNames, maxSteps = 16, context, deps } = opts;
+  // Bounded auto-continuation state (see ToolLoopOptions.maxContinuations).
+  const maxContinuations = Math.max(0, opts.maxContinuations ?? DEFAULT_MAX_CONTINUATIONS);
+  const continuationSteps = Math.max(1, opts.continuationSteps ?? DEFAULT_CONTINUATION_STEPS);
+  let continuations = 0;
+  // The EFFECTIVE bound: starts at maxSteps and is extended (never beyond the
+  // continuation budget) so a turn that still has work can finish.
+  let stepLimit = maxSteps;
+  // R1 — the harness, not a constant, decides how wide a read fan-out this
+  // model can consume. Tiny models get 1 (serial): they rarely emit parallel
+  // calls and interleaved results cost them more than the latency they save.
+  const maxParallelReads = Math.max(1, opts.maxParallelReads ?? MAX_PARALLEL_READS);
 
   const followups: FollowupSuggestion[] = [];
   const toolCallsRun: string[] = [];
-  const sink = { push(f: FollowupSuggestion) { followups.push(f); } };
+  // Every collected suggestion passes through the shared normalizer, so the
+  // loop's output is ALWAYS clean + structured (1–3 items, deduped, no leaked
+  // tool JSON, capped prompt/label) regardless of what the model emitted —
+  // and every surface (CLI, dashboard chips, gateway list) inherits it.
+  const sink = {
+    push(f: FollowupSuggestion) {
+      const next = normalizeFollowups([...followups, f]);
+      followups.length = 0;
+      followups.push(...next);
+    },
+  };
   const ctx: ToolContext = {
     ...context,
     followups: context.followups || sink,
@@ -388,7 +512,23 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
   let lastContent = '';
   let bounded = false;
 
-  while (steps < maxSteps) {
+  for (;;) {
+    // ── Bounded auto-continuation on the STEP BOUND ────────────────────────
+    // The model still wanted to act when the budget ran out (a long build, a
+    // many-file edit). Extend the budget a bounded number of times and keep
+    // the SAME thread — completed tool calls are never re-run — instead of
+    // telling the user "I reached my step limit" with the task unfinished.
+    if (steps >= stepLimit) {
+      if (continuations < maxContinuations) {
+        continuations += 1;
+        stepLimit += continuationSteps;
+        deps.onEvent?.(
+          `   🔄 Step bound reached with work remaining — continuing (continuation ${continuations}/${maxContinuations}, budget ${stepLimit} steps).`,
+        );
+        continue;
+      }
+      break;
+    }
     // P4 — check cancellation BEFORE each step (a pre-aborted signal never
     // spends a model call) and after tool executions (below).
     if (opts.signal?.aborted) {
@@ -409,6 +549,14 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     let response: StepResponse;
     try {
       response = await deps.callModel(thread, schemas, opts.onToken, opts.signal);
+      // A provider/adapter that resolves with nothing usable (undefined, a
+      // missing content field) must not crash the turn — treat it as this
+      // step's generation failure so the bounded continuation logic below can
+      // resume or return gracefully. Malformed steps used to throw a raw
+      // TypeError out of the loop and kill an otherwise-recoverable turn.
+      if (!response || typeof response.content !== 'string' || !Array.isArray(response.toolCalls)) {
+        throw new Error('model returned a malformed step response (no content/toolCalls)');
+      }
     } catch (err) {
       // P4 — an abort (the dashboard Cancel button) is a clean stop, NOT a
       // generation failure: the caller discards the turn. No error text, no
@@ -424,14 +572,48 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       // never re-runs work (e.g. the model already called `build`, and a later
       // step's generation died — the pipeline must NOT run twice).
       const message = err instanceof Error ? err.message : String(err);
+      // The RAW provider text is for the log/trace ONLY. It used to be
+      // interpolated straight into the delivered answer, which is how a
+      // WhatsApp/dashboard sender ended up reading a provider JSON dump
+      // ("… API error (429): {\"error\":{\"code\":429, …, quotaValue, …}").
       logger.warn(`   ⚠️ Tool-loop generation failed: ${message}`);
       const madeProgress = lastContent.trim() !== '' || toolCallsRun.length > 0;
+      // ── Bounded auto-continuation ────────────────────────────────────────
+      // The step died mid-turn. Instead of handing the user a partial answer
+      // (or an error line) and making them re-ask, resume the SAME turn while
+      // the continuation budget lasts: the model keeps its thread, so every
+      // completed tool call and gathered fact is still in context and is never
+      // repeated. The failure is recorded on the provider walk already (which
+      // is what makes the retry land on a fresh candidate), so a short pause
+      // then a re-attempt is the honest, bounded recovery. Once the budget is
+      // spent the previous behavior applies unchanged.
+      // Resume only when the turn had already DONE something (a tool ran, or an
+      // answer was written). This is the "model went away MID-WAY" case: the
+      // thread holds real work that must not be thrown away, and one more walk
+      // (with the failures just recorded) can land on a different candidate.
+      //
+      // When NOTHING happened, `callModel` has already walked every candidate —
+      // re-walking immediately repeats the same exhausted list for no benefit,
+      // so the honest thing is to surface the failure (generationFailed) and let
+      // the caller's no-model path act. This also keeps the interactive/gateway
+      // turns as fast as before on a hard outage.
+      if (continuations < maxContinuations && madeProgress) {
+        continuations += 1;
+        stepLimit += continuationSteps;
+        deps.onEvent?.(
+          `   🔄 Model call failed mid-turn — resuming this turn (continuation ${continuations}/${maxContinuations}, budget ${stepLimit} steps).`,
+        );
+        const delayMs = opts.continuationDelayMs ?? (isTransientGenerationFailure(message) ? CONTINUATION_DELAY_MS : 0);
+        await sleep(Math.max(0, delayMs));
+        continue;
+      }
       return {
-        content: lastContent || `I couldn't complete that request (${message}).`,
+        content: lastContent || toUserFacingGenerationError(err),
         followups,
         toolCalls: toolCallsRun,
         steps,
         bounded: false,
+        continuations,
         generationFailed: !madeProgress,
       };
     }
@@ -473,6 +655,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
         toolCalls: toolCallsRun,
         steps,
         bounded: false,
+        continuations,
       };
     }
 
@@ -480,86 +663,166 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     thread.push({
       role: 'assistant',
       content: response.content,
-      toolCalls: toolCalls.map((tc) => ({ id: tc.id, name: tc.name, arguments: JSON.stringify(tc.arguments) })),
+      // `providerMeta` rides along verbatim: it is provider-owned data (Gemini's
+      // thoughtSignature) that the adapter must send back on the next turn.
+      // Rebuilding the call from id/name/arguments alone silently broke every
+      // multi-step provider-tool-calling conversation.
+      toolCalls: toolCalls.map((tc) => ({
+        id: tc.id,
+        name: tc.name,
+        arguments: JSON.stringify(tc.arguments),
+        ...(tc.providerMeta ? { providerMeta: tc.providerMeta } : {}),
+      })),
     });
 
     let endedAfterConcluding = false;
-    for (const call of toolCalls) {
+
+    // ── Phase 1 — decide, in order (deterministic) ─────────────────────────
+    // Guards count calls that came BEFORE this one. Pushing the name first made
+    // `prior >= 1` true on a tool's FIRST invocation, so plan_todo was refused
+    // on EVERY call — the model then retried it and burned the step budget,
+    // which is the very loop the guard was written to prevent. Telemetry still
+    // records every attempted call, as before.
+    type PlannedCall = { call: (typeof toolCalls)[number]; refuse?: string };
+    const plans: PlannedCall[] = toolCalls.map((call) => {
       const tool = getTool(call.name);
+      const priorSameTool = toolCallsRun.filter((t) => t === call.name).length;
       toolCallsRun.push(call.name);
+      // S5 — PLANNER LOOP GUARD: allow the first plan of the turn, refuse
+      // repeats (the 6x planner loop observed in
+      // trace-1788059239352-k7zl03: 15.6K tokens, 2m25s, FAILED).
+      if (call.name === 'plan_todo' && priorSameTool >= 1) {
+        return {
+          call,
+          refuse:
+            'Error: plan_todo already called. You have a plan — now execute it. Do NOT call plan_todo again. Use write_file, run_terminal, or other execution tools to complete the work.',
+        };
+      }
+      if (tool?.category === 'pipeline' && priorSameTool >= 1) {
+        // The guard this replaces tested the literal name `pipeline`, which is
+        // NOT a registered tool — the dispatch tools are build / resume /
+        // repair / document / website / analyze / test / publish — so it could
+        // never fire and two identical pipeline runs could start in one turn
+        // (pipeline-tool.ts has no in-flight guard of its own). Match the real
+        // category, and only when the SAME dispatch tool is repeated.
+        return {
+          call,
+          refuse: `Error: ${call.name} was already dispatched this turn — the pipeline is running. Do not call it again.`,
+        };
+      }
+      if (!tool) {
+        // Unknown tool — the error is fed back so the model retries with a
+        // known tool (hadToolCallError handling).
+        return { call, refuse: `Error: unknown tool "${call.name}". Available tools: ${schemas.map((s) => s.name).join(', ')}.` };
+      }
+      if (tiered && !schemaNames.has(call.name)) {
+        // Tiered exposure gate: the tool is REGISTERED but its toolset was
+        // never loaded this turn — do NOT execute it silently. Give the model
+        // the exact load syntax so it can activate the toolset and retry.
+        const ownerToolset = toolsetForTool(call.name);
+        return {
+          call,
+          refuse:
+            `Error: tool "${call.name}" exists but its "${ownerToolset?.name ?? 'domain'}" toolset is not loaded this turn. ` +
+            `Call tool_search with {"action":"load","toolset":"${ownerToolset?.name ?? ''}"} first — its tools become callable immediately.`,
+        };
+      }
+      if (!isToolEnabled(call.name, context.configManager)) {
+        // I1 execution gate: a disabled tool is rejected at runtime even if
+        // the model hallucinated its name — the toggle is never cosmetic.
+        return { call, refuse: `Error: tool "${call.name}" is disabled — its toolset is turned off. Enable it with \`nuvira tools toolsets\`.` };
+      }
+      return { call };
+    });
+
+    // ── Phase 2 — execute (read-only runs fan out; everything else serial) ──
+    const runOne = async (plan: PlannedCall): Promise<string> => {
+      const { call } = plan;
+      if (plan.refuse !== undefined) return plan.refuse;
       if (call.name === 'suggest_followups') {
         // The LAST suggest_followups call wins (a model that repeats it after
         // already answering must not accumulate 15 stale suggestions).
         followups.length = 0;
       }
-      let resultText: string;
-
-      // S5 — PLANNER LOOP GUARD: if plan_todo has been called more than
-      // once, force-break the loop and return whatever content we have.
-      // This prevents the 6x planner loop observed in trace-1788059239352-k7zl03
-      // where the model called plan_todo 6 times for a song-writing request
-      // (15.6K tokens, 2m25s, FAILED).
-      const planTodoCount = toolCallsRun.filter((t) => t === 'plan_todo').length;
-      if (call.name === 'plan_todo' && planTodoCount >= 1) {
-        resultText = 'Error: plan_todo already called. You have a plan — now execute it. Do NOT call plan_todo again. Use write_file, run_terminal, or other execution tools to complete the work.';
-      } else if (call.name === 'pipeline' && toolCallsRun.filter((t) => t === 'pipeline').length >= 1) {
-        resultText = 'Error: pipeline already called. The pipeline is running — do not call it again.';
-      } else if (!tool) {
-        // Unknown tool — the error is fed back so the model retries with a
-        // known tool (hadToolCallError handling).
-        resultText = `Error: unknown tool "${call.name}". Available tools: ${schemas.map((s) => s.name).join(', ')}.`;
-      } else if (tiered && !schemaNames.has(call.name)) {
-        // Tiered exposure gate: the tool is REGISTERED but its toolset was
-        // never loaded this turn — do NOT execute it silently. Give the model
-        // the exact load syntax so it can activate the toolset and retry.
-        const ownerToolset = toolsetForTool(call.name);
-        resultText =
-          `Error: tool "${call.name}" exists but its "${ownerToolset?.name ?? 'domain'}" toolset is not loaded this turn. ` +
-          `Call tool_search with {"action":"load","toolset":"${ownerToolset?.name ?? ''}"} first — its tools become callable immediately.`;
-      } else if (!isToolEnabled(call.name, context.configManager)) {
-        // I1 execution gate: a disabled tool is rejected at runtime even if
-        // the model hallucinated its name — the toggle is never cosmetic.
-        resultText = `Error: tool "${call.name}" is disabled — its toolset is turned off. Enable it with \`nuvira tools toolsets\`.`;
-      } else {
-        // I2: emit `tool:started` (before execution) + `tool:called` (after)
-        // on the observability bus — drives the hooks registry's
-        // the `post_tool_call` hook AND the dashboard's
-        // step cards (P0.6: the GUI renders each call as a live card —
-        // running → ok/error with duration + collapsible result). Timing is
-        // wall-clock; `ok` mirrors the tool-result convention (Error: prefix).
-        const startedAt = Date.now();
-        ctx.emit?.('tool:started', {
+      // I2: emit `tool:started` (before execution) + `tool:called` (after)
+      // on the observability bus — drives the hooks registry's
+      // the `post_tool_call` hook AND the dashboard's
+      // step cards (P0.6: the GUI renders each call as a live card —
+      // running → ok/error with duration + collapsible result). Timing is
+      // wall-clock; `ok` mirrors the tool-result convention (Error: prefix).
+      const startedAt = Date.now();
+      ctx.emit?.('tool:started', {
+        id: call.id,
+        tool: call.name,
+        args: call.arguments,
+      });
+      try {
+        deps.onEvent?.(`   ⚙ ${call.name}(${summarizeArgs(call.arguments)})`);
+        let resultText = await deps.executeTool(call.name, call.arguments, ctx);
+        // I3: a tool that returns {artifact, result} gets its deliverable
+        // recorded on the session and only `result`
+        // is fed back to the model — the JSON payload is runtime metadata.
+        resultText = appendToolArtifact(resultText, ctx.artifacts);
+        ctx.emit?.('tool:called', {
           id: call.id,
           tool: call.name,
-          args: call.arguments,
+          ok: !resultText.startsWith('Error:'),
+          result: resultText,
+          durationMs: Date.now() - startedAt,
         });
-        try {
-          deps.onEvent?.(`   ⚙ ${call.name}(${summarizeArgs(call.arguments)})`);
-          resultText = await deps.executeTool(call.name, call.arguments, ctx);
-          // I3: a tool that returns {artifact, result} gets its deliverable
-          // recorded on the session and only `result`
-          // is fed back to the model — the JSON payload is runtime metadata.
-          resultText = appendToolArtifact(resultText, ctx.artifacts);
-          ctx.emit?.('tool:called', {
-            id: call.id,
-            tool: call.name,
-            ok: !resultText.startsWith('Error:'),
-            result: resultText,
-            durationMs: Date.now() - startedAt,
-          });
-          if (call.name === 'suggest_followups') endedAfterConcluding = true;
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          resultText = `Error: ${message}`;
-          ctx.emit?.('tool:called', {
-            id: call.id,
-            tool: call.name,
-            ok: false,
-            error: message,
-            durationMs: Date.now() - startedAt,
-          });
-        }
+        if (call.name === 'suggest_followups') endedAfterConcluding = true;
+        return resultText;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        ctx.emit?.('tool:called', {
+          id: call.id,
+          tool: call.name,
+          ok: false,
+          error: message,
+          durationMs: Date.now() - startedAt,
+        });
+        return `Error: ${message}`;
       }
+    };
+
+    const executed: string[] = new Array(plans.length).fill('');
+    for (let i = 0; i < plans.length; ) {
+      // A run of consecutive read-only calls is ONE bounded fan-out; any
+      // refused call breaks the run (its error is cheap and order-sensitive).
+      if (plans[i].refuse === undefined && isParallelSafeTool(plans[i].call.name)) {
+        let j = i;
+        while (j < plans.length && plans[j].refuse === undefined && isParallelSafeTool(plans[j].call.name)) j += 1;
+        const run = plans.slice(i, j);
+        if (run.length > 1) {
+          deps.onEvent?.(`   ⚡ ${run.length} read-only tool calls in parallel`);
+          for (let k = 0; k < run.length; k += maxParallelReads) {
+            const chunk = run.slice(k, k + maxParallelReads);
+            const chunkResults = await Promise.all(chunk.map((p) => runOne(p)));
+            chunkResults.forEach((text, n) => {
+              executed[i + k + n] = text;
+            });
+          }
+        } else {
+          executed[i] = await runOne(run[0]);
+        }
+        i = j;
+      } else {
+        executed[i] = await runOne(plans[i]);
+        i += 1;
+      }
+    }
+
+    // ── Phase 3 — post-process, in the model's original call order ─────────
+    // Tool results MUST reach the thread in the assistant's tool_calls order:
+    // providers pair them by `toolCallId`, and a reordered thread reads as a
+    // different (worse) tool use. So the ordered pass below owns the push even
+    // though the executions above may have completed out of order.
+    // What each call actually delivered (post hint/tip decoration), kept in
+    // call order for the endsAgentStep exit below.
+    const delivered: string[] = new Array(plans.length).fill('');
+    for (let i = 0; i < plans.length; i += 1) {
+      const call = plans[i].call;
+      let resultText = executed[i];
       // P3c — on error/denial, append the deterministic fallback hint for
       // this tool (advisory — the model still decides; never on success).
       const hint = fallbackHintForTool(call.name, resultText);
@@ -568,6 +831,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       // fires once after the 2nd (bounded, deterministic, advisory).
       const parallelTip = parallel.note(call.name, !resultText.startsWith('Error:'));
       if (parallelTip) resultText = `${resultText}\n\n${parallelTip}`;
+      delivered[i] = resultText;
       thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
     }
 
@@ -580,6 +844,39 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     // model step on a cancelled turn (the user already walked away).
     if (opts.signal?.aborted) {
       return { content: '', followups, toolCalls: toolCallsRun, steps, bounded: false, cancelled: true };
+    }
+
+    // ── endsAgentStep — a successful dispenser's RESULT is the answer ────────
+    // `build`/`resume`/`repair`/`document`/`website`/`analyze`/`test`/`publish`
+    // declare endsAgentStep: the pipeline they dispatch runs the entire task,
+    // so their own result text (`✅ build succeeded` + summary + details) IS the
+    // deliverable. The flag was declared on the Tool interface and read by
+    // NOTHING (audit W4), so the loop always asked for one more model step —
+    // a full round trip that re-sent the whole tool schema purely to have the
+    // model paraphrase output it had not produced, with a live window for a
+    // second dispatch of the same pipeline.
+    //
+    // Only a SUCCESS ends the step (a refused or failed dispatch must stay in
+    // the loop so the model can react), and `ask_user` deliberately does not:
+    // its result is the user's ANSWER — input the model must act on. See the
+    // `endsAgentStep` docstring in registry.ts for the contract.
+    const terminalIdx = delivered.findIndex(
+      (text, i) => !text.startsWith('Error:') && getTool(plans[i].call.name)?.endsAgentStep === true,
+    );
+    if (terminalIdx >= 0) {
+      // A real summary written THIS step wins (it is the model's own account
+      // of the dispatch); a bare lead-in ("Running the build now…") does not —
+      // the pipeline's summary is the answer then, not the wrapper.
+      const thisStepIsSubstantive =
+        response.content.trim() !== '' && !isBareAcknowledgment(response.content);
+      return {
+        content: thisStepIsSubstantive ? response.content : delivered[terminalIdx],
+        followups,
+        toolCalls: toolCallsRun,
+        steps,
+        bounded: false,
+        continuations,
+      };
     }
 
     // End-of-response semantics (the contract: "END EVERY RESPONSE by
@@ -611,18 +908,22 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
         toolCalls: toolCallsRun,
         steps,
         bounded: false,
+        continuations,
       };
     }
   }
 
+  // Reaching here means the continuation budget is spent (the in-loop check
+  // extends the bound otherwise) — the turn is honestly bounded.
   bounded = true;
-  deps.onEvent?.(`   ⚠️ Tool loop reached its ${maxSteps}-step bound — returning the last response.`);
+  deps.onEvent?.(`   ⚠️ Tool loop reached its ${stepLimit}-step budget — returning the last response.`);
   return {
     content: lastContent || 'I reached my step limit for this request.',
     followups,
     toolCalls: toolCallsRun,
     steps,
     bounded: true,
+    continuations,
   };
 }
 

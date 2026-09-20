@@ -363,16 +363,32 @@ export function coreToolJsonSchemas(cm?: ConfigManagerLike): ToolJsonSchema[] {
  * Tiered exposure mode — read from config (`tools.loopExposure`):
  * - 'tiered'  — core schemas on the wire; the rest via `tool_search` load.
  * - 'all'     — the pre-tiering behavior (every enabled toolset's schemas).
- * Default 'all' keeps every existing caller byte-identical until evals
- * (Phase 0) justify flipping the default — the feature ships complete but
- * inert, so nothing can regress silently.
+ *
+ * DEFAULT 'tiered' (flipped from 'all' after the live evidence below).
+ *
+ * Measured on the built 2.7.3 artifact: the full set is 110 schemas ≈
+ * 68,764 bytes ≈ 17.2K tokens sent on EVERY loop step, while the tiered core
+ * is 16 schemas ≈ 15,034 bytes ≈ 3.9K tokens — a 4.6× cut. That payload is a
+ * hard FUNCTIONAL ceiling, not merely a cost: Gemini's free tier caps input
+ * at 16,000 tokens per model per minute
+ * (`generate_content_free_tier_input_token_count`), so a 17.2K-token tool
+ * payload can never fit — every turn dies with "You exceeded your current
+ * quota", which is exactly the live 429 users hit on the WhatsApp/dashboard
+ * chat paths.
+ *
+ * Tiering stays safe because CORE_TOOL_NAMES keeps the whole tool CONTRACT on
+ * the wire (`suggest_followups`, `ask_user`, `plan_todo`) plus `tool_search`,
+ * the discovery loader — so a turn that needs a domain tool still reaches it
+ * mid-turn instead of being stranded without it.
+ *
+ * 'all' remains an explicit opt-in for large-context models / debugging.
  */
 export function getLoopExposureMode(cm?: ConfigManagerLike): 'tiered' | 'all' {
   try {
     const exposure = (cm?.getAll?.() as { tools?: { loopExposure?: string } } | undefined)?.tools?.loopExposure;
-    return exposure === 'tiered' ? 'tiered' : 'all';
+    return exposure === 'all' ? 'all' : 'tiered';
   } catch {
-    return 'all';
+    return 'tiered';
   }
 }
 

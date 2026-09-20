@@ -113,4 +113,54 @@ describe('PlatformConfigSection', () => {
     await waitFor(() => expect(authSpy).toHaveBeenCalled());
     expect(sessionExpired).toHaveBeenCalled();
   });
+
+  /**
+   * The viewer gate — boundary, not presentation.
+   *
+   * The "all buttons disabled" test above passes only if EVERY write control is
+   * gated. It was failing, and the reason was a real hole: the `🚀 Getting
+   * Started` wizard entry had no `canWrite` gate, and the wizard's `💾 Save
+   * token` was gated only on `wizardSaving`. A read-only viewer could therefore
+   * walk into the credential wizard and persist a transport credential via
+   * `setPlatformConfig`.
+   *
+   * These tests pin the boundary itself, so re-introducing an ungated write
+   * path fails loudly even if someone forgets to add `disabled`.
+   */
+  it('viewer: the credential wizard cannot be opened, let alone saved', async () => {
+    mockApi();
+    render(<PlatformConfigSection canWrite={false} sessionExpired={() => {}} />);
+    const entries = await screen.findAllByRole('button', { name: /🚀 Getting Started/ });
+
+    expect((entries[0] as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(entries[0]); // forced click — a disabled button is not a boundary
+
+    expect(screen.queryByRole('button', { name: /💾 Save token/ })).toBeNull();
+    expect(dashboardAPI.setPlatformConfig).not.toHaveBeenCalled();
+  });
+
+  it('viewer: the edit form never opens, so Save/Remove are unreachable', async () => {
+    vi.stubGlobal('confirm', () => true);
+    mockApi();
+    render(<PlatformConfigSection canWrite={false} sessionExpired={() => {}} />);
+    const edit = await screen.findAllByRole('button', { name: /✎ Edit/ });
+
+    fireEvent.click(edit[0]);
+
+    expect(screen.queryByRole('button', { name: /💾 Save/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /🗑 Remove/ })).toBeNull();
+    expect(dashboardAPI.setPlatformConfig).not.toHaveBeenCalled();
+    expect(dashboardAPI.removePlatformConfig).not.toHaveBeenCalled();
+  });
+
+  it('table mode (AgentHub Channels): every write button is gated for a viewer', async () => {
+    mockApi();
+    render(<PlatformConfigSection canWrite={false} sessionExpired={() => {}} mode="table" />);
+    await screen.findByText('Telegram');
+
+    for (const b of screen.getAllByRole('button')) {
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
 });

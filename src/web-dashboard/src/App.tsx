@@ -22,6 +22,23 @@ import PlatformsPage from './components/PlatformsPage';
 import BedrockOnboarding from './components/BedrockOnboarding';
 import ContactsPage from './components/ContactsPage';
 import ModelTimeline from './components/ModelTimeline';
+// Memory + conversation history were being COMPUTED and SERVED by the server
+// (`readMemoryData()` / `readHistoryData()` in the /api payload) but no route
+// rendered them, so the panels sat unreachable and the data reached nobody.
+import MemoryPanel from './components/MemoryPanel';
+import HistoryBrowser from './components/HistoryBrowser';
+// Skill executions were invisible end to end: this panel and the audit backend
+// behind `/api/executions` were both complete and both unreferenced, so a skill
+// run left no trace a user could inspect. `onClear`/`onExport` are intentionally
+// left off — the panel guards them and hides those actions, so this is a
+// complete integration of the panel's view capability rather than dead buttons.
+import { ExecutionHistory } from './components/ExecutionHistory';
+// The env-var editor was a complete, styled component with a live write
+// endpoint behind it and no route — so skill secrets could be written (from the
+// in-chat card) but never reviewed, corrected or removed. The page supplies the
+// rows + callbacks the presentational editor expects, and gates writes on the
+// same role the server enforces.
+import SkillEnvPage from './components/SkillEnvPage';
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -79,6 +96,13 @@ export default function App() {
         <Route path="/bedrock" element={<BedrockOnboarding canWrite={true} sessionExpired={(msg) => console.error(msg)} />} />
         <Route path="/contacts" element={<ContactsPage />} />
         <Route path="/gateway" element={<GatewayPage />} />
+        <Route path="/env" element={<SkillEnvPage />} />
+        <Route path="/memory" element={<MemoryPanel data={data} />} />
+        <Route path="/history" element={<HistoryBrowser data={data} />} />
+        <Route
+          path="/executions"
+          element={<ExecutionHistory onFetch={(f) => dashboardAPI.fetchExecutionAudit(f)} />}
+        />
         <Route path="/system" element={<HealthPanel data={data} />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />

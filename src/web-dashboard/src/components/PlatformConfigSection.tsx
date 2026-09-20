@@ -138,6 +138,10 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
   };
 
   const startWizard = (entry: PlatformConfigEntry): void => {
+    // Write action: the wizard ends in setPlatformConfig, which persists a
+    // transport credential. A disabled button is presentation; this is the
+    // boundary — a viewer must not reach the wizard at all.
+    if (!canWrite) return;
     setWizardPlatform(entry);
     setWizardStep(0);
     setWizardValues(Object.fromEntries(entry.envVars.map((v) => [v.varName, v.value])));
@@ -145,7 +149,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
   };
 
   const saveWizard = async (): Promise<void> => {
-    if (!wizardPlatform) return;
+    if (!wizardPlatform || !canWrite) return;
     setWizardSaving(true);
     setWizardResult(null);
     const result = await dashboardAPI.setPlatformConfig(wizardPlatform.platform, wizardValues);
@@ -206,7 +210,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
                   {wizardResult ? (<div className={`admin-row-msg${wizardResult.kind === 'ok' ? '' : ' admin-row-msg-err'}`}>{wizardResult.text}</div>) : null}
                   <div className="wizard-nav">
                     <button type="button" className="admin-mini-btn" onClick={() => setWizardStep(0)}>← Back</button>
-                    <button type="button" className="admin-refresh-btn" onClick={() => void saveWizard()} disabled={wizardSaving}>{wizardSaving ? '⏳ Saving…' : '💾 Save token'}</button>
+                    <button type="button" className="admin-refresh-btn" onClick={() => void saveWizard()} disabled={wizardSaving || !canWrite}>{wizardSaving ? '⏳ Saving…' : '💾 Save token'}</button>
                   </div>
                   {wizardResult?.kind === 'ok' ? (<><p className="wizard-section-title">📋 Next steps:</p><ol className="wizard-steps">{guide.postSetup.map((s, i) => <li key={i}>{s}</li>)}</ol></>) : null}
                 </>
@@ -240,7 +244,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
                   </td>
                   <td className="platform-config-actions">
                     {!p.configured ? (
-                      <button type="button" className="wizard-start-btn" onClick={() => startWizard(p)}>🚀 Getting Started</button>
+                      <button type="button" className="wizard-start-btn" onClick={() => startWizard(p)} disabled={!canWrite}>🚀 Getting Started</button>
                     ) : null}
                     {p.setupUrl ? (
                       <a href={p.setupUrl} target="_blank" rel="noopener noreferrer" className="admin-mini-btn platform-docs-link">📖 Docs</a>
@@ -331,7 +335,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
                 ) : null}
                 <div className="wizard-nav">
                   <button type="button" className="admin-mini-btn" onClick={() => setWizardStep(0)}>← Back</button>
-                  <button type="button" className="admin-refresh-btn" onClick={() => void saveWizard()} disabled={wizardSaving}>
+                  <button type="button" className="admin-refresh-btn" onClick={() => void saveWizard()} disabled={wizardSaving || !canWrite}>
                     {wizardSaving ? '⏳ Saving…' : '💾 Save token'}
                   </button>
                 </div>
@@ -405,7 +409,7 @@ function PlatformConfigCard(props: {
         <span className="hub-platform-label">{entry.label}</span>
         <span className="hub-card-id">{entry.platform}</span>
         {!entry.configured ? (
-          <button type="button" className="wizard-start-btn" onClick={onStartWizard} title="Step-by-step setup wizard">
+          <button type="button" className="wizard-start-btn" onClick={onStartWizard} disabled={!canWrite} title="Step-by-step setup wizard">
             🚀 Getting Started
           </button>
         ) : null}
@@ -458,12 +462,12 @@ function PlatformConfigCard(props: {
               type="button"
               className="admin-refresh-btn"
               onClick={() => onSave(values)}
-              disabled={busy}
+              disabled={busy || !canWrite}
             >
               {busy ? '⏳ Saving…' : '💾 Save'}
             </button>
             {entry.configured ? (
-              <button type="button" className="hub-remove-btn" onClick={onRemove} disabled={busy}>
+              <button type="button" className="hub-remove-btn" onClick={onRemove} disabled={busy || !canWrite}>
                 🗑 Remove
               </button>
             ) : null}

@@ -11,7 +11,7 @@
  * module on first use so the dashboard server never pays for it at import
  * time (chat.ts pulls the whole CLI router).
  */
-import type { FollowupSuggestion } from '../tools/registry.js';
+import { type FollowupSuggestion } from '../tools/followup-utils.js';
 import { type PlanSnapshot, type PlanStoreLike } from '../tools/plan-store.js';
 /** One stored turn in a chat session. */
 export interface ChatTurn {
@@ -39,6 +39,12 @@ export interface ChatEngine {
         projectContext?: string;
         /** P4 — attached project dir; the engine recalls its sessions + facts. */
         projectPath?: string;
+        /**
+         * P5 — the message is a picked FOLLOWUP (it matches the followups this
+         * session was last offered): the engine marks it as a continuation of the
+         * previous turn instead of a fresh independent request.
+         */
+        continuation?: boolean;
         /**
          * P4 — stream answer tokens live (the typewriter). Called with each
          * content token as the model generates it; non-streaming providers
@@ -148,6 +154,12 @@ export interface ChatSessionRecord {
     updatedAt: number;
     /** P4b — the attached project dir at the time of the conversation (used to restore on resume). */
     projectPath?: string;
+    /**
+     * P5 — the followups the last answer offered. A message that MATCHES one of
+     * these (a clicked chip) is recognised as a continuation of the previous
+     * execution and carries the continuation marker into the model thread.
+     */
+    followups?: FollowupSuggestion[];
 }
 /** P4 — the sidebar summary shape for `GET /api/sessions`. */
 export interface ChatSessionSummary {

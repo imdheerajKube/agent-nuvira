@@ -59,7 +59,18 @@ export interface SandboxExecutionResult {
  */
 export declare function executeInSandbox(scriptContent: string, scriptPath: string, env?: Record<string, string>, args?: string[], config?: Partial<SandboxConfig>): Promise<SandboxExecutionResult>;
 /**
- * Check if Docker is available and running.
+ * Check if Docker is available and RUNNING.
+ *
+ * `docker --version` only proves the CLI is installed — it succeeds with the
+ * daemon stopped, and every subsequent `docker run` then dies with exit code
+ * 125 ("Cannot connect to the Docker daemon"). Callers trust this answer to
+ * decide between the sandbox and a local fallback, so a CLI-only probe made a
+ * machine with Docker installed-but-not-running take the sandbox path, fail on
+ * every skill, and never fall back.
+ *
+ * So probe the DAEMON (`docker info`) and keep `--version` only to report the
+ * version string. A stopped daemon now reports `available: false` with the
+ * daemon's own error, which is exactly what enables the local fallback.
  */
 export declare function checkDockerAvailable(): Promise<{
     available: boolean;

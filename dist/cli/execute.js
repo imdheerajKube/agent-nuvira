@@ -34,10 +34,11 @@ import { runLoopExecutor } from './loop-executor.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { isConversationalQuestion } from '../nlu/conversation-gate.js';
 import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
-import { maybeAutoRecall, recallCard, recallContextBlock } from '../context/session-recall.js';
+import { maybeAutoRecall, recallCard, recallContextBlock, recallPolicy } from '../context/session-recall.js';
 import { toFollowupSuggestions } from '../tools/registry.js';
 import { maybeRunBackgroundDuties } from './duties.js';
 import { recordActionFailure } from '../learning/failure-bookkeeping.js';
+import { sweepTransientFailures, sessionRevivalStore } from '../learning/provider-revival.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { listCheckpoints } from '../agents/checkpoint-store.js';
 import { logger, setSilent } from '../utils/logger.js';
@@ -111,7 +112,8 @@ export class ExecuteCommand extends BaseCommand {
             .option('--repair-mode <mode>', 'Repair mode: auto | prompt | off (default: auto)')
             .option('--repair-fallback-models <models>', 'Comma-separated fallback models for repair (e.g., groq/llama3,nim/mistral)')
             .option('--auto-route', 'Route each agent to the best provider/model automatically (Auto model)', false)
-            .option('--tool-calling', 'Use iterative tool-calling agents for writer/reviewer (read→edit→verify loop)', false)
+            .option('--tool-calling', 'Use iterative tool-calling agents for writer/reviewer (read→edit→verify loop). On by default — kept for explicit/back-compat use')
+            .option('--no-tool-calling', 'Disable the tool-calling writer/reviewer — the one-shot writer must emit complete files without ever reading them')
             .option('--engine <mode>', 'Execution engine: auto | loop | pipeline (default: auto — loop for strong models, pipeline for local/weak tier)')
             .option('--plan-mode <mode>', 'Planning depth: light | heavy (default: light — heavy forces the reasoner→planner front-matter for large greenfield builds)')
             .option('--checkpoint', 'Save a resume-able checkpoint after every task batch (in ~/.nuvira/memory/checkpoints/)', false)
@@ -960,6 +962,22 @@ export class ExecuteCommand extends BaseCommand {
         };
         // ── Try LLM-powered suggestions ─────────────────────────────────────
         try {
+            // ── Re-verify before re-admit ───────────────────────────────────────
+            // This is the ONLY execute-side LLM call that bypasses the orchestrator,
+            // and it records into `this.failureSession`. Without a sweep here the
+            // marker only ever goes one way: a provider that failed transiently stays
+            // excluded for the whole run even after it recovered, so the follow-up
+            // generator is denied a provider that is back — while the machinery to
+            // prove recovery in seconds sat unused. Best-effort: a sweep failure must
+            // never stop the rule-based fallback from rendering.
+            try {
+                await sweepTransientFailures(sessionRevivalStore(this.failureSession), this.configManager, {
+                    agentType: 'execute',
+                });
+            }
+            catch {
+                // Best-effort — revival must never break follow-up suggestions.
+            }
             const config = this.configManager.getAll();
             const type = (activeProvider ||
                 config.defaultProvider || 'auto');
@@ -1437,11 +1455,14 @@ export class ExecuteCommand extends BaseCommand {
             // with chat). Best-effort — never breaks execution. In --json-events
             // mode the card is suppressed so stdout stays pure NDJSON.
             let recallContext;
-            if (dispatch.mode === 'recall') {
+            // Ambient recall (see recallPolicy): a goal no longer has to be phrased as
+            // a continuation to learn what this project already did.
+            const recallPolicyDecision = recallPolicy({ mode: dispatch.mode });
+            if (recallPolicyDecision.recall) {
                 try {
                     const recall = await maybeAutoRecall(process.cwd(), this.configManager.getWorkspaceStore());
                     if (recall) {
-                        if (!options.jsonEvents)
+                        if (recallPolicyDecision.announce && !options.jsonEvents)
                             console.log(recallCard(recall));
                         recallContext = recallContextBlock(recall);
                     }
@@ -1468,7 +1489,10 @@ export class ExecuteCommand extends BaseCommand {
                 repairMode: options.repairMode,
                 repairFallbackModels: options.repairFallbackModels?.split(',').map((m) => m.trim()).filter(Boolean),
                 autoRouteModels: options.autoRoute || undefined,
-                useToolCalling: options.toolCalling || undefined,
+                // Resolved explicitly (default true): the orchestrator's own default is
+                // tool-calling ON (audit W3), and passing the boolean keeps `--no-tool-calling`
+                // authoritative over it from the CLI.
+                useToolCalling: options.toolCalling !== false,
                 ...checkpointOptions(options.checkpoint, options.resume),
                 spinner: board,
             });

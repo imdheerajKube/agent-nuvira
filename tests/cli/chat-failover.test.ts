@@ -242,4 +242,57 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
     ).rejects.toThrow(/Tool-calling API error \(400\)/);
     expect(generateTools).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * A model that cannot do native tool calling must NOT kill the turn.
+   *
+   * Live regression (reproduced through the fixed router): Groq answered
+   *   400 "`tool calling` is not supported with this model"
+   * and the WHOLE turn died — the user got "I couldn't complete that request"
+   * for a perfectly ordinary question. The loop already ships a transport that
+   * needs no provider tool support, so it must fall through to it.
+   */
+  it('falls through to the JSON transport when the model rejects native tool calling', async () => {
+    const generateTools = vi.fn().mockRejectedValue(
+      new Error(
+        'Tool-calling API error (400): {"error":{"message":"`tool calling` is not supported with this model","type":"invalid_request_error","param":"tool calling"}}',
+      ),
+    );
+    // The JSON transport asks the same model a flattened prompt; it answers in
+    // prose with no tool block, which ends the turn cleanly.
+    const generate = vi.fn().mockResolvedValue('Division: 20101 ÷ 2 = 10050 remainder 1.');
+    const cmd = new ChatCommand() as any;
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generateTools, generate, generateStream: undefined },
+      model: 'groq/compound',
+    };
+
+    const callModel = (cmd as any).buildToolCallModel('teach division', session, {}, { auto: false });
+    const result = await callModel(
+      [{ role: 'user', content: 'teach division' }],
+      [{ name: 'suggest_followups', description: '', parameters: {} }],
+    );
+
+    expect(result.content).toBe('Division: 20101 ÷ 2 = 10050 remainder 1.');
+    expect(generateTools).toHaveBeenCalledTimes(1); // tried native first
+    expect(generate).toHaveBeenCalledTimes(1); // then the JSON transport
+    // The attempted model is recorded, so the trace names it instead of "unknown".
+    expect(session.model).toBe('groq/compound');
+  });
+
+  it('still fails over on a TRANSIENT error (transport switch is only for tool-incapability)', async () => {
+    const generateTools = vi.fn().mockRejectedValue(new Error('429 rate limit exceeded'));
+    const generate = vi.fn().mockResolvedValue('should not be reached on the same candidate');
+    const cmd = new ChatCommand() as any;
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generateTools, generate },
+      model: 'llama-3.3-70b-versatile',
+    };
+    const callModel = (cmd as any).buildToolCallModel('q', session, {}, { auto: false });
+    await expect(
+      callModel([{ role: 'user', content: 'q' }], [{ name: 't', description: '', parameters: {} }]),
+    ).rejects.toThrow(/429/);
+  });
 });

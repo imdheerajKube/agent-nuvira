@@ -54,9 +54,21 @@ export interface Tool {
   /** zod input schema — the same schema handed to tool-calling providers. */
   inputSchema: ZodType;
   /**
-   * Whether executing this tool should continue the loop after it returns.
-   * `false` (e.g. suggest_followups) lets the model end the turn right after
-   * (endsAgentStep semantics).
+   * Whether a SUCCESSFUL call to this tool ends the agent step: the tool's
+   * result is then delivered as the step's answer instead of asking the model
+   * for one more step (see the endsAgentStep exit in tool-loop.ts).
+   *
+   * This is set on the DISPENSER tools whose call runs an entire task on its
+   * own — `build`/`resume`/`repair`/`document`/`website`/`analyze`/`test`/
+   * `publish` — because their result text already IS the deliverable. Every
+   * ordinary tool (a read, an edit, a search) and every CONTROL tool
+   * (`ask_user` — its result is the user's answer, which the model must act
+   * on; `suggest_followups` — it closes the turn through its own followups
+   * path) is `false`.
+   *
+   * NOTE: this docstring previously stated the OPPOSITE (`true` = continue),
+   * which contradicted every registration — and nothing read the field, so the
+   * declared semantics did nothing at all.
    */
   endsAgentStep: boolean;
   /** What runs. Returns the tool-result text fed back to the model. */
@@ -142,13 +154,13 @@ export interface AskUserAnswer {
   custom?: string;
 }
 
-/** A follow-up recommendation. */
-export interface FollowupSuggestion {
-  /** The full prompt sent as the next user message when clicked. */
-  prompt: string;
-  /** Optional short display label (defaults to the prompt). */
-  label?: string;
-}
+/**
+ * A follow-up recommendation. Defined in the dependency-free leaf module
+ * (`followup-utils.ts`) and re-exported here so the many existing importers of
+ * `FollowupSuggestion` from the registry keep working unchanged.
+ */
+import type { FollowupSuggestion } from './followup-utils.js';
+export type { FollowupSuggestion } from './followup-utils.js';
 
 /** Sink collecting `suggest_followups` calls during a loop. */
 export interface FollowupSink {
@@ -607,7 +619,10 @@ registerTool({
   description: 'Ask the user a clarifying question with 2–4 choices (multi-select optional). Use when a request is ambiguous or missing information.',
   category: 'experience',
   inputSchema: askUserSchema,
-  endsAgentStep: true,
+  // NOT a dispenser: the tool result is the user's ANSWER, which the model
+  // must act on in the next step (ending the step here would throw the answer
+  // away). See the endsAgentStep contract in this file.
+  endsAgentStep: false,
   run: async (args, ctx) => {
     const { question, choices, multi_select } = askUserSchema.parse(args);
     const render = ctx.askUser || (await import('./ask-user.js')).renderAskUser;
@@ -1039,12 +1054,34 @@ export function toFollowupSuggestions(raw: string): FollowupSuggestion[] {
       }
       return { prompt: '' };
     });
+    // NOTE: this is a PARSER — it validates and returns every followup the
+    // model emitted (the schema deliberately has no hard max). Hygiene/capping
+    // belongs to the render/collect points (normalizeFollowups), so callers
+    // that want the top N keep the whole list to choose from.
     const parsed2 = suggestFollowupsSchema.safeParse({ followups });
     return parsed2.success ? parsed2.data.followups : [];
   } catch {
     return [];
   }
 }
+
+// ─── Followup hygiene + continuation ────────────────────────────────────────
+// The implementation lives in the dependency-FREE leaf module
+// `followup-utils.ts` and is re-exported here for the surfaces that already
+// import the registry. It is deliberately NOT implemented inline: the gateway
+// and dashboard must be able to normalise a followup (and recognise a clicked
+// one) WITHOUT pulling the whole 110-tool registry into their import graph —
+// doing so measurably slowed those hot paths.
+export {
+  MAX_FOLLOWUPS,
+  MAX_FOLLOWUP_PROMPT_CHARS,
+  MAX_FOLLOWUP_LABEL_CHARS,
+  normalizeFollowups,
+  FOLLOWUP_CONTINUATION_MARKER,
+  buildFollowupContinuationPrompt,
+  isFollowupContinuation,
+  isSuggestedFollowup,
+} from './followup-utils.js';
 
 // ─── Tool run implementations (deferred imports to avoid cycles) ────────────
 
@@ -2950,7 +2987,7 @@ registerTool({
 
 registerTool({
   name: 'search_memory',
-  description: 'Search memories by content, type, or tags.',
+  description: 'Search memories by content, type, or tags. Searches BOTH memory stores: entries added with add_memory (keyword/tag) and facts learned from earlier sessions (semantic), so a memory recorded by another path is still found.',
   category: 'workflow',
   inputSchema: z.object({
     query: z.string().optional().describe('Search query'),
@@ -2959,11 +2996,20 @@ registerTool({
     limit: z.number().optional().describe('Max results (default: 10)'),
   }),
   endsAgentStep: false,
-  run: (args) => import('./memory-tools.js').then((m) => {
-    const store = m.getMemoryStore();
+  run: (args, ctx) => import('./memory-tools.js').then(async (m) => {
     const { query, type, tags, limit } = args as any;
-    const results = store.search({ query, type, tags, limit });
-    return JSON.stringify({ count: results.length, results: results.map(r => ({ id: r.entry.id, content: r.entry.content, type: r.entry.type, score: r.score })) });
+    // Scope the semantic half to this project — the same deriveProjectId() the
+    // fact extractor and recall use, so all three agree on the store.
+    let projectId: string | undefined;
+    try {
+      const { deriveProjectId } = await import('../config/workspace.js');
+      projectId = deriveProjectId(ctx?.cwd || process.cwd()).id;
+    } catch { /* best-effort — memory-store results still return */ }
+    const results = await m.searchMemories({ query, type, tags, limit, projectId });
+    return JSON.stringify({
+      count: results.length,
+      results: results.map((r) => ({ id: r.id, content: r.content, type: r.type, score: r.score, source: r.source })),
+    });
   }),
 });
 

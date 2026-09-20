@@ -26,6 +26,14 @@
  */
 import { SkillCompiler } from '../learning/skill-compiler.js';
 import { getCliName } from '../cli/commands.js';
+// `isEnvVarPersisted` / `getEnvVarValue` read the credential .env FILE first and
+// fall back to process.env. That ordering is the whole point here: the
+// dashboard writes secrets to `~/.nuvira/.env` in ITS process, while the agent
+// runs in another one and only merged the file into process.env at STARTUP
+// (utils/env.ts, and it never overrides an already-present var). Checking
+// `process.env` alone therefore meant "I saved the key in the dashboard, ran
+// the skill, and it still says the var is missing" until the agent restarted.
+import { isEnvVarPersisted, getEnvVarValue } from '../skills/secret-capture.js';
 /**
  * Resolve a skill by name/id from both sources. Compiled store first (its id
  * is the deterministic seed id), then hub catalog by id or name. Returns null
@@ -431,8 +439,10 @@ async function runSkillExecute(execute, ctx) {
     // Register env vars for passthrough
     if (requiredEnvVars.length > 0) {
         registerEnvPassthrough(requiredEnvVars);
-        // Check which vars are missing
-        const missing = requiredEnvVars.filter((v) => !process.env[v]);
+        // Check which vars are missing — against the persisted .env, not just this
+        // process's environment, so a secret captured a moment ago in the dashboard
+        // counts as set (see the import note above).
+        const missing = requiredEnvVars.filter((v) => !isEnvVarPersisted(v));
         if (missing.length > 0) {
             return [
                 `⚠️ Skill '${skillName}' requires environment variables that are not set:`,
@@ -496,11 +506,18 @@ async function runSkillExecute(execute, ctx) {
     });
     // Detect runtime
     const runtime = execute.runtime ?? detectRuntime(skillContent, skillPath);
-    // Build execution context
+    // Build execution context.
+    //
+    // Each declared var is resolved through `getEnvVarValue` (file first, then
+    // process.env) and ALSO hydrated into `process.env`, because the executor's
+    // sandbox passthrough reads process.env — without the hydration a
+    // freshly-saved secret would reach `env` but not the sandboxed process.
     const env = { ...execute.env };
     for (const varName of requiredEnvVars) {
-        if (process.env[varName]) {
-            env[varName] = process.env[varName];
+        const value = getEnvVarValue(varName);
+        if (value) {
+            env[varName] = value;
+            process.env[varName] = value;
         }
     }
     // Execute the skill
@@ -510,6 +527,36 @@ async function runSkillExecute(execute, ctx) {
             env,
             timeoutMs: execute.timeoutMs ?? 30_000,
         }, skillPath);
+        // ── Audit trail ─────────────────────────────────────────────────────
+        // A skill run previously left NO inspectable record: the audit backend
+        // (`skills/execution-audit.ts`) and its dashboard panel were both complete
+        // and both unreferenced, so nothing ever wrote the log. Record the run here
+        // — the single choke point every `skill` execute call passes through.
+        // Best-effort and never awaited on the hot path's behalf: an audit write
+        // failure must not fail the skill the user asked for.
+        // Captured BEFORE the closure. The `!` mirrors the assertion on the
+        // executeSkill call above: TS cannot prove `skillPath` was assigned on the
+        // branch that got here, and an async closure cannot narrow it either.
+        const auditSource = skillPath ? 'local' : 'bundled';
+        void (async () => {
+            try {
+                const { logExecution } = await import('../skills/execution-audit.js');
+                await logExecution({
+                    skillName,
+                    skillSource: auditSource,
+                    runtime,
+                    status: result.success ? 'success' : 'failure',
+                    sessionId: process.env.NUVIRA_SESSION_ID || 'cli',
+                    durationMs: result.durationMs,
+                    exitCode: result.exitCode,
+                    command: skillName,
+                    outputSizeBytes: (result.stdout?.length ?? 0) + (result.stderr?.length ?? 0),
+                });
+            }
+            catch {
+                // Best-effort — the audit trail must never break a skill run.
+            }
+        })();
         const output = [
             `📜 Skill '${skillName}' executed (${runtime}, ${result.durationMs}ms)`,
             result.success ? '✅ Success' : `❌ Failed (exit code ${result.exitCode})`,

@@ -43,6 +43,13 @@ export interface EditParams {
      * Default: true. Set to false to always use the LLM.
      */
     useTier0?: boolean;
+    /**
+     * Model-window-aware file-context budget (T2). When supplied by a caller
+     * that knows the served model's real window, it replaces the historical
+     * constants (10 files / 16K chars); omitted → unchanged behavior.
+     */
+    contextBudgetChars?: number;
+    contextBudgetFiles?: number;
 }
 /** Output of the edit phase */
 export interface EditOutput {

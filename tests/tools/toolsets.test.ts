@@ -23,6 +23,8 @@ import {
   effectiveTools,
   effectiveToolJsonSchemas,
   getToolsetStatus,
+  getLoopExposureMode,
+  coreToolJsonSchemas,
   filterToolsByToolsets,
   type ConfigManagerLike,
 } from '../../src/tools/toolsets.js';
@@ -221,5 +223,48 @@ describe('tool-loop enforcement (schema + execution gate)', () => {
     });
     expect(deps.executeTool).toHaveBeenCalledWith('code_search', { pattern: 'foo' }, expect.anything());
     expect(result.toolCalls).toEqual(['code_search']);
+  });
+});
+
+/**
+ * The exposure ModeFn must default to TIERED.
+ *
+ * Why this is a correctness regression test, not a preference: the full 110-
+ * schema payload is ~17.2K tokens on every step, and Gemini's free tier caps
+ * input at 16,000 tokens/model/minute — so the payload literally cannot fit
+ * and every turn 429s with "You exceeded your current quota" (the live
+ * failure). Tiered sends 16 core schemas (~3.9K tokens). `all` stays available
+ * as an explicit opt-in.
+ */
+describe('getLoopExposureMode — tiered is the default', () => {
+  const cmWith = (tools?: Record<string, unknown>) =>
+    ({ getAll: () => (tools ? { tools } : {}) }) as never;
+
+  it('defaults to tiered when nothing is configured', () => {
+    expect(getLoopExposureMode(undefined)).toBe('tiered');
+    expect(getLoopExposureMode(cmWith())).toBe('tiered');
+  });
+
+  it('still honors an explicit opt-in to the full surface', () => {
+    expect(getLoopExposureMode(cmWith({ loopExposure: 'all' }))).toBe('all');
+    expect(getLoopExposureMode(cmWith({ loopExposure: 'tiered' }))).toBe('tiered');
+  });
+
+  it('treats an unrecognized value (or a throwing config) as tiered, never all', () => {
+    expect(getLoopExposureMode(cmWith({ loopExposure: 'ALL' }))).toBe('tiered');
+    expect(getLoopExposureMode(cmWith({ loopExposure: 'nonsense' }))).toBe('tiered');
+    expect(getLoopExposureMode({ getAll: () => { throw new Error('boom'); } } as never)).toBe('tiered');
+  });
+
+  it('keeps the whole tool CONTRACT on the tiered wire (no stranded turn)', () => {
+    // Tiering is only safe if the contract tools + the discovery loader are
+    // core; otherwise a tiered turn could not ask, suggest, plan, or discover.
+    const names = coreToolJsonSchemas().map((s) => s.name);
+    expect(names).toContain('suggest_followups');
+    expect(names).toContain('ask_user');
+    expect(names).toContain('plan_todo');
+    expect(names).toContain('tool_search');
+    expect(names.length).toBeLessThan(30);
+    expect(effectiveToolJsonSchemas(cmWith()).length).toBeGreaterThan(names.length);
   });
 });

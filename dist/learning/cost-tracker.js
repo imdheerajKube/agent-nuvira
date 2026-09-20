@@ -14,14 +14,24 @@
  * Costs are configurable via config file for accuracy.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths.js';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { join } from 'node:path';
 import { getQuotaLedger } from './quota-ledger.js';
 import { getModelRegistry } from './model-registry.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
-const MEMORY_DIR = join(resolveNuviraHome(), 'memory');
-const COST_PATH = join(MEMORY_DIR, 'cost-tracker.json');
 const CURRENT_VERSION = 1;
+/**
+ * Cost-ledger location — resolved LAZILY through the standard
+ * `NUVIRA_MEMORY_DIR` override, like every other persisted store. Captured at
+ * module load it ignored the override, so spend recorded by a hermetic run
+ * (test, sandbox, isolated profile) was written into the real profile.
+ */
+function memoryDir() {
+    return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
+}
+function costPath() {
+    return join(memoryDir(), 'cost-tracker.json');
+}
 /**
  * Default pricing per 1K tokens (input/output) in USD.
  * Users can override these via config file.
@@ -38,17 +48,19 @@ const DEFAULT_PRICING = {
 const MAX_ENTRIES = 10000;
 // ─── Helpers ────────────────────────────────────────────────────────────────
 function ensureDir() {
-    if (!existsSync(MEMORY_DIR)) {
-        mkdirSync(MEMORY_DIR, { recursive: true });
+    const dir = memoryDir();
+    if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
     }
 }
 function readCosts() {
     try {
         ensureDir();
-        if (!existsSync(COST_PATH)) {
+        const path = costPath();
+        if (!existsSync(path)) {
             return { entries: [], version: CURRENT_VERSION };
         }
-        const raw = readFileSync(COST_PATH, 'utf-8');
+        const raw = readFileSync(path, 'utf-8');
         return JSON.parse(raw);
     }
     catch {
@@ -57,7 +69,7 @@ function readCosts() {
 }
 function writeCosts(data) {
     ensureDir();
-    writeFileSync(COST_PATH, JSON.stringify(data, null, 2), 'utf-8');
+    writeFileSync(costPath(), JSON.stringify(data, null, 2), 'utf-8');
 }
 /**
  * Estimate the number of tokens from text length.

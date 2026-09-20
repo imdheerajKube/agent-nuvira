@@ -12,6 +12,22 @@ import { getPluginRegistry } from '../plugins/registry.js';
 import { getCatalogProvider } from './provider-catalog.js';
 
 /**
+ * Providers with a DEDICATED adapter in this factory. Kept as a set so
+ * `isConstructible` and `createProvider` can never drift apart: every id here
+ * must have a `case` in the switch below.
+ * `nuvira` is the first-party provider; the catalog ids are served generically.
+ */
+const BUILT_IN_PROVIDER_TYPES: ReadonlySet<string> = new Set([
+  'nim',
+  'gemini',
+  'openrouter',
+  'groq',
+  'local',
+  'nuvira',
+  'anthropic',
+]);
+
+/**
  * Factory to create the appropriate inference provider based on configuration
  * and type.
  *
@@ -30,6 +46,31 @@ export class ProviderFactory {
    * checks the plugin registry for a matching plugin. Throws if no built-in,
    * catalog, or plugin provider is found for the type.
    */
+  /**
+   * True when a provider id can actually be CONSTRUCTED — a built-in adapter,
+   * a catalog provider that speaks the OpenAI protocol, or an installed
+   * plugin. Non-throwing twin of `createProvider`.
+   *
+   * Why routing needs this: catalog ids exist for providers we have no adapter
+   * for (e.g. `bedrock` is in the catalog but is neither built-in nor
+   * `openAICompat`). Such an id is *credentialed* — a user can have an
+   * AWS_BEARER_TOKEN — so credential checks alone let it into the failover
+   * candidate pool, where resolution then silently fell back to a DIFFERENT
+   * provider and mislabeled its models (live: "model 'anthropic.claude-3-5-
+   * sonnet-20241022-v1:0' is not available on 'bedrock' — using 'qwen2.5:0.5b'",
+   * i.e. a local Ollama model presented as a Bedrock one). Filtering the pool
+   * by constructibility keeps unusable providers out entirely.
+   */
+  static isConstructible(type: string): boolean {
+    if (BUILT_IN_PROVIDER_TYPES.has(type)) return true;
+    try {
+      if (getCatalogProvider(type)?.openAICompat) return true;
+      return getPluginRegistry().hasPlugin(type);
+    } catch {
+      return false;
+    }
+  }
+
   static createProvider(type: ProviderType | string, config: ProviderConfig): InferenceProvider {
     switch (type) {
       case 'nim':

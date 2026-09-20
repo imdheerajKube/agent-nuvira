@@ -39,12 +39,21 @@ beforeAll(() => {
   process.env.NUVIRA_CONFIG_DIR = cfgDir;
   process.env.NUVIRA_MEMORY_DIR = join(cfgDir, 'memory');
   // Fast-fail local model so the real runPipelineTool resolves without network.
+  // `baseUrl` points at a closed port so the FAILURE is hermetic too: with a
+  // reachable endpoint the model validator substitutes a real installed Ollama
+  // model for the fake pin and runs actual local inference (~20s per test).
   writeFileSync(
     join(cfgDir, 'buffconfig.json'),
     JSON.stringify({
       defaultProvider: 'local',
       providers: {
-        local: { runner: 'ollama', model: 'nonexistent-fast-fail', temperature: 0.7, maxTokens: 1024 },
+        local: {
+          runner: 'ollama',
+          model: 'nonexistent-fast-fail',
+          baseUrl: 'http://127.0.0.1:9',
+          temperature: 0.7,
+          maxTokens: 1024,
+        },
       },
     }),
   );
@@ -823,5 +832,177 @@ describe('GatewayRegistry P1 policies', () => {
     expect(entries[0]).toMatchObject({ platform: 'mock', handled: 'refused', text: 'hello there' });
     expect(entries[1]).toMatchObject({ platform: 'mock', handled: 'refused', senderId: 'u-1' });
     expect(entries.every((e) => e.id && e.at)).toBe(true);
+  });
+});
+
+/**
+ * Idempotency — a message the transport delivers twice is handled ONCE.
+ * Live context: the WhatsApp bridge replays its offline backfill on reconnect,
+ * so one ask arrived 20+ times and was answered 20+ times (re-running a 112s
+ * multi-agent pipeline each time for a pipeline-routed ask).
+ */
+describe('GatewayRegistry — inbound idempotency (dedup ledger)', () => {
+  it('ignores a re-delivered message: one handle, no second reply', async () => {
+    const { registry, adapter } = mockRegistry({ streamEvents: false, policies: { mock: {} } });
+    const msg = {
+      platform: 'mock' as const,
+      channelId: 'dedup-1',
+      text: 'fix the failing test',
+      senderId: 'u-dedup',
+      messageId: 'DEDUP-MSG-1',
+    };
+    const first = await registry.handleInbound(msg);
+    const sentAfterFirst = adapter.sent.length;
+    expect(sentAfterFirst).toBeGreaterThan(0);
+    expect(first).not.toBe('duplicate');
+
+    const second = await registry.handleInbound(msg);
+    // The verdict is explicit, and NOTHING was sent the second time — the
+    // sender already has the answer for this exact message.
+    expect(second).toBe('duplicate');
+    expect(adapter.sent).toHaveLength(sentAfterFirst);
+
+    const entries = registry.inbox.read().filter((e) => e.channelId === 'dedup-1');
+    expect(entries).toHaveLength(2);
+    expect(entries[0].handled).toBe('duplicate');
+    expect(entries[0].dedupKey).toContain('DEDUP-MSG-1');
+    expect(entries[0].dedupCount).toBe(2);
+    expect(entries[1].handled).not.toBe('duplicate');
+  });
+
+  it('a duplicate does NOT enter the conversation history twice', async () => {
+    const { registry } = mockRegistry({ streamEvents: false, policies: { mock: {} } });
+    const msg = {
+      platform: 'mock' as const,
+      channelId: 'dedup-history',
+      text: 'explain the auth flow',
+      messageId: 'DEDUP-H-1',
+    };
+    await registry.handleInbound(msg);
+    const before = registry.chatStore.getFullHistory('mock:dedup-history').length;
+    expect(before).toBeGreaterThan(0);
+    await registry.handleInbound(msg);
+    // The re-delivery must not add a second copy of the user's turn — that
+    // would corrupt the follow-up context the model sees.
+    expect(registry.chatStore.getFullHistory('mock:dedup-history').length).toBe(before);
+  });
+
+  it('distinct message ids are NOT collapsed, even with identical text', async () => {
+    const { registry, adapter } = mockRegistry({ streamEvents: false, policies: { mock: {} } });
+    const base = { platform: 'mock' as const, channelId: 'dedup-2', text: 'hello', senderId: 'u-dedup' };
+    const a = await registry.handleInbound({ ...base, messageId: 'ID-A' });
+    const b = await registry.handleInbound({ ...base, messageId: 'ID-B' });
+    expect(a).not.toBe('duplicate');
+    expect(b).not.toBe('duplicate');
+    expect(adapter.sent.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('never dedups on text alone (a sender repeating themselves is real work)', async () => {
+    const { registry, adapter } = mockRegistry({ streamEvents: false, policies: { mock: {} } });
+    const base = { platform: 'mock' as const, channelId: 'dedup-3', text: 'hello', senderId: 'u-dedup' };
+    const a = await registry.handleInbound(base);
+    const sentAfter = adapter.sent.length;
+    const b = await registry.handleInbound(base);
+    expect(a).not.toBe('duplicate');
+    expect(b).not.toBe('duplicate');
+    expect(adapter.sent.length).toBeGreaterThan(sentAfter);
+  });
+
+  it('an UNAPPROVED sender still leaves no trace (dedup runs after the policy gate)', async () => {
+    const { registry } = mockRegistry({
+      streamEvents: false,
+      policies: { mock: { allowedUsers: ['u-ok'], silentDrop: true } },
+    });
+    const refused = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'dedup-gate',
+      text: 'fix the failing test',
+      senderId: 'u-stranger',
+      messageId: 'DEDUP-GATE-1',
+    });
+    expect(refused).toBe('refused');
+    // Nothing recorded in the dedup ledger for a sender who must not be seen.
+    expect(registry.dedup.read().some((e) => e.key.includes('DEDUP-GATE-1'))).toBe(false);
+  });
+});
+
+/**
+ * Routing parity — the gateway must make the SAME chat-vs-pipeline call the
+ * chat/execute surfaces make (resolveAskKind). The gateway previously asked
+ * only `parseRequestSync().action.run`, so the surfaces disagreed on the same
+ * ask.
+ */
+describe('GatewayRegistry — routing matches the shared gate', () => {
+  it('regression: a coding TASK phrased as a question runs the pipeline, not prose', async () => {
+    const { registry, adapter } = mockRegistry({ streamEvents: false, policies: { mock: {} } });
+    // `parseRequestSync` reads this as explain/chat; the gate's coding-action
+    // override makes it a task. It must reach the pipeline (the ack line).
+    await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'route-1',
+      text: 'how do I add JWT auth to the app?',
+      senderId: 'u-route',
+    });
+    expect(adapter.sent.some((s) => s.text.includes('running the'))).toBe(true);
+  });
+
+  it('a question phrased like a task is answered directly (never the pipeline)', async () => {
+    const { registry, adapter } = mockRegistry({
+      streamEvents: false,
+      policies: { mock: {} },
+      chatEngine: {
+        async answerOnce(message: string) {
+          return { content: `lazy-answer: ${message}`, followups: [] };
+        },
+      },
+    });
+    await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'route-2',
+      text: 'what is the fix for this error?',
+      senderId: 'u-route',
+    });
+    // The chat engine answered — no pipeline ack at all.
+    expect(adapter.sent.some((s) => s.text.includes('lazy-answer'))).toBe(true);
+    expect(adapter.sent.some((s) => s.text.includes('running the'))).toBe(false);
+  });
+
+  it('regression: a local CLI command gets a pointer, NOT a 6-task pipeline', async () => {
+    const { registry, adapter } = mockRegistry({ streamEvents: false, policies: { mock: {} } });
+    const reply = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'route-3',
+      text: 'run nuvira gateway status',
+      senderId: 'u-route',
+    });
+    expect(reply).toContain('your own terminal');
+    expect(adapter.sent.some((s) => s.text.includes('running the'))).toBe(false);
+    expect(registry.inbox.read().find((e) => e.channelId === 'route-3')?.handled).toBe('help');
+  });
+});
+
+/**
+ * Liveness — "is the gateway up?" must be answerable and never silently wrong.
+ * Live context: `gateway status` reported every platform as "configured ✅"
+ * while no gateway process existed at all.
+ */
+describe('GatewayRegistry — liveness heartbeat', () => {
+  it('start() begins beating and reports adapter health; stop() says DOWN', async () => {
+    const { registry } = mockRegistry({ streamEvents: false, policies: { mock: {} } });
+    expect(registry.heartbeat.status().state).toBe('down');
+
+    await registry.start();
+    // The first beat is written immediately, so status is honest at once.
+    await new Promise((r) => setTimeout(r, 20));
+    const status = registry.heartbeat.status();
+    expect(status.state).toBe('running');
+    expect(status.beat?.pid).toBe(process.pid);
+    expect(status.beat?.adapters).toEqual([
+      { platform: 'mock', configured: true, started: true, restarts: 0 },
+    ]);
+
+    await registry.stop();
+    // A clean shutdown removes the beat: "down", not a misleading "stale".
+    expect(registry.heartbeat.status().state).toBe('down');
   });
 });

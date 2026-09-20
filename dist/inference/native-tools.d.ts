@@ -60,6 +60,12 @@ interface GeminiPart {
         name: string;
         response: Record<string, unknown>;
     };
+    /**
+     * Returned by Gemini alongside a functionCall part and REQUIRED on the way
+     * back when the loop continues the conversation. Opaque to us — we only
+     * carry it.
+     */
+    thoughtSignature?: string;
 }
 export interface GeminiContent {
     role: 'user' | 'model';
@@ -103,6 +109,7 @@ export interface GeminiToolResponse {
                     name: string;
                     args?: Record<string, unknown>;
                 };
+                thoughtSignature?: string;
             }>;
         };
         finishReason?: string;
@@ -124,6 +131,7 @@ export declare function parseGeminiToolSSEChunk(line: string): {
     functionCalls: Array<{
         name: string;
         args?: Record<string, unknown>;
+        thoughtSignature?: string;
     }>;
     usage?: {
         promptTokens?: number;

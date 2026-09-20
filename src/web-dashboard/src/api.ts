@@ -1,4 +1,5 @@
 import { parseJsonOrNull } from './jsonOrNull';
+import type { ExecutionEntry } from './components/ExecutionHistory';
 import type {
   AdminAuthStatus,
   AdminCatalog,
@@ -21,6 +22,7 @@ import type {
   TaskLogLine,
   TaskRecord,
   TaskStatus,
+  SkillEnvVarRow,
   TraceEntry,
   WhatsAppPairStatus,
 } from './types';
@@ -294,6 +296,33 @@ export class DashboardAPI {
   }
 
   /** P0: fetch the reasoning-trace index (list view, no step previews). */
+  /**
+   * Skill execution audit trail (the `ExecutionHistory` panel's data source).
+   *
+   * Returns `[]` — never null — so the panel renders its empty state instead of
+   * a spinner or a crash when nothing has been audited yet.
+   */
+  async fetchExecutionAudit(filters?: {
+    skillName?: string;
+    status?: string;
+    limit?: number;
+  }): Promise<ExecutionEntry[]> {
+    try {
+      const params = new URLSearchParams();
+      if (filters?.skillName) params.set('skillName', filters.skillName);
+      if (filters?.status) params.set('status', filters.status);
+      if (filters?.limit) params.set('limit', String(filters.limit));
+      const qs = params.toString();
+      const res = await fetch(`${this.baseUrl}/api/executions${qs ? `?${qs}` : ''}`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = (await parseJsonOrNull(res)) as { entries?: ExecutionEntry[] } | null;
+      return data?.entries ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   async fetchTraces(): Promise<TraceEntry[] | null> {
     try {
       const res = await fetch(`${this.baseUrl}/api/traces`, { signal: AbortSignal.timeout(8000) });
@@ -1483,16 +1512,83 @@ export class DashboardAPI {
     }
   }
 
-  /** PA4 — save a skill's env vars (writes to ~/.nuvira/.env or ~/.nuvira/.env). */
-  async saveSecrets(vars: Record<string, string>): Promise<{ ok: boolean; error?: string; saved?: string[] }> {
+  /**
+   * PA4 — save a skill's env vars (writes to the credential `.env`).
+   *
+   * `refused` names the vars the server would NOT store and why (a provider
+   * credential, an invalid name, a write failure). Callers must surface it —
+   * without it a blocked key looked identical to a successful save.
+   */
+  async saveSecrets(vars: Record<string, string>): Promise<{
+    ok: boolean;
+    error?: string;
+    saved?: string[];
+    refused?: Array<{ name: string; reason: string }>;
+  }> {
     try {
       const res = await fetch(`${this.baseUrl}/api/skills/secrets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ vars }),
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string; saved?: string[] };
-      return { ok: data.ok === true, error: data.error, saved: data.saved };
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        saved?: string[];
+        refused?: Array<{ name: string; reason: string }>;
+      };
+      return { ok: data.ok === true, error: data.error, saved: data.saved, refused: data.refused };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * PA5 — the skill env-var inventory behind the environment-variable editor.
+   *
+   * Returns `[]` — never null — so the editor renders its empty state instead
+   * of spinning forever when the request fails.
+   */
+  async fetchSkillEnv(): Promise<SkillEnvVarRow[]> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/skills/env`, { headers: { ...authHeaders() } });
+      const data = (await parseJsonOrNull(res)) as { vars?: SkillEnvVarRow[] } | null;
+      return data?.vars ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** PA5 — remove one env var from the credential `.env`. */
+  async deleteSkillEnvVar(name: string): Promise<{ ok: boolean; removed?: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/skills/env/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ name }),
+      });
+      const data = (await res.json()) as { ok?: boolean; removed?: boolean; error?: string };
+      return { ok: data.ok === true, removed: data.removed, error: data.error };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * PA5 — ask whether a SKILL can consume this variable right now. This is not
+   * an API-key validity check (that would cost a paid provider call); it proves
+   * the value is set and not on the credential blocklist, which is exactly what
+   * skill execution checks.
+   */
+  async testSkillEnvVar(name: string): Promise<{ ok: boolean; usable?: boolean; detail?: string; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/skills/env/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ name }),
+      });
+      const data = (await res.json()) as { ok?: boolean; usable?: boolean; detail?: string; error?: string };
+      return { ok: data.ok === true, usable: data.usable, detail: data.detail, error: data.error };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }

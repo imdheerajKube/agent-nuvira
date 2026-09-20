@@ -87,6 +87,19 @@ export interface SingleShotAutoOptions {
    * skips it while other keys of the same provider stay usable.
    */
   recordFailure: (providerType: string, model: string | undefined, err: unknown, apiKey?: string) => void;
+  /**
+   * Optional pre-walk revival: re-verify transiently-failed providers and
+   * re-admit the ones that recovered, BEFORE the route is computed. The caller
+   * owns its session state (this walk only consumes the route), so it supplies
+   * the sweep.
+   *
+   * Without it, an exclusion armed minutes ago still hides a provider that has
+   * been healthy ever since — the failure this hook exists to close. Callers
+   * that pass `failureSession` to `recordActionFailure` should pass a sweep over
+   * the same session, so the round-trip (fail → cool down → prove recovery →
+   * route again) actually completes instead of only ever going one way.
+   */
+  revive?: () => Promise<void>;
 }
 
 /**
@@ -97,6 +110,16 @@ export interface SingleShotAutoOptions {
  * error is rethrown. Throws the LAST error when every candidate fails.
  */
 export async function runSingleShotAuto(opts: SingleShotAutoOptions): Promise<string> {
+  // ── Re-verify before re-admit ───────────────────────────────────────────
+  // A provider whose TRANSIENT exclusion has expired is only re-admitted once a
+  // spot-check proves it is actually back, so recovery is discovered in seconds
+  // instead of by failing again on the first attempt. Best-effort: a sweep
+  // failure must never stop the walk from routing.
+  try {
+    await opts.revive?.();
+  } catch {
+    // Best-effort — revival must never break the walk.
+  }
   const first = await opts.route([]);
   const attempted = new Set<string>();
   let lastError: unknown = new Error(`No auto-routed provider succeeded for: ${opts.task.slice(0, 80)}`);

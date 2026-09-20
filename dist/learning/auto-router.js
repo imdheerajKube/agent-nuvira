@@ -46,10 +46,15 @@ import { getMlRouter, DEFAULT_ML_K, DEFAULT_ML_MIN_SAMPLES, DEFAULT_ML_STRENGTH 
 import { buildModelCandidates } from './model-first-router.js';
 import { pickBestModel, topModelCandidates } from './model-scoring.js';
 import { getModelRegistry } from './model-registry.js';
+// R4: the agentic capability floor needs the same "too small to hold a tool
+// loop" judgement the harness uses. model-harness.ts imports nothing, so this
+// adds no cycle risk to the router.
+import { isTinyModel } from './model-harness.js';
 import { estimateTokens } from './cost-tracker.js';
 import { preferredModelsFor, PROVIDER_CONTEXT_WINDOWS } from './model-selection.js';
 import { isNonChatModel } from '../inference/model-catalog.js';
 import { CATALOG_PROVIDER_IDS, getCatalogProvider, getDefaultModel, isCatalogKeyless } from '../inference/provider-catalog.js';
+import { ProviderFactory } from '../inference/factory.js';
 import { logger } from '../utils/logger.js';
 // ─── Constants ──────────────────────────────────────────────────────────────
 /** The special model value that triggers automatic per-task routing. */
@@ -663,6 +668,16 @@ export class AutoModelRouter {
         }
         const registered = registry.getUsableProviders();
         const base = [...new Set([...CATALOG_PROVIDER_IDS, ...configuredIds])].filter((p) => {
+            // A provider with no adapter can never be resolved: `resolveProvider`
+            // refuses to substitute another provider for it (see router.ts), so a
+            // candidate like this is guaranteed to fail — and leaving it in is how a
+            // credentialed-but-unconstructible id (`bedrock` is in the catalog but
+            // has no adapter) reached the failover walk, silently resolved to a
+            // DIFFERENT provider, and mislabeled that provider's models as its own.
+            if (!ProviderFactory.isConstructible(p)) {
+                excluded.push({ provider: p, reason: 'no adapter in this build' });
+                return false;
+            }
             if (blocked.has(p) || degraded.has(p)) {
                 // Cite the registry's own counts so the explanation proves the data
                 // is working ("openrouter excluded — 0 verified, 6 unavailable"). The
@@ -1185,6 +1200,52 @@ export class AutoModelRouter {
                 }
             }
         }
+        // ── Agentic capability floor (R4) ──────────────────────────────────────
+        // Effective capability is `model × (1 − harness tax)`: a multi-step agentic
+        // task needs the served model to hold a tool loop across turns. A model too
+        // small for that is not "a bit worse" here, it is a doomed run — it burns
+        // steps, emits malformed tool calls, and then gets BOOKED as a model failure,
+        // teaching the bandit a lesson about the model when the mismatch was ours
+        // (auto handed an agentic task to a model that cannot do one). This is the
+        // routing-side half of R1: the harness fits the model, and the router stops
+        // feeding the harness a model it cannot fit.
+        //
+        // ORDERING (why this runs AFTER the hard constraints): the constraint slot
+        // above owns explicit user/admin policy (maxCostUsd/minSpeed/minReasoning/
+        // governance) and its benign "eliminated everyone" fallback restores the RAW
+        // ranking. Running this floor first made that fallback restore the floor's
+        // survivors instead, so an impossible minReasoning ask could still be served
+        // a provider the user had just ruled out. Policy decides who is eligible;
+        // this heuristic only narrows the eligible set afterwards.
+        //
+        // Deliberately conservative, exactly like the free/local gate above:
+        //   - only the SERVED model is judged (a provider hosting both a tiny and a
+        //     strong model keeps its strong entry);
+        //   - an UNKNOWN served model is kept (never eliminate on ignorance — the
+        //     JSON-contract transport still gives it a way to act);
+        //   - if the floor would eliminate everyone, the ranking is left alone rather
+        //     than returning no route at all. Auto must never dead-end.
+        const agenticTask = complexity === 'complex' ||
+            complexity === 'critical' ||
+            taskProfile.requiresVerification === true;
+        if (agenticTask) {
+            const capable = scored.filter((s) => {
+                let servedModel;
+                try {
+                    servedModel = this.resolveModel(s.provider, agentType, configManager, taskDescription);
+                }
+                catch {
+                    servedModel = undefined;
+                }
+                return servedModel === undefined || !isTinyModel(servedModel);
+            });
+            if (capable.length > 0) {
+                scored = capable;
+            }
+            else if (options.verbose) {
+                logger.warn('  ⚠️ agentic capability floor would eliminate every provider — keeping the full ranking');
+            }
+        }
         // Rank: circuit-breaker-cooldown providers sink first, then quota-parked
         // ones, then healthy ones; ties broken by score. A quota-parked provider
         // is only selected when every candidate is parked (matching cooldown).
@@ -1483,7 +1544,26 @@ export class AutoModelRouter {
                 });
             }
         }
-        const explanation = this.buildExplanation(agentType, complexity, taskType, selected, mode, model, weights, taskProfile) + (routedBy === 'bandit' ? ' | bandit-learned' : '') +
+        // ── Present the FINAL decision consistently ──────────────────────────────
+        // Model-first routing (and per-model learning) can select a provider/model
+        // that differs from the deterministic `selected`. Before this, the rationale
+        // line named the PRE-override provider, `decision.score` was that loser's
+        // score, and the ✅ marker could sit on a row ranked below #1 — so
+        // `models explain`'s rationale, Decision line and ranked table disagreed
+        // (`Decision: gemini/gemini-3.1-flash-lite` beside a `groq/…` rationale).
+        // Promote the FINAL provider's entry to the head of the ranked list and
+        // present ITS score everywhere the decision is shown. `selected` itself is
+        // left untouched — the promotion gate's A/B record must keep the true
+        // deterministic/bandit pick.
+        let winner = scored.find((s) => s.provider === provider);
+        if (!winner) {
+            // A model-first pick can name a provider with no scored entry only in
+            // pathological cases; synthesize one so presentation never breaks.
+            winner = { ...selected, provider, score: selected.score, reason: `${provider}: model-first pick` };
+        }
+        scored = [winner, ...scored.filter((s) => s.provider !== provider)];
+        const decisionScore = winner.score;
+        const explanation = this.buildExplanation(agentType, complexity, taskType, provider, decisionScore, mode, model, weights, taskProfile) + (routedBy === 'bandit' ? ' | bandit-learned' : '') +
             (banditEscalation ? ' | escalated: winner unlearned' : '') +
             // ISSUE-002 explanation transparency: cite the registry data that
             // excluded providers from the candidate pool, so auto routing proves
@@ -1528,7 +1608,7 @@ export class AutoModelRouter {
             taskType,
             provider,
             model,
-            score: selected.score,
+            score: decisionScore,
             weights,
             ranked: scored,
             fallbackChain,
@@ -2048,7 +2128,12 @@ export class AutoModelRouter {
         return parts.length ? `${provider}: ${parts.join(', ')}` : `${provider}: adequate for ${complexity} complexity`;
     }
     /** Build the human-readable decision explanation. */
-    buildExplanation(agentType, complexity, taskType, selected, mode, model, weights, taskProfile) {
+    buildExplanation(agentType, complexity, taskType, 
+    /** The FINAL provider id (post model-first override), so the rationale can
+     *  never name a different provider than the Decision line. */
+    provider, 
+    /** The FINAL decision score (the promoted winner entry's score). */
+    score, mode, model, weights, taskProfile) {
         const complexityLabels = {
             trivial: '🟢 trivial',
             simple: '🔵 simple',
@@ -2060,8 +2145,8 @@ export class AutoModelRouter {
             .reduce((a, b) => (weights[b] > weights[a] ? b : a), 'reasoning');
         const modeStr = mode !== 'balanced' ? ` | ${mode}` : '';
         const profileSuffix = taskProfile.requiresVerification ? ' | verification' : '';
-        return `${agentType} (${complexityLabels[complexity]}, ${taskType}) → ${selected.provider}/${model} ` +
-            `score ${selected.score.toFixed(2)} | dominant: ${DIMENSION_LABELS[dominant]}${modeStr}${profileSuffix}`;
+        return `${agentType} (${complexityLabels[complexity]}, ${taskType}) → ${provider}/${model} ` +
+            `score ${score.toFixed(2)} | dominant: ${DIMENSION_LABELS[dominant]}${modeStr}${profileSuffix}`;
     }
 }
 // ─── Singleton ──────────────────────────────────────────────────────────────

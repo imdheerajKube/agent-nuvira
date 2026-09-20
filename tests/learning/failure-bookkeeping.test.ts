@@ -20,6 +20,7 @@ import {
   recordActionFailure,
   RATE_LIMIT_EXCLUSION_MS,
   TRANSIENT_FAILURE_EXCLUSION_MS,
+  RAPID_FAILURE_COOLDOWN_MS,
   type FailureSessionState,
 } from '../../src/learning/failure-bookkeeping.js';
 import {
@@ -84,6 +85,9 @@ afterEach(() => {
   else process.env.NUVIRA_TELEMETRY_ACTION = originalTelemetryAction;
   rmSync(tempDir, { recursive: true, force: true });
 });
+
+/** A park below this is the short base (10s); above it, the T4 escalation. */
+const RAPID_FLOOR_PROBE_MS = 30_000;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -316,5 +320,44 @@ describe('FailureBookkeeping — recordActionFailure', () => {
     // sentinel 'default'), and the registry's write guard refuses to track the
     // sentinel as a real model — so nothing bogus is persisted.
     expect(getModelRegistry().getEntry('openrouter', 'default')).toBeUndefined();
+  });
+});
+
+// T4 — RPM/TPM rapid-failure breaker: a burst of free-tier 429s must raise the
+// park floor to a full minute (the RPM window) instead of the blind 10s base.
+describe('FailureBookkeeping — T4 rapid-failure (RPM/TPM) breaker', () => {
+  it('the FIRST blind 429 keeps the short base park (no regression)', () => {
+    const session = makeSession();
+    const before = Date.now();
+
+    recordActionFailure(session, 'gemini', new Error('quota exceeded'), makeConfig(), { action: 'chat' });
+
+    const parkExpiry = mockLedger.parkProvider.mock.calls[0][1] as number;
+    expect(parkExpiry).toBeLessThan(before + RAPID_FLOOR_PROBE_MS);
+  });
+
+  it('a THIRD failure inside the window escalates the park to a full minute', () => {
+    const session = makeSession();
+    // Two prior blind 429s in the same turn (the tool-loop burst).
+    recordActionFailure(session, 'gemini', new Error('quota exceeded'), makeConfig(), { action: 'execute' });
+    recordActionFailure(session, 'gemini', new Error('quota exceeded'), makeConfig(), { action: 'execute' });
+    const before = Date.now();
+
+    recordActionFailure(session, 'gemini', new Error('quota exceeded'), makeConfig(), { action: 'execute' });
+
+    const parkExpiry = mockLedger.parkProvider.mock.calls[2][1] as number;
+    expect(parkExpiry).toBeGreaterThanOrEqual(before + RAPID_FAILURE_COOLDOWN_MS);
+  });
+
+  it('the breaker is SESSION-scoped: a fresh session starts over', () => {
+    const first = makeSession();
+    recordActionFailure(first, 'gemini', new Error('quota exceeded'), makeConfig(), { action: 'execute' });
+    recordActionFailure(first, 'gemini', new Error('quota exceeded'), makeConfig(), { action: 'execute' });
+
+    const fresh = makeSession();
+    const before = Date.now();
+    recordActionFailure(fresh, 'gemini', new Error('quota exceeded'), makeConfig(), { action: 'execute' });
+
+    expect(mockLedger.parkProvider.mock.calls.at(-1)![1] as number).toBeLessThan(before + RAPID_FLOOR_PROBE_MS);
   });
 });

@@ -36,7 +36,16 @@ beforeAll(() => {
     JSON.stringify({
       defaultProvider: 'local',
       providers: {
-        local: { runner: 'ollama', model: 'nonexistent-fast-fail', temperature: 0.7, maxTokens: 1024 },
+        // Dead endpoint: keeps the fake-model failure hermetic. A reachable
+        // Ollama lets the validator substitute a real installed model and run
+        // actual inference, making these tests slow and machine-dependent.
+        local: {
+          runner: 'ollama',
+          model: 'nonexistent-fast-fail',
+          baseUrl: 'http://127.0.0.1:9',
+          temperature: 0.7,
+          maxTokens: 1024,
+        },
       },
     }),
   );

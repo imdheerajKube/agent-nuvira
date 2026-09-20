@@ -19,6 +19,7 @@ import { GatewayRegistry } from '../gateway/registry.js';
 import { ChannelDirectory, PLATFORM_LABELS, configuredPlatforms, isPlatformConfigured, } from '../gateway/channel-directory.js';
 import { createConfiguredAdapters, WebhookReceiver, TelegramAdapter, DiscordAdapter, SlackAdapter, WhatsAppBridgeAdapter, WhatsAppCloudAdapter, EmailAdapter, SignalAdapter, DingTalkAdapter, FeishuAdapter, WeComAdapter, MattermostAdapter, MatrixAdapter, GenericWebhookAdapter, BlueBubblesAdapter, NtfyAdapter, TeamsAdapter, GoogleChatAdapter, WeixinAdapter, SmsAdapter, IrcAdapter, SimplexAdapter, HomeAssistantAdapter, } from '../gateway/adapters.js';
 import { DeliveryLedger } from '../gateway/delivery.js';
+import { GatewayHeartbeat, formatDuration, HEARTBEAT_STALE_AFTER_MS } from '../gateway/heartbeat.js';
 import { maskSenderId } from '../utils/mask.js';
 import { guardRbacAction } from './rbac-guard.js';
 import { getCliName } from './commands.js';
@@ -103,11 +104,14 @@ export class GatewayCommand {
             .action(async () => this.historyPrune());
         cmd
             .command('start')
-            .description('Run all configured adapters in the foreground (Ctrl-C to stop)')
+            .description('Run all configured adapters in the foreground (Ctrl-C to stop; --supervise auto-restarts on crash)')
             .option('--port <n>', 'Webhook inbound port for Discord/Slack/WhatsApp', '8787')
             .option('--host <ip>', 'Webhook bind address (default 127.0.0.1 — use 0.0.0.0 for a public tunnel)', '127.0.0.1')
             .option('--no-events', 'Do not stream board events to channels', false)
-            .action(async (opts) => this.start(Number(opts.port), opts.host, opts.events));
+            .option('--supervise', 'Keep the gateway alive: restart it automatically if it exits (recommended for a always-on/WhatsApp setup)', false)
+            .action(async (opts) => opts.supervise
+            ? this.supervise(Number(opts.port), opts.host, opts.events)
+            : this.start(Number(opts.port), opts.host, opts.events));
         cmd
             .command('stop')
             .description('Stop a running gateway gracefully (SIGTERM — from any terminal)')
@@ -123,6 +127,30 @@ export class GatewayCommand {
     status() {
         const adapters = statusAdapters();
         console.log('🌐 Gateway status');
+        console.log('');
+        // ── LIVENESS FIRST ── the adapter list below only reflects CONFIGURED env
+        // vars; it says nothing about whether a process is receiving messages.
+        // Observed live: every platform showed "configured ✅" while no gateway
+        // process existed at all, so senders were messaging a bridge nobody was
+        // listening to. The heartbeat makes that state impossible to miss.
+        const live = new GatewayHeartbeat().status();
+        if (live.state === 'running' && live.beat) {
+            const up = formatDuration(Date.now() - live.beat.startedAt);
+            const started = live.beat.adapters.filter((a) => a.started).length;
+            const failed = live.beat.adapters.filter((a) => !a.started);
+            console.log(`  ✅ gateway RUNNING — pid ${live.beat.pid}, up ${up}, ${started}/${live.beat.adapters.length} adapters live${live.beat.supervised ? ' (supervised)' : ''}, beat ${formatDuration(live.ageMs)} ago`);
+            for (const a of failed) {
+                console.log(`     ⚠ ${a.platform} not started (${a.restarts} retries): ${a.lastError ?? 'unknown error'}`);
+            }
+        }
+        else if (live.state === 'stale' && live.beat) {
+            console.log(`  🛑 gateway NOT RESPONDING — last beat ${formatDuration(live.ageMs)} ago (pid ${live.beat.pid} may have been killed; beats stop after ${formatDuration(HEARTBEAT_STALE_AFTER_MS)})`);
+            console.log('     Start it again:  nuvira gateway start --supervise');
+        }
+        else {
+            console.log('  ⛔ gateway NOT RUNNING — no gateway process is receiving messages');
+            console.log('     Start it:  nuvira gateway start --supervise   (auto-restarts on crash)');
+        }
         console.log('');
         for (const adapter of adapters) {
             const mark = adapter.configured ? '✅' : '⬜';
@@ -704,6 +732,84 @@ export class GatewayCommand {
             console.log(`  → ${step}`);
         }
         console.log('');
+    }
+    // ─── supervise ────────────────────────────────────────────────────────────
+    /**
+     * `gateway start --supervise`: run the gateway as a CHILD process and bring
+     * it back if it exits.
+     *
+     * Why: the gateway runs in the foreground, so a crash (or the machine
+     * sleeping, or the launching shell being killed) leaves every channel
+     * silently dead — observed live: no gateway process existed while
+     * `gateway status` reported the platforms as configured, and senders kept
+     * messaging a bridge nobody was listening to. A supervisor turns "the
+     * gateway is up" from a hope into an invariant.
+     *
+     * Backoff: 5s doubling to 60s between restarts. A genuine CRASH LOOP (more
+     * than 10 exits in 10 minutes) stops the supervisor and says why, so a bad
+     * credential cannot spin forever in the background.
+     */
+    async supervise(port, host, streamEvents) {
+        const { spawn } = await import('node:child_process');
+        // Re-invoke the SAME entry point, minus the flag (a child must never spawn
+        // its own supervisor).argv[1] is the JS entry (dist/index.js or the bin
+        // shim), so `node <entry> <args…>` reproduces this exact invocation.
+        const childArgs = process.argv.slice(1).filter((a) => a !== '--supervise');
+        const restarts = [];
+        let stopping = false;
+        let child = null;
+        const LOG = 'nuvira gateway --supervise';
+        logger.info(`${LOG}: starting gateway (pid will be reported by \`gateway status\`)`);
+        const stop = () => {
+            stopping = true;
+            logger.info(`${LOG}: stopping…`);
+            try {
+                child?.kill('SIGTERM');
+            }
+            catch {
+                /* already gone */
+            }
+            // Grace window, then leave (the child removes its own heartbeat on a
+            // clean SIGTERM shutdown, so `gateway status` reports "down").
+            setTimeout(() => process.exit(0), 3000).unref?.();
+        };
+        process.on('SIGINT', stop);
+        process.on('SIGTERM', stop);
+        const launch = () => {
+            child = spawn(process.execPath, childArgs, {
+                stdio: 'inherit',
+                env: { ...process.env, BUFF_GATEWAY_SUPERVISED: '1' },
+            });
+            child.on('exit', (code, signal) => {
+                if (stopping)
+                    return;
+                const now = Date.now();
+                restarts.push(now);
+                const recent = restarts.filter((t) => now - t < 10 * 60_000);
+                if (recent.length > 10) {
+                    logger.error(`${LOG}: gateway exited ${recent.length} times in 10 minutes (last exit code ${code ?? 'null'} / ${signal ?? 'none'}) — stopping instead of looping. Fix the underlying error, then restart.`);
+                    process.exit(1);
+                }
+                const delay = Math.min(5_000 * 2 ** (recent.length - 1), 60_000);
+                logger.warn(`${LOG}: gateway exited (code ${code ?? 'null'}${signal ? `, signal ${signal}` : ''}) — restarting in ${Math.round(delay / 1000)}s (restart #${recent.length})`);
+                // NOT unref'd: this timer is the only thing keeping the supervisor's
+                // event loop alive once the child is gone. An unref'd restart timer
+                // let the loop drain and the supervisor exited silently without ever
+                // restarting the gateway it was hired to keep up.
+                setTimeout(launch, delay);
+            });
+        };
+        launch();
+        // Keep the supervisor alive. An unresolved promise is NOT enough — a
+        // pending promise holds no libuv handle, so the loop would drain the
+        // moment the child exits. A real (non-unref'd) interval does.
+        const keepAlive = setInterval(() => {
+            /* supervisor liveness — the child's `exit` handler drives restarts */
+        }, 30_000);
+        process.on('exit', () => clearInterval(keepAlive));
+        await new Promise(() => {
+            /* never resolves — the process exits on SIGINT/SIGTERM or crash-loop */
+        });
     }
     // ─── start ────────────────────────────────────────────────────────────────
     async start(port, host, streamEvents) {

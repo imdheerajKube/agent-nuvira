@@ -216,6 +216,12 @@ export declare function setChatConsoleForTest(console: ChatConsole): void;
  * exercising /api/admin/shutdown never exit the test runner).
  */
 export declare function setDashboardShutdownForTest(action: (() => void) | null): void;
+/** Test hook: stub the gateway-stop action (null restores the real one). */
+export declare function setGatewayShutdownForTest(action: (() => Promise<{
+    stopped: boolean;
+    pid?: number;
+    reason?: string;
+}>) | null): void;
 /**
  * Test hook: swap the pairing manager (e.g. for a fake-bridge manager) so
  * /api/whatsapp integration tests never open a real WhatsApp connection.

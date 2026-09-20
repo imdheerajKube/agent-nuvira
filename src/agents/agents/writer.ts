@@ -516,12 +516,21 @@ export class WriterAgent extends Agent {
     const rankedPaths = new Set(retrievalRanking.map((r) => r.filePath));
     const rankedBaseNames = new Set(retrievalRanking.map((r) => basename(r.filePath)));
     const isRanked = (p: string) => rankedPaths.has(p) || rankedBaseNames.has(basename(p));
-    const filesToSend = this.selectFilesWithinBudget(context.artifacts, MAX_CONTEXT_CHARS, (a, b) => {
+    // Model-window-aware file budget (T2): the orchestrator sets a budget from
+    // the served model's REAL window; fall back to the historical constants when
+    // it is unknown, so nothing regresses for a model we cannot discover.
+    const fileBudgetChars = typeof context.metadata.contextFileBudgetChars === 'number' && context.metadata.contextFileBudgetChars > 0
+      ? context.metadata.contextFileBudgetChars
+      : MAX_CONTEXT_CHARS;
+    const fileBudgetCount = typeof context.metadata.contextFileBudgetFiles === 'number' && context.metadata.contextFileBudgetFiles > 0
+      ? context.metadata.contextFileBudgetFiles
+      : MAX_CONTEXT_FILES;
+    const filesToSend = this.selectFilesWithinBudget(context.artifacts, fileBudgetChars, (a, b) => {
       const ra = isRanked(a.path) ? 0 : 1;
       const rb = isRanked(b.path) ? 0 : 1;
       if (ra !== rb) return ra - rb;
       return 0; // keep the size-first tiebreak inside selectFilesWithinBudget
-    });
+    }, fileBudgetCount);
 
     const fileContext = filesToSend.length > 0
       ? filesToSend
@@ -710,6 +719,8 @@ export class WriterAgent extends Agent {
     artifacts: import('../agent.js').Artifact[],
     budget: number,
     priorityComparator?: (a: import('../agent.js').Artifact, b: import('../agent.js').Artifact) => number,
+    /** Model-window-aware file cap; defaults to the historical constant. */
+    maxFiles: number = MAX_CONTEXT_FILES,
   ): Array<{ artifact: import('../agent.js').Artifact; truncated: string | null }> {
     const sorted = [...artifacts]
       .map((a) => ({ artifact: a, size: a.content.length }))
@@ -724,7 +735,7 @@ export class WriterAgent extends Agent {
     const OVERHEAD_PER_FILE = 50;
 
     for (const { artifact, size } of sorted) {
-      if (result.length >= MAX_CONTEXT_FILES) break;
+      if (result.length >= maxFiles) break;
 
       const totalNeeded = size + OVERHEAD_PER_FILE;
 

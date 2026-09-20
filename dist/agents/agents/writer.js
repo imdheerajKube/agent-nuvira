@@ -455,13 +455,22 @@ export class WriterAgent extends Agent {
         const rankedPaths = new Set(retrievalRanking.map((r) => r.filePath));
         const rankedBaseNames = new Set(retrievalRanking.map((r) => basename(r.filePath)));
         const isRanked = (p) => rankedPaths.has(p) || rankedBaseNames.has(basename(p));
-        const filesToSend = this.selectFilesWithinBudget(context.artifacts, MAX_CONTEXT_CHARS, (a, b) => {
+        // Model-window-aware file budget (T2): the orchestrator sets a budget from
+        // the served model's REAL window; fall back to the historical constants when
+        // it is unknown, so nothing regresses for a model we cannot discover.
+        const fileBudgetChars = typeof context.metadata.contextFileBudgetChars === 'number' && context.metadata.contextFileBudgetChars > 0
+            ? context.metadata.contextFileBudgetChars
+            : MAX_CONTEXT_CHARS;
+        const fileBudgetCount = typeof context.metadata.contextFileBudgetFiles === 'number' && context.metadata.contextFileBudgetFiles > 0
+            ? context.metadata.contextFileBudgetFiles
+            : MAX_CONTEXT_FILES;
+        const filesToSend = this.selectFilesWithinBudget(context.artifacts, fileBudgetChars, (a, b) => {
             const ra = isRanked(a.path) ? 0 : 1;
             const rb = isRanked(b.path) ? 0 : 1;
             if (ra !== rb)
                 return ra - rb;
             return 0; // keep the size-first tiebreak inside selectFilesWithinBudget
-        });
+        }, fileBudgetCount);
         const fileContext = filesToSend.length > 0
             ? filesToSend
                 .map(({ artifact, truncated }) => `--- ${artifact.path} ---${truncated ? ` (truncated, ${artifact.content.length}\u2192${truncated.length} chars)` : ''}\n${truncated || artifact.content}`)
@@ -622,7 +631,9 @@ export class WriterAgent extends Agent {
      * Select files within the given character budget.
      * Prioritizes smaller files first so the LLM sees as much complete context as possible.
      */
-    selectFilesWithinBudget(artifacts, budget, priorityComparator) {
+    selectFilesWithinBudget(artifacts, budget, priorityComparator, 
+    /** Model-window-aware file cap; defaults to the historical constant. */
+    maxFiles = MAX_CONTEXT_FILES) {
         const sorted = [...artifacts]
             .map((a) => ({ artifact: a, size: a.content.length }))
             .sort((a, b) => {
@@ -634,7 +645,7 @@ export class WriterAgent extends Agent {
         let used = 0;
         const OVERHEAD_PER_FILE = 50;
         for (const { artifact, size } of sorted) {
-            if (result.length >= MAX_CONTEXT_FILES)
+            if (result.length >= maxFiles)
                 break;
             const totalNeeded = size + OVERHEAD_PER_FILE;
             if (used + totalNeeded <= budget) {

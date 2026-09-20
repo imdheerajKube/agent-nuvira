@@ -16,7 +16,8 @@ export interface ToolCallInfo {
     error?: string;
     durationMs?: number;
 }
-import { type ToolContext, type FollowupSuggestion } from '../tools/registry.js';
+import { type ToolContext } from '../tools/registry.js';
+import { type FollowupSuggestion } from '../tools/followup-utils.js';
 /** E3a — the menu-free dispatch decision (rule-based, C1/C3 only). */
 export interface PipelineDispatchDecision {
     /** Whether the request runs the coding pipeline. */
@@ -59,6 +60,38 @@ export declare function runDeveloperMode(goal: string, configManager: any, optio
     provider?: string;
     model?: string;
 }): Promise<void>;
+/**
+ * E3b — the tool-loop system prompt: base identity + the tool
+ * contract (clarify via ask_user, end every response with suggest_followups).
+ *
+ * E3c — the rule assessment is a HINT, never a bypass: when the rules parsed
+ * a confident intent, the model sees it as context ("rule assessment: … you
+ * decide") so it can act faster — but the MODEL is the sole decision-maker
+ * (rules act only as the no-model fallback in the
+ * caller, never to skip the loop).
+ */
+/**
+ * Backoff schedule for a SAME-provider retry on a transient failure. Two extra
+ * attempts, deliberately short: a capacity spike at a shared endpoint clears in
+ * seconds, and the user is waiting in the foreground. Long/looping retries belong
+ * to the background runners, not the interactive turn.
+ */
+export declare const TRANSIENT_RETRY_DELAYS_MS: readonly [1000, 3000];
+/**
+ * Run one provider attempt, retrying transient failures against the SAME
+ * provider before giving up.
+ *
+ * Why this exists next to the failover walk rather than inside it: the walk
+ * needs a DIFFERENT provider to exist, and it books the failure against the one
+ * that just failed. Verified live — a single configured provider plus a Gemini
+ * 503 meant no retry at all, the circuit breaker parked the provider for 120s,
+ * and the agent degraded to editing with zero gathered context. A transient
+ * spike must cost a few seconds, not the whole task.
+ *
+ * Never retries: non-transient classes (auth, rate-limit, model/harness faults),
+ * a cancelled turn, or once the schedule is exhausted.
+ */
+export declare function generateWithTransientRetry<T>(attempt: () => Promise<T>, signal?: AbortSignal, onRetry?: (attemptNumber: number, err: unknown) => void): Promise<T>;
 export declare class ChatCommand extends BaseCommand {
     private devModeAuto;
     /**
@@ -127,6 +160,13 @@ export declare class ChatCommand extends BaseCommand {
             content: string;
         }>;
         askUser?: ToolContext['askUser'];
+        /**
+         * P5 — this message is a CONTINUATION of the previous turn (it came from a
+         * clicked followup). The continuation marker is prepended to the
+         * model-facing thread ONLY — the raw text is what lands in history, so a
+         * long session never accumulates markers. See FOLLOWUP_CONTINUATION_MARKER.
+         */
+        continuation?: boolean;
         /** P3 — live progress lines for the dashboard chat console. */
         onProgress?: (line: string) => void;
         /**
@@ -221,6 +261,20 @@ export declare class ChatCommand extends BaseCommand {
      * broken provider never crashes the turn (it answers from the next working
      * candidate, exactly like the legacy generation block).
      */
+    /**
+     * The model id used in the response-cache key.
+     *
+     * NEVER returns the `'default'` sentinel (or an empty string). Keying the
+     * cache on `'default'` — which is what `session.model ?? 'default'` did —
+     * collapsed EVERY model of a provider into a single entry (observed live:
+     * `cache.json` held `provider: gemini, model: "default"`). Two consequences,
+     * both real: an answer produced by a weak model was replayed as though a
+     * strong one had written it, and switching `nuvira model switch` could never
+     * take effect for a message already cached. Falls back to the provider's
+     * effective model, then to a provider-qualified marker so distinct providers
+     * still never collide.
+     */
+    private cacheModelFor;
     private buildToolCallModel;
     /**
      * E3b — render suggest_followups results. Interactive:

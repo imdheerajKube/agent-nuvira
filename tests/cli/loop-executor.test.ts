@@ -145,6 +145,7 @@ describe('loop executor — failure semantics', () => {
   });
   afterEach(() => {
     vi.doUnmock('../../src/cli/router.js');
+    vi.doUnmock('../../src/learning/provider-fallback.js');
     vi.resetModules();
   });
 
@@ -152,6 +153,13 @@ describe('loop executor — failure semantics', () => {
     const provider = scriptedProvider({ fallbackText: ['x'], generateError: new Error('provider down') });
     vi.doMock('../../src/cli/router.js', () => ({
       resolveProvider: () => ({ type: 'scripted', provider }),
+    }));
+    // No fallback is configured here, so the pinned run has nothing else to
+    // walk — this test is about the failure SHAPE, not provider fan-out (the
+    // real chain derives from whatever providers the machine has keys for).
+    vi.doMock('../../src/learning/provider-fallback.js', async (orig) => ({
+      ...(await orig<typeof import('../../src/learning/provider-fallback.js')>()),
+      getProviderFallback: () => ({ getFallbackChain: () => [] }),
     }));
     const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
     const result = await runLoopExecutor('do something', new ConfigManager(), {
@@ -264,5 +272,217 @@ describe('loop executor — loop-side skill match hint (Phase 3.2)', () => {
     });
     expect(result.generationFailed).toBe(false);
     expect(result.content).toBe('ok');
+  });
+});
+
+describe('loop executor — mid-turn failover (T1)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+  afterEach(() => {
+    for (const m of [
+      '../../src/cli/router.js',
+      '../../src/learning/auto-router.js',
+      '../../src/learning/resilient-call.js',
+      '../../src/inference/model-validator.js',
+      '../../src/learning/failure-bookkeeping.js',
+      '../../src/learning/provider-fallback.js',
+    ]) {
+      vi.doUnmock(m);
+    }
+    vi.resetModules();
+  });
+
+  it('fails over to the next candidate after a mid-step 429 and records the failure', async () => {
+    const primary: InferenceProvider = {
+      name: 'Primary',
+      isAvailable: async () => true,
+      async generate(): Promise<string> {
+        throw new Error('should not be reached');
+      },
+      async generateTools(): Promise<ToolCallResponse> {
+        throw new Error('429 rate limit exceeded for model primary-model');
+      },
+    } as unknown as InferenceProvider;
+    const backup: InferenceProvider = {
+      name: 'Backup',
+      isAvailable: async () => true,
+      async generate(): Promise<string> {
+        return 'backup answer';
+      },
+      async generateTools(): Promise<ToolCallResponse> {
+        return { content: 'backup answer', toolCalls: [] };
+      },
+    } as unknown as InferenceProvider;
+
+    const recordFailure = vi.fn();
+    const recordSuccess = vi.fn();
+
+    vi.doMock('../../src/learning/auto-router.js', async (orig) => ({
+      ...(await orig<typeof import('../../src/learning/auto-router.js')>()),
+      getAutoRouter: () => ({
+        resolve: async () => ({ provider: 'primary', model: 'primary-model', fallbackChain: [] }),
+        resolveModel: () => 'resolved-model',
+      }),
+    }));
+    vi.doMock('../../src/learning/resilient-call.js', async (orig) => ({
+      ...(await orig<typeof import('../../src/learning/resilient-call.js')>()),
+      buildDeepFailoverPool: () => [
+        { provider: 'primary', model: 'primary-model' },
+        { provider: 'backup', model: 'backup-model' },
+      ],
+      createFailoverExclusionFilter: () => () => false,
+    }));
+    vi.doMock('../../src/inference/model-validator.js', async (orig) => ({
+      ...(await orig<typeof import('../../src/inference/model-validator.js')>()),
+      resolveWorkingModel: async (_p: unknown, _t: string, desired?: string) => desired ?? 'resolved',
+    }));
+    vi.doMock('../../src/learning/failure-bookkeeping.js', async (orig) => ({
+      ...(await orig<typeof import('../../src/learning/failure-bookkeeping.js')>()),
+      recordActionFailure: (...args: unknown[]) => recordFailure(...args),
+    }));
+    vi.doMock('../../src/learning/provider-fallback.js', async (orig) => ({
+      ...(await orig<typeof import('../../src/learning/provider-fallback.js')>()),
+      recordRegistrySuccess: (...args: unknown[]) => recordSuccess(...args),
+    }));
+    vi.doMock('../../src/cli/router.js', () => ({
+      resolveProvider: (_cm: unknown, type: string) => ({
+        type,
+        provider: type === 'primary' ? primary : backup,
+      }),
+    }));
+
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const result = await runLoopExecutor('do the thing', new ConfigManager(), {
+      skipProjectContext: true,
+      skipSkillHint: true,
+      quiet: true,
+    });
+
+    expect(result.generationFailed).toBe(false);
+    expect(result.content).toBe('backup answer');
+    expect(result.provider).toBe('backup');
+    // The 429 was written through the SHARED bookkeeping — learned, not lost.
+    expect(recordFailure).toHaveBeenCalled();
+    expect(recordSuccess).toHaveBeenCalledWith('backup', 'backup-model', 'execute');
+  });
+});
+
+/**
+ * Pinned-provider failover. `--provider X` used to collapse the candidate pool
+ * to that single provider, so X's first bad step (a 429 on a free tier) killed
+ * the turn even though a fallback chain was configured. The pin now contributes
+ * the config-declared fallback chain as well — but only a failure another
+ * provider could plausibly answer justifies leaving an explicit choice.
+ */
+describe('loop executor — pinned-provider failover (config fallback chain)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+  afterEach(() => {
+    for (const m of [
+      '../../src/cli/router.js',
+      '../../src/learning/auto-router.js',
+      '../../src/inference/model-validator.js',
+      '../../src/learning/failure-bookkeeping.js',
+      '../../src/learning/provider-fallback.js',
+      '../../src/learning/model-selection.js',
+    ]) {
+      vi.doUnmock(m);
+    }
+    vi.resetModules();
+  });
+
+  /** A pinned provider that fails with `failure` + a healthy fallback sibling. */
+  function mockPinnedPair(failure: Error): { recordFailure: ReturnType<typeof vi.fn>; fallbackCalls: { n: number } } {
+    const recordFailure = vi.fn();
+    const fallbackCalls = { n: 0 };
+    const pinned: InferenceProvider = {
+      name: 'Pinned',
+      isAvailable: async () => true,
+      async generate(): Promise<string> {
+        throw new Error('should not be reached');
+      },
+      async generateTools(): Promise<ToolCallResponse> {
+        throw failure;
+      },
+    } as unknown as InferenceProvider;
+    const fallback: InferenceProvider = {
+      name: 'Fallback',
+      isAvailable: async () => true,
+      async generate(): Promise<string> {
+        return 'fallback answer';
+      },
+      async generateTools(): Promise<ToolCallResponse> {
+        fallbackCalls.n += 1;
+        return { content: 'fallback answer', toolCalls: [] };
+      },
+    } as unknown as InferenceProvider;
+
+    vi.doMock('../../src/learning/auto-router.js', async (orig) => ({
+      ...(await orig<typeof import('../../src/learning/auto-router.js')>()),
+      getAutoRouter: () => ({ resolveModel: () => 'resolved-model' }),
+    }));
+    vi.doMock('../../src/inference/model-validator.js', async (orig) => ({
+      ...(await orig<typeof import('../../src/inference/model-validator.js')>()),
+      resolveWorkingModel: async (_p: unknown, _t: string, desired?: string) => desired ?? 'resolved',
+    }));
+    vi.doMock('../../src/learning/failure-bookkeeping.js', async (orig) => ({
+      ...(await orig<typeof import('../../src/learning/failure-bookkeeping.js')>()),
+      recordActionFailure: (...args: unknown[]) => recordFailure(...args),
+    }));
+    vi.doMock('../../src/learning/provider-fallback.js', async (orig) => ({
+      ...(await orig<typeof import('../../src/learning/provider-fallback.js')>()),
+      recordRegistrySuccess: () => undefined,
+      // The config-declared chain: the pinned provider followed by its fallback.
+      getProviderFallback: () => ({ getFallbackChain: () => ['pinned', 'fallback'] }),
+    }));
+    // The chain is credential-filtered (an explicit fallback entry with no key
+    // must not cost a connection timeout), so the fake provider ids need a
+    // credential verdict of their own.
+    vi.doMock('../../src/learning/model-selection.js', async (orig) => ({
+      ...(await orig<typeof import('../../src/learning/model-selection.js')>()),
+      hasCredentials: () => true,
+    }));
+    vi.doMock('../../src/cli/router.js', () => ({
+      resolveProvider: (_cm: unknown, type: string) => ({
+        type,
+        provider: type === 'pinned' ? pinned : fallback,
+      }),
+    }));
+    return { recordFailure, fallbackCalls };
+  }
+
+  it('walks the config fallback chain when a pinned provider hits a 429', async () => {
+    const { recordFailure, fallbackCalls } = mockPinnedPair(new Error('429 rate limit exceeded'));
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const result = await runLoopExecutor('do the thing', new ConfigManager(), {
+      provider: 'pinned',
+      skipProjectContext: true,
+      skipSkillHint: true,
+      quiet: true,
+    });
+
+    expect(result.generationFailed).toBe(false);
+    expect(result.content).toBe('fallback answer');
+    expect(result.provider).toBe('fallback');
+    expect(fallbackCalls.n).toBe(1);
+    // The pinned provider's failure was still learned (parked), not lost.
+    expect(recordFailure).toHaveBeenCalled();
+  });
+
+  it('does NOT leave an explicitly pinned provider on a non-retryable auth error', async () => {
+    const { fallbackCalls } = mockPinnedPair(new Error('401 unauthorized invalid api key'));
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const result = await runLoopExecutor('do the thing', new ConfigManager(), {
+      provider: 'pinned',
+      skipProjectContext: true,
+      skipSkillHint: true,
+      quiet: true,
+    });
+
+    // No silent provider switch: the pin's real verdict is surfaced instead.
+    expect(fallbackCalls.n).toBe(0);
+    expect(result.provider).toBe('pinned');
   });
 });

@@ -343,6 +343,54 @@ describe('SingleShotAutoRunner — runSingleShotAuto', () => {
     expect(generate).toHaveBeenCalledTimes(1);
   });
 
+  // ─── Pre-walk revival hook ─────────────────────────────────────────────────
+  // edit.ts and plan.ts pass a `revive` sweep so a transiently-failed provider
+  // is re-probed and re-admitted BEFORE the route is computed. Two properties
+  // matter: it must run (and finish) before routing, and it must never be able
+  // to break the walk.
+
+  it('awaits the revival sweep BEFORE computing the route', async () => {
+    const order: string[] = [];
+    const revive = vi.fn(async () => {
+      order.push('revive');
+    });
+
+    const result = await runSingleShotAuto({
+      action: 'edit',
+      task: 't',
+      configManager: makeConfigManager(),
+      revive,
+      route: vi.fn(async () => {
+        order.push('route');
+        return baseRoute();
+      }),
+      generate: vi.fn(async () => 'answer'),
+      recordFailure: vi.fn(),
+    });
+
+    expect(result).toBe('answer');
+    expect(order).toEqual(['revive', 'route']);
+  });
+
+  it('routes anyway when the revival sweep throws (best-effort)', async () => {
+    const route = vi.fn(async () => baseRoute());
+
+    const result = await runSingleShotAuto({
+      action: 'edit',
+      task: 't',
+      configManager: makeConfigManager(),
+      revive: vi.fn(async () => {
+        throw new Error('probe exploded');
+      }),
+      route,
+      generate: vi.fn(async () => 'answer'),
+      recordFailure: vi.fn(),
+    });
+
+    expect(result).toBe('answer');
+    expect(route).toHaveBeenCalledOnce();
+  });
+
   afterEach(() => {
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
     resetQuotaLedger();

@@ -20,6 +20,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { pushDAGUpdate, updateDAGNode, resetDAG } from '../observability/dag-bridge.js';
 import inquirer from 'inquirer';
 
 import { ProviderFactory } from '../inference/factory.js';
@@ -76,6 +77,8 @@ import { getModelRegistry } from '../learning/model-registry.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
 import { classifyFallbackError, getProviderFallback, recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
+import { sweepTransientFailures, sessionRevivalStore } from '../learning/provider-revival.js';
+import { resolveContextBudget, resolveContextFileBudget, resolveMaxOutputTokens } from '../learning/context-budget.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
@@ -88,24 +91,20 @@ import { indexFiles, retrieve, recordRetrievalStats, retrievalOptionsFromConfig,
 // ─── DAG Integration (optional — dashboard may not be built) ─────────────────
 
 /**
- * Push a DAG update to the live dashboard, if the server is running.
- * Uses dynamic import so the orchestrator doesn't crash if the dashboard
- * module hasn't been built or isn't available.
+ * Push a DAG update to the live dashboard, if one is running.
+ *
+ * These helpers used to `await import('../web-dashboard/server.js')` on first
+ * use, which dragged the entire 270 KB dashboard module into every CLI pipeline
+ * run just to mutate in-process graph state nothing could read (no dashboard =
+ * no SSE clients), and added an upward edge to the import graph. The dashboard
+ * now REGISTERS its implementation with `observability/dag-bridge.ts` when it
+ * loads, so these are cheap no-ops without a dashboard — same observable
+ * behaviour, no web module in the agent's dependency closure.
+ *
+ * Deliberately still `async`: every call site awaits them, and the ordering
+ * contract (the update lands before the step it describes completes) is what
+ * the DAG view depends on.
  */
-let dagModule: {
-  pushDAGUpdate: (update: { pipelineId?: string; pipelineDescription?: string; nodes: Array<{ id: string; agentType: string; status: string; description: string }>; edges: Array<{ from: string; to: string }> }) => void;
-  updateDAGNode: (nodeId: string, update: { status: string; summary?: string }) => void;
-  resetDAG: () => void;
-} | undefined | null = undefined;
-
-async function ensureDAGModule(): Promise<void> {
-  if (dagModule !== undefined) return; // already attempted (null = failed, object = loaded)
-  try {
-    dagModule = await import('../web-dashboard/server.js') as any;
-  } catch {
-    dagModule = null; // dashboard module not available — mark as failed
-  }
-}
 
 async function tryPushDAG(update: {
   pipelineId?: string;
@@ -113,18 +112,15 @@ async function tryPushDAG(update: {
   nodes: Array<{ id: string; agentType: string; status: string; description: string }>;
   edges: Array<{ from: string; to: string }>;
 }): Promise<void> {
-  await ensureDAGModule();
-  if (dagModule) dagModule.pushDAGUpdate(update as any);
+  pushDAGUpdate(update);
 }
 
 async function tryUpdateDAGNode(nodeId: string, update: { status: string; summary?: string }): Promise<void> {
-  await ensureDAGModule();
-  if (dagModule) dagModule.updateDAGNode(nodeId, update as any);
+  updateDAGNode(nodeId, update);
 }
 
 async function tryResetDAG(): Promise<void> {
-  await ensureDAGModule();
-  if (dagModule) dagModule.resetDAG();
+  resetDAG();
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -152,6 +148,11 @@ export interface OrchestratorOptions {
    * When true, the orchestrator routes 'writer' tasks to 'writer-tc' and
    * 'reviewer' tasks to 'reviewer-tc' — iterative read→edit→verify loops
    * instead of one-shot LLM calls. Adopted from Freebuff/Hermes pattern.
+   *
+   * Defaults to `DEFAULT_USE_TOOL_CALLING` (true). Absent means "use the
+   * default" — pass an explicit `false` to force the one-shot writer, which
+   * is what the eval framework does for its non-tool-calling arm so the arms
+   * stay distinguishable.
    */
   useToolCalling?: boolean;
   /**
@@ -351,6 +352,30 @@ function createAgent(agentType: string, registry: ModuleRegistry): Agent | null 
   }
 }
 
+/**
+ * Default for the iterative tool-calling writer/reviewer (audit W3).
+ *
+ * The one-shot writer receives the plan + gathered context and must emit the
+ * COMPLETE content of every file in a single response — it cannot read the
+ * file it is editing, so it rewrites code it has never seen, and a single
+ * malformed code fence loses the whole task. `writer-tc`/`reviewer-tc` run a
+ * prompt-based read→edit→verify loop instead, which is provider-agnostic (no
+ * native function calling required) and is the single largest capability gap
+ * between this harness and Freebuff's for every model, weak ones most of all.
+ *
+ * It is therefore ON by default; `--no-tool-calling` (CLI) or
+ * `useToolCalling: false` (API) restores the one-shot writer.
+ */
+export const DEFAULT_USE_TOOL_CALLING = true;
+
+/**
+ * Resolve the tool-calling writer/reviewer setting from options.
+ * Exported so the default is testable without booting an orchestrator.
+ */
+export function resolveUseToolCalling(options: Pick<OrchestratorOptions, 'useToolCalling'>): boolean {
+  return options.useToolCalling ?? DEFAULT_USE_TOOL_CALLING;
+}
+
 // ─── Orchestrator ───────────────────────────────────────────────────────────
 
 interface RoutingExecutionStrategy {
@@ -433,6 +458,34 @@ export class Orchestrator {
     sessionFailedProviders: new Map(),
     sessionTransientFailedProviders: new Set(),
   };
+  /**
+   * Re-verify transiently-failed providers and re-admit the ones that recovered.
+   *
+   * The pipeline allocated `failureSession.sessionTransientFailedProviders` and
+   * never read it, so the documented round-trip — "fail → cool down → prove
+   * recovery with a 1-token spot-check → route again" — only ever went ONE way
+   * here. A provider that recovered mid-run stayed excluded for the rest of the
+   * pipeline, which is how a transient 503 ended up degrading a whole run.
+   *
+   * Called once per task batch (and at pipeline entry), so recovery is discovered
+   * between tasks rather than by failing again. Cheap when nothing is pending:
+   * the sweep returns immediately on an empty transient set, and a still-active
+   * exclusion is skipped without a network call.
+   */
+  private async sweepTransientProviders(agentType = 'orchestrator'): Promise<string[]> {
+    try {
+      const result = await sweepTransientFailures(
+        sessionRevivalStore(this.failureSession),
+        this.configManager,
+        { agentType },
+      );
+      return result.revived;
+    } catch {
+      // Best-effort — revival must never break the pipeline.
+      return [];
+    }
+  }
+
   /** Execution telemetry accumulator for the current pipeline */
   private stats: ExecutionStats = {
     llmCalls: 0,
@@ -471,6 +524,12 @@ export class Orchestrator {
 
   /** The actual pipeline body — wrapped by execute() with a K1 runId. */
   private async executeCorrelated(goal: string, options: OrchestratorOptions = {}): Promise<OrchestrationResult> {
+    // Re-admit any provider that recovered since the LAST run before the planner
+    // routes: the transient marker is session-scoped, but the registry block it
+    // pairs with persists, so a provider proven healthy in a prior run must not
+    // stay hidden from this one.
+    await this.sweepTransientProviders('planner');
+
     // P0 reasoning trace: begin the per-pipeline trace so every planner,
     // memory, and task LLM call lands in ~/.nuvira/memory/reasoning-traces.json
     // (best-effort — a trace failure must never break the pipeline).
@@ -1219,6 +1278,13 @@ export class Orchestrator {
         }
       }
 
+      // ── Re-verify before re-admit, once per BATCH ────────────────────────
+      // A provider that failed transiently earlier in this pipeline is only
+      // re-admitted once a spot-check proves it is back. Re-checking per batch
+      // (not per task) bounds the cost: a batch is already the fan-out unit, and
+      // the sweep no-ops when no exclusion has expired.
+      await this.sweepTransientProviders();
+
       // Mark every runnable task as running up front so the live board shows
       // the whole batch (and its parallel lanes) at once.
       for (const { task } of taskStrategies) {
@@ -1783,11 +1849,18 @@ export class Orchestrator {
           // Best-effort — fall through to the original value if resolution fails
         }
       }
+      const servedModel = isAutoModel(requestedModel) ? (config.model || requestedModel) : requestedModel;
       const mergedOptions = {
         ...inferenceOptions,
-        model: isAutoModel(requestedModel) ? (config.model || requestedModel) : requestedModel,
+        model: servedModel,
         temperature: inferenceOptions?.temperature ?? config.temperature ?? 0.7,
-        maxTokens: inferenceOptions?.maxTokens ?? config.maxTokens ?? 4096,
+        // Output cap: explicit option → configured value → the model's real
+        // capability. The old flat `4096` held a 200K+ model to a small-model
+        // ceiling, so the better the model, the more of it the constant wasted.
+        maxTokens:
+          inferenceOptions?.maxTokens ??
+          config.maxTokens ??
+          resolveMaxOutputTokens({ provider: providerType, model: servedModel }),
       };
       // The strongest signal the provider×model is NOT usable: a real call
       // failed. Feed the SHARED registry telemetry path (the same one chat
@@ -2298,7 +2371,7 @@ export class Orchestrator {
       // This gives the LLM iterative read→edit→verify capability instead
       // of a single-shot LLM call (adopted from Freebuff/Hermes pattern).
       let actualAgentType = effectiveAgentType;
-      if (options.useToolCalling) {
+      if (resolveUseToolCalling(options)) {
         if (effectiveAgentType === 'writer') {
           actualAgentType = 'writer-tc';
         } else if (effectiveAgentType === 'reviewer') {
@@ -3461,7 +3534,36 @@ export class Orchestrator {
    * Logs details in verbose mode.
    */
   private pruneContext(vault: ContextVault, options: OrchestratorOptions): void {
-    const maxTokens = options.contextLimit || 128_000;
+    // Budget from the SERVED model's real window when it is known (the registry
+    // records each provider's advertised `context_length`), falling back to the
+    // historical 128K default when it is not — so nothing regresses for a model
+    // we cannot discover, while a large-window model stops being pruned as if it
+    // had 128K. An explicit `contextLimit` still wins outright.
+    //
+    // NOTE: this uses the pipeline's configured provider/model. In auto mode the
+    // CONCRETE model is chosen per task, so a per-task budget would be more
+    // precise still — that requires threading the routed decision into pruning.
+    const maxTokens = resolveContextBudget({
+      provider: options.provider,
+      model: options.model,
+      override: options.contextLimit,
+    }).budget;
+    // T2 — model-window-aware FILE-context budget for the writer/edit agents,
+    // derived from the same window the pruner uses. Unknown windows resolve to
+    // the historical caps (10 files / 16K chars), so nothing regresses; a known
+    // large window lets the writer read more of the project instead of a fixed
+    // keyhole. Best-effort — budget metadata must never break a run.
+    try {
+      const fileBudget = resolveContextFileBudget({
+        provider: options.provider,
+        model: options.model,
+        override: options.contextLimit,
+      });
+      vault.setMeta('contextFileBudgetChars', fileBudget.maxChars);
+      vault.setMeta('contextFileBudgetFiles', fileBudget.maxFiles);
+    } catch {
+      // Best-effort.
+    }
     const pruner = new ContextPruner({
       maxTokens,
       conversationMode: options.contextPruneMode || 'soft',

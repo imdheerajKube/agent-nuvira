@@ -28,10 +28,15 @@ import { resolveProvider } from './router.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
 import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
+import { recordActionFailure } from '../learning/failure-bookkeeping.js';
+import { recordRegistrySuccess, getProviderFallback, classifyFallbackError, isRetryableError, } from '../learning/provider-fallback.js';
+import { resolveThreadBudgetChars } from '../learning/context-budget.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
+import { resolveModelHarnessProfile } from '../learning/model-harness.js';
 import { resolveEngine } from '../learning/engine-router.js';
 import { logger } from '../utils/logger.js';
+import { toUserFacingGenerationError } from '../inference/tool-call-utils.js';
 /** The system prompt for the execute-loop arm (verification-first). */
 function buildExecuteLoopSystemPrompt(toolContractJson) {
     return [
@@ -58,6 +63,36 @@ export async function runLoopExecutor(goal, configManager, opts = {}) {
     let providerType = 'auto';
     let model = 'default';
     let provider = null;
+    // ── Mid-turn failover candidate pool ────────────────────────────────────
+    // The SAME deep chain the orchestrator/chat walk. Before this the loop only
+    // used the chain to pick its STARTING provider: a 429 on the second step
+    // killed the whole turn (observed live on gemini free tier) and the failure
+    // was never recorded, so the next run repeated the same pick. callModel now
+    // walks this pool and writes every failure through the shared bookkeeping.
+    const candidatePairs = [];
+    const seenCandidate = new Set();
+    const pushCandidate = (prov, mdl) => {
+        if (!prov)
+            return;
+        const m = mdl && mdl !== 'default' ? mdl : 'default';
+        const key = `${prov}|${m}`;
+        if (seenCandidate.has(key))
+            return;
+        seenCandidate.add(key);
+        candidatePairs.push({ provider: prov, model: m });
+    };
+    /**
+     * True when the caller explicitly pinned a provider (`--provider X`). A pin
+     * narrows WHICH failures justify leaving the requested provider (see the
+     * retryable gate in `callModel`); it never disables failover entirely.
+     */
+    const pinnedRun = Boolean(opts.provider && !isAutoProvider(opts.provider));
+    /** Per-turn failure session — same composition every other action uses. */
+    const failureSession = {
+        sessionFailedProviders: new Map(),
+        sessionTransientFailedProviders: new Set(),
+        sessionFailedModels: new Map(),
+    };
     try {
         if (opts.provider && !isAutoProvider(opts.provider)) {
             const resolved = resolveProvider(configManager, opts.provider);
@@ -66,6 +101,45 @@ export async function runLoopExecutor(goal, configManager, opts = {}) {
             model = opts.model && !isAutoModel(opts.model)
                 ? opts.model
                 : await resolveWorkingModel(provider, providerType, undefined);
+            pushCandidate(providerType, model);
+            // ── A PINNED RUN FAILS OVER TOO ──────────────────────────────────────
+            // A pinned provider used to contribute a SINGLE candidate, so any
+            // mid-turn failure killed the whole turn even though a fallback chain
+            // was configured — the pin collapsed the deep pool into a one-shot. Walk
+            // the SAME config-declared chain chat's non-auto path walks
+            // (`fallback.providers` when set, otherwise the credentialed/verified
+            // providers ranked dynamically), so `--provider X` still lands a
+            // best-effort answer instead of dying on X's first bad step.
+            try {
+                const chain = getProviderFallback(configManager, configManager.getAll().fallback)
+                    .getFallbackChain(providerType);
+                const fbTypes = chain.filter((t) => t !== providerType);
+                // SAME exclusion predicate the auto path applies (session/model
+                // cooldowns + cross-pipeline memory + registry per-ENTRY usability):
+                // a registry-parked or quarantined fallback is ordered LAST — never
+                // dropped — so an all-excluded chain still makes the best attempt
+                // instead of dying on the pin's first bad step. The PINNED provider
+                // itself is never filtered: the user asked for it explicitly, and a
+                // spot-check may be about to re-admit it.
+                let ordered = fbTypes;
+                try {
+                    const isExcluded = createFailoverExclusionFilter();
+                    ordered = [
+                        ...fbTypes.filter((t) => !isExcluded(t)),
+                        ...fbTypes.filter((t) => isExcluded(t)),
+                    ];
+                }
+                catch {
+                    // Exclusion is an optimization — an unavailable filter must never
+                    // cost us the fallback chain itself.
+                }
+                for (const fbType of ordered)
+                    pushCandidate(fbType);
+            }
+            catch {
+                // Best-effort — an unconfigured fallback chain must never break a
+                // pinned run (the pinned candidate alone is still a valid pool).
+            }
         }
         else {
             const routed = await getAutoRouter().resolve('execute', goal, { verbose: !opts.quiet }, configManager);
@@ -114,6 +188,9 @@ export async function runLoopExecutor(goal, configManager, opts = {}) {
                 ...pairs.filter((p) => !isExcluded(p.provider, p.model)),
                 ...pairs.filter((p) => isExcluded(p.provider, p.model)),
             ];
+            // Hand the whole ordered chain to the mid-turn walk.
+            for (const pair of ordered)
+                pushCandidate(pair.provider, pair.model);
             for (const pair of ordered) {
                 try {
                     const resolved = resolveProvider(configManager, pair.provider);
@@ -134,7 +211,10 @@ export async function runLoopExecutor(goal, configManager, opts = {}) {
         }
     }
     catch (err) {
-        return failureResult(`Routing failed: ${err instanceof Error ? err.message : String(err)}`, startedAt, opts.provider ?? 'auto', opts.model ?? 'default', 'routing failed before an engine decision was possible');
+        return failureResult(
+        // User-facing reason is sanitized (no provider wire text); the raw error
+        // rides along as the technical explanation below.
+        toUserFacingGenerationError(err), startedAt, opts.provider ?? 'auto', opts.model ?? 'default', `routing failed before an engine decision was possible: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (!provider) {
         return failureResult('No available provider for the loop engine (check API keys / local runner).', startedAt, opts.provider ?? 'auto', opts.model ?? 'default', 'no available provider after the candidate walk');
@@ -194,38 +274,148 @@ export async function runLoopExecutor(goal, configManager, opts = {}) {
     ];
     const loadedExtraTools = new Set();
     const erroredTools = [];
-    const callModel = async (messages, schemas, _stepOnToken, stepSignal) => {
-        void _stepOnToken;
-        if (typeof provider.generateTools === 'function' && schemas.length > 0) {
-            if (typeof provider.generateToolsStream === 'function' && opts.onToken) {
-                return provider.generateToolsStream(messages, schemas, { model, signal: stepSignal ?? opts.signal }, opts.onToken);
+    // Adapter cache — one `resolveProvider` per provider per turn.
+    const resolvedProviders = new Map();
+    const resolveAdapter = async (prov) => {
+        const cached = resolvedProviders.get(prov);
+        if (cached)
+            return cached;
+        const resolved = resolveProvider(configManager, prov);
+        resolvedProviders.set(prov, resolved.provider);
+        return resolved.provider;
+    };
+    /** Candidates that already failed in THIS turn (attempted, but tried last). */
+    const failedPairs = new Set();
+    const pairKey = (p, m) => `${p}|${m}`;
+    /** One generation attempt on a concrete provider × model (native → JSON). */
+    const tryOnce = async (prov, mdl, messages, schemas, abort) => {
+        if (typeof prov.generateTools === 'function' && schemas.length > 0) {
+            if (typeof prov.generateToolsStream === 'function' && opts.onToken) {
+                return prov.generateToolsStream(messages, schemas, { model: mdl, signal: abort }, opts.onToken);
             }
-            return provider.generateTools(messages, schemas, { model, signal: stepSignal ?? opts.signal });
+            return prov.generateTools(messages, schemas, { model: mdl, signal: abort });
         }
         // JSON fallback transport — the shared helper the chat engine uses.
         const { buildJsonFallbackPrompt } = await import('../inference/tool-call-utils.js');
         const { extractFallbackToolCalls } = await import('../tools/tool-loop.js');
         const prompt = buildJsonFallbackPrompt(messages, schemas);
         let raw;
-        if (typeof provider.generateStream === 'function') {
+        if (typeof prov.generateStream === 'function') {
             const chunks = [];
-            await provider.generateStream(prompt, { model, signal: stepSignal ?? opts.signal }, (t) => {
+            await prov.generateStream(prompt, { model: mdl, signal: abort }, (t) => {
                 chunks.push(t);
                 opts.onToken?.(t);
             });
             raw = chunks.join('');
         }
         else {
-            raw = await provider.generate(prompt, { model, signal: stepSignal ?? opts.signal });
+            raw = await prov.generate(prompt, { model: mdl, signal: abort });
         }
         const { text, calls } = extractFallbackToolCalls(raw);
         return { content: text, toolCalls: calls };
     };
+    const callModel = async (messages, schemas, _stepOnToken, stepSignal) => {
+        void _stepOnToken;
+        const abort = stepSignal ?? opts.signal;
+        // Walk order: the CURRENT pick first, then the rest of the deep chain.
+        // Candidates that already failed this turn are attempted LAST (never
+        // dropped), so an all-failed pool still makes the best attempt instead of
+        // dying on "no candidate".
+        const primary = { provider: providerType, model };
+        const all = [];
+        const seenAll = new Set();
+        for (const c of [primary, ...candidatePairs]) {
+            const k = pairKey(c.provider, c.model);
+            if (seenAll.has(k))
+                continue;
+            seenAll.add(k);
+            all.push(c);
+        }
+        const walk = [
+            ...all.filter((c) => !failedPairs.has(pairKey(c.provider, c.model))),
+            ...all.filter((c) => failedPairs.has(pairKey(c.provider, c.model))),
+        ];
+        let lastErr;
+        for (const cand of walk) {
+            if (abort?.aborted)
+                break;
+            const key = pairKey(cand.provider, cand.model);
+            try {
+                const prov = await resolveAdapter(cand.provider);
+                if (typeof prov.isAvailable === 'function' && !(await prov.isAvailable())) {
+                    failedPairs.add(key);
+                    continue;
+                }
+                const desired = cand.model !== 'default'
+                    ? cand.model
+                    : getAutoRouter().resolveModel(cand.provider, 'execute', configManager);
+                const mdl = await resolveWorkingModel(prov, cand.provider, desired);
+                // Flip the loop's active provider/model to the candidate that answers,
+                // so telemetry and the NEXT step's primary pick follow the winner.
+                providerType = cand.provider;
+                provider = prov;
+                model = mdl;
+                const resp = await tryOnce(prov, mdl, messages, schemas, abort);
+                // Success attribution — the same per-action write-through chat/execute
+                // use, so the provider × model is marked verified for real usage.
+                recordRegistrySuccess(cand.provider, mdl, 'execute');
+                return resp;
+            }
+            catch (err) {
+                // An abort is a clean stop, not a generation failure — never fail over
+                // (or book a failure) for the caller's own cancellation.
+                if (abort?.aborted)
+                    throw err;
+                lastErr = err;
+                failedPairs.add(key);
+                // FULL shared bookkeeping: session exclusion → (rate-limit) ledger
+                // park → registry write-through → quota timeline → circuit breaker.
+                // This is what makes a mid-loop 429 LEARNED: the model rests and the
+                // next run (and this turn's later steps) routes around it.
+                try {
+                    recordActionFailure(failureSession, cand.provider, err, configManager, {
+                        model: cand.model !== 'default' ? cand.model : model,
+                        action: 'execute',
+                    });
+                }
+                catch {
+                    // Best-effort — bookkeeping must never mask the generation error.
+                }
+                // ── PINNED-RUN GATE ────────────────────────────────────────────────
+                // Leaving a provider the user EXPLICITLY asked for is only justified by
+                // a failure another provider can plausibly answer — the same retryable
+                // gate chat's non-auto path uses. An auth error (the key is dead) or a
+                // deterministic request-shape rejection fails identically everywhere;
+                // surfacing it beats silently running the user's job somewhere they did
+                // not ask for. The failure is still recorded above, so the pin does not
+                // blind the router to a dead key.
+                if (pinnedRun && !isRetryableError(classifyFallbackError(err))) {
+                    throw err;
+                }
+                if (!opts.quiet) {
+                    logger.warn(`   \u26A0\uFE0F ${cand.provider} failed — trying the next loop candidate...`);
+                }
+            }
+        }
+        throw lastErr ?? new Error('no loop candidate could complete the step');
+    };
     try {
+        // R1 — the harness is fitted to the MODEL that will run, not just to
+        // config: `getLoopExposureMode` alone hands a 0.5B local model the same
+        // surface as gpt-oss:120b.
+        const harness = resolveModelHarnessProfile({
+            model,
+            configExposure: getLoopExposureMode(configManager),
+        });
         const result = await runToolLoop({
             messages: thread,
             maxSteps: opts.maxSteps ?? 16,
-            toolExposure: getLoopExposureMode(configManager),
+            // Model-window-aware thread budget: a 1M-token model keeps its whole
+            // window instead of being trimmed to the fixed ~50K-token default.
+            // Undefined (unknown window) leaves the tool-loop default untouched.
+            threadBudgetChars: resolveThreadBudgetChars({ provider: providerType, model }),
+            toolExposure: harness.exposure,
+            maxParallelReads: harness.maxParallelReads,
             onToken: opts.onToken,
             signal: opts.signal,
             context: {
@@ -269,7 +459,7 @@ export async function runLoopExecutor(goal, configManager, opts = {}) {
         };
     }
     catch (err) {
-        return failureResult(`Loop execution failed: ${err instanceof Error ? err.message : String(err)}`, startedAt, providerType, model, engineExplanation);
+        return failureResult(toUserFacingGenerationError(err), startedAt, providerType, model, `loop execution failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 }
 /** Build a failed result (shape-complete for the eval arm comparison). */

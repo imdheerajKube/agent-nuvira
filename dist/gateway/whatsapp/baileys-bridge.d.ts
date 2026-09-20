@@ -23,6 +23,16 @@
  *   so `send("Alex", …)` resolves the contact by name.
  */
 import { type WhatsAppBridge } from './bridge.js';
+/**
+ * How old an OFFLINE-BACKFILL message may be and still be handled (ms).
+ *
+ * WhatsApp re-delivers history after every (re)connect. Anything genuinely new
+ * — sent while the gateway was briefly offline — is seconds/minutes old and is
+ * handled; anything older was already answered (or is stale), and re-running it
+ * is what produced the observed reply storms. Override with
+ * `BUFF_GATEWAY_BACKFILL_MAX_AGE_MS` (0 = never accept backfill at all).
+ */
+export declare const BACKFILL_MAX_AGE_MS: number;
 /** Read persisted LID→PN pairs (missing/corrupt file → [] — never throws). */
 export declare function readLidMappingsFile(sessionDir: string): Array<{
     lid: string;
@@ -177,7 +187,7 @@ export declare class BaileysBridge implements WhatsAppBridge {
      * CLI send resolves names only after that sync arrives.
      */
     private resolveContactJid;
-    connect(onMessage: (fromJid: string, text: string) => void): Promise<void>;
+    connect(onMessage: (fromJid: string, text: string, participant?: string, messageId?: string) => void): Promise<void>;
     disconnect(): Promise<void>;
     /**
      * Recreate a dead socket while connected, with exponential backoff. Polls

@@ -23,10 +23,33 @@ import { getMCPManager } from '../../mcp/manager.js';
 import { assessProject, type ProjectAssessment } from '../prompt-assembly.js';
 import { referenceDocsFor } from '../reference-docs.js';
 import { getToolsForAgent } from '../tool-bridge.js';
+import { responseIndicatesNoChanges } from './writer.js';
 
 export class WriterToolCallingAgent extends ToolCallingAgent {
   readonly name = 'Writer';
   readonly description = 'Implements code changes using iterative tool calls';
+
+  /**
+   * A writer's deliverable is FILE CHANGES, so finishing with none proposed is
+   * a failure unless the model explicitly judged that no change was needed
+   * ("the file already implements this") — the same distinction the one-shot
+   * `WriterAgent` makes with `responseIndicatesNoChanges`. Returning success
+   * for "I'll outline my approach…" silently skipped the task's real work and
+   * stranded every downstream step, which is exactly what Session 46 fixed on
+   * the one-shot path.
+   */
+  protected acceptNoChangeOutcome(_context: AgentContext, text: string): boolean {
+    return responseIndicatesNoChanges(text);
+  }
+
+  protected noChangeFailure(): { summary: string; error: string } {
+    return {
+      summary: 'Writer produced no file changes',
+      error:
+        'The writer finished without proposing a single file change and without a "no changes needed" judgment ' +
+        '(no propose_change/edit tool call was emitted).',
+    };
+  }
 
   /**
    * Override getTools to include MCP tools from connected servers.

@@ -72,6 +72,12 @@ interface GeminiPart {
   text?: string;
   functionCall?: { name: string; args?: Record<string, unknown> };
   functionResponse?: { name: string; response: Record<string, unknown> };
+  /**
+   * Returned by Gemini alongside a functionCall part and REQUIRED on the way
+   * back when the loop continues the conversation. Opaque to us — we only
+   * carry it.
+   */
+  thoughtSignature?: string;
 }
 
 export interface GeminiContent {
@@ -182,7 +188,15 @@ export function toGeminiContents(messages: ToolMessage[]): {
       const parts: GeminiPart[] = [];
       if (m.content) parts.push({ text: m.content });
       for (const tc of m.toolCalls ?? []) {
-        parts.push({ functionCall: { name: tc.name, args: parseToolArguments(tc.arguments) } });
+        // Echo the provider's opaque thought signature back with the call it
+        // belongs to. Without this Gemini rejects the continuation turn with
+        // `400 ... missing a thought_signature in functionCall parts`, so a
+        // Gemini run died on step 2 no matter how capable the model was.
+        const signature = tc.providerMeta?.thoughtSignature;
+        parts.push({
+          functionCall: { name: tc.name, args: parseToolArguments(tc.arguments) },
+          ...(typeof signature === 'string' ? { thoughtSignature: signature } : {}),
+        });
       }
       if (parts.length > 0) contents.push({ role: 'model', parts });
       continue;
@@ -202,7 +216,13 @@ export function toGeminiContents(messages: ToolMessage[]): {
 /** Non-stream Gemini generateContent response shape (tool-call aware). */
 export interface GeminiToolResponse {
   candidates?: Array<{
-    content?: { parts?: Array<{ text?: string; functionCall?: { name: string; args?: Record<string, unknown> } }> };
+    content?: {
+      parts?: Array<{
+        text?: string;
+        functionCall?: { name: string; args?: Record<string, unknown> };
+        thoughtSignature?: string;
+      }>;
+    };
     finishReason?: string;
   }>;
   usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
@@ -220,6 +240,8 @@ export function parseGeminiToolResponse(data: GeminiToolResponse): ToolCallRespo
         id: `call_${toolCalls.length + 1}`,
         name: p.functionCall.name,
         arguments: p.functionCall.args ?? {},
+        // Carried, never interpreted — see GeminiPart.thoughtSignature.
+        ...(p.thoughtSignature ? { providerMeta: { thoughtSignature: p.thoughtSignature } } : {}),
       });
     }
   }
@@ -233,7 +255,7 @@ export function parseGeminiToolResponse(data: GeminiToolResponse): ToolCallRespo
  */
 export function parseGeminiToolSSEChunk(line: string): {
   text: string | null;
-  functionCalls: Array<{ name: string; args?: Record<string, unknown> }>;
+  functionCalls: Array<{ name: string; args?: Record<string, unknown>; thoughtSignature?: string }>;
   usage?: { promptTokens?: number; completionTokens?: number };
 } | null {
   if (!line.startsWith('data: ')) return null;
@@ -243,10 +265,12 @@ export function parseGeminiToolSSEChunk(line: string): {
     const parsed = JSON.parse(data) as GeminiToolResponse;
     const parts = parsed.candidates?.[0]?.content?.parts ?? [];
     let text: string | null = null;
-    const functionCalls: Array<{ name: string; args?: Record<string, unknown> }> = [];
+    const functionCalls: Array<{ name: string; args?: Record<string, unknown>; thoughtSignature?: string }> = [];
     for (const p of parts) {
       if (typeof p.text === 'string' && p.text) text = (text ?? '') + p.text;
-      if (p.functionCall?.name) functionCalls.push({ name: p.functionCall.name, args: p.functionCall.args });
+      if (p.functionCall?.name) {
+        functionCalls.push({ name: p.functionCall.name, args: p.functionCall.args, thoughtSignature: p.thoughtSignature });
+      }
     }
     const usage = parsed.usageMetadata
       ? { promptTokens: parsed.usageMetadata.promptTokenCount, completionTokens: parsed.usageMetadata.candidatesTokenCount }

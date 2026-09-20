@@ -151,3 +151,63 @@ describe('ToolCallingAgent — list_files tool', () => {
     expect(result.output).toContain('agents');
   });
 });
+
+describe('ToolCallingAgent — no masked success (writer deliverable contract)', () => {
+  /** A writer whose only response is prose (no tool call) proposes nothing. */
+  const proseOnly = async () => 'I will implement the handler now. First the imports, then the gesture.';
+
+  it('a prose-only writer FAILS instead of reporting success with no changes', async () => {
+    const agent = new WriterToolCallingAgent();
+    const context = makeContext();
+
+    const result = await agent.execute(context, proseOnly as unknown as LLMCallFn);
+
+    expect(result.success).toBe(false);
+    expect(result.summary).toBe('Writer produced no file changes');
+    expect(result.error).toContain('without proposing a single file change');
+    expect(context.fileChanges).toHaveLength(0);
+  });
+
+  it('an explicit "no changes needed" judgment is still a legitimate success', async () => {
+    const agent = new WriterToolCallingAgent();
+    const context = makeContext();
+
+    const result = await agent.execute(
+      context,
+      (async () => 'The file already implements this — no changes needed.') as unknown as LLMCallFn,
+    );
+
+    expect(result.success).toBe(true);
+    expect(context.fileChanges).toHaveLength(0);
+  });
+
+  it('a reviewer verdict with no proposed changes remains a success (text is the deliverable)', async () => {
+    const agent = new ReviewerToolCallingAgent();
+    const context = makeContext();
+
+    const result = await agent.execute(
+      context,
+      (async () => 'Review passed. No issues found.') as unknown as LLMCallFn,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain('Review passed');
+  });
+
+  it('a writer that proposes a change still succeeds on prose alone', async () => {
+    const agent = new WriterToolCallingAgent();
+    const context = makeContext();
+    const scripts = [
+      '```json\n{"tool":"propose_change","args":{"path":"game.py","content":"print(1)\\n"}}\n```',
+      'Done — created game.py.',
+    ];
+
+    const result = await agent.execute(
+      context,
+      (async () => scripts.shift() ?? 'nothing') as unknown as LLMCallFn,
+    );
+
+    expect(result.success).toBe(true);
+    expect(context.fileChanges.map((c: FileChange) => c.path)).toEqual(['game.py']);
+  });
+});

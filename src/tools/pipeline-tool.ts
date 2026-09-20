@@ -24,7 +24,7 @@ import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { parseRequestSync } from '../nlu/parser.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
-import { maybeAutoRecall, recallCard, recallContextBlock } from '../context/session-recall.js';
+import { maybeAutoRecall, recallCard, recallContextBlock, recallPolicy } from '../context/session-recall.js';
 import { logger } from '../utils/logger.js';
 import type { ModeHint } from '../nlu/intent.js';
 import type { TaskIntent } from '../learning/auto-router.js';
@@ -140,11 +140,16 @@ export async function runPipelineTool(
     ...(opts.notes || []),
   ];
   let recallContext = opts.recallContext;
-  if (mode === 'recall' && !recallContext) {
+  // Ambient recall (see recallPolicy): the dispatched pipeline learns what this
+  // project already did even when the request was not phrased as a continuation.
+  const recallPolicyDecision = recallPolicy({ mode });
+  if (recallPolicyDecision.recall && !recallContext) {
     try {
       const recall = await maybeAutoRecall(process.cwd(), configManager.getWorkspaceStore());
       if (recall) {
-        notes.push(...recallCard(recall).split('\n').filter((l) => l.trim() !== ''));
+        if (recallPolicyDecision.announce) {
+          notes.push(...recallCard(recall).split('\n').filter((l) => l.trim() !== ''));
+        }
         recallContext = recallContextBlock(recall);
       }
     } catch { /* recall must never break dispatch */ }

@@ -29,8 +29,8 @@ describe('Sandbox Executor', () => {
       expect(typeof status.available).toBe('boolean');
     });
 
-    it('checks if an image exists', async () => {
-      if (!dockerAvailable) return;
+    it('checks if an image exists', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       const exists = await checkImageExists('node:20-slim');
       expect(typeof exists).toBe('boolean');
@@ -38,8 +38,8 @@ describe('Sandbox Executor', () => {
   });
 
   describe('Sandbox Execution', () => {
-    it('executes a shell script in sandbox', async () => {
-      if (!dockerAvailable) return;
+    it('executes a shell script in sandbox', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       const script = 'echo "hello from sandbox"';
       const result = await executeInSandbox(script, 'test.sh');
@@ -50,8 +50,8 @@ describe('Sandbox Executor', () => {
       expect(result.durationMs).toBeGreaterThan(0);
     });
 
-    it('executes a Python script in sandbox', async () => {
-      if (!dockerAvailable) return;
+    it('executes a Python script in sandbox', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       const script = 'print("hello from python")';
       const result = await executeInSandbox(script, 'test.py');
@@ -61,8 +61,8 @@ describe('Sandbox Executor', () => {
       expect(result.exitCode).toBe(0);
     });
 
-    it('executes a Node.js script in sandbox', async () => {
-      if (!dockerAvailable) return;
+    it('executes a Node.js script in sandbox', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       const script = 'console.log("hello from node")';
       const result = await executeInSandbox(script, 'test.js');
@@ -72,8 +72,8 @@ describe('Sandbox Executor', () => {
       expect(result.exitCode).toBe(0);
     });
 
-    it('injects environment variables', async () => {
-      if (!dockerAvailable) return;
+    it('injects environment variables', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       const script = 'echo $MY_VAR';
       const result = await executeInSandbox(script, 'test.sh', { MY_VAR: 'injected' });
@@ -82,8 +82,8 @@ describe('Sandbox Executor', () => {
       expect(result.stdout.trim()).toBe('injected');
     });
 
-    it('handles non-zero exit codes', async () => {
-      if (!dockerAvailable) return;
+    it('handles non-zero exit codes', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       const script = 'exit 1';
       const result = await executeInSandbox(script, 'test.sh');
@@ -92,8 +92,8 @@ describe('Sandbox Executor', () => {
       expect(result.exitCode).toBe(1);
     });
 
-    it('captures stderr', async () => {
-      if (!dockerAvailable) return;
+    it('captures stderr', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       const script = 'echo "error" >&2';
       const result = await executeInSandbox(script, 'test.sh');
@@ -101,8 +101,8 @@ describe('Sandbox Executor', () => {
       expect(result.stderr.trim()).toBe('error');
     });
 
-    it('respects timeout', async () => {
-      if (!dockerAvailable) return;
+    it('respects timeout', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       const script = 'sleep 10';
       const result = await executeInSandbox(script, 'test.sh', undefined, undefined, { timeoutMs: 1000 });
@@ -111,8 +111,8 @@ describe('Sandbox Executor', () => {
       expect(result.exitCode).toBe(124); // timeout exit code
     }, 10000);
 
-    it('passes arguments to the script', async () => {
-      if (!dockerAvailable) return;
+    it('passes arguments to the script', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       const script = 'echo "args: $@"';
       const result = await executeInSandbox(script, 'test.sh', undefined, ['arg1', 'arg2']);
@@ -121,8 +121,8 @@ describe('Sandbox Executor', () => {
       expect(result.stdout.trim()).toBe('args: arg1 arg2');
     });
 
-    it('restricts network access', async () => {
-      if (!dockerAvailable) return;
+    it('restricts network access', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       // This should fail because network is disabled
       const script = 'curl -s http://example.com || echo "network blocked"';
@@ -134,8 +134,8 @@ describe('Sandbox Executor', () => {
   });
 
   describe('Security', () => {
-    it('drops all capabilities by default', async () => {
-      if (!dockerAvailable) return;
+    it('drops all capabilities by default', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       // This should work even with dropped capabilities
       const script = 'echo "secure execution"';
@@ -145,8 +145,8 @@ describe('Sandbox Executor', () => {
       expect(result.stdout.trim()).toBe('secure execution');
     });
 
-    it('uses read-only root filesystem', async () => {
-      if (!dockerAvailable) return;
+    it('uses read-only root filesystem', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       // This should fail because root filesystem is read-only
       const script = 'touch /etc/test || echo "read-only"';
@@ -155,8 +155,8 @@ describe('Sandbox Executor', () => {
       expect(result.stdout).toContain('read-only');
     });
 
-    it('limits memory usage', async () => {
-      if (!dockerAvailable) return;
+    it('limits memory usage', async (ctx) => {
+      if (!dockerAvailable) return ctx.skip();
       
       // This should work within memory limits
       const script = 'echo "memory limited"';

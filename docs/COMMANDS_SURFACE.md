@@ -1,7 +1,7 @@
 <!-- GENERATED FILE — do not edit by hand. -->
 <!-- Regenerate: node scripts/generate-commands-surface.mjs -->
 <!-- Drift guard: node scripts/generate-commands-surface.mjs --check -->
-<!-- Source of truth: src/cli/router.ts (createCLI) — generated from the live commander tree. -->
+<!-- Source of truth: src/cli/cli-program.ts (createCLI) — generated from the live commander tree. -->
 
 # CLI Command Surface
 
@@ -229,7 +229,7 @@ Run the model-registry maintenance daemon: probe + spot-check on a schedule
 
 Run a multi-agent pipeline to accomplish a goal
 
-   - flags: `--auto-branch, --auto-route, --checkpoint, --checkpoint-list, --context-limit <context_limit>, --context-prune <context_prune>, --dry-run, --engine <engine>, --gatherer-model <gatherer_model>, --json-events, --max-repairs <max_repairs>, --memory, --memory-clear, --memory-stats, --model <model>, --plan-mode <plan_mode>, --planner-model <planner_model>, --provider <provider>, --repair-fallback-models <repair_fallback_models>, --repair-mode <repair_mode>, --resume [resume], --review, --reviewer-model <reviewer_model>, --sandbox, --skip-tests, --tool-calling, --verbose, --writer-model <writer_model>`
+   - flags: `--auto-branch, --auto-route, --checkpoint, --checkpoint-list, --context-limit <context_limit>, --context-prune <context_prune>, --dry-run, --engine <engine>, --gatherer-model <gatherer_model>, --json-events, --max-repairs <max_repairs>, --memory, --memory-clear, --memory-stats, --model <model>, --no-tool-calling, --plan-mode <plan_mode>, --planner-model <planner_model>, --provider <provider>, --repair-fallback-models <repair_fallback_models>, --repair-mode <repair_mode>, --resume [resume], --review, --reviewer-model <reviewer_model>, --sandbox, --skip-tests, --tool-calling, --verbose, --writer-model <writer_model>`
 ### `buff run`
 
 Execute a shell command and show output (lightweight alternative to the full pipeline)
@@ -574,9 +574,9 @@ Remove conversations older than 7 days
 
 ### `buff gateway start`
 
-Run all configured adapters in the foreground (Ctrl-C to stop)
+Run all configured adapters in the foreground (Ctrl-C to stop; --supervise auto-restarts on crash)
 
-   - flags: `--host <host>, --no-events, --port <port>`
+   - flags: `--host <host>, --no-events, --port <port>, --supervise`
 ### `buff gateway stop`
 
 Stop a running gateway gracefully (SIGTERM — from any terminal)

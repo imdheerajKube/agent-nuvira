@@ -1028,7 +1028,8 @@ ${messages.map((m) => {
           )}
           <p className="admin-hint">
             {data.channels.inbox.total} received · {data.channels.inbox.pipeline} triggered the pipeline ·{' '}
-            {data.channels.inbox.help} got the help line · {data.channels.inbox.refused} refused by policy.
+            {data.channels.inbox.help} got the help line · {data.channels.inbox.refused} refused by policy ·{' '}
+            {data.channels.inbox.duplicate ?? 0} duplicate re-deliveries ignored.
           </p>
 
           <h3 className="section-subtitle">🔌 Platform transports</h3>

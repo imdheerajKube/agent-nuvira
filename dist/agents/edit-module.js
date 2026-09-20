@@ -72,6 +72,10 @@ export class DefaultEditModule {
      */
     async edit(params) {
         const { goal, workingDirectory, artifacts, callLLM: initialCallLLM, taskDescription, mcpToolsFormatted, onRateLimit, isRetry } = params;
+        const fileBudget = {
+            maxChars: params.contextBudgetChars,
+            maxFiles: params.contextBudgetFiles,
+        };
         let currentCallLLM = initialCallLLM;
         // ── Emit: edit generating ──────────────────────────────────────────
         this.eventBus.emit(EventNames.EDIT_GENERATING, {
@@ -107,7 +111,7 @@ export class DefaultEditModule {
         for (let attempt = 0; attempt < 2; attempt++) {
             try {
                 const effectiveIsRetry = attempt > 0 ? true : (isRetry ?? false);
-                const prompt = this.buildPrompt(goal, workingDirectory, artifacts, taskDescription, mcpToolsFormatted, effectiveIsRetry);
+                const prompt = this.buildPrompt(goal, workingDirectory, artifacts, taskDescription, mcpToolsFormatted, effectiveIsRetry, fileBudget);
                 const response = await currentCallLLM(prompt, {
                     temperature: effectiveIsRetry ? 0.1 : 0.3,
                     maxTokens: 4096,
@@ -217,10 +221,19 @@ export class DefaultEditModule {
     /**
      * Build the LLM prompt from file artifacts and task description.
      */
-    buildPrompt(goal, workingDirectory, artifacts, taskDescription, mcpToolsFormatted, isRetry = false) {
+    buildPrompt(goal, workingDirectory, artifacts, taskDescription, mcpToolsFormatted, isRetry = false, 
+    /** Model-window-aware budget; undefined fields keep the constants. */
+    fileBudget) {
         const taskDesc = taskDescription || goal;
-        // Select files within the character budget
-        const filesToSend = this.selectFilesWithinBudget(artifacts, MAX_CONTEXT_CHARS);
+        // Select files within the budget (model-window-aware when the caller
+        // supplied one; the historical constants otherwise).
+        const budgetChars = typeof fileBudget?.maxChars === 'number' && fileBudget.maxChars > 0
+            ? fileBudget.maxChars
+            : MAX_CONTEXT_CHARS;
+        const budgetFiles = typeof fileBudget?.maxFiles === 'number' && fileBudget.maxFiles > 0
+            ? fileBudget.maxFiles
+            : MAX_CONTEXT_FILES;
+        const filesToSend = this.selectFilesWithinBudget(artifacts, budgetChars, budgetFiles);
         const fileContext = filesToSend.length > 0
             ? filesToSend
                 .map(({ artifact, truncated }) => `--- ${artifact.path} ---${truncated ? ` (truncated, ${artifact.content.length}\u2192${truncated.length} chars)` : ''}\n${truncated || artifact.content}`)
@@ -247,14 +260,16 @@ export class DefaultEditModule {
     /**
      * Select files within the character budget, prioritizing smaller files.
      */
-    selectFilesWithinBudget(artifacts, budget) {
+    selectFilesWithinBudget(artifacts, budget, 
+    /** Model-window-aware file cap; defaults to the historical constant. */
+    maxFiles = MAX_CONTEXT_FILES) {
         const sorted = [...artifacts]
             .map((a) => ({ artifact: a, size: a.content.length }))
             .sort((a, b) => a.size - b.size);
         const result = [];
         let used = 0;
         for (const { artifact, size } of sorted) {
-            if (result.length >= MAX_CONTEXT_FILES)
+            if (result.length >= maxFiles)
                 break;
             const totalNeeded = size + OVERHEAD_PER_FILE;
             if (used + totalNeeded <= budget) {

@@ -1157,14 +1157,21 @@ describe('ExecuteCommand — P0.5 conversation-vs-pipeline gate', () => {
         trajectoryId: '',
       } as any);
 
-    // groq is strong tier → resolveEngine says 'loop' → runLoopEngineGoal
-    // runs the single agentic loop (which self-fails over to a usable route
-    // or reports a generation failure — either way the ORCHESTRATOR and the
-    // direct-answer path are untouched).
+    // Stub the loop engine itself: this test is about DISPATCH (loop chosen,
+    // not the orchestrator, not the direct-answer path). Running the real loop
+    // here stopped being hermetic once a pinned run began failing over — the
+    // walk goes groq (429) → gemini (404) → openrouter (no credits) → local,
+    // which then executes the whole "create an API" goal step by step (~10-40s
+    // of real network + local inference inside a unit test).
+    const loopSpy = vi
+      .spyOn(cmd as unknown as { runLoopEngineGoal: Function }, 'runLoopEngineGoal')
+      .mockResolvedValue({ success: true });
+
     const result = await (cmd as any).runSingleGoal('create an API', 'groq', 'llama3', {});
 
     expect(directSpy).not.toHaveBeenCalled();
     expect(orchestratorSpy).not.toHaveBeenCalled();
+    expect(loopSpy).toHaveBeenCalledTimes(1);
     expect(result).toHaveProperty('success');
   });
 

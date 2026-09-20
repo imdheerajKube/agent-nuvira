@@ -233,6 +233,30 @@ export interface HistorySession {
     tags: string[];
     startedAt: number;
 }
+/**
+ * One row of the dashboard's skill environment-variable editor.
+ *
+ * Produced by `skills/skill-env-inventory.ts` — the union of what installed
+ * skills declare they need and what is persisted in the credential `.env`.
+ * `value` is always MASKED; a real secret never leaves the server.
+ */
+export interface SkillEnvVarRow {
+    /** Variable name. */
+    name: string;
+    /** Masked value when set ('' when unset). */
+    value: string;
+    /** Whether a non-empty value is persisted or in the environment. */
+    isSet: boolean;
+    /** Installed skill that declares this var (absent for a hand-set secret). */
+    requiredBy?: string;
+    /** Skill description, used as the row's help text. */
+    description?: string;
+    /**
+     * True for provider credentials. Shown 🔒 and not editable here: they are
+     * refused by the write path, and skills never receive them.
+     */
+    isProviderCredential?: boolean;
+}
 export interface HistoryData {
     total: number;
     recent: HistorySession[];
@@ -1027,9 +1051,13 @@ export interface HubInboxEntry {
     from?: string;
     senderId?: string;
     isGroup: boolean;
-    handled: 'pipeline' | 'chat' | 'help' | 'refused' | 'error';
+    handled: 'pipeline' | 'chat' | 'help' | 'refused' | 'error' | 'duplicate';
     reply?: string;
     at: number;
+    /** Present on a `duplicate` entry — the id/fingerprint it collided with. */
+    dedupKey?: string;
+    /** For a `duplicate`: how many times this identity has now been seen. */
+    dedupCount?: number;
 }
 export interface HubDeliveryEntry {
     id: string;
@@ -1101,6 +1129,8 @@ export interface HubData {
             chat: number;
             help: number;
             refused: number;
+            /** Re-deliveries recognised and deliberately not re-run (dedup). */
+            duplicate: number;
             recent: HubInboxEntry[];
         };
     };

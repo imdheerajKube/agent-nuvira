@@ -335,3 +335,83 @@ describe('AnthropicToolStreamAccumulator', () => {
     expect(result.toolCalls[0].arguments).toEqual({});
   });
 });
+
+// ─── Gemini thoughtSignature round trip (live-caught bug) ───────────────────
+//
+// Caught by running a real Gemini agent task, not by reading code: step 1's
+// plan_todo succeeded, step 2 failed with
+//   `400: Function call is missing a thought_signature in functionCall parts.
+//    This is required for tools to work correctly.`
+// Gemini returns an opaque `thoughtSignature` with each functionCall part and
+// REQUIRES it back on the model turn when the conversation continues. The
+// adapter dropped it in two places (response parsing, and contents
+// serialization, which rebuilt the part from name+args), so NO Gemini run could
+// ever get past its second step — indistinguishable from "the model can't do
+// multi-step work".
+
+describe('Gemini thoughtSignature round trip', () => {
+  const signature = 'CBcKAQEYASIBMA==';
+
+  it('captures the signature when parsing a non-stream response', () => {
+    const parsed = parseGeminiToolResponse({
+      candidates: [
+        {
+          content: {
+            parts: [
+              { text: '', functionCall: { name: 'plan_todo', args: { goal: 'x' } }, thoughtSignature: signature },
+            ],
+          },
+        },
+      ],
+    });
+    expect(parsed.toolCalls).toHaveLength(1);
+    expect(parsed.toolCalls[0].providerMeta).toEqual({ thoughtSignature: signature });
+  });
+
+  it('captures the signature when parsing an SSE chunk', () => {
+    const chunk = parseGeminiToolSSEChunk(
+      `data: ${JSON.stringify({
+        candidates: [
+          { content: { parts: [{ functionCall: { name: 'read_file', args: {} }, thoughtSignature: signature }] } },
+        ],
+      })}`,
+    );
+    expect(chunk?.functionCalls[0].thoughtSignature).toBe(signature);
+  });
+
+  it('sends the signature back on the model turn (the actual fix)', () => {
+    const { contents } = toGeminiContents([
+      { role: 'user', content: 'fix the tests' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          {
+            id: 'call_1',
+            name: 'plan_todo',
+            arguments: JSON.stringify({ goal: 'x' }),
+            providerMeta: { thoughtSignature: signature },
+          },
+        ],
+      },
+      { role: 'tool', content: 'ok', toolCallId: 'call_1' },
+    ]);
+
+    const modelTurn = contents.find((c) => c.role === 'model');
+    const part = modelTurn?.parts.find((p) => 'functionCall' in p) as { thoughtSignature?: string } | undefined;
+    expect(part?.thoughtSignature).toBe(signature);
+  });
+
+  it('omits the field entirely for providers/turns that have no signature', () => {
+    const { contents } = toGeminiContents([
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'call_1', name: 'read_file', arguments: '{}' }],
+      },
+    ]);
+    const part = contents.find((c) => c.role === 'model')?.parts[0] as Record<string, unknown>;
+    expect(part).not.toHaveProperty('thoughtSignature');
+  });
+});

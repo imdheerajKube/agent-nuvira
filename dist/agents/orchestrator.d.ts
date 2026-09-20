@@ -45,6 +45,11 @@ export interface OrchestratorOptions {
      * When true, the orchestrator routes 'writer' tasks to 'writer-tc' and
      * 'reviewer' tasks to 'reviewer-tc' — iterative read→edit→verify loops
      * instead of one-shot LLM calls. Adopted from Freebuff/Hermes pattern.
+     *
+     * Defaults to `DEFAULT_USE_TOOL_CALLING` (true). Absent means "use the
+     * default" — pass an explicit `false` to force the one-shot writer, which
+     * is what the eval framework does for its non-tool-calling arm so the arms
+     * stay distinguishable.
      */
     useToolCalling?: boolean;
     /**
@@ -221,6 +226,26 @@ export interface ExecutionStats {
     /** Number of file changes that were rolled back (reverted to original) */
     rollbackCount: number;
 }
+/**
+ * Default for the iterative tool-calling writer/reviewer (audit W3).
+ *
+ * The one-shot writer receives the plan + gathered context and must emit the
+ * COMPLETE content of every file in a single response — it cannot read the
+ * file it is editing, so it rewrites code it has never seen, and a single
+ * malformed code fence loses the whole task. `writer-tc`/`reviewer-tc` run a
+ * prompt-based read→edit→verify loop instead, which is provider-agnostic (no
+ * native function calling required) and is the single largest capability gap
+ * between this harness and Freebuff's for every model, weak ones most of all.
+ *
+ * It is therefore ON by default; `--no-tool-calling` (CLI) or
+ * `useToolCalling: false` (API) restores the one-shot writer.
+ */
+export declare const DEFAULT_USE_TOOL_CALLING = true;
+/**
+ * Resolve the tool-calling writer/reviewer setting from options.
+ * Exported so the default is testable without booting an orchestrator.
+ */
+export declare function resolveUseToolCalling(options: Pick<OrchestratorOptions, 'useToolCalling'>): boolean;
 export declare class Orchestrator {
     private configManager;
     /** The module registry used for agent lookups */
@@ -288,6 +313,21 @@ export declare class Orchestrator {
      * ones), so both mechanisms agree.
      */
     private readonly failureSession;
+    /**
+     * Re-verify transiently-failed providers and re-admit the ones that recovered.
+     *
+     * The pipeline allocated `failureSession.sessionTransientFailedProviders` and
+     * never read it, so the documented round-trip — "fail → cool down → prove
+     * recovery with a 1-token spot-check → route again" — only ever went ONE way
+     * here. A provider that recovered mid-run stayed excluded for the rest of the
+     * pipeline, which is how a transient 503 ended up degrading a whole run.
+     *
+     * Called once per task batch (and at pipeline entry), so recovery is discovered
+     * between tasks rather than by failing again. Cheap when nothing is pending:
+     * the sweep returns immediately on an empty transient set, and a still-active
+     * exclusion is skipped without a network call.
+     */
+    private sweepTransientProviders;
     /** Execution telemetry accumulator for the current pipeline */
     private stats;
     constructor(configManager?: ConfigManager, moduleRegistry?: ModuleRegistry, eventBus?: EventBus, reportModule?: ReportModule);

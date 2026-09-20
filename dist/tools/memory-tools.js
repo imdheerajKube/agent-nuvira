@@ -225,12 +225,88 @@ class MemoryStore {
         };
     }
 }
+/**
+ * Search BOTH memory stores and merge the results.
+ *
+ * Why: this file and `memory/fact-store.ts` were separate silos — the model's
+ * `add_memory`/`search_memory` tools wrote/read only this JSON store, while the
+ * narrative memory provider and session recall read only the FACT store. So a
+ * memory the model recorded was invisible to recall, and a fact the extractor
+ * learned was invisible to `search_memory` — the same feature, two disjoint
+ * halves.
+ *
+ * The memory store is keyword/tag matched (always available, no embeddings);
+ * the fact store is semantic and needs an embedding tier, so it is queried
+ * best-effort — a failure degrades to memory-store results instead of an empty
+ * answer.
+ */
+export async function searchMemories(params) {
+    const limit = params.limit || 10;
+    const hits = [];
+    const seen = new Set();
+    const push = (hit) => {
+        const key = hit.content.trim().toLowerCase();
+        if (!key || seen.has(key))
+            return; // dedupe across stores by text
+        seen.add(key);
+        hits.push(hit);
+    };
+    // 1) This store — keyword/tag match, no embeddings required.
+    for (const r of getMemoryStore().search({
+        query: params.query,
+        type: params.type,
+        tags: params.tags,
+        limit,
+    })) {
+        push({
+            id: r.entry.id,
+            content: r.entry.content,
+            type: r.entry.type,
+            tags: r.entry.tags,
+            score: r.score,
+            source: 'memory',
+        });
+    }
+    // 2) The fact store — semantic. Facts carry no memory `type`, so a `type`
+    // filter other than 'fact' excludes them; tag filters must overlap.
+    if (params.projectId && (!params.type || params.type === 'fact')) {
+        try {
+            const { getFactStore } = await import('../memory/fact-store.js');
+            const store = getFactStore();
+            const facts = params.query
+                ? await store.retrieveFacts(params.projectId, params.query, undefined, { k: limit })
+                : await store.listFacts(params.projectId);
+            for (const fact of facts) {
+                if (params.tags && params.tags.length > 0 && !params.tags.some((t) => fact.tags.includes(t)))
+                    continue;
+                push({
+                    id: fact.id,
+                    content: fact.text,
+                    type: 'fact',
+                    tags: fact.tags,
+                    // Semantic hits rank below exact/partial keyword matches but above
+                    // the no-query floor (0.5) so both halves interleave predictably.
+                    score: params.query ? 0.6 : 0.5,
+                    source: 'facts',
+                });
+            }
+        }
+        catch {
+            // Best-effort — the memory store's half is still returned.
+        }
+    }
+    return hits.sort((a, b) => b.score - a.score).slice(0, limit);
+}
 // ─── Singleton ──────────────────────────────────────────────────────────────
 let _instance = null;
 export function getMemoryStore() {
     if (!_instance)
         _instance = new MemoryStore();
     return _instance;
+}
+/** Test-only: drop the cached instance so a new memory dir takes effect. */
+export function resetMemoryStore() {
+    _instance = null;
 }
 export { MemoryStore };
 //# sourceMappingURL=memory-tools.js.map
