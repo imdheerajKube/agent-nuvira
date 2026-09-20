@@ -44,8 +44,11 @@ jobs:
           - 22
           - 24
           - 26
-    # macOS runners are 2-3x slower than Linux; Ubuntu tests finish quickly
-    timeout-minutes: ${{ matrix.os == 'macos-latest' && 15 || 10 }}
+    # Budgets calibrated against the REAL suite size (~5.8k tests, ~9 min on a
+    # fast dev machine). Until the dashboard-build fix landed, every job died in
+    # "Build project" after ~15s, so these numbers had never been tested against
+    # a full run. macOS runners are slower than Linux, so it gets more headroom.
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 30 || 25 }}
 
     steps:
       - name: Checkout repository
@@ -103,7 +106,7 @@ jobs:
   bun:
     name: ubuntu-latest (Bun latest)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repository
