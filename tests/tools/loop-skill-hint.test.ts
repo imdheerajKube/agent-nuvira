@@ -108,6 +108,25 @@ describe('findLoopSkillMatch — compiled store + hub catalog', () => {
     expect(await findLoopSkillMatch('')).toBeNull();
     expect(await findLoopSkillMatch('   ')).toBeNull();
   });
+
+  it('does not treat generic process vocabulary as goal evidence', async () => {
+    const { hasRealGoalEvidence } = await loadHint();
+    const roadmap = {
+      name: 'technical-roadmap',
+      tags: ['roadmap', 'planning', 'migration', 'architecture', 'phases', 'strategy'],
+      goalPattern: 'roadmap migration plan technical plan phased upgrade path target state current state phases dependencies milestones',
+    };
+    // Live false positive (2026-09-20): a TRAVEL prompt matched this skill on the
+    // single generic tag `planning` and injected a phased-migration methodology
+    // into the turn. Neither a name word nor a domain tag is present here.
+    expect(
+      hasRealGoalEvidence('am planning to travel to vietnam — beach, casino, 8-12 days, avoid hanoi', roadmap),
+    ).toBe(false);
+    // Real evidence is unaffected: the skill's own name word, or a domain tag
+    // (`migration` is a domain word, not process vocabulary).
+    expect(hasRealGoalEvidence('build a migration roadmap for this codebase', roadmap)).toBe(true);
+    expect(hasRealGoalEvidence('plan the phases for the migration', roadmap)).toBe(true);
+  });
 });
 
 describe('findLoopSkillMatch — gates', () => {

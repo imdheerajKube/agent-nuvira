@@ -44,6 +44,7 @@ import {
   looksLikeConfusedScaffoldingReply,
   toUserFacingGenerationError,
   isToolCallingUnsupported,
+  stripToolCallArtifacts,
 } from '../inference/tool-call-utils.js';
 import { beginTrace, endTrace, recordStep } from '../learning/reasoning-trace.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
@@ -564,6 +565,33 @@ export class ChatCommand extends BaseCommand {
     const requestedModel = opts.model && opts.model !== 'default' ? opts.model : undefined;
     const activeOpts = applyActiveModel({ provider: opts.provider, model: requestedModel });
     const mergedOpts = { ...opts, provider: activeOpts.provider, model: activeOpts.model };
+    // When the CALLER supplies neither a provider nor a model — the dashboard
+    // chat console and the gateway chat engine both call answerOnce with just a
+    // message — fall back to the CONFIGURED defaultProvider instead of letting
+    // resolveProvider() land on one fixed provider.
+    //
+    // Why this matters (live, 2026-09-20): the shipped config default is
+    // `defaultProvider: "auto"`, but auto mode was only ever enabled by an
+    // EXPLICIT 'auto' from the flags or the `nuvira model switch` state. The
+    // dashboard passes neither, so every dashboard turn silently ran on ONE
+    // concrete provider with NO auto-failover walk (the non-auto path only
+    // walks `fallback.providers`, which ships empty). One 400/429/timeout then
+    // ended the turn with the canned "the language model was unavailable"
+    // line — while the CLI answered the identical prompt, because the CLI
+    // resolves auto from the same config. Same engine, two modes: this closes
+    // that gap.
+    // Only the AUTO default changes behavior: a concrete `defaultProvider` is a
+    // deliberate pin and keeps the non-auto path exactly as it is.
+    if (!mergedOpts.provider && !mergedOpts.model) {
+      try {
+        const cfg = this.configManager.getAll() as { defaultProvider?: string };
+        if (isAutoProvider(cfg.defaultProvider)) {
+          mergedOpts.provider = cfg.defaultProvider;
+        }
+      } catch {
+        // Best-effort — an unreadable config leaves the previous behavior.
+      }
+    }
     let autoMode = isAutoModel(mergedOpts.model) || isAutoProvider(mergedOpts.provider);
     let { type, provider } = autoMode
       ? await this.getProvider({})
@@ -623,10 +651,7 @@ export class ChatCommand extends BaseCommand {
     }
 
     // E3b: strip raw suggest_followups JSON embedded in content by the model
-    const cleanContent = (answer.content || '')
-      .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
-      .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*<\/function>/g, '')
-      .trim();
+    const cleanContent = stripToolCallArtifacts(answer.content || '');
     return {
       content: cleanContent,
       followups: answer.followups ?? [],
@@ -780,7 +805,7 @@ export class ChatCommand extends BaseCommand {
         history.push({ role: 'user', content: prompt });
         // Continue to interactive mode (don't return)
         logger.info('');
-      } else
+      }
 
       // Ordering: the ANSWER is always printed first, then followups — the
       // user asked for the content, not a menu. On a real terminal the
@@ -788,8 +813,13 @@ export class ChatCommand extends BaseCommand {
       // next turn (conversation threaded), pressing Enter continues interactively.
       // Non-TTY (scripts/CI/pipes) keeps the current print-and-exit behavior
       // so automation is never blocked by a prompt.
-      if (answer.content.trim()) {
-        console.log('\n' + answer.content + '\n');
+      //
+      // Print parity with the dashboard console + gateway: the answer must not
+      // carry the model's tool-call artifacts (a raw trailing suggest_followups
+      // JSON blob, or the empty ```json fence the fallback transport leaves
+      // behind) — see stripToolCallArtifacts.
+      else if (answer.content.trim()) {
+        console.log('\n' + stripToolCallArtifacts(answer.content) + '\n');
       }
       if (!process.stdin.isTTY) {
         await this.renderFollowups(answer.followups ?? [], false);
@@ -816,8 +846,9 @@ export class ChatCommand extends BaseCommand {
           // P5 — a picked followup continues the previous execution.
           { continuation: true },
         );
-        if (next.content.trim()) {
-          console.log('\n' + next.content + '\n');
+        const nextText = stripToolCallArtifacts(next.content);
+        if (nextText) {
+          console.log('\n' + nextText + '\n');
           // NOTE: no history.push here — runChatAnswer already recorded the
           // assistant turn. The old duplicate push gave every subsequent turn
           // TWO copies of the previous answer (relevance noise).

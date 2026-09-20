@@ -109,6 +109,32 @@ export declare const GENERATION_FAILURE_MESSAGE = "I couldn't complete that requ
  */
 export declare function toUserFacingGenerationError(err: unknown): string;
 /**
+ * Strip the model's TOOL-CALL ARTIFACTS out of a user-facing answer.
+ *
+ * A model that cannot (or forgets to) emit a real `suggest_followups` tool call
+ * often writes the call as TEXT instead — either as a trailing bare object or
+ * inside a fenced ```json block. The user then reads the contract's plumbing in
+ * the answer:
+ *
+ *   ok
+ *   {"tool":"suggest_followups","arguments":{"followups":[…]}}
+ *
+ *   **Next steps you might consider:**
+ *   ```json
+ *   ```                       ← the body was parsed out, the empty fence stayed
+ *
+ * Both were observed live from the CLI's one-shot path, which printed
+ * `answer.content` raw while the dashboard console and the gateway applied the
+ * strip — a parity gap, not a rendering choice. This is the ONE copy of the
+ * strip (the helper module's whole reason for existing), so every surface that
+ * shows an answer can share it.
+ *
+ * Deliberately conservative: it only removes artifacts that ARE the followups
+ * contract. A fenced block with real content, and a code block the user asked
+ * for, are untouched.
+ */
+export declare function stripToolCallArtifacts(content: string): string;
+/**
  * S3 — salvage the model's generated content from a tool-calling 400.
  *
  * OpenAI-compatible APIs (Groq et al.) reject the CALL but often embed the

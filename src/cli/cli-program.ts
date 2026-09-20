@@ -100,8 +100,21 @@ export function createCLI(): Command {
     .version(pkg.version);
 
   // Global options
+  //
+  // `-t, --task <text>` is a ROOT-LEVEL shorthand for a one-shot agent turn.
+  // Why it lives here as well as on `plan`: `-t/--task` is the natural flag for
+  // "here is my task", so users type `nuvira -t "<task>"` — but the option is
+  // declared on the `plan` subcommand, so commander parsed a root-level `-t`
+  // before ever reaching it and died with its terse `error: unknown option
+  // '-t'`. The root flag now dispatches through the REAL chat command (below),
+  // so it behaves exactly like `nuvira chat "<task>"`.
   program
-    .option('-d, --debug', 'Enable debug logging');
+    .option('-d, --debug', 'Enable debug logging')
+    .option('-t, --task <text>', 'Run one task through the agent (shorthand for `chat "<task>"`)');
+
+  // An unrecognized flag must never be a dead end — print the error and then
+  // the usage, so the next command is discoverable from the failure itself.
+  program.showHelpAfterError(`(run \`${invoker} --help\` for the command list)`);
 
   // Register commands
   const chatCmd = new ChatCommand();
@@ -257,8 +270,16 @@ export function createCLI(): Command {
   const traceCmd = new TraceCommand();
   program.addCommand(traceCmd.create());
 
-  // Default action: show help
-  program.action(() => {
+  // Default action: a root `-t/--task` runs the task; otherwise show help.
+  program.action(async (options?: { task?: string }) => {
+    const task = typeof options?.task === 'string' ? options.task.trim() : '';
+    if (task) {
+      // Dispatch through the chat command itself (a fresh, standalone Command)
+      // rather than duplicating the one-shot path: provider resolution, auto
+      // failover, followups and history behave byte-identically.
+      await chatCmd.create().parseAsync([process.argv[0], `${invoker} chat`, task]);
+      return;
+    }
     program.help();
   });
 

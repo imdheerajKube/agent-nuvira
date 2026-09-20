@@ -12,6 +12,7 @@ import {
   looksLikeConfusedScaffoldingReply,
   toUserFacingGenerationError,
   isToolCallingUnsupported,
+  stripToolCallArtifacts,
   GENERATION_FAILURE_MESSAGE,
 } from '../../src/inference/tool-call-utils.js';
 import type { ToolJsonSchema } from '../../src/tools/registry.js';
@@ -279,9 +280,72 @@ describe('toUserFacingGenerationError', () => {
     expect(toUserFacingGenerationError(new Error('request timed out'))).toMatch(/timed out/i);
   });
 
+  it('names the real failure instead of the canned "language model was unavailable"', () => {
+    // Live (2026-09-20): a Groq 400 over the JSON-fallback transport surfaced to
+    // the dashboard as "the language model was unavailable" — no model outage at
+    // all, just a request that outgrew the model's context window.
+    const context = toUserFacingGenerationError(
+      new Error(
+        'API error (400): {"error":{"message":"Please reduce the length of the messages or completion.","type":"invalid_request_error","param":"messages","code":"context_length_exceeded"}}',
+      ),
+    );
+    expect(context).toMatch(/context window/i);
+    expect(context).not.toBe(GENERATION_FAILURE_MESSAGE);
+
+    // Our OWN loop errors: a model that talked about the tool contract, and a
+    // provider that resolved with an unusable step payload. Both used to fall
+    // through to the canned line, which misdiagnosed a reachable model.
+    expect(
+      toUserFacingGenerationError(
+        new Error('model answered with tool-contract confusion instead of the task (reply: Sure, I can help)'),
+      ),
+    ).toMatch(/tool instructions/i);
+    expect(
+      toUserFacingGenerationError(new Error('model returned a malformed step response (no content/toolCalls)')),
+    ).toMatch(/incomplete/i);
+
+    // A bare abort carries NO class keyword — Node's DOMException is literally
+    // "This operation was aborted", which is how an aborted request used to be
+    // reported as an unavailable model.
+    expect(toUserFacingGenerationError(new Error('This operation was aborted'))).toMatch(/aborted/i);
+  });
+
+  it('still calls a timeout a timeout (a timeout is also an abort)', () => {
+    expect(toUserFacingGenerationError(new Error('The operation was aborted due to timeout'))).toMatch(/timed out/i);
+  });
+
   it('falls back to the canonical line for anything unrecognized (and non-Errors)', () => {
     expect(toUserFacingGenerationError(new Error('???'))).toBe(GENERATION_FAILURE_MESSAGE);
     expect(toUserFacingGenerationError(undefined)).toBe(GENERATION_FAILURE_MESSAGE);
     expect(toUserFacingGenerationError('plain string')).toBe(GENERATION_FAILURE_MESSAGE);
+  });
+});
+
+describe('stripToolCallArtifacts', () => {
+  const CALL =
+    '{"tool":"suggest_followups","arguments":{"followups":[{"label":"More","prompt":"more please"}]}}';
+
+  it('removes a bare trailing followups call (CLI parity with the dashboard)', () => {
+    // Live: `nuvira -t "…"` printed exactly this after the real answer.
+    expect(stripToolCallArtifacts(`ok\n\n${CALL}`)).toBe('ok');
+  });
+
+  it('removes an empty fenced block left behind when the call body was parsed out', () => {
+    expect(stripToolCallArtifacts('The plan is ready.\n\n**Next steps**\n\n```json\n```\n')).toBe(
+      'The plan is ready.\n\n**Next steps**',
+    );
+  });
+
+  it('removes a fenced block whose body is the call, and the tag form', () => {
+    expect(stripToolCallArtifacts('Done.\n\n```json\n' + CALL + '\n```')).toBe('Done.');
+    expect(
+      stripToolCallArtifacts('Done\n<function=suggest_followups [{"prompt":"x"}]</function>'),
+    ).toBe('Done');
+  });
+
+  it('leaves real content and real code blocks untouched', () => {
+    const code = 'Here:\n\n```js\nconst a = 1;\n```';
+    expect(stripToolCallArtifacts(code)).toBe(code);
+    expect(stripToolCallArtifacts('')).toBe('');
   });
 });
