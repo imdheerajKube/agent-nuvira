@@ -155,24 +155,56 @@ export function matchAskUserChoice(
   choices: string[],
 ): { answer: string; index: number } | null {
   const raw = (text || '').trim();
-  if (!raw || choices.length === 0) return null;
-  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  // A blank/absent label can only come from a malformed question, but it must
+  // never THROW here: this runs inside the inbound path, so an exception would
+  // break the turn that a reply was meant to resume. Coerce defensively.
+  const opts = (Array.isArray(choices) ? choices : [])
+    .map((c) => String(c ?? '').trim())
+    .filter((c) => c.length > 0);
+  if (!raw || opts.length === 0) return null;
+  const norm = (s: unknown): string => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
   const numbered = raw.match(/^(?:option\s*|#\s*)?(\d{1,2})[.)]?$/i);
   if (numbered) {
     const idx = Number(numbered[1]) - 1;
-    return idx >= 0 && idx < choices.length ? { answer: choices[idx], index: idx } : null;
+    return idx >= 0 && idx < opts.length ? { answer: opts[idx]!, index: idx } : null;
   }
 
   const n = norm(raw);
-  const exact = choices.findIndex((c) => norm(c) === n);
-  if (exact >= 0) return { answer: choices[exact], index: exact };
+  const exact = opts.findIndex((c) => norm(c) === n);
+  if (exact >= 0) return { answer: opts[exact]!, index: exact };
 
   if (n.length >= 2) {
-    const hits = choices.map((c, i) => ({ c, i })).filter(({ c }) => norm(c).startsWith(n));
-    if (hits.length === 1) return { answer: hits[0].c, index: hits[0].i };
+    const hits = opts.map((c, i) => ({ c, i })).filter(({ c }) => norm(c).startsWith(n));
+    if (hits.length === 1) return { answer: hits[0]!.c, index: hits[0]!.i };
   }
   return null;
+}
+
+/**
+ * Normalise the model's `ask_user` choices into displayable labels.
+ *
+ * `ChatEngine` types this parameter as `unknown[]` and the tool is called with
+ * BOTH shapes in the wild — plain strings (`['Book', 'PDF']`) and objects
+ * (`[{ label: 'Book', description: … }]`). The previous code assumed objects
+ * and read `.label` unconditionally, so a string array rendered as
+ * "1. undefined / 2. undefined" and then crashed the inbound path when the
+ * contact replied to it. Accept every documented shape; drop what cannot be
+ * rendered rather than inventing a placeholder.
+ */
+export function normalizeAskUserChoices(choices: unknown): string[] {
+  if (!Array.isArray(choices)) return [];
+  return choices
+    .map((c) => {
+      if (typeof c === 'string' || typeof c === 'number') return String(c).trim();
+      if (c && typeof c === 'object') {
+        const o = c as { label?: unknown; title?: unknown; value?: unknown };
+        const v = o.label ?? o.title ?? o.value;
+        return v === undefined || v === null ? '' : String(v).trim();
+      }
+      return '';
+    })
+    .filter((l) => l.length > 0);
 }
 
 // ─── Reply formatting ───────────────────────────────────────────────────────
@@ -402,6 +434,89 @@ export interface GatewayRegistryOptions {
    * The dashboard server uses this to broadcast typing indicators via SSE.
    */
   onTyping?: (event: { platform: string; channelId: string; typing: boolean }) => void;
+}
+
+/**
+ * Drop the text report's truncation sentinel.
+ *
+ * `TextFormatter` cuts the goal at 120 chars and follows it with a line that
+ * reads `   ... (truncated)`. That is tolerable in a CLI dump and reads as a
+ * broken sentence on a phone, so chat surfaces strip the sentinel and mark the
+ * cut inline instead.
+ */
+function stripTruncationSentinel(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !/^\s*\.\.\.\s*\(.*truncated\)\s*$/i.test(line))
+    .map((line) => line.replace(/\s*\.\.\.\s*\(.*truncated\)\s*$/i, '…'))
+    .join('\n');
+}
+
+/** Strip a leading status emoji so a verdict is never nested after another. */
+const LEADING_VERDICT_RE = /^\s*[✅❌⚠️ℹ️⏭️]\s*/;
+
+/**
+ * Compose the chat-facing result of a pipeline run.
+ *
+ * The orchestrator's `summary` is the CLI TEXT REPORT — multi-line, already
+ * carrying its own verdict emoji, its own goal/duration block, and an
+ * `Agent Results:` list. Sending it verbatim after a second verdict is what a
+ * WhatsApp user actually received:
+ *
+ *     ❌ Failed — ❌ Completed 2/3 tasks with some failures in 9.6s
+ *     Goal: Create a project plan to develop a multiple screen calculator … fo
+ *        ... (truncated)
+ *     Tasks: 2/3 completed
+ *     Agent Results:          <- the same three lines as the bullets below
+ *     • Tasks: 0/5 completed  <- a different denominator, so this contradicts
+ *
+ * Three defects, all fixed here rather than by reformatting the shared report
+ * (the CLI and the audit trail want the rich form):
+ *   - ONE verdict, taken from `success`; the summary's own leading verdict is
+ *     stripped instead of being nested behind a second one.
+ *   - ONE set of counts, labelled so the two different denominators (pipeline
+ *     steps vs agent runs) read as detail instead of self-contradiction.
+ *   - No duplication and no machine sentinel: agent lines come from the
+ *     STRUCTURED result, and the truncation artifact is removed.
+ *
+ * `structured` is absent only when the pipeline threw before returning (the
+ * catch path), where the summary line is all we truthfully have.
+ */
+export function composePipelineReply(pipeline: {
+  success: boolean;
+  summary: string;
+  structured?: {
+    tasksCompleted: number;
+    tasksTotal: number;
+    agentResults: Array<{ agent: string; success: boolean; summary: string }>;
+  } | null;
+}): string {
+  const verdict = pipeline.success ? '✅ Done' : '❌ Failed';
+  const cleaned = stripTruncationSentinel(pipeline.summary);
+  const structured = pipeline.structured ?? null;
+
+  if (!structured) {
+    // No structured result: keep the orchestrator's own sentence, but exactly
+    // one verdict and no sentinel.
+    const body = cleaned
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const head = (body.shift() ?? '').replace(LEADING_VERDICT_RE, '').trim();
+    return [`${verdict}${head ? ` — ${head}` : ''}`, ...body.slice(0, 6)].join('\n');
+  }
+
+  const counts: string[] = [`${structured.tasksCompleted}/${structured.tasksTotal} steps completed`];
+  if (structured.agentResults.length > 0) {
+    const ok = structured.agentResults.filter((a) => a.success).length;
+    counts.push(`${ok}/${structured.agentResults.length} agents ok`);
+  }
+  const lines = [`${verdict} — ${counts.join(' · ')}`];
+  for (const agent of structured.agentResults.slice(0, 6)) {
+    const detail = stripTruncationSentinel(agent.summary).replace(/\s+/g, ' ').trim();
+    lines.push(`• ${agent.success ? '✅' : '❌'} ${agent.agent}: ${detail.slice(0, 160)}`);
+  }
+  return lines.join('\n');
 }
 
 export class GatewayRegistry {
@@ -1011,12 +1126,17 @@ export class GatewayRegistry {
         taskIntentHint: parsed.action.taskIntent,
         origin,
       });
-      const headline = result.success ? '✅ Done' : '❌ Failed';
-      const lines = [`${headline} — ${result.summary}`];
-      if (result.details && result.details.length > 0) {
-        for (const line of result.details.slice(0, 6)) lines.push(`• ${line}`);
-      }
-      const reply = lines.join('\n');
+      const reply = composePipelineReply({
+        success: result.success,
+        summary: result.summary,
+        structured: result.result
+          ? {
+              tasksCompleted: result.result.tasksCompleted,
+              tasksTotal: result.result.tasksTotal,
+              agentResults: result.result.agentResults,
+            }
+          : null,
+      });
       await replyTo(reply);
       logGatewayEvent('pipeline.completed', {
         platform: msg.platform,
@@ -1206,20 +1326,28 @@ export class GatewayRegistry {
           directory: this.directory,
         },
         askUser: async (question, choices) => {
-          const labels = (choices as Array<{ label: string }>).map((c) => c.label);
+          const labels = normalizeAskUserChoices(choices);
           const list = labels.map((l, i) => `${i + 1}. ${l}`).join('\n');
           const ref = { platform: msg.platform, channelId: msg.channelId };
           const fallback = { answer: labels[0] ?? 'skip', index: 0 };
           const waiting = this.askUserWaitEnabled();
+          // A question whose choices could not be rendered still gets asked —
+          // with no numbered list and no instruction to pick a number it does
+          // not have. (With no choices, `matchAskUserChoice` returns null, so
+          // the next message safely falls through as a new turn.)
           await this.sendToRef(
             ref,
-            `🤔 ${question}\n${list}` +
+            `🤔 ${question}${list ? `\n${list}` : ''}` +
               (waiting
-                ? '\n\nReply with the number (or the option text) — I will wait.'
-                : `\n\n(Going with 1. ${labels[0] ?? 'skip'} — reply to change it after this turn.)`),
+                ? labels.length > 0
+                  ? '\n\nReply with the number (or the option text) — I will wait.'
+                  : '\n\nReply in your own words — I will wait.'
+                : labels.length > 0
+                  ? `\n\n(Going with 1. ${labels[0]} — reply to change it after this turn.)`
+                  : ''),
           );
           if (!waiting) return fallback;
-          return this.awaitAskUserReply(`${msg.platform}:${msg.channelId}`, labels, fallback, question);
+          return this.awaitAskUserReply(`${msg.platform}:${msg.channelId}`, labels, fallback, question, ref);
         },
         // P3 note: the engine's onProgress is intentionally NOT wired here —
         // internal progress lines (routed-to, raw tool calls) must never leak
@@ -1559,12 +1687,18 @@ export class GatewayRegistry {
    * The promise ALWAYS settles: the timeout resolves it with `fallback`, so a
    * silent contact costs one bounded wait and never a stuck gateway. The timer
    * is unref'd so a pending question cannot keep the process alive on shutdown.
+   *
+   * On timeout the contact is TOLD the default was applied. The question
+   * promises "I will wait", so proceeding silently would leave them reading an
+   * answer to a question they never answered — and their later reply would look
+   * like it had been ignored.
    */
   private awaitAskUserReply(
     key: string,
     choices: string[],
     fallback: { answer: string; index: number },
     question: string,
+    ref: ChannelRef,
   ): Promise<{ answer: string; index: number }> {
     // One waiter per contact: the older question gets its default and is
     // released (the model asked twice in one turn — the older answer cannot be
@@ -1583,6 +1717,15 @@ export class GatewayRegistry {
         logger.warn(
           `gateway: no reply to "${question.slice(0, 60)}" within ${Math.round(timeoutMs / 1000)}s — using "${fallback.answer}".`,
         );
+        // Tell the contact BEFORE the answer lands, so the answer reads as the
+        // stated default rather than as a reply to something they never sent.
+        // Best-effort: a send failure must not stop the turn resolving.
+        void this.sendToRef(
+          ref,
+          choices.length > 0
+            ? `⏳ No reply yet — going ahead with ${fallback.index + 1}. ${fallback.answer}.`
+            : '⏳ No reply yet — going ahead.',
+        ).catch(() => undefined);
         settle(fallback);
       }, timeoutMs);
       // Never hold the event loop open for a question nobody will answer.

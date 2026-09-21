@@ -21,7 +21,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { GatewayRegistry, matchAskUserChoice } from '../../src/gateway/registry.js';
+import {
+  GatewayRegistry,
+  matchAskUserChoice,
+  normalizeAskUserChoices,
+} from '../../src/gateway/registry.js';
 import type { ChannelAdapter, MessageHandler } from '../../src/gateway/adapters.js';
 import { ConfigManager } from '../../src/config/manager.js';
 import { parseAskWaitDuration } from '../../src/cli/config.js';
@@ -115,6 +119,25 @@ function mockRegistry() {
   return { registry, adapter };
 }
 
+/**
+ * Asks with PLAIN STRING choices — a shape the real tool emits and the previous
+ * renderer assumed could not happen, so it produced "1. undefined / 2.
+ * undefined" and then crashed on the reply. See the regression describe below.
+ */
+function stringChoicesEngine() {
+  return {
+    answerOnce: async (
+      _message: string,
+      opts?: {
+        askUser?: (q: string, c: unknown[]) => Promise<{ answer: string; index: number }>;
+      },
+    ) => {
+      const res = await opts?.askUser?.('How should I deliver it?', ['Interactive game', 'Printable PDF']);
+      return { content: `Delivering as: ${res?.answer ?? 'unknown'}`, followups: [] };
+    },
+  };
+}
+
 /** Poll until `predicate` holds (avoids a fixed sleep for the question send). */
 async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
@@ -151,6 +174,34 @@ describe('matchAskUserChoice', () => {
     expect(matchAskUserChoice('1', [])).toBeNull();
     // A prefix matching MORE than one label must not resolve.
     expect(matchAskUserChoice('p', ['Printable PDF', 'Popup window'])).toBeNull();
+  });
+
+  it('never throws on a malformed choice list — this runs inside the inbound path', () => {
+    // Observed live: string choices → undefined labels → the contact's reply
+    // threw "Cannot read properties of undefined (reading 'toLowerCase')",
+    // which broke the very turn the reply was meant to resume.
+    expect(() => matchAskUserChoice('1', [undefined, null] as never)).not.toThrow();
+    expect(matchAskUserChoice('1', [undefined, null] as never)).toBeNull();
+    expect(matchAskUserChoice('pdf', ['', '   '])).toBeNull();
+    expect(() => matchAskUserChoice('2', undefined as never)).not.toThrow();
+    // Blank entries are ignored, so numbering still refers to the REAL labels.
+    expect(matchAskUserChoice('1', ['', 'Real'] as never)).toEqual({ answer: 'Real', index: 0 });
+  });
+});
+
+describe('normalizeAskUserChoices', () => {
+  it('accepts every shape the tool is called with', () => {
+    expect(normalizeAskUserChoices(['Book', 'PDF'])).toEqual(['Book', 'PDF']);
+    expect(normalizeAskUserChoices([{ label: 'Book' }, { label: 'PDF' }])).toEqual(['Book', 'PDF']);
+    expect(normalizeAskUserChoices([{ title: 'Book' }, { value: 'PDF' }])).toEqual(['Book', 'PDF']);
+    expect(normalizeAskUserChoices([1, 2])).toEqual(['1', '2']);
+  });
+
+  it('drops what cannot be rendered instead of inventing a placeholder', () => {
+    expect(normalizeAskUserChoices([{ description: 'no label' }, 'Kept'])).toEqual(['Kept']);
+    expect(normalizeAskUserChoices([null, undefined, '  '])).toEqual([]);
+    expect(normalizeAskUserChoices('not-an-array')).toEqual([]);
+    expect(normalizeAskUserChoices(undefined)).toEqual([]);
   });
 });
 
@@ -250,4 +301,43 @@ describe('gateway ask-and-wait', () => {
     ).resolves.toBeDefined();
     writeConfig(false);
   });
+
+  it('renders STRING choices as real options, and their reply resumes the hold', async () => {
+    // Regression: the renderer cast `choices` to `{label}[]`, so a string array
+    // asked the contact to pick from "1. undefined / 2. undefined" and their
+    // reply threw before it could resolve the held turn.
+    writeConfig(true);
+    const adapter = new MockAdapter();
+    const registry = new GatewayRegistry(
+      { streamEvents: false, chatEngine: stringChoicesEngine() as never },
+      new ConfigManager(),
+    );
+    registry.register(adapter);
+
+    const turn = registry.handleInbound({ platform: 'mock', channelId: 'str1', text: 'hello' });
+    await waitFor(() => askedSomething(adapter));
+    const question = adapter.sent.find((s) => s.text.includes('🤔'))!.text;
+    expect(question).toContain('1. Interactive game');
+    expect(question).toContain('2. Printable PDF');
+    expect(question).not.toContain('undefined');
+
+    const confirmation = await registry.handleInbound({ platform: 'mock', channelId: 'str1', text: '2' });
+    expect(confirmation).toContain('Printable PDF');
+    await expect(turn).resolves.toContain('Delivering as: Printable PDF');
+    await registry.stop();
+    writeConfig(false);
+  });
+
+  it('tells the contact when the window lapsed — the question promised to wait', async () => {
+    writeConfig(true, 1); // clamped up to the 5s floor
+    const { registry, adapter } = mockRegistry();
+    const turn = registry.handleInbound({ platform: 'mock', channelId: 'on5', text: 'hello' });
+    await waitFor(() => askedSomething(adapter));
+    await expect(turn).resolves.toContain('Delivering as: Interactive game');
+    // Without this the contact sees an answer to a question they never
+    // answered, and their later reply looks ignored.
+    await waitFor(() => adapter.sent.some((s) => /No reply yet — going ahead with 1\./.test(s.text)));
+    await registry.stop();
+    writeConfig(false);
+  }, 15_000);
 });
