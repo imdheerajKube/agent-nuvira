@@ -33,6 +33,7 @@
 
 import { isTrivialPrompt } from '../memory/provider.js';
 import { parseRequestSync, type ParsedRequest } from './parser.js';
+import { isContentArtifactAsk } from './intent.js';
 
 /**
  * Verbs that are unambiguous coding TASKS when used in command position.
@@ -62,6 +63,14 @@ const TASK_VERB_AFTER_PREFIX = new RegExp(
 export function hasCodingAction(text: string): boolean {
   const t = String(text ?? '').trim();
   if (!t) return false;
+  // A CONTENT artifact ask ("create a plan/routine/schedule for my child",
+  // "build a routine", "create a test for class 4") is not code — the verbs
+  // below would otherwise force it into the developer pipeline (observed live:
+  // a WhatsApp teaching-plan ask ran the pipeline, whose planner emitted a
+  // Python program). The guard runs BEFORE the verb test so no create/build/
+  // fix verb can override it; it is a no-op when the ask names a coding object
+  // ("create a plan for the ecommerce app").
+  if (isContentArtifactAsk(t)) return false;
   // Command position only — a verb used as a noun ("what is the fix for…")
   // must never be read as an imperative.
   return TASK_VERB_AT_START.test(t) || TASK_VERB_AFTER_PREFIX.test(t);

@@ -28,7 +28,7 @@
 import { ConfigManager } from '../config/manager.js';
 import { resolveProvider } from './router.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
-import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
+import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
 import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
@@ -170,9 +170,21 @@ export async function runLoopExecutor(
       // before the next fallback was tried — measured live at ~25s against an
       // unauthenticated endpoint. This is the same credential gate the router's
       // own candidate set applies (`hasCredentials`).
-      const fbTypes = chain.filter(
-        (t) => t !== providerType && hasCredentials(configManager, t),
-      );
+      const fbTypes = chain
+        .filter((t) => t !== providerType && hasCredentials(configManager, t))
+        // ADMIN POLICY: a pinned run must not fall back to a provider the
+        // governance policy rules out (allow/deny lists, and the PII privacy
+        // gate for a task that matches a configured PII pattern). This path
+        // bypasses `autoRouter.resolve`, where the policy is otherwise
+        // enforced, so it has to apply the same verdict itself. No policy
+        // configured → every verdict is permissive and nothing changes.
+        .filter((t) => {
+          const verdict = governanceVerdict(configManager, t, { taskText: goal });
+          if (!verdict.allowed) {
+            logger.warn(`   ⚠️ 🔒 ${t} skipped — ${verdict.reason}`);
+          }
+          return verdict.allowed;
+        });
       // SAME exclusion predicate the auto path applies (session/model
       // cooldowns + cross-pipeline memory + registry per-ENTRY usability): a
       // registry-parked or quarantined fallback is ordered LAST — never

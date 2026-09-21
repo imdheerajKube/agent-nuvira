@@ -14,6 +14,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   runToolLoop,
   detectUnverifiedDeliveryClaim,
+  detectUnfulfilledIntentPromise,
   type ToolLoopDeps,
   type StepResponse,
 } from '../../src/tools/tool-loop.js';
@@ -85,7 +86,52 @@ describe('tool loop annotates an unverified claim', () => {
     );
     const result = await runToolLoop({ messages: [{ role: 'user', content: 'send it' }], context: ctx, deps });
     expect(result.toolCalls).toContain('gateway_send');
+    expect(result.successfulToolCalls).toContain('gateway_send');
+    expect(result.deliveryConfirmed).toBe(true);
     expect(result.unverifiedActionClaim).toBeFalsy();
+  });
+
+  it('flags a claimed delivery when the gateway_send ATTEMPT failed (never received)', async () => {
+    // Live incident (2026-09-21): the agent replied "I have sent the guide…"
+    // after gateway_send returned ⚠️ (transport refused) — the message never
+    // arrived, yet the trace read "✅ action performed — message sent" because
+    // delivery was inferred from the attempted tool NAME.
+    const executeTool = vi.fn(async (name: string) => {
+      if (name === 'gateway_send') {
+        return (
+          'gateway_send: ⚠️ send to whatsapp:+918800663237 (+918800663237) failed — the adapter is not ' +
+          'configured or the transport is unreachable. The message was queued in the delivery ledger for retry.'
+        );
+      }
+      return 'ok';
+    });
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'gateway_send', arguments: { target: 'whatsapp:+918800663237', text: 'guide' } }] },
+        { content: 'I have sent the guide to +918800663237 via WhatsApp.', toolCalls: [] },
+      ],
+      executeTool as unknown as ToolLoopDeps['executeTool'],
+    );
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'send it' }], context: ctx, deps });
+    // Attempted, but NOT a delivery — so the claim is flagged as unverified.
+    expect(result.toolCalls).toContain('gateway_send');
+    expect(result.successfulToolCalls).not.toContain('gateway_send');
+    expect(result.deliveryConfirmed).toBe(false);
+    expect(result.unverifiedActionClaim).toBe(true);
+    // And the trace outcome derives NO delivery from the honest tool list.
+    const outcome = buildTraceOutcome({ tools: result.successfulToolCalls });
+    expect(outcome.delivered).toBeUndefined();
+    expect(outcome.kind).toBe('answered');
+  });
+
+  it('keeps refused/unknown calls out of successfulToolCalls', async () => {
+    const deps = mockDeps([
+      { content: '', toolCalls: [{ id: 'c1', name: 'not_a_tool', arguments: {} }] },
+      { content: 'Done.', toolCalls: [] },
+    ]);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'x' }], context: ctx, deps });
+    expect(result.toolCalls).toEqual(['not_a_tool']);
+    expect(result.successfulToolCalls).toEqual([]);
   });
 });
 
@@ -108,8 +154,99 @@ describe('buildTraceOutcome', () => {
     expect(o.kind).toBe('answered');
     expect(o.unverifiedClaim).toBe(true);
   });
+  it('carries the unfulfilled-promise flag', () => {
+    const o = buildTraceOutcome({ tools: [], unfulfilledPromise: true });
+    expect(o.kind).toBe('answered');
+    expect(o.unfulfilledPromise).toBe(true);
+  });
   it('failed / cancelled win over tool list', () => {
     expect(buildTraceOutcome({ generationFailed: true, tools: ['x'] }).kind).toBe('failed');
     expect(buildTraceOutcome({ cancelled: true, tools: ['x'] }).kind).toBe('cancelled');
+  });
+});
+
+describe('detectUnfulfilledIntentPromise (dangling promise)', () => {
+  it('flags an imminent first-person promise to act', () => {
+    expect(detectUnfulfilledIntentPromise('I will begin by scaffolding the project structure.')).toBe(true);
+    expect(detectUnfulfilledIntentPromise('Let me now create the files.')).toBe(true);
+    expect(detectUnfulfilledIntentPromise("I'll start by reading the config.")).toBe(true);
+    expect(detectUnfulfilledIntentPromise('I will now implement the module.')).toBe(true);
+    expect(detectUnfulfilledIntentPromise('I will go ahead and update the schema.')).toBe(true);
+    // The promise may be followed by a closing courtesy line.
+    expect(
+      detectUnfulfilledIntentPromise(
+        'I will begin by scaffolding the project structure.\n\nLet me know if you want a different stack.',
+      ),
+    ).toBe(true);
+  });
+
+  it('does NOT flag a descriptive future (no imminent self-action)', () => {
+    // The deliverable itself describes what the assistant will produce.
+    expect(detectUnfulfilledIntentPromise('I will create a four-week routine for your daughter.')).toBe(false);
+    expect(detectUnfulfilledIntentPromise('I will send it once you confirm the number.')).toBe(false);
+    expect(detectUnfulfilledIntentPromise('Should I create the file?')).toBe(false);
+  });
+
+  it('does NOT flag an answer that delivered something', () => {
+    // A list is a produced deliverable (a plan enumerates phases).
+    expect(
+      detectUnfulfilledIntentPromise('Here is the plan:\n1. Set up the repo\n2. Build the app\n3. Ship it'),
+    ).toBe(false);
+    // Pure chat verbs are not tool-shaped actions.
+    expect(detectUnfulfilledIntentPromise('Let me explain how division works for a class-4 child.')).toBe(false);
+    expect(detectUnfulfilledIntentPromise('Here is the poem you asked for.')).toBe(false);
+    expect(detectUnfulfilledIntentPromise('')).toBe(false);
+  });
+});
+
+describe('tool loop nudges a dangling promise and flags the residue', () => {
+  it('asks the model to carry out the announced action instead of ending on it', async () => {
+    const callModel = vi.fn();
+    let i = 0;
+    const script: StepResponse[] = [
+      { content: 'I will begin by scaffolding the project structure.', toolCalls: [] },
+      { content: 'Here is the answer.', toolCalls: [] },
+    ];
+    callModel.mockImplementation(async () => script[Math.min(i++, script.length - 1)]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'build me a calculator app' }],
+      context: ctx,
+      deps: { callModel, executeTool: realExecute, onEvent: vi.fn() },
+    });
+    // The nudge spent one extra model step; the promise was not the answer.
+    expect(callModel).toHaveBeenCalledTimes(2);
+    expect(result.content).toBe('Here is the answer.');
+    // Nothing was performed, but the model was made to try — the residue is only
+    // flagged when the FINAL answer still closes on a promise.
+    expect(result.unfulfilledPromise).toBeFalsy();
+  });
+
+  it('flags the turn when the model promises again after the nudge', async () => {
+    const deps = mockDeps([{ content: 'Let me now create the files.', toolCalls: [] }]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'create the files' }],
+      context: ctx,
+      deps,
+    });
+    expect(result.successfulToolCalls).toEqual([]);
+    expect(result.unfulfilledPromise).toBe(true);
+  });
+
+  it('does NOT flag a turn that actually performed work', async () => {
+    const executeTool = vi.fn(async (name: string) => `ran ${name}`);
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'a.ts' } }] },
+        { content: 'I will now implement the change.', toolCalls: [] },
+      ],
+      executeTool as unknown as ToolLoopDeps['executeTool'],
+    );
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'read then implement' }],
+      context: ctx,
+      deps,
+    });
+    expect(result.successfulToolCalls).toContain('read_file');
+    expect(result.unfulfilledPromise).toBeFalsy();
   });
 });

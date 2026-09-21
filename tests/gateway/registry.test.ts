@@ -30,6 +30,7 @@ vi.mock('../../src/cli/chat.js', () => ({
 }));
 import { getEventBus, EventNames } from '../../src/observability/event-bus.js';
 import { resetWorkspaceStore } from '../../src/config/workspace.js';
+import { readGatewayLog } from '../../src/gateway/gateway-log.js';
 
 const cfgDir = mkdtempSync(join(tmpdir(), 'buff-gw-reg-'));
 const ORIG_CONFIG_DIR = process.env.NUVIRA_CONFIG_DIR;
@@ -118,6 +119,73 @@ function mockRegistry(
   registry.register(adapter);
   return { registry, adapter };
 }
+
+/**
+ * VERIFIED sends — the registry must record WHY a send failed, in a form that
+ * outlives the process.
+ *
+ * Live incident (2026-09-21): a WhatsApp send was reported as delivered, the
+ * recipient received nothing, and there was no artifact left to explain it.
+ */
+describe('GatewayRegistry — verified send failures', () => {
+  /** An adapter that reports a specific failure reason (like WhatsApp does). */
+  class ReasonedAdapter extends MockAdapter {
+    reason = '918800663237@s.whatsapp.net is not a WhatsApp account — the message was NOT sent.';
+    fail = true;
+
+    override async send(channelId: string, text: string): Promise<boolean> {
+      await super.send(channelId, text);
+      return !this.fail;
+    }
+
+    async sendDetailed(_channelId: string, _text: string): Promise<{ ok: boolean; error?: string; verification?: string }> {
+      return this.fail ? { ok: false, error: this.reason } : { ok: true, verification: 'accepted' };
+    }
+  }
+
+  it('records the verified reason on the registry and in the delivery ledger', async () => {
+    const registry = new GatewayRegistry({ streamEvents: false });
+    const adapter = new ReasonedAdapter();
+    registry.register(adapter);
+    const ref = { platform: 'mock' as const, channelId: '+918800663237' };
+
+    expect(await registry.sendToRef(ref, 'hello', 'whatsapp:+918800663237')).toBe(false);
+    expect(registry.lastSendError(ref)).toContain('is not a WhatsApp account');
+    const [entry] = registry.delivery.read();
+    expect(entry?.status).toBe('pending');
+    expect(entry?.lastError).toContain('is not a WhatsApp account');
+  });
+
+  it('persists a structured send.failed record with the reason (the durable artifact)', async () => {
+    const registry = new GatewayRegistry({ streamEvents: false });
+    const adapter = new ReasonedAdapter();
+    registry.register(adapter);
+
+    await registry.sendToRef({ platform: 'mock', channelId: '+918800663237' }, 'the guide', 'whatsapp:+918800663237');
+
+    const record = readGatewayLog(50).find((r) => r.event === 'send.failed' && r.channelId === '+918800663237');
+    expect(record).toBeDefined();
+    expect(record).toMatchObject({ level: 'warn', platform: 'mock', target: 'whatsapp:+918800663237' });
+    expect(String(record?.reason)).toContain('is not a WhatsApp account');
+    expect(record?.textPreview).toBe('the guide');
+  });
+
+  it('clears the recorded failure after a subsequent successful send', async () => {
+    const registry = new GatewayRegistry({ streamEvents: false });
+    const adapter = new ReasonedAdapter();
+    registry.register(adapter);
+    const ref = { platform: 'mock' as const, channelId: 'chan-1' };
+
+    await registry.sendToRef(ref, 'one');
+    expect(registry.lastSendError(ref)).toBeDefined();
+    adapter.fail = false;
+    expect(await registry.sendToRef(ref, 'two')).toBe(true);
+    expect(registry.lastSendError(ref)).toBeUndefined();
+    // A success is logged too, with its verification level.
+    const ok = readGatewayLog(50).find((r) => r.event === 'send.ok' && r.channelId === 'chan-1');
+    expect(ok?.verification).toBe('accepted');
+  });
+});
 
 describe('eventToStatusLine', () => {
   it('renders pipeline + exec events as compact channel lines', () => {
@@ -294,6 +362,37 @@ describe('GatewayRegistry.handleInbound', () => {
     const { registry, adapter } = mockRegistry({ streamEvents: false, pipelineOnly: true });
     await registry.handleInbound({ platform: 'mock', channelId: 'c', text: 'set up groq api key' });
     expect(adapter.sent).toHaveLength(0);
+  });
+
+  it('appends an honest correction when the answer DROPPED an announced action', async () => {
+    // The reply closed on "I will begin by …" having done nothing. On a
+    // messaging channel that reads as work in progress, so the sender must be
+    // told plainly that nothing happened yet.
+    const engine = {
+      answerOnce: async () => ({
+        content: 'I will begin by scaffolding the project structure.',
+        followups: [],
+        unfulfilledPromise: true,
+      }),
+    };
+    const { registry, adapter } = mockRegistry({ streamEvents: false, chatEngine: engine });
+    const reply = await registry.handleInbound({ platform: 'mock', channelId: 'c', text: 'hello there' });
+    expect(reply).toContain('did not actually carry it out');
+    expect(adapter.sent.some((s) => s.text.includes('did not actually carry it out'))).toBe(true);
+  });
+
+  it('appends the delivery correction when a send was CLAIMED but never performed', async () => {
+    const engine = {
+      answerOnce: async () => ({
+        content: 'I have sent the poem to +918800663237 via WhatsApp.',
+        followups: [],
+        unverifiedActionClaim: true,
+      }),
+    };
+    const { registry, adapter } = mockRegistry({ streamEvents: false, chatEngine: engine });
+    const reply = await registry.handleInbound({ platform: 'mock', channelId: 'c', text: 'hello there' });
+    expect(reply).toContain('could not confirm that message was actually sent');
+    expect(adapter.sent.some((s) => s.text.includes('could not confirm'))).toBe(true);
   });
 
   it('refuses pipeline triggers from non-allow-listed channels — SILENT by default', async () => {
@@ -674,7 +773,10 @@ describe('GatewayRegistry P1 policies', () => {
     });
     expect(grp).not.toBe('refused');
     expect(adapter.sent.some((s) => s.text.includes('running the'))).toBe(true);
-  });
+    // Two live pipeline runs (DM + group) sit right at the 5s default on a
+    // loaded machine — give them an explicit budget so the test is not
+    // timing-fragile (it exercises the real dispatch path).
+  }, 15_000);
 
   it('a BLANK allowedUsers list ([]) denies EVERYONE — verified-list rule (no Allow-All = no one)', async () => {
     const { registry, adapter } = mockRegistry({

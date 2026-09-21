@@ -1,10 +1,22 @@
-./freebuff
 node_modules/
 dist/
 *.log
 .env
 *.db
+# SQLite sidecars + journal are NOT matched by `*.db`, and that gap is exactly
+# how two of these got committed: `.freebuff/desktop-v2.db-wal` / `-shm` matched
+# no rule at all while the `.db` itself was ignored.
+*.db-shm
+*.db-wal
+*.db-journal
 .buffconfig.json
+
+# ── Third-party app state (never source) ──────────────────────────────────
+# `.freebuff/` is another product's local desktop state directory (its SQLite
+# DB, sidecars and project-id). It is runtime detritus of the tool being RUN in
+# this directory — never part of Agent-Nuvira — and it must not be committed.
+.freebuff/
+.codebuff/
 .npmrc
 # Generated addon builds (agent output during addon-creation tasks)
 addon/

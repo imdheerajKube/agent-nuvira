@@ -249,10 +249,22 @@ export async function runGatewaySendTool(args: unknown, ctx: ToolContext): Promi
     if (!ref) {
       return unknownTargetMessage(target);
     }
-    const ok = await registry.send(target, text);
-    return ok
-      ? `gateway_send: ✅ sent to ${target} (${ref.platform}:${ref.channelId}) — message delivered.`
-      : `gateway_send: ⚠️ send to ${target} (${ref.platform}:${ref.channelId}) failed — the adapter is not configured or the transport is unreachable. The message was queued in the delivery ledger for retry.`;
+    // `sendToRef` (not `send`) so the VERIFIED failure reason — e.g. "not a
+    // WhatsApp account" — can be reported instead of a generic "unreachable".
+    const ok = registry.sendToRef
+      ? await registry.sendToRef(ref, text, target)
+      : await registry.send(target, text);
+    if (ok) {
+      return `gateway_send: ✅ sent to ${target} (${ref.platform}:${ref.channelId}) — message delivered.`;
+    }
+    const why = registry.lastSendError?.(ref);
+    return (
+      `gateway_send: ⚠️ send to ${target} (${ref.platform}:${ref.channelId}) failed` +
+      (why
+        ? ` — ${why}`
+        : ' — the adapter is not configured or the transport is unreachable') +
+      '. The message was queued in the delivery ledger for retry.'
+    );
   }
 
   // Deferred imports: registry/adapters pull the whole gateway; the tools

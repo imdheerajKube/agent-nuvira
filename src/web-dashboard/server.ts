@@ -962,14 +962,16 @@ interface DashboardTrace {
   success?: boolean;
   /**
    * WHAT ACTUALLY HAPPENED — `answered` (text only) vs `acted` (a tool ran),
-   * plus `unverifiedClaim`. Shown in the Trace tab so a hallucinated
-   * "I sent it" can never look like a real delivery.
+   * plus `unverifiedClaim` / `unfulfilledPromise`. Shown in the Trace tab so a
+   * hallucinated "I sent it" can never look like a real delivery, and an
+   * announced-but-never-performed action never reads as work in progress.
    */
   outcome?: {
     kind: 'answered' | 'acted' | 'failed' | 'cancelled';
     tools?: string[];
     delivered?: boolean;
     unverifiedClaim?: boolean;
+    unfulfilledPromise?: boolean;
   };
   steps: DashboardTraceStep[];
 }
@@ -4002,13 +4004,22 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         const { envPolicies } = await import('../gateway/registry.js');
         const { readGatewayContacts } = await import('../gateway/contacts.js');
         const configManager = new ConfigManager();
-        const all = configManager.getAll() as { gateway?: { policies?: Record<string, unknown>; statusRecipients?: string[] } };
+        const all = configManager.getAll() as { gateway?: { policies?: Record<string, unknown>; statusRecipients?: string[]; askUserWait?: boolean; askUserTimeoutMs?: number } };
         const fromConfig = all.gateway?.policies ?? {};
         const policies: Record<string, unknown> = {};
         for (const p of Object.keys(PLATFORM_ENV_VARS)) {
           policies[p] = { ...((envPolicies() as Record<string, unknown>)[p] as Record<string, unknown> | undefined ?? {}), ...((fromConfig[p] as Record<string, unknown> | undefined) ?? {}) };
         }
-        writeJson(res, 200, { ok: true, policies, statusRecipients: all.gateway?.statusRecipients ?? [], contacts: readGatewayContacts() });
+        writeJson(res, 200, {
+          ok: true,
+          policies,
+          statusRecipients: all.gateway?.statusRecipients ?? [],
+          // Channel clarification behaviour rides along with the policies — it
+          // is the same Permissions surface, so one GET must describe it too.
+          askUserWait: all.gateway?.askUserWait === true,
+          askUserTimeoutMs: all.gateway?.askUserTimeoutMs ?? 120_000,
+          contacts: readGatewayContacts(),
+        });
         return;
       }
       if (req.method === 'PUT') {
@@ -4035,8 +4046,20 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           merged[platform] = next;
         }
         // Status recipients ride along on the same PUT (whole-array semantics).
-        const gatewayPatch: { policies: Record<string, Record<string, unknown>>; statusRecipients?: string[] } = { policies: merged };
+        const gatewayPatch: {
+          policies: Record<string, Record<string, unknown>>;
+          statusRecipients?: string[];
+          askUserWait?: boolean;
+          askUserTimeoutMs?: number;
+        } = { policies: merged };
         if (Array.isArray(body?.statusRecipients)) gatewayPatch.statusRecipients = body.statusRecipients as string[];
+        // Ask-and-wait rides the same PUT. Only an explicit boolean is accepted
+        // (a malformed body must never enable a behaviour change), and the
+        // window is clamped exactly as the CLI clamps it.
+        if (typeof body?.askUserWait === 'boolean') gatewayPatch.askUserWait = body.askUserWait;
+        if (typeof body?.askUserTimeoutMs === 'number' && Number.isFinite(body.askUserTimeoutMs)) {
+          gatewayPatch.askUserTimeoutMs = Math.min(600_000, Math.max(5_000, Math.round(body.askUserTimeoutMs)));
+        }
         configManager.save({ gateway: gatewayPatch });
         // Verified contacts ride along too (whole-array). Names are metadata
         // for the Permissions page — the GATE still only reads allowedUsers,

@@ -3,9 +3,11 @@
  * goal and execution plan. It reads file contents and stores them as artifacts
  * in the shared context bus for downstream agents (Writer, Reviewer) to use.
  *
- * CHANGE-002: Adopts Codebuff's file-finding pattern — uses a separate, fast/cheap
- * model for file selection (like Codebuff's finetuned Gemini Flash). The main model
- * is only used when the file finder is not available.
+ * CHANGE-002: two-model file finding — a separate, fast/cheap model selects the
+ * files and the main model is used for everything else (and whenever no
+ * file-finder model is available). A small model is fast, cheap and accurate
+ * enough for this narrow task, and it keeps the main model's budget for the
+ * actual work.
  *
  * Rate-limit handling:
  * - Short waits (<3s): auto-retry silently
@@ -60,11 +62,10 @@ export class ContextGathererAgent extends Agent {
       this.report(context, 'scanning', 'Scanning the project to map relevant files…');
       const fileTree = await buildProjectFileTree(context.workingDirectory);
 
-      // CHANGE-002: Use fast/cheap model for file selection (Codebuff pattern).
-      // Codebuff uses a finetuned Gemini Flash model for file finding — fast,
-      // cheap, and accurate for this narrow task. When a file finder LLM is
-      // available (injected via metadata by the orchestrator), use it instead
-      // of the main model for file selection.
+      // CHANGE-002: use the fast/cheap model for file selection. A small model
+      // is fast, cheap and accurate enough for this narrow task. When a
+      // file-finder LLM is available (injected via metadata by the
+      // orchestrator), use it instead of the main model.
       const fileFinderLLM = (context.metadata?.fileFinderCallLLM as LLMCallFn | undefined) || callLLM;
       const isUsingFastModel = fileFinderLLM !== callLLM;
       if (isUsingFastModel) {
@@ -268,7 +269,7 @@ export class ContextGathererAgent extends Agent {
     // Limit file tree to avoid token overflow on large projects
     const truncatedTree = truncateTree(fileTree, 80);
 
-    // CHANGE-002: Codebuff-style file finding prompt.
+    // CHANGE-002: file-finding prompt, tuned for a fast/cheap model.
     // Optimized for fast models (Gemini Flash, small LLMs).
     // Simple, focused, returns just file paths.
     const prompt = [

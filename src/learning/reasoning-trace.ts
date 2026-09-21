@@ -106,6 +106,13 @@ export interface TraceOutcome {
    * tab surfaces as a warning — the reply is unreliable about the action.
    */
   unverifiedClaim?: boolean;
+  /**
+   * True when the reply CLOSED on a promise to act ("I will begin by…") that
+   * the turn never carried out (see `detectUnfulfilledIntentPromise`). The
+   * action is not pending — it never started — so the Trace tab flags it
+   * instead of letting it read as work in progress.
+   */
+  unfulfilledPromise?: boolean;
 }
 
 /** A full reasoning trace — one pipeline execution. */
@@ -310,6 +317,7 @@ export function buildTraceOutcome(input: {
   cancelled?: boolean;
   tools?: readonly string[];
   unverifiedActionClaim?: boolean;
+  unfulfilledPromise?: boolean;
 }): TraceOutcome {
   const tools = [...(input.tools ?? [])];
   if (input.cancelled) return { kind: 'cancelled', tools };
@@ -320,6 +328,7 @@ export function buildTraceOutcome(input: {
     tools,
     ...(delivered ? { delivered: true } : {}),
     ...(input.unverifiedActionClaim ? { unverifiedClaim: true } : {}),
+    ...(input.unfulfilledPromise ? { unfulfilledPromise: true } : {}),
   };
 }
 

@@ -38,6 +38,7 @@ import { DeliveryLedger, type DeliveryEntry } from './delivery.js';
 import { InboxLedger, type InboundDisposition } from './inbox.js';
 import { InboundDedupLedger } from './dedup.js';
 import { GatewayHeartbeat, HEARTBEAT_INTERVAL_MS, type AdapterHealth } from './heartbeat.js';
+import { logGatewayEvent, previewText } from './gateway-log.js';
 import { hasCodingAction, looksLikeAgentCliAsk, resolveAskKind } from '../nlu/conversation-gate.js';
 import { GatewayChatStore, CHAT_HISTORY_MAX_PAIRS } from './chat-store.js';
 import { looksLikeConfusedScaffoldingReply, toUserFacingGenerationError } from '../inference/tool-call-utils.js';
@@ -48,6 +49,9 @@ import { resolveBuffConfigDir } from '../config/paths.js';
 
 /** How often the running gateway drains due delivery entries (ms). */
 const DELIVERY_DRAIN_INTERVAL_MS = 30_000;
+
+/** Cap the per-target send-failure map (diagnostics only — never grows). */
+const MAX_TRACKED_SEND_ERRORS = 200;
 
 // ─── Response cleanup ──────────────────────────────────────────────────────
 
@@ -132,6 +136,43 @@ export function hasDeliveryAsk(text: string): boolean {
   // feature" has the verb but no recipient → also stays pipeline.
   return /\b(send|message|email|text|notify|deliver|share|forward|post|dm)\b/i.test(text) &&
     /\b(to|for|me|us|them|him|her)\b/i.test(text);
+}
+
+/**
+ * Match a channel reply against the choices of a pending `ask_user` question.
+ *
+ * Deliberately conservative, because a WRONG match silently steers the agent:
+ * only unambiguous forms resolve, and anything else returns `null` so the
+ * caller releases the waiter with its default and handles the text as a normal
+ * message. Supported forms:
+ *   - `1`, `2`, … (1-based, in range) and `option 2` / `#2`
+ *   - the choice label, case- and punctuation-insensitively ("pdf" → "PDF book")
+ *   - a prefix of exactly ONE label ("interactive" → "Interactive game")
+ * A number OUT of range, or a prefix matching several labels, is NOT a choice.
+ */
+export function matchAskUserChoice(
+  text: string,
+  choices: string[],
+): { answer: string; index: number } | null {
+  const raw = (text || '').trim();
+  if (!raw || choices.length === 0) return null;
+  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+  const numbered = raw.match(/^(?:option\s*|#\s*)?(\d{1,2})[.)]?$/i);
+  if (numbered) {
+    const idx = Number(numbered[1]) - 1;
+    return idx >= 0 && idx < choices.length ? { answer: choices[idx], index: idx } : null;
+  }
+
+  const n = norm(raw);
+  const exact = choices.findIndex((c) => norm(c) === n);
+  if (exact >= 0) return { answer: choices[exact], index: exact };
+
+  if (n.length >= 2) {
+    const hits = choices.map((c, i) => ({ c, i })).filter(({ c }) => norm(c).startsWith(n));
+    if (hits.length === 1) return { answer: hits[0].c, index: hits[0].i };
+  }
+  return null;
 }
 
 // ─── Reply formatting ───────────────────────────────────────────────────────
@@ -422,6 +463,31 @@ export class GatewayRegistry {
    */
   private lastFollowupsByContact = new Map<string, import('../tools/followup-utils.js').FollowupSuggestion[]>();
   private onTypingCallback: GatewayRegistryOptions['onTyping'] | null = null;
+  /**
+   * Last send failure reason per `platform:channelId`, so a caller can report
+   * the real cause (e.g. "not a WhatsApp account") instead of a generic line.
+   * Bounded; cleared on the next successful send to the same target.
+   */
+  private readonly lastSendErrors = new Map<string, string>();
+  /**
+   * Questions the gateway is WAITING on, per `platform:channelId`
+   * (`gateway.askUserWait`). The awaiting turn holds its promise until the
+   * contact's next message resolves it — see `consumePendingAsk` — or the
+   * timeout applies the default. At most ONE waiter per contact: a second
+   * question replaces the first (which receives its default, exactly what it
+   * would have received anyway), so this map cannot grow an unbounded queue.
+   */
+  private readonly pendingQuestions = new Map<
+    string,
+    {
+      /** Choice labels in order; index 0 is the default. */
+      choices: string[];
+      resolve: (a: { answer: string; index: number }) => void;
+      timer: NodeJS.Timeout;
+      askedAt: number;
+      question: string;
+    }
+  >();
 
   constructor(options: GatewayRegistryOptions = {}, configManager?: ConfigManager) {
     const allowFromEnv = (envBuff('GATEWAY_ALLOW_IDS') ?? '')
@@ -523,28 +589,88 @@ export class GatewayRegistry {
   async sendToRef(ref: ChannelRef, text: string, target?: string): Promise<boolean> {
     const adapter = this.adapters.get(ref.platform);
     if (!adapter || !adapter.configured) {
-      logger.warn(`gateway: adapter for '${ref.platform}' not configured`);
+      const reason = `adapter for '${ref.platform}' is not configured`;
+      logger.warn(`gateway: ${reason}`);
+      this.recordSendError(ref, reason);
       return false;
     }
-    const ok = await adapter.send(ref.channelId, text);
-    if (!ok) {
-      logger.warn(`gateway: send to ${ref.platform}:${ref.channelId} failed — enqueued for delivery retry`);
+    // Prefer the VERIFIED path when the adapter has one (WhatsApp's Baileys
+    // bridge): a bare boolean cannot say WHY a send failed, so a mistyped /
+    // non-WhatsApp number looked identical to a success. The reason now flows
+    // to the delivery ledger, the gateway logs and the caller.
+    const outcome = adapter.sendDetailed
+      ? await adapter.sendDetailed(ref.channelId, text)
+      : { ok: await adapter.send(ref.channelId, text) };
+    if (!outcome.ok) {
+      const reason = outcome.error ?? 'send failed';
+      this.recordSendError(ref, reason);
+      logger.warn(
+        `gateway: send to ${ref.platform}:${ref.channelId} failed — ${reason} — enqueued for delivery retry`,
+      );
       // Persist for retry (survives this process) — the next drain (or the
       // next `gateway start`) delivers it. Keep the HUMAN target (alias)
       // when the caller had one, for readable ledger lines.
-      this.delivery.enqueue({
+      const entry = this.delivery.enqueue({
         target: target ?? `${ref.platform}:${ref.channelId}`,
         ref,
         text,
+        lastError: reason,
       });
+      // Structured, durable record — the delivery ledger is pruned and stdout
+      // is gone, so this is what makes a later "why did it never arrive?"
+      // answerable.
+      logGatewayEvent(
+        'send.failed',
+        {
+          platform: ref.platform,
+          channelId: ref.channelId,
+          target: target ?? `${ref.platform}:${ref.channelId}`,
+          reason,
+          deliveryId: entry.id,
+          verification: outcome.verification,
+          textChars: text.length,
+          textPreview: previewText(text),
+        },
+        'warn',
+      );
       return false;
     }
+    this.clearSendError(ref);
+    logGatewayEvent('send.ok', {
+      platform: ref.platform,
+      channelId: ref.channelId,
+      target: target ?? `${ref.platform}:${ref.channelId}`,
+      verification: outcome.verification,
+      textChars: text.length,
+    });
     // Opportunistic flush: a successful send often means the network is back
     // — drain any due pending entries for THIS platform right away (serialized
     // on the drain chain so it never overlaps the timer/CLI drains; awaits so
     // the caller's next send sees the ledger state settled). Never throws.
     await this.drainForPlatform(ref.platform);
     return true;
+  }
+
+  /**
+   * WHY the most recent send to this target failed (undefined when it did not).
+   * The verified adapters (WhatsApp) fill this in so the caller — and the
+   * `gateway_send` tool's model-facing output — can report the real cause
+   * instead of a generic "transport unreachable".
+   */
+  lastSendError(ref: ChannelRef): string | undefined {
+    return this.lastSendErrors.get(`${ref.platform}:${ref.channelId}`);
+  }
+
+  private recordSendError(ref: ChannelRef, reason: string): void {
+    this.lastSendErrors.set(`${ref.platform}:${ref.channelId}`, reason);
+    if (this.lastSendErrors.size > MAX_TRACKED_SEND_ERRORS) {
+      const oldest = this.lastSendErrors.keys().next().value;
+      if (oldest !== undefined) this.lastSendErrors.delete(oldest);
+    }
+  }
+
+  private clearSendError(ref: ChannelRef): void {
+    this.lastSendErrors.delete(`${ref.platform}:${ref.channelId}`);
   }
 
   /**
@@ -564,8 +690,26 @@ export class GatewayRegistry {
     if (!adapter || !adapter.configured) {
       return { ok: false, error: `adapter for '${entry.platform}' not configured` };
     }
-    const ok = await adapter.send(entry.channelId, entry.text);
-    return ok ? { ok: true } : { ok: false, error: 'send failed' };
+    // Same verified path as a first attempt: a retry's failure reason is just
+    // as important for diagnosing why a message never arrived.
+    const outcome = adapter.sendDetailed
+      ? await adapter.sendDetailed(entry.channelId, entry.text)
+      : await adapter
+          .send(entry.channelId, entry.text)
+          .then((ok) => (ok ? { ok } : { ok: false, error: 'send failed' }));
+    logGatewayEvent(
+      'delivery.dispatched',
+      {
+        platform: entry.platform,
+        channelId: entry.channelId,
+        target: entry.target,
+        attempt: entry.attempts + 1,
+        ok: outcome.ok,
+        reason: outcome.error,
+      },
+      outcome.ok ? 'info' : 'warn',
+    );
+    return outcome;
   }
 
   /** Drain due entries for one platform only (opportunistic flush, serialized). */
@@ -633,6 +777,15 @@ export class GatewayRegistry {
     this.policies = this.readPolicies();
     const policy = this.policies[msg.platform];
     const refuse = async (why: string): Promise<string> => {
+      // Durable record of a drop: a sender who never gets an answer is the
+      // hardest thing to diagnose from the outside.
+      logGatewayEvent('inbound.refused', {
+        platform: msg.platform,
+        channelId: msg.channelId,
+        from: msg.from,
+        senderId: msg.senderId,
+        reason: why,
+      }, 'warn');
       // HARD POLICY: silent by default — nothing is sent and nothing runs.
       // `silentDrop: false` explicitly opts a platform back into the polite
       // ⛔ message (for operators who want unapproved senders to know why).
@@ -728,6 +881,21 @@ export class GatewayRegistry {
       /* best-effort */
     }
 
+    // PENDING QUESTION (gateway.askUserWait): a turn is HOLDING for this
+    // contact's answer. Consume the message as that answer — placed AFTER the
+    // authorization + dedup gates (an unapproved sender can never answer a
+    // question, and a re-delivered duplicate must not consume one) and BEFORE
+    // every routing decision, because the reply belongs to the question rather
+    // than to the NLU. A message that does NOT match a choice releases the
+    // waiter with its default and falls through to normal handling, so a user
+    // typing something else is never silently dropped.
+    const pendingAnswerLine = this.consumePendingAsk(msg);
+    if (pendingAnswerLine) {
+      await replyTo(pendingAnswerLine);
+      record('clarified', pendingAnswerLine);
+      return pendingAnswerLine;
+    }
+
     // ── Local-CLI asks ── "run nuvira gateway status" names a command for the
     // OPERATOR's terminal. Observed live: it was dispatched to the multi-agent
     // pipeline as a create intent, burned 112s, failed, and wrote an approval
@@ -794,6 +962,13 @@ export class GatewayRegistry {
       // wording distinguishes a genuinely unconfigured model from a transient
       // provider failure so a glitch is not reported as "no model".
       logger.warn(`gateway: chat generation failed (${parsed.intent} @ ${parsed.confidence.toFixed(2)})`);
+      logGatewayEvent('chat.failed', {
+        platform: msg.platform,
+        channelId: msg.channelId,
+        intent: parsed.intent,
+        confidence: parsed.confidence,
+        hasModel: this.hasConfiguredModel(),
+      }, 'error');
       const line = this.generationFailureLine();
       await replyTo(line);
       record('chat', line);
@@ -843,6 +1018,13 @@ export class GatewayRegistry {
       }
       const reply = lines.join('\n');
       await replyTo(reply);
+      logGatewayEvent('pipeline.completed', {
+        platform: msg.platform,
+        channelId: msg.channelId,
+        success: result.success,
+        summary: result.summary,
+        tools: parsed.action.name,
+      }, result.success ? 'info' : 'warn');
       record('pipeline', reply);
       // Status recipients: ALWAYS forward the completion summary to the
       // configured contacts/groups, whoever triggered it.
@@ -977,10 +1159,11 @@ export class GatewayRegistry {
       // including raw suggest_followups JSON) is INTERNAL — streaming it to a
       // channel leaks routing internals and tool-call noise to the sender.
       await this.sendToRef({ platform: msg.platform, channelId: msg.channelId }, '🤖 Working on it…');
-      // askUser must never hang the gateway on a TTY: when the model needs a
-      // clarification, reply to the channel with the question + choices and
-      // pick the first as a best-effort default (the user can answer on the
-      // next message). Matches the dashboard's non-TTY renderer.
+      // askUser on a channel. DEFAULT (askUserWait off): reply with the question
+      // + choices and pick the first as a best-effort default — the historical
+      // behaviour, matching the dashboard's non-TTY renderer. With
+      // gateway.askUserWait ON, the turn HOLDS for the contact's reply instead
+      // (see `awaitAskUserReply`), so a typed answer actually steers the run.
       // gateway: reuse THIS live registry so the model's gateway_send calls
       // deliver through the already-connected bridge — a fresh registry would
       // open a second WhatsApp connection and stall.
@@ -1005,6 +1188,11 @@ export class GatewayRegistry {
         // exchanges with this contact (follow-up questions, suggested followups).
         gateway: {
           send: (target, text) => this.send(target, text),
+          // Verified delivery: `gateway_send` uses these to report WHY a send
+          // failed (a bare `send` boolean hid a mistyped number behind a
+          // generic "transport unreachable").
+          sendToRef: (ref, text, target) => this.sendToRef(ref as ChannelRef, text, target),
+          lastSendError: (ref) => this.lastSendError(ref as ChannelRef),
           sendMedia: (target, media) => {
             const ref = this.directory.resolve(target);
             if (!ref) return Promise.resolve(false);
@@ -1018,9 +1206,20 @@ export class GatewayRegistry {
           directory: this.directory,
         },
         askUser: async (question, choices) => {
-          const list = (choices as Array<{ label: string }>).map((c, i) => `${i + 1}. ${c.label}`).join('\n');
-          await this.sendToRef({ platform: msg.platform, channelId: msg.channelId }, `🤔 ${question}\n${list}`);
-          return { answer: (choices as Array<{ label: string }>)[0]?.label ?? 'skip', index: 0 };
+          const labels = (choices as Array<{ label: string }>).map((c) => c.label);
+          const list = labels.map((l, i) => `${i + 1}. ${l}`).join('\n');
+          const ref = { platform: msg.platform, channelId: msg.channelId };
+          const fallback = { answer: labels[0] ?? 'skip', index: 0 };
+          const waiting = this.askUserWaitEnabled();
+          await this.sendToRef(
+            ref,
+            `🤔 ${question}\n${list}` +
+              (waiting
+                ? '\n\nReply with the number (or the option text) — I will wait.'
+                : `\n\n(Going with 1. ${labels[0] ?? 'skip'} — reply to change it after this turn.)`),
+          );
+          if (!waiting) return fallback;
+          return this.awaitAskUserReply(`${msg.platform}:${msg.channelId}`, labels, fallback, question);
         },
         // P3 note: the engine's onProgress is intentionally NOT wired here —
         // internal progress lines (routed-to, raw tool calls) must never leak
@@ -1053,6 +1252,15 @@ export class GatewayRegistry {
         content +=
           '\n\n⚠️ Heads-up: I could not confirm that message was actually sent — the send action did not complete. ' +
           'Please ask me to try again, or send it yourself.';
+      }
+      // HONESTY GUARD (dropped intent) — the reply closed on "I will now …" and
+      // the turn ended having done nothing. In a messaging channel that reads
+      // as work in progress, so say plainly that it has not happened.
+      if (answer.unfulfilledPromise) {
+        logger.warn('gateway: answer announced an action the turn never performed — appending correction');
+        content +=
+          '\n\n⚠️ Note: I described what I was about to do, but I did not actually carry it out yet. ' +
+          'Reply "go ahead" and I will do it now.';
       }
       // v1.8x audit — LAST-RESORT sender guard: a reply that is pure
       // tool-contract confusion ("I'm sorry, but the provided example call to
@@ -1087,7 +1295,13 @@ export class GatewayRegistry {
       this.writeTypingFile({ platform: msg.platform, channelId: msg.channelId, typing: false });
       return { content, generationFailed: answer.generationFailed };
     } catch (err) {
-      logger.error(`gateway: inbound chat failed: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`gateway: inbound chat failed: ${message}`);
+      logGatewayEvent('inbound.failed', {
+        platform: msg.platform,
+        channelId: msg.channelId,
+        error: message,
+      }, 'error');
       this.onTypingCallback?.({ platform: msg.platform, channelId: msg.channelId, typing: false });
       this.writeTypingFile({ platform: msg.platform, channelId: msg.channelId, typing: false });
       return { content: '', generationFailed: true };
@@ -1310,8 +1524,121 @@ export class GatewayRegistry {
     }
   }
 
+  /**
+   * Is ask-and-wait enabled? `gateway.askUserWait === true` only — an absent or
+   * malformed value keeps the historical no-wait behaviour, so enabling this is
+   * an explicit, deliberate act.
+   */
+  private askUserWaitEnabled(): boolean {
+    try {
+      return (this.configManager.getAll() as { gateway?: { askUserWait?: boolean } }).gateway?.askUserWait === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * How long to hold a turn for a reply. Clamped to 5s–10min so a bad config
+   * value can neither hang a turn forever nor time out before the user can
+   * physically read the question.
+   */
+  private askUserWaitTimeoutMs(): number {
+    let raw = 120_000;
+    try {
+      const v = (this.configManager.getAll() as { gateway?: { askUserTimeoutMs?: unknown } }).gateway?.askUserTimeoutMs;
+      if (typeof v === 'number' && Number.isFinite(v)) raw = v;
+    } catch {
+      // Absent/unreadable → the default window.
+    }
+    return Math.min(600_000, Math.max(5_000, Math.round(raw)));
+  }
+
+  /**
+   * Hold the current turn until `key`'s contact replies, or the window lapses.
+   *
+   * The promise ALWAYS settles: the timeout resolves it with `fallback`, so a
+   * silent contact costs one bounded wait and never a stuck gateway. The timer
+   * is unref'd so a pending question cannot keep the process alive on shutdown.
+   */
+  private awaitAskUserReply(
+    key: string,
+    choices: string[],
+    fallback: { answer: string; index: number },
+    question: string,
+  ): Promise<{ answer: string; index: number }> {
+    // One waiter per contact: the older question gets its default and is
+    // released (the model asked twice in one turn — the older answer cannot be
+    // honoured once the newer question is on screen).
+    this.releasePendingAsk(key, 'replaced by a newer question');
+
+    const timeoutMs = this.askUserWaitTimeoutMs();
+    return new Promise((resolve) => {
+      const settle = (a: { answer: string; index: number }): void => {
+        const entry = this.pendingQuestions.get(key);
+        if (entry) clearTimeout(entry.timer);
+        this.pendingQuestions.delete(key);
+        resolve(a);
+      };
+      const timer = setTimeout(() => {
+        logger.warn(
+          `gateway: no reply to "${question.slice(0, 60)}" within ${Math.round(timeoutMs / 1000)}s — using "${fallback.answer}".`,
+        );
+        settle(fallback);
+      }, timeoutMs);
+      // Never hold the event loop open for a question nobody will answer.
+      if (typeof timer.unref === 'function') timer.unref();
+      this.pendingQuestions.set(key, { choices, resolve: settle, timer, askedAt: Date.now(), question });
+    });
+  }
+
+  /** Release a waiter with its default (timeout, replacement, or shutdown). */
+  private releasePendingAsk(key: string, why: string): boolean {
+    const entry = this.pendingQuestions.get(key);
+    if (!entry) return false;
+    clearTimeout(entry.timer);
+    this.pendingQuestions.delete(key);
+    logger.info(
+      `gateway: releasing pending question "${entry.question.slice(0, 60)}" — ${why}; using "${entry.choices[0] ?? 'skip'}".`,
+    );
+    entry.resolve({ answer: entry.choices[0] ?? 'skip', index: 0 });
+    return true;
+  }
+
+  /**
+   * Resolve an awaiting question from the contact's next message. Returns a
+   * user-facing confirmation when the reply matched a choice, or `null` when it
+   * did not — in which case the waiter is released with its default and the
+   * message falls through to NORMAL handling. Failing open is the invariant: a
+   * message is never swallowed by the question machinery.
+   */
+  private consumePendingAsk(msg: InboundMessage): string | null {
+    const key = `${msg.platform}:${msg.channelId}`;
+    const entry = this.pendingQuestions.get(key);
+    if (!entry) return null;
+    const match = matchAskUserChoice(msg.text, entry.choices);
+    if (!match) {
+      // Not an answer to the question — release with the default and let the
+      // text be handled as a new request rather than dropping it.
+      this.releasePendingAsk(key, 'reply did not match any choice');
+      return null;
+    }
+    clearTimeout(entry.timer);
+    this.pendingQuestions.delete(key);
+    logger.info(
+      `gateway: pending question answered with "${match.answer}" (choice ${match.index + 1}/${entry.choices.length}).`,
+    );
+    entry.resolve(match);
+    return `👍 Got it — using "${match.answer}".`;
+  }
+
   /** Stop adapters + unsubscribe + stop the delivery drain. Idempotent. */
   async stop(): Promise<void> {
+    // Release every awaiting question FIRST, and before the `started` guard: a
+    // turn blocked on a reply must not outlive the gateway, and stop() is also
+    // called on registries that were never started (early shutdown, tests).
+    for (const key of [...this.pendingQuestions.keys()]) {
+      this.releasePendingAsk(key, 'gateway is shutting down');
+    }
     if (!this.started) return;
     this.started = false;
     this.unsubscribe?.();

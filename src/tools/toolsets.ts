@@ -291,8 +291,8 @@ export function effectiveToolJsonSchemas(cm?: ConfigManagerLike): ToolJsonSchema
 // The assessment measured ~110 tool schemas (~12K chars of descriptions
 // alone) in EVERY chat turn with all toolsets enabled by default. That is a
 // per-turn token tax, a prompt-cache problem, and — worse — choice paralysis
-// for weak models. Freebuff's proven equilibrium is ~15 tools + one discovery
-// tool. The fix is NOT fewer capabilities; it is TIERED EXPOSURE:
+// for weak models. The proven equilibrium is ~15 tools + one discovery tool.
+// The fix is NOT fewer capabilities; it is TIERED EXPOSURE:
 //
 //   Tier 1 (CORE)  — universal primitives, always in the model's schema.
 //   Tier 2 (DOMAIN)— every other toolset, hidden until the model loads it

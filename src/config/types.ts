@@ -491,6 +491,29 @@ export interface BuffConfig {
      * `nuvira config gateway notify add/remove` or the dashboard Permissions page.
      */
     statusRecipients?: string[];
+    /**
+     * Ask-and-WAIT for clarifying questions (`ask_user`) on messaging channels.
+     * OFF BY DEFAULT — flagging this on changes live channel behaviour.
+     *
+     * When OFF (historical behaviour): the question and its choices are sent to
+     * the channel and the FIRST choice is used immediately, without waiting.
+     * On a surface where the user IS reachable that is misleading — they are
+     * asked a question whose answer cannot affect the run, while their real
+     * reply arrives afterwards as an unrelated new message.
+     *
+     * When ON: the turn HOLDS until that contact replies with a choice (number
+     * or option text), so a typed answer actually steers the run. If no reply
+     * arrives within `askUserTimeoutMs`, the default (first) choice applies and
+     * the timeout is logged — a turn can never hang on a silent contact, and a
+     * reply that does not match a choice is never swallowed: the waiter is
+     * released with the default and the text is handled as a normal message.
+     *
+     * Set via `nuvira config gateway ask-user-wait on|off` or the dashboard
+     * Permissions page.
+     */
+    askUserWait?: boolean;
+    /** Reply window for `askUserWait`, in ms (default 120000; clamped 5s–10min). */
+    askUserTimeoutMs?: number;
   };
 }
 

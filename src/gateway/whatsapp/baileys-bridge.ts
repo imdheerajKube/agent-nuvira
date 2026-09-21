@@ -26,7 +26,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { normalizeWhatsAppJid, type WhatsAppBridge } from './bridge.js';
+import {
+  normalizeWhatsAppJid,
+  type WhatsAppBridge,
+  type WhatsAppSendResult,
+} from './bridge.js';
 import { whatsappSessionDir } from './session.js';
 import { readContactsFile, writeContactsFile } from './contacts.js';
 import { envBuff } from '../../config/paths.js';
@@ -180,6 +184,13 @@ interface WASocketLike {
   requestPairingCode?(phoneNumber: string, customPairingCode?: string): Promise<string>;
   /** Resolves once the underlying WebSocket handshake completes. */
   waitForSocketOpen?(): Promise<void>;
+  /**
+   * WhatsApp's account-existence query (USync). Resolves `undefined` when the
+   * query itself fails (inconclusive) and an array of `{ jid, exists }`
+   * otherwise — note Baileys FILTERS unregistered users out, so an absent
+   * entry means "not on WhatsApp".
+   */
+  onWhatsApp?(...phoneNumber: string[]): Promise<Array<{ jid: string; exists: boolean }> | undefined>;
   ev?: {
     on(event: string, cb: (...args: unknown[]) => void): unknown;
     removeAllListeners?(event?: string): unknown;
@@ -217,6 +228,55 @@ function sessionHasCreds(dir: string): boolean {
 export function isSelfChatEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const v = (env.BUFF_WHATSAPP_SELF_CHAT ?? '').trim().toLowerCase();
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+// ─── Delivery verification ─────────────────────────────────────────────────
+
+/**
+ * How long to wait for WhatsApp's device acknowledgement of an outbound
+ * message (ms).
+ *
+ * DEFAULT 0 — `sendMessage` only resolves after WhatsApp ACKS the message
+ * stanza (Baileys awaits it), so a resolve already proves the recipient EXISTS
+ * and the server accepted the message for delivery: that is `accepted`, and it
+ * costs nothing. Waiting for the DELIVERY/READ receipt upgrades the verdict to
+ * `delivered`, but it depends on the recipient's device being online — they
+ * may legitimately acknowledge minutes later (WhatsApp holds offline messages)
+ * — so it is opt-in rather than a default that would add latency to every
+ * reply. `NUVIRA_WHATSAPP_ACK_WAIT_MS=<ms>` enables it (read per send, so tests
+ * and config changes apply immediately).
+ */
+export function whatsappAckWaitMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env.NUVIRA_WHATSAPP_ACK_WAIT_MS ?? env.BUFF_WHATSAPP_ACK_WAIT_MS ?? '').trim();
+  if (raw === '') return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+/** How long a recipient-registration answer is trusted (ms). */
+export const REGISTRATION_CACHE_TTL_MS = 10 * 60_000;
+
+/**
+ * `proto.WebMessageInfo.Status` values (see baileys/WAProto).
+ * ERROR=0 rejects the message; SERVER_ACK=2 is WhatsApp accepting it;
+ * DELIVERY_ACK=3 means the recipient's device received it.
+ */
+const WA_STATUS_ERROR = 0;
+const WA_STATUS_SERVER_ACK = 2;
+const WA_STATUS_DELIVERY_ACK = 3;
+
+/** Cap the per-message status map (diagnostics only — never grows). */
+const MAX_TRACKED_STATUSES = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Best-effort error text (never throws, never leaks a stack). */
+function errorText(err: unknown): string {
+  if (err instanceof Error) return err.message.split('\n')[0]?.trim() || err.name;
+  const s = String(err ?? '').trim();
+  return s || 'unknown error';
 }
 
 /** Options for {@link BaileysBridge.pair}. */
@@ -349,6 +409,19 @@ export class BaileysBridge implements WhatsAppBridge {
   private readonly learnedContacts = new Map<string, string>();
   /** LID → PN resolver (privacy-rollout DMs arrive as random `@lid` jids). */
   private readonly lidMapper: LidJidMapper;
+  /**
+   * Memoized recipient-registration answers (`onWhatsApp`), keyed by the
+   * digits-only phone. Prevents a USync round-trip on every send while still
+   * catching a mistyped / non-WhatsApp number — the silent-drop class this
+   * guard exists for.
+   */
+  private readonly registrationCache = new Map<string, { exists: boolean; at: number }>();
+  /**
+   * Last known `WAMessageStatus` per outbound message id. Populated from
+   * `messages.update`; used to confirm delivery and to record WHY a send
+   * failed (structured gateway logs / diagnostics). Bounded.
+   */
+  private readonly messageStatus = new Map<string, number>();
 
   constructor(
     private readonly sessionDir: string = whatsappSessionDir(),
@@ -527,34 +600,188 @@ export class BaileysBridge implements WhatsAppBridge {
   }
 
   async send(target: string, text: string): Promise<boolean> {
-    if (!this.paired) return false;
-    try {
-      const sock = await this.ensureSocket();
-      if (!sock) return false;
-      // I8b — a non-numeric, non-JID target is a contact NAME: resolve it
-      // against the learned contact list (waits for the address-book sync).
-      let jid = '';
-      const t = (target || '').trim();
-      if (t.includes('@') || /^\+?\d[\d\s-]*$/.test(t)) {
-        jid = normalizeWhatsAppJid(t);
-      } else {
-        jid = (await this.resolveContactJid(t)) ?? normalizeWhatsAppJid(t);
-      }
-      if (!jid) return false;
-      const sent = (await sock.sendMessage(jid, { text })) as { key?: { id?: string } } | undefined;
-      // Record the outbound message id so its echo is filtered on upsert.
-      const id = sent?.key?.id;
-      if (typeof id === 'string' && id) {
-        this.recentlySent.set(id, Date.now());
-        // Cap the echo window at 10 minutes — ids never collide that late.
-        for (const [k, at] of this.recentlySent) {
-          if (Date.now() - at > 10 * 60_000) this.recentlySent.delete(k);
-        }
-      }
-      return true;
-    } catch {
-      return false;
+    return (await this.sendVerified(target, text)).ok;
+  }
+
+  /**
+   * VERIFIED send — the honest answer to "did it actually go out?".
+   *
+   * `sendMessage` resolving is NOT proof of delivery (live incident
+   * 2026-09-21: a WhatsApp send reported success while the recipient received
+   * nothing). This checks, in order:
+   *  1. the recipient is a REGISTERED WhatsApp account (`onWhatsApp`) — the
+   *     mistyped/unknown-number class that silently went nowhere;
+   *  2. WhatsApp returned a real message id and did not mark the message a stub
+   *     (an undeliverable/blocked message is reported as a FAILURE, not a send);
+   *  3. when `NUVIRA_WHATSAPP_ACK_WAIT_MS` is set, the device acknowledgement
+   *     is awaited so the verdict can be upgraded to `delivered`.
+   * A resolve already implies WhatsApp acked the stanza, so an unconfirmed
+   * send reports `accepted`, never a bare "sent".
+   */
+  async sendVerified(target: string, text: string): Promise<WhatsAppSendResult> {
+    return this.deliverVerified(target, { text });
+  }
+
+  /**
+   * Shared verified-delivery path for text and media. Never throws.
+   */
+  private async deliverVerified(
+    target: string,
+    content: Record<string, unknown>,
+  ): Promise<WhatsAppSendResult> {
+    if (!this.paired) {
+      return { ok: false, reason: 'WhatsApp is not paired — run `nuvira whatsapp pair` first.' };
     }
+    let sock: WASocketLike | null = null;
+    try {
+      sock = await this.ensureSocket();
+    } catch {
+      sock = null;
+    }
+    if (!sock) {
+      return { ok: false, reason: 'the WhatsApp transport could not be opened (socket unavailable).' };
+    }
+
+    // I8b — a non-numeric, non-JID target is a contact NAME: resolve it
+    // against the learned contact list (waits for the address-book sync).
+    const jid = await this.resolveTargetJid(target);
+    if (!jid) return { ok: false, reason: `cannot resolve WhatsApp target '${target}'.` };
+
+    const unreachable = await this.verifyRecipient(sock, jid);
+    if (unreachable) return { ok: false, reason: unreachable, jid };
+
+    let sent: { key?: { id?: string }; messageStubType?: number | string | null } | undefined;
+    try {
+      sent = (await sock.sendMessage(jid, content)) as typeof sent;
+    } catch (err) {
+      return { ok: false, reason: `WhatsApp rejected the send: ${errorText(err)}`, jid };
+    }
+
+    // ACCEPTANCE CHECK — a resolved promise with no message id means the
+    // message was never actually accepted; claiming success here is exactly
+    // the false positive this path removes.
+    const id = sent?.key?.id;
+    if (typeof id !== 'string' || !id) {
+      return { ok: false, reason: 'WhatsApp returned no message id — the message was NOT sent.', jid };
+    }
+    const stub = Number(sent?.messageStubType ?? 0);
+    if (Number.isFinite(stub) && stub > 0) {
+      return { ok: false, reason: `WhatsApp marked the message undeliverable (stub type ${stub}).`, jid };
+    }
+
+    // Record the outbound message id so its echo is filtered on upsert.
+    this.recentlySent.set(id, Date.now());
+    // Cap the echo window at 10 minutes — ids never collide that late.
+    for (const [k, at] of this.recentlySent) {
+      if (Date.now() - at > 10 * 60_000) this.recentlySent.delete(k);
+    }
+
+    const verdict = await this.confirmDelivery(id);
+    if (verdict === 'failed') {
+      return {
+        ok: false,
+        reason: 'WhatsApp reported an error for this message — the recipient may be unreachable.',
+        jid,
+      };
+    }
+    return { ok: true, verification: verdict, jid };
+  }
+
+  /**
+   * Resolve a user-supplied target to a native JID (number / JID verbatim,
+   * contact NAME via the learned + file contact maps).
+   */
+  private async resolveTargetJid(target: string): Promise<string> {
+    const t = (target || '').trim();
+    if (!t) return '';
+    if (t.includes('@') || /^\+?\d[\d\s-]*$/.test(t)) return normalizeWhatsAppJid(t);
+    return (await this.resolveContactJid(t)) ?? normalizeWhatsAppJid(t);
+  }
+
+  /**
+   * Confirm the recipient is a REGISTERED WhatsApp account before sending.
+   *
+   * Returns `true` (registered), `false` (definitively not on WhatsApp) or
+   * `null` when the check is inconclusive — a group/broadcast/LID target, a
+   * transport without `onWhatsApp`, or a failed USync query. Inconclusive
+   * NEVER blocks a send: the guard exists to catch a wrong number, not to add
+   * a new way for a good send to fail.
+   *
+   * Baileys FILTERS unregistered users out of the result, so an absent entry is
+   * a definitive "no WhatsApp account for this number".
+   */
+  private async checkRegistration(sock: WASocketLike, jid: string): Promise<boolean | null> {
+    const bare = jid.replace(/:\d+(?=@)/, '');
+    if (!/^\d+@s\.whatsapp\.net$/.test(bare)) return null; // groups/broadcast/LID/aliases
+    const digits = bare.split('@')[0]!;
+    const cached = this.registrationCache.get(digits);
+    if (cached && Date.now() - cached.at < REGISTRATION_CACHE_TTL_MS) return cached.exists;
+    if (typeof sock.onWhatsApp !== 'function') return null;
+    try {
+      const res = await sock.onWhatsApp(bare);
+      // `undefined` = the USync query failed (inconclusive — do not block).
+      if (!res) return null;
+      const exists = res.some((r) => r?.exists && String(r.jid ?? '').replace(/:\d+(?=@)/, '').split('@')[0] === digits);
+      this.registrationCache.set(digits, { exists, at: Date.now() });
+      return exists;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Failure reason when the recipient is definitively unreachable, else null. */
+  private async verifyRecipient(sock: WASocketLike, jid: string): Promise<string | null> {
+    const registered = await this.checkRegistration(sock, jid);
+    if (registered === false) {
+      return (
+        `${jid} is not a WhatsApp account — the message was NOT sent. ` +
+        'Check the number (include the country code) and try again.'
+      );
+    }
+    return null;
+  }
+
+  /**
+   * Confirm delivery using the `messages.update` status stream.
+   *
+   * With no wait configured this is a single check of the freshest status (a
+   * resolve already implies WhatsApp acked the stanza → `accepted`). With
+   * `NUVIRA_WHATSAPP_ACK_WAIT_MS` set it waits for a device acknowledgement and
+   * upgrades the verdict to `delivered`; an explicit ERROR status is a failure
+   * at any point.
+   */
+  private async confirmDelivery(id: string): Promise<'delivered' | 'accepted' | 'failed'> {
+    const deadline = Date.now() + whatsappAckWaitMs();
+    for (;;) {
+      const status = this.messageStatus.get(id);
+      if (status === WA_STATUS_ERROR) return 'failed';
+      if (status !== undefined && status >= WA_STATUS_DELIVERY_ACK) return 'delivered';
+      if (Date.now() >= deadline) {
+        const latest = this.messageStatus.get(id);
+        if (latest === WA_STATUS_ERROR) return 'failed';
+        if (latest !== undefined && latest >= WA_STATUS_DELIVERY_ACK) return 'delivered';
+        // ACKed by the server (implied by the resolve) or not yet reported.
+        return 'accepted';
+      }
+      await sleep(120);
+    }
+  }
+
+  /** Record a `messages.update` status (bounded; diagnostics + ack waiting). */
+  private recordMessageStatus(id: string, status: number): void {
+    this.messageStatus.set(id, status);
+    if (this.messageStatus.size > MAX_TRACKED_STATUSES) {
+      const oldest = this.messageStatus.keys().next().value;
+      if (oldest !== undefined) this.messageStatus.delete(oldest);
+    }
+  }
+
+  /**
+   * Last known WhatsApp status for a message id (`proto.WebMessageInfo.Status`)
+   * — `2` accepted, `3` delivered to the device, `0` error. Diagnostics only.
+   */
+  statusFor(messageId: string): number | undefined {
+    return this.messageStatus.get(messageId);
   }
 
   /**
@@ -566,29 +793,22 @@ export class BaileysBridge implements WhatsAppBridge {
     target: string,
     media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string },
   ): Promise<boolean> {
-    if (!this.paired) return false;
-    try {
-      const sock = await this.ensureSocket();
-      if (!sock) return false;
-      let jid = '';
-      const t = (target || '').trim();
-      if (t.includes('@') || /^\+?\d[\d\s-]*$/.test(t)) {
-        jid = normalizeWhatsAppJid(t);
-      } else {
-        jid = (await this.resolveContactJid(t)) ?? normalizeWhatsAppJid(t);
-      }
-      if (!jid) return false;
-      const payload: Record<string, unknown> = { [media.type]: media.data };
-      if (media.caption) payload.caption = media.caption;
-      if (media.type === 'audio') payload.mimetype = 'audio/mp4';
-      if (media.type === 'document' && media.filename) payload.fileName = media.filename;
-      const sent = (await sock.sendMessage(jid, payload)) as { key?: { id?: string } } | undefined;
-      const id = sent?.key?.id;
-      if (typeof id === 'string' && id) this.recentlySent.set(id, Date.now());
-      return true;
-    } catch {
-      return false;
-    }
+    return (await this.sendMediaVerified(target, media)).ok;
+  }
+
+  /**
+   * Verified media send — same recipient/acceptance checks as `sendVerified`
+   * (a media send that went nowhere must not report success either).
+   */
+  async sendMediaVerified(
+    target: string,
+    media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string },
+  ): Promise<WhatsAppSendResult> {
+    const payload: Record<string, unknown> = { [media.type]: media.data };
+    if (media.caption) payload.caption = media.caption;
+    if (media.type === 'audio') payload.mimetype = 'audio/mp4';
+    if (media.type === 'document' && media.filename) payload.fileName = media.filename;
+    return this.deliverVerified(target, payload);
   }
 
   /**
@@ -790,6 +1010,21 @@ export class BaileysBridge implements WhatsAppBridge {
       const { state, saveCreds } = await baileys.useMultiFileAuthState(this.sessionDir);
       const sock = baileys.makeWASocket({ auth: state, printQRInTerminal: false, logger: QUIET_LOGGER });
       sock.ev?.on('creds.update', () => void saveCreds());
+      // DELIVERY VERIFICATION — WhatsApp reports the lifecycle of every
+      // outbound message here (PENDING → SERVER_ACK → DELIVERY_ACK → READ, or
+      // ERROR). Recording it is what lets a send be confirmed instead of
+      // assumed, and gives the gateway logs a concrete failure reason.
+      sock.ev?.on('messages.update', (...args: unknown[]) => {
+        const updates = Array.isArray(args[0]) ? (args[0] as unknown[]) : [];
+        for (const u of updates) {
+          const entry = (u ?? {}) as { key?: { id?: unknown }; update?: { status?: unknown } };
+          const id = entry.key?.id;
+          const status = Number(entry.update?.status);
+          if (typeof id === 'string' && id && Number.isFinite(status)) {
+            this.recordMessageStatus(id, status);
+          }
+        }
+      });
       // Learn OUR OWN LID→PN pair right away (self-chat inbound arrives as our
       // own LID jid; creds.me carries both ids on LID-mode accounts).
       try {

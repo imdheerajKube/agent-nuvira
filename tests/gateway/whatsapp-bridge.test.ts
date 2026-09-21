@@ -56,13 +56,33 @@ vi.mock('baileys', () => {
         calls: [] as string[],
         sentTo: [] as string[],
         sentContent: [] as unknown[],
+        /** Every `onWhatsApp` query the bridge made (registration check). */
+        onWhatsAppCalls: [] as string[][],
+        /**
+         * USync answer override. `undefined` (default) = every queried number
+         * is a registered account; `[]` = none are (the "not a WhatsApp
+         * account" case); a custom array models partial results.
+         */
+        onWhatsAppResult: undefined as Array<{ jid: string; exists: boolean }> | undefined,
+        /** Simulate a USync failure (inconclusive — must NOT block a send). */
+        onWhatsAppThrows: false,
+        /** Override the sendMessage result (no id / stub / error). */
+        sendMessageResult: undefined as unknown,
         // Resolves with a message key id so the bridge's echo filter can
         // record it (real Baileys sendMessage does the same).
         sendMessage: async (jid: string, content: unknown) => {
           sock.sentTo.push(jid);
           sock.sentContent.push(content);
           sock.calls.push('sendMessage');
+          if (sock.sendMessageResult !== undefined) return sock.sendMessageResult;
           return { key: { id: `SENT-${sock.sentTo.length}` } };
+        },
+        onWhatsApp: async (...jids: string[]) => {
+          sock.onWhatsAppCalls.push(jids);
+          sock.calls.push('onWhatsApp');
+          if (sock.onWhatsAppThrows) throw new Error('usync query failed');
+          if (sock.onWhatsAppResult !== undefined) return sock.onWhatsAppResult;
+          return jids.map((jid) => ({ jid, exists: true }));
         },
         requestPairingCode: async () => {
           sock.calls.push('requestPairingCode');
@@ -944,5 +964,190 @@ describe('BaileysBridge I8b — echo filter / self-chat / contacts (fake baileys
     const bridge = new BaileysBridge(dir);
     expect(await bridge.sendMedia?.('Alex', { type: 'image', data: new Uint8Array([1]) })).toBe(false);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * DELIVERY VERIFICATION — a resolved `sendMessage` is NOT a delivery.
+ *
+ * Live incident (2026-09-21): a WhatsApp send reported success while the
+ * recipient received nothing, because `sendMessage` resolving was taken as
+ * proof. The bridge now verifies the recipient EXISTS, that WhatsApp returned a
+ * real message id (not a stub), and reports HOW FAR the send was confirmed.
+ */
+describe('BaileysBridge — verified sends (fake baileys)', () => {
+  let sessionDir = '';
+  const envBackup: Record<string, string | undefined> = {};
+  const emit = (i: number, event: string, ...args: unknown[]): void =>
+    (fakeBaileys.sockets[i].ev as { emit: (e: string, ...a: unknown[]) => void }).emit(event, ...args);
+  const waitFor = async (fn: () => boolean, timeoutMs = 3_000): Promise<void> => {
+    const start = Date.now();
+    while (!fn()) {
+      if (Date.now() - start > timeoutMs) throw new Error('waitFor timeout');
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+
+  beforeEach(() => {
+    sessionDir = mkdtempSync(join(tmpdir(), 'buff-wa-verify-'));
+    fakeBaileys.sockets.length = 0;
+    writeFileSync(join(sessionDir, 'creds.json'), '{}', 'utf-8');
+    envBackup.NUVIRA_WHATSAPP_ACK_WAIT_MS = process.env.NUVIRA_WHATSAPP_ACK_WAIT_MS;
+    delete process.env.NUVIRA_WHATSAPP_ACK_WAIT_MS;
+  });
+
+  afterEach(() => {
+    if (envBackup.NUVIRA_WHATSAPP_ACK_WAIT_MS === undefined) delete process.env.NUVIRA_WHATSAPP_ACK_WAIT_MS;
+    else process.env.NUVIRA_WHATSAPP_ACK_WAIT_MS = envBackup.NUVIRA_WHATSAPP_ACK_WAIT_MS;
+    rmSync(sessionDir, { recursive: true, force: true });
+  });
+
+  const openBridge = async (): Promise<BaileysBridge> => {
+    const bridge = new BaileysBridge(sessionDir);
+    const p = bridge.connect(() => {});
+    await waitFor(() => fakeBaileys.sockets.length >= 1);
+    emit(0, 'connection.update', { connection: 'open' });
+    await p;
+    return bridge;
+  };
+
+  it('reports a REGISTERED send as accepted (never a bare "sent")', async () => {
+    const bridge = await openBridge();
+    const result = await bridge.sendVerified?.('+15551234567', 'hello');
+    expect(result).toMatchObject({ ok: true, verification: 'accepted' });
+    expect(result?.jid).toBe('15551234567@s.whatsapp.net');
+    // The recipient-existence check actually ran.
+    expect(fakeBaileys.sockets[0].onWhatsAppCalls).toEqual([['15551234567@s.whatsapp.net']]);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('FAILS (does not claim sent) when the number is not a WhatsApp account', async () => {
+    const bridge = await openBridge();
+    fakeBaileys.sockets[0].onWhatsAppResult = []; // Baileys filters unknown users out
+    const result = await bridge.sendVerified?.('+918800663237', 'guide');
+    expect(result?.ok).toBe(false);
+    expect(result?.reason).toContain('is not a WhatsApp account');
+    // Nothing was even attempted over the wire.
+    expect(fakeBaileys.sockets[0].sentTo).toEqual([]);
+    expect(await bridge.send('+918800663237', 'guide')).toBe(false);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('memoizes the registration answer instead of re-querying on every send', async () => {
+    const bridge = await openBridge();
+    await bridge.sendVerified?.('+15551234567', 'one');
+    await bridge.sendVerified?.('+15551234567', 'two');
+    await bridge.sendVerified?.('15551234567@s.whatsapp.net', 'three');
+    expect(fakeBaileys.sockets[0].onWhatsAppCalls).toHaveLength(1);
+    expect(fakeBaileys.sockets[0].sentTo).toHaveLength(3);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('an INCONCLUSIVE registration check never blocks a send', async () => {
+    const bridge = await openBridge();
+    fakeBaileys.sockets[0].onWhatsAppThrows = true;
+    const thrown = await bridge.sendVerified?.('+15551234567', 'hello');
+    expect(thrown?.ok).toBe(true);
+    fakeBaileys.sockets[0].onWhatsAppThrows = false;
+    fakeBaileys.sockets[0].onWhatsAppResult = undefined; // returns undefined = query failed
+    const undef = await bridge.sendVerified?.('+15551234568', 'hello');
+    expect(undef?.ok).toBe(true);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('requires a real message id — a resolve without one is NOT a send', async () => {
+    const bridge = await openBridge();
+    fakeBaileys.sockets[0].sendMessageResult = { key: {} };
+    const result = await bridge.sendVerified?.('+15551234567', 'hello');
+    expect(result?.ok).toBe(false);
+    expect(result?.reason).toContain('no message id');
+    expect(await bridge.send('+15551234567', 'hello')).toBe(false);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('treats a stub (undeliverable) result as a failure', async () => {
+    const bridge = await openBridge();
+    fakeBaileys.sockets[0].sendMessageResult = { key: { id: 'STUB-1' }, messageStubType: 2 };
+    const result = await bridge.sendVerified?.('+15551234567', 'hello');
+    expect(result?.ok).toBe(false);
+    expect(result?.reason).toContain('undeliverable');
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('reports the transport error when sendMessage throws', async () => {
+    const bridge = await openBridge();
+    fakeBaileys.sockets[0].sendMessageResult = undefined;
+    // Force a throw by replacing the fake's sendMessage for this instance.
+    fakeBaileys.sockets[0].sendMessage = async () => {
+      throw new Error('Connection Closed');
+    };
+    const result = await bridge.sendVerified?.('+15551234567', 'hello');
+    expect(result?.ok).toBe(false);
+    expect(result?.reason).toContain('Connection Closed');
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('upgrades to "delivered" when WhatsApp confirms the device ack', async () => {
+    process.env.NUVIRA_WHATSAPP_ACK_WAIT_MS = '1500';
+    const bridge = await openBridge();
+    const pending = bridge.sendVerified?.('+15551234567', 'hello');
+    // The delivery receipt arrives while the send is still confirming.
+    await waitFor(() => fakeBaileys.sockets[0].sentTo.length === 1);
+    emit(0, 'messages.update', [{ key: { id: 'SENT-1' }, update: { status: 3 } }]);
+    const result = await pending;
+    expect(result).toMatchObject({ ok: true, verification: 'delivered' });
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('fails when WhatsApp reports an ERROR status for the message', async () => {
+    process.env.NUVIRA_WHATSAPP_ACK_WAIT_MS = '1500';
+    const bridge = await openBridge();
+    const pending = bridge.sendVerified?.('+15551234567', 'hello');
+    await waitFor(() => fakeBaileys.sockets[0].sentTo.length === 1);
+    emit(0, 'messages.update', [{ key: { id: 'SENT-1' }, update: { status: 0 } }]);
+    const result = await pending;
+    expect(result?.ok).toBe(false);
+    expect(result?.reason).toContain('reported an error');
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('verifies media sends too (no id = no delivery)', async () => {
+    const bridge = await openBridge();
+    const img = new Uint8Array([1, 2, 3]);
+    expect(await bridge.sendMedia?.('+15551234567', { type: 'image', data: img })).toBe(true);
+    fakeBaileys.sockets[0].sendMessageResult = { key: {} };
+    expect(await bridge.sendMedia?.('+15551234567', { type: 'image', data: img })).toBe(false);
+    await bridge.disconnect();
+  }, 10_000);
+});
+
+/**
+ * The adapter must surface the VERIFIED reason — the registry, the delivery
+ * ledger and `gateway_send`'s output all consume it.
+ */
+describe('WhatsAppBridgeAdapter.sendDetailed', () => {
+  it('passes the bridge reason through on failure', async () => {
+    const bridge = new FakeBridge(true);
+    bridge.failSend = true;
+    (bridge as unknown as { sendVerified: unknown }).sendVerified = async () => ({
+      ok: false,
+      reason: '918800663237@s.whatsapp.net is not a WhatsApp account — the message was NOT sent.',
+    });
+    const adapter = new WhatsAppBridgeAdapter(bridge);
+    const outcome = await adapter.sendDetailed?.('+918800663237', 'hello');
+    expect(outcome?.ok).toBe(false);
+    expect(outcome?.error).toContain('is not a WhatsApp account');
+  });
+
+  it('falls back to the plain boolean for a bridge without verification', async () => {
+    const adapter = new WhatsAppBridgeAdapter(new FakeBridge(true));
+    expect(await adapter.sendDetailed?.('+15551234567', 'hello')).toEqual({ ok: true });
+  });
+
+  it('reports an unpaired transport instead of a bare failure', async () => {
+    const adapter = new WhatsAppBridgeAdapter(new FakeBridge(false));
+    const outcome = await adapter.sendDetailed?.('+15551234567', 'hello');
+    expect(outcome?.ok).toBe(false);
+    expect(outcome?.error).toContain('not paired');
   });
 });

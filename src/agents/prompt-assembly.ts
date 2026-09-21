@@ -68,9 +68,9 @@ export interface ProjectAssessment {
 
 /**
  * Assess the project before executing tasks.
- * Adopts Codebuff's pattern: detect framework, language, and project state
- * before generating prompts. This replaces the generic context-gatherer
- * with a fast, deterministic assessment.
+ * Detect framework, language, and project state before generating prompts.
+ * This replaces the generic context-gatherer with a fast, deterministic
+ * assessment.
  */
 export function assessProject(workingDirectory: string): ProjectAssessment {
   const assessment: ProjectAssessment = {

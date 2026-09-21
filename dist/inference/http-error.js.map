@@ -1,1 +1,0 @@
-{"version":3,"file":"http-error.js","sourceRoot":"","sources":["../../src/inference/http-error.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;GAcG;AACH,MAAM,UAAU,iBAAiB,CAAC,GAAU,EAAE,MAAc,EAAE,OAAiB;IAC5E,GAAmC,CAAC,MAAM,GAAG,MAAM,CAAC;IACrD,IAAI,OAAO,EAAE,CAAC;QACX,GAAqC,CAAC,OAAO,GAAG,OAAO,CAAC;IAC3D,CAAC;IACD,OAAO,GAAG,CAAC;AACb,CAAC"}

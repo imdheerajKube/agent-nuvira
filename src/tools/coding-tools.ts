@@ -58,6 +58,11 @@ type GateResult = { ok: true; abs: string; rel: string } | { ok: false; reason: 
  * Deny-first workspace gate. Lexically resolves `p` against `root`; refuses
  * absolute paths elsewhere and `..` escapes. Realpath verification happens
  * per-tool (it needs the target to exist and to catch symlink escapes).
+ *
+ * NOTE: `rel` (the display path) uses the NATIVE separator, matching the
+ * pre-existing convention of these coding tools — `write_file` has always
+ * reported `deep\nested\new-file.ts` on Windows. Callers asserting on it must
+ * build expectations with `join`/`sep` rather than hard-coded slashes.
  */
 function gatePath(root: string | undefined, p: string): GateResult {
   const base = root || process.cwd();

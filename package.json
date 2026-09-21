@@ -30,6 +30,7 @@
     "test:coverage": "vitest run --coverage",
     "build:dashboard": "node scripts/build-dashboard.mjs",
     "build:sdk": "cd src/agent-sdk && npx tsc",
+    "prepare": "node scripts/prepare-install.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "npm run build && npm test"
   },

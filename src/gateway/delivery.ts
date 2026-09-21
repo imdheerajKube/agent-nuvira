@@ -97,8 +97,13 @@ export class DeliveryLedger {
     } catch { /* best-effort — a failed ledger write must never break a send */ }
   }
 
-  /** Persist a new pending entry. Returns the stored entry. */
-  enqueue(input: { target: string; ref: ChannelRef; text: string }): DeliveryEntry {
+  /**
+   * Persist a new pending entry. Returns the stored entry.
+   * `lastError` records WHY the first attempt failed (e.g. "not a WhatsApp
+   * account") so `nuvira gateway delivery` explains the failure instead of
+   * showing a bare retry row.
+   */
+  enqueue(input: { target: string; ref: ChannelRef; text: string; lastError?: string }): DeliveryEntry {
     const entry: DeliveryEntry = {
       id: randomUUID(),
       target: input.target,
@@ -109,6 +114,7 @@ export class DeliveryLedger {
       attempts: 0,
       nextAttemptAt: Date.now(),
       createdAt: Date.now(),
+      ...(input.lastError ? { lastError: input.lastError } : {}),
     };
     this.write([entry, ...this.read()]);
     return entry;

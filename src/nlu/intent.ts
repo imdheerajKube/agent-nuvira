@@ -110,6 +110,10 @@ export function matchContinueRule(text: string, referenceDate: Date = new Date()
  * "deploy the project nuvira-fix-validation" would false-positive into fix.
  */
 export function matchFixRule(text: string): IntentResult | null {
+  // OBJECT-AWARE GUARD: "fix my diet plan" / "correct my child's worksheet" is
+  // content repair, not debugging — the fix verb must not send a life/school
+  // artifact to the developer pipeline (whose planner emits a program).
+  if (isContentArtifactAsk(text)) return null;
   if (/(?:^|[^\w-])(?:fix|debug|repair|troubleshoot|resolve|patch|address|diagnose|correct)(?:$|[^\w-])/i.test(text)) {
     return { intent: 'fix', confidence: 0.85, modeHint: 'execute' };
   }
@@ -145,6 +149,93 @@ export function matchConfigureRule(text: string): IntentResult | null {
 }
 
 /**
+ * Non-coding planning/lifestyle artifacts. "Create a plan/routine/schedule for
+ * my child" is a CONTENT request (teach me, give me a routine) — it is NOT a
+ * software deliverable. Observed live: the WhatsApp ask "Can you create plan to
+ * enable my child learn spoken English" ran the DEVELOPER pipeline, whose
+ * planner (a "senior software architect") answered with a Python program using
+ * SpeechRecognition/gTTS. Guarded by CODING_OBJECT_RE so a plan FOR code
+ * ("create a plan for the ecommerce app") still reaches the create rule.
+ */
+const NON_CODE_ARTIFACT_RE =
+  /\b(?:plans?|routines?|schedules?|timetables?|time[- ]?tables?|curricul(?:um|a)|syllab(?:us|i)|diets?|meal plans?|workouts?|exercise plans?|fitness plans?|budgets?|itinerar(?:y|ies)|reading lists?|study plans?|revision plans?|lesson plans?|habit trackers?|chore charts?|worksheets?|quiz(?:zes)?|exams?|examinations?|question papers?|test papers?|question banks?|answer keys?|mock tests?)\b/i;
+
+/**
+ * Prose/document/book deliverables — the same object-blindness one step
+ * further out. A book/guide/course/report is CONTENT, but the bare create verb
+ * still sent it to the developer pipeline (observed live: "create a book which
+ * teaches maths division for class 4 student" → create/dev → pipeline, planner
+ * as a "senior software architect").
+ *
+ * Deliberately EXCLUDES code-shaped nouns — "script", "program", "tool" —
+ * even though the write rule's own object list carries some of them: that list
+ * is guarded by a *writing verb*, while this one is consulted by the
+ * verb-agnostic guard, so "create a script to back up files" must stay coding.
+ */
+const CONTENT_DOCUMENT_RE =
+  /\b(?:books?|e ?books?|text ?books?|work ?books?|story ?books?|comic books?|graphic novels?|novels?|guides?|hand ?books?|manuals?|tutorials?|courses?|articles?|essays?|blog posts?|newsletters?|reports?|summaries?|cheat ?sheets?|flash ?cards?|mind ?maps?|presentations?|slideshows?|slide decks?|poems?|poetry|songs?|lyrics|rhymes?|stories|short stories|fables?|myths?|legends?|letters?|cover letters?|e ?mails?|resumes?|biographies?|memoirs?|speeches?|recipes?|cook ?books?|shopping lists?|grocery lists?|check ?lists?|outlines?|tables? of contents?|appendi(?:x|ces)|glossar(?:y|ies)|prefaces?|forewords?|road ?maps?|posters?|flyers?|brochures?|pamphlets?|invitations?|puzzles?|crosswords?|riddles?)\b/i;
+
+/**
+ * Nouns naming a SOFTWARE deliverable. When one is present the ask stays a
+ * coding task even if it also says "plan"/"schedule" — the artifact guard must
+ * not starve a real dev request just because it is phrased as a plan.
+ */
+const CODING_OBJECT_RE =
+  /\b(?:functions?|modules?|components?|apis?|endpoints?|routes?|handlers?|controllers?|resolvers?|middleware|hooks?|wrappers?|servers?|databases?|dbs?|clis?|tools?|services?|programs?|scripts?|apps?|applications?|workers?|daemons?|plugins?|packages?|librar(?:y|ies)|projects?|repos?(?:itories)?|schemas?|features?|websites?|web ?apps?|dashboards?|backends?|frontends?|code|codebase|microservices?|dockerfiles?|docker|kubernetes|k8s|sdks?|addons?|extensions?|pipelines?|workflows?|bots?|specs?|migrations?)\b/i;
+
+/**
+ * True when an ask is about a NON-CODING artifact (a plan/routine/schedule for
+ * life, teaching, fitness, diet …) and names no software deliverable. Such an
+ * ask must be ANSWERED, never dispatched to the coding pipeline.
+ */
+export function isNonCodeArtifactAsk(text: string): boolean {
+  const t = String(text ?? '').trim();
+  if (!t) return false;
+  return (NON_CODE_ARTIFACT_RE.test(t) || CONTENT_DOCUMENT_RE.test(t)) && !CODING_OBJECT_RE.test(t);
+}
+
+/**
+ * An EDUCATIONAL frame — a class/grade, a school/exam context. Without one, a
+ * "test"/"worksheet" is the software kind (`create a test for the login
+ * function`); with one it is schoolwork (`create a test for class 4`).
+ */
+const EDUCATION_FRAME_RE =
+  /\b(?:class|grade|std|standard)\s*\d+\b|\b(?:school|exam(?:ination)?s?|mcq|worksheets?|question papers?|question banks?|syllabus|semesters?|homework|tuition|pupils?|students?|teacher|curriculum|revision)\b/i;
+
+/** Artifacts produced for a CLASS: a school test/quiz/worksheet/exam paper. */
+const ACADEMIC_ARTIFACT_RE = /\b(?:tests?|assignments?|homeworks?|notes?)\b/i;
+
+/**
+ * True when the ask names an ACADEMIC artifact (a class test/quiz/worksheet/
+ * exam paper) rather than a software one.
+ *
+ * Observed live: the same object-blindness that sent a teaching PLAN to the
+ * developer pipeline also sent school work there — "create a test for class 4"
+ * and "make a worksheet for grade 3" are CONTENT, not code. The education frame
+ * plus the absence of a coding object is what separates them from the software
+ * test/worksheet (`create a test for the login function`).
+ */
+export function isAcademicArtifactAsk(text: string): boolean {
+  const t = String(text ?? '').trim();
+  if (!t) return false;
+  return ACADEMIC_ARTIFACT_RE.test(t) && EDUCATION_FRAME_RE.test(t) && !CODING_OBJECT_RE.test(t);
+}
+
+/**
+ * True when the ask is for CONTENT rather than a software deliverable — a
+ * life/teaching plan or routine, an academic test/worksheet, etc.
+ *
+ * THE single guard the verb-driven rules consult. Every rule that keys off a
+ * verb (`create`/`build`/`fix`/`make`/`write`/`test`) is blind to the verb's
+ * OBJECT on its own, so "create plan …", "build a routine", "fix my diet
+ * plan" and "create a test for class 4" all read as coding tasks. Consulting
+ * one shared predicate keeps the CLI, dashboard and gateway in agreement.
+ */
+export function isContentArtifactAsk(text: string): boolean {
+  return isNonCodeArtifactAsk(text) || isAcademicArtifactAsk(text);
+}
+
+/**
  * Write/creative → chat (S4). "Write an essay/poem/story/letter/article/…" is
  * a CONTENT request — a direct chat answer, NEVER the coding pipeline (the
  * observed failure: "write an essay" was classified create → the no-model
@@ -167,6 +258,16 @@ export function matchWriteRule(text: string): IntentResult | null {
   // excluded: "class 4 student" is a grade level, not a coding class.
   const codingNoun =
     /\b(?:function|module|component|api|endpoint|route|server|database|cli|tool|service|program|script|app(?:lication)?|worker|daemon|plugin|package|library|project|schema)\b/i;
+  // Content artifacts (plan/routine/schedule/curriculum/diet/… for life or
+  // teaching; class test/worksheet/exam for school) name no software
+  // deliverable — they are CONTENT. Answer directly; never spin up the
+  // developer pipeline (whose planner would emit a program). Guarded by
+  // `isContentArtifactAsk`, so "create a plan for the ecommerce app" and
+  // "create a test for the login function" (both name a coding object) still
+  // fall through to the create rule below.
+  if (isContentArtifactAsk(text) && /\b(?:write|draft|compose|create|build|make|prepare|design|give|provide|suggest|fix|correct)\b/i.test(text)) {
+    return { intent: 'write', confidence: 0.85, modeHint: 'chat' };
+  }
   // Guard: coding nouns must NOT match the write rule — "write a function for"
   // or "write a test for" are dev tasks, not creative content. These nouns
   // fall through to matchCreateRule so the coding pipeline runs.
@@ -202,6 +303,11 @@ export function matchCreateRule(text: string): IntentResult | null {
   const documentNoun =
     /\b(?:poster|diagram|flowchart|flow.?chart|wireframe|mind.?map|mindmap|chart|infographic|brochure|flyer|pamphlet|newsletter|report|presentation|slideshow|mockup|blueprint|sketch|outline|song|poem|story|essay|letter|article|speech|caption|logo)\b/i;
   if (documentNoun.test(text)) return null;
+  // Content artifacts (a teaching/fitness/diet plan, a routine, a schedule, a
+  // class test/worksheet) are never a software deliverable — the write rule
+  // answers them first; this is the belt-and-braces guard for an ask with no
+  // explicit write verb.
+  if (isContentArtifactAsk(text)) return null;
   // GUARD: "set up my groq key" is a configure task, not a create task.
   if (/\b(?:api ?key|auth key|secret key|access key|private key|encryption key)\b/i.test(text)) return null;
   if (/\b(?:set(?:\s+up)?|update|change|switch)\s+(?:my|the)?\s*\w*\s*(?:key|token|credential)s?\b/i.test(text)) return null;

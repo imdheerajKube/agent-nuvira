@@ -374,6 +374,63 @@ describe('analyzeTaskProfile', () => {
     expect(profile.requiresVerification).toBe(false);
     expect(profile.escalationTarget).toBeUndefined();
   });
+
+  /**
+   * The router had the SAME object-blindness the NLU had: every rule keyed off a
+   * surface word and never asked what that word was ABOUT. So a diet/exercise
+   * plan was labeled `planning` (never getting the creative quality floor a
+   * content answer needs), "fix my diet plan" was labeled `debugging`, and
+   * "design a poster for the event" was labeled `architecture` — which also
+   * granted it a verification boost and a gemini escalation it has no business
+   * getting. The object is now decided BEFORE those rules.
+   */
+  it('labels CONTENT asks creative, whatever verb they use', () => {
+    const contentAsks = [
+      'Create a plan for diet and exercise to loose weight by 10 KGs in 3 months , i have bad knee',
+      "Create a book which teaches math's devision for class 4 student",
+      'fix my diet plan',
+      'design a poster for the event',
+      'create a study plan for class 4',
+      'create a test for class 4',
+      'make a weekly grocery list',
+      'create an outline for my essay',
+    ];
+    for (const ask of contentAsks) {
+      const profile = analyzeTaskProfile(ask);
+      expect(profile.intent, ask).toBe('creative');
+      expect(profile.requiresVerification, ask).toBe(false);
+      expect(profile.escalationTarget, ask).toBeUndefined();
+    }
+  });
+
+  it('does NOT grant a content ask the engineering labels or their boosts', () => {
+    // These are the exact mislabels the old surface-word rules produced.
+    expect(analyzeTaskProfile('fix my diet plan').intent).not.toBe('debugging');
+    expect(analyzeTaskProfile('design a poster for the event').intent).not.toBe('architecture');
+    expect(analyzeTaskProfile('design a poster for the event').requiresVerification).toBe(false);
+  });
+
+  it('keeps every ENGINEERING ask on its original label', () => {
+    expect(analyzeTaskProfile('deploy to production and verify the rollout').intent).toBe('verification');
+    expect(analyzeTaskProfile('migrate the auth service to the new deployment pipeline').intent).toBe('migration');
+    expect(
+      analyzeTaskProfile('design a new microservice architecture for the platform').intent,
+    ).toBe('architecture');
+    expect(analyzeTaskProfile('fix the failing test in auth.ts').intent).toBe('debugging');
+    expect(analyzeTaskProfile('refactor the router').intent).toBe('migration');
+    expect(analyzeTaskProfile('outline the authentication architecture').intent).toBe('planning');
+    expect(analyzeTaskProfile('write a security audit report').intent).toBe('security');
+    expect(analyzeTaskProfile('create a plan for the ecommerce app').intent).toBe('planning');
+  });
+
+  it('does not let "for students" make a CODING ask creative', () => {
+    // /for (kids|children|students|class N)/ used to tip ANY ask to creative —
+    // "build an app for students" included.
+    expect(analyzeTaskProfile('build an app for students').intent).toBe('coding');
+    expect(analyzeTaskProfile('build a quiz app for class 4').intent).toBe('coding');
+    // …while a genuine content ask still gets the creative treatment.
+    expect(analyzeTaskProfile('write an essay on elephants for class 4').intent).toBe('creative');
+  });
 });
 
 // ─── AutoModelRouter.resolve ────────────────────────────────────────────────

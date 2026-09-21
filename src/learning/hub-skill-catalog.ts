@@ -410,18 +410,26 @@ export function findHubSkillMatch(goal: string, cm?: ConfigManager, projectRoot 
   const skills = listMatchableHubSkills(cm, projectRoot, home);
   if (skills.length === 0) return null;
 
+  // WHOLE-WORD matching, never substring: `q.includes('kill')` matched inside
+  // "s**kill**", which ranked `feature-flags` top for "no skill covers alpaca
+  // husbandry whatsoever". The same class makes `mac` match "machine" and
+  // `arch` match "search". Tokenizing once also keeps this ranking consistent
+  // with the caller's evidence gate (`hasRealGoalEvidence`), so the scorer
+  // cannot nominate a skill the gate then rejects.
+  const tokens = new Set(q.split(/[^a-z0-9]+/).filter((w) => w.length > 0));
+
   const scored = skills.map((skill) => {
     let score = 0;
     // Name words (>3 chars) present in the goal.
     for (const word of skill.name.toLowerCase().split(/[^a-z0-9]+/)) {
-      if (word.length > 3 && q.includes(word)) score += 2;
+      if (word.length > 3 && tokens.has(word)) score += 2;
     }
     // Description keywords.
     for (const word of skill.description.toLowerCase().split(/[^a-z0-9]+/)) {
-      if (word.length > 3 && q.includes(word)) score += 1.5;
+      if (word.length > 3 && tokens.has(word)) score += 1.5;
     }
     // Skill id (directory name).
-    if (q.includes(skill.id.toLowerCase())) score += 1;
+    if (tokens.has(skill.id.toLowerCase())) score += 1;
     return { skill, score };
   });
 

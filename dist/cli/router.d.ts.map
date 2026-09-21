@@ -1,1 +1,0 @@
-{"version":3,"file":"router.d.ts","sourceRoot":"","sources":["../../src/cli/router.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;GAeG;AACH,OAAO,EAAE,aAAa,EAAE,MAAM,sBAAsB,CAAC;AAGrD,OAAO,EAAE,iBAAiB,EAAE,MAAM,2BAA2B,CAAC;AAY9D;;;;;;;GAOG;AACH,wBAAgB,eAAe,CAC7B,aAAa,EAAE,aAAa,EAC5B,cAAc,CAAC,EAAE,MAAM,GACtB;IAAE,IAAI,EAAE,MAAM,CAAC;IAAC,QAAQ,EAAE,iBAAiB,CAAA;CAAE,CAkF/C"}

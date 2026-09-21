@@ -102,6 +102,48 @@ describe('hasCodingAction — the command-position coding-verb override', () => 
     expect(hasCodingAction('add 2 + 2')).toBe(false);
     expect(hasCodingAction('add Rahul to whatsapp')).toBe(false);
   });
+
+  it('does NOT flag a non-coding artifact ask (plan/routine/schedule) as coding', () => {
+    // Live incident: "Can you create plan to enable my child learn spoken
+    // English" on WhatsApp ran the developer pipeline, whose planner produced a
+    // Python program. "plan" here is a document, not a software deliverable.
+    expect(hasCodingAction('Can you create plan to enable my child learn spoken English')).toBe(false);
+    expect(hasCodingAction('create a study plan for class 4')).toBe(false);
+    expect(hasCodingAction('Create a daily routine for my kid to learn English')).toBe(false);
+    expect(hasCodingAction('create a workout plan')).toBe(false);
+  });
+
+  it('still flags a plan FOR code (a coding object keeps it a dev task)', () => {
+    expect(hasCodingAction('create a plan for the ecommerce app')).toBe(true);
+    expect(hasCodingAction('create a plan for the API migration')).toBe(true);
+    expect(hasCodingAction('create a CLI tool')).toBe(true);
+  });
+
+  it('also clears prose/document deliverables (book, course, guide, list)', () => {
+    // Same object-blindness one step out: the create verb alone put a BOOK on
+    // the developer pipeline (observed 2026-09-21).
+    expect(hasCodingAction("create a book which teaches math's devision for class 4 student")).toBe(false);
+    expect(hasCodingAction('create a course on spoken english')).toBe(false);
+    expect(hasCodingAction('make a weekly grocery list')).toBe(false);
+    // …but a content noun PLUS a software deliverable is still coding.
+    expect(hasCodingAction('create a book management API')).toBe(true);
+    expect(hasCodingAction('create a course website')).toBe(true);
+    expect(hasCodingAction('create a script to back up files')).toBe(true);
+  });
+
+  it('separates the three ambiguous asks by their OBJECT, not their verb', () => {
+    // All three open with "Create a …" — only the object distinguishes them.
+    // Live asks, 2026-09-21.
+    expect(
+      resolveAskKind('Create a plan for diet and exercise to loose weight by 10 KGs in 3 months , i have bad knee'),
+    ).toBe('chat');
+    expect(
+      resolveAskKind(
+        'Create a project plan to develop a multiple screen calculator and unit converter , it should be GUI and cross platform for Windows and Linux',
+      ),
+    ).toBe('pipeline');
+    expect(resolveAskKind("Create a book which teaches math's devision for class 4 student")).toBe('chat');
+  });
 });
 
 /**
@@ -134,8 +176,22 @@ describe('resolveAskKind — one routing rule for every surface', () => {
       'deploy the api',
       'refactor the router',
       'build the dashboard page',
+      'create a plan for the ecommerce app', // a plan FOR code is still a dev plan
     ]) {
       expect(resolveAskKind(g), g).toBe('pipeline');
+    }
+  });
+
+  it('routes non-coding artifact asks (teaching/fitness/life plans) to chat', () => {
+    for (const q of [
+      'Can you create plan to enable my child learn spoken English',
+      'Create a daily routine for my kid to learn English',
+      'Create a study plan for class 4',
+      'create a workout plan',
+      'build a schedule for my week',
+      'make a diet chart for me',
+    ]) {
+      expect(resolveAskKind(q), q).toBe('chat');
     }
   });
 

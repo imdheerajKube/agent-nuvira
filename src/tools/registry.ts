@@ -109,6 +109,14 @@ export interface ToolContext {
    */
   gateway?: {
     send(target: string, text: string): Promise<boolean>;
+    /**
+     * Send to an EXPLICIT resolved channel ref. Preferred over `send` for
+     * delivery because a failure is ledgered for retry and — with a verified
+     * adapter (WhatsApp) — the real reason is available via `lastSendError`.
+     */
+    sendToRef?(ref: { platform: string; channelId: string }, text: string, target?: string): Promise<boolean>;
+    /** Why the most recent send to this target failed (undefined = none/ok). */
+    lastSendError?(ref: { platform: string; channelId: string }): string | undefined;
     sendMedia?(target: string, media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string }): Promise<boolean>;
     /** The originating channel (platform + channelId) for this gateway-triggered turn. */
     origin?: { platform: string; channelId: string };

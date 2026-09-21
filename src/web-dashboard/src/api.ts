@@ -663,18 +663,27 @@ export class DashboardAPI {
    * policies (the running gateway re-reads config per inbound, so changes
    * apply without a restart).
    */
-  async gatewayPolicies(): Promise<{ ok: boolean; policies?: Record<string, HubChannelPolicy>; statusRecipients?: string[]; contacts?: HubContact[]; error?: string; unauthorized?: boolean; forbidden?: boolean }> {
+  async gatewayPolicies(): Promise<{ ok: boolean; policies?: Record<string, HubChannelPolicy>; statusRecipients?: string[]; contacts?: HubContact[]; askUserWait?: boolean; askUserTimeoutMs?: number; error?: string; unauthorized?: boolean; forbidden?: boolean }> {
     const r = await this.sendAdminRequest('/api/admin/gateway/policies', 'GET');
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
-    const d = (r.data ?? {}) as { ok?: boolean; policies?: Record<string, HubChannelPolicy>; statusRecipients?: string[]; contacts?: HubContact[]; error?: string };
-    if (r.status === 200 && d.ok) return { ok: true, policies: d.policies, statusRecipients: d.statusRecipients, contacts: d.contacts };
+    const d = (r.data ?? {}) as { ok?: boolean; policies?: Record<string, HubChannelPolicy>; statusRecipients?: string[]; contacts?: HubContact[]; askUserWait?: boolean; askUserTimeoutMs?: number; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true, policies: d.policies, statusRecipients: d.statusRecipients, contacts: d.contacts, askUserWait: d.askUserWait, askUserTimeoutMs: d.askUserTimeoutMs };
     return { ok: false, error: d.error || 'Failed to read policies.', unauthorized: r.status === 401, forbidden: r.status === 403 };
   }
 
-  async saveGatewayPolicies(policies: Record<string, HubChannelPolicy>, statusRecipients?: string[], contacts?: HubContact[]): Promise<AdminWriteResult> {
+  async saveGatewayPolicies(
+    policies: Record<string, HubChannelPolicy>,
+    statusRecipients?: string[],
+    contacts?: HubContact[],
+    askUser?: { wait: boolean; timeoutMs?: number },
+  ): Promise<AdminWriteResult> {
     const body: Record<string, unknown> = { policies };
     if (Array.isArray(statusRecipients)) body.statusRecipients = statusRecipients;
     if (Array.isArray(contacts)) body.contacts = contacts;
+    if (askUser) {
+      body.askUserWait = askUser.wait;
+      if (typeof askUser.timeoutMs === 'number') body.askUserTimeoutMs = askUser.timeoutMs;
+    }
     const r = await this.sendAdminRequest('/api/admin/gateway/policies', 'PUT', body);
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
     const d = (r.data ?? {}) as AdminWriteResult;

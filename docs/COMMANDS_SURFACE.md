@@ -187,6 +187,10 @@ Manage who may command the agent to send to OTHER people (gateway_send). Outboun
 
 Manage status recipients — contacts/groups that ALWAYS get pipeline completion summaries
 
+### `buff config gateway ask-user-wait`
+
+Ask-and-wait for clarifying questions on messaging channels: when a turn asks the sender a question, hold it for their reply instead of assuming option 1
+
 ### `buff cache`
 
 Manage inference cache
@@ -219,6 +223,11 @@ Show the Model Availability Registry (verified / unavailable / quota-parked mode
 Manually release a registry-blocked provider (escape hatch) and re-probe it against the live API
 
    - flags: `--json, --no-spot-check`
+### `buff models excluded`
+
+Show which providers routing is currently skipping, and why (failure cooldowns, registry blocks, governance policy)
+
+   - flags: `--json`
 ### `buff models staleness`
 
 Show model staleness: last probe time, days since verification, and removal risk
@@ -554,6 +563,11 @@ Manually add a contact (e.g. nuvira gateway contact add Anuj telegram 616825477)
 Show the delivery ledger (failed sends awaiting retry) and optionally drain it
 
    - flags: `--flush`
+### `buff gateway logs`
+
+Show the structured gateway log (send failures, refused senders, pipeline outcomes)
+
+   - flags: `--event <event>, --limit <limit>, --path`
 ### `buff gateway history`
 
 Manage per-contact conversation history (gateway chat memory)
@@ -1283,4 +1297,4 @@ Delete all stored traces
 
 ---
 
-*416 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*421 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

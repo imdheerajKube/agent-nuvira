@@ -75,6 +75,10 @@ export interface ChatEngine {
       /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
       gateway?: {
         send(target: string, text: string): Promise<boolean>;
+        /** Verified send to an explicit ref (failure reason via `lastSendError`). */
+        sendToRef?(ref: { platform: string; channelId: string }, text: string, target?: string): Promise<boolean>;
+        /** Why the most recent send to this target failed (undefined = none/ok). */
+        lastSendError?(ref: { platform: string; channelId: string }): string | undefined;
         sendMedia?(target: string, media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string }): Promise<boolean>;
         origin?: { platform: string; channelId: string };
         autoDeliverMedia?(media: { type: 'image' | 'video' | 'audio' | 'document'; data: Uint8Array; caption?: string; filename?: string }): Promise<boolean>;
@@ -93,6 +97,8 @@ export interface ChatEngine {
     toolCalls?: string[];
     /** True when the answer claimed a delivery no delivery tool performed. */
     unverifiedActionClaim?: boolean;
+    /** True when the answer closed on a promise the turn never carried out. */
+    unfulfilledPromise?: boolean;
     provider?: string;
     model?: string;
   }>;
@@ -658,9 +664,24 @@ export class ChatConsole {
         .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
         .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*<\/function>/g, '')
         .trim();
+      // HONESTY GUARDS — the same corrections the gateway appends, so a
+      // dashboard reader is never shown "I have sent it" as done, or
+      // "I will now …" as pending, when nothing actually happened. The trace
+      // panel records the flag too; this makes the CHAT BUBBLE honest.
+      let honestContent = cleanContent;
+      if (answer.unverifiedActionClaim) {
+        honestContent +=
+          '\n\n⚠️ Heads-up: I could not confirm that message was actually sent — the send action did not complete. ' +
+          'Please ask me to try again, or send it yourself.';
+      }
+      if (answer.unfulfilledPromise) {
+        honestContent +=
+          '\n\n⚠️ Note: I described what I was about to do, but I did not actually carry it out yet. ' +
+          'Say "go ahead" and I will do it now.';
+      }
       return {
         ok: true,
-        content: cleanContent,
+        content: honestContent,
         followups: nextFollowups,
         provider: answer.provider ?? null,
         model: answer.model ?? null,

@@ -123,38 +123,124 @@ function isDisabled(id: string, cm?: ConfigManager): boolean {
 }
 
 /**
- * Did the goal show REAL evidence for this skill — a name-word hit, a tag
- * hit, or two pattern-word hits (meta-words excluded)? Guards the compiled
- * store's intentionally loose threshold: findMatch adds a quality/usage bonus
- * to every skill, so a generic word like "goal" alone must never inject
- * methodology into a chat turn. Deterministic, no LLM.
+ * HOST/PLATFORM names — where something runs, not what the user wants done.
+ *
+ * Observed live (2026-09-21): the goal "…a multiple screen calculator and unit
+ * converter, it should be GUI and cross platform for Windows and Linux"
+ * activated `wsl-setup` (tags `wsl, windows, linux, development, gpu`) and
+ * injected its WSL/Distro/GPU-passthrough methodology into a Flutter app plan.
+ * Both tag hits and both pattern hits came from the platform names alone:
+ * "Windows" and "Linux" were read as intent to configure the machine they run
+ * on. A target platform is a CONSTRAINT on the work, never evidence for a
+ * methodology, so these words contribute no evidence anywhere in this file.
+ *
+ * Deliberately narrow — only HOSTS. Tooling and cloud domains stay evidence
+ * (`docker`, `kubernetes`, `aws`, `postgres`, `redis`, …): "deploy to AWS" IS
+ * a request for deployment methodology, while "cross platform for Windows" is
+ * not a request for WSL setup.
+ */
+const PLATFORM_HOST_NAMES = new Set([
+  'windows', 'win32', 'win64', 'windows10', 'windows11',
+  'linux', 'unix', 'gnu', 'ubuntu', 'debian', 'fedora', 'centos', 'rhel',
+  'alpine', 'arch', 'suse', 'freebsd', 'openbsd',
+  'macos', 'macosx', 'mac', 'osx', 'darwin', 'apple',
+  'android', 'ios', 'ipados', 'watchos', 'tvos',
+  'wsl', 'wsl2', 'cygwin', 'mingw', 'msys',
+  'crossplatform', 'cross-platform',
+  'x64', 'x86', 'arm64', 'aarch64', 'amd64',
+]);
+
+/** Is this token a host/platform name (never goal evidence)? */
+export function isPlatformName(word: string): boolean {
+  return PLATFORM_HOST_NAMES.has(word.trim().toLowerCase());
+}
+
+/**
+ * Did the goal show REAL evidence for this skill — a name-word hit, a tag hit,
+ * or two pattern/description-word hits (meta-words and platform names
+ * excluded)? Guards the compiled store's intentionally loose threshold:
+ * findMatch adds a quality/usage bonus to every skill, so a generic word like
+ * "goal" alone must never inject methodology into a chat turn.
+ *
+ * Also the HUB path's only filter: `findHubSkillMatch` scores name words and
+ * DESCRIPTION keywords and returns the top scorer with no evidence gate at all,
+ * so an installed skill whose description merely names the target platform
+ * scored on that alone. A hub match carries no tags/goalPattern, so its
+ * description words are the pattern-level evidence (the caller passes it here).
+ *
+ * MATCHING IS BY WHOLE WORD, never substring. `q.includes(word)` matched
+ * "kill" inside "s**kill**" — measured: `feature-flags` (goalPattern “…kill
+ * switch…”) matched "no **skill** covers alpaca husbandry whatsoever", and the
+ * same class makes `mac` match "machine" and `arch` match "search". The goal is
+ * tokenized once into a word set and skills are matched against tokens.
+ *
+ * Deterministic, no LLM.
  */
 export function hasRealGoalEvidence(
   goal: string,
-  skill: { name: string; tags: string[]; goalPattern: string },
+  skill: { name: string; tags?: string[]; goalPattern?: string; description?: string },
 ): boolean {
-  const q = goal.toLowerCase();
-  if (!q) return false;
+  const tokens = wordSet(goal);
+  if (tokens.size === 0) return false;
 
   let nameHits = 0;
   for (const word of skill.name.toLowerCase().split(/[^a-z0-9]+/)) {
-    if (word.length > 3 && q.includes(word)) nameHits++;
+    if (word.length > 3 && !isPlatformName(word) && tokens.has(word)) nameHits++;
   }
 
   let tagHits = 0;
-  for (const tag of skill.tags) {
+  for (const tag of skill.tags ?? []) {
     const t = tag.toLowerCase().trim();
     // Generic process vocabulary is not goal evidence (see GENERIC_SKILL_TAGS).
-    if (t.length > 3 && !GENERIC_SKILL_TAGS.has(t) && q.includes(t)) tagHits++;
+    if (t.length > 3 && !GENERIC_SKILL_TAGS.has(t) && !isPlatformName(t) && tokens.has(t)) tagHits++;
   }
 
+  // Pattern-level evidence: the skill's own goalPattern words, plus (for a hub
+  // skill, which has no goalPattern) its description keywords. Two distinct
+  // domain words are required — one shared word is not enough to inject a
+  // whole methodology into a turn.
   let patternHits = 0;
-  for (const word of skill.goalPattern.toLowerCase().split(/\s+/)) {
+  const evidenceText = `${skill.goalPattern ?? ''} ${skill.description ?? ''}`;
+  for (const word of evidenceText.toLowerCase().split(/[^a-z0-9]+/)) {
     const w = word.trim();
-    if (w.length > 3 && !PATTERN_STOPWORDS.has(w) && q.includes(w)) patternHits++;
+    if (w.length > 3 && !PATTERN_STOPWORDS.has(w) && !GENERIC_SKILL_TAGS.has(w) && !isPlatformName(w) && tokens.has(w)) {
+      patternHits++;
+    }
   }
 
   return nameHits >= 1 || tagHits >= 1 || patternHits >= 2;
+}
+
+/** Whole-word token set for a goal (word-boundary matching, never substring). */
+function wordSet(text: string): Set<string> {
+  return new Set(
+    (text || '')
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 0),
+  );
+}
+
+/**
+ * THE skill-activation gate — the single decision every injection path makes.
+ *
+ * Composes (1) the website-deploy activation rule: website methodology needs
+ * HOSTING intent, so a generic "deploy the API" goal never gets it; and (2) the
+ * evidence rule above.
+ *
+ * Before this existed the gate was implemented three times with different
+ * strength: the chat/execute loop applied the evidence filter to COMPILED
+ * matches but trusted hub matches raw, and the ORCHESTRATOR applied neither
+ * (only the website-deploy rule) — so the pipeline was the most exposed
+ * surface. One predicate, consumed by all of them.
+ */
+export function isSkillActivated(
+  goal: string,
+  skill: { id?: string; name: string; tags?: string[]; goalPattern?: string; description?: string },
+): boolean {
+  const label = `${skill.id ?? ''} ${skill.name}`;
+  if (WEBSITE_DEPLOY_ID.test(label) && !HOSTING_INTENT.test(goal)) return false;
+  return hasRealGoalEvidence(goal, skill);
 }
 
 /**
@@ -174,11 +260,8 @@ export async function findLoopSkillMatch(
   try {
     const { getSkillStore } = await import('../learning/skill-store.js');
     const match = getSkillStore().findMatch(q);
-    if (match && !isDisabled(match.id, cm) && hasRealGoalEvidence(q, match)) {
-      // Activation gate: website-deploy methodology needs hosting intent.
-      if (!(WEBSITE_DEPLOY_ID.test(match.id) || WEBSITE_DEPLOY_ID.test(match.name)) || HOSTING_INTENT.test(q)) {
-        return { name: match.name, id: match.id, source: 'compiled' };
-      }
+    if (match && !isDisabled(match.id, cm) && isSkillActivated(q, match)) {
+      return { name: match.name, id: match.id, source: 'compiled' };
     }
   } catch {
     // Fall through to the hub catalog — a store failure must not block it.
@@ -186,15 +269,22 @@ export async function findLoopSkillMatch(
 
   // 2. Hub catalog (installed SKILL.md skills — first-class runtime
   //    capabilities; a fresh `nuvira skills install` is matchable with zero
-  //    recompilation, exactly like the orchestrator's fallback path). Its
-  //    scoring is pure keyword evidence (score >= 1), no filter needed.
+  //    recompilation, exactly like the orchestrator's fallback path).
+  //
+  //    Its scoring is NOT evidence: `findHubSkillMatch` counts name words and
+  //    DESCRIPTION keywords and returns the top scorer, so a skill whose
+  //    description merely names the target platform ("…a Linux development
+  //    environment on Windows") scored on those two words alone. The same
+  //    evidence gate the compiled path uses is applied here now.
   try {
     const { findHubSkillMatch } = await import('../learning/hub-skill-catalog.js');
     const hub = findHubSkillMatch(q, cm);
-    if (hub && !isDisabled(hub.id, cm)) {
-      if (!(WEBSITE_DEPLOY_ID.test(hub.id) || WEBSITE_DEPLOY_ID.test(hub.name)) || HOSTING_INTENT.test(q)) {
-        return { name: hub.name, id: hub.id, source: 'hub' };
-      }
+    // A hub match carries only id/name/description — its description words are
+    // the pattern-level evidence — and the platform/word-boundary rules above
+    // decide. A skill named `wsl-setup` therefore needs actual domain words
+    // (networking, development, subsystem), not merely the platforms it targets.
+    if (hub && !isDisabled(hub.id, cm) && isSkillActivated(q, hub)) {
+      return { name: hub.name, id: hub.id, source: 'hub' };
     }
   } catch {
     // Best-effort — a catalog failure leaves no hint.

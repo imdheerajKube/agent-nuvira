@@ -129,6 +129,14 @@ export class GatewayCommand {
       .option('--flush', 'Attempt every due pending entry now (uses configured adapters)')
       .action(async (opts) => this.delivery(Boolean(opts.flush)));
 
+    cmd
+      .command('logs')
+      .description('Show the structured gateway log (send failures, refused senders, pipeline outcomes)')
+      .option('--limit <n>', 'How many recent records to show', '40')
+      .option('--event <name>', 'Only records for one event (e.g. send.failed)')
+      .option('--path', 'Print the log file path and exit')
+      .action(async (opts) => this.logs(opts));
+
     // ── history subcommands (per-contact conversation history) ──
     const history = cmd.command('history').description('Manage per-contact conversation history (gateway chat memory)');
 
@@ -460,6 +468,46 @@ export class GatewayCommand {
     console.log('');
     console.log(`  total: ${pending.length} pending · ${sent.length} sent · ${failed.length} failed (of ${remaining.length} retained)`);
     console.log('  Retries happen automatically while `${getCliName()} gateway start` runs; `--flush` forces a drain now.');
+  }
+
+  // ─── logs (structured gateway log) ────────────────────────────────────────
+
+  /**
+   * Print the structured gateway log. This is the surface that answers "why
+   * did that message never arrive?" after the fact — the delivery ledger is
+   * pruned and the console output is gone, but every send failure, refused
+   * sender and failed chat turn is persisted with its reason.
+   */
+  private async logs(opts: { limit?: string; event?: string; path?: boolean }): Promise<void> {
+    const { readGatewayLog, gatewayLogFile } = await import('../gateway/gateway-log.js');
+    if (opts.path) {
+      console.log(gatewayLogFile());
+      return;
+    }
+    const limit = Math.max(1, Math.min(1000, Number(opts.limit ?? 40) || 40));
+    const all = readGatewayLog(limit * 4);
+    const records = opts.event ? all.filter((r) => r.event === opts.event) : all;
+    const shown = records.slice(0, limit);
+
+    console.log('🧾 Gateway log (structured, newest first)');
+    console.log(`   ${gatewayLogFile()}`);
+    console.log('');
+    if (shown.length === 0) {
+      console.log(opts.event ? `  (no '${opts.event}' records)` : '  (empty — nothing recorded yet)');
+      console.log('');
+      return;
+    }
+    for (const r of shown) {
+      const mark = r.level === 'error' ? '❌' : r.level === 'warn' ? '⚠️ ' : '•';
+      const { at, level: _level, event, ...rest } = r;
+      const detail = Object.entries(rest)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+        .join(' ');
+      console.log(`  ${mark} ${at} ${event} ${detail}`.trimEnd());
+    }
+    if (records.length > shown.length) console.log(`  …and ${records.length - shown.length} more (use --limit)`);
+    console.log('');
   }
 
   // ─── alias ────────────────────────────────────────────────────────────────
