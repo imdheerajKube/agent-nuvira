@@ -54,6 +54,9 @@ function outcomeBadge(outcome: TraceEntry['outcome']): { text: string; color: st
   if (outcome.unverifiedClaim) {
     return { text: '⚠️ unverified claim — said it acted, but no tool ran', color: '#d29922', bg: '#3d2c00', border: '#d29922' };
   }
+  if (outcome.unfulfilledPromise) {
+    return { text: '⚠️ unfulfilled promise — announced an action it never performed', color: '#d29922', bg: '#3d2c00', border: '#d29922' };
+  }
   if (outcome.kind === 'acted') {
     return {
       text: outcome.delivered ? '✅ action performed — message sent' : `🔧 acted — ${outcome.tools?.length ?? 0} tool(s)`,

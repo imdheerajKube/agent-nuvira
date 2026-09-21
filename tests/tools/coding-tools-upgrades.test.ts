@@ -1,7 +1,7 @@
 /**
  * Upgrades-over-parity tests for the coding tools.
  *
- * Two features are covered here that go beyond Freebuff's read_files/str_replace:
+ * Two capabilities are covered here that go beyond the basic read/edit tools:
  *
  *  1. BATCHED reads (`read_file { paths }`) — one call reads many files under a
  *     shared character budget, with per-file errors, dedup, continuation
@@ -11,6 +11,13 @@
  *     a `dry_run` preview and a unified diff in the result.
  *
  * Everything runs in a hermetic tmpdir.
+ *
+ * CROSS-PLATFORM NOTE: these tools report workspace paths in NATIVE form (the
+ * pre-existing convention — `write_file` has always reported
+ * `deep\nested\new-file.ts` on Windows). Expectations are therefore built with
+ * `p()` (a `join`) rather than hard-coded slashes; this file previously spelled
+ * them `src/a.ts` and failed on the windows-latest runner, where the tool
+ * correctly returned `src\a.ts`.
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
@@ -20,6 +27,9 @@ import { join } from 'node:path';
 
 import { runReadFile, runEditFile } from '../../src/tools/coding-tools.js';
 import type { ToolContext } from '../../src/tools/registry.js';
+
+/** Build a native workspace path for an assertion (`src/a.ts` on POSIX). */
+const p = (...parts: string[]) => join(...parts);
 
 const createdDirs: string[] = [];
 
@@ -43,8 +53,8 @@ describe('read_file — batched reads (one call, many files)', () => {
     const { ctx } = makeWorkspace();
     const out = await runReadFile({ paths: ['src/a.ts', 'src/b.ts'] }, ctx);
     expect(out).toContain('read_file: 2 files requested, 2 read');
-    expect(out).toContain('### src/a.ts');
-    expect(out).toContain('### src/b.ts');
+    expect(out).toContain(`### ${p('src', 'a.ts')}`);
+    expect(out).toContain(`### ${p('src', 'b.ts')}`);
     expect(out).toContain('1: export const a = 1;');
     expect(out).toContain('2: export const b2 = 3;');
   });
@@ -52,7 +62,7 @@ describe('read_file — batched reads (one call, many files)', () => {
   it('preserves the caller entry order', async () => {
     const { ctx } = makeWorkspace();
     const out = await runReadFile({ paths: ['src/c.ts', 'src/a.ts'] }, ctx);
-    expect(out.indexOf('### src/c.ts')).toBeLessThan(out.indexOf('### src/a.ts'));
+    expect(out.indexOf(`### ${p('src', 'c.ts')}`)).toBeLessThan(out.indexOf(`### ${p('src', 'a.ts')}`));
   });
 
   it('honors a per-entry window ({ path, offset, limit })', async () => {
@@ -67,10 +77,11 @@ describe('read_file — batched reads (one call, many files)', () => {
   it('isolates a bad path — the other files still read', async () => {
     const { ctx } = makeWorkspace();
     const out = await runReadFile({ paths: ['src/a.ts', 'src/missing.ts', 'src/b.ts'] }, ctx);
+    // Unresolvable entries are labelled with the caller's own spelling.
     expect(out).toContain('### src/missing.ts — not read');
     expect(out).toContain('no such file or directory');
-    expect(out).toContain('### src/a.ts');
-    expect(out).toContain('### src/b.ts');
+    expect(out).toContain(`### ${p('src', 'a.ts')}`);
+    expect(out).toContain(`### ${p('src', 'b.ts')}`);
     expect(out).toContain('2 read');
   });
 
@@ -78,7 +89,7 @@ describe('read_file — batched reads (one call, many files)', () => {
     const { ctx } = makeWorkspace();
     const out = await runReadFile({ paths: ['../../etc/passwd', '/etc/hosts', 'src/a.ts'] }, ctx);
     expect(out).toContain('denied');
-    expect(out).toContain('### src/a.ts');
+    expect(out).toContain(`### ${p('src', 'a.ts')}`);
   });
 
   it('deduplicates repeated paths (including ./ forms)', async () => {
@@ -94,7 +105,7 @@ describe('read_file — batched reads (one call, many files)', () => {
     const out = await runReadFile({ paths: ['blob.bin', 'src', 'src/a.ts'] }, ctx);
     expect(out).toContain('looks binary');
     expect(out).toContain('is a directory');
-    expect(out).toContain('### src/a.ts');
+    expect(out).toContain(`### ${p('src', 'a.ts')}`);
   });
 
   it('enforces a SHARED character budget across the batch', async () => {
@@ -106,7 +117,7 @@ describe('read_file — batched reads (one call, many files)', () => {
     expect(out).toMatch(/big1\.txt[\s\S]*?truncated — continue at offset/);
     expect(out).toMatch(/big2\.txt[\s\S]*?truncated — continue at offset/);
     // The third file is honest about why it wasn't read.
-    expect(out).toContain('src/a.ts — not read (batch budget exhausted');
+    expect(out).toContain(`${p('src', 'a.ts')} — not read (batch budget exhausted`);
   });
 
   it('reports a continuation offset for a truncated batch entry', async () => {
@@ -125,7 +136,7 @@ describe('read_file — batched reads (one call, many files)', () => {
   it('still returns the legacy single-file shape when only `path` is given', async () => {
     const { ctx } = makeWorkspace();
     const out = await runReadFile({ path: 'src/a.ts' }, ctx);
-    expect(out).toMatch(/^read_file: src.a\.ts \(1 lines/);
+    expect(out).toContain(`read_file: ${p('src', 'a.ts')} (1 lines`);
     expect(out).not.toContain('### ');
   });
 });
@@ -222,8 +233,8 @@ describe('edit_file — transactional multi-pair edits', () => {
       },
       ctx,
     );
-    expect(out).toContain('--- src/b.ts');
-    expect(out).toContain('+++ src/b.ts');
+    expect(out).toContain(`--- ${p('src', 'b.ts')}`);
+    expect(out).toContain(`+++ ${p('src', 'b.ts')}`);
     expect(out).toContain('-export const b = 2;');
     expect(out).toContain('+export const b = 20;');
     expect(out).toMatch(/✓ #1 line 1/);

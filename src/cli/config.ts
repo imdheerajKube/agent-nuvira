@@ -25,6 +25,24 @@ import {
 } from '../gateway/platform-config.js';
 
 /**
+ * Parse a reply-window duration for `config gateway ask-user-wait timeout`.
+ * Accepts a bare number (milliseconds), or a suffixed `30s` / `2m` / `1h`.
+ * Returns null for anything unparseable — the caller reports the error rather
+ * than silently writing a nonsense window.
+ */
+export function parseAskWaitDuration(value: string | undefined): number | null {
+  const raw = (value ?? '').trim().toLowerCase();
+  if (!raw) return null;
+  const m = raw.match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h)?$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const unit = m[2] ?? 'ms';
+  const factor = unit === 'h' ? 3_600_000 : unit === 'm' ? 60_000 : unit === 's' ? 1_000 : 1;
+  return Math.round(n * factor);
+}
+
+/**
  * Config command — manage nuvira configuration
  * nuvira config [set|get|list]
  */
@@ -768,8 +786,71 @@ export class ConfigCommand extends BaseCommand {
           .argument('<action>', 'add, remove or list')
           .argument('[target...]', 'Channel target(s): alias or platform:channelId (e.g. whatsapp:Alex, telegram:123456)')
           .action((action: string, targets: string[]) => this.manageStatusRecipients(action, targets)),
+      )
+      .addCommand(
+        new Command('ask-user-wait')
+          .description('Ask-and-wait for clarifying questions on messaging channels: when a turn asks the sender a question, hold it for their reply instead of assuming option 1')
+          .argument('<mode>', 'on, off or timeout')
+          .argument('[value]', 'timeout mode only: reply window, e.g. 120s, 2m or 90000 (ms)')
+          .action((mode: string, value?: string) => this.setAskUserWait(mode, value)),
       );
     return cmd;
+  }
+
+  /**
+   * `${getCliName()} config gateway ask-user-wait on|off|timeout [value]`
+   *
+   * OFF by default. When ON, a turn that asks the sender a question HOLDS for
+   * their reply, so an answer typed on WhatsApp actually steers the run instead
+   * of arriving after the agent already acted on option 1. Applies to the
+   * running gateway immediately (config is re-read per turn).
+   */
+  private setAskUserWait(mode: string, value?: string): void {
+    if (!guardRbacAction('gateway.manage')) return;
+    const cfg = this.configManager.getAll() as {
+      gateway?: { askUserWait?: boolean; askUserTimeoutMs?: number };
+    };
+
+    if (mode === 'on' || mode === 'off') {
+      this.configManager.save({ gateway: { askUserWait: mode === 'on' } });
+      const ms = cfg.gateway?.askUserTimeoutMs ?? 120_000;
+      if (mode === 'on') {
+        logger.success(
+          `Ask-and-wait is ON — a question holds the turn for up to ${Math.round(ms / 1000)}s for the sender's reply.`,
+        );
+      } else {
+        logger.info('Ask-and-wait is OFF — questions use the first choice immediately (historical behaviour).');
+      }
+      return;
+    }
+
+    if (mode === 'timeout') {
+      const parsed = parseAskWaitDuration(value);
+      if (parsed === null) {
+        logger.error(`Timeout must look like 120s, 2m or 90000 — got '${value ?? ''}'.`);
+        return;
+      }
+      const clamped = Math.min(600_000, Math.max(5_000, parsed));
+      this.configManager.save({ gateway: { askUserTimeoutMs: clamped } });
+      logger.success(
+        `Ask-and-wait reply window: ${Math.round(clamped / 1000)}s` +
+          (clamped !== parsed ? ` (clamped from ${parsed}ms to the 5s–10min range)` : '') +
+          '.',
+      );
+      if (cfg.gateway?.askUserWait !== true) {
+        logger.info('Note: ask-and-wait is currently OFF — enable it with: config gateway ask-user-wait on');
+      }
+      return;
+    }
+
+    if (mode === 'status' || mode === 'list') {
+      const on = cfg.gateway?.askUserWait === true;
+      logger.info(`Ask-and-wait: ${on ? 'ON' : 'OFF (default)'}`);
+      logger.info(`Reply window: ${Math.round((cfg.gateway?.askUserTimeoutMs ?? 120_000) / 1000)}s`);
+      return;
+    }
+
+    logger.error(`Mode must be on, off, timeout or status — got '${mode}'.`);
   }
 
   /**

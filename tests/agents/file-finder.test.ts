@@ -27,7 +27,7 @@ describe('ContextGathererAgent — file-finding', () => {
 
     const fileFinderLLM: LLMCallFn = async (prompt) => {
       fileFinderCalled.current = true;
-      // Return file paths in Codebuff style (one per line)
+      // Return file paths in line-per-file format
       return 'src/index.ts\npackage.json';
     };
 
@@ -78,7 +78,7 @@ describe('ContextGathererAgent — file-finding', () => {
     expect(mainLLMCalled.current).toBe(true);
   });
 
-  it('parses line-per-file format (Codebuff style)', async () => {
+  it('parses line-per-file format', async () => {
     const agent = new ContextGathererAgent();
 
     const fileFinderLLM: LLMCallFn = async () => {

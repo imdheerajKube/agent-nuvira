@@ -3,8 +3,8 @@
  *
  * `edit_file` reports what it changed with a real unified diff, so the model
  * (and the dashboard) can see the exact edit without paying a re-read — the
- * same affordance Freebuff's `str_replace` gets from the `diff` package, but
- * WITHOUT adding a dependency: Myers' O(ND) greedy algorithm on lines.
+ * usual affordance of a diff library, but WITHOUT adding a dependency:
+ * Myers' O(ND) greedy algorithm on lines.
  *
  * Bounds are deliberate and enforced here, not by the caller:
  * - `MAX_DIFF_LINES` caps the combined line count (a 50k-line file is not

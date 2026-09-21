@@ -78,6 +78,17 @@ export interface ChannelAdapter {
   /** Send a text message to a channel. Never throws — returns success. */
   send(channelId: string, text: string): Promise<boolean>;
   /**
+   * VERIFIED send — same as {@link send} but also reports WHY a send failed
+   * (and how far it was verified). Optional: adapters with a transport that can
+   * confirm delivery (WhatsApp's Baileys bridge) implement it, and the registry
+   * prefers it so a failure reason reaches the delivery ledger, the gateway
+   * logs and `gateway_send`'s output. Never throws.
+   */
+  sendDetailed?(
+    channelId: string,
+    text: string,
+  ): Promise<{ ok: boolean; error?: string; verification?: string }>;
+  /**
    * P3 — optional media send. Adapters whose transport supports file uploads
    * (WhatsApp, Telegram, Discord) implement it; the registry dispatches via
    * `sendMediaToRef`. Never throws — returns success.
@@ -473,6 +484,28 @@ export class WhatsAppBridgeAdapter implements ChannelAdapter {
   async send(channelId: string, text: string): Promise<boolean> {
     if (!this.configured) return false;
     return this.bridge.send(channelId, text);
+  }
+
+  /**
+   * VERIFIED send — delegates to the bridge's `sendVerified` when it has one
+   * (the Baileys bridge does), so a mistyped/non-WhatsApp number or an
+   * unaccepted message is reported as a FAILURE with a reason instead of a
+   * silent "sent". A bridge without `sendVerified` (test fake) falls back to
+   * the plain boolean.
+   */
+  async sendDetailed(
+    channelId: string,
+    text: string,
+  ): Promise<{ ok: boolean; error?: string; verification?: string }> {
+    if (!this.configured) return { ok: false, error: 'WhatsApp is not paired (no session on disk).' };
+    if (!this.bridge.sendVerified) {
+      const ok = await this.bridge.send(channelId, text);
+      return ok ? { ok } : { ok: false, error: 'send failed' };
+    }
+    const result = await this.bridge.sendVerified(channelId, text);
+    return result.ok
+      ? { ok: true, ...(result.verification ? { verification: result.verification } : {}) }
+      : { ok: false, error: result.reason ?? 'send failed' };
   }
 
   /** P3 — media send passthrough (only the Baileys bridge implements it). */

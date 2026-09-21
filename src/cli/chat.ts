@@ -23,7 +23,7 @@ import type { ProviderType } from '../config/types.js';
 import { getProviderFallback, classifyFallbackError, isRetryableError, isTransientForRetry, recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure, RATE_LIMIT_EXCLUSION_MS } from '../learning/failure-bookkeeping.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
-import { getAutoRouter, isAutoModel, isAutoProvider } from '../learning/auto-router.js';
+import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
@@ -49,7 +49,7 @@ import {
 import { beginTrace, endTrace, recordStep, buildTraceOutcome } from '../learning/reasoning-trace.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile, shouldSkipNativeTools } from '../learning/model-harness.js';
-import { resolveAdapterDefault } from '../learning/model-selection.js';
+import { resolveAdapterDefault, hasCredentials } from '../learning/model-selection.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
 import { sweepTransientFailures, collectionRevivalStore } from '../learning/provider-revival.js';
 import { analyzeComplexity } from '../learning/hybrid-router.js';
@@ -246,18 +246,24 @@ export interface DispatchAssessmentOptions {
 }
 
 /**
- * E3a/E3c — the rule assessment (hint + no-model fallback source).
+ * E3a/E3c — the rule assessment (no-model fallback source).
  *
  * The legacy `promptDeveloperMode` menu ("1. Chat mode / 2. Developer mode")
  * is DELETED (Session 7c re-scope, landed in E3a). E3c demotes the rules
- * further (model-decides): EVERY request runs as a
- * tool-call turn and the MODEL decides what to do. This function computes
- * what the RULES would say, used for two things only:
- * - the rule hint injected into the model's context (buildToolSystemPrompt),
- * - the no-model fallback decision: when the tool loop fails to generate a
- *   single response AND the rules assessed a high-confidence pipeline intent,
- *   the pipeline runs directly — rules act ONLY when the model is unavailable,
- *   never as a bypass.
+ * further (model-decides): EVERY request runs as a tool-call turn and the
+ * MODEL decides what to do. This function computes what the RULES would say,
+ * used for ONE thing only: the no-model fallback — when the tool loop fails to
+ * generate a single response AND the rules assessed a high-confidence pipeline
+ * intent, the pipeline runs directly. Rules act ONLY when the model is
+ * unavailable, never as a bypass.
+ *
+ * It is deliberately NOT injected into the model's system prompt: commit
+ * 4d30b7e removed prompt-level intent steering ("give the LLM tools and let it
+ * decide") and a test guards against its return. So on THIS surface the model
+ * decides, and `resolveAskKind` does not determine the outcome — that is only
+ * true of the GATEWAY, which routes on it BEFORE the model is called. Same
+ * rule, two different consequences: do not read a routing table here as a
+ * prediction of what `nuvira chat` will do.
  * `dev` (the --dev flag / /dev toggle) forces the assessment to dispatch.
  */
 export function resolvePipelineDispatch(
@@ -561,6 +567,11 @@ export class ChatCommand extends BaseCommand {
    * unverified claim. Every surface must treat this as "not confirmed done".
    */
   unverifiedActionClaim?: boolean;
+  /**
+   * True when the answer closed on a promise to act that the turn never
+   * carried out. Surfaces must not present such a turn as "in progress".
+   */
+  unfulfilledPromise?: boolean;
   provider?: string;
   model?: string;
 }> {
@@ -667,6 +678,7 @@ export class ChatCommand extends BaseCommand {
       bounded: answer.bounded,
       toolCalls: answer.toolCalls,
       unverifiedActionClaim: answer.unverifiedActionClaim,
+      unfulfilledPromise: answer.unfulfilledPromise,
       provider: type,
       model,
     };
@@ -782,10 +794,9 @@ export class ChatCommand extends BaseCommand {
       }
 
       // E3c: model-decides — EVERY request runs as a TOOL-CALL TURN. The
-      // rule assessment is a HINT in the model's context (buildToolSystemPrompt)
-      // — the model decides what to do. Rules act
-      // ONLY as the no-model fallback below (generation failed entirely), never
-      // as a bypass.
+      // model decides what to do; the rule assessment is NOT in its context
+      // (4d30b7e) and acts ONLY as the no-model fallback below (generation
+      // failed entirely), never as a bypass.
       const parsed = parseRequestSync(prompt);
       const dispatchDecision = resolvePipelineDispatch(parsed, { dev: options?.dev, text: prompt });
 
@@ -1168,6 +1179,8 @@ export class ChatCommand extends BaseCommand {
     toolCalls?: string[];
     /** True when the answer claimed a delivery no delivery tool performed. */
     unverifiedActionClaim?: boolean;
+    /** True when the answer closed on a promise the turn never carried out. */
+    unfulfilledPromise?: boolean;
   }> {
     // Cache check first (same as the legacy path).
     const cache = getCache();
@@ -1194,8 +1207,11 @@ export class ChatCommand extends BaseCommand {
 
     // System prompt: base identity + the tool contract — the
     // model clarifies with ask_user and ends every response with followups.
-    // E3c: the rule assessment rides in as a hint when the rules parsed a
-    // confident intent (model decides; hint only).
+    //
+    // NO rule-based intent steering goes in here (commit 4d30b7e removed it on
+    // purpose: "give the LLM tools and let it decide"). `dispatchDecision` is
+    // computed for the generation-FAILED fallback only — it does NOT reach the
+    // prompt, so on this surface the MODEL decides and the rules are invisible.
     const systemText = buildToolSystemPrompt(parsed);
 
     // Phase 3.2 (assessment Addendum v4) — loop-side skill match hint: the
@@ -1478,8 +1494,12 @@ export class ChatCommand extends BaseCommand {
       buildTraceOutcome({
         generationFailed: result.generationFailed,
         cancelled: result.cancelled,
-        tools: result.toolCalls,
+        // What actually RAN successfully, not what was attempted: a failed
+        // `gateway_send` must not make the trace read
+        // "✅ action performed — message sent".
+        tools: result.successfulToolCalls ?? result.toolCalls,
         unverifiedActionClaim: result.unverifiedActionClaim,
+        unfulfilledPromise: result.unfulfilledPromise,
       }),
     );
 
@@ -1526,6 +1546,7 @@ export class ChatCommand extends BaseCommand {
       followups: result.followups,
       toolCalls: result.toolCalls,
       unverifiedActionClaim: result.unverifiedActionClaim,
+      unfulfilledPromise: result.unfulfilledPromise,
     };
   }
 
@@ -1599,6 +1620,35 @@ export class ChatCommand extends BaseCommand {
        * path automatically.
        */
       const nativeToolsRejected = new Set<string>();
+
+      /**
+       * GOVERNANCE PRE-FLIGHT (pinned path).
+       *
+       * An explicit pin bypasses `autoRouter.resolve`, and the admin policy
+       * (provider/model allow+deny lists, the PII privacy hard-gate) is enforced
+       * inside resolve — so a pinned turn was the one way to serve a provider
+       * the policy rules out, and a failed pinned turn would happily fall back
+       * to one. A privacy policy any pin can bypass is not a policy. Checked
+       * BEFORE the first network call so a blocked turn costs nothing, and
+       * thrown as a typed policy error so `toUserFacingGenerationError` surfaces
+       * the REASON instead of "the language model was unavailable".
+       *
+       * No policy configured → `governanceVerdict` is permissive and this is a
+       * no-op (unchanged behaviour for every existing setup).
+       */
+      if (!mode.auto) {
+        const verdict = governanceVerdict(this.configManager, session.type, {
+          model: session.model,
+          taskText: message,
+        });
+        if (!verdict.allowed) {
+          // Prefixed so `toUserFacingGenerationError` reports the POLICY, not a
+          // phantom unavailable model (nothing was unreachable — a rule
+          // refused it). The reason names the provider and the rule.
+          throw new Error(`Governance policy: ${verdict.reason}`);
+        }
+      }
+
       const resolveEffectiveModel = (providerType: string, requested?: string): string | undefined => {
         if (requested && requested !== 'default') return requested;
         try {
@@ -1781,20 +1831,87 @@ export class ChatCommand extends BaseCommand {
           }
         } else if (isRetryableError(classifyFallbackError(err))) {
           // Non-auto: walk the shared fallback chain (retryable errors only).
+          // Providers the admin policy rules out are collected here so the
+          // failure can name POLICY as the reason instead of implying the model
+          // was unreachable.
+          const policyBlocked: Array<{ provider: string; reason: string }> = [];
           try {
             const fallback = getProviderFallback(this.configManager, this.configManager.getAll().fallback);
             const chain = fallback.getFallbackChain(session.type);
-            for (const fbType of chain) {
+            /**
+             * Order the chain the way `loop-executor`'s pinned pool does: a
+             * registry-parked / cooling-down provider goes LAST (never dropped,
+             * since the whole point of failover is to reach what the primary
+             * could not). Best-effort — ordering must never cost us the chain.
+             */
+            let ordered = chain;
+            try {
+              const isExcluded = createFailoverExclusionFilter();
+              ordered = [
+                ...chain.filter((t) => !isExcluded(t)),
+                ...chain.filter((t) => isExcluded(t)),
+              ];
+            } catch {
+              // Ordering is an optimization only.
+            }
+            for (const fbType of ordered) {
               if (fbType === session.type) continue;
+              // ADMIN POLICY: never fall back to a provider the policy rules
+              // out. This was the leak — a PII task whose pinned (compliant)
+              // provider failed would silently continue on a provider the
+              // privacy policy forbids. Recorded so the turn can SAY why the
+              // walk found nothing instead of blaming the model.
+              const policy = governanceVerdict(this.configManager, fbType, {
+                taskText: message,
+              });
+              if (!policy.allowed) {
+                policyBlocked.push({ provider: fbType, reason: policy.reason ?? 'blocked by policy' });
+                continue;
+              }
+              // Only providers the user can actually CALL. An explicit
+              // `fallback.providers` entry with no key is not filtered out by
+              // the chain itself, so it used to cost a full connection timeout
+              // (measured live at ~25s against an unauthenticated endpoint)
+              // before the next candidate was tried — time the sender spends
+              // waiting for a reply that is already failing. Same credential
+              // gate `loop-executor`'s pinned pool applies.
+              if (!hasCredentials(this.configManager, fbType)) continue;
               try {
                 const resolved = resolveProvider(this.configManager, fbType);
-                return await tryGenerate(resolved.provider, resolved.type, session.model);
+                // The fallback provider gets ITS OWN model, not the primary's
+                // id. Reusing `session.model` here sent e.g. gemini's
+                // `gemini-3.1-flash-lite` to groq, which 404s “model not found”
+                // — so every fallback candidate failed for a reason unrelated
+                // to the outage and a pinned-provider turn dead-ended with
+                // “the language model was unavailable” even though healthy
+                // providers were available. (The auto branch below has always
+                // passed `next.model`, which is why only the pinned path -
+                // the dashboard console and the gateway chat engine - looked
+                // dead.) Undefined = that provider's configured/adapter
+                // default, which tryGenerate resolves per attempt.
+                return await tryGenerate(resolved.provider, resolved.type, resolveEffectiveModel(resolved.type, undefined));
               } catch {
                 // Next fallback candidate.
               }
             }
           } catch {
             // Fall through to rethrow.
+          }
+          // Every fallback candidate was refused by ADMIN POLICY (and none
+          // answered): the honest answer is the policy block, not "the language
+          // model was unavailable". Surfaced through the same
+          // `Governance policy:` prefix the pre-flight check uses.
+          if (policyBlocked.length > 0) {
+            logger.warn(
+              `   ⚠️ Governance policy blocked every fallback provider: ${policyBlocked
+                .map((b) => `${b.provider} (${b.reason})`)
+                .join('; ')}`,
+            );
+            throw new Error(
+              `Governance policy: no permitted fallback provider was available — ${policyBlocked
+                .map((b) => `${b.provider}: ${b.reason}`)
+                .join('; ')}`,
+            );
           }
         }
         // Answer-quality resilience: every candidate failed (or none was

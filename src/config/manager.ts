@@ -299,11 +299,20 @@ export class ConfigManager {
           };
         }
 
-        // Merge gateway per-platform policies (deep per platform so allows for
-        // different platforms coexist; arrays are whole-value from the caller).
-        if (userConfig.gateway?.policies || userConfig.gateway?.statusRecipients) {
+        // Merge gateway config. The gate is `userConfig.gateway` (any key), not
+        // `policies || statusRecipients`: a file carrying ONLY another gateway
+        // setting (askUserWait, askUserTimeoutMs) must still load.
+        //
+        // `...userConfig.gateway` carries EVERY other key through. This block
+        // used to rebuild the object from policies + statusRecipients alone, so
+        // any other gateway setting was silently DROPPED on load — the value
+        // was in the file and still read back as absent. (Same class as the
+        // whitelisting bug in save(): a new setting appears to save and appear
+        // to load while doing neither.)
+        if (userConfig.gateway) {
           config.gateway = {
             ...(config.gateway || {}),
+            ...userConfig.gateway,
             policies: {
               ...(config.gateway?.policies || {}),
               ...Object.fromEntries(
@@ -652,6 +661,11 @@ export class ConfigManager {
       // preserved via the spread of existing.
       this.config.gateway = {
         ...(this.config.gateway || {}),
+        // Persist EVERY key the caller supplied — askUserWait / askUserTimeoutMs
+        // included. Rebuilding the object from policies + statusRecipients alone
+        // silently DROPPED any other gateway setting, so the CLI printed a
+        // success line and the config file never received the value.
+        ...config.gateway,
         policies: {
           ...(this.config.gateway?.policies || {}),
           ...(config.gateway.policies || {}),

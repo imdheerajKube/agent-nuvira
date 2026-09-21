@@ -26,7 +26,14 @@ export type InboundDisposition =
    * backfill, webhook retry). Recorded for visibility, but NOT processed and
    * NOT answered — the sender already has the answer.
    */
-  | 'duplicate';
+  | 'duplicate'
+  /**
+   * The message answered a question the agent was WAITING on
+   * (`gateway.askUserWait`) — it resolved a pending `ask_user` rather than
+   * starting a turn. Recorded so the reply is visible in the ledger instead of
+   * looking like a message that vanished.
+   */
+  | 'clarified';
 
 /** One inbound message recorded by the gateway. */
 export interface InboxEntry {

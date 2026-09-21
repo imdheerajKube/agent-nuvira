@@ -55,6 +55,12 @@ import { estimateTokens } from './cost-tracker.js';
 import { preferredModelsFor, PROVIDER_CONTEXT_WINDOWS } from './model-selection.js';
 import { isNonChatModel } from '../inference/model-catalog.js';
 import { CATALOG_PROVIDER_IDS, getCatalogProvider, getDefaultModel, isCatalogKeyless } from '../inference/provider-catalog.js';
+// The SAME object-aware predicates the NLU routes on. `src/nlu/intent.ts` has no
+// runtime imports of its own (its only import is the date-time recognizer), so
+// this is a one-way edge into a leaf module — no cycle (verified with
+// `node scripts/check-import-cycles.mjs`). Kept shared rather than re-derived so
+// the router cannot disagree with the NLU about what "create a plan" means.
+import { isContentArtifactAsk } from '../nlu/intent.js';
 import { ProviderFactory } from '../inference/factory.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { ProviderPricing, GovernanceConfig } from '../config/types.js';
@@ -158,6 +164,127 @@ export class GovernancePolicyError extends Error {
     this.name = 'GovernancePolicyError';
     this.blocked = blocked;
   }
+}
+
+/**
+ * The admin governance policy in force, or `undefined` when none is configured.
+ * An absent/empty policy is FULLY PERMISSIVE — every consumer must treat
+ * `undefined` as "no restriction", so a user who never set a policy sees
+ * byte-for-byte unchanged behaviour.
+ */
+export function governancePolicyOf(configManager?: ConfigManager): GovernanceConfig | undefined {
+  try {
+    return configManager?.getAll?.()?.routing?.governance;
+  } catch {
+    // Best-effort — an unreadable policy must never break routing.
+    return undefined;
+  }
+}
+
+/** Does this policy constrain anything at all? */
+export function governanceActive(governance?: GovernanceConfig): boolean {
+  if (!governance) return false;
+  return Boolean(
+    governance.allowProviders?.length ||
+      governance.denyProviders?.length ||
+      governance.allowModels?.length ||
+      governance.denyModels?.length ||
+      governance.maxCostUsd !== undefined ||
+      governance.piiPatterns?.length,
+  );
+}
+
+/**
+ * Compile a policy's PII patterns, dropping malformed ones (a bad regex must
+ * never break routing).
+ */
+export function compilePiiPatterns(governance?: GovernanceConfig): RegExp[] {
+  return (governance?.piiPatterns || [])
+    .map((p) => {
+      try {
+        return new RegExp(p, 'i');
+      } catch {
+        return null;
+      }
+    })
+    .filter((r): r is RegExp => r !== null);
+}
+
+/** True when the task text matches any configured PII/confidential pattern. */
+export function isPiiTask(governance: GovernanceConfig | undefined, taskText: string): boolean {
+  const patterns = compilePiiPatterns(governance);
+  return patterns.length > 0 && patterns.some((re) => re.test(taskText || ''));
+}
+
+/** A governance verdict for one provider (and optionally one model). */
+export interface GovernanceVerdict {
+  allowed: boolean;
+  /** Why it was blocked — shown to the user, never swallowed. */
+  reason?: string;
+  /** `admin` = an allow/deny list; `pii` = the privacy hard-gate. */
+  kind?: 'admin' | 'pii';
+}
+
+/**
+ * THE governance gate for a SPECIFIC provider×model — the shared source of
+ * truth for every path that picks a provider itself.
+ *
+ * `resolve()` enforces the admin policy inside its constraint slot, but paths
+ * that BYPASS the router (an explicit `--provider` pin, the pinned fallback
+ * walk, `loop-executor`'s pinned pool) never consulted it. That made the
+ * policy decorative: a user could pin the very provider their admin deny-list
+ * forbids, and — worse — a failed pinned turn would silently fall back to a
+ * provider the policy rules out for PII. A privacy policy that any pin can
+ * bypass is not a privacy policy.
+ *
+ * Deliberately does NOT re-implement the admin max-cost cap: that needs the
+ * router's measured-cost estimate and belongs to SELECTION (which provider to
+ * prefer), not to a hard allow/deny/privacy rule about a provider the user or
+ * the fallback chain has already chosen. It is evaluated on the auto path.
+ *
+ * Best-effort: an unreadable policy returns `{ allowed: true }`.
+ */
+export function governanceVerdict(
+  configManager: ConfigManager | undefined,
+  provider: string,
+  opts: { model?: string; taskText?: string } = {},
+): GovernanceVerdict {
+  const governance = governancePolicyOf(configManager);
+  if (!governanceActive(governance)) return { allowed: true };
+  const g = governance!;
+
+  if (g.denyProviders?.length && g.denyProviders.includes(provider)) {
+    return { allowed: false, reason: `'${provider}' is on the admin denyProviders list`, kind: 'admin' };
+  }
+  if (g.allowProviders?.length && !g.allowProviders.includes(provider)) {
+    return { allowed: false, reason: `'${provider}' is not on the admin allowProviders list`, kind: 'admin' };
+  }
+
+  const model = opts.model && opts.model !== 'default' ? opts.model : undefined;
+  if (model) {
+    if (g.denyModels?.length && g.denyModels.includes(model)) {
+      return { allowed: false, reason: `model '${model}' is on the admin denyModels list`, kind: 'admin' };
+    }
+    if (g.allowModels?.length && !g.allowModels.includes(model)) {
+      return { allowed: false, reason: `model '${model}' is not on the admin allowModels list`, kind: 'admin' };
+    }
+  }
+
+  // PII is a PRIVACY policy, not a cost/speed tradeoff — the privacy bar holds
+  // however the provider was chosen, pin included.
+  if (opts.taskText && isPiiTask(g, opts.taskText)) {
+    const required = g.minPrivacyForPii ?? 1.0;
+    const privacy = getAutoRouter().getCapabilities(provider).privacy;
+    if (privacy < required) {
+      return {
+        allowed: false,
+        reason: `PII-domain task — '${provider}' privacy ${privacy} < required ${required}`,
+        kind: 'pii',
+      };
+    }
+  }
+
+  return { allowed: true };
 }
 
 /** Options for a single resolve() call. */
@@ -813,8 +940,60 @@ export function computeWeights(
 /**
  * Score a single provider against the effective weights.
  */
+/**
+ * A SOFTWARE deliverable named in the ask. Deliberately its own list (not the
+ * NLU's, which is tuned to veto artifact nouns): the router needs to know
+ * "is this about code?", and `for students`/`class 4` must not answer it.
+ */
+const CODE_OBJECT_RE =
+  /\b(?:apps?|applications?|apis?|endpoints?|servers?|services?|microservices?|modules?|components?|functions?|classes|interfaces?|librar(?:y|ies)|packages?|frameworks?|plugins?|scripts?|programs?|tools?|clis?|uis?|guis?|screens?|pages?|forms?|widgets?|databases?|dbs?|schemas?|migrations?|queries?|routes?|handlers?|controllers?|middleware|workers?|jobs?|daemons?|pipelines?|bots?|dashboards?|websites?|web ?apps?|backends?|frontends?|repos?|repositor(?:y|ies)|codebases?|code|dockerfiles?|docker|kubernetes|k8s|terraform|sdks?)\b/i;
+
+/**
+ * Engineering vocabulary that indicts the ask as a SOFTWARE task even when no
+ * deliverable noun appears.
+ *
+ * This is what keeps the content shortcut honest in the other direction:
+ * "outline the authentication architecture" carries a content noun (`outline`)
+ * but is plainly an engineering plan, while "create a plan for diet and
+ * exercise" carries the same noun and is plainly not.
+ */
+const ENGINEERING_CONTEXT_RE =
+  /\b(?:auth(?:entication|orization)?|login|sign ?in|sign ?up|password|session|token|jwt|oauth|architect\w*|deploy\w*|production|prod|rollout|release|ci\/cd|api|endpoints?|databases?|dbs?|schemas?|migrations?|pipelines?|microservices?|backends?|frontends?|infra\w*|docker|kubernetes|k8s|repos?(?:itor(?:y|ies))?|branch|commits?|merges?|refactor\w*|codebases?|source code|compil\w*|dependenc(?:y|ies)|framework|librar(?:y|ies)|config\w*|env(?:ironment)? variables?|unit tests?|integration tests?|e2e|regression tests?|flaky|failing tests?|debug\w*|bugs?|error messages?|stack ?traces?|security|audits?|vulnerab\w*|threats?|exploits?|encrypt\w*|upgrade|launch|scaler?|scaling|latency|throughput|cache|index(?:es|ing)?)\b/i;
+
+/** Media/content deliverables that are unambiguously not software. */
+const CREATIVE_OBJECT_RE =
+  /\b(?:essay|poem|poetry|song|lyrics|hymn|anthem|shayari|ghazal|jingle|lullaby|haiku|sonnet|ode|elegy|story|short story|fiction|fantasy|novel|biography|memoir|tale|fable|myth|legend|recipe|letter|article|blog(?: post)?|paragraph|composition|dialogue|screenplay|skit|monologue|speech|caption|advertisement|review|summary|prose|poster|diagram|flowchart|flow.?chart|wireframe|mind.?map|chart|infographic|brochure|flyer|pamphlet|newsletter|report|presentation|slideshow|mockup|blueprint|sketch|outline|mindmap)\b/i;
+
+/**
+ * Classify a task description into a routing profile.
+ *
+ * ORDER IS THE CONTRACT. Every rule here keys off a surface word, and a surface
+ * word is blind to its OBJECT — the identical blindness that sent "create a plan
+ * for my child" to the coding pipeline and, inside the router, labeled:
+ *   - a diet/exercise plan `planning` (so it never got the creative quality floor),
+ *   - "fix my diet plan" `debugging`,
+ *   - "design a poster for the event" `architecture` (+ verification boost and a
+ *     gemini escalation it has no business getting).
+ *
+ * So the OBJECT is decided FIRST, from two derived facts:
+ *   - `engineering` — a software deliverable or engineering vocabulary is named;
+ *   - `content` — a content artifact (life/teaching plan, schoolwork, book,
+ *     essay, poster …) is named AND nothing engineering is.
+ * A `content` ask is answered as CONTENT (creative) regardless of whether it
+ * says "plan", "fix" or "design". An `engineering` ask keeps every rule below
+ * exactly as it was, so no engineering task changed label.
+ */
 export function analyzeTaskProfile(taskDescription: string): TaskProfile {
   const text = (taskDescription || '').toLowerCase();
+
+  const engineering = CODE_OBJECT_RE.test(text) || ENGINEERING_CONTEXT_RE.test(text);
+  if (!engineering && (isContentArtifactAsk(taskDescription) || CREATIVE_OBJECT_RE.test(text))) {
+    return {
+      intent: 'creative',
+      requiresVerification: false,
+      notes: ['content (non-code) task detected'],
+    };
+  }
 
   if (/migrat(e|ion)|upgrade|refactor|pipeline|deployment/.test(text)) {
     return {
@@ -872,8 +1051,13 @@ export function analyzeTaskProfile(taskDescription: string): TaskProfile {
   // routing applies a reasoning floor (a 4-bit local model must not serve
   // essays). An NLU taskIntentHint (e.g. 'write an essay' → 'creative')
   // overrides this label; this text rule is the hint-less fallback path.
-  if (/\b(?:essay|poem|poetry|story|short story|letter|article|blog(?: post)?|paragraph|composition|novel|dialogue|speech|summary|caption|creative writing)\b/i.test(text) ||
-    /\bfor (?:kids|children|students?|class \d)/i.test(text)) {
+  // `for kids/children/students/class N` alone does NOT make a task creative:
+  // "build an app for students" is code. It only tips a task that names no
+  // software object, which is also how the NLU reads an academic frame.
+  if (
+    /\b(?:essay|poem|poetry|story|short story|letter|article|blog(?: post)?|paragraph|composition|novel|dialogue|speech|summary|caption|creative writing)\b/i.test(text) ||
+    (!engineering && /\bfor (?:kids|children|students?|class \d)/i.test(text))
+  ) {
     return {
       intent: 'creative',
       requiresVerification: false,

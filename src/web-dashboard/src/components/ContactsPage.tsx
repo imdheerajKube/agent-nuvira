@@ -32,6 +32,11 @@ export default function ContactsPage() {
   const [sendInputs, setSendInputs] = useState<Record<string, string>>({});
   const [sendMsg, setSendMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [sendBusy, setSendBusy] = useState(false);
+  // Channel clarification behaviour — the same Permissions surface, so it rides
+  // this panel rather than hiding in a config file.
+  const [askUserWait, setAskUserWait] = useState(false);
+  const [savedAskUserWait, setSavedAskUserWait] = useState(false);
+  const [askUserTimeoutMs, setAskUserTimeoutMs] = useState(120_000);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -54,6 +59,9 @@ export default function ContactsPage() {
       setSendAuth(next);
       setSavedSendAuth(next);
     }
+    setAskUserWait(pol.askUserWait === true);
+    setSavedAskUserWait(pol.askUserWait === true);
+    if (typeof pol.askUserTimeoutMs === 'number') setAskUserTimeoutMs(pol.askUserTimeoutMs);
     setLoading(false);
   }, []);
 
@@ -164,12 +172,18 @@ export default function ContactsPage() {
         requireApprovedTarget: Boolean(nextEntry.requireApprovedTarget),
       };
     }
-    if (Object.keys(payload).length === 0) {
+    const askUserChanged = askUserWait !== savedAskUserWait;
+    if (Object.keys(payload).length === 0 && !askUserChanged) {
       setSendBusy(false);
       setSendMsg({ kind: 'ok', text: 'No changes to save.' });
       return;
     }
-    const r = await dashboardAPI.saveGatewayPolicies(payload as never);
+    const r = await dashboardAPI.saveGatewayPolicies(
+      payload as never,
+      undefined,
+      undefined,
+      { wait: askUserWait, timeoutMs: askUserTimeoutMs },
+    );
     if (r.ok) {
       setSendMsg({ kind: 'ok', text: '✅ Send authority saved.' });
       void refresh();
@@ -312,6 +326,42 @@ export default function ContactsPage() {
           );
         })}
       </div>
+      <div className="hub-card" style={{ marginTop: 16 }}>
+        <div className="hub-card-top">
+          <span className="hub-chip">🧠 Clarifying questions</span>
+          {askUserWait ? <span className="hub-chip">wait for reply</span> : <span className="hub-chip">assume option 1</span>}
+          {askUserWait !== savedAskUserWait ? <span className="hub-chip">· unsaved</span> : null}
+        </div>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+          <input
+            type="checkbox"
+            checked={askUserWait}
+            disabled={sendBusy}
+            onChange={() => setAskUserWait((v) => !v)}
+          />
+          <span className="admin-hint">
+            When the agent asks a question on a channel, <strong>wait for the sender&apos;s reply</strong> before
+            acting. Off (default): the question is sent and the <em>first</em> option is assumed immediately — so a
+            reply typed afterwards arrives too late to change anything.
+          </span>
+        </label>
+        {askUserWait ? (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+            <span className="admin-hint">Reply window (seconds)</span>
+            <input
+              type="number"
+              min={5}
+              max={600}
+              value={Math.round(askUserTimeoutMs / 1000)}
+              disabled={sendBusy}
+              onChange={(e) => setAskUserTimeoutMs(Math.max(5, Math.min(600, Number(e.target.value) || 120)) * 1000)}
+              style={{ width: 90 }}
+            />
+            <span className="admin-hint">then the first option is used, and the timeout is logged.</span>
+          </label>
+        ) : null}
+      </div>
+
       <div style={{ marginTop: 12 }}>
         <button className="admin-refresh-btn" disabled={sendBusy} onClick={() => void handleSaveSendAuth()}>💾 Save send authority</button>
       </div>

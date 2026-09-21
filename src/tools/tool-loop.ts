@@ -221,8 +221,22 @@ export interface ToolLoopResult {
   content: string;
   /** Follow-ups collected from suggest_followups calls. */
   followups: FollowupSuggestion[];
-  /** Tool names executed this turn (telemetry / tests). */
+  /** Tool names ATTEMPTED this turn (includes refused/unknown/failed calls). */
   toolCalls: string[];
+  /**
+   * Tool names that ACTUALLY ran successfully this turn — an `Error:` refusal,
+   * an unknown tool, or a delivery tool that reported failure is NOT included.
+   * This is the honest "what happened" list the trace outcome consumes (the
+   * `acted` contract is "at least one tool executed successfully").
+   */
+  successfulToolCalls?: string[];
+  /**
+   * True when a delivery tool (`gateway_send`) ran AND reported success
+   * (`✅ sent …`). A mere attempt is NOT a delivery — a failed send still lets
+   * the model say "I have sent…", so the trace must not read
+   * "action performed — message sent".
+   */
+  deliveryConfirmed?: boolean;
   /** Steps consumed. */
   steps: number;
   /** True when the step bound was hit before an end turn. */
@@ -256,6 +270,18 @@ export interface ToolLoopResult {
    * callers.
    */
   unverifiedActionClaim?: boolean;
+  /**
+   * HONESTY FLAG — the answer closes by ANNOUNCING an imminent tool-shaped
+   * action ("I will begin by scaffolding the project…", "Let me now create the
+   * files") and the turn ends having performed NOTHING. The delivery-claim
+   * guard deliberately ignores future tense (a truthful answer may say "I will
+   * send it if you confirm"), so a dropped intent passed unreported and read
+   * to the user as work in progress. The loop first spends ONE bounded nudge
+   * asking the model to actually act; this flag is the residual signal for a
+   * promise it still did not keep. The caller must never present such a turn
+   * as "in progress".
+   */
+  unfulfilledPromise?: boolean;
 }
 
 /** An orphan reasoning block or bare <think> is a think-only response. */
@@ -435,16 +461,30 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Mutable turn-level progress shared with the wrapper. Kept OUT of the many
+ * `runToolLoopInner` return sites so every exit path (cancel, bounded, terminal
+ * dispatch, end-of-response) reports the same honest accounting.
+ */
+export interface ToolLoopProgress {
+  /** Names of tool calls that ran successfully this turn. */
+  successfulToolCalls: string[];
+  /** True when a delivery tool reported an actual `✅` send. */
+  deliveryConfirmed: boolean;
+}
+
+/**
  * Run one tool-call turn:
  * generate → execute tools → feed results back → repeat until the model
  * returns a no-tools response (end turn), bounded by maxSteps.
  */
-async function runToolLoopInner(opts: ToolLoopOptions): Promise<ToolLoopResult> {
+async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgress): Promise<ToolLoopResult> {
   const { messages, tools: toolNames, maxSteps = 16, context, deps } = opts;
   // Bounded auto-continuation state (see ToolLoopOptions.maxContinuations).
   const maxContinuations = Math.max(0, opts.maxContinuations ?? DEFAULT_MAX_CONTINUATIONS);
   const continuationSteps = Math.max(1, opts.continuationSteps ?? DEFAULT_CONTINUATION_STEPS);
   let continuations = 0;
+  // Bounded dangling-promise nudges spent this turn (see INTENT_PROMISE_RE).
+  let intentNudges = 0;
   // The EFFECTIVE bound: starts at maxSteps and is extended (never beyond the
   // continuation budget) so a turn that still has work can finish.
   let stepLimit = maxSteps;
@@ -685,6 +725,41 @@ async function runToolLoopInner(opts: ToolLoopOptions): Promise<ToolLoopResult> 
         deps.onEvent?.('   🧠 model reasoning… (continuing)');
         continue;
       }
+      // ── Dangling-promise nudge (bounded, once) ──────────────────────────
+      // The model closed the turn announcing what it is ABOUT to do ("I will
+      // begin by scaffolding…", "Let me now create the files") without calling
+      // a single tool — nothing ran and, in a chat surface, the turn simply
+      // ends. Rather than hand the user a promise as the answer, spend ONE
+      // extra step asking for the action. Gated on NOTHING having succeeded
+      // this turn (a turn that already did work and narrates a next step is
+      // not silently dropped), on tools being available, and on the bounded
+      // counter. Any residual promise is reported via `unfulfilledPromise`.
+      if (
+        intentNudges < 1 &&
+        progress.successfulToolCalls.length === 0 &&
+        schemas.length > 0 &&
+        detectUnfulfilledIntentPromise(
+          response.content.length >= lastContent.length ? response.content : lastContent,
+        )
+      ) {
+        intentNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.('   🔁 Answer announced an action but performed none — asking the model to carry it out.');
+        // The promise is NOT a candidate answer: drop it from the
+        // longest-substantive memory so the post-nudge answer (or result) is
+        // what the turn delivers. Safe because the gate only fires when no
+        // tool succeeded and the closing line is a promise — a real essay
+        // would outrank and suppress the nudge entirely.
+        lastContent = '';
+        thread.push({ role: 'assistant', content: response.content });
+        thread.push({
+          role: 'user',
+          content:
+            'You announced an action you were about to take, but no tool was called and nothing was done. ' +
+            'Either carry it out now with the tools available, or reply with the actual answer — do not end the turn on a promise.',
+        });
+        continue;
+      }
       // S1 (both exits): the MOST SUBSTANTIVE content seen wins here too —
       // a short closing step ("Sent it to her! ✅") with no tool calls must
       // not clobber the deliverable (poem/essay) the model composed in an
@@ -863,6 +938,18 @@ async function runToolLoopInner(opts: ToolLoopOptions): Promise<ToolLoopResult> 
     const delivered: string[] = new Array(plans.length).fill('');
     for (let i = 0; i < plans.length; i += 1) {
       const call = plans[i].call;
+      const rawResult = executed[i];
+      // HONEST ACCOUNTING: record what actually SUCCEEDED (an error/refusal is
+      // not a success, and a delivery tool only counts when it reported `✅`).
+      // `toolCallsRun` stays the attempted list for telemetry; these two drive
+      // the honesty flag and the trace outcome.
+      const ranOk =
+        !rawResult.startsWith('Error:') &&
+        (!DELIVERY_TOOL_NAMES.has(call.name) || deliveryResultSucceeded(rawResult));
+      if (ranOk) progress.successfulToolCalls.push(call.name);
+      if (call.name === 'gateway_send' && deliveryResultSucceeded(rawResult)) {
+        progress.deliveryConfirmed = true;
+      }
       let resultText = executed[i];
       // P3c — on error/denial, append the deterministic fallback hint for
       // this tool (advisory — the model still decides; never on success).
@@ -973,6 +1060,20 @@ async function runToolLoopInner(opts: ToolLoopOptions): Promise<ToolLoopResult> 
 // delivery. If one of these ran, a "sent it" sentence is truthful.
 const DELIVERY_TOOL_NAMES = new Set(['gateway_send']);
 
+/**
+ * True when a delivery-tool RESULT reports an actual delivery.
+ *
+ * `gateway_send` never throws: a failed send returns a `⚠️`/`🚫`/unknown-target
+ * string, and the tool only writes `gateway_send: ✅ sent …` when the transport
+ * accepted the message. So "the tool ran" is not the same as "the message was
+ * delivered" — observed live: a WhatsApp send that was never received still
+ * produced "I have sent…" and a trace reading "✅ action performed — message
+ * sent", because delivery was inferred from the attempted tool NAME.
+ */
+function deliveryResultSucceeded(resultText: string): boolean {
+  return /^gateway_send:\s*✅/m.test((resultText || '').trim());
+}
+
 /** Past-tense sentences that ASSERT a completed delivery/action. */
 const DELIVERY_CLAIM_RE = [
   /\bi(?:'ve| have)\s+(?:just\s+|now\s+|also\s+)*(?:sent|delivered|forwarded|shared|messaged|texted|emailed)\b/i,
@@ -1012,15 +1113,113 @@ export function detectUnverifiedDeliveryClaim(content: string, toolsRun: readonl
 }
 
 /**
+ * Tool-shaped actions a first-person imminent promise can drop. Matched by
+ * STEM (`\w*` suffix) so "scaffold" covers "scaffolding", "write" covers
+ * "writing", etc. — the promise is usually phrased as a gerund ("start by
+ * scaffolding").
+ */
+const INTENT_ACTION_STEM =
+  '(?:creat|writ|build|scaffold|implement|generat|add|edit|updat|modif|refactor|run|execut|install|configur|read|inspect|send|post|upload|deploy|publish|fetch|search|apply|fix|delet|remov|mov|renam|copi|compil|set\\s+up)';
+
+/**
+ * A first-person IMMINENT promise to act. Immediacy is required, because that
+ * is what separates "I am doing this next, in this turn" (a dropped intent)
+ * from "I will create a routine for her" (a description of the deliverable).
+ * Four shapes cover the real phrasings:
+ *   - "Let me now create the files."          (let me …)
+ *   - "I will now scaffold the project."      (immediacy adverb)
+ *   - "I'll start by reading the config."     (start/begin by …)
+ *   - "I will go ahead and implement it."     (go ahead and …)
+ */
+const INTENT_PROMISE_RES: readonly RegExp[] = [
+  new RegExp(
+    `\\blet me\\s+(?:now\\s+|then\\s+|first\\s+|just\\s+)*` +
+      `(?:start\\s+by\\s+|begin\\s+by\\s+|start\\s+|begin\\s+|go\\s+ahead\\s+and\\s+)?(?:${INTENT_ACTION_STEM}\\w*)`,
+    'i',
+  ),
+  new RegExp(
+    `\\bi(?:'ll| will| am going to| am about to|'m going to)\\s+` +
+      `(?:now|next|first|immediately|right\\s+away)\\s+` +
+      `(?:start\\s+by\\s+|begin\\s+by\\s+|start\\s+|begin\\s+|go\\s+ahead\\s+and\\s+)?(?:${INTENT_ACTION_STEM}\\w*)`,
+    'i',
+  ),
+  new RegExp(
+    `\\bi(?:'ll| will| am going to| am about to|'m going to)\\s+(?:start|begin)\\s+by\\s+(?:${INTENT_ACTION_STEM}\\w*)`,
+    'i',
+  ),
+  new RegExp(
+    `\\bi(?:'ll| will| am going to| am about to|'m going to)\\s+` +
+      `(?:go\\s+ahead\\s+and|proceed\\s+to|get\\s+right\\s+to)\\s+(?:${INTENT_ACTION_STEM}\\w*)`,
+    'i',
+  ),
+];
+
+/** A list means a deliverable was produced (a plan enumerates phases). */
+const LIST_STRUCTURE_RE = /^[ \t]*(?:[-*•·]|\d+[.)])\s+\S/m;
+
+/**
+ * A CONDITIONAL or interrogative promise is not dropped intent — "I will send
+ * it once you confirm" is an offer, and "shall I proceed?" is a question. Only
+ * an unconditional, declarative promise is a dangling one.
+ */
+const PROMISE_CONDITION_RE =
+  /\b(?:if|once|when|after|unless)\s+(?:you|your|i\s+(?:get|receive|hear)|approved|confirmed|permission)\b|\b(?:shall|should)\s+i\b|\bdo you want\b|\blet me know\b|\bwould you\b|\byour\s+(?:approval|go-?ahead|confirmation|permission|ok)\b|\?/i;
+
+/**
+ * True when the answer CLOSES on an unconditional first-person promise to take
+ * a tool-shaped action — the "I will begin by scaffolding…" shape that ends a
+ * turn with nothing done.
+ *
+ * Deliberately narrow, because crying wolf is worse than staying silent:
+ * - Only the closing sentences are judged; a promise mid-answer followed by
+ *   real work is narration, not a dropped intent.
+ * - An answer containing a list is never a dangling promise — a plan
+ *   enumerates, and a prose answer that stops is what this catches.
+ * - Immediacy is required ("I will NOW …", "Let me …", "I'll start by …"), so
+ *   a descriptive future ("I will create a routine for her") is not a promise.
+ * - Conditional/interrogative promises and pure chat verbs (explain, describe,
+ *   summarise) are excluded.
+ */
+export function detectUnfulfilledIntentPromise(content: string): boolean {
+  const text = (content || '').trim();
+  if (!text) return false;
+  if (LIST_STRUCTURE_RE.test(text)) return false;
+  const sentences = text
+    .split(/(?<=[.!?。！？])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // Judge only the closing few sentences (the promise that ends the turn).
+  for (const sentence of sentences.slice(-3).reverse()) {
+    if (!INTENT_PROMISE_RES.some((re) => re.test(sentence))) continue;
+    if (PROMISE_CONDITION_RE.test(sentence)) return false;
+    return true;
+  }
+  return false;
+}
+
+/**
  * Public entry point. Runs the loop, then annotates the result with the
- * honest-answer flag so every surface (CLI, dashboard, gateway, trace) can
+ * honest-answer flags so every surface (CLI, dashboard, gateway, trace) can
  * distinguish "generated a reply" from "actually performed the action".
  */
 export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult> {
-  const result = await runToolLoopInner(opts);
+  const progress: ToolLoopProgress = { successfulToolCalls: [], deliveryConfirmed: false };
+  const result = await runToolLoopInner(opts, progress);
   if (!result.cancelled && !result.generationFailed) {
-    if (detectUnverifiedDeliveryClaim(result.content, result.toolCalls)) {
+    result.successfulToolCalls = [...progress.successfulToolCalls];
+    result.deliveryConfirmed = progress.deliveryConfirmed;
+    // Judge the "I have sent it" claim against what actually DELIVERED, not
+    // against the attempted tool list — a failed gateway_send must not silence
+    // the honesty correction.
+    if (detectUnverifiedDeliveryClaim(result.content, result.successfulToolCalls)) {
       result.unverifiedActionClaim = true;
+    }
+    // Residual dangling promise: the bounded nudge either got the action
+    // carried out (then a tool succeeded and this cannot fire) or it did not.
+    // Gated on NOTHING having succeeded, so a turn that partially completed
+    // and narrates remaining work is never reported as a dropped intent.
+    if (result.successfulToolCalls.length === 0 && detectUnfulfilledIntentPromise(result.content)) {
+      result.unfulfilledPromise = true;
     }
   }
   return result;
@@ -1039,7 +1238,7 @@ function summarizeArgs(args: Record<string, unknown>): string {
 // The loop had NO thread-size management: a read_file of a large file (or a
 // long tool result chain) accumulated verbatim until the provider rejected
 // the request. This is DETERMINISTIC compaction — no LLM call, no summary
-// latency, no summarization drift (the Freebuff compact-history pattern):
+// latency, no summarization drift (the compact-history pattern):
 // the oldest tool results collapse to a stub first, the newest stay verbatim,
 // and the system prompt + first user message are never touched.
 

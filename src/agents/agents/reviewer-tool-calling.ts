@@ -11,9 +11,9 @@
  * KEY: This agent does NOT write to disk. It proposes additional FileChange
  * objects in context.fileChanges to fix issues found during review.
  *
- * Reference:
- * - Freebuff: packages/agent-runtime/src/run-agent-step.ts
- * - Hermes: run_agent.py AIAgent tool dispatch loop
+ * Reference implementation pattern:
+ * - One model step per turn; tool calls are dispatched from the parsed
+ *   response and their results are fed back as the next turn's input.
  */
 
 import { ToolCallingAgent, type AgentTool, type ParsedResponse, type ToolResult } from '../tool-calling-agent.js';

@@ -57,6 +57,7 @@ vi.mock('../../src/inference/model-validator.js', () => ({
 // ─── Test setup ─────────────────────────────────────────────────────────────
 
 import { shouldConfirmFailover, promptFailoverChoice } from '../../src/cli/failover-prompt.js';
+import { resolveProvider } from '../../src/cli/router.js';
 
 const mockedShouldConfirm = vi.mocked(shouldConfirmFailover);
 const mockedPromptChoice = vi.mocked(promptFailoverChoice);
@@ -279,6 +280,95 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
     expect(generate).toHaveBeenCalledTimes(1); // then the JSON transport
     // The attempted model is recorded, so the trace names it instead of "unknown".
     expect(session.model).toBe('groq/compound');
+  });
+
+  /**
+   * The PINNED path (an explicit provider/model — what the dashboard console and
+   * the gateway chat engine run on) has its own fallback walk, and it used to
+   * hand the fallback provider the PRIMARY's model id: a pinned `gemini`
+   * /`gemini-3.1-flash-lite` turn that failed tried `groq` with
+   * `model: 'gemini-3.1-flash-lite'`, which 404s "model not found". Every
+   * fallback candidate then failed for a reason unrelated to the outage and the
+   * turn ended as "the language model was unavailable" while healthy providers
+   * sat right there. The auto path never had this bug (it passes the
+   * candidate's own model), which is exactly why only the pinned surfaces looked
+   * dead.
+   */
+  it('non-auto fallback calls the fallback provider with ITS OWN model, not the primary id', async () => {
+    const attempts: Array<{ name: string; model?: string }> = [];
+    const generate = vi.fn().mockImplementation(function (
+      this: { name: string },
+      _prompt: string,
+      opts?: { model?: string },
+    ) {
+      attempts.push({ name: this.name, model: opts?.model });
+      if (this.name === 'Groq') return Promise.reject(new Error('429 rate limit exceeded'));
+      return Promise.resolve('answered by the fallback provider');
+    });
+
+    const cmd = new ChatCommand() as any;
+    cmd.configManager = {
+      getAll: () => ({
+        fallback: { enabled: true, providers: ['gemini'], maxAttempts: 3, retryDelayMs: 0 },
+        providers: { gemini: { model: 'gemini-2.0-flash' } },
+      }),
+      hasRequiredCredentials: (p: string) => p === 'gemini',
+      getProviderConfig: (p: string) => ({ type: p, config: {} }),
+    };
+    vi.mocked(resolveProvider).mockImplementation(((_cm: any, type: string) => ({
+      type,
+      provider: {
+        name: type === 'groq' ? 'Groq' : 'Gemini',
+        isAvailable: vi.fn().mockResolvedValue(true),
+        generate,
+      },
+    })) as any);
+
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generate },
+      model: 'llama-3.3-70b-versatile',
+    };
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: false });
+    const result = await callModel([{ role: 'user', content: 'explain this' }], []);
+
+    expect(result.content).toBe('answered by the fallback provider');
+    const fallbackAttempt = attempts.find((a) => a.name === 'Gemini');
+    expect(fallbackAttempt).toBeDefined();
+    expect(fallbackAttempt!.model).toBe('gemini-2.0-flash');
+    expect(fallbackAttempt!.model).not.toBe('llama-3.3-70b-versatile');
+  });
+
+  it('does not waste the walk on a fallback provider the user has no credential for', async () => {
+    const attempts: string[] = [];
+    const generate = vi.fn().mockImplementation(function (this: { name: string }) {
+      attempts.push(this.name);
+      return Promise.reject(new Error('429 rate limit exceeded'));
+    });
+
+    const cmd = new ChatCommand() as any;
+    cmd.configManager = {
+      // `nim` is in the explicit chain but has NO key: it must be skipped, not
+      // attempted (an unauthenticated endpoint costs a full connection timeout
+      // before the next candidate is tried).
+      getAll: () => ({
+        fallback: { enabled: true, providers: ['nim', 'gemini'], maxAttempts: 3, retryDelayMs: 0 },
+        providers: { gemini: { model: 'gemini-2.0-flash' } },
+      }),
+      hasRequiredCredentials: (p: string) => p === 'gemini',
+      getProviderConfig: (p: string) => ({ type: p, config: {} }),
+    };
+    vi.mocked(resolveProvider).mockImplementation(((_cm: any, type: string) => ({
+      type,
+      provider: { name: type === 'groq' ? 'Groq' : type === 'nim' ? 'NIM' : 'Gemini', isAvailable: vi.fn().mockResolvedValue(true), generate },
+    })) as any);
+
+    const session = { type: 'groq', provider: { name: 'Groq', generate }, model: 'llama-3.3-70b-versatile' };
+    const callModel = (cmd as any).buildToolCallModel('q', session, {}, { auto: false });
+    await expect(callModel([{ role: 'user', content: 'q' }], [])).rejects.toThrow(/429/);
+
+    expect(attempts).not.toContain('NIM');
+    expect(attempts).toContain('Gemini');
   });
 
   it('still fails over on a TRANSIENT error (transport switch is only for tool-incapability)', async () => {

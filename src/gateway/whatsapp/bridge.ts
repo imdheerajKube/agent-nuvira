@@ -12,6 +12,34 @@
  * the SAME multi-file creds.json format, then send/receive by WhatsApp JID.
  */
 
+/**
+ * Outcome of a VERIFIED send — how far the delivery was actually confirmed.
+ *
+ * Baileys' `sendMessage` resolving only proves the request was handed to the
+ * socket. Live incident (2026-09-21): a WhatsApp send was reported as
+ * delivered while the recipient received nothing, because success was assumed
+ * from the resolve alone. Every send now reports WHAT was verified:
+ *  - `delivered` — WhatsApp confirmed the recipient's device received it;
+ *  - `accepted`  — WhatsApp confirmed the recipient EXISTS and accepted the
+ *                  message for delivery (device ack still pending/offline);
+ *  - `unverified`— sent, but no confirmation arrived in the wait window.
+ */
+export type WhatsAppSendVerification = 'delivered' | 'accepted' | 'unverified';
+
+/** Result of a verified WhatsApp send. */
+export interface WhatsAppSendResult {
+  ok: boolean;
+  /** How far the delivery was confirmed (absent when `ok` is false). */
+  verification?: WhatsAppSendVerification;
+  /**
+   * Human-readable reason when `ok` is false (or the caveat when a send went
+   * out unverified). Safe to show to a user — it never contains secrets.
+   */
+  reason?: string;
+  /** The native JID the message was addressed to (diagnostics/logging). */
+  jid?: string;
+}
+
 /** A WhatsApp bridge — injectable so the adapter is testable without baileys. */
 export interface WhatsAppBridge {
   /** True when a paired session exists on disk (drives adapter.configured). */
@@ -32,6 +60,12 @@ export interface WhatsAppBridge {
   disconnect(): Promise<void>;
   /** Send a text message to a WhatsApp target (JID or E.164 / plain number). */
   send(target: string, text: string): Promise<boolean>;
+  /**
+   * VERIFIED send — same as {@link send} but also reports WHY a send failed and
+   * HOW FAR it was verified (registered recipient? device ack?). Optional so
+   * test fakes keep satisfying `send`; adapters prefer it when present.
+   */
+  sendVerified?(target: string, text: string): Promise<WhatsAppSendResult>;
   /**
    * Send media (image/video/audio/document) to a WhatsApp target. Optional —
    * only the Baileys bridge implements it; fakes return undefined.

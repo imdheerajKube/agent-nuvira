@@ -31,8 +31,8 @@ import { assessProject, type ProjectAssessment } from '../prompt-assembly.js';
 
 /**
  * Build the writer system prompt with project-specific context.
- * Adopts Hermes's pattern: identity → project conventions → task instructions.
- * The prompt changes based on the detected framework, language, and project state.
+ * Layering: identity → project conventions → task instructions. The prompt
+ * changes based on the detected framework, language, and project state.
  */
 function buildWriterSystemPrompt(assessment?: ProjectAssessment): string {
   const base = `You are an expert software engineer implementing changes to a codebase.
@@ -63,7 +63,7 @@ INCORRECT (do NOT use these):
 - Write clean, well-documented code
 - If you modify multiple files, return ONE code block per file`;
 
-  // Inject project-specific conventions (Codebuff pattern: project-aware prompts)
+  // Inject project-specific conventions (project-aware prompts)
   const conventions: string[] = [];
 
   if (assessment?.framework) {
@@ -571,8 +571,8 @@ export class WriterAgent extends Agent {
       ? `\n## CRITICAL — Read This Carefully\nThe previous response could not be parsed because the files were not wrapped in correctly formatted code blocks.\n\nYou MUST follow this format EXACTLY for EACH file you modify:\n\n\`\`\`filepath:src/example.ts\n// THE COMPLETE UPDATED FILE CONTENT GOES HERE (every line, full file)\n\`\`\`\n\nIMPORTANT:\n- The filepath: prefix is REQUIRED after the opening backticks\n- Return the FULL file, not a diff or snippet\n- If you modify 2 files, return 2 separate code blocks in this format`
       : `\n## Instructions\nImplement the changes described in the task. Return the complete updated file content for each file you modify. Remember: each file must be wrapped in \`\`\`filepath:...\n\`\`\` format.`;
 
-    // CHANGE-005: Use project-specific writer prompt (Codebuff pattern)
-    // Assess the project once and inject framework-specific conventions
+    // CHANGE-005: project-aware writer prompt — assess the project once and
+    // inject framework-specific conventions
     let projectAssessment: ProjectAssessment | undefined;
     try {
       projectAssessment = assessProject(context.workingDirectory);

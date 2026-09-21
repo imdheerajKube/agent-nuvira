@@ -1,7 +1,7 @@
 /**
  * ToolCallingAgent — Base class for agents that use a tool-calling loop.
  *
- * Adopts the proven pattern from Freebuff and Hermes:
+ * Adopts the proven agentic pattern:
  *   LLM generates tool call → Agent executes tool → Result fed back → Loop
  *
  * KEY CONSTRAINT: This agent does NOT write to disk. Tools propose FileChange
@@ -9,8 +9,8 @@
  * agent returns. This preserves dry-run mode, rollback, and audit trail.
  *
  * Reference:
- * - Freebuff: packages/agent-runtime/src/run-agent-step.ts (tool-calling loop)
- * - Hermes: run_agent.py AIAgent.run_conversation() (tool dispatch loop)
+ * - tool-calling loop: LLM step → tool dispatch → observation → next step
+ * - tool dispatch loop: run the requested tool, feed the result back
  *
  * The tool-calling is prompt-based (not native function calling) because
  * the existing LLMCallFn interface doesn't support tool definitions.

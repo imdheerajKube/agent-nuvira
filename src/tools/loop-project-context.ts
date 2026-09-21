@@ -1,6 +1,6 @@
 /**
  * Loop project context (`src/tools/loop-project-context.ts`) — AGENTIC_CAPABILITY_ASSESSMENT
- * Addendum v4 Phase 1.4: Freebuff-pattern AMBIENT CONTEXT for the tool loop.
+ * Addendum v4 Phase 1.4: AMBIENT CONTEXT for the tool loop.
  *
  * The assessment's core finding: a single-loop agent needs the project shape
  * in its context FROM TURN ZERO — a token-budgeted file tree, a git-state
@@ -21,7 +21,7 @@
  *   filtered) rather than the orchestrator's full recursive builder — the
  *   loop needs SHAPE, not a complete index, and must never take >50ms on a
  *   huge repo. Entries past the line budget are truncated with an explicit
- *   note (honest truncation, like Freebuff's `truncate-file-tree`).
+ *   note (honest truncation, never a silent drop).
  * - Git digests run read-only commands with a 3s cap each and are omitted
  *   entirely outside a git repo.
  */
@@ -118,7 +118,7 @@ export function walkBoundedTree(dir: string): string[] {
  * Build the bounded `[Project context]` block for the loop system context.
  * Returns '' when the directory is not a project (caller injects nothing).
  *
- * Layout (Freebuff system-prompt parity):
+ * Layout (stable ambient-context sections):
  *   ## Project   — cwd + deterministic assessment (language/framework/tests)
  *   ## File tree — bounded BFS walk, honestly truncated
  *   ## Git state — branch, dirty files, recent commits

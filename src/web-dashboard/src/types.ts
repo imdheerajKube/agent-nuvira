@@ -740,14 +740,16 @@ export interface TraceEntry {
   success?: boolean;
   /**
    * What actually happened — `answered` (text reply only) vs `acted` (a tool
-   * ran), plus `delivered`/`unverifiedClaim`. This is how the Trace tab
-   * distinguishes a real send from a hallucinated "I sent it".
+   * ran), plus `delivered`/`unverifiedClaim`/`unfulfilledPromise`. This is how
+   * the Trace tab distinguishes a real send from a hallucinated "I sent it",
+   * and an announced-but-never-performed action from work in progress.
    */
   outcome?: {
     kind: 'answered' | 'acted' | 'failed' | 'cancelled';
     tools?: string[];
     delivered?: boolean;
     unverifiedClaim?: boolean;
+    unfulfilledPromise?: boolean;
   };
   /** Present in the detail endpoint only. */
   steps?: TraceStep[];
@@ -1109,7 +1111,8 @@ export interface HubInboxEntry {
   from?: string;
   senderId?: string;
   isGroup: boolean;
-  handled: 'pipeline' | 'chat' | 'help' | 'refused' | 'error' | 'duplicate';
+  /** `clarified` = the message answered a question the agent was WAITING on. */
+  handled: 'pipeline' | 'chat' | 'help' | 'refused' | 'error' | 'duplicate' | 'clarified';
   reply?: string;
   at: number;
   /** Present on a `duplicate` entry — the id/fingerprint it collided with. */

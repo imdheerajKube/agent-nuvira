@@ -157,6 +157,20 @@ describe('E3c — model-decides: the rules NEVER bypass the model', () => {
   it('keeps the shared resolveDispatch choke point (cross-command parity)', () => {
     expect(chatSrc).toContain('resolveDispatch(');
   });
+
+  it('the rule assessment is NOT injected into the model context (4d30b7e, doc-corrected)', () => {
+    // The docstring of `resolvePipelineDispatch` used to claim the assessment
+    // was "the rule hint injected into the model's context
+    // (buildToolSystemPrompt)". 4d30b7e removed that injection and a test
+    // guards its return — the comment was simply left stale, which is how a
+    // routing TABLE (resolveAskKind) gets misread as the chat surface's
+    // actual behavior. The prompt builder takes no hint, and no builder for
+    // one exists.
+    expect(chatSrc).not.toContain('buildRoutingHint');
+    expect(chatSrc).not.toMatch(/buildToolSystemPrompt\(\s*parsed\s*,/);
+    // The stale claim is gone from the docstring.
+    expect(chatSrc).not.toContain("the rule hint injected into the model's context");
+  });
 });
 
 describe('E3a regression — the mode menu is gone', () => {

@@ -171,6 +171,16 @@ export function toUserFacingGenerationError(err: unknown): string {
   // misdiagnosis is what made a live dashboard failure undiagnosable.
   const CONTRACT_CONFUSION = /tool-contract confusion/;
   const MALFORMED_STEP = /malformed step response/;
+  /**
+   * ADMIN POLICY blocks (governance allow/deny lists, the PII privacy gate) are
+   * our own errors and must never be reported as an unavailable model: nothing
+   * was unreachable — a rule refused the provider, and the user needs the rule
+   * (and which provider) to fix it. Matched by NAME, like the two above and for
+   * the same reason the `instanceof` route is unavailable here: the error
+   * classes live in `src/learning/auto-router.ts`, which already imports this
+   * inference layer, so a reverse import would close a cycle.
+   */
+  const POLICY_BLOCK = /governance policy|pii governance policy|pii-domain task/;
   const QUOTA =
     /\b429\b|rate.?limit|too many requests|quota|resource.?exhausted|resource_exhausted|insufficient_quota|token_count/;
   const AUTH = /\b401\b|\b403\b|unauthorized|forbidden|api key|invalid key|permission/;
@@ -185,6 +195,10 @@ export function toUserFacingGenerationError(err: unknown): string {
   const CONTEXT =
     /context_length_exceeded|context length|maximum context|reduce the length of the messages|too many tokens|exceeds? the context window/;
   const NOT_FOUND = /\b404\b|not found|does not exist|no longer available|model_not_found|unsupported model/;
+  if (POLICY_BLOCK.test(m)) {
+    // The message already names the provider and the rule (`Governance policy:…`).
+    return raw;
+  }
   if (CONTRACT_CONFUSION.test(m)) {
     return "The model got tangled up in its own tool instructions and never answered your request. Try again, or switch models with `nuvira models`.";
   }

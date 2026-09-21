@@ -6,9 +6,13 @@ import {
   matchFixRule,
   matchConfigureRule,
   matchCreateRule,
+  matchWriteRule,
+  isNonCodeArtifactAsk,
+  isContentArtifactAsk,
   extractTimeRange,
   RULE_TRUST_THRESHOLD,
   type IntentResult,
+  type ModeHint,
 } from '../../src/nlu/intent.js';
 
 /** Deterministic "today" so temporal tests never depend on wall-clock time. */
@@ -99,6 +103,154 @@ describe('classifyIntent — rule matrix', () => {
   it('treats the empty string as unknown', () => {
     const result = classifyIntent('   ', REF);
     expect(result).toEqual({ intent: 'unknown', confidence: 0, modeHint: null });
+  });
+
+  it('never routes a non-coding artifact (teaching/fitness/life plan) into dev mode', () => {
+    // Live incident: the WhatsApp ask "Can you create plan to enable my child
+    // learn spoken English" hit the verb-initial create branch and ran the
+    // developer pipeline (a Python SpeechRecognition/gTTS program).
+    for (const ask of [
+      'Can you create plan to enable my child learn spoken English',
+      'Create a study plan for class 4',
+      'create a workout plan',
+      'Create a daily routine for my kid to learn English',
+    ]) {
+      const result = classifyIntent(ask, REF);
+      expect(result.modeHint, ask).toBe('chat');
+      expect(result.intent, ask).not.toBe('create');
+    }
+  });
+
+  it('still routes a plan FOR code into dev mode', () => {
+    const result = classifyIntent('create a plan for the ecommerce app', REF);
+    expect(result.intent).toBe('create');
+    expect(result.modeHint).toBe('dev');
+  });
+});
+
+// ─── Non-coding artifacts ────────────────────────────────────────────────────
+
+describe('isNonCodeArtifactAsk', () => {
+  it('is true for a planning/lifestyle artifact with no coding object', () => {
+    for (const t of [
+      'create a plan for my child',
+      'create a study plan for class 4',
+      'make a diet chart for me',
+      'build a schedule for my week',
+      "continue last week's ecommerce plan", // artifact, but continue wins earlier
+    ]) {
+      expect(isNonCodeArtifactAsk(t), t).toBe(true);
+    }
+  });
+
+  it('is false when the ask names a software deliverable', () => {
+    for (const t of [
+      'create a plan for the ecommerce app',
+      'create a project plan for the API migration',
+      'create a test plan for the new module',
+      'fix the login bug',
+    ]) {
+      expect(isNonCodeArtifactAsk(t), t).toBe(false);
+    }
+  });
+
+  it('classifies an artifact ask as write/chat via the rules', () => {
+    expect(matchCreateRule('create a study plan for class 4')).toBeNull();
+    expect(matchWriteRule('create a study plan for class 4')?.modeHint).toBe('chat');
+  });
+});
+
+/**
+ * OBJECT-BLINDNESS AUDIT — every rule that keys off a VERB is blind to that
+ * verb's object on its own, so "create plan …", "build a routine", "fix my diet
+ * plan" and "create a test for class 4" all read as coding tasks. This pins the
+ * content-vs-code separation for each affected rule, in both directions, so a
+ * future verb-list change cannot silently re-open the hole.
+ */
+describe('intent rules — object-blindness audit (content vs code)', () => {
+  const CONTENT_ASKS = [
+    'create a test for class 4', // academic test, not a software test
+    'create a maths quiz for class 5',
+    'create notes for class 4 science',
+    'make a worksheet for grade 3',
+    'create an exam paper for grade 8',
+    'build a routine',
+    'fix my diet plan',
+    "correct my child's worksheet",
+    'create a study plan for class 4',
+    // Prose/document deliverables — the same object-blindness one step out.
+    // Observed live (2026-09-21): "create a book which teaches maths division
+    // for class 4 student" → create/dev → the developer pipeline, whose planner
+    // is a senior software architect.
+    "create a book which teaches math's devision for class 4 student",
+    'create a book on gardening for beginners',
+    'create a course on spoken english',
+    'make a weekly grocery list',
+    'create a guide for new parents',
+    'make a table of contents',
+  ];
+
+  const CODE_ASKS: Array<[string, ModeHint]> = [
+    ['create a test for the login function', 'dev'],
+    ['write a test for the payment module', 'dev'],
+    ['create a test suite for the API', 'dev'],
+    ['create a plan for the ecommerce app', 'dev'],
+    ['build a REST api', 'dev'],
+    ['test the API', 'dev'],
+    ['fix the failing test', 'execute'],
+    // A CONTENT noun plus a coding noun stays a coding task — the guard is
+    // vetoed by the software deliverable, not by the verb.
+    ['create a book management API', 'dev'],
+    ['create a course website', 'dev'],
+    ['create a script to back up files', 'dev'],
+    ['make a post endpoint handler', 'dev'],
+  ];
+
+  it('isContentArtifactAsk separates schoolwork/content from software', () => {
+    for (const ask of CONTENT_ASKS) expect(isContentArtifactAsk(ask), ask).toBe(true);
+    for (const [ask] of CODE_ASKS) expect(isContentArtifactAsk(ask), ask).toBe(false);
+  });
+
+  it('routes every content ask to chat and every code ask to its pipeline', () => {
+    for (const ask of CONTENT_ASKS) {
+      const result = classifyIntent(ask, REF);
+      expect(result.modeHint, ask).toBe('chat');
+      expect(result.intent, ask).not.toBe('create');
+      expect(result.intent, ask).not.toBe('fix');
+    }
+    for (const [ask, mode] of CODE_ASKS) {
+      expect(classifyIntent(ask, REF).modeHint, ask).toBe(mode);
+    }
+  });
+
+  it('the FILTER/FIX rule no longer sends a life artifact to the debugger', () => {
+    // Regression: the fix rule keys off the verb anywhere in the text, so
+    // "fix my diet plan" ran the debugging pipeline (planner + runner +
+    // debugger) instead of answering the content request.
+    expect(matchFixRule('fix my diet plan')).toBeNull();
+    expect(matchFixRule("correct my child's worksheet")).toBeNull();
+    // A real code fix still wins.
+    expect(matchFixRule('fix the failing test')?.intent).toBe('fix');
+    expect(matchFixRule('debug the login module')?.intent).toBe('fix');
+  });
+
+  it('the CREATE rule no longer sends an academic or planning artifact to the pipeline', () => {
+    expect(matchCreateRule('create a test for class 4')).toBeNull();
+    expect(matchCreateRule('make a worksheet for grade 3')).toBeNull();
+    expect(matchCreateRule('create a plan for my child')).toBeNull();
+    // Books/courses/guides are prose, not software. "script" is deliberately
+    // NOT a content noun — "create a script to back up files" stays dev.
+    expect(matchCreateRule("create a book which teaches math's devision for class 4 student")).toBeNull();
+    expect(matchCreateRule('create a course on spoken english')).toBeNull();
+    expect(matchCreateRule('create a script to back up files')?.modeHint).toBe('dev');
+    expect(matchCreateRule('create a book management API')?.modeHint).toBe('dev');
+    // "report generator" is the ambiguous pair that classifies as NEITHER rule
+    // (document noun vetoes create, code noun vetoes write) — it must still
+    // dispatch, which the gate's command-position override guarantees.
+    expect(matchCreateRule('create a report generator tool')).toBeNull();
+    // Coding objects still resolve to dev mode.
+    expect(matchCreateRule('create a test for the login function')?.modeHint).toBe('dev');
+    expect(matchCreateRule('create a CLI tool')?.modeHint).toBe('dev');
   });
 });
 

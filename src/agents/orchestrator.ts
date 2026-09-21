@@ -147,7 +147,7 @@ export interface OrchestratorOptions {
    * Use tool-calling agents for writer and reviewer steps.
    * When true, the orchestrator routes 'writer' tasks to 'writer-tc' and
    * 'reviewer' tasks to 'reviewer-tc' — iterative read→edit→verify loops
-   * instead of one-shot LLM calls. Adopted from Freebuff/Hermes pattern.
+   * instead of one-shot LLM calls.
    *
    * Defaults to `DEFAULT_USE_TOOL_CALLING` (true). Absent means "use the
    * default" — pass an explicit `false` to force the one-shot writer, which
@@ -361,7 +361,7 @@ function createAgent(agentType: string, registry: ModuleRegistry): Agent | null 
  * malformed code fence loses the whole task. `writer-tc`/`reviewer-tc` run a
  * prompt-based read→edit→verify loop instead, which is provider-agnostic (no
  * native function calling required) and is the single largest capability gap
- * between this harness and Freebuff's for every model, weak ones most of all.
+ * between this harness and a fully agentic harness, weak models most of all.
  *
  * It is therefore ON by default; `--no-tool-calling` (CLI) or
  * `useToolCalling: false` (API) restores the one-shot writer.
@@ -946,11 +946,15 @@ export class Orchestrator {
       // API" goal does NOT get website-deployment methodology. For a
       // website-deployment skill (bundled OR hub-installed), require
       // hosting-specific intent words.
-      if (matchedSkill && matchedSkill.id === 'skill-website-deploy') {
-        const goalLower = goal.toLowerCase();
-        const HOSTING_INTENT = /cloudflare|netlify|vercel|github\s*pages|hosting|pages\.dev|web\s*site|website|static\s*site|landing\s*page/;
-        if (!HOSTING_INTENT.test(goalLower)) matchedSkill = null;
-      }
+      //
+      // This pipeline path used to apply ONLY the website-deploy rule and NO
+      // evidence filter at all — so it was the most exposed injection surface
+      // (live 2026-09-21: `wsl-setup` methodology injected into a cross-platform
+      // GUI app plan because the goal named "Windows and Linux"). It now uses
+      // the SAME `isSkillActivated` predicate as the chat/execute loop, so the
+      // three surfaces cannot disagree about what a goal is evidence FOR.
+      const { isSkillActivated } = await import('../tools/loop-skill-hint.js');
+      if (matchedSkill && !isSkillActivated(goal, matchedSkill)) matchedSkill = null;
       if (matchedSkill) {
         // Load full methodology from skill_view() (Hermes progressive disclosure)
         let fullMethodology = '';
@@ -984,14 +988,11 @@ export class Orchestrator {
         // recommendation, the planner still owns the final plan.
         const { findHubSkillMatch } = await import('../learning/hub-skill-catalog.js');
         let hubMatch = findHubSkillMatch(goal);
-        // Same activation gate as the compiled website-deploy skill: a hub
-        // skill whose id/name is website-deploy-ish must NOT inject website
-        // methodology for an unrelated "deploy the API" goal.
-        if (hubMatch && /website[-_ ]?deploy/.test(`${hubMatch.id} ${hubMatch.name}`)) {
-          const goalLower = goal.toLowerCase();
-          const HOSTING_INTENT = /cloudflare|netlify|vercel|github\s*pages|hosting|pages\.dev|web\s*site|website|static\s*site|landing\s*page/;
-          if (!HOSTING_INTENT.test(goalLower)) hubMatch = null;
-        }
+        // SAME activation gate as the compiled skill (website-deploy needs
+        // hosting intent) AND the evidence filter the hub scorer has never had:
+        // its name/description keyword score is a candidate RANKING, not proof
+        // the goal asked for the methodology.
+        if (hubMatch && !isSkillActivated(goal, hubMatch)) hubMatch = null;
         if (hubMatch) {
           // Load full methodology from skill_view() (Hermes progressive disclosure)
           let fullMethodology = '';
@@ -1901,8 +1902,8 @@ export class Orchestrator {
 
   /**
    * CHANGE-002: Create a fast/cheap LLM for file finding.
-   * Adopts Codebuff's pattern: use a small, fast model (like Gemini Flash)
-   * for file selection instead of the main (expensive) model.
+   * Use a small, fast model (like Gemini Flash) for file selection instead
+   * of the main (expensive) model.
    *
    * The file finder only needs to:
    * 1. Read the file tree
@@ -1910,8 +1911,8 @@ export class Orchestrator {
    * 3. Return file paths
    *
    * This doesn't require a powerful model — a fast model with good instruction
-   * following is sufficient. Codebuff uses a finetuned Gemini Flash model for
-   * this exact purpose.
+   * following is sufficient. A finetuned small model is well suited to this
+   * exact purpose.
    *
    * Returns a cheap LLM call function, or null if no fast model is available.
    */
@@ -2369,7 +2370,7 @@ export class Orchestrator {
       // Tool-calling agent routing: when useToolCalling is enabled, route
       // 'writer' and 'reviewer' tasks to their tool-calling variants.
       // This gives the LLM iterative read→edit→verify capability instead
-      // of a single-shot LLM call (adopted from Freebuff/Hermes pattern).
+      // of a single-shot LLM call.
       let actualAgentType = effectiveAgentType;
       if (resolveUseToolCalling(options)) {
         if (effectiveAgentType === 'writer') {
@@ -2395,7 +2396,7 @@ export class Orchestrator {
       agent.currentTaskId = task.id;
 
       // CHANGE-002: Create a fast/cheap file finder LLM for context-gatherer.
-      // Codebuff uses a finetuned Gemini Flash model for file finding — fast,
+      // A finetuned small model is well suited to file finding — fast,
       // cheap, and accurate for this narrow task. When available, inject it
       // into the context-gatherer's metadata so it uses the fast model instead
       // of the main (expensive) model for file selection.

@@ -9,6 +9,8 @@ import { getModelRegistry } from '../learning/model-registry.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { refreshModelRegistry, startRegistryWatcher, defaultProbeProviders } from '../inference/model-probe.js';
 import { CATALOG_PROVIDER_IDS, isCatalogKeyless } from '../inference/provider-catalog.js';
+import { describeRoutingExclusions, formatRoutingExclusion } from '../learning/resilient-call.js';
+import { governanceVerdict } from '../learning/auto-router.js';
 
 /**
  * Models command — list available models from providers
@@ -214,6 +216,71 @@ export class ModelsCommand extends BaseCommand {
         }
         console.log('');
         console.log(await registry.formatStatus());
+      });
+
+    // ── Subcommand: models excluded — WHY a provider is not being tried ──
+    command
+      .command('excluded')
+      .description('Show which providers routing is currently skipping, and why (failure cooldowns, registry blocks, governance policy)')
+      .option('-j, --json', 'Output as JSON', false)
+      .action(async (opts?: { json?: boolean }, cmd?: Command) => {
+        const json = this.isJsonMode(opts, cmd);
+        const reports = describeRoutingExclusions(this.configManager);
+
+        /**
+         * Governance is the other reason a provider never gets tried, and it
+         * leaves no record on disk — it is derived from `routing.governance`.
+         * Reported through the SAME `governanceVerdict` the pinned paths and the
+         * router use, so this view cannot disagree with enforcement. No task
+         * text is passed: only the static allow/deny rules apply without one.
+         */
+        const governanceBlocked: Array<{ provider: string; reason: string }> = [];
+        try {
+          const configured = Object.keys(
+            (this.configManager.getAll() as { providers?: Record<string, unknown> }).providers ?? {},
+          );
+          for (const provider of configured) {
+            const verdict = governanceVerdict(this.configManager, provider);
+            if (!verdict.allowed) {
+              governanceBlocked.push({ provider, reason: verdict.reason ?? 'blocked by policy' });
+            }
+          }
+        } catch {
+          // Best-effort — a policy read must never break the command.
+        }
+
+        if (json) {
+          console.log(JSON.stringify({ exclusions: reports, governanceBlocked }, null, 2));
+          return;
+        }
+
+        console.log('');
+        if (reports.length === 0 && governanceBlocked.length === 0) {
+          logger.success('✅ Nothing is being skipped — no failure cooldowns, registry blocks or governance rules are in force.');
+          console.log('');
+          return;
+        }
+
+        const active = reports.filter((r) => r.active);
+        const healed = reports.filter((r) => !r.active);
+        console.log(`🔍 Routing exclusions — ${active.length + governanceBlocked.length} active:\n`);
+        for (const r of active) console.log(`  ${formatRoutingExclusion(r)}`);
+        for (const g of governanceBlocked) {
+          console.log(`  🔒 ${g.provider} — skipped by admin governance policy: ${g.reason}`);
+        }
+        if (healed.length > 0) {
+          console.log('\n♻️  Recovered (no longer skipped):\n');
+          for (const r of healed) console.log(`  ${formatRoutingExclusion(r)}`);
+        }
+        console.log('\n👀 A provider that stays skipped with a working key is a bug — `nuvira models unblock <provider>` forces a re-probe.');
+        // The two SELECTION-only filters are deliberately absent: they never
+        // hard-block, they reorder the AUTO path's candidates. A pin is an
+        // explicit user choice, so it is not silently overridden by a cost or
+        // speed preference — say so, because "why was the cost cap ignored?"
+        // is exactly the question this command exists to answer.
+        console.log('ℹ️  Not listed here (SELECTION-only, never a hard block): the admin max-cost cap and minSpeed/minReasoning.');
+        console.log('   They reorder candidates on the auto path only; an explicit --provider pin is respected as your choice.');
+        console.log('');
       });
 
     // ── Subcommand: models staleness — show model freshness status ────────

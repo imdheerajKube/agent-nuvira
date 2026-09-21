@@ -127,6 +127,109 @@ describe('findLoopSkillMatch — compiled store + hub catalog', () => {
     expect(hasRealGoalEvidence('build a migration roadmap for this codebase', roadmap)).toBe(true);
     expect(hasRealGoalEvidence('plan the phases for the migration', roadmap)).toBe(true);
   });
+
+  /**
+   * A TARGET PLATFORM is a constraint on the work, not evidence for a
+   * methodology.
+   *
+   * Live false positive (2026-09-21): "…a multiple screen calculator and unit
+   * converter, it should be GUI and cross platform for Windows and Linux"
+   * activated `wsl-setup` (tags `wsl, windows, linux, development, gpu`) and
+   * injected WSL distribution/GPU-passthrough methodology into a Flutter app
+   * plan. BOTH tag hits and BOTH pattern hits came from the platform names
+   * alone. Observed on the real chat engine, twice (chat + the pipeline path).
+   */
+  it('does not treat platform/OS names as goal evidence', async () => {
+    const { hasRealGoalEvidence, isPlatformName, isSkillActivated } = await loadHint();
+    const wsl = {
+      name: 'wsl-setup',
+      tags: ['wsl', 'windows', 'linux', 'development', 'gpu'],
+      goalPattern: 'WSL windows subsystem linux setup configuration development environment GPU networking',
+    };
+
+    // The exact live goal: no platform-only evidence. A relevant skill (the hub
+    // `cross-platform-build`) may match instead — what must never happen is the
+    // PLATFORM names acting as the evidence.
+    expect(
+      hasRealGoalEvidence(
+        'Create a project plan to develop a multiple screen calculator and unit converter , it should be GUI and cross platform for Windows and Linux',
+        wsl,
+      ),
+    ).toBe(false);
+    expect(hasRealGoalEvidence('build a desktop app for macOS and Windows', wsl)).toBe(false);
+    expect(hasRealGoalEvidence('make it work on windows and linux', wsl)).toBe(false);
+
+    // Real intent still matches — domain words from the pattern, not platform names.
+    expect(hasRealGoalEvidence('configure wsl networking and development environment', wsl)).toBe(true);
+    expect(hasRealGoalEvidence('set up a linux development environment', wsl)).toBe(true);
+
+    // The exclusion is narrow: HOSTS only. Tooling/cloud domains stay evidence,
+    // because "deploy to AWS" IS a request for deployment methodology.
+    expect(isPlatformName('Windows')).toBe(true);
+    expect(isPlatformName('ubuntu')).toBe(true);
+    expect(isPlatformName('wsl')).toBe(true);
+    expect(isPlatformName('docker')).toBe(false);
+    expect(isPlatformName('kubernetes')).toBe(false);
+    expect(isPlatformName('postgres')).toBe(false);
+
+    // …and the composed gate keeps the website-deploy rule intact.
+    expect(isSkillActivated('deploy the api', { id: 'skill-website-deploy', name: 'website-deploy' })).toBe(false);
+    expect(
+      isSkillActivated('deploy my website to cloudflare pages', { id: 'skill-website-deploy', name: 'website-deploy' }),
+    ).toBe(true);
+  });
+
+  /**
+   * Evidence matching is by WHOLE WORD. `q.includes(word)` let a skill's
+   * goalPattern word match inside an unrelated goal word — measured:
+   * `feature-flags` ("…kill switch…") matched "no skill covers alpaca husbandry
+   * whatsoever" because "kill" sits inside "s-KILL". `mac` inside "machine" and
+   * `arch` inside "search" are the same bug.
+   */
+  it('matches whole words only, never substrings', async () => {
+    const { hasRealGoalEvidence } = await loadHint();
+    const featureFlags = {
+      name: 'feature-flags',
+      tags: ['feature-flags', 'toggle', 'rollout'],
+      goalPattern: 'feature flag toggle rollout ab testing kill switch launchdarkly unleash',
+    };
+    const featureFlagsHub = {
+      ...featureFlags,
+      description: 'Implement feature flags for gradual rollouts, A/B testing and kill switches.',
+    };
+    for (const skill of [featureFlags, featureFlagsHub]) {
+      expect(hasRealGoalEvidence('no skill covers alpaca husbandry whatsoever', skill)).toBe(false);
+      expect(hasRealGoalEvidence('which architecture does this use', skill)).toBe(false);
+    }
+    // Real domain evidence still matches.
+    expect(hasRealGoalEvidence('add a kill switch for this feature', featureFlagsHub)).toBe(true);
+  });
+
+  it('gates a hub match on its NAME, not its description prose', async () => {
+    const { isSkillActivated, hasRealGoalEvidence } = await loadHint();
+    // A hub match carries id/name/description only. The scorer ranks on name +
+    // DESCRIPTION keywords with no evidence check, so a description that merely
+    // names the target platform used to be enough.
+    const hubWsl = { id: 'wsl-setup', name: 'wsl-setup' };
+    expect(
+      isSkillActivated(
+        'Create a project plan to develop a multiple screen calculator and unit converter , it should be GUI and cross platform for Windows and Linux',
+        hubWsl,
+      ),
+    ).toBe(false);
+    expect(isSkillActivated('wsl setup and configuration for gpu passthrough', hubWsl)).toBe(true);
+
+    // …and a description is NEVER evidence for a compiled skill either: prose
+    // words like "covers" used to make matching WIDER (measured: `feature-flags`
+    // matched "no skill covers alpaca husbandry whatsoever").
+    const compiled = {
+      name: 'feature-flags',
+      tags: ['feature-flags', 'toggle', 'rollout', 'ab-testing', 'gradual', 'kill-switch'],
+      goalPattern: 'feature flag toggle rollout ab testing kill switch launchdarkly unleash',
+    };
+    expect(hasRealGoalEvidence('no skill covers alpaca husbandry whatsoever', compiled)).toBe(false);
+    expect(hasRealGoalEvidence('set up feature flags for a gradual rollout', compiled)).toBe(true);
+  });
 });
 
 describe('findLoopSkillMatch — gates', () => {

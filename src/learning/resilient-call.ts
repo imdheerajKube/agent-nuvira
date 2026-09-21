@@ -27,6 +27,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { resolveNuviraConfigDir, resolveNuviraDataPath } from '../config/paths.js';
 import { getAutoRouter, type AutoRouteResult, type ScoredProvider } from './auto-router.js';
@@ -120,8 +121,24 @@ function modelKey(provider: string, model: string): string {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-/** How long a provider is excluded after an auth failure (whole session). */
-const AUTH_FAILURE_EXCLUSION_MS = Number.MAX_SAFE_INTEGER;
+/**
+ * How long a provider is excluded after an auth failure.
+ *
+ * This used to be `Number.MAX_SAFE_INTEGER` — "the key is dead, skip it
+ * always" — which made a REPAIRED key invisible forever. The record is written
+ * to `nuvira-routing-failures.json` and the loader only prunes entries whose
+ * `expiresAt <= now`, so one 401 (a missing env var during setup, a rotated
+ * key, an expired OAuth token, or a quota-exhausted key misclassified as auth)
+ * excluded that provider in EVERY future process with no route back except a
+ * revival probe triggered by a config edit. Observed on disk 2026-09-21:
+ * `deepinfra → kind: auth`, expiresAt = now + MAX_SAFE_INTEGER.
+ *
+ * One hour is long enough that a genuinely dead key costs at most one wasted
+ * request per hour, and short enough that a corrected key self-heals with no
+ * user action. A CHANGED credential skips the cooldown entirely — see
+ * {@link credentialFingerprint}.
+ */
+const AUTH_FAILURE_EXCLUSION_MS = 60 * 60_000;
 /** How long a provider is excluded after rate-limit (short cooldown). */
 const RATE_LIMIT_EXCLUSION_MS = 60_000;
 /** How long a provider is excluded after timeout/network (medium cooldown). */
@@ -175,10 +192,243 @@ function exclusionDuration(kind: FailureKind): number {
  * taking the provider's other models with it.
  */
 interface PersistedFailures {
-  [key: string]: { expiresAt: number; kind: FailureKind; recordedAt: number };
+  [key: string]: {
+    expiresAt: number;
+    kind: FailureKind;
+    recordedAt: number;
+    /**
+     * Fingerprint of the credential that was in force when this failure was
+     * recorded (see {@link credentialFingerprint}). Absent on records written
+     * before this field existed and on providers whose secret is not readable —
+     * those fall back to the time-based cooldown alone.
+     */
+    credentialFingerprint?: string;
+  };
 }
 
-function loadPersistedFailures(): PersistedFailures {
+/**
+ * Shape of a provider's config as far as credentials matter. Kept structural so
+ * this module does not depend on the full provider-config union.
+ */
+type ProviderConfigLike = Record<string, unknown>;
+
+/** One entry of the "why is this provider being skipped?" report. */
+export interface RoutingExclusionReport {
+  provider: string;
+  /** Present when the record rules out ONE model, absent when provider-wide. */
+  model?: string;
+  kind: FailureKind;
+  scope: 'provider' | 'model';
+  recordedAt: number;
+  /** When the exclusion lifts (0 once it no longer applies). */
+  expiresAt: number;
+  /** Excluding right now? */
+  active: boolean;
+  /** Why it is NOT in force, when it is not. */
+  note?: 'expired' | 'legacy-expired' | 'credential-changed';
+  /** `nuvira-routing-failures.json` (cross-process) vs the model registry. */
+  source: 'routing-failures' | 'registry';
+}
+
+/**
+ * WHY a provider is not being tried — the report behind `nuvira models excluded`.
+ *
+ * This is the surface the auth-exclusion bug was missing. A provider could be
+ * skipped for days with a valid key in place and NOTHING anywhere said so: the
+ * record lived in a JSON file, the decision happened inside a failover walk, and
+ * the only symptom was that routing quietly used something else. Diagnosis took
+ * forensic work on `~/.nuvira/nuvira-routing-failures.json`; it should take one
+ * command.
+ *
+ * Deliberately built on `evaluateFailureRecord` — the SAME function enforcement
+ * uses — so this report can never disagree with what routing actually does.
+ * Includes records that are NOT active (`credential-changed`, `expired`) because
+ * "I fixed the key and it is STILL skipped" is exactly the case worth showing.
+ */
+export function describeRoutingExclusions(configManager?: ConfigManager): RoutingExclusionReport[] {
+  const reports: RoutingExclusionReport[] = [];
+  const now = Date.now();
+  const fingerprintOf = fingerprintResolver(configManager);
+
+  // 1. Cross-process failure records.
+  try {
+    const path = resolveNuviraDataPath(FAILURE_PERSIST_PATH);
+    if (existsSync(path)) {
+      const data = JSON.parse(readFileSync(path, 'utf-8')) as PersistedFailures;
+      for (const key of Object.keys(data)) {
+        const entry = data[key];
+        if (!entry || typeof entry.expiresAt !== 'number') continue;
+        const provider = providerOfKey(key);
+        const model = key.indexOf('|') === -1 ? undefined : key.slice(key.indexOf('|') + 1);
+        const verdict = evaluateFailureRecord(entry, provider, now, fingerprintOf);
+        reports.push({
+          provider,
+          model,
+          kind: entry.kind ?? 'unknown',
+          scope: model ? 'model' : 'provider',
+          recordedAt: entry.recordedAt ?? 0,
+          expiresAt: verdict.active ? entry.expiresAt : 0,
+          active: verdict.active,
+          note: verdict.note,
+          source: 'routing-failures',
+        });
+      }
+    }
+  } catch {
+    // Best-effort — a corrupt file must not break the report.
+  }
+
+  // 2. Registry-learned blocks (all tracked models unusable / quota-parked).
+  try {
+    for (const provider of getModelRegistry().getBlockedProviders()) {
+      reports.push({
+        provider,
+        kind: 'unknown',
+        scope: 'provider',
+        recordedAt: 0,
+        expiresAt: 0,
+        active: true,
+        source: 'registry',
+      });
+    }
+  } catch {
+    // Best-effort.
+  }
+
+  return reports.sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return a.provider.localeCompare(b.provider);
+  });
+}
+
+/**
+ * One line of English for a report entry — the reason a user (or a support
+ * conversation) needs, with the timing so "will it come back?" is answerable.
+ */
+export function formatRoutingExclusion(r: RoutingExclusionReport, now = Date.now()): string {
+  const target = r.model ? `${r.provider}/${r.model}` : r.provider;
+  if (r.source === 'registry') {
+    return `🔒 ${target} — skipped by the model registry (every tracked model is unavailable or quota-parked). Run \`nuvira models unblock ${r.provider}\` once it recovers.`;
+  }
+  if (!r.active && r.note === 'credential-changed') {
+    return `✅ ${target} — ${r.kind} failure recorded against a DIFFERENT credential; IGNORED, this provider is routable now.`;
+  }
+  if (!r.active) {
+    const when = r.recordedAt ? new Date(r.recordedAt).toISOString().slice(0, 16).replace('T', ' ') : 'unknown time';
+    const why = r.note === 'legacy-expired' ? 'the pre-1h "never expires" auth record' : 'expired';
+    return `✅ ${target} — ${r.kind} failure from ${when} UTC has ${why}; routable now.`;
+  }
+  const secs = Math.max(0, Math.round((r.expiresAt - now) / 1000));
+  const mins = secs >= 60 ? `${Math.round(secs / 60)}m` : `${secs}s`;
+  return `🔒 ${target} — ${r.kind} failure; retried in ~${mins} (${r.scope}-scoped). If the key changed since, this lifts automatically.`;
+}
+
+/**
+ * A short, non-reversible fingerprint of a provider's SECRET material.
+ *
+ * Answers one question: "are we still using the credential this exclusion was
+ * earned with?". A different key means the old 401 says nothing about the new
+ * one, so the exclusion is dropped. Only a SHA-256 prefix is stored — never the
+ * secret itself — so the persisted file stays safe to read and to log.
+ *
+ * Returns `undefined` when nothing credential-shaped is readable, in which case
+ * the caller keeps the (now bounded) time cooldown.
+ */
+export function credentialFingerprint(
+  configManager: ConfigManager | undefined,
+  provider: string,
+): string | undefined {
+  if (!configManager || typeof configManager.getProviderConfig !== 'function') return undefined;
+  try {
+    const { config } = configManager.getProviderConfig(provider);
+    const secret = extractSecretMaterial(config as ProviderConfigLike);
+    if (!secret) return undefined;
+    return createHash('sha256').update(`${provider}\u0000${secret}`).digest('hex').slice(0, 16);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Concatenate every credential-shaped string in a provider config, in stable
+ * key order, so the fingerprint moves iff a secret actually changes. Names that
+ * merely CONTAIN "key" are included deliberately (`apiKey`, `accessKeyId`,
+ * `refreshToken`, …); non-secret settings change the fingerprint only if we
+ * guessed wrong about them, which is the safe direction (a re-try, not a
+ * permanent skip).
+ */
+function extractSecretMaterial(config: ProviderConfigLike): string {
+  const parts: string[] = [];
+  for (const name of Object.keys(config).sort()) {
+    if (!/key|token|secret|password|credential/i.test(name)) continue;
+    const value = config[name];
+    if (typeof value === 'string') {
+      // A vault REFERENCE (`vault:provider/name`) is resolved by the config
+      // manager before we see it; an unresolved ref still varies with the
+      // provider entry, so it remains a valid (if weaker) signal.
+      parts.push(`${name}=${value}`);
+    } else if (typeof value === 'number' || typeof value === 'boolean') {
+      parts.push(`${name}=${String(value)}`);
+    }
+  }
+  return parts.join('\u0001');
+}
+
+/** The evaluated fate of ONE persisted record — the single place the healing
+ * rules live, so the enforcement path and the reporting path cannot drift. */
+interface FailureRecordVerdict {
+  /** Effective expiry AFTER legacy re-anchoring (0 = pruned outright). */
+  effectiveExpiresAt: number;
+  /** Still excluding its provider×model right now? */
+  active: boolean;
+  /** A human reason when the record is NOT (or no longer) in force. */
+  note?: 'expired' | 'legacy-expired' | 'credential-changed';
+}
+
+function evaluateFailureRecord(
+  entry: { expiresAt: number; recordedAt?: number; credentialFingerprint?: string },
+  provider: string,
+  now: number,
+  fingerprintOf: (provider: string) => string | undefined,
+): FailureRecordVerdict {
+  let expiresAt = entry.expiresAt;
+  // LEGACY record from the `Number.MAX_SAFE_INTEGER` auth policy — an expiry
+  // further out than any cooldown this version can write. Re-anchor it to the
+  // bounded window measured from when it was recorded, so upgrading heals the
+  // provider instead of inheriting a permanent exclusion (live: `deepinfra →
+  // auth` on disk, 2026-09-21).
+  const legacy = expiresAt > now + AUTH_FAILURE_EXCLUSION_MS;
+  if (legacy) expiresAt = (entry.recordedAt || now) + AUTH_FAILURE_EXCLUSION_MS;
+
+  if (expiresAt <= now) {
+    return { effectiveExpiresAt: 0, active: false, note: legacy ? 'legacy-expired' : 'expired' };
+  }
+  // RECORDED AGAINST A DIFFERENT CREDENTIAL → the exclusion is stale. This is
+  // the fix for "I fixed my API key and the provider still never got tried":
+  // the moment the secret changes, every failure that key earned is discarded,
+  // however long its cooldown was.
+  if (entry.credentialFingerprint) {
+    const current = fingerprintOf(provider);
+    if (current && current !== entry.credentialFingerprint) {
+      return { effectiveExpiresAt: expiresAt, active: false, note: 'credential-changed' };
+    }
+  }
+  return { effectiveExpiresAt: expiresAt, active: true };
+}
+
+/**
+ * Build the effective fingerprint resolver for a load/report pass. Fingerprints
+ * each provider ONCE per pass, not per record.
+ */
+function fingerprintResolver(configManager?: ConfigManager): (provider: string) => string | undefined {
+  const cache = new Map<string, string | undefined>();
+  return (provider: string): string | undefined => {
+    if (!cache.has(provider)) cache.set(provider, credentialFingerprint(configManager, provider));
+    return cache.get(provider);
+  };
+}
+
+function loadPersistedFailures(configManager?: ConfigManager): PersistedFailures {
   try {
     // Resolved through the active config dir (`$NUVIRA_CONFIG_DIR` aware) — a
     // hardcoded `~/.nuvira` here made an isolated process inherit (and mutate)
@@ -189,14 +439,23 @@ function loadPersistedFailures(): PersistedFailures {
     const raw = readFileSync(path, 'utf-8');
     const data = JSON.parse(raw) as PersistedFailures;
     const now = Date.now();
-    // Clean expired entries
+    const fingerprintOf = fingerprintResolver(configManager);
     for (const key of Object.keys(data)) {
-      if (data[key].expiresAt <= now) delete data[key];
+      const provider = providerOfKey(key);
+      const verdict = evaluateFailureRecord(data[key], provider, now, fingerprintOf);
+      if (!verdict.active) delete data[key];
+      else data[key].expiresAt = verdict.effectiveExpiresAt;
     }
     return data;
   } catch {
     return {};
   }
+}
+
+/** The provider part of a persisted key — `provider` or `provider|model`. */
+function providerOfKey(key: string): string {
+  const sep = key.indexOf('|');
+  return sep === -1 ? key : key.slice(0, sep);
 }
 
 /**
@@ -205,7 +464,12 @@ function loadPersistedFailures(): PersistedFailures {
  * is still routable in the next process; without a model it stays
  * provider-wide (the legacy, honest answer).
  */
-function persistFailure(provider: string, kind: FailureKind, model?: string): void {
+function persistFailure(
+  provider: string,
+  kind: FailureKind,
+  model?: string,
+  fingerprint?: string,
+): void {
   try {
     const dir = resolveNuviraConfigDir();
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -216,6 +480,7 @@ function persistFailure(provider: string, kind: FailureKind, model?: string): vo
       expiresAt: Date.now() + exclusionDuration(kind),
       kind,
       recordedAt: Date.now(),
+      ...(fingerprint ? { credentialFingerprint: fingerprint } : {}),
     };
     writeFileSync(path, JSON.stringify(existing, null, 2));
   } catch {
@@ -278,8 +543,11 @@ export function createResilientCallLLM(
   // being skipped for the entire task.
   const transientProviders = new Set<string>();
 
-  // Load cross-pipeline failures
-  const persistedFailures = options.crossPipelineMemory !== false ? loadPersistedFailures() : {};
+  // Load cross-pipeline failures. Passing the config manager lets the loader
+  // discard records earned with a credential that is no longer in force.
+  const persistedFailures = options.crossPipelineMemory !== false
+    ? loadPersistedFailures(configManager)
+    : {};
 
   // Initial routing decision
   const initialDecision = resolveWithExclusions(
@@ -312,6 +580,7 @@ export function createResilientCallLLM(
     sessionFailedModels: state.sessionFailedModels,
     crossPipelineMemory: options.crossPipelineMemory !== false,
     persistedFailures,
+    credentialFingerprint: (provider) => credentialFingerprint(configManager, provider),
   });
 
   // The resilient callLLM
@@ -500,9 +769,17 @@ export function createResilientCallLLM(
           transientProviders.add(candidate.provider);
         }
 
-        // Persist for cross-pipeline memory
+        // Persist for cross-pipeline memory. The credential fingerprint is
+        // recorded WITH the failure so a later key change invalidates it
+        // instead of leaving the provider excluded (see
+        // `loadPersistedFailures`).
         if (options.crossPipelineMemory !== false) {
-          persistFailure(candidate.provider, kind, modelScoped ? failedModel : undefined);
+          persistFailure(
+            candidate.provider,
+            kind,
+            modelScoped ? failedModel : undefined,
+            credentialFingerprint(configManager, candidate.provider),
+          );
         }
 
         // Record failure in shared bookkeeping
@@ -801,6 +1078,13 @@ export interface FailoverExclusionOptions {
   persistedFailures?: PersistedFailures;
   /** Consult the registry's per-ENTRY usability (default: on). */
   registryCheck?: boolean;
+  /**
+   * Resolver for a provider's CURRENT credential fingerprint (see
+   * {@link credentialFingerprint}). When supplied, a persisted exclusion whose
+   * fingerprint no longer matches is ignored — a repaired key is never skipped.
+   * Optional so the predicate stays usable without a config manager.
+   */
+  credentialFingerprint?: (provider: string) => string | undefined;
 }
 
 /**
@@ -823,8 +1107,9 @@ export function createFailoverExclusionFilter(
     ? {}
     : opts.persistedFailures ?? loadPersistedFailures();
   const registryCheck = opts.registryCheck !== false;
+  const fingerprintOf = opts.credentialFingerprint;
   return (provider: string, model?: string): boolean => {
-    if (isExcluded(provider, model, opts.sessionFailed, opts.sessionFailedModels, persisted)) {
+    if (isExcluded(provider, model, opts.sessionFailed, opts.sessionFailedModels, persisted, fingerprintOf)) {
       return true;
     }
     return registryCheck ? isRegistryRuledOut(provider, model) : false;
@@ -837,18 +1122,30 @@ function isExcluded(
   sessionFailed: ExclusionMap | undefined,
   sessionFailedModels: ExclusionMap | undefined,
   persistedFailures: PersistedFailures,
+  credentialFingerprintOf?: (provider: string) => string | undefined,
 ): boolean {
   const now = Date.now();
+  //
+  // A persisted record is only honored while the credential it was earned with
+  // is still the credential in force. `loadPersistedFailures` prunes mismatches
+  // at read time; this re-check covers a map that was loaded BEFORE a key was
+  // fixed (a long-lived process, or an already-built filter).
+  const persistedActive = (entry: PersistedFailures[string] | undefined): boolean => {
+    if (!entry || expiryAt(entry) <= now) return false;
+    const recorded = entry.credentialFingerprint;
+    if (!recorded || !credentialFingerprintOf) return true;
+    const current = credentialFingerprintOf(provider);
+    return !current || current === recorded;
+  };
   // Provider-wide (auth / unresolved model).
   if (expiryAt(sessionFailed?.get(provider)) > now) return true;
-  if (expiryAt(persistedFailures[provider]) > now) return true;
+  if (persistedActive(persistedFailures[provider])) return true;
   // Model-scoped — only this exact provider × model is ruled out.
   if (model && model !== 'default') {
     const key = modelKey(provider, model);
     const modelExcl = sessionFailedModels?.get(key);
     if (expiryAt(modelExcl) > now) return true;
-    const persistedModel = persistedFailures[key];
-    if (expiryAt(persistedModel) > now) return true;
+    if (persistedActive(persistedFailures[key])) return true;
   }
   return false;
 }

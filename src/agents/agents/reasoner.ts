@@ -16,7 +16,8 @@
  *
  * Reference:
  * - Enterprise agents use a "reasoning layer" between goal and plan
- * - Freebuff/Hermes don't have this — it's an architectural advantage
+ * - A single-shot agent has no equivalent step; the extra layer is this
+ *   design's architectural advantage
  * - The decision document replaces generic "create a game" with
  *   "Create a Python+tkinter snake-and-ladder game, single file,
  *    package with pyinstaller, produce .exe for Windows"
