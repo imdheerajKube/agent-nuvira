@@ -24,7 +24,12 @@ vi.mock('../../src/cli/chat.js', () => ({
     }
 
     async answerOnce(message: string): Promise<{ content: string; followups: unknown[] }> {
-      return { content: `lazy-answer: ${message}`, followups: [] };
+      // A realistic answer — deliberately NOT an echo of the prompt. The prompt
+      // carries the RESPONSE FORMAT block ("- End with suggest_followups"), so
+      // echoing it back is a scaffolding leak the gateway now suppresses; that
+      // would make this routing assertion pass for the wrong reason.
+      const ask = message.split('\n').filter((l) => l.trim() !== '').pop() ?? '';
+      return { content: `lazy-answer: ${ask}`, followups: [] };
     }
   },
 }));
@@ -328,6 +333,69 @@ describe('GatewayRegistry.handleInbound', () => {
     // A helpful, human-language line goes instead.
     expect(reply).toContain('none of my language models');
     expect(adapter.sent.length).toBe(2); // working line + the replacement
+  });
+
+  it('suppresses a reasoning-only reply instead of sending the model\'s thinking (live WhatsApp incident)', async () => {
+    // Verbatim from ~/.nuvira/gateway/inbox.json — this reached a real sender.
+    const reasoningReply = [
+      'The user said "Hi" via WhatsApp.',
+      'According to the instructions:',
+      '- Deliver answer DIRECTLY.',
+      '- No preamble.',
+      '- No meta-commentary.',
+      '- End with `suggest_followups`.',
+      '',
+      'Since it\'s a simple "Hi", I should respond with a friendly greeting.',
+      'Wait, looking at the system prompt: "If you have nothing to add, answer directly".',
+    ].join('\n');
+    const { registry, adapter } = mockRegistry({
+      streamEvents: false,
+      chatEngine: { answerOnce: async () => ({ content: reasoningReply, followups: [] }) },
+    });
+    const reply = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'chan-1',
+      text: 'Hi',
+    });
+    // The thinking never reaches the sender, and neither does the recital of the
+    // prompt's own format rules.
+    expect(reply).not.toContain('The user said');
+    expect(reply).not.toContain('According to the instructions');
+    expect(reply).not.toContain('No meta-commentary');
+    expect(reply).toContain('none of my language models');
+  });
+
+  it('SALVAGES the real answer behind a leaked reasoning trace (live WhatsApp incident)', async () => {
+    // Two of the three historical leaks were thinking PREFIXED onto a real
+    // answer. Discarding the whole reply would have cost the sender the content
+    // they asked for, so the trace is stripped and the remainder delivered.
+    const reply = [
+      'The user is asking for travel advice for a trip in December 2026 from Delhi, India.',
+      'Options: Vietnam or Philippines.',
+      'Duration: 7-10 days.',
+      '',
+      'I need to compare Vietnam and the Philippines based on these interests.',
+      '',
+      '**Vietnam Analysis:**',
+      '- **Beaches:** Excellent beaches in Da Nang and Phu Quoc.',
+      '',
+      'If the user wants high-end casinos, the Philippines wins.',
+    ].join('\n');
+    const { registry } = mockRegistry({
+      streamEvents: false,
+      chatEngine: { answerOnce: async () => ({ content: reply, followups: [] }) },
+    });
+    const answer = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'chan-1',
+      text: 'Vietnam or Philippines in December?',
+    });
+    // The deliverable survives…
+    expect(answer).toContain('**Vietnam Analysis:**');
+    expect(answer).toContain('Excellent beaches in Da Nang');
+    // …without the thinking that preceded it.
+    expect(answer).not.toContain('The user is asking');
+    expect(answer).not.toContain('I need to compare');
   });
 
   it('pipeline requests reply with the run result (fast-fail local model)', { timeout: 30000 }, async () => {
@@ -1054,7 +1122,10 @@ describe('GatewayRegistry — routing matches the shared gate', () => {
       policies: { mock: {} },
       chatEngine: {
         async answerOnce(message: string) {
-          return { content: `lazy-answer: ${message}`, followups: [] };
+          // See the class mock above: not a prompt echo, or the reply is
+          // suppressed as a scaffolding leak and this proves nothing.
+          const ask = message.split('\n').filter((l) => l.trim() !== '').pop() ?? '';
+          return { content: `lazy-answer: ${ask}`, followups: [] };
         },
       },
     });

@@ -131,17 +131,24 @@ describe('hasCodingAction — the command-position coding-verb override', () => 
     expect(hasCodingAction('create a script to back up files')).toBe(true);
   });
 
-  it('separates the three ambiguous asks by their OBJECT, not their verb', () => {
+  it('routes all THREE ambiguous asks to chat — the head noun decides', () => {
     // All three open with "Create a …" — only the object distinguishes them.
     // Live asks, 2026-09-21.
     expect(
       resolveAskKind('Create a plan for diet and exercise to loose weight by 10 KGs in 3 months , i have bad knee'),
     ).toBe('chat');
+    // DECISION 2026-09-21: this one previously ran the pipeline, and failed
+    // 0/7 steps, when the sender was asking for a plan. The head noun of the
+    // requested artifact is `plan`; "project" is a MODIFIER of it (what the
+    // plan covers), not a deliverable being requested — so it is answered in
+    // chat like the other two. A software noun in a PURPOSE clause is still a
+    // coding object: "create a plan for the ecommerce app" stays on the
+    // pipeline (see the gate's "plan FOR code" case below).
     expect(
       resolveAskKind(
         'Create a project plan to develop a multiple screen calculator and unit converter , it should be GUI and cross platform for Windows and Linux',
       ),
-    ).toBe('pipeline');
+    ).toBe('chat');
     expect(resolveAskKind("Create a book which teaches math's devision for class 4 student")).toBe('chat');
   });
 });

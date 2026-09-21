@@ -543,4 +543,76 @@ describe('ChatCommand — P4 answer token streaming (dashboard typewriter)', () 
     // One model call only — the boundary check stopped the second.
     expect(provider.generateTools).toHaveBeenCalledTimes(1);
   });
+
+  it('REJECTS a reply that is the model\'s own reasoning, instead of delivering it', async () => {
+    // Verbatim opening from ~/.nuvira/gateway/inbox.json — the model narrated
+    // its thinking and the loop shipped it to a WhatsApp sender as the answer.
+    // A quality failure never THROWS on its own, so the loop must reject it
+    // here (which is what makes the failover walk try the next candidate).
+    const REASONING_REPLY = [
+      'The user said "Hi" via WhatsApp.',
+      'According to the instructions:',
+      '- Deliver answer DIRECTLY.',
+      '- End with `suggest_followups`.',
+      '',
+      'Since it\'s a simple "Hi", I should respond with a friendly greeting.',
+    ].join('\n');
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn().mockResolvedValue({ content: REASONING_REPLY, toolCalls: [] }),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+
+    const cmd = new ChatCommand() as unknown as { runChatAnswer: Function };
+    const history: Array<{ role: string; content: string }> = [];
+    const out = await cmd.runChatAnswer(
+      'Hi',
+      history,
+      { type: 'groq', provider, model: 'mock-model' },
+      {},
+      false,
+      // No failover candidates in this harness, so the walk exhausts and the
+      // turn must surface as a FAILURE rather than a successful answer.
+      { auto: false },
+    );
+
+    // The thinking is NOT the answer…
+    expect(out.content ?? '').not.toContain('The user said');
+    expect(out.content ?? '').not.toContain('According to the instructions');
+    // …and the turn is marked failed (so it is never cached as a success).
+    expect(out.generationFailed).toBe(true);
+    // Nothing was written to history as an answer.
+    expect(history.some((t) => t.role === 'assistant')).toBe(false);
+  });
+
+  it('still accepts a real answer that merely mentions the user', async () => {
+    // The guard must not burn good replies: `user` is a table in this codebase.
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn().mockResolvedValue({
+        content: 'The user table now has an index — your request is implemented.',
+        toolCalls: [],
+      }),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+
+    const cmd = new ChatCommand() as unknown as { runChatAnswer: Function };
+    const history: Array<{ role: string; content: string }> = [];
+    const out = await cmd.runChatAnswer(
+      'did the migration run?',
+      history,
+      { type: 'groq', provider, model: 'mock-model' },
+      {},
+      false,
+      { auto: false },
+    );
+    expect(out.content).toBe('The user table now has an index — your request is implemented.');
+    expect(out.generationFailed).toBeFalsy();
+  });
 });

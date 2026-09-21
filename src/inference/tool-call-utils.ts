@@ -101,6 +101,322 @@ export function looksLikeConfusedScaffoldingReply(
 }
 
 /**
+ * Answer-quality resilience — detect the model's own REASONING delivered as
+ * the answer. This block documents the DETECTOR as a whole: the options type
+ * below, the two opener sets, and `looksLikeReasoningLeakReply`.
+ *
+ * Motivation (live WhatsApp incidents, three of them, all replayed from the
+ * inbox ledger): the model wrote its private analysis instead of a reply and
+ * the loop accepted the text verbatim, because nothing in the pipeline asked
+ * "is this addressed to the user, or is this thinking?". Delivered were:
+ *
+ *   `The user said "Hi" via WhatsApp. / According to the instructions: /
+ *    - Deliver answer DIRECTLY. / - No preamble. / - No meta-commentary. /
+ *    - End with suggest_followups. / Since it's a simple "Hi", I should…`
+ *   `The user is asking for travel advice for a trip in December 2026 from
+ *    Delhi, India. / Options: Vietnam or Philippines. / I need to compare …`
+ *
+ * WHY THE EXISTING STRIPPER DID NOT SAVE US: `stripGatewayReasoning`
+ * (registry.ts) is FORMAT-dependent — it removes `<think>`-tagged blocks and
+ * lines carrying a known planning label behind a `*`/`1.` marker. Reasoning
+ * emitted as flat PROSE has neither, so it passed through untouched: replaying
+ * the four historical leaks through today's stripper + scaffolding guard, the
+ * three above are still delivered in full and only the meta-talk ones are
+ * caught. A blocklist of labels cannot be completed against a model's
+ * unbounded phrasing, which is why this detector keys off structure instead.
+ *
+ * STRUCTURE, not vocabulary. A delivered answer opens by addressing the user;
+ * a leaked reasoning trace opens by describing the CONVERSATION to itself —
+ * "The user is/asked/said …", "According to the instructions", "Let me
+ * think/analyze/plan …", "Wait, …", "My plan:", "Response:" — or by reciting
+ * the system prompt's format rules back as a checklist ("- No preamble.",
+ * "- End with suggest_followups"). Two signals, both high-precision:
+ *
+ *   (1) a reasoning OPENER in the first non-blank line, or
+ *   (2) a RECITED CONTRACT bullet anywhere (a deliverable never contains the
+ *       instruction "No meta-commentary.").
+ *
+ * Deliberately conservative, because a wrong verdict BURNS a good answer: the
+ * opener must be the very first thing in the reply (a genuine answer that
+ * happens to mention "the user" mid-sentence is untouched — the two real
+ * second/third-person cases in the ledger start at character 0), and a quoted
+ * opening (`"The user said …" is a common test fixture`) is excluded because
+ * the quote blocks the start anchor.
+ *
+ * Callers treat a true verdict exactly like a generation failure: throw so the
+ * failover walk tries the next candidate, then suppress at the send site if
+ * every candidate narrated. It never THROWS itself — detection is pure.
+ */
+export interface ReasoningLeakOptions {
+  /**
+   * Report only the HIGH-PRECISION signals — the model narrating the
+   * conversation to itself, or reciting the prompt's format rules.
+   *
+   * Why this knob exists: an agentic step that carries TOOL CALLS may open with
+   * a legitimate action narration ("Let me check the project files." followed by
+   * `list_dir`). The first-person `deliberation` openers are a genuinely weaker
+   * signal than `The user is asking …` — measured while wiring the loop engine's
+   * gate: `I will check.` (the lead-in of a real JSON-fallback tool step) was
+   * flagged, the step was rejected, and its TOOL CALL was thrown away. On the
+   * step that IS the answer (no tool calls) every signal applies, which is the
+   * text a user would otherwise read.
+   */
+  highPrecisionOnly?: boolean;
+}
+
+/**
+ * Openers that can only be written while THINKING about the conversation: the
+ * model describing the exchange or reciting the prompt it was given.
+ */
+const HIGH_PRECISION_OPENERS: RegExp[] = [
+  // Narrating the conversation to itself. The verb is REQUIRED and must be an
+  // input verb — a bare `The user` would flag a legitimate sentence about a
+  // `user` table/record/route ("The user table now has an index"), which is
+  // ordinary prose in a codebase. "The user can log in" is likewise a
+  // deliverable, so modals are excluded on purpose.
+  /^(?:the|this)\s+user\s+(?:is\s+(?:asking|planning|requesting|wondering|looking|trying|attempting|providing|saying|referring|describing)|(?:just\s+)?(?:said|says|asked|asks|wants|wanted|requested|requests|needs|needed|wrote|mentioned|sent|gave|seems|appears))\b/i,
+  /^according\s+to\s+(?:the\s+)?(?:instructions?|system\s+prompt|prompt|rules?|guidelines?)\b/i,
+  /^(?:the|my)\s+(?:system\s+)?(?:prompt|instructions?)\s+(?:says|states|asks|tells|requires)\b/i,
+  // Reasoning labels / draft markers.
+  /^(?:my\s+)?(?:reasoning|thinking|chain\s+of\s+thought|analysis|internal\s+notes?)\s*[:.]/i,
+  /^(?:my\s+plan|final\s+plan|plan|draft|response|answer|output|reply)\s*\d*\s*:/i,
+  // A bare self-address, the way a trace opens on a re-read.
+  /^(?:since|because|given)\s+(?:the\s+user|this\s+is\s+a\s+request|it'?s\s+a\s+simple)\b/i,
+];
+
+/**
+ * Weaker, first-person signals: the model addressing ITSELF instead of writing
+ * to the user. Real deliberation, but a tool-calling step may legitimately open
+ * this way before acting (see `ReasoningLeakOptions.highPrecisionOnly`).
+ */
+const DELIBERATION_OPENERS: RegExp[] = [
+  /^(?:let\s+me|i'?ll|i\s+will)\s+(?:now\s+)?(?:think|plan|analyse|analyze|consider|reason)\b/i,
+  /^(?:wait|hmm|actually|alright|okay|ok)\s*[,:]/i,
+];
+
+/**
+ * @param content  the model's visible reply text
+ * @param options  `highPrecisionOnly` for a step that carries tool calls
+ */
+export function looksLikeReasoningLeakReply(content: string, options: ReasoningLeakOptions = {}): boolean {
+  const t = (content || '').trim();
+  if (!t) return false;
+
+  // ── (2) The system prompt's format rules recited back as a checklist ──
+  // These lines only exist in a reasoning trace: a deliverable is written FOR
+  // the user, so it has no reason to state the instruction it is following.
+  if (
+    /^\s*[-*\u2022]\s*(?:no\s+(?:preamble|meta-commentary|internal|narration|tool)|deliver\s+(?:the\s+)?answer\s+directly|end\s+with\s+`?suggest_follow_?ups?|only\s+the\s+text\s+outside)/im.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+
+  // ── (1) A reasoning opener in the first non-blank line ──
+  // Anchored (no `m` flag): the FIRST line only, so an answer that starts
+  // normally and merely mentions the user later is never flagged.
+  const firstLine = t.split(/\r?\n/, 1)[0] ?? '';
+  if (HIGH_PRECISION_OPENERS.some((re) => re.test(firstLine))) return true;
+  if (options.highPrecisionOnly) return false;
+  return DELIBERATION_OPENERS.some((re) => re.test(firstLine));
+}
+
+/**
+ * Salvage the deliverable from a reply that opens with a reasoning trace.
+ *
+ * `looksLikeReasoningLeakReply` only answers "is this thinking?". Two of the
+ * three real leaks were thinking PREFIXED onto a real (if rough) answer — the
+ * travel comparison sat behind `The user is asking … / Options: … / I need to
+ * compare …` — so discarding the whole reply would throw away content the user
+ * actually wanted. This drops the leading trace and returns what remains.
+ *
+ * The boundary is found by walking lines from the top while they are
+ * trace-shaped, then cutting there:
+ *   - an opener line (see the detector),
+ *   - a continuation line WHILE already inside a trace (a bare `Label: value`
+ *     narration line, a recited-contract bullet, or a first-person
+ *     deliberation line) — the same shapes a trace is built from,
+ *   - blank lines inside the trace (they separate its paragraphs).
+ * The first line that is none of those ends the trace and is KEPT, so the
+ * deliverable survives intact. A quoted opener never gets here (the detector
+ * excludes quotes), and content that merely mentions the user mid-text is not
+ * at line 0, so the walk stops before it.
+ *
+ * Returns the emptied string when the trace was the whole reply (the "Hi"
+ * case), which the caller reads as "nothing to salvage". Pure — never throws.
+ */
+/**
+ * One line that could only be written while THINKING about the conversation:
+ * narrating the user, reciting the prompt, or deliberating in the first
+ * person. Deliberately broader than the detector's openers — this is used to
+ * decide whether a line is still inside a trace, where a mistaken "not a
+ * trace line" merely ends the trim early (the tail gate below catches that),
+ * and a mistaken "is a trace line" costs a line of the deliverable.
+ */
+const REASONING_LINE =
+  /^\s*(?:[-*\u2022]\s*(?:no\s+(?:preamble|meta-commentary|internal|narration|tool)|deliver\s+(?:the\s+)?answer\s+directly|end\s+with\s+`?suggest_follow_?ups?)|(?:the|this)\s+user\b|according\s+to\s+|(?:the|my)\s+(?:system\s+)?(?:prompt|instructions?)\s+\w|(?:let\s+me|let'?s|i'?ll|i\s+will|i\s+should|i\s+need|i\s+must|i\s+can'?t|i'?m|i\s+am|we\s+(?:need|should))\b|(?:wait|hmm|actually|alright|okay|ok|so|now|then)\s*[,:]|(?:my\s+)?(?:reasoning|thinking|chain\s+of\s+thought|analysis|internal\s+notes?)\s*[:.]|(?:my\s+plan|final\s+plan|plan|draft|response|answer|output|reply)\s*\d*\s*:|(?:options?|interests?|duration|goal|tone|subject|key\s+elements?|constraints?|delivery|status|summary)\s*:|if\s+the\s+user\b|since\s+(?:the\s+user|it'?s\s+a\s+simple)|this\s+is\s+a\s+request\b|but\s+the\s+user\b|however,)/i;
+
+/**
+ * Does this look like the DELIVERABLE half of a reply — real content for the
+ * reader, as opposed to more thinking?
+ *
+ * The reason this gate exists: a trace's vocabulary cannot be enumerated, so
+ * the walk below can stop one line too late and leave a fragment of thinking
+ * behind. Rather than trust the walk, require the remainder to OPEN with
+ * Markdown structure (a heading, bullet, numbered item, or quote) — how the
+ * two salvageable real answers both began — with an opening line that is not a
+ * reasoning line. Anything else is refused, which the caller reads as "nothing
+ * to salvage" and suppresses instead of delivering a fragment of thinking.
+ *
+ * Deliberately checks the OPENING LINE only, never the whole remainder: a real
+ * answer legitimately contains sentences that read like trace
+ * ("If the user wants a mix of casinos and beaches, the Philippines wins" is
+ * the CONCLUSION of the very answer being salvaged), so a whole-tail check
+ * rejects the good content it exists to rescue.
+ */
+function looksLikeDeliverableTail(text: string): boolean {
+  const s = text.trim();
+  if (!s) return false;
+  if (!/^(?:\*\*|#{1,6}\s|[-*\u2022]\s|\d+[.)]\s|>)/.test(s)) return false;
+  if (looksLikeReasoningLeakReply(s)) return false;
+  return !REASONING_LINE.test(s.split(/\r?\n/, 1)[0] ?? '');
+}
+
+/**
+ * Salvage the deliverable from a reply that opens with a reasoning trace.
+ *
+ * `looksLikeReasoningLeakReply` only answers "is this thinking?". Two of the
+ * three real leaks were thinking PREFIXED onto a real (if rough) answer — the
+ * travel comparison sat behind `The user is asking … / Options: … / I need to
+ * compare …` — so discarding the whole reply would throw away content the user
+ * actually wanted. This drops the leading trace and returns what remains.
+ *
+ * Returns the text UNCHANGED when the detector does not flag it (never invents
+ * a trim), and the EMPTY string when the flag was right but nothing deliverable
+ * survived — the caller reads empty as "suppress, do not deliver".
+ */
+export function stripLeadingReasoningTrace(content: string): string {
+  const text = (content || '').replace(/^\s*\n/, '');
+  if (!text.trim()) return '';
+  if (!looksLikeReasoningLeakReply(text)) return text;
+
+  const lines = text.split(/\r?\n/);
+  let cut = 0;
+  let sawTrace = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.trim() === '') {
+      // A blank line inside the trace separates its paragraphs and continues
+      // it; a blank line before any trace line cannot occur (leading blanks are
+      // stripped above), so this never advances past real content.
+      if (sawTrace) cut = i + 1;
+      continue;
+    }
+    if (!REASONING_LINE.test(line)) break;
+    sawTrace = true;
+    cut = i + 1;
+  }
+  const tail = sawTrace ? lines.slice(cut).join('\n').trim() : text.trim();
+  // A trace-and-nothing-else, or a remainder that still reads as thinking:
+  // report nothing salvageable rather than shipping a fragment.
+  return looksLikeDeliverableTail(tail) ? tail : '';
+}
+
+/**
+ * The answer-quality failures a model reply can exhibit — the two families this
+ * module detects, named so callers can report WHICH one happened.
+ */
+export type AnswerQualityKind = 'confusion' | 'reasoning';
+
+export interface AnswerQualityFailure {
+  kind: AnswerQualityKind;
+}
+
+/**
+ * THE answer-quality detector — one predicate for every surface.
+ *
+ * Both failures below were shipped to real users by surfaces that had no check
+ * at all (the loop engine driving `nuvira execute` and every pipeline run), so
+ * the engine and the chat loop must ask the SAME question. Returns null when
+ * the reply is usable, which is the overwhelmingly common case — both detectors
+ * are deliberately high-precision.
+ *
+ * @param content  the model's visible reply text
+ * @param tools    tool names the turn exposed (for the contract-confusion
+ *                 branch); defaults to the end-of-turn marker
+ * @param options  `highPrecisionOnly` when the step carries tool calls (see
+ *                 `ReasoningLeakOptions`)
+ */
+export function detectAnswerQualityFailure(
+  content: string,
+  tools: string[] = ['suggest_followups'],
+  options: ReasoningLeakOptions = {},
+): AnswerQualityFailure | null {
+  if (looksLikeConfusedScaffoldingReply(content, tools)) return { kind: 'confusion' };
+  if (looksLikeReasoningLeakReply(content, options)) return { kind: 'reasoning' };
+  return null;
+}
+
+/**
+ * Build the error a caller THROWS to drive a failover walk on a quality
+ * failure.
+ *
+ * Why an error at all: a quality failure never throws on its own, so the
+ * failover walk (which only reacts to provider errors) used to accept the reply
+ * and ship it — the thinking/meta-talk was delivered verbatim AND the turn was
+ * cached as a success. Throwing routes it through the existing walk instead.
+ *
+ * The message wording is load-bearing: `toUserFacingGenerationError` matches
+ * these two phrases to report the honest cause, and the raw reply is carried on
+ * `confusedReply` so a caller can log/salvage it without shipping it.
+ */
+export function answerQualityError(content: string, failure: AnswerQualityFailure): Error {
+  const described = failure.kind === 'confusion' ? 'tool-contract confusion' : 'its own reasoning';
+  const err = new Error(
+    `model answered with ${described} instead of the task (reply: ${content.slice(0, 160)})`,
+  );
+  const tagged = err as Error & { confusedReply?: string; qualityKind?: AnswerQualityKind };
+  tagged.confusedReply = content;
+  tagged.qualityKind = failure.kind;
+  return err;
+}
+
+/**
+ * The line a surface shows when a reply was nothing but the model's OWN
+ * TRACE — i.e. `stripReasoningLeak` had to suppress it entirely.
+ *
+ * It must not blame the model's absence ("the language model was unavailable")
+ * — the model answered, it just answered with its working notes — so it names
+ * the real cause and offers the two things that actually help.
+ */
+export const ANSWER_QUALITY_FAILURE_LINE =
+  '🤖 Sorry — I could not produce a usable answer just now. The model answered with its own working notes instead of your request. Please try again, or switch models with `nuvira models`.';
+
+/**
+ * RENDER-SITE sanitizer: never hand a leaked reasoning trace to a user.
+ *
+ * Two of the three real incidents had a genuine (if rough) answer sitting
+ * BEHIND the trace, so suppressing everything throws away content the user
+ * asked for; discarding nothing shows the reader "The user said \"Hi\" …
+ * According to the instructions: …" as the answer. So: return the text
+ * unchanged when it is not a leak, the deliverable when one can be recovered,
+ * and EMPTY when the trace was the whole reply — the caller substitutes
+ * `ANSWER_QUALITY_FAILURE_LINE` (empty is unambiguous: a real answer is never
+ * blank by the time it reaches a render site).
+ *
+ * The loop engines now REJECT these replies at generation time, so reaching a
+ * render site means every candidate narrated; this is the last line of defence,
+ * not the mechanism.
+ */
+export function stripReasoningLeak(content: string): string {
+  const text = content ?? '';
+  if (!looksLikeReasoningLeakReply(text)) return text;
+  const salvaged = stripLeadingReasoningTrace(text);
+  return salvaged.trim() && !looksLikeReasoningLeakReply(salvaged) ? salvaged : '';
+}
+
+/**
  * True when the provider rejected the request because the MODEL cannot do
  * native tool/function calling at all.
  *
@@ -170,6 +486,18 @@ export function toUserFacingGenerationError(err: unknown): string {
   // unavailable" about a model that had answered, just not usefully. That
   // misdiagnosis is what made a live dashboard failure undiagnosable.
   const CONTRACT_CONFUSION = /tool-contract confusion/;
+  /**
+   * The OTHER quality failure — the model delivered its own REASONING (or its
+   * plan for what it was about to do) as the answer. Produced by
+   * `answerQualityError`, so the phrase is a fixed contract. Reported separately
+   * from confusion because the two need different words: confusion means the
+   * model got lost in the tool contract, this means it never wrote to the user
+   * at all. Without this branch a turn whose every candidate narrated fell all
+   * the way through to GENERATION_FAILURE_MESSAGE — telling the user "the
+   * language model was unavailable" about a model that answered, just not
+   * usefully (the same misdiagnosis the CONTRACT_CONFUSION branch fixed).
+   */
+  const REASONING_LEAK = /answered with its own reasoning/;
   const MALFORMED_STEP = /malformed step response/;
   /**
    * ADMIN POLICY blocks (governance allow/deny lists, the PII privacy gate) are
@@ -201,6 +529,9 @@ export function toUserFacingGenerationError(err: unknown): string {
   }
   if (CONTRACT_CONFUSION.test(m)) {
     return "The model got tangled up in its own tool instructions and never answered your request. Try again, or switch models with `nuvira models`.";
+  }
+  if (REASONING_LEAK.test(m)) {
+    return "The model wrote its own working notes instead of an answer, so there was nothing fit to send. Please try again, or switch models with `nuvira models`.";
   }
   if (MALFORMED_STEP.test(m)) {
     return 'The model returned an incomplete response. Please try again.';
@@ -251,19 +582,142 @@ export function toUserFacingGenerationError(err: unknown): string {
  */
 export function stripToolCallArtifacts(content: string): string {
   if (!content) return '';
-  return (
-    content
-      // An EMPTY fenced block — the fallback transport parsed the call out of
-      // the body and left the fence behind.
-      .replace(/\n?```[a-z]*\s*\n?\s*```\s*/gi, '\n')
-      // A fenced block WHOSE BODY is the call.
-      .replace(/```[a-z]*\s*\{[\s\S]*?"tool"\s*:\s*"suggest_followups"[\s\S]*?```/gi, '')
-      // The bare trailing call object (the model wrote the tool JSON verbatim).
-      .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
-      // The Anthropic-style tag form (<function=suggest_followups …>).
-      .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*?<\/function>/g, '')
-      .trim()
+  const stripped = content
+    // An EMPTY fenced block — the fallback transport parsed the call out of
+    // the body and left the fence behind.
+    .replace(/\n?```[a-z]*\s*\n?\s*```\s*/gi, '\n')
+    // A fenced block WHOSE BODY is the call.
+    .replace(/```[a-z]*\s*\{[\s\S]*?"tool"\s*:\s*"suggest_followups"[\s\S]*?```/gi, '')
+    // The bare trailing call object (the model wrote the tool JSON verbatim).
+    .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
+    // The Anthropic-style tag form (<function=suggest_followups …>).
+    .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*?<\/function>/g, '');
+  // The THIRD shape — the model wrote the tool's ARGUMENTS (not the call) as
+  // text, optionally under a bold header. Observed live from the execute loop:
+  //
+  //   Would you like to dive deeper…?
+  //
+  //   **suggest_followups**
+  //   ```json
+  //   { "followups": [ { "label": "…", "prompt": "…" } ] }
+  //   ```
+  //
+  // No regex above matches it (there is no `"tool"` key), and a pure regex
+  // cannot be trusted here: a fenced block legitimately containing a
+  // `followups` field ("write me a JSON schema with a followups array") must
+  // survive. So the payload is PARSED and only removed when it really is the
+  // suggest_followups contract.
+  return stripTrailingFollowupsPayload(stripped).trim();
+}
+
+/** JSON.parse that never throws — null for anything unparseable. */
+function parseJsonLoose(text: string): unknown {
+  try {
+    return JSON.parse(text.trim());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Is this parsed value the model's `suggest_followups` payload?
+ *
+ * Accepts the tool-call object (`{tool:'suggest_followups',…}`) and the bare
+ * arguments shape — an object with a `followups` list, or the list itself as a
+ * BARE ARRAY under a `**suggest_followups**` caption (both observed live
+ * 2026-09-21 from `nuvira execute`).
+ *
+ * CONSERVATISM ON PLAIN STRINGS: an entry that is a `{prompt}` object is the
+ * tool's own schema and is accepted anywhere; a plain STRING entry is only
+ * accepted when the model captioned the payload with the tool name, because
+ * `{"followups":["Do you like it?"]}` is also a perfectly ordinary config a
+ * user could have asked for and a bare one must survive. (These flags are
+ * deliberately asymmetric rather than perfectly symmetric — this helper must
+ * never delete a deliverable.)
+ */
+function isFollowupsPayload(value: unknown, allowStringEntries: boolean): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return isFollowupList(value, allowStringEntries);
+  const o = value as { tool?: unknown; arguments?: unknown; followups?: unknown };
+  if (o.tool === 'suggest_followups') return true;
+  const nested = (o.arguments ?? {}) as { followups?: unknown };
+  const list = Array.isArray(o.followups) ? o.followups : nested.followups;
+  return isFollowupList(list, allowStringEntries);
+}
+
+/** A non-empty list of followup entries (`{prompt,label?}` objects, ± strings). */
+function isFollowupList(list: unknown, allowStringEntries: boolean): boolean {
+  if (!Array.isArray(list) || list.length === 0) return false;
+  return list.every(
+    (f) =>
+      (allowStringEntries && typeof f === 'string') ||
+      (f !== null && typeof f === 'object' && typeof (f as { prompt?: unknown }).prompt === 'string'),
   );
+}
+
+/** Does the text immediately before a payload end on a tool-name caption? */
+function hasFollowupsCaption(textBefore: string): boolean {
+  return /\*{0,2}\s*suggest[_ ]?follow[_ ]?ups\s*\*{0,2}\s*:?[ \t]*$/i.test(
+    textBefore.replace(/\s+$/, ''),
+  );
+}
+
+/**
+ * Drop a trailing followups payload — a fenced block whose body IS the payload,
+ * or a bare trailing JSON value (object OR array) — plus the bold
+ * `**suggest_followups**` header the model tends to caption it with. Structural (parses the body), so
+ * a user-requested code block that merely contains the word `followups` is
+ * never touched.
+ */
+function stripTrailingFollowupsPayload(text: string): string {
+  const trimmed = text.replace(/\s+$/, '');
+  if (!trimmed) return text;
+
+  // 1. The LAST fenced block, when it ends the text and its body parses to
+  //    the payload. (Anchoring on the last block — not the first — keeps an
+  //    answer+code-block+followups-fence sequence correct.)
+  if (trimmed.endsWith('```')) {
+    const closing = trimmed.length - 3;
+    const opening = trimmed.lastIndexOf('```', closing - 1);
+    if (opening >= 0) {
+      const newline = trimmed.indexOf('\n', opening);
+      if (newline >= 0 && newline < closing) {
+        const body = trimmed.slice(newline + 1, closing);
+        if (isFollowupsPayload(parseJsonLoose(body), hasFollowupsCaption(trimmed.slice(0, opening)))) {
+          return stripTrailingFollowupsHeader(trimmed.slice(0, opening));
+        }
+      }
+    }
+  }
+
+  // 2. A bare trailing JSON value (object OR array), opening at a line boundary
+  //    (where a model appends the payload). Try the candidates from the END
+  //    backwards: the first whose slice parses is the OUTERMOST value that
+  //    reaches the end (a nested `{` yields an unbalanced slice and fails).
+  const lineStarts: number[] = [];
+  const openRe = /^[ \t]*(\{|\[)/gm;
+  let open: RegExpExecArray | null;
+  while ((open = openRe.exec(trimmed)) !== null) lineStarts.push(open.index + open[0].length - 1);
+  for (let k = lineStarts.length - 1; k >= 0; k--) {
+    const start = lineStarts[k];
+    if (isFollowupsPayload(parseJsonLoose(trimmed.slice(start)), hasFollowupsCaption(trimmed.slice(0, start)))) {
+      return stripTrailingFollowupsHeader(trimmed.slice(0, start));
+    }
+  }
+  return text;
+}
+
+/**
+ * Remove the caption line left after a payload was stripped — a
+ * `**suggest_followups**` label and/or the horizontal rule the model tends to
+ * put in front of it. Only ever called once a payload WAS removed, so an
+ * answer that legitimately ends in `---` on its own is untouched.
+ */
+function stripTrailingFollowupsHeader(text: string): string {
+  return text
+    .replace(/\n+\s*\*{0,2}\s*suggest[_ ]?follow[_ ]?ups\s*\*{0,2}\s*:?[ \t]*$/i, '')
+    .replace(/\n+\s*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/, '')
+    .replace(/\s+$/, '');
 }
 
 /**

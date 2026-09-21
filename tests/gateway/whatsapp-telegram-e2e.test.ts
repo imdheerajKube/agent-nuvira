@@ -259,7 +259,10 @@ describe('Telegram message flow', () => {
     // Pipeline may succeed or fail (fast-fail model), but should get a reply
     expect(typeof reply).toBe('string');
     expect(adapter.sent.length).toBeGreaterThanOrEqual(1);
-  });
+    // This drives the REAL pipeline ("add auth to the API"), so it is bounded by
+    // provider latency rather than by test logic — 5s is not a budget, it is a
+    // coin flip on a slow runner.
+  }, 60_000);
 
   it('Telegram chat intent (write/explain/ask) runs chat engine', async () => {
     const engine = {

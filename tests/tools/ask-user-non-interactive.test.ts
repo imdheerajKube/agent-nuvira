@@ -44,14 +44,41 @@ describe('renderAskUser — non-interactive (no TTY)', () => {
     expect(answer.index).toBe(0);
   });
 
-  it('tells the model no human was reached, so it stops asking', async () => {
+  it('tells the model to DISCLOSE the question + assumption, not to silently decide', async () => {
     const answer = await renderAskUser('Apply this change?', CHOICES, false);
 
-    // Without this the model sees a plain answer and asks again on the next step
-    // (the live run called ask_user twice).
-    expect(answer.custom).toBeTruthy();
-    expect(String(answer.custom).toLowerCase()).toContain('no interactive user');
-    expect(String(answer.custom).toLowerCase()).toContain('do not ask again');
+    const custom = String(answer.custom);
+    expect(custom).toBeTruthy();
+    // The old contract told the model "do not ask again; proceed" — which made
+    // a one-shot run present a decision the user never made (live: "I have
+    // selected Python/Qt") and, worse, made the model echo the internal note
+    // back ("no interactive user attached — defaulting to Beginner"). The
+    // gateway instead REPLIES with the question and states the option it is
+    // going with, so the user can correct it. The CLI now asks for the same
+    // disclosure.
+    expect(custom).toMatch(/assumption/i);
+    expect(custom).toMatch(/question/i);
+    expect(custom).toMatch(/do not mention this internal note/i);
+    expect(custom.toLowerCase()).not.toContain('do not ask again');
+  });
+
+  it('shows the question and every choice on the visible output (gateway parity)', async () => {
+    const printed: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      printed.push(args.map((a) => String(a)).join(' '));
+    });
+    try {
+      await renderAskUser('Apply this change?', CHOICES, false);
+    } finally {
+      spy.mockRestore();
+    }
+    const out = printed.join('\n');
+    // The human running a piped command must SEE what was asked and which
+    // option was assumed — previously only an internal logger line carried it.
+    expect(out).toContain('Apply this change?');
+    expect(out).toContain('1. Update implementation');
+    expect(out).toContain('2. Cancel');
+    expect(out).toContain('proceeding with 1. "Update implementation"');
   });
 
   it('handles multi-select without prompting', async () => {

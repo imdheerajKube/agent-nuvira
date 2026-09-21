@@ -64,6 +64,7 @@ import type { RepairMode } from '../learning/error-repair.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { scanForInjections, formatScanReport } from '../security/scanner.js';
 import { withLogCorrelation } from '../enterprise/log.js';
+import { withAgentAnswerQualityGate } from './answer-quality-gate.js';
 import { getMetrics } from '../enterprise/metrics.js';
 import {
   getAutoRouter,
@@ -1971,7 +1972,12 @@ export class Orchestrator {
     _options: OrchestratorOptions,
   ): Promise<AgentResult> {
     try {
-      return await withLogCorrelation({ taskId: 'single' }, () => agent.execute(vault.context, callLLM));
+      // Same answer-quality gate as the task path (see the wiring above): the
+      // reasoner and planner are executed HERE with their own LLM function, so
+      // without this their summaries would be the only agent output still able
+      // to carry a leaked reasoning trace into the report.
+      const gated = withAgentAnswerQualityGate(callLLM, { agent: agent.name, taskId: 'single' });
+      return await withLogCorrelation({ taskId: 'single' }, () => agent.execute(vault.context, gated));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, summary: `${agent.name} errored`, error: msg };
@@ -2300,7 +2306,7 @@ export class Orchestrator {
       const agentModel = options.model || options.agentModels?.[effectiveAgentType] || options.agentModels?.[task.agentType];
       let taskBoundProvider: string | undefined;
       const useResilient = autoRouting && (options.resilientRouting !== false);
-      const agentCallLLM = autoRouting
+      const routedAgentCallLLM = autoRouting
         ? (useResilient
             ? this.createResilientAutoRoutedLLM(
                 {
@@ -2338,6 +2344,24 @@ export class Orchestrator {
               model: agentModel || options.model,
             },
           );
+
+      // ── AGENT ANSWER-QUALITY GATE ──────────────────────────────────────
+      // The agents do NOT go through the loop engine, so the generation-time
+      // quality gate that protects chat/`execute` never saw them: each agent is
+      // handed this function and calls the provider directly. A traced reply
+      // (the model narrating the conversation or reciting its instructions)
+      // therefore became the task's SUMMARY — rendered as
+      // `• ✅ Reasoner: The user wants a project plan … I should use the
+      // \`plan_todo\` tool…`. Wrapping here (rather than inside each agent)
+      // covers every agent type and every path that hands the agent this
+      // function — the first pass, the repair engine, the reviewer-fix
+      // strategy — while leaving the orchestrator's housekeeping calls (file
+      // finding, memory) alone. One corrective retry, then the render sites'
+      // salvage/suppress takes over.
+      const agentCallLLM = withAgentAnswerQualityGate(routedAgentCallLLM, {
+        agent: effectiveAgentType,
+        taskId: task.id,
+      });
 
       // Skip tester and debugger tasks in skip-tests mode
       if (options.skipTests && (task.agentType === 'tester' || task.agentType === 'debugger')) {

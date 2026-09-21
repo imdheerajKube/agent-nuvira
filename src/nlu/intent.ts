@@ -114,13 +114,24 @@ export function matchFixRule(text: string): IntentResult | null {
   // content repair, not debugging — the fix verb must not send a life/school
   // artifact to the developer pipeline (whose planner emits a program).
   if (isContentArtifactAsk(text)) return null;
+  // QUESTION GUARD — it must come BEFORE the verb test, because that test is a
+  // bare keyword match and "the fix for" is the verb used as a NOUN. Measured
+  // live: "so, what is the fix for this error?" classified as a fix TASK and
+  // ran the developer pipeline, purely because the verb test matched first and
+  // the old question guard (below, at character 0 only) never ran. The marker
+  // prefix matters for the same reason: the sentence opens with "so,".
+  //
+  // A task phrased as a question is unaffected: the conversation gate's
+  // coding-action override ("how do I fix …", "can you fix …") still routes it
+  // to the pipeline, which is the surface that decision actually belongs on.
+  if (/^(?:(?:so|now|then|ok|okay|and|but|please)\s*,?\s*)*(?:what|how|why|when|where|which)\b/i.test(text)) {
+    return null;
+  }
   if (/(?:^|[^\w-])(?:fix|debug|repair|troubleshoot|resolve|patch|address|diagnose|correct)(?:$|[^\w-])/i.test(text)) {
     return { intent: 'fix', confidence: 0.85, modeHint: 'execute' };
   }
   // "X is broken", "X keeps failing", "X stopped working" — implicit fix tasks.
   // "X failed" — standalone failure signal ("the build failed").
-  // GUARD: "why is the test failing?" is a QUESTION, not a fix request.
-  if (/^(?:what|how|why|when|where|which)\b/i.test(text)) return null;
   if (/\b(?:is|are|was|were|keeps?|kept|stopped|has stopped)\s+(?:broken|failing|crashing|erroring|not working|working|dead)\b/i.test(text)) {
     return { intent: 'fix', confidence: 0.8, modeHint: 'execute' };
   }
@@ -184,6 +195,84 @@ const CODING_OBJECT_RE =
   /\b(?:functions?|modules?|components?|apis?|endpoints?|routes?|handlers?|controllers?|resolvers?|middleware|hooks?|wrappers?|servers?|databases?|dbs?|clis?|tools?|services?|programs?|scripts?|apps?|applications?|workers?|daemons?|plugins?|packages?|librar(?:y|ies)|projects?|repos?(?:itories)?|schemas?|features?|websites?|web ?apps?|dashboards?|backends?|frontends?|code|codebase|microservices?|dockerfiles?|docker|kubernetes|k8s|sdks?|addons?|extensions?|pipelines?|workflows?|bots?|specs?|migrations?)\b/i;
 
 /**
+ * The artifact phrase a create-style verb asks for — "project plan" in "create
+ * a project plan to develop X".
+ */
+const CREATE_VERB_RE =
+  /\b(?:create|make|write|draft|compose|prepare|design|give|provide|suggest|build|generate)\b\s+(?:me\s+)?(?:(?:a|an|the|some|another|new|my|our)\s+)?/i;
+
+/** Where the requested artifact phrase ends and the purpose clause begins. */
+const ARTIFACT_PHRASE_END_RE =
+  /\s+(?:to|for|with|that|which|who|and|or|about|on|in|from|so|but|then|covering|including|listing|using|based)\b|[,.!?;:]/i;
+
+/**
+ * Remove the requested artifact phrase — but ONLY when its HEAD noun is a
+ * plan/document noun. Otherwise the artifact IS software ("create a course
+ * website") and the coding-object veto must stand.
+ *
+ * This separates a coding noun that MODIFIES the artifact from one that IS the
+ * deliverable. "project plan" asks for a plan ABOUT a project: its head noun is
+ * `plan`, and the bare word `project` used to veto the content guard on its
+ * own. Observed live 2026-09-21 — "Create a project plan to develop a multiple
+ * screen calculator and unit converter…" ran the developer pipeline and failed
+ * 0/7 steps, when the sender was asking for a plan. Compare "create a plan FOR
+ * the ecommerce app", where the software noun sits in a PURPOSE clause rather
+ * than in the artifact phrase: that is still a dev plan, and still reaches the
+ * create rule.
+ */
+function stripRequestedArtifactPhrase(text: string): string {
+  const m = CREATE_VERB_RE.exec(text);
+  if (!m) return text;
+  const start = m.index + m[0].length;
+  const rest = text.slice(start);
+  const end = rest.search(ARTIFACT_PHRASE_END_RE);
+  const phrase = end >= 0 ? rest.slice(0, end) : rest;
+  const words = phrase.split(/[^A-Za-z0-9-]+/).filter(Boolean);
+  const head = words[words.length - 1] ?? '';
+  if (!head || !(NON_CODE_ARTIFACT_RE.test(head) || CONTENT_DOCUMENT_RE.test(head))) return text;
+  return text.slice(0, start) + rest.slice(phrase.length);
+}
+
+/**
+ * A BACKWARD REFERENCE to an artifact that already exists — "as per the plan
+ * you created", "based on my design", "following the schedule".
+ *
+ * THE SAME OBJECT-BLINDNESS, MIRRORED. The guards above fixed a coding noun
+ * used as a *modifier* of the requested artifact ("create a PROJECT PLAN").
+ * This one is the opposite direction: the plan/document noun is not the
+ * requested artifact at all — it names something from an EARLIER turn. So
+ * immediately after the fix that made "create a project plan to develop X"
+ * answer in chat, the obvious follow-up — *"Develop the calculator as per the
+ * plan created by agent-nuvira"* — was answered in CHAT: `plan` matched the
+ * artifact list, no software noun vetoed it, and the user's genuine develop
+ * request never reached the pipeline. The requested deliverable there is the
+ * calculator; `the plan` is context.
+ *
+ * The marker alone is not enough to strip — that would eat whole sentences
+ * ("using the plan, create a worksheet" is a content ask, and its verb would
+ * vanish). The clause is therefore bounded to marker + a short noun phrase
+ * whose head is a KNOWN plan/document/spec noun, which is what keeps it
+ * precise: "generate a report from the data" simply does not match.
+ */
+const ARTIFACT_REFERENCE_RE = new RegExp(
+  '\\b(?:as\\s+per|per|according\\s+to|based\\s+on|in\\s+line\\s+with|consistent\\s+with|following|referring\\s+to|as\\s+(?:described|outlined|detailed|specified|stated|mentioned|defined)\\s+in)' +
+    '\\s+(?:the|my|our|your|that|this|above|previous|earlier|same|a|an)?\\s*' +
+    '(?:[a-z][a-z-]*\\s+){0,2}?' +
+    '(?:plans?|documents?|specs?|specifications?|designs?|proposals?|blueprints?|briefs?|outlines?|roadmaps?|instructions?|schedules?)\\b',
+  'gi',
+);
+
+/**
+ * Drop backward-reference clauses so a guard judges the REQUESTED artifact.
+ * Exported because the conversation gate needs the same view of the sentence:
+ * "Following the plan, develop the calculator" must still read as a coding
+ * action even though it does not literally start with the verb.
+ */
+export function stripArtifactReferences(text: string): string {
+  return String(text ?? '').replace(ARTIFACT_REFERENCE_RE, ' ');
+}
+
+/**
  * True when an ask is about a NON-CODING artifact (a plan/routine/schedule for
  * life, teaching, fitness, diet …) and names no software deliverable. Such an
  * ask must be ANSWERED, never dispatched to the coding pipeline.
@@ -191,7 +280,16 @@ const CODING_OBJECT_RE =
 export function isNonCodeArtifactAsk(text: string): boolean {
   const t = String(text ?? '').trim();
   if (!t) return false;
-  return (NON_CODE_ARTIFACT_RE.test(t) || CONTENT_DOCUMENT_RE.test(t)) && !CODING_OBJECT_RE.test(t);
+  // The artifact word must be in the REQUEST itself, not in a backward
+  // reference to an earlier artifact (see ARTIFACT_REFERENCE_RE). The coding
+  // veto below still reads the FULL text: a software object named anywhere —
+  // including inside the reference clause — still makes this a dev ask.
+  const requested = stripArtifactReferences(t).trim();
+  if (!(NON_CODE_ARTIFACT_RE.test(requested) || CONTENT_DOCUMENT_RE.test(requested))) return false;
+  if (!CODING_OBJECT_RE.test(t)) return true;
+  // A software noun vetoes only when it is NOT merely a modifier inside the
+  // requested artifact phrase (see stripRequestedArtifactPhrase).
+  return !CODING_OBJECT_RE.test(stripRequestedArtifactPhrase(t));
 }
 
 /**

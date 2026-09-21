@@ -35,14 +35,30 @@ export async function renderAskUser(
 
   if (!process.stdin.isTTY) {
     const fallback = choices[0]?.label ?? 'skip';
-    logger.info(`↩ no interactive user attached — defaulting to "${fallback}" and continuing`);
+    // PARITY WITH THE GATEWAY. A messaging channel with askUserWait OFF
+    // replies with the QUESTION and says which option it is going with ("Going
+    // with 1. X — reply to change it"), so the sender can correct it. A piped /
+    // headless CLI run could not do even that: it picked choice 1, told the
+    // MODEL to move on, and the question itself never reached the human — the
+    // model's answer read as a decision the user never made (observed live:
+    // "I have selected Python/Qt" after a silent default). Show the question
+    // and the choices on the visible output, and make the disclosure part of
+    // the model's ANSWER instead of an internal note it echoes verbatim.
+    logger.highlight('  Choices:');
+    choices.forEach((c, i) => {
+      const mark = i === 0 ? '→' : ' ';
+      logger.info(`   ${mark} ${i + 1}. ${c.label}${c.description ? ` — ${c.description}` : ''}`);
+    });
+    logger.info(`↩ no interactive user attached — proceeding with 1. "${fallback}" and continuing`);
     console.log('');
     return {
       answer: multiSelect ? [fallback] : fallback,
       index: multiSelect ? [0] : 0,
       custom:
-        'no interactive user is attached to this session (piped or headless run) — ' +
-        'do not ask again; proceed with your best judgement and state the assumption you made',
+        `Nobody was available to answer in this run, so "${fallback}" was assumed. ` +
+        'Do NOT mention this internal note. Instead, in your written answer tell the user the question ' +
+        `you would have asked and the assumption you made (e.g. "I assumed "${fallback}" — tell me ` +
+        'if you would prefer something else"), then continue with that assumption.',
     };
   }
 

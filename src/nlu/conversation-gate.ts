@@ -33,7 +33,7 @@
 
 import { isTrivialPrompt } from '../memory/provider.js';
 import { parseRequestSync, type ParsedRequest } from './parser.js';
-import { isContentArtifactAsk } from './intent.js';
+import { isContentArtifactAsk, stripArtifactReferences } from './intent.js';
 
 /**
  * Verbs that are unambiguous coding TASKS when used in command position.
@@ -72,8 +72,19 @@ export function hasCodingAction(text: string): boolean {
   // ("create a plan for the ecommerce app").
   if (isContentArtifactAsk(t)) return false;
   // Command position only — a verb used as a noun ("what is the fix for…")
-  // must never be read as an imperative.
-  return TASK_VERB_AT_START.test(t) || TASK_VERB_AFTER_PREFIX.test(t);
+  // must never be read as an imperative. Judged on the REQUESTED action: a
+  // sentence that opens by pointing back at an earlier artifact ("Following
+  // the plan, develop the calculator") still starts the work in command
+  // position, and testing the raw text would miss it. Leading punctuation is
+  // dropped too, since removing a reference clause leaves its comma behind.
+  // A leading discourse marker is not part of the action ("Now implement the
+  // calculator", "Then fix the login bug"). Only markers are dropped, and a
+  // STRONG_TASK_VERB must still follow immediately, so a question is never
+  // misread ("so, what is the fix?" finds no verb in command position).
+  const action = stripArtifactReferences(t)
+    .replace(/^[\s,;:.!-]+/, '')
+    .replace(/^(?:(?:please|now|next|then|ok|okay|so|also|and)\s*,?\s*)+/i, '');
+  return TASK_VERB_AT_START.test(action) || TASK_VERB_AFTER_PREFIX.test(action);
 }
 
 /**

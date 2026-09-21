@@ -157,7 +157,7 @@ export function isPlatformName(word: string): boolean {
 
 /**
  * Did the goal show REAL evidence for this skill — a name-word hit, a tag hit,
- * or two pattern/description-word hits (meta-words and platform names
+ * or two DISTINCT pattern/description words (meta-words and platform names
  * excluded)? Guards the compiled store's intentionally loose threshold:
  * findMatch adds a quality/usage bonus to every skill, so a generic word like
  * "goal" alone must never inject methodology into a chat turn.
@@ -196,19 +196,29 @@ export function hasRealGoalEvidence(
   }
 
   // Pattern-level evidence: the skill's own goalPattern words, plus (for a hub
-  // skill, which has no goalPattern) its description keywords. Two distinct
+  // skill, which has no goalPattern) its description keywords. Two DISTINCT
   // domain words are required — one shared word is not enough to inject a
   // whole methodology into a turn.
-  let patternHits = 0;
+  //
+  // DISTINCT is the whole point, and a plain counter got it wrong: the evidence
+  // text is `goalPattern + description`, so ONE word that a skill repeats in
+  // both fields counted twice and satisfied the "two words" rule on its own.
+  // Measured live (2026-09-21): "Create a book which teaches math's division
+  // for class 4 student" activated `game-development`, whose ONLY overlap is
+  // the word `create` — present in its goalPattern (`game create build …`) and
+  // again in its description ("Use when the goal asks to create, build, or
+  // develop a game"). `create` is also a generic action verb, so the match was
+  // noise in both senses.
+  const patternHits = new Set<string>();
   const evidenceText = `${skill.goalPattern ?? ''} ${skill.description ?? ''}`;
   for (const word of evidenceText.toLowerCase().split(/[^a-z0-9]+/)) {
     const w = word.trim();
     if (w.length > 3 && !PATTERN_STOPWORDS.has(w) && !GENERIC_SKILL_TAGS.has(w) && !isPlatformName(w) && tokens.has(w)) {
-      patternHits++;
+      patternHits.add(w);
     }
   }
 
-  return nameHits >= 1 || tagHits >= 1 || patternHits >= 2;
+  return nameHits >= 1 || tagHits >= 1 || patternHits.size >= 2;
 }
 
 /** Whole-word token set for a goal (word-boundary matching, never substring). */

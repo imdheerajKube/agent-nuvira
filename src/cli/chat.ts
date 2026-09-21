@@ -41,7 +41,8 @@ import { resolveDispatch } from '../nlu/actions.js';
 import { hasCodingAction, resolveAskKind } from '../nlu/conversation-gate.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
 import {
-  looksLikeConfusedScaffoldingReply,
+  detectAnswerQualityFailure,
+  answerQualityError,
   toUserFacingGenerationError,
   isToolCallingUnsupported,
   stripToolCallArtifacts,
@@ -1674,16 +1675,24 @@ export class ChatCommand extends BaseCommand {
         // the tool contract (e.g. apologizing that "the provided example call
         // to suggest_followups is incomplete") instead of executing it — never
         // throws, so failover never fired and the confusion went to the user
-        // verbatim (live WhatsApp incident). Treat it like a generation
-        // failure: THROWS so the caller's failover walk retries with the next
-        // candidate; the raw reply is carried on the error for the final
-        // fallback.
-        const confuseCheck = (content: string): void => {
-          if (looksLikeConfusedScaffoldingReply(content)) {
-            const err = new Error(`model answered with tool-contract confusion instead of the task (reply: ${content.slice(0, 160)})`);
-            (err as Error & { confusedReply?: string }).confusedReply = content;
-            throw err;
-          }
+        // verbatim (live WhatsApp incident). Same for the OTHER quality failure:
+        // the model delivering its own REASONING ("The user said \"Hi\" …
+        // According to the instructions: …"). One shared detector
+        // (`detectAnswerQualityFailure`) is used here and by the loop engine
+        // (`nuvira execute` / the pipeline), so neither surface can drift.
+        // Treat it like a generation failure: THROWS so the caller's failover
+        // walk retries with the next candidate; the raw reply is carried on the
+        // error for the final fallback.
+        // `hasToolCalls` selects the strictness tier: a step that is ACTING may
+        // legitimately open with a first-person narration ("Let me check the
+        // config.") before its tool call, and rejecting it would throw the call
+        // away — so a tool-carrying step is judged on the high-precision
+        // signals only, while the step that IS the answer is judged on all.
+        const confuseCheck = (content: string, hasToolCalls = false): void => {
+          const failure = detectAnswerQualityFailure(content, undefined, {
+            highPrecisionOnly: hasToolCalls,
+          });
+          if (failure) throw answerQualityError(content, failure);
         };
         /** Mark the model that actually produced this response. */
         const answered = <T extends StepResponse>(resp: T): T => {
@@ -1705,11 +1714,11 @@ export class ChatCommand extends BaseCommand {
             // still receives the answer (appears at once — today's behavior).
             if (sink && typeof prov.generateToolsStream === 'function') {
               const result = await prov.generateToolsStream(messages, schemas, { ...options, model: effectiveModel, signal: abort }, sink);
-              confuseCheck(result.content);
+              confuseCheck(result.content, result.toolCalls.length > 0);
               return answered(result);
             }
             const result = await prov.generateTools(messages, schemas, { ...options, model: effectiveModel, signal: abort });
-            confuseCheck(result.content);
+            confuseCheck(result.content, result.toolCalls.length > 0);
             if (sink && result.content) sink(result.content);
             return answered(result);
           } catch (err) {
@@ -1721,7 +1730,7 @@ export class ChatCommand extends BaseCommand {
             if (salvaged) {
               // The salvaged essay can itself be contract-confusion — check it
               // too, otherwise a confused 400 payload sails through salvage.
-              confuseCheck(salvaged.content);
+              confuseCheck(salvaged.content, (salvaged.followups?.length ?? 0) > 0);
               logger.warn("   ⚠️ Tool call rejected (400) — salvaging the model's generated answer.");
               // Re-run the recovered suggest_followups through the normal tool
               // path so the followups land in the sink (and the loop's
@@ -1762,7 +1771,7 @@ export class ChatCommand extends BaseCommand {
           raw = await prov.generate(prompt, { ...options, model: effectiveModel, signal: abort });
         }
         const { text, calls } = extractFallbackToolCalls(raw);
-        confuseCheck(text);
+        confuseCheck(text, calls.length > 0);
         return answered({ content: text, toolCalls: calls });
       };
 

@@ -180,6 +180,32 @@ describe('findLoopSkillMatch — compiled store + hub catalog', () => {
   });
 
   /**
+   * Integration lock on the REAL bundled definition, not a synthetic copy.
+   *
+   * The cases above use a made-up `wsl-setup` object; this one drives the
+   * ACTUAL `wslSetupSkill` shipped in `src/skills/bundled-skills-phase3.ts`
+   * (id `skill-wsl-setup`, tags `wsl, windows, linux, development, gpu`) with
+   * the three live ambiguous goals from the user's report. If a future edit to
+   * that skill's tags/goalPattern reintroduces platform-name evidence, this
+   * test — not a user's WhatsApp reply — catches it.
+   */
+  it('never activates the REAL bundled wsl-setup on the live ambiguous goals', async () => {
+    const { isSkillActivated, hasRealGoalEvidence } = await loadHint();
+    const { wslSetupSkill } = await import('../../src/skills/bundled-skills-phase3.js');
+    const goals = [
+      'Create a project plan to develop a multiple screen calculator and unit converter , it should be GUI and cross platform for Windows and Linux',
+      'Create a plan for diet and exercise to loose wait by 10 KGs in 3 months , i have bad knee',
+      'Can you create plan to enable my child learn spoken English',
+    ];
+    for (const goal of goals) {
+      expect(hasRealGoalEvidence(goal, wslSetupSkill)).toBe(false);
+      expect(isSkillActivated(goal, wslSetupSkill)).toBe(false);
+    }
+    // The skill still fires for its OWN intent — the gate is a filter, not an off-switch.
+    expect(isSkillActivated('set up wsl with gpu passthrough and networking', wslSetupSkill)).toBe(true);
+  });
+
+  /**
    * Evidence matching is by WHOLE WORD. `q.includes(word)` let a skill's
    * goalPattern word match inside an unrelated goal word — measured:
    * `feature-flags` ("…kill switch…") matched "no skill covers alpaca husbandry
@@ -203,6 +229,41 @@ describe('findLoopSkillMatch — compiled store + hub catalog', () => {
     }
     // Real domain evidence still matches.
     expect(hasRealGoalEvidence('add a kill switch for this feature', featureFlagsHub)).toBe(true);
+  });
+
+  /**
+   * Pattern evidence must be two DISTINCT words.
+   *
+   * The evidence text is `goalPattern + description`, so a plain counter let
+   * ONE word that a skill repeats in BOTH fields count twice and clear the
+   * two-word bar on its own. Measured live (2026-09-21): "Create a book which
+   * teaches math's devision for class 4 student" activated `game-development`
+   * — its only overlap with the goal is the word `create`, present in its
+   * goalPattern (`game create build …`) AND again in its description ("Use
+   * when the goal asks to create, build, or develop a game").
+   */
+  it('requires two DISTINCT pattern words (a repeated word is ONE hit)', async () => {
+    const { hasRealGoalEvidence } = await loadHint();
+    const gameDev = {
+      name: 'game-development',
+      tags: ['game', 'gui', 'board-game', '2d', 'interactive', 'entertainment'],
+      goalPattern: 'game create build develop snake ladder tic tac toe chess board card puzzle 2d platformer GUI play win lose',
+      description:
+        'Create a GUI game with graphics, input handling, game logic, and packaging. Use when the goal asks to create, build, or develop a game (board games, card games, puzzle games, 2D games, snake-and-ladder, tic-tac-toe, chess, etc.).',
+    };
+    // The live false positive: the only shared word is `create`.
+    expect(
+      hasRealGoalEvidence("Create a book which teaches math's devision for class 4 student", gameDev),
+    ).toBe(false);
+    expect(hasRealGoalEvidence('Create a plan for diet and exercise to lose weight', {
+      name: 'zorbafier',
+      tags: ['zorbafy'],
+      goalPattern: 'create a widget zorbafy frobnicator',
+    })).toBe(false);
+    // Real game intent still matches — via the name word or distinct domain words.
+    expect(hasRealGoalEvidence('build a 2d platformer game with pygame', gameDev)).toBe(true);
+    expect(hasRealGoalEvidence('create a tic tac toe game', gameDev)).toBe(true);
+    expect(hasRealGoalEvidence('make a board game with chess pieces', gameDev)).toBe(true);
   });
 
   it('gates a hub match on its NAME, not its description prose', async () => {

@@ -41,7 +41,19 @@ import { GatewayHeartbeat, HEARTBEAT_INTERVAL_MS, type AdapterHealth } from './h
 import { logGatewayEvent, previewText } from './gateway-log.js';
 import { hasCodingAction, looksLikeAgentCliAsk, resolveAskKind } from '../nlu/conversation-gate.js';
 import { GatewayChatStore, CHAT_HISTORY_MAX_PAIRS } from './chat-store.js';
-import { looksLikeConfusedScaffoldingReply, toUserFacingGenerationError } from '../inference/tool-call-utils.js';
+import {
+  looksLikeConfusedScaffoldingReply,
+  looksLikeReasoningLeakReply,
+  stripLeadingReasoningTrace,
+  stripToolCallArtifacts,
+  stripReasoningLeak,
+  toUserFacingGenerationError,
+} from '../inference/tool-call-utils.js';
+import {
+  markFailoverAttempts,
+  modelBreadthReport,
+  renderModelBreadthReport,
+} from '../learning/resilient-call.js';
 import { logger } from '../utils/logger.js';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -497,12 +509,24 @@ export function composePipelineReply(pipeline: {
 
   if (!structured) {
     // No structured result: keep the orchestrator's own sentence, but exactly
-    // one verdict and no sentinel.
-    const body = cleaned
+    // one verdict and no sentinel. The verdict is removed BEFORE sanitizing so
+    // (a) a summary that already carries its own "❌ Failed" is not prefixed
+    // with a second one — the same double-verdict defect fixed for the
+    // structured path, which survived here — and (b) a leak is still visible to
+    // the detector, whose opener check reads the FIRST line ("Failed — The user
+    // wants …" hid it). A summary that is nothing but the model's TRACE is not
+    // an outcome, so it is named as such rather than forwarded.
+    const withoutVerdict = cleaned
+      .replace(LEADING_VERDICT_RE, '')
+      .replace(/^\s*(?:Failed|Done|Completed|Error|Success)\s*[—–:-]\s*/i, '')
+      .trim();
+    const body = stripReasoningLeak(stripToolCallArtifacts(withoutVerdict))
       .split('\n')
       .map((l) => l.trim())
       .filter(Boolean);
-    const head = (body.shift() ?? '').replace(LEADING_VERDICT_RE, '').trim();
+    const head =
+      (body.shift() ?? '').trim() ||
+      (withoutVerdict ? 'the model returned its own working notes instead of a result' : '');
     return [`${verdict}${head ? ` — ${head}` : ''}`, ...body.slice(0, 6)].join('\n');
   }
 
@@ -513,8 +537,19 @@ export function composePipelineReply(pipeline: {
   }
   const lines = [`${verdict} — ${counts.join(' · ')}`];
   for (const agent of structured.agentResults.slice(0, 6)) {
-    const detail = stripTruncationSentinel(agent.summary).replace(/\s+/g, ' ').trim();
-    lines.push(`• ${agent.success ? '✅' : '❌'} ${agent.agent}: ${detail.slice(0, 160)}`);
+    // Sanitize each agent line: the loop engine rejects a reasoning reply at
+    // generation time, but the ORCHESTRATOR's agents run their own model calls,
+    // so a trace (or a raw followups payload) can still arrive as a summary.
+    // Observed live: an agent summary that was literally "The user wants a
+    // project plan for a … I should use the `plan_todo` tool to create a
+    // structured plan." A pipeline report is not a place to relay that — keep
+    // the line, name the agent, and say the summary was unusable.
+    const detail = stripReasoningLeak(stripToolCallArtifacts(stripTruncationSentinel(agent.summary)))
+      .replace(/\s+/g, ' ')
+      .trim();
+    lines.push(
+      `• ${agent.success ? '✅' : '❌'} ${agent.agent}: ${detail ? detail.slice(0, 160) : '(no usable summary — the model returned its own working notes)'}`,
+    );
   }
   return lines.join('\n');
 }
@@ -1066,6 +1101,9 @@ export class GatewayRegistry {
     // on WhatsApp actually writes the poem, and the model's toolset includes
     // gateway_send to deliver it.
     if (askKind === 'chat') {
+      // Mark the failover log BEFORE the turn so a failure can report which
+      // models were actually tried (see the failure branch below).
+      const attemptMark = markFailoverAttempts();
       const answer = await this.runInboundChat(msg);
       if (answer && answer.content.trim() && !answer.generationFailed) {
         await replyTo(answer.content);
@@ -1084,10 +1122,17 @@ export class GatewayRegistry {
         confidence: parsed.confidence,
         hasModel: this.hasConfiguredModel(),
       }, 'error');
+      // A failure the sender cannot act on is a failure twice over. When a
+      // model IS configured, say which models were tried, which are parked and
+      // why, and offer to keep checking — instead of "couldn't get an answer".
       const line = this.generationFailureLine();
-      await replyTo(line);
-      record('chat', line);
-      return line;
+      const detail = this.hasConfiguredModel()
+        ? renderModelBreadthReport(modelBreadthReport(attemptMark, this.configManager), { task: msg.text })
+        : undefined;
+      const full = detail ? `${line}\n\n${detail}` : line;
+      await replyTo(full);
+      record('chat', full);
+      return full;
     }
 
     // Pipeline intent that ALSO asks to deliver the result ("create a report
@@ -1114,6 +1159,7 @@ export class GatewayRegistry {
     // activeChannel before the gate: a chat message arriving while a pipeline
     // run is in flight must not redirect the run's board events.
     await replyTo(`✅ Got it — running the ${parsed.action.name} pipeline…`);
+    const pipelineAttemptMark = markFailoverAttempts();
     const run = this.runChain.then(async (): Promise<string> => {
       // Only THIS run's events stream — set activeChannel inside the chain.
       this.activeChannel = ref;
@@ -1137,7 +1183,15 @@ export class GatewayRegistry {
             }
           : null,
       });
-      await replyTo(reply);
+      // On failure, name the models that were tried and the ones parked, so the
+      // sender learns WHY rather than just that it failed.
+      const breadth = result.success
+        ? undefined
+        : renderModelBreadthReport(modelBreadthReport(pipelineAttemptMark, this.configManager), {
+            task: msg.text,
+          });
+      const finalReply = breadth ? `${reply}\n\n${breadth}` : reply;
+      await replyTo(finalReply);
       logGatewayEvent('pipeline.completed', {
         platform: msg.platform,
         channelId: msg.channelId,
@@ -1145,11 +1199,11 @@ export class GatewayRegistry {
         summary: result.summary,
         tools: parsed.action.name,
       }, result.success ? 'info' : 'warn');
-      record('pipeline', reply);
+      record('pipeline', finalReply);
       // Status recipients: ALWAYS forward the completion summary to the
       // configured contacts/groups, whoever triggered it.
-      await this.notifyStatusRecipients(reply);
-      return reply;
+      await this.notifyStatusRecipients(finalReply);
+      return finalReply;
     });
     this.runChain = run.catch(() => undefined);
     return run;
@@ -1361,10 +1415,12 @@ export class GatewayRegistry {
       // E3b: strip any raw suggest_followups JSON the model embedded in the text
       // instead of making a proper tool call — this leaks internal tool-call
       // noise to the channel sender.
-      let content = (answer.content || '')
-        .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
-        .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*<\/function>/g, '')
-        .trim();
+      // ONE shared strip (src/inference/tool-call-utils.ts) — the gateway used
+      // to carry its own two-regex copy, which silently missed the third shape
+      // the model produces (a bold `**suggest_followups**` caption over a
+      // fenced `{"followups":[…]}` payload). Sharing the helper means a new
+      // artifact shape is fixed once for every surface.
+      let content = stripToolCallArtifacts(answer.content || '');
       // Strip leaked internal reasoning, planning blocks, and meta-commentary.
       // The model sometimes emits chain-of-thought (draft planning, tool
       // deliberation, self-correction) as visible text. This cleans it up
@@ -1400,6 +1456,26 @@ export class GatewayRegistry {
       if (looksLikeConfusedScaffoldingReply(content)) {
         logger.warn(`gateway: suppressing contract-confusion reply (${content.length} chars)`);
         content = '🤖 Sorry — none of my language models could handle that request just now. Please try again in a moment, or rephrase it — you can also run `nuvira models` to check your model setup.';
+      }
+      // LAST-RESORT guard for the OTHER answer-quality failure: the model's own
+      // reasoning delivered as the reply. The loop now rejects these (see
+      // `looksLikeReasoningLeakReply` in chat.ts's confuseCheck), so reaching
+      // here means EVERY candidate narrated its thinking. Two of the three real
+      // incidents had a real answer BEHIND the trace, so try to salvage it
+      // first — only a reply that was trace and nothing else is suppressed.
+      // Without this, the sender reads "The user said \"Hi\" … According to the
+      // instructions: …" as if it were an answer.
+      if (looksLikeReasoningLeakReply(content)) {
+        const salvaged = stripLeadingReasoningTrace(content);
+        if (salvaged.trim() && !looksLikeReasoningLeakReply(salvaged)) {
+          logger.warn(
+            `gateway: stripped a leaked reasoning trace (${content.length} → ${salvaged.length} chars) and delivered the remainder`,
+          );
+          content = salvaged;
+        } else {
+          logger.warn(`gateway: suppressing reasoning-only reply (${content.length} chars)`);
+          content = '🤖 Sorry — none of my language models could handle that request just now. Please try again in a moment, or rephrase it — you can also run `nuvira models` to check your model setup.';
+        }
       }
       // P5 — remember what we offered (for the next inbound), and render the
       // "Try next" list CLEAN + STRUCTURED through the shared normalizer.

@@ -158,6 +158,35 @@ describe('isNonCodeArtifactAsk', () => {
     expect(matchCreateRule('create a study plan for class 4')).toBeNull();
     expect(matchWriteRule('create a study plan for class 4')?.modeHint).toBe('chat');
   });
+
+  it('a coding noun that only MODIFIES the artifact does not veto it', () => {
+    // Observed live 2026-09-21 (WhatsApp): this ran the developer pipeline and
+    // failed 0/7 steps, when the sender was asking for a plan. The head noun is
+    // `plan`; "project" only says what the plan covers.
+    const PROJECT_PLAN =
+      'Create a project plan to develop a multiple screen calculator and unit converter, it should be GUI and cross platform for Windows and Linux';
+    expect(isNonCodeArtifactAsk(PROJECT_PLAN)).toBe(true);
+    expect(isNonCodeArtifactAsk('create a project plan')).toBe(true);
+    expect(isNonCodeArtifactAsk('create an app plan for the checkout flow')).toBe(true);
+    expect(isNonCodeArtifactAsk('make a website plan to launch in March')).toBe(true);
+    // No article, as sent over WhatsApp.
+    expect(isNonCodeArtifactAsk('create project plan to develop a calculator')).toBe(true);
+  });
+
+  it('still vetoes when the software noun is the DELIVERABLE, not a modifier', () => {
+    // The artifact phrase's HEAD decides. These are code and must stay code:
+    // the software noun sits in a purpose clause, or is itself the head noun.
+    for (const t of [
+      'create a plan for the ecommerce app',
+      'create a project plan for the API migration',
+      'create a test plan for the new module',
+      'create a course website',
+      'create a book management API',
+      'create a script to back up files',
+    ]) {
+      expect(isNonCodeArtifactAsk(t), t).toBe(false);
+    }
+  });
 });
 
 /**
@@ -188,6 +217,11 @@ describe('intent rules — object-blindness audit (content vs code)', () => {
     'make a weekly grocery list',
     'create a guide for new parents',
     'make a table of contents',
+    // A software noun that only MODIFIES the artifact does not make it code —
+    // the head noun is `plan`. Observed live 2026-09-21: this exact ask ran the
+    // developer pipeline (planner: python+flet) and failed 0/7 steps, when the
+    // sender was asking for a plan.
+    'Create a project plan to develop a multiple screen calculator and unit converter, it should be GUI and cross platform for Windows and Linux',
   ];
 
   const CODE_ASKS: Array<[string, ModeHint]> = [

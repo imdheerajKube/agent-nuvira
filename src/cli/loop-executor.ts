@@ -45,7 +45,12 @@ import { resolveModelHarnessProfile } from '../learning/model-harness.js';
 import { hasCredentials } from '../learning/model-selection.js';
 import { resolveEngine } from '../learning/engine-router.js';
 import { logger } from '../utils/logger.js';
-import { toUserFacingGenerationError } from '../inference/tool-call-utils.js';
+import {
+  toUserFacingGenerationError,
+  detectAnswerQualityFailure,
+  answerQualityError,
+  type AnswerQualityKind,
+} from '../inference/tool-call-utils.js';
 import type { InferenceProvider, ToolMessage } from '../inference/interface.js';
 import type { ToolJsonSchema } from '../tools/registry.js';
 
@@ -487,6 +492,36 @@ export async function runLoopExecutor(
         provider = prov;
         model = mdl;
         const resp = await tryOnce(prov, mdl, messages, schemas, abort);
+        // ── ANSWER-QUALITY GATE ──────────────────────────────────────────
+        // A reply that is the model's own REASONING, or its narration of the
+        // tool contract, is not a deliverable — and it never THROWS, so this
+        // walk (which only reacts to provider errors) used to accept it and
+        // the loop returned it as the turn's answer. Observed live from
+        // `nuvira execute` on 2026-09-21, in a run whose tool calls succeeded:
+        //   "The user wants a project plan for a … I should use the
+        //    `plan_todo` tool to create a structured plan."
+        // was the printed answer, and the same class reached WhatsApp senders.
+        // One shared detector with the chat loop (see
+        // `detectAnswerQualityFailure`), so the engine that drives `execute`
+        // and every pipeline run can no longer be the surface that ships it.
+        //
+        // Checked BEFORE the success attribution: a rejected reply must not
+        // mark the model verified for real usage. Throwing lands in the catch
+        // below, which treats a quality failure as a candidate-level miss
+        // (never a provider outage) and walks on.
+        //
+        // Two-tier on purpose: a step that carries TOOL CALLS may legitimately
+        // open with an action narration ("Let me check the project files." then
+        // `list_dir`), and rejecting it would throw that call away — measured
+        // on the JSON-fallback transport, whose real lead-in `I will check.`
+        // tripped the deliberation opener and lost the step's `list_dir` call.
+        // A tool-carrying step is therefore judged on the HIGH-PRECISION
+        // signals only (narrating the conversation, reciting the prompt), while
+        // the step that IS the answer is judged on all of them.
+        const quality = detectAnswerQualityFailure(resp.content, schemas.map((s) => s.name), {
+          highPrecisionOnly: resp.toolCalls.length > 0,
+        });
+        if (quality) throw answerQualityError(resp.content, quality);
         // Success attribution — the same per-action write-through chat/execute
         // use, so the provider × model is marked verified for real usage.
         recordRegistrySuccess(cand.provider, mdl, 'execute');
@@ -497,32 +532,51 @@ export async function runLoopExecutor(
         if (abort?.aborted) throw err;
         lastErr = err;
         failedPairs.add(key);
-        // FULL shared bookkeeping: session exclusion → (rate-limit) ledger
-        // park → registry write-through → quota timeline → circuit breaker.
-        // This is what makes a mid-loop 429 LEARNED: the model rests and the
-        // next run (and this turn's later steps) routes around it.
-        try {
-          recordActionFailure(failureSession, cand.provider, err, configManager, {
-            model: cand.model !== 'default' ? cand.model : model,
-            action: 'execute',
-          });
-        } catch {
-          // Best-effort — bookkeeping must never mask the generation error.
-        }
-        // ── PINNED-RUN GATE ────────────────────────────────────────────────
-        // Leaving a provider the user EXPLICITLY asked for is only justified by
-        // a failure another provider can plausibly answer — the same retryable
-        // gate chat's non-auto path uses. An auth error (the key is dead) or a
-        // deterministic request-shape rejection fails identically everywhere;
-        // surfacing it beats silently running the user's job somewhere they did
-        // not ask for. The failure is still recorded above, so the pin does not
-        // blind the router to a dead key.
-        if (pinnedRun && !isRetryableError(classifyFallbackError(err))) {
-          throw err;
+        /**
+         * A QUALITY failure is not a provider OUTAGE: the model answered, just
+         * not usefully. It is excluded from the failure bookkeeping below on
+         * purpose — `classifyFallbackError` reads a reasoning/confusion error as
+         * `unknown`, which would park the provider, decay its health score and
+         * teach the bandit that a healthy endpoint is weak, all for a prompt it
+         * answered in the wrong voice. The candidate is simply done for this
+         * turn, and the pinned gate is skipped so a genuine development ask can
+         * still reach the next candidate instead of dying on step 1.
+         */
+        const qualityKind = (err as Error & { qualityKind?: AnswerQualityKind }).qualityKind;
+        if (!qualityKind) {
+          // FULL shared bookkeeping: session exclusion → (rate-limit) ledger
+          // park → registry write-through → quota timeline → circuit breaker.
+          // This is what makes a mid-loop 429 LEARNED: the model rests and the
+          // next run (and this turn's later steps) routes around it.
+          try {
+            recordActionFailure(failureSession, cand.provider, err, configManager, {
+              model: cand.model !== 'default' ? cand.model : model,
+              action: 'execute',
+            });
+          } catch {
+            // Best-effort — bookkeeping must never mask the generation error.
+          }
+          // ── PINNED-RUN GATE ──────────────────────────────────────────────
+          // Leaving a provider the user EXPLICITLY asked for is only justified
+          // by a failure another provider can plausibly answer — the same
+          // retryable gate chat's non-auto path uses. An auth error (the key is
+          // dead) or a deterministic request-shape rejection fails identically
+          // everywhere; surfacing it beats silently running the user's job
+          // somewhere they did not ask for. The failure is still recorded above,
+          // so the pin does not blind the router to a dead key.
+          if (pinnedRun && !isRetryableError(classifyFallbackError(err))) {
+            throw err;
+          }
         }
         extendWithPinnedFallbacks();
         if (!opts.quiet) {
-          logger.warn(`   \u26A0\uFE0F ${cand.provider} failed — trying the next loop candidate...`);
+          logger.warn(
+            qualityKind
+              ? `   \u26A0\uFE0F ${cand.provider} answered with ${
+                  qualityKind === 'reasoning' ? 'its own reasoning' : 'tool-contract confusion'
+                } instead of the task — trying the next loop candidate...`
+              : `   \u26A0\uFE0F ${cand.provider} failed — trying the next loop candidate...`,
+          );
         }
       }
     }

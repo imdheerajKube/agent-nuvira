@@ -18,6 +18,11 @@ import { dirname, join } from 'node:path';
 // LEAF import on purpose: the dashboard console must not pull the whole tool
 // registry in just to clean up / recognise followups.
 import { isSuggestedFollowup, normalizeFollowups, type FollowupSuggestion } from '../tools/followup-utils.js';
+import {
+  looksLikeReasoningLeakReply,
+  stripLeadingReasoningTrace,
+  stripToolCallArtifacts,
+} from '../inference/tool-call-utils.js';
 import { PlanStore, type PlanSnapshot, type PlanStoreLike } from '../tools/plan-store.js';
 
 /** One stored turn in a chat session. */
@@ -659,11 +664,24 @@ export class ChatConsole {
         provider: answer.provider ?? null,
         model: answer.model ?? null,
       });
-      // E3b: strip raw suggest_followups JSON embedded in content
-      const cleanContent = (answer.content || '')
-        .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
-        .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*<\/function>/g, '')
-        .trim();
+      // E3b: strip raw suggest_followups artifacts — the ONE shared helper (the
+      // gateway and CLI use it too), so a new artifact shape is fixed once.
+      let cleanContent = stripToolCallArtifacts(answer.content || '');
+      // ANSWER-QUALITY guard, mirroring the gateway's: the loop now REJECTS a
+      // reply that is the model's own reasoning (see `looksLikeReasoningLeakReply`
+      // in cli/chat.ts's confuseCheck), so a bubble here normally means every
+      // candidate narrated. Recover the deliverable if one sat behind the trace
+      // (two of the three real incidents did) instead of showing the reader
+      // "The user said \"Hi\" … According to the instructions: …".
+      if (looksLikeReasoningLeakReply(cleanContent)) {
+        const salvaged = stripLeadingReasoningTrace(cleanContent);
+        if (salvaged.trim() && !looksLikeReasoningLeakReply(salvaged)) {
+          cleanContent = salvaged;
+        } else {
+          cleanContent =
+            '🤖 Sorry — I could not produce a usable answer just now. Please try again in a moment, or rephrase the request.';
+        }
+      }
       // HONESTY GUARDS — the same corrections the gateway appends, so a
       // dashboard reader is never shown "I have sent it" as done, or
       // "I will now …" as pending, when nothing actually happened. The trace

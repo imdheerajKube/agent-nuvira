@@ -44,6 +44,7 @@ import { isConversationalQuestion } from '../nlu/conversation-gate.js';
 import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
 import { maybeAutoRecall, recallCard, recallContextBlock, recallPolicy } from '../context/session-recall.js';
 import { toFollowupSuggestions } from '../tools/registry.js';
+import { stripToolCallArtifacts, stripReasoningLeak, ANSWER_QUALITY_FAILURE_LINE } from '../inference/tool-call-utils.js';
 import { maybeRunBackgroundDuties } from './duties.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { sweepTransientFailures, sessionRevivalStore } from '../learning/provider-revival.js';
@@ -1612,7 +1613,10 @@ export class ExecuteCommand extends BaseCommand {
         ...(provider ? { provider } : {}),
         ...(model ? { model } : {}),
       });
-      const content = (answer.content ?? '').trim();
+      // Parity with the dashboard/gateway: never print a raw suggest_followups
+      // payload (or the empty fence it leaves behind) as if it were the answer,
+      // and never print the model's own reasoning as one either.
+      const content = displayTextOrLine(answer.content ?? '');
       if (options.jsonEvents) {
         process.stdout.write(JSON.stringify({
           type: 'result',
@@ -1657,8 +1661,17 @@ export class ExecuteCommand extends BaseCommand {
         model,
         quiet: !!options.jsonEvents,
       });
-      const content = (result.content ?? '').trim();
-      const success = !result.generationFailed;
+      // The loop engine's answer is rendered by THIS command while the gateway
+      // and dashboard console both sanitize it before showing it. Without this
+      // the execute CLI printed a `**suggest_followups**` caption plus its raw
+      // JSON payload (observed live from `nuvira execute`) — and, in the same
+      // session, the model's own reasoning as the answer ("The user wants a
+      // project plan… I should use the `plan_todo` tool…"). The loop engine now
+      // REJECTS a reasoning reply at generation time, so this is the last line
+      // of defence; a suppressed reply is never reported as a success.
+      const content = displayTextOrLine(result.content ?? '');
+      const suppressed = suppressReasoningLeak(result.content ?? '');
+      const success = !result.generationFailed && !suppressed;
       if (options.jsonEvents) {
         process.stdout.write(JSON.stringify({
           type: 'result',
@@ -1854,10 +1867,16 @@ export class ExecuteCommand extends BaseCommand {
           type: 'result',
           success: result.success,
           goal: result.goal,
-          summary: result.summary,
+          summary: displayTextOrLine(result.summary),
           tasksCompleted: result.tasksCompleted,
           tasksTotal: result.tasksTotal,
-          agentResults: result.agentResults,
+          // Each agent line goes through the same sanitizer: a `--json-events`
+          // consumer must not receive a leaked reasoning trace as an agent's
+          // summary either.
+          agentResults: result.agentResults.map((ar) => ({
+            ...ar,
+            summary: displayTextOrLine(ar.summary),
+          })),
           fileChanges: result.fileChanges,
           runOutput: result.runOutput,
           error: result.error,
@@ -1960,6 +1979,39 @@ export class ExecuteCommand extends BaseCommand {
   }
 }
 
+// ─── Answer rendering ───────────────────────────────────────────────────────
+
+/**
+ * Text fit to show a human: tool-call artifacts stripped, and a leading
+ * reasoning trace salvaged away (empty when the trace was the whole reply).
+ *
+ * ONE definition for every execute render path — the loop engine, the direct
+ * answer, the pipeline report and each agent line — so the human output and the
+ * `--json-events` payload can never disagree about what was shown (the parity
+ * gap that let a raw `**suggest_followups**` payload reach `nuvira execute`
+ * while the gateway and dashboard stripped it).
+ */
+function displayText(text: string): string {
+  return stripReasoningLeak(stripToolCallArtifacts(text ?? '')).trim();
+}
+
+/**
+ * `displayText`, plus an honest line when nothing deliverable remained — for the
+ * surfaces that must always render something (the pipeline summary and its
+ * per-agent lines). Empty input stays empty: an absent summary is not a
+ * suppressed one.
+ */
+function displayTextOrLine(text: string): string {
+  if (!(text ?? '').trim()) return '';
+  return displayText(text) || ANSWER_QUALITY_FAILURE_LINE;
+}
+
+/** Did this reply have to be suppressed as a reasoning trace (nothing usable)? */
+function suppressReasoningLeak(text: string): boolean {
+  const raw = (text ?? '').trim();
+  return raw !== '' && displayText(raw) === '';
+}
+
 // ─── Pretty Printer ─────────────────────────────────────────────────────────
 
 /**
@@ -1972,7 +2024,7 @@ export function printOrchestrationResult(result: import('../agents/orchestrator.
   logger.highlight(`${'═'.repeat(60)}`);
 
   console.log(`\n  Goal: ${result.goal}`);
-  console.log(`\n  ${result.summary}`);
+  console.log(`\n  ${displayTextOrLine(result.summary)}`);
   console.log(`  Tasks: ${result.tasksCompleted}/${result.tasksTotal} completed`);
 
   if (result.trajectoryId) {
@@ -1983,9 +2035,10 @@ export function printOrchestrationResult(result: import('../agents/orchestrator.
     console.log(`\n  Agents:`);
     for (const ar of result.agentResults) {
       const icon = ar.success ? '✅' : '❌';
-      const truncatedSummary = ar.summary.length > 120
-        ? ar.summary.slice(0, 120) + '...'
-        : ar.summary;
+      const agentSummary = displayTextOrLine(ar.summary);
+      const truncatedSummary = agentSummary.length > 120
+        ? agentSummary.slice(0, 120) + '...'
+        : agentSummary;
       console.log(`    ${icon} ${ar.agent}: ${truncatedSummary}`);
     }
   }

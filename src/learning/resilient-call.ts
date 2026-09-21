@@ -635,6 +635,13 @@ export function createResilientCallLLM(
       // itself, so the provider's other candidates in this list stay reachable
       // (deep failover). Shared with chat/execute via the same factory.
       if (failoverFilter(candidate.provider, candidate.model)) {
+        recordFailoverAttempt({
+          provider: candidate.provider,
+          model: candidate.model,
+          kind: 'skipped',
+          skipped: true,
+          reason: 'ruled out by a recent failure or the model registry',
+        });
         if (options.verbose) {
           logger.debug(`   ⏭️  ${candidate.provider}/${candidate.model} excluded (failure or registry) — skipping`);
         }
@@ -644,6 +651,13 @@ export function createResilientCallLLM(
       // Resolve the provider adapter
       const adapter = resolveProviderAdapter(configManager, candidate.provider);
       if (!adapter) {
+        recordFailoverAttempt({
+          provider: candidate.provider,
+          model: candidate.model,
+          kind: 'skipped',
+          skipped: true,
+          reason: 'no credential configured for it',
+        });
         if (options.verbose) {
           logger.debug(`   ⏭️  ${candidate.provider} unresolvable — skipping`);
         }
@@ -653,6 +667,13 @@ export function createResilientCallLLM(
       // Check availability
       try {
         if (!(await adapter.isAvailable())) {
+          recordFailoverAttempt({
+            provider: candidate.provider,
+            model: candidate.model,
+            kind: 'skipped',
+            skipped: true,
+            reason: 'adapter reported itself unavailable',
+          });
           if (options.verbose) {
             logger.debug(`   ⏭️  ${candidate.provider} unavailable — skipping`);
           }
@@ -739,6 +760,15 @@ export function createResilientCallLLM(
         // Classify and record the failure
         const kind = classifyFailure(err);
         const duration = exclusionDuration(kind);
+        // Telemetry for the failure report: the user is told which models were
+        // actually called and why each one did not answer.
+        recordFailoverAttempt({
+          provider: candidate.provider,
+          model: candidate.model,
+          kind: String(kind),
+          skipped: false,
+          reason: failureKindPhrase(String(kind)),
+        });
 
         // PER-MODEL EXCLUSION when the failing model is known. Excluding the
         // whole provider here is what stopped a provider's 2nd-best model from
@@ -1172,4 +1202,178 @@ function isRegistryRuledOut(provider: string, model: string | undefined): boolea
   } catch {
     return false;
   }
+}
+
+// ─── What the walk actually ATTEMPTED ──────────────────────────────────────
+//
+// `describeRoutingExclusions` answers "why is this provider being SKIPPED?" —
+// it is a snapshot of records. It cannot answer "what did you actually TRY?",
+// because an attempt is an EVENT, not a record. A failure report needs both
+// halves: a user told "the model was unavailable" has no way to tell a genuinely
+// exhausted pool from one provider that rate-limited while three others sat
+// parked on quota.
+//
+// Recording is a ring buffer, not state: a caller marks a position before
+// starting work and asks for what was recorded since. Nothing here can change a
+// routing decision — it is telemetry, and every write is guarded.
+
+/** One model the failover walk attempted, and why it did not answer. */
+export interface FailoverAttempt {
+  provider: string;
+  model: string;
+  /** Classified failure kind, or `skipped` when it was never called. */
+  kind: string;
+  /** True when the candidate was skipped rather than called and failed. */
+  skipped: boolean;
+  /** Short human phrase — what a user can act on. */
+  reason: string;
+}
+
+const FAILOVER_ATTEMPT_LIMIT = 200;
+let failoverSeq = 0;
+const failoverAttempts: Array<FailoverAttempt & { seq: number; at: number }> = [];
+
+/** Mark the current position in the attempt log (pass the result to `attemptsSince`). */
+export function markFailoverAttempts(): number {
+  return failoverSeq;
+}
+
+/** Attempts recorded since `mark`, oldest first. */
+export function attemptsSince(mark: number): FailoverAttempt[] {
+  return failoverAttempts.filter((a) => a.seq > mark).map(({ seq: _s, at: _a, ...rest }) => rest);
+}
+
+/** Record one attempt. Best-effort: telemetry must never break routing. */
+export function recordFailoverAttempt(attempt: FailoverAttempt): void {
+  try {
+    failoverSeq += 1;
+    failoverAttempts.push({ ...attempt, seq: failoverSeq, at: Date.now() });
+    if (failoverAttempts.length > FAILOVER_ATTEMPT_LIMIT) {
+      failoverAttempts.splice(0, failoverAttempts.length - FAILOVER_ATTEMPT_LIMIT);
+    }
+  } catch {
+    /* never break routing for telemetry */
+  }
+}
+
+/** A short, human phrase for a failure kind — what the user can act on. */
+export function failureKindPhrase(kind: string): string {
+  switch (kind) {
+    case 'rate-limit':
+      return 'rate limited (quota) — still logged in, just throttled';
+    case 'auth':
+      return 'rejected its credential';
+    case 'timeout':
+      return 'timed out';
+    case 'network':
+      return 'network error';
+    case 'model-not-found':
+      return 'model not found';
+    case 'context-window':
+      return 'the prompt was too large for its window';
+    case 'server':
+      return 'provider-side error';
+    default:
+      return 'failed';
+  }
+}
+
+/** Both halves of "why did this fail": what was tried, what is parked. */
+export interface ModelBreadthReport {
+  tried: FailoverAttempt[];
+  /** Active exclusions right now — the models that were NOT available to try. */
+  parked: RoutingExclusionReport[];
+  /** ms until the soonest parked model frees up (absent when none will). */
+  nextFreeInMs?: number;
+}
+
+/**
+ * Collect what the walk tried since `mark`, plus every model parked right now.
+ * Deliberately assembled from `describeRoutingExclusions` — the SAME evaluation
+ * enforcement uses — so the report can never disagree with what routing did.
+ */
+export function modelBreadthReport(mark: number, configManager?: ConfigManager): ModelBreadthReport {
+  const tried = attemptsSince(mark);
+  let parked: RoutingExclusionReport[] = [];
+  try {
+    parked = describeRoutingExclusions(configManager).filter((r) => r.active);
+  } catch {
+    parked = [];
+  }
+  const now = Date.now();
+  const nextFreeInMs = parked.reduce<number | undefined>((acc, r) => {
+    if (!r.expiresAt) return acc;
+    const wait = Math.max(0, r.expiresAt - now);
+    return acc === undefined || wait < acc ? wait : acc;
+  }, undefined);
+  return { tried, parked, ...(nextFreeInMs !== undefined ? { nextFreeInMs } : {}) };
+}
+
+/** "2m", "55m", "3h" — a wait a person can read. */
+export function formatWait(ms: number): string {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  return `${Math.round(ms / 3_600_000)}h`;
+}
+
+/**
+ * The honest failure message: what was tried, what was parked and WHY, and
+ * whether waiting would help.
+ *
+ * Replaces a bare "the language model was unavailable", which names no cause and
+ * offers no next step. The agent's job is to deliver a task, so a failure it
+ * cannot avoid must at least tell the user which models were in play and
+ * whether the situation is temporary — a pool that is genuinely empty and a
+ * pool that is briefly throttled look identical from a one-line apology.
+ *
+ * Returns undefined when there is nothing concrete to report, so callers keep
+ * their existing (already-actionable) error line rather than printing an empty
+ * report.
+ */
+export function renderModelBreadthReport(
+  report: ModelBreadthReport,
+  opts: { task?: string } = {},
+): string | undefined {
+  const tried = report.tried.filter((a) => !a.skipped);
+  const skipped = report.tried.filter((a) => a.skipped);
+  if (tried.length === 0 && report.parked.length === 0 && skipped.length === 0) return undefined;
+
+  const lines: string[] = [];
+  lines.push(opts.task ? `😞 I couldn't finish: ${opts.task.slice(0, 120)}` : "😞 I couldn't finish that task.");
+
+  if (tried.length > 0) {
+    lines.push('');
+    lines.push(`I tried ${tried.length} model${tried.length === 1 ? '' : 's'}:`);
+    for (const a of tried.slice(0, 8)) {
+      lines.push(`  • ${a.provider}/${a.model} — ${a.reason}`);
+    }
+  }
+
+  if (report.parked.length > 0) {
+    const now = Date.now();
+    lines.push('');
+    lines.push('Not available to try (parked), and why:');
+    for (const r of report.parked.slice(0, 8)) {
+      const target = r.model ? `${r.provider}/${r.model}` : r.provider;
+      const wait = r.expiresAt ? ` — free in ~${formatWait(Math.max(0, r.expiresAt - now))}` : '';
+      lines.push(`  • ${target} — ${failureKindPhrase(r.kind)}${wait}`);
+    }
+  }
+
+  if (skipped.length > 0 && tried.length === 0) {
+    lines.push('');
+    lines.push(`Every candidate was skipped before it could be called (${skipped.length}).`);
+  }
+
+  lines.push('');
+  if (report.nextFreeInMs !== undefined) {
+    lines.push(
+      `A model frees up in about ${formatWait(report.nextFreeInMs)}. Want me to keep checking and run this the moment one is available, then update you here? Reply *yes* and I will keep trying until it is done.`,
+    );
+  } else {
+    lines.push(
+      'No suitable model is available right now. Want me to keep checking in the background and run this as soon as one comes back? Reply *yes* and I will keep trying until it is done.',
+    );
+  }
+  return lines.join('\n');
 }
