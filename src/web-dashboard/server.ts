@@ -42,6 +42,8 @@ import {
 import { TaskRunner } from './task-runner.js';
 import { WhatsAppPairingManager } from './whatsapp-pairing.js';
 import { ChatConsole, newChatSessionId } from './chat-console.js';
+import { ChatRetryBroker, type ChatRetryEvent } from './chat-retry.js';
+import { markFailoverAttempts } from '../learning/resilient-call.js';
 import { buildProjectContext, formatProjectText, type ProjectContextBundle } from './project-context.js';
 import { isVaultRef } from '../enterprise/vault.js';
 import { ROLES, roleCan, type Role } from '../enterprise/rbac.js';
@@ -335,6 +337,48 @@ export function broadcastTyping(event: { platform: string; channelId: string; ty
     try { client.res.write(payload); } catch { /* client disconnected */ }
   }
 }
+
+/**
+ * Push a deferred-retry update to the open dashboard.
+ *
+ * The retry runs minutes or hours after the turn that queued it, long after the
+ * per-session chat stream has been torn down (the client unsubscribes when the
+ * POST resolves), so it rides the PERSISTENT `/api/sse` channel the app opens
+ * once at load. The session id is in the payload because that channel is shared
+ * by every session and by every other panel.
+ */
+export function broadcastChatRetry(event: ChatRetryEvent): void {
+  const payload = `event: chat-retry\ndata: ${JSON.stringify({ ...event, serverTime: Date.now() })}\n\n`;
+  for (const client of sseClients) {
+    try { client.res.write(payload); } catch { /* client disconnected */ }
+  }
+}
+
+/**
+ * The deferred-retry drain (one timer per process; idempotent).
+ *
+ * Armed with the server and cleared on shutdown. A retry is meant to outlive the
+ * user's attention — that is the whole point of the offer — so unlike the quota
+ * watcher this is NOT tied to an open SSE client: closing the tab must not
+ * cancel the work the agent promised to finish.
+ */
+let chatRetryTimer: ReturnType<typeof setInterval> | null = null;
+function armChatRetryDrain(): void {
+  if (chatRetryTimer) return;
+  chatRetryTimer = setInterval(() => {
+    void chatRetryBroker.drain().catch(() => undefined);
+  }, CHAT_RETRY_DRAIN_INTERVAL_MS);
+  // Never hold the event loop open for a background convenience.
+  chatRetryTimer.unref?.();
+}
+function disarmChatRetryDrain(): void {
+  if (!chatRetryTimer) return;
+  clearInterval(chatRetryTimer);
+  chatRetryTimer = null;
+}
+
+/** How often the dashboard checks for a retry whose wait is over (ms). */
+const CHAT_RETRY_DRAIN_INTERVAL_MS = 15_000;
 
 // ─── ZIP Generation (no external dependencies) ─────────────────────────────
 
@@ -2713,6 +2757,22 @@ let whatsappPairing = new WhatsAppPairingManager();
 // sidebar can resume any past conversation after a dashboard restart.
 let chatConsole = new ChatConsole({ persistPath: join(MEMORY_DIR, 'chat-sessions.json') });
 
+/**
+ * The dashboard's half of the deferred retry loop (one per process).
+ *
+ * Reads `chatConsole` lazily through its closures, so the test hook that swaps
+ * the console keeps working: a broker captured at module load would freeze the
+ * original console and retry into a session nobody is looking at.
+ */
+const chatRetryBroker = new ChatRetryBroker({
+  // `recordTurn: false` — the broker writes the retry outcome itself, once,
+  // with the header that explains an answer arriving unprompted.
+  answer: (sessionId, text) => chatConsole.answer(sessionId, text, { recordTurn: false }),
+  isBusy: (sessionId) => chatConsole.isBusy(sessionId),
+  notify: (event) => broadcastChatRetry(event),
+  persistTurn: (sessionId, user, assistant) => chatConsole.appendTurns(sessionId, user, assistant),
+});
+
 // Phase 4 (AGENTIC_CAPABILITY_ASSESSMENT Addendum v4) — the chat console's
 // loop turns record their engine + per-tool telemetry into the DAG store (a
 // local hook, never a cross-module import: chat-console must not know about
@@ -2780,6 +2840,15 @@ export function setChatConsoleForTest(console: ChatConsole): void {
 }
 
 /**
+ * Test hook: run one deferred-retry drain immediately, instead of waiting for
+ * the 15s tick. Mirrors `setChatConsoleForTest` — the seam a real-HTTP test
+ * needs to observe a retry that is otherwise hours of wall-clock away.
+ */
+export async function runChatRetryDrainForTest(): Promise<void> {
+  await chatRetryBroker.drain();
+}
+
+/**
  * The LIVE server handle, kept module-level so the Shutdown route can close
  * the listeners (primary + IPv6 twin) before exiting — a dashboard stopped
  * from its own UI must free the port immediately, not wait for the OS.
@@ -2798,6 +2867,9 @@ let dashboardShutdownAction: () => void = () => {
     if (activeServerHandle?.ipv6Twin) {
       try { activeServerHandle.ipv6Twin.close(); } catch { /* best-effort */ }
     }
+    // The queue itself is PERSISTED and deliberately left alone: a restart
+    // resumes it (the normal case for a quota wait). Only the timer stops.
+    disarmChatRetryDrain();
     process.exit(0);
   }, 150);
 };
@@ -5664,10 +5736,29 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // stream closes): for an ABORTED fetch the response never completes, so
       // writableEnded stays false and the turn is cancelled; after a normal
       // completion writableEnded is true and this is a no-op.
+      // A pending retry offer is answered HERE, before any turn runs: the reply
+      // belongs to the offer, not to the composer's next request. A message that
+      // is neither yes nor no falls through to normal handling.
+      const retryReply = chatRetryBroker.consumeAnswer(sessionId, message);
+      if (retryReply) {
+        writeJson(res, 200, {
+          ok: true,
+          sessionId,
+          content: retryReply,
+          followups: [],
+          provider: null,
+          model: null,
+          generationFailed: false,
+        });
+        return;
+      }
       const onResClose = () => {
         if (!res.writableEnded) chatConsole.abort(sessionId);
       };
       res.on('close', onResClose);
+      // Mark the failover log BEFORE the turn so a failure can report which
+      // models were actually tried (same contract as the gateway).
+      const attemptMark = markFailoverAttempts();
       const result = await chatConsole.answer(sessionId, message, { provider, model, projectContext, projectPath, attachments });
       // The response is written below — remove the disconnect listener so a
       // post-completion close can never touch the console again.
@@ -5679,14 +5770,38 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         });
         return;
       }
+      // A failed generation gets the SAME treatment as the gateway: report what
+      // was tried, offer to keep checking, and queue the ask so the offer is
+      // enforced (see ChatRetryBroker). Without this the console was a dead end
+      // — the reader had to wait and re-send the message themselves.
+      let content = result.content ?? '';
+      // Did the offer we are about to send get a mechanism behind it? The client
+      // uses this to stop offering "↻ Retry" for a turn the server is already
+      // retrying on its own — a manual re-send on top of the queued one would
+      // run the same ask twice.
+      let retryQueued = false;
+      if (result.generationFailed === true) {
+        const report = chatRetryBroker.onFailure(sessionId, message, attemptMark);
+        if (report) {
+          content = content.trim() ? `${content}\n\n${report}` : report;
+          retryQueued = true;
+          // The console stored whatever the ENGINE returned (often nothing), so
+          // the report the reader is about to see would vanish on reload. Record
+          // the composed bubble — the same contract as the gateway's `record()`.
+          chatConsole.amendLastAssistantTurn(sessionId, content);
+        } else if (!content.trim()) {
+          content = "🤖 I couldn't get an answer from the model just now — please try again in a moment.";
+        }
+      }
       writeJson(res, 200, {
         ok: true,
         sessionId,
-        content: result.content ?? '',
+        content,
         followups: result.followups ?? [],
         provider: result.provider ?? null,
         model: result.model ?? null,
         generationFailed: result.generationFailed === true,
+        retryQueued,
       });
     })();
     return;
@@ -6002,6 +6117,9 @@ export interface DashboardServerHandle {
 export function createDashboardServer(
   opts?: { port?: number; host?: string },
 ): DashboardServerHandle {
+  // Deferred retries for this dashboard's own chat sessions. Armed here (not
+  // per SSE client): a promised retry must run whether or not the tab is open.
+  armChatRetryDrain();
   // Bind values are resolved at CALL time: explicit override → env var →
   // import-time default. (PORT/HOST above are module constants, so the CLI's
   // `dashboard --port X` can NOT rely on setting BUFF_DASHBOARD_PORT after

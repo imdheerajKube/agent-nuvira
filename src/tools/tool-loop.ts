@@ -668,14 +668,28 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         await sleep(Math.max(0, delayMs));
         continue;
       }
+      // `generationFailed` answers ONE question: was an ANSWER delivered? It
+      // used to answer "did anything happen yet", which is `madeProgress`, and
+      // the two are not the same: a turn that ran `code_search` and then died
+      // has made progress but produced no answer, so `content` below is the
+      // failure line — and returning it with `generationFailed: false` shipped
+      // that line as a SUCCESS. Caught live on the dashboard surface: the bubble
+      // read "The model wrote its own working notes instead of an answer…" while
+      // the flag was false, so no retry was offered and nothing was queued, the
+      // gateway would have reported the turn as fine, and the line was eligible
+      // for the answer cache. `madeProgress` keeps its own meaning where it
+      // belongs — deciding whether a no-model turn may be re-run through the
+      // rules' pipeline fallback (E3c) — and a turn with NO answer at all is a
+      // failure either way, because there is nothing to deliver.
+      const delivered = lastContent.trim();
       return {
-        content: lastContent || toUserFacingGenerationError(err),
+        content: delivered || toUserFacingGenerationError(err),
         followups,
         toolCalls: toolCallsRun,
         steps,
         bounded: false,
         continuations,
-        generationFailed: !madeProgress,
+        generationFailed: delivered === '' || !madeProgress,
       };
     }
 

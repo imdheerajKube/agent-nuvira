@@ -663,7 +663,11 @@ export class ChatCommand extends BaseCommand {
     // pipeline resolves its own working provider/model).
     if (answer.generationFailed && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
       const r = await runPipelineTool(message, this.configManager, { provider: type, model, board: false });
-      if (r.error) {
+      // `success`, not `error`: a pipeline that RAN and failed reports its
+      // outcome in `summary` and only sometimes sets `error`, so keying off
+      // `error` alone returned a failed run's summary with NO failure flag —
+      // i.e. reported it as a successful turn on every surface.
+      if (!r.success) {
         return { content: '', followups: [], generationFailed: true, provider: type, model };
       }
       return { content: r.result?.summary ?? '', followups: [], provider: type, model };
@@ -1473,7 +1477,10 @@ export class ChatCommand extends BaseCommand {
         },
       });
     } catch (err) {
-      // The tool loop never throws by design; this guards future changes.
+      // The tool loop does not throw on its own; this catches the errors that
+      // ARE meant to propagate — most importantly the ANSWER-QUALITY rejection
+      // (`answerQualityError`), which the loop rethrows once every candidate has
+      // narrated.
       logger.error(String(err));
       endTrace(chatTraceId, false, { kind: 'failed' });
       result = {
@@ -1484,6 +1491,14 @@ export class ChatCommand extends BaseCommand {
         toolCalls: [],
         steps: 0,
         bounded: false,
+        // AND it is a FAILURE. Without this the honest line was returned as a
+        // SUCCESSFUL turn: the dashboard offered no retry and queued nothing,
+        // the gateway reported the turn as fine, and the line was free to be
+        // cached as the model's answer. Caught live on the dashboard surface —
+        // the bubble read "The model wrote its own working notes instead of an
+        // answer…" while `generationFailed` was false, so the one thing the
+        // reader could have done about it (retry) was never offered.
+        generationFailed: true,
       };
     }
     // Record WHAT HAPPENED, not just "the model answered": a hallucinated

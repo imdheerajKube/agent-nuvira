@@ -631,6 +631,33 @@ describe('tool loop — bounded auto-continuation', () => {
     expect(deps.callModel).toHaveBeenCalledTimes(4);
   });
 
+  it('a turn that RAN A TOOL but produced no answer is a FAILURE, not a success', async () => {
+    // Live evidence (dashboard chat, 2026-09-21): the model narrated for a few
+    // steps, a `code_search` ran, every candidate then failed the answer-quality
+    // gate, and the loop returned the honest line — with `generationFailed:
+    // false`, because "something happened" was mistaken for "an answer was
+    // delivered". The bubble read "The model wrote its own working notes instead
+    // of an answer…" while the surface offered no retry and queued nothing, the
+    // gateway would have called the turn fine, and the line was eligible for the
+    // answer cache.
+    const deps = failingDeps(
+      [{ content: '', toolCalls: [{ id: 'c1', name: 'tool_search', arguments: { action: 'load', toolset: 'media' } }] }],
+      [1, 2],
+    );
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'explain how routing works' }],
+      context: ctx,
+      deps,
+      maxContinuations: 1,
+      continuationDelayMs: 0,
+    });
+
+    expect(deps.executeTool).toHaveBeenCalledTimes(1); // the tool really ran
+    expect(result.generationFailed).toBe(true); // …and there is still no answer
+    expect(result.content.trim().length).toBeGreaterThan(0); // the honest line
+    expect(result.content).not.toContain('429 on every candidate'); // never raw provider text
+  });
+
   it('does NOT burn time resuming when nothing at all happened', async () => {
     // callModel already walked every candidate — re-walking immediately gains
     // nothing, so the turn surfaces generationFailed straight away for the

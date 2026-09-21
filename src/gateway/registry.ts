@@ -2188,9 +2188,15 @@ export class GatewayRegistry {
    * twice, and a retry is a full chat/pipeline turn that can take minutes.
    */
   private async drainDeferredTasks(): Promise<void> {
+    // The queue is SHARED with the dashboard server, which serves its own
+    // `dashboard` tasks. This drain owns every OTHER platform (the messaging
+    // channels this process actually has adapters for); claiming a dashboard
+    // session id here would try to deliver it to a messaging platform.
+    const owns = (task: DeferredTask): boolean => task.platform !== 'dashboard';
+
     // Expiry is reported FIRST: a sender who was told "I'll keep trying" must
     // hear the outcome even when the queue is busy with something else.
-    for (const task of expiredTasks()) {
+    for (const task of expiredTasks(Date.now(), owns)) {
       removeDeferredTask(task.id);
       const ref: ChannelRef = { platform: task.platform as Platform, channelId: task.channelId };
       try {
@@ -2206,7 +2212,7 @@ export class GatewayRegistry {
       }, 'warn');
     }
 
-    const due = dueTasks();
+    const due = dueTasks(Date.now(), owns);
     if (due.length === 0) return;
     this.retryChain = this.retryChain
       .then(async () => {

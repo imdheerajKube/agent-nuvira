@@ -36,9 +36,11 @@ process.env.NUVIRA_CONFIG_DIR = join(testDir, '.nuvira');
 // developer's real ~/.nuvira — the P6a accept path writes both.
 process.env.HOME = testDir;
 
-const { createDashboardServer, setChatConsoleForTest } = await import('../../src/web-dashboard/server.js');
+const { createDashboardServer, setChatConsoleForTest, runChatRetryDrainForTest } = await import('../../src/web-dashboard/server.js');
 const { ChatConsole } = await import('../../src/web-dashboard/chat-console.js');
 import type { ChatEngine } from '../../src/web-dashboard/chat-console.js';
+const { recordFailoverAttempt } = await import('../../src/learning/resilient-call.js');
+const { getPendingTask, listPendingTasks, removeDeferredTask, updateDeferredTask } = await import('../../src/learning/deferred-task.js');
 
 /** Fake engine: records calls, returns canned answers — no LLM, no tools. */
 class FakeEngine implements ChatEngine {
@@ -59,7 +61,15 @@ class FakeEngine implements ChatEngine {
   /** E2E — when set, the engine answers with this exact content (the model
    *  "wrote" a ```diff block directly in its answer — the artifact-card path). */
   answerContent: string | null = null;
-  async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string }> {
+  /**
+   * Deferred retries — when true the turn FAILS to generate (no model
+   * answered), which is the case that offers "keep trying" and queues the ask.
+   * Set per test; the engine flips it off to let a retry succeed.
+   */
+  generationFailed = false;
+  /** What the failover walk recorded while this turn was failing (see seedFailoverAttempts). */
+  failoverAttempts: Array<Parameters<typeof recordFailoverAttempt>[0]> = [];
+  async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string; generationFailed?: boolean }> {
     this.calls.push({ message, opts });
     const o = opts as { onProgress?: (line: string) => void; onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void; onPlanChange?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void; onGitDiff?: (d: { files: Array<{ path: string; body: string }>; summary: string }) => void };
     for (const line of this.progressLines) o.onProgress?.(line);
@@ -78,6 +88,11 @@ class FakeEngine implements ChatEngine {
         });
       }
     }
+    if (this.generationFailed) {
+      // Logged HERE, mid-turn — the same window the real walk records into.
+      for (const a of this.failoverAttempts) recordFailoverAttempt(a);
+      return { content: '', followups: [], generationFailed: true, provider: 'groq', model: 'llama-3.3-70b' };
+    }
     return {
       content: this.answerContent ?? `echo: ${message}`,
       followups: [{ prompt: 'What next?', label: 'Next' }],
@@ -85,6 +100,55 @@ class FakeEngine implements ChatEngine {
       model: 'llama-3.3-70b',
     };
   }
+}
+
+/**
+ * Stand in for the failover walk having called two models that both gave up.
+ *
+ * Returned (not recorded) so the FAKE ENGINE logs them DURING the turn, exactly
+ * as the real walk does — the route marks the log before the turn, so attempts
+ * recorded beforehand are correctly outside the window being reported.
+ */
+function seedFailoverAttempts(): Array<Parameters<typeof recordFailoverAttempt>[0]> {
+  return ['gemini-3.1-flash-lite', 'llama-3.3-70b-versatile'].map((model) => ({
+    provider: model.startsWith('gemini') ? 'gemini' : 'groq',
+    model,
+    kind: 'rate-limit',
+    skipped: false,
+    reason: 'rate limited (quota) — still logged in, just throttled',
+  }));
+}
+
+/** Read an SSE stream, collecting parsed events until closed. */
+async function openSSE(url: string): Promise<{ events: Array<{ event: string; data: string }>; close: () => void }> {
+  const controller = new AbortController();
+  const res = await fetch(url, { signal: controller.signal, headers: { Accept: 'text/event-stream' } });
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  const events: Array<{ event: string; data: string }> = [];
+  let buf = '';
+  void (async () => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx = buf.indexOf('\n\n');
+        while (idx >= 0) {
+          const chunk = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          events.push({
+            event: /event: ([^\n]+)/.exec(chunk)?.[1] ?? 'message',
+            data: /data: ([^\n]*)/.exec(chunk)?.[1] ?? '',
+          });
+          idx = buf.indexOf('\n\n');
+        }
+      }
+    } catch {
+      /* stream closed */
+    }
+  })();
+  return { events, close: () => controller.abort() };
 }
 
 let baseUrl: string;
@@ -880,5 +944,97 @@ describe('/api/projects — P3 project attach', () => {
       const ren = await authedFetch('/api/sessions/gated-sess/rename', 'POST', { title: 'x' }, viewerToken);
       expect(ren.status).toBe(403);
     });
+  });
+});
+
+/**
+ * Deferred retries — the dashboard keeps the promise the gateway does.
+ *
+ * A failed turn that offers "reply yes and I'll keep checking" must be BACKED:
+ * the ask is queued, a yes confirms it, and the drain re-runs it and pushes the
+ * answer to the open conversation over the app-wide SSE channel (the per-turn
+ * chat stream is long gone by then).
+ */
+describe('/api/chat — deferred retries', () => {
+  it('a failed turn reports what was tried, offers to keep trying, and QUEUES the ask', async () => {
+    engine.generationFailed = true;
+    engine.failoverAttempts = seedFailoverAttempts();
+    const res = await authedFetch('/api/chat', 'POST', { sessionId: 'retry-sess', message: 'explain the router' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; content: string; generationFailed: boolean; retryQueued: boolean };
+    expect(body.generationFailed).toBe(true);
+    expect(body.content).toMatch(/I tried 2 models/);
+    expect(body.content).toMatch(/Reply \*yes\*/i);
+    // The offer is BACKED: the client uses this to drop its manual Retry button.
+    expect(body.retryQueued).toBe(true);
+
+    const task = getPendingTask('dashboard', 'retry-sess');
+    expect(task?.text).toBe('explain the router');
+    expect(task?.kind).toBe('chat');
+
+    // RELOAD PARITY: the bubble the reader just read is the bubble the session
+    // stores — otherwise a refresh shows a failure with no explanation for a
+    // retry that is queued and running.
+    const stored = await authedFetch('/api/sessions/retry-sess');
+    const storedBody = (await stored.json()) as { session: { turns: Array<{ role: string; content: string }> } };
+    const lastAssistant = storedBody.session.turns.filter((t) => t.role === 'assistant').at(-1)!;
+    expect(lastAssistant.content).toBe(body.content);
+    // …and the ask is stored exactly once.
+    expect(storedBody.session.turns.filter((t) => t.role === 'user' && t.content === 'explain the router')).toHaveLength(1);
+    engine.generationFailed = false;
+  });
+
+  it('"yes" confirms the queue entry without running a model turn', async () => {
+    const callsBefore = engine.calls.length;
+    const res = await authedFetch('/api/chat', 'POST', { sessionId: 'retry-sess', message: 'yes' });
+    const body = (await res.json()) as { content: string };
+    expect(body.content).toMatch(/keep trying/);
+    expect(body.content).toMatch(/Next attempt/);
+    expect(engine.calls.length).toBe(callsBefore);
+    expect(getPendingTask('dashboard', 'retry-sess')?.confirmed).toBe(true);
+  });
+
+  it('"stop" cancels it, and a real request is left alone', async () => {
+    const ask = await authedFetch('/api/chat', 'POST', { sessionId: 'retry-sess', message: 'write a poem about the sea' });
+    const askBody = (await ask.json()) as { content: string };
+    expect(askBody.content).not.toMatch(/keep trying/);
+    expect(getPendingTask('dashboard', 'retry-sess')).toBeDefined();
+
+    const stop = await authedFetch('/api/chat', 'POST', { sessionId: 'retry-sess', message: 'stop' });
+    expect(((await stop.json()) as { content: string }).content).toMatch(/stopped retrying/);
+    expect(getPendingTask('dashboard', 'retry-sess')).toBeUndefined();
+  });
+
+  it('the drain re-runs the ask and PUSHES the answer over SSE', async () => {
+    const stream = await openSSE(`${baseUrl}/api/sse`);
+    // Wait for the stream to be established (its init frame).
+    await until(() => stream.events.length > 0);
+
+    engine.generationFailed = true;
+    engine.failoverAttempts = seedFailoverAttempts();
+    await authedFetch('/api/chat', 'POST', { sessionId: 'retry-drain', message: 'explain the cache' });
+    engine.generationFailed = false;
+    const queued = getPendingTask('dashboard', 'retry-drain')!;
+    updateDeferredTask(queued.id, { notBefore: Date.now() - 1 });
+
+    await runChatRetryDrainForTest();
+
+    await until(() => stream.events.some((e) => e.event === 'chat-retry'));
+    const pushed = stream.events.filter((e) => e.event === 'chat-retry').map((e) => JSON.parse(e.data) as { sessionId: string; kind: string; content: string });
+    expect(pushed[0]).toMatchObject({ sessionId: 'retry-drain', kind: 'answer' });
+    expect(pushed[0]!.content).toMatch(/Trying again now/);
+    expect(pushed[0]!.content).toContain('echo: explain the cache');
+    // The queue entry is settled, and the answer is in the session history so a
+    // reload (or a closed tab) still shows it.
+    expect(getPendingTask('dashboard', 'retry-drain')).toBeUndefined();
+    const session = await authedFetch('/api/sessions/retry-drain');
+    const sessionBody = (await session.json()) as { session: { turns: Array<{ role: string; content: string }> } };
+    const stored = sessionBody.session.turns.map((t) => t.content).join('\n');
+    expect(stored).toContain('echo: explain the cache');
+    // Exactly ONE bubble for the retry: the header + the answer, written by the
+    // broker. A second writer (the console) would duplicate the ask or the reply.
+    expect(sessionBody.session.turns.filter((t) => t.content.includes('Trying again now')).length).toBe(1);
+    expect(sessionBody.session.turns.filter((t) => t.content === 'echo: explain the cache').length).toBe(0);
+    stream.close();
   });
 });

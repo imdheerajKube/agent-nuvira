@@ -100,12 +100,29 @@ export type DashboardListener = (data: DashboardData) => void;
 export type ConnectionListener = (connected: boolean) => void;
 export type DAGListener = (dag: DAGData) => void;
 
+/**
+ * A deferred-retry update from the server: a failed chat turn was re-run after
+ * its wait (or gave up), and the result must land in the open conversation.
+ *
+ * Delivered over the PERSISTENT `/api/sse` channel, not the per-turn chat
+ * stream: a retry fires minutes or hours later, long after that stream closed.
+ */
+export interface ChatRetryEventPayload {
+  sessionId: string;
+  kind: 'answer' | 'failed' | 'abandoned';
+  content: string;
+  attempts?: number;
+  taskId?: string;
+  serverTime?: number;
+}
+
 export class DashboardAPI {
   private sse: EventSource | null = null;
   private listeners: Set<DashboardListener> = new Set();
   private connectionListeners: Set<ConnectionListener> = new Set();
   private dagListeners: Set<DAGListener> = new Set();
   private typingListeners: Set<(event: { platform: string; channelId: string; typing: boolean }) => void> = new Set();
+  private chatRetryListeners: Set<(event: ChatRetryEventPayload) => void> = new Set();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private baseUrl: string;
   private lastData: DashboardData | null = null;
@@ -130,6 +147,15 @@ export class DashboardAPI {
   onTypingEvent(listener: (event: { platform: string; channelId: string; typing: boolean }) => void): () => void {
     this.typingListeners.add(listener);
     return () => this.typingListeners.delete(listener);
+  }
+
+  /**
+   * Subscribe to background retry updates (see ChatRetryEventPayload).
+   * Returns an unsubscribe function.
+   */
+  onChatRetryEvent(listener: (event: ChatRetryEventPayload) => void): () => void {
+    this.chatRetryListeners.add(listener);
+    return () => this.chatRetryListeners.delete(listener);
   }
 
 
@@ -237,6 +263,21 @@ export class DashboardAPI {
         }
       } catch (e) {
         console.error('Failed to parse SSE typing event:', e);
+      }
+    });
+
+    // A deferred chat retry finished (or gave up). This channel is the only one
+    // open at that point — the per-turn chat stream was torn down when the POST
+    // that failed resolved.
+    this.sse.addEventListener('chat-retry', (event) => {
+      try {
+        const payload = JSON.parse(event.data) as ChatRetryEventPayload;
+        if (!payload || typeof payload.sessionId !== 'string' || typeof payload.content !== 'string') return;
+        for (const cb of this.chatRetryListeners) {
+          try { cb(payload); } catch { /* listener error must not kill the stream */ }
+        }
+      } catch (e) {
+        console.error('Failed to parse SSE chat-retry event:', e);
       }
     });
 
@@ -1237,7 +1278,7 @@ export class DashboardAPI {
     opts?: { provider?: string; model?: string; projectPath?: string; attachments?: Array<{ name: string; content: string; kind?: string }> },
     signal?: AbortSignal,
   ): Promise<
-    | { ok: true; content: string; followups: Array<{ prompt: string; label?: string }>; provider: string | null; model: string | null; generationFailed: boolean }
+    | { ok: true; content: string; followups: Array<{ prompt: string; label?: string }>; provider: string | null; model: string | null; generationFailed: boolean; retryQueued?: boolean }
     | { ok: false; error: string; unauthorized?: boolean; forbidden?: boolean }
   > {
     const token = getAdminToken();
@@ -1261,6 +1302,7 @@ export class DashboardAPI {
           provider: typeof d.provider === 'string' ? d.provider : null,
           model: typeof d.model === 'string' ? d.model : null,
           generationFailed: d.generationFailed === true,
+          retryQueued: d.retryQueued === true,
         };
       }
       return {

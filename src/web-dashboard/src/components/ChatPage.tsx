@@ -1002,6 +1002,31 @@ export default function ChatPage() {
     }
   }, [browsePath]);
 
+  /**
+   * Deferred retries: after a failed turn the SERVER keeps checking for a model
+   * and re-runs the ask when one frees, pushing the result here (see
+   * `chat-retry.ts`). The per-turn stream is long gone by then, so this rides
+   * the app-wide SSE subscription and lands as a normal bubble in the thread.
+   * This is what makes "reply yes and I'll keep trying" true on the dashboard,
+   * not just on WhatsApp.
+   */
+  useEffect(() => {
+    const off = dashboardAPI.onChatRetryEvent((event) => {
+      if (event.sessionId !== sessionIdRef.current) {
+        // Another session's retry finished — refresh the rail so its entry
+        // reflects the new turn when the user switches back to it.
+        void dashboardAPI.listChatSessions().then((list) => {
+          if (Array.isArray(list)) setSessions(list);
+        });
+        return;
+      }
+      setMessages((m) => [...m, { role: 'assistant', content: event.content }]);
+      // The wait is over — the stale "retry" affordance no longer applies.
+      if (event.kind === 'answer') setRetryAsk(null);
+    });
+    return off;
+  }, []);
+
   /** Auto-refresh browse every 5 seconds when open. */
   useEffect(() => {
     if (browseOpen && browsePath) {
@@ -1198,8 +1223,11 @@ export default function ChatPage() {
       setStreamingText('');
       if (r.ok) {
         setMeta(r.generationFailed ? null : `${r.provider ?? 'provider'}${r.model ? ` / ${r.model}` : ' (auto-routed)'}`);
-        // P4 — a failed generation (no usable answer) offers Retry too.
-        setRetryAsk(r.generationFailed ? clean : null);
+        // P4 — a failed generation (no usable answer) offers Retry too — but NOT
+        // when the server already queued the ask (see `retryQueued`): the retry
+        // loop is re-running it and will push the answer here, so a manual
+        // re-send would run the same ask a second time.
+        setRetryAsk(r.generationFailed && !r.retryQueued ? clean : null);
         const replyContent = r.content || '(the agent produced no text — try rephrasing)';
         setMessages((m) => [
           ...m,

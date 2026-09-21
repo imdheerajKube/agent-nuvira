@@ -456,15 +456,80 @@ export class ChatConsole {
   }
 
   /**
+   * Append one exchange to a session WITHOUT running a turn.
+   *
+   * The deferred retry loop needs this: an ask can be re-run minutes or hours
+   * later, and both the result and the user's "yes" must land in the SAME
+   * thread they belong to — otherwise a reload shows a conversation that is
+   * missing an answer the agent promised.
+   *
+   * `user` is null when the ask is already in the history (a retry re-runs a
+   * message that was recorded the first time, and duplicating it would show the
+   * same request twice in the thread).
+   */
+  appendTurns(sessionId: string, user: string | null, assistant: string): void {
+    try {
+      const existing = this.sessions.get(sessionId);
+      const now = Date.now();
+      const turns: ChatTurn[] = [...(existing?.turns ?? [])];
+      if (user && user.trim()) turns.push({ role: 'user', content: user });
+      if (assistant && assistant.trim()) turns.push({ role: 'assistant', content: assistant });
+      const maxTurns = this.opts.maxTurns ?? DEFAULT_MAX_TURNS;
+      const kept = turns.length > maxTurns ? turns.slice(turns.length - maxTurns) : turns;
+      const firstUser = kept.find((t) => t.role === 'user')?.content ?? existing?.title ?? '';
+      this.sessions.set(sessionId, {
+        turns: kept,
+        title: existing?.title || firstUser.slice(0, 80),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        ...(existing?.projectPath ? { projectPath: existing.projectPath } : {}),
+        ...(existing?.followups && existing.followups.length > 0 ? { followups: existing.followups } : {}),
+      });
+      this.persist();
+    } catch {
+      /* best-effort — history is a convenience, never a blocker */
+    }
+  }
+
+  /**
+   * Rewrite the session's last assistant turn, or append one when the turn
+   * stored none.
+   *
+   * WHY: a failed turn's bubble is composed by the ROUTE (it appends the model
+   * breadth report and the "reply *yes*" offer to whatever the engine returned),
+   * so the text the reader sees is not the text the console stored. Without
+   * this, a reload showed a failure with no explanation — or no bubble at all —
+   * for a retry that IS queued and running. The gateway does the same thing with
+   * its `record()`; this is the dashboard's half.
+   */
+  amendLastAssistantTurn(sessionId: string, content: string): void {
+    try {
+      const existing = this.sessions.get(sessionId);
+      if (!existing) return;
+      const turns: ChatTurn[] = [...existing.turns];
+      const last = turns[turns.length - 1];
+      if (last && last.role === 'assistant') turns[turns.length - 1] = { role: 'assistant', content };
+      else if (content.trim()) turns.push({ role: 'assistant', content });
+      this.sessions.set(sessionId, { ...existing, turns, updatedAt: Date.now() });
+      this.persist();
+    } catch {
+      /* best-effort — history is a convenience, never a blocker */
+    }
+  }
+
+  /**
    * Run one turn for a session. Threads the stored history as context; the
    * reply (and followup chips) come back as data. One in-flight turn per
    * session; the ask_user tool is declined (returns no selection) so the turn
    * never blocks on a TTY prompt inside the server.
+   *
+   * `recordTurn: false` runs the turn WITHOUT writing the session (see the
+   * deferred-retry broker) — the caller owns the thread in that case.
    */
   async answer(
     sessionId: string,
     message: string,
-    opts: { provider?: string; model?: string; projectContext?: string; projectPath?: string; attachments?: ChatAttachment[] } = {},
+    opts: { provider?: string; model?: string; projectContext?: string; projectPath?: string; attachments?: ChatAttachment[]; recordTurn?: boolean } = {},
   ): Promise<ChatAnswerResult> {
     const clean = (message || '').trim();
     if (!clean) return { ok: false, error: 'Empty message.' };
@@ -481,19 +546,26 @@ export class ChatConsole {
     }
     const existing = this.sessions.get(sessionId);
     const history = existing?.turns ?? [];
+    // A DEFERRED RETRY runs with history writing off (`recordTurn: false`): the
+    // ask was already recorded by the attempt that failed, and the retry broker
+    // writes the outcome itself (with the header that explains the unprompted
+    // bubble). Writing here too would duplicate the ask or the answer.
+    const recordTurn = opts.recordTurn !== false;
     // P5 — does this message match a followup the session was last offered?
     // (Chips send the raw prompt, so the server is the only place that can
     // know a message is a followup rather than a fresh request.)
     const continuation = isSuggestedFollowup(clean, existing?.followups);
     const now = Date.now();
-    this.sessions.set(sessionId, {
-      turns: history,
-      title: existing?.title ?? '',
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: existing?.updatedAt ?? now,
-      ...(opts.projectPath ? { projectPath: opts.projectPath } : (existing?.projectPath ? { projectPath: existing.projectPath } : {})),
-      ...(existing?.followups && existing.followups.length > 0 ? { followups: existing.followups } : {}),
-    });
+    if (recordTurn) {
+      this.sessions.set(sessionId, {
+        turns: history,
+        title: existing?.title ?? '',
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: existing?.updatedAt ?? now,
+        ...(opts.projectPath ? { projectPath: opts.projectPath } : (existing?.projectPath ? { projectPath: existing.projectPath } : {})),
+        ...(existing?.followups && existing.followups.length > 0 ? { followups: existing.followups } : {}),
+      });
+    }
     this.busy.add(sessionId);
     // P4 — one AbortController per turn: abort(sessionId) fires it, the
     // engine stops at the next loop boundary (and aborts the in-flight
@@ -645,16 +717,18 @@ export class ChatConsole {
       // P5 — remember the followups this answer offered so the NEXT message can
       // be recognised as a continuation (and so the chips survive a reload).
       const nextFollowups = normalizeFollowups(answer.followups);
-      this.sessions.set(sessionId, {
-        turns: kept,
-        title: existing?.title || firstUser.slice(0, 80),
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: Date.now(),
-        // P4b — persist the project path so it can be restored on resume.
-        ...(opts.projectPath ? { projectPath: opts.projectPath } : (existing?.projectPath ? { projectPath: existing.projectPath } : {})),
-        ...(nextFollowups.length > 0 ? { followups: nextFollowups } : {}),
-      });
-      this.persist();
+      if (recordTurn) {
+        this.sessions.set(sessionId, {
+          turns: kept,
+          title: existing?.title || firstUser.slice(0, 80),
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: Date.now(),
+          // P4b — persist the project path so it can be restored on resume.
+          ...(opts.projectPath ? { projectPath: opts.projectPath } : (existing?.projectPath ? { projectPath: existing.projectPath } : {})),
+          ...(nextFollowups.length > 0 ? { followups: nextFollowups } : {}),
+        });
+        this.persist();
+      }
       this.emit(sessionId, { kind: 'status', status: 'done' });
       this.notifyTurnCompleted({
         sessionId,

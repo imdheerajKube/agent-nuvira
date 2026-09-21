@@ -358,6 +358,38 @@ describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
     expect(recallIdx).toBeLessThan(askIdx);
   });
 
+  it('a rejected answer is reported as a FAILURE, never as a successful turn', async () => {
+    // Live evidence (dashboard chat): the bubble read "The model wrote its own
+    // working notes instead of an answer…" while `generationFailed` was FALSE,
+    // so the surface offered no retry and queued nothing — the honest line was
+    // reported to every caller as the turn's answer.
+    const leak = [
+      "The user wants to know how the router picks a model.",
+      '',
+      "I should read the auto-router first.",
+    ].join('\n');
+    const provider = {
+      name: 'Mock',
+      // Every candidate narrates, so the walk cannot rescue the turn.
+      generateTools: vi.fn(async () => ({ content: leak, toolCalls: [] })),
+      generate: vi.fn().mockResolvedValue(leak),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+    stubGetProvider(provider);
+
+    const cmd = new ChatCommand() as unknown as { answerOnce: Function };
+    const out = await cmd.answerOnce('explain how the router picks a model', {
+      provider: 'groq',
+      model: 'mock-model',
+    });
+
+    expect(out.content).not.toContain('The user wants to know how the router');
+    expect(out.content).not.toContain('language model was unavailable');
+    expect(out.generationFailed).toBe(true);
+  });
+
   it('injects NO recall when no project is attached (plain dashboard chat)', async () => {
     const { provider, calls } = makeCapturingProvider();
     stubGetProvider(provider);

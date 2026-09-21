@@ -138,6 +138,30 @@ describe('deferred task queue — lifecycle', () => {
   });
 });
 
+describe('a retry abandoned mid-attempt is recovered, not stranded', () => {
+  it('re-pends a task left `running` by a process that died', () => {
+    const { task } = defer();
+    // The attempt was claimed (status running) and then the process went away —
+    // a restart during a quota wait, which is the normal case.
+    updateDeferredTask(task.id, { status: 'running', attempts: 1, lastAttemptAt: Date.now() - 20 * 60_000 });
+
+    // A `running` task is invisible to BOTH drain queries, so without the
+    // recovery the ask (and the promise) would be lost forever.
+    expect(dueTasks().map((t) => t.id)).toEqual([task.id]);
+    expect(getPendingTask('whatsapp', '918800604222@s.whatsapp.net')?.status).toBe('pending');
+    // The repair is persisted, so the next reader sees it too.
+    expect(listPendingTasks().find((t) => t.id === task.id)?.status).toBe('pending');
+  });
+
+  it('never steals a LIVE attempt', () => {
+    const { task } = defer();
+    updateDeferredTask(task.id, { status: 'running', attempts: 1, lastAttemptAt: Date.now() - 60_000 });
+
+    expect(dueTasks()).toHaveLength(0);
+    expect(getPendingTask('whatsapp', '918800604222@s.whatsapp.net')?.status).toBe('running');
+  });
+});
+
 describe('retry-offer replies', () => {
   it('accepts the plain and polite forms', () => {
     for (const yes of ['yes', 'Yes', 'YES!', 'yep', 'ok', 'okay', 'sure', 'haan', 'go ahead', 'keep trying', 'yes please', 'yes, please keep trying', 'please do', 'try again', '👍', 'Yes 🙏']) {

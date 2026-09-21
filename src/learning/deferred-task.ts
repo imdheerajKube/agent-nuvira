@@ -110,6 +110,19 @@ const DEFAULT_WAIT_MS = 5 * 60_000;
 
 const FILE_NAME = 'deferred-tasks.json';
 
+/**
+ * How long a task may sit in `running` before it is treated as abandoned.
+ *
+ * A retry is claimed by setting `status: 'running'` BEFORE the turn. If the
+ * process dies mid-attempt — a dashboard/gateway restart, a reboot, a crash,
+ * all normal during a quota wait — nothing ever resets it, and a `running` task
+ * is invisible to both `dueTasks` and `expiredTasks`. The promise would be
+ * stranded silently, which is the exact failure this whole store exists to
+ * prevent. The ceiling is generous (a retry is a full turn, capped at 5 minutes
+ * by the chat HTTP ceiling), so a live attempt is never stolen.
+ */
+const STALE_RUNNING_MS = 15 * 60_000;
+
 function storePath(): string {
   return resolveNuviraDataPath(FILE_NAME);
 }
@@ -126,10 +139,32 @@ export function loadDeferredTasks(): DeferredTask[] {
     if (!existsSync(path)) return [];
     const parsed = JSON.parse(readFileSync(path, 'utf-8')) as StoreShape;
     if (!parsed || !Array.isArray(parsed.tasks)) return [];
-    return parsed.tasks.filter(isTaskShape);
+    return recoverStaleRunning(parsed.tasks.filter(isTaskShape));
   } catch {
     return [];
   }
+}
+
+/**
+ * Self-heal tasks abandoned mid-attempt (see STALE_RUNNING_MS).
+ *
+ * Applied on READ, so no process has to remember to run a recovery pass on
+ * startup, and the repair is written back so the next reader sees it too.
+ */
+function recoverStaleRunning(tasks: DeferredTask[], now: number = Date.now()): DeferredTask[] {
+  let repaired = false;
+  for (const task of tasks) {
+    if (task.status !== 'running') continue;
+    const startedAt = task.lastAttemptAt || task.createdAt;
+    if (now - startedAt <= STALE_RUNNING_MS) continue;
+    task.status = 'pending';
+    // Its wait elapsed long ago (it was due when the attempt was claimed), so
+    // being due again immediately is correct — nothing to wait for.
+    task.notBefore = Math.min(task.notBefore, now);
+    repaired = true;
+  }
+  if (repaired) writeDeferredTasks(tasks);
+  return tasks;
 }
 
 function writeDeferredTasks(tasks: DeferredTask[]): void {
@@ -247,17 +282,32 @@ export function listPendingTasks(): DeferredTask[] {
   return loadDeferredTasks();
 }
 
+/**
+ * One drain OWNS a subset of the queue.
+ *
+ * The store is shared by every process that can serve a channel (the gateway
+ * for WhatsApp/Telegram, the dashboard server for its own chat), so each drain
+ * declares what it owns. Without this the gateway would claim a `dashboard`
+ * task and try to deliver it to a messaging platform — and then remove it.
+ */
+export type TaskOwnership = (task: DeferredTask) => boolean;
+
 /** Tasks whose next attempt is due and whose TTL has not elapsed. */
-export function dueTasks(now: number = Date.now()): DeferredTask[] {
+export function dueTasks(now: number = Date.now(), owns: TaskOwnership = () => true): DeferredTask[] {
   return loadDeferredTasks().filter(
-    (t) => t.status === 'pending' && t.notBefore <= now && t.deadline > now && t.attempts < attemptCap(t),
+    (t) =>
+      t.status === 'pending' &&
+      t.notBefore <= now &&
+      t.deadline > now &&
+      t.attempts < attemptCap(t) &&
+      owns(t),
   );
 }
 
 /** Tasks that ran out of attempts or TTL — the sender must be told, not ghosted. */
-export function expiredTasks(now: number = Date.now()): DeferredTask[] {
+export function expiredTasks(now: number = Date.now(), owns: TaskOwnership = () => true): DeferredTask[] {
   return loadDeferredTasks().filter(
-    (t) => t.status === 'pending' && (t.deadline <= now || t.attempts >= attemptCap(t)),
+    (t) => t.status === 'pending' && (t.deadline <= now || t.attempts >= attemptCap(t)) && owns(t),
   );
 }
 

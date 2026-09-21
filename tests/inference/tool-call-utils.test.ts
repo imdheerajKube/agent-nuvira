@@ -491,6 +491,63 @@ describe('looksLikeReasoningLeakReply', () => {
     }
   });
 
+  it('catches a turn that ENDED on a plan to go looking (seen live)', () => {
+    // Reproduced on the dashboard chat surface: the model narrated the search it
+    // was about to run and stopped, so the reader's "answer" was a plan.
+    const live =
+      'We need to find router selection logic. Let\'s search for "router" and "model".';
+    expect(looksLikeReasoningLeakReply(live)).toBe(true);
+    // The apostrophe is optional in the opener: models drop it constantly.
+    expect(looksLikeReasoningLeakReply('Lets search the codebase for the routing entry point.')).toBe(true);
+    expect(looksLikeReasoningLeakReply('Let\'s search the codebase for the routing entry point.')).toBe(true);
+    // Caught on the next live runs: the same model, terser and with the object
+    // phrased loosely — "… the router-bandit file".
+    expect(looksLikeReasoningLeakReply('We will search.')).toBe(true);
+    expect(looksLikeReasoningLeakReply('We need to read the router-bandit file.')).toBe(true);
+    expect(looksLikeReasoningLeakReply("I'll inspect the gateway registry next.")).toBe(true);
+    expect(looksLikeReasoningLeakReply("I need to search the repo for the model registry module.")).toBe(true);
+    // An opener ALONE is not enough — the reply must also state a concrete
+    // intention to touch the codebase/system, or "I need to find a good
+    // restaurant for you" (a real answer) would be rejected.
+    expect(looksLikeReasoningLeakReply('I need to find you a good restaurant near the office.')).toBe(false);
+    expect(looksLikeReasoningLeakReply('Now let\'s read the gateway registry and check the drain.')).toBe(false);
+  });
+
+  it('leaves a REAL deliverable alone even when it talks about searching', () => {
+    const GOOD = [
+      // A completion claim proves work was done, not described.
+      'Here is what I found: the router walks candidates in score order.',
+      // Structure (list/fence/heading/quote) means content, not narration.
+      'We need to find the routing entry point.\n\n- `src/learning/auto-router.ts` — ranks candidates\n- `src/learning/resilient-call.ts` — the walk',
+      'Let\'s search the repo for the drain:\n\n```bash\ngrep -rn drainDeferredTasks src\n```',
+      // A question back to the reader is an answer-shaped turn.
+      'Let\'s search for the entry point — should I search the whole repo?',
+      // A side-effect promise is NOT this signal: the repo reports it with an
+      // honest note instead of burning the reply through a failover walk.
+      'I will send it to your wife now.',
+      'I will update the README with these steps.',
+      // Conversational promises name no code artefact and aim no investigation
+      // verb at a codebase.
+      "I'll look into it and get back to you.",
+      'I will read your note again.',
+      // Long replies are never this signal.
+      'We need to find the router. ' + 'Extra context about how routing works. '.repeat(10),
+    ];
+    for (const good of GOOD) {
+      expect(looksLikeReasoningLeakReply(good), `wrongly flagged: ${good.slice(0, 60)}`).toBe(false);
+    }
+  });
+
+  it('does NOT report it for a step that carries tool calls', () => {
+    // The step that runs `list_dir` may legitimately narrate the action; a wrong
+    // verdict here throws its tool call away (see highPrecisionOnly).
+    expect(
+      looksLikeReasoningLeakReply('We need to find router selection logic. Let\'s search for it.', {
+        highPrecisionOnly: true,
+      }),
+    ).toBe(false);
+  });
+
   it('is empty-safe', () => {
     expect(looksLikeReasoningLeakReply('')).toBe(false);
     expect(looksLikeReasoningLeakReply('   \n  ')).toBe(false);

@@ -35,6 +35,7 @@ import { ConfigManager } from '../../src/config/manager.js';
 import { resetWorkspaceStore } from '../../src/config/workspace.js';
 import { recordFailoverAttempt } from '../../src/learning/resilient-call.js';
 import {
+  deferTask,
   getPendingTask,
   listPendingTasks,
   removeDeferredTask,
@@ -250,6 +251,28 @@ describe('the drain runs the queued ask', () => {
     expect(adapter.all).toMatch(/I tried 2 models/);
     expect(adapter.all).toContain('🧭 confirmed-note');
     expect(audit.calls).toBe(1);
+    await registry.stop();
+  });
+
+  it('OWNERSHIP: never picks up a DASHBOARD task (the dashboard server owns those)', async () => {
+    const { registry, adapter } = registryWith(flakyEngine(1, 'a dashboard answer'));
+    // A dashboard chat session's queued retry, in the SAME shared store. Claiming
+    // it here would try to deliver a session id to a messaging platform.
+    deferTask({
+      platform: 'dashboard',
+      channelId: 'session-xyz',
+      text: 'explain the router',
+      kind: 'chat',
+      nextFreeInMs: 60_000,
+    });
+    const dash = getPendingTask('dashboard', 'session-xyz')!;
+    updateDeferredTask(dash.id, { notBefore: Date.now() - 1 });
+
+    await (registry as unknown as { drainDeferredTasks(): Promise<void> }).drainDeferredTasks();
+
+    expect(adapter.all).not.toContain('a dashboard answer');
+    // Untouched, and still waiting for its real owner.
+    expect(getPendingTask('dashboard', 'session-xyz')?.attempts).toBe(0);
     await registry.stop();
   });
 

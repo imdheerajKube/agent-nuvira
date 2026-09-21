@@ -195,6 +195,74 @@ const DELIBERATION_OPENERS: RegExp[] = [
 ];
 
 /**
+ * An intent to GO LOOK, written as if to a colleague rather than to the user:
+ * "We need to find the router. Let's search for it." — a plan to act, with no
+ * action taken and nothing delivered.
+ */
+const PLANNING_NARRATION_OPENER_RE =
+  /^(?:we\s+(?:need|should|must|have)\s+to\s+(?:find|look|search|check|read|open|inspect|examine|understand|figure|determine|locate|grep|scan|trace|see)|(?:we|i)(?:'ll|'re\s+going\s+to|\s+will|\s+are\s+going\s+to|\s+am\s+going\s+to)\s+(?:now\s+)?(?:search|grep|look|find|read|open|inspect|examine|scan|trace|explore|dig|check|review)|let'?s\s+(?:search|look|find|check|read|open|grep|inspect|examine|run|scan|trace|start|begin|dig|explore)|i\s+(?:need|have|want)\s+to\s+(?:find|search|look|check|read|grep|inspect|examine|understand|figure|locate|determine))\b/i;
+
+/**
+ * …plus a concrete object of that intention, stated in the reply.
+ *
+ * A codebase-directed verb stands alone ("We will search."); a generic verb
+ * (read/open/check/find/locate/review/list) needs a CODE artefact to go with it
+ * ("… read the router-bandit file"). That asymmetry is what keeps the guard off
+ * conversational answers: "I will read your note again" and "I need to find you
+ * a good restaurant" are neither, so both are left untouched.
+ */
+const CODE_ARTEFACT_RE =
+  /\b(?:file|files|code|codebase|repo|repository|source|module|registry|config|logs?|tests?|implementation|director(?:y|ies)|folder)\b/i;
+const CODEBASE_VERB_RE = /\b(?:search|grep|inspect|examine|scan|trace|explore|dig|debug)\b/i;
+function statesToolIntent(text: string): boolean {
+  if (CODEBASE_VERB_RE.test(text)) return true;
+  return /\b(?:read|open|check|find|locate|review|list)\b/i.test(text) && CODE_ARTEFACT_RE.test(text);
+}
+
+/** Content that proves there IS a deliverable, so narration cannot be the answer. */
+const DELIVERABLE_EVIDENCE_RE = /(?:```|^[ \t]*(?:[-*\u2022]\s|#{1,6}\s|\d+[.)]\s|>))/m;
+
+/** A completion claim the model would only make having actually done the work. */
+const COMPLETION_CLAIM_RE = /\b(?:i(?:'ve| have)\s+(?:updated|created|added|written|fixed|changed|run|checked|found|built)|here(?:'s| is| are)|the answer is|below is|as requested|i found)\b/i;
+
+/**
+ * Planning narration that ENDED a turn: the model described the search it was
+ * about to run and stopped, leaving the reader with a plan instead of an answer.
+ *
+ * Seen LIVE (dashboard chat, `gemini`-class local fallback):
+ * "We need to find router selection logic. Let's search for \"router\" and \"model\"."
+ * The existing openers miss it because they key on first-person SINGULAR
+ * deliberation (`Let me think …`, `My plan:`) or on narrating the CONVERSATION
+ * (`The user is asking …`); this shape is a plural/imperative intent to act, and
+ * it is exactly the class the user reads as the agent's thinking.
+ *
+ * The opener family is deliberately INVESTIGATION-only (`search`, `grep`, `read`,
+ * `look`, `inspect`, …) and excludes side-effect verbs (`send`, `email`, `write`,
+ * `build`, `fix`): "I will send it now" is a promise with a real consequence, and
+ * the repo already reports that case with an honest note rather than by burning
+ * the reply through a failover walk. A terser shape of the same class was caught
+ * live on the next run — *"We will search."* — which is why `we/i will <verb>` is
+ * included.
+ *
+ * Only reported for the step that IS the answer (never when
+ * `highPrecisionOnly`): an agentic step may legitimately narrate "Let me check
+ * the files." before running `list_dir`, and rejecting that step would throw the
+ * tool call away. Four guards keep it off real deliverables — a fenced block,
+ * list, heading or quote; a completion claim; a reply over 240 characters; and a
+ * question to the reader. Any of those means the model produced CONTENT, and the
+ * reply is left alone.
+ */
+function looksLikePlanningNarration(text: string): boolean {
+  const t = text.trim();
+  if (t.length > 240) return false;
+  if (DELIVERABLE_EVIDENCE_RE.test(t)) return false;
+  if (COMPLETION_CLAIM_RE.test(t)) return false;
+  if (/\?\s*$/.test(t)) return false;
+  if (!statesToolIntent(t)) return false;
+  return PLANNING_NARRATION_OPENER_RE.test(t.split(/\r?\n/, 1)[0] ?? '');
+}
+
+/**
  * @param content  the model's visible reply text
  * @param options  `highPrecisionOnly` for a step that carries tool calls
  */
@@ -219,7 +287,8 @@ export function looksLikeReasoningLeakReply(content: string, options: ReasoningL
   const firstLine = t.split(/\r?\n/, 1)[0] ?? '';
   if (HIGH_PRECISION_OPENERS.some((re) => re.test(firstLine))) return true;
   if (options.highPrecisionOnly) return false;
-  return DELIBERATION_OPENERS.some((re) => re.test(firstLine));
+  if (DELIBERATION_OPENERS.some((re) => re.test(firstLine))) return true;
+  return looksLikePlanningNarration(t);
 }
 
 /**

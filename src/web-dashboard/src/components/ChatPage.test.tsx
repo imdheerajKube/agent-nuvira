@@ -1047,3 +1047,98 @@ describe('ChatPage', () => {
     expect(document.activeElement).toBe(cards[2]);
   });
 });
+
+/**
+ * Deferred retries land in the OPEN conversation.
+ *
+ * After a failed turn the server keeps checking for a model and re-runs the ask
+ * when one frees — minutes or hours later, long after the per-turn chat stream
+ * was torn down — then pushes the result over the app-wide SSE channel. Without
+ * this the dashboard's failure bubble was a dead end: the reader had to wait and
+ * re-send the message themselves.
+ */
+describe('ChatPage — background retries', () => {
+  type RetryHandler = (e: { sessionId: string; kind: 'answer' | 'failed' | 'abandoned'; content: string }) => void;
+
+  function captureRetryHandler(): () => RetryHandler | null {
+    let handler: RetryHandler | null = null;
+    vi.spyOn(dashboardAPI, 'onChatRetryEvent').mockImplementation(((cb: RetryHandler) => {
+      handler = cb;
+      return () => {};
+    }) as never);
+    return () => handler;
+  }
+
+  it('appends a retry answer to the thread it belongs to', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const send = mockChatSend(OK_RESPONSE);
+    const readHandler = captureRetryHandler();
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    // Send once so the page has a real session id (it generates its own).
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'check the repo' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    const sessionId = send.mock.calls[0]![0] as string;
+    await waitFor(() => expect(readHandler()).toBeTruthy());
+
+    readHandler()!({
+      sessionId,
+      kind: 'answer',
+      content: '🔁 Trying again now (attempt 1 of at most 4)\n\nHere is the answer.',
+    });
+
+    await waitFor(() => expect(screen.getByText(/Here is the answer\./)).toBeTruthy());
+  });
+
+  it('a failure the SERVER is already retrying offers no manual ↻ Retry', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const send = mockChatSend({
+      ok: true as const,
+      content:
+        "😞 I couldn't finish: explain the router\n\nI tried 2 models:\n  • gemini/model-0 — rate limited (quota)\n\nA model frees up in about 44s. Want me to keep checking? Reply *yes* and I will keep trying until it is done.",
+      followups: [],
+      provider: null,
+      model: null,
+      generationFailed: true,
+      // The server queued the ask — re-sending it by hand would run it twice.
+      retryQueued: true,
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'explain the router' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    await waitFor(() => expect(screen.getByText(/I tried 2 models/)).toBeTruthy());
+    expect(screen.getByText(/Reply/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not put another session's retry into THIS thread", async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const send = mockChatSend(OK_RESPONSE);
+    const list = vi.spyOn(dashboardAPI, 'listChatSessions').mockResolvedValue([]);
+    const readHandler = captureRetryHandler();
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+    await waitFor(() => expect(list).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'check the repo' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    await waitFor(() => expect(readHandler()).toBeTruthy());
+    const before = list.mock.calls.length;
+
+    readHandler()!({ sessionId: 'some-other-session', kind: 'answer', content: '🔁 Not mine.' });
+
+    // The rail is refreshed for the other session, and THIS thread is untouched.
+    await waitFor(() => expect(list.mock.calls.length).toBeGreaterThan(before));
+    expect(screen.queryByText(/Not mine\./)).toBeNull();
+  });
+});
