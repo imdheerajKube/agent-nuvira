@@ -50,10 +50,38 @@ import {
   toUserFacingGenerationError,
 } from '../inference/tool-call-utils.js';
 import {
+  createResilientCallLLM,
   markFailoverAttempts,
   modelBreadthReport,
   renderModelBreadthReport,
 } from '../learning/resilient-call.js';
+// The intent audit: on a REPEATED failure, ask the model what the ask really
+// needs and feed a confirmed correction back into the NLU (see learnings.ts).
+import {
+  confirmRoutedIntent,
+  intentConfirmedNote,
+  intentCorrectedNote,
+} from '../nlu/intent-confirm.js';
+import type { AskKind } from '../nlu/conversation-gate.js';
+// The retry queue behind the "Reply *yes* and I will keep trying" offer. LEAF
+// import: a plain store + matcher, so the gateway does not pull routing in for it.
+import {
+  abandonedLine,
+  acceptedLine,
+  cancelTasksFor,
+  confirmTask,
+  deferTask,
+  dueTasks,
+  expiredTasks,
+  getPendingTask,
+  isRetryAcceptance,
+  isRetryDecline,
+  removeDeferredTask,
+  retryingLine,
+  updateDeferredTask,
+  type DeferredAskKind,
+  type DeferredTask,
+} from '../learning/deferred-task.js';
 import { logger } from '../utils/logger.js';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -61,6 +89,14 @@ import { resolveBuffConfigDir } from '../config/paths.js';
 
 /** How often the running gateway drains due delivery entries (ms). */
 const DELIVERY_DRAIN_INTERVAL_MS = 30_000;
+
+/**
+ * How often the running gateway checks for deferred asks whose wait is over.
+ * 15s: a retry is already gated by the model's own free-up ETA, so this only
+ * bounds how late the reply can be — tight enough to feel immediate, loose
+ * enough to cost nothing on a quiet gateway.
+ */
+const RETRY_DRAIN_INTERVAL_MS = 15_000;
 
 /** Cap the per-target send-failure map (diagnostics only — never grows). */
 const MAX_TRACKED_SEND_ERRORS = 200;
@@ -591,6 +627,14 @@ export class GatewayRegistry {
    *  double-count would prematurely fail entries). */
   private drainChain: Promise<unknown> = Promise.resolve();
   private started = false;
+  /**
+   * The deferred-retry drain. A failed turn is queued (see `deferFailedTask`)
+   * and re-run here when a model is expected back — the mechanism behind the
+   * "Reply *yes*" offer, which used to be a promise with nothing behind it.
+   */
+  private retryTimer: NodeJS.Timeout | null = null;
+  /** Serializes retry runs so a long one is never started twice. */
+  private retryChain: Promise<unknown> = Promise.resolve();
   /** Epoch ms of start() — the uptime reported in the heartbeat. */
   private startedAt = 0;
   /** Beats written this run (monotonic; a stalled count means a stalled loop). */
@@ -883,7 +927,27 @@ export class GatewayRegistry {
    * channel (a second message while a run is active queues behind it).
    * Every message is recorded in the inbox (P2) with its disposition.
    */
-  async handleInbound(msg: InboundMessage): Promise<string> {
+  async handleInbound(
+    msg: InboundMessage,
+    opts: {
+      /** Set when this message is a queued RETRY of an earlier failed ask. */
+      retryOf?: string;
+      /**
+       * Route as if `resolveAskKind` had returned this.
+       *
+       * Used ONLY by the intent audit's re-route: when a confirmation proves
+       * the ask was read wrong, the corrected route is run through this same
+       * entry point so it gets the same gates, the same reply path and the
+       * same ledger rows as any other message — rather than a private second
+       * implementation that could drift from it.
+       */
+      forceKind?: AskKind;
+      /** Internal re-entry of the SAME message (already gated + recorded). */
+      reentry?: boolean;
+      /** The intent audit already ran for this message — never run it twice. */
+      audited?: boolean;
+    } = {},
+  ): Promise<string> {
     // Auto-learn Telegram chat IDs: when a message arrives from a Telegram
     // user, update any contact/alias that used a phone number format.
     // Also auto-registers new users with status: 'pending' for admin approval.
@@ -1026,7 +1090,10 @@ export class GatewayRegistry {
     // must never break handling).
     const historyKey = `${msg.platform}:${msg.channelId}`;
     try {
-      this.chatStore.recordInbound(historyKey, msg.text);
+      // A deferred RETRY or an audit RE-ROUTE must not re-record the ask: the
+      // original arrival already wrote that user turn, and a second copy would
+      // make the model see the same request twice in the thread.
+      if (!opts.retryOf && !opts.reentry) this.chatStore.recordInbound(historyKey, msg.text);
     } catch {
       /* best-effort */
     }
@@ -1044,6 +1111,20 @@ export class GatewayRegistry {
       await replyTo(pendingAnswerLine);
       record('clarified', pendingAnswerLine);
       return pendingAnswerLine;
+    }
+
+    // DEFERRED RETRY ANSWER — an earlier failure told the sender "Reply *yes*
+    // and I will keep trying", so a pending task may be waiting for exactly
+    // this message. Placed AFTER the pending-question gate (a turn ACTIVELY
+    // holding for an answer wins — it is mid-run, the queue is not) and BEFORE
+    // every routing decision, because the reply belongs to the OFFER rather
+    // than to the NLU. A message that is neither yes nor no falls through
+    // unchanged, so a real new request is never swallowed.
+    const retryLine = this.consumeRetryAnswer(msg);
+    if (retryLine) {
+      await replyTo(retryLine);
+      record('clarified', retryLine);
+      return retryLine;
     }
 
     // ── Local-CLI asks ── "run nuvira gateway status" names a command for the
@@ -1091,9 +1172,9 @@ export class GatewayRegistry {
     // `parsed.action.run`, so the two surfaces disagreed on the same ask —
     // "how do I add JWT auth to the app?" got prose here while chat/execute
     // did the work, and a question phrased like a task still burned a run.
-    const askKind = resolveAskKind(msg.text, parsed);
+    const askKind = opts.forceKind ?? resolveAskKind(msg.text, parsed);
     logger.debug(
-      `gateway: route ${askKind} (intent ${parsed.intent} @ ${parsed.confidence.toFixed(2)}, coding=${hasCodingAction(msg.text)})`,
+      `gateway: route ${askKind}${opts.forceKind ? ' (audit override)' : ''} (intent ${parsed.intent} @ ${parsed.confidence.toFixed(2)}, coding=${hasCodingAction(msg.text)})`,
     );
 
     // Chat ask: a REAL chat answer through the same engine as the dashboard
@@ -1108,6 +1189,9 @@ export class GatewayRegistry {
       if (answer && answer.content.trim() && !answer.generationFailed) {
         await replyTo(answer.content);
         record('chat', answer.content);
+        // A retry that produced a real answer is DONE — the queue entry must go,
+        // or the drain would keep re-running a fulfilled ask.
+        if (opts.retryOf) removeDeferredTask(opts.retryOf);
         return answer.content;
       }
       // Generation failed. The sender gets NO parsed intent/confidence (that
@@ -1125,11 +1209,25 @@ export class GatewayRegistry {
       // A failure the sender cannot act on is a failure twice over. When a
       // model IS configured, say which models were tried, which are parked and
       // why, and offer to keep checking — instead of "couldn't get an answer".
+      // BEFORE reporting the failure: ask the model whether a WRITTEN ANSWER is
+      // even the right route (see `auditAndReroute`). A chat ask that keeps
+      // failing is often a coding task the NLU misread — in which case the
+      // honest answer is to do the work, not to report a model problem.
+      const audit = await this.auditAndReroute(msg, 'chat', opts);
+      if (audit?.rerouted) {
+        // The corrected route already replied through its own branch.
+        return audit.reply;
+      }
+
       const line = this.generationFailureLine();
-      const detail = this.hasConfiguredModel()
-        ? renderModelBreadthReport(modelBreadthReport(attemptMark, this.configManager), { task: msg.text })
+      const breadth = this.hasConfiguredModel()
+        ? modelBreadthReport(attemptMark, this.configManager)
         : undefined;
-      const full = detail ? `${line}\n\n${detail}` : line;
+      const detail = breadth ? renderModelBreadthReport(breadth, { task: msg.text }) : undefined;
+      // The offer above is only honest if something ENFORCES it: queue the ask
+      // and retry it when a model is back (see drainDeferredTasks).
+      if (detail) this.deferFailedAsk(msg, 'chat', breadth?.nextFreeInMs, line);
+      const full = [line, detail, audit?.note].filter(Boolean).join('\n\n');
       await replyTo(full);
       record('chat', full);
       return full;
@@ -1143,70 +1241,216 @@ export class GatewayRegistry {
     // task with no delivery ask stays on the fast direct-orchestrator path.
     if (hasDeliveryAsk(msg.text)) {
       const answer = await this.runInboundChat(msg);
-      const line =
-        answer && answer.content.trim() && !answer.generationFailed
-          ? answer.content
-          : this.generationFailureLine();
+      const answered = !!answer && answer.content.trim().length > 0 && !answer.generationFailed;
+      const line = answered ? answer!.content : this.generationFailureLine();
       await replyTo(line);
       record('pipeline', line);
+      if (answered && opts.retryOf) removeDeferredTask(opts.retryOf);
       // Status recipients: a pipeline task (even one routed through the loop
       // for delivery) forwards its outcome to the configured contacts.
       await this.notifyStatusRecipients(line);
       return line;
     }
 
-    // Pure pipeline intent — run serialized. Deliberately does NOT touch
+    // Pure pipeline intent — the RUN is serialized. Deliberately does NOT touch
     // activeChannel before the gate: a chat message arriving while a pipeline
     // run is in flight must not redirect the run's board events.
+    //
+    // Only the WORK sits inside the chain. Composing and sending the reply used
+    // to live there too, which is why a failed run could not be re-examined:
+    // the intent audit re-enters `handleInbound`, and doing that from inside the
+    // chain would wait on the chain it is itself blocking (a deadlock).
     await replyTo(`✅ Got it — running the ${parsed.action.name} pipeline…`);
     const pipelineAttemptMark = markFailoverAttempts();
-    const run = this.runChain.then(async (): Promise<string> => {
+    const run = this.runChain.then(async () => {
       // Only THIS run's events stream — set activeChannel inside the chain.
       this.activeChannel = ref;
       // P2 — origin context: the pipeline model knows who it's talking to and
       // where (so it can reply/forward to the right place via gateway_send).
       const origin = `${PLATFORM_LABELS[msg.platform]} ${msg.isGroup ? 'group' : 'chat'} ${msg.from ?? msg.senderId ?? msg.channelId}`;
-      const result = await runPipelineTool(msg.text, this.configManager, {
+      return runPipelineTool(msg.text, this.configManager, {
         board: false,
         mode: parsed.mode,
         taskIntentHint: parsed.action.taskIntent,
         origin,
       });
-      const reply = composePipelineReply({
-        success: result.success,
-        summary: result.summary,
-        structured: result.result
-          ? {
-              tasksCompleted: result.result.tasksCompleted,
-              tasksTotal: result.result.tasksTotal,
-              agentResults: result.result.agentResults,
-            }
-          : null,
-      });
-      // On failure, name the models that were tried and the ones parked, so the
-      // sender learns WHY rather than just that it failed.
-      const breadth = result.success
-        ? undefined
-        : renderModelBreadthReport(modelBreadthReport(pipelineAttemptMark, this.configManager), {
-            task: msg.text,
-          });
-      const finalReply = breadth ? `${reply}\n\n${breadth}` : reply;
-      await replyTo(finalReply);
-      logGatewayEvent('pipeline.completed', {
-        platform: msg.platform,
-        channelId: msg.channelId,
-        success: result.success,
-        summary: result.summary,
-        tools: parsed.action.name,
-      }, result.success ? 'info' : 'warn');
-      record('pipeline', finalReply);
-      // Status recipients: ALWAYS forward the completion summary to the
-      // configured contacts/groups, whoever triggered it.
-      await this.notifyStatusRecipients(finalReply);
-      return finalReply;
     });
     this.runChain = run.catch(() => undefined);
-    return run;
+    const result = await run;
+
+    const reply = composePipelineReply({
+      success: result.success,
+      summary: result.summary,
+      structured: result.result
+        ? {
+            tasksCompleted: result.result.tasksCompleted,
+            tasksTotal: result.result.tasksTotal,
+            agentResults: result.result.agentResults,
+          }
+        : null,
+    });
+
+    // A FAILED pipeline is where the routing itself deserves one audit: six
+    // agent steps were just spent on something the rules may have misread, and
+    // the sender's alternative is to rephrase and hope. When the confirmation
+    // says the ask was NOT a coding task, the right move is to answer it rather
+    // than to report the failure — so the failure report is deliberately not
+    // sent at all in that path (one reply, not two).
+    let intentNote: string | undefined;
+    if (!result.success) {
+      const audit = await this.auditAndReroute(msg, 'pipeline', opts);
+      if (audit?.rerouted) {
+        logGatewayEvent('pipeline.completed', {
+          platform: msg.platform,
+          channelId: msg.channelId,
+          success: false,
+          summary: result.summary,
+          tools: parsed.action.name,
+          reroutedTo: 'chat',
+        }, 'warn');
+        // Status recipients still hear the outcome — the ask was answered, just
+        // by the other route.
+        await this.notifyStatusRecipients(audit.reply);
+        return audit.reply;
+      }
+      intentNote = audit?.note;
+    }
+
+    // On failure, name the models that were tried and the ones parked, so the
+    // sender learns WHY rather than just that it failed.
+    const report = result.success
+      ? undefined
+      : modelBreadthReport(pipelineAttemptMark, this.configManager);
+    const breadth = report ? renderModelBreadthReport(report, { task: msg.text }) : undefined;
+    // Queue the ask so the retry offer in that report is actually enforced.
+    if (breadth) this.deferFailedAsk(msg, 'pipeline', report?.nextFreeInMs, reply);
+    const finalReply = [reply, breadth, intentNote].filter(Boolean).join('\n\n');
+    await replyTo(finalReply);
+    // Only a SUCCESSFUL run settles the retry: on failure the branch above has
+    // already re-queued this same task with a fresh wait.
+    if (result.success && opts.retryOf) removeDeferredTask(opts.retryOf);
+    logGatewayEvent('pipeline.completed', {
+      platform: msg.platform,
+      channelId: msg.channelId,
+      success: result.success,
+      summary: result.summary,
+      tools: parsed.action.name,
+    }, result.success ? 'info' : 'warn');
+    record('pipeline', finalReply);
+    // Status recipients: ALWAYS forward the completion summary to the
+    // configured contacts/groups, whoever triggered it.
+    await this.notifyStatusRecipients(finalReply);
+    return finalReply;
+  }
+
+  /**
+   * On a REPEATED failure, ask the model what this ask really needs, and act on
+   * the answer.
+   *
+   * THE PROBLEM IT SOLVES. A failure says nothing about whether the request was
+   * read correctly — but a failure that happens TWICE (a queued retry, an audit
+   * re-route, or a spent six-step pipeline) is expensive enough that the routing
+   * itself is worth one question. Without it, a misreading is permanent: the same
+   * ask runs down the same wrong path forever, and the user's only recourse is to
+   * rephrase. This is the self-correction half of routing; `learnings.ts` is the
+   * memory half, so the NEXT identical ask routes right the first time.
+   *
+   * Runs at most ONCE per inbound message (the `audited` flag), which is what
+   * stops a misreading ping-ponging between the two routes.
+   *
+   * @returns null when no audit ran; `{rerouted: true}` when the corrected route
+   *   was run (its reply already delivered); `{rerouted: false, note}` when the
+   *   model CONFIRMED the reading, so the caller keeps its failure report and
+   *   adds the confirmation line.
+   */
+  private async auditAndReroute(
+    msg: InboundMessage,
+    routed: AskKind,
+    opts: { retryOf?: string; reentry?: boolean; audited?: boolean; forceKind?: AskKind },
+  ): Promise<{ rerouted: true; reply: string; to: AskKind } | { rerouted: false; note?: string } | null> {
+    if (opts.audited || opts.reentry || opts.forceKind) return null;
+    // REPEATED failure only. A single failure mostly describes the world, and
+    // auditing every one would spend a quota-limited model to second-guess a
+    // decision that was usually right.
+    const queued = getPendingTask(msg.platform, msg.channelId);
+    const repeated = !!opts.retryOf || (queued?.attempts ?? 0) >= 1;
+    if (!repeated) return null;
+    if (!this.hasConfiguredModel()) return null;
+
+    let verdict: Awaited<ReturnType<typeof confirmRoutedIntent>>;
+    try {
+      const callLLM = createResilientCallLLM(this.configManager, {
+        // A throwaway task identity on purpose: this probe must not inherit the
+        // failover state of the turn that just died, and it must not write
+        // cross-pipeline exclusions from a question about intent.
+        task: { agentType: 'chat', description: msg.text },
+        crossPipelineMemory: false,
+      });
+      verdict = await confirmRoutedIntent({
+        ask: msg.text,
+        routed,
+        callLLM: (prompt) => callLLM(prompt, { maxTokens: 160, temperature: 0 }),
+      });
+    } catch {
+      return null;
+    }
+
+    if (verdict.agreed) {
+      logGatewayEvent('intent.confirmed', {
+        platform: msg.platform,
+        channelId: msg.channelId,
+        routed,
+        probed: !verdict.failed,
+        reason: verdict.reason,
+      }, 'info');
+      // The audit ran and confirmed the reading: say so, because "it failed" and
+      // "it failed and I checked that I understood you" are different promises.
+      return { rerouted: false, ...(verdict.failed ? {} : { note: intentConfirmedNote(routed) }) };
+    }
+
+    logger.warn(
+      `gateway: intent audit corrected ${routed} → ${verdict.kind} for "${msg.text.slice(0, 70)}"${verdict.reason ? ` (${verdict.reason})` : ''}`,
+    );
+    logGatewayEvent('intent.corrected', {
+      platform: msg.platform,
+      channelId: msg.channelId,
+      from: routed,
+      to: verdict.kind,
+      reason: verdict.reason,
+      learningId: verdict.learning?.id,
+    }, 'warn');
+
+    const corrected = verdict.kind;
+    const line = intentCorrectedNote(corrected, verdict.reason);
+    try {
+      await this.sendToRef({ platform: msg.platform, channelId: msg.channelId }, line);
+    } catch {
+      /* best-effort — the corrected route still runs */
+    }
+    try {
+      // Re-enter through the SAME entry point: the corrected route gets the
+      // same gates, the same reply path and its own ledger rows, so it cannot
+      // drift from a first-time ask. Fresh message id, `reentry` (the ask is
+      // already in history), `audited` (never ping-pong the audit).
+      const reply = await this.handleInbound(
+        { ...msg, messageId: `${msg.messageId ?? 'ask'}-audit-${corrected}` },
+        {
+          reentry: true,
+          audited: true,
+          forceKind: corrected,
+          // Carry the retry identity through: the corrected route IS this
+          // task's attempt, so its success must settle the queue entry rather
+          // than leave a fulfilled ask waiting to be retried again.
+          ...(opts.retryOf ? { retryOf: opts.retryOf } : {}),
+        },
+      );
+      return { rerouted: true, reply, to: corrected };
+    } catch (err) {
+      logger.warn(
+        `gateway: audit re-route to ${corrected} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { rerouted: false, note: line };
+    }
   }
 
   /**
@@ -1565,6 +1809,14 @@ export class GatewayRegistry {
     this.deliveryTimer = setInterval(() => {
       void this.drainDelivery().catch(() => undefined);
     }, DELIVERY_DRAIN_INTERVAL_MS);
+
+    // Deferred retries: the queue is PERSISTED, so this also resumes asks that
+    // were still waiting when the gateway restarted — the normal case for a
+    // quota wait, which routinely outlives the process that offered it.
+    this.retryTimer = setInterval(() => {
+      void this.drainDeferredTasks().catch(() => undefined);
+    }, RETRY_DRAIN_INTERVAL_MS);
+    void this.drainDeferredTasks().catch(() => undefined);
   }
 
   /**
@@ -1850,6 +2102,207 @@ export class GatewayRegistry {
     return `👍 Got it — using "${match.answer}".`;
   }
 
+  // ─── Deferred retries (the "Reply *yes*" offer, enforced) ────────────────
+
+  /**
+   * Resolve a reply against a pending retry offer. Returns a user-facing line
+   * when the message WAS an answer to that offer, or `null` to let it fall
+   * through to normal handling.
+   *
+   * Failing OPEN is the invariant (same as the pending-question machinery): a
+   * message that is not clearly yes/no is never swallowed, and the queued task
+   * simply keeps its place — so the sender can still accept or cancel later.
+   */
+  private consumeRetryAnswer(msg: InboundMessage): string | null {
+    const task = getPendingTask(msg.platform, msg.channelId);
+    if (!task) return null;
+
+    if (isRetryDecline(msg.text)) {
+      const cancelled = cancelTasksFor(msg.platform, msg.channelId);
+      logger.info(`gateway: sender declined the retry offer — ${cancelled} queued task(s) cancelled`);
+      logGatewayEvent('retry.cancelled', {
+        platform: msg.platform,
+        channelId: msg.channelId,
+        tasks: cancelled,
+      }, 'info');
+      return "👍 Okay — I've stopped retrying that. Ask me anything else whenever you're ready.";
+    }
+
+    if (!isRetryAcceptance(msg.text)) return null;
+
+    // The task was queued the moment the turn failed, so "yes" CONFIRMS it
+    // rather than creating a second one — and confirmation is what buys the
+    // long horizon (see `confirmTask`).
+    const confirmed = confirmTask(task.id) ?? task;
+    logger.info(
+      `gateway: retry offer accepted (attempt ${confirmed.attempts}, next in ${Math.max(0, confirmed.notBefore - Date.now())}ms)`,
+    );
+    logGatewayEvent('retry.accepted', {
+      platform: msg.platform,
+      channelId: msg.channelId,
+      taskId: confirmed.id,
+      attempts: confirmed.attempts,
+    }, 'info');
+    return acceptedLine(confirmed);
+  }
+
+  /**
+   * Queue a failed ask for retry. Called from BOTH failure branches (chat and
+   * pipeline) at the moment the breadth report — and therefore the "Reply
+   * *yes*" offer — is being sent to the sender.
+   *
+   * Never throws and never awaits: a queue write must not delay or break the
+   * failure reply the sender is owed.
+   */
+  private deferFailedAsk(
+    msg: InboundMessage,
+    kind: DeferredAskKind,
+    nextFreeInMs: number | undefined,
+    lastError: string,
+  ): void {
+    try {
+      const { task, created } = deferTask({
+        platform: msg.platform,
+        channelId: msg.channelId,
+        text: msg.text,
+        kind,
+        from: msg.from,
+        senderId: msg.senderId,
+        isGroup: msg.isGroup,
+        nextFreeInMs,
+        lastError,
+      });
+      logger.info(
+        `gateway: ${created ? 'queued' : 're-queued'} deferred ask (${kind}) for ${msg.platform}:${msg.channelId} — next attempt in ${Math.max(0, task.notBefore - Date.now())}ms`,
+      );
+    } catch (err) {
+      logger.warn(`gateway: could not queue the failed ask for retry: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Run every deferred ask whose wait is over (and report the ones that ran
+   * out of road).
+   *
+   * Serialized through `retryChain`: two drains must never run the same ask
+   * twice, and a retry is a full chat/pipeline turn that can take minutes.
+   */
+  private async drainDeferredTasks(): Promise<void> {
+    // Expiry is reported FIRST: a sender who was told "I'll keep trying" must
+    // hear the outcome even when the queue is busy with something else.
+    for (const task of expiredTasks()) {
+      removeDeferredTask(task.id);
+      const ref: ChannelRef = { platform: task.platform as Platform, channelId: task.channelId };
+      try {
+        await this.sendToRef(ref, abandonedLine(task));
+      } catch {
+        /* best-effort — the report must not stop the drain */
+      }
+      logGatewayEvent('retry.abandoned', {
+        platform: task.platform,
+        channelId: task.channelId,
+        attempts: task.attempts,
+        confirmed: !!task.confirmed,
+      }, 'warn');
+    }
+
+    const due = dueTasks();
+    if (due.length === 0) return;
+    this.retryChain = this.retryChain
+      .then(async () => {
+        for (const task of due) await this.runDeferredTask(task);
+      })
+      .catch(() => undefined);
+    await this.retryChain;
+  }
+
+  /**
+   * Replay ONE deferred ask through the ordinary inbound path.
+   *
+   * Replaying the original message (rather than calling an engine directly) is
+   * deliberate: the retry gets the SAME authorization, the SAME routing
+   * verdict, the SAME pipeline serialization and the SAME reply path as a
+   * first-time ask, so a retry can never behave differently from the request
+   * it is retrying.
+   */
+  private async runDeferredTask(task: DeferredTask): Promise<void> {
+    const runStart = Date.now();
+    const ref: ChannelRef = { platform: task.platform as Platform, channelId: task.channelId };
+    const attempt = task.attempts + 1;
+    updateDeferredTask(task.id, {
+      status: 'running',
+      attempts: attempt,
+      lastAttemptAt: runStart,
+    });
+    logger.info(
+      `gateway: retrying deferred ask (attempt ${attempt}) for ${task.platform}:${task.channelId} — ${task.text.slice(0, 60)}`,
+    );
+    logGatewayEvent('retry.started', {
+      platform: task.platform,
+      channelId: task.channelId,
+      attempt,
+    }, 'info');
+
+    // Say so BEFORE the result: a failure report arriving out of nowhere, or an
+    // answer to a request the sender had given up on, both read as a bug. The
+    // line also explains the task in hand, since the original ask may be hours old.
+    try {
+      await this.sendToRef(ref, retryingLine({ ...task, attempts: attempt }));
+    } catch {
+      /* best-effort */
+    }
+
+    let outcome = '';
+    try {
+      outcome = await this.handleInbound(
+        {
+          platform: task.platform as Platform,
+          channelId: task.channelId,
+          text: task.text,
+          ...(task.from ? { from: task.from } : {}),
+          ...(task.senderId ? { senderId: task.senderId } : {}),
+          ...(task.isGroup !== undefined ? { isGroup: task.isGroup } : {}),
+          // A FRESH transport id: the dedup ledger consumed the original one, so
+          // reusing it would classify the retry as a duplicate and silently
+          // drop it — the exact "nothing happened" failure this queue exists to fix.
+          messageId: `${task.id}-${attempt}`,
+        },
+        { retryOf: task.id },
+      );
+    } catch (err) {
+      logger.warn(
+        `gateway: deferred retry threw: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // A policy change can deauthorize the sender between the offer and the
+    // retry. Retrying a refused sender forever would be harassment, so the task
+    // is dropped (silently, matching the policy gate's own contract).
+    if (outcome === 'refused') {
+      removeDeferredTask(task.id);
+      logger.info('gateway: deferred ask dropped — sender no longer authorized.');
+      return;
+    }
+
+    // Did the replay FAIL again? Then the failure branch re-queued this same
+    // task with a fresh wait, which is the ONLY thing that moves `notBefore`
+    // past the moment we started. Anything else means the ask was answered.
+    const after = getPendingTask(task.platform, task.channelId);
+    if (after && after.id === task.id && after.notBefore > runStart) return;
+    if (after && after.id === task.id) {
+      // No decision was reached (the turn threw before its failure branch):
+      // keep the task with a short backoff rather than dropping a real request.
+      updateDeferredTask(task.id, { status: 'pending', notBefore: Date.now() + 60_000 });
+      return;
+    }
+    removeDeferredTask(task.id);
+    logGatewayEvent('retry.succeeded', {
+      platform: task.platform,
+      channelId: task.channelId,
+      attempts: attempt,
+    }, 'info');
+  }
+
   /** Stop adapters + unsubscribe + stop the delivery drain. Idempotent. */
   async stop(): Promise<void> {
     // Release every awaiting question FIRST, and before the `started` guard: a
@@ -1872,6 +2325,13 @@ export class GatewayRegistry {
     if (this.deliveryTimer) {
       clearInterval(this.deliveryTimer);
       this.deliveryTimer = null;
+    }
+    // Deferred tasks are NOT cleared here: they are persisted precisely so a
+    // restart resumes them (and `stop()` is also called on registries that were
+    // never started).
+    if (this.retryTimer) {
+      clearInterval(this.retryTimer);
+      this.retryTimer = null;
     }
     for (const adapter of this.adapters.values()) {
       try { await adapter.stop(); } catch { /* best-effort */ }

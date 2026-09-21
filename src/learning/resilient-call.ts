@@ -280,11 +280,28 @@ export function describeRoutingExclusions(configManager?: ConfigManager): Routin
 
   // 2. Registry-learned blocks (all tracked models unusable / quota-parked).
   try {
-    for (const provider of getModelRegistry().getBlockedProviders()) {
+    const registry = getModelRegistry();
+    for (const provider of registry.getBlockedProviders()) {
       reports.push({
         provider,
         kind: 'unknown',
         scope: 'provider',
+        recordedAt: 0,
+        expiresAt: 0,
+        active: true,
+        source: 'registry',
+      });
+    }
+    // 3. DEAD PAIRS — a model this provider answered "not found" for. Unlike a
+    // parked provider, the pair will never come back on its own, so it is the
+    // most explainable exclusion there is: without this the pair simply
+    // vanished from every failure report (it was never even "tried").
+    for (const pair of registry.getDeadPairs()) {
+      reports.push({
+        provider: pair.provider,
+        model: pair.model,
+        kind: 'model-not-found',
+        scope: 'model',
         recordedAt: 0,
         expiresAt: 0,
         active: true,
@@ -307,6 +324,9 @@ export function describeRoutingExclusions(configManager?: ConfigManager): Routin
  */
 export function formatRoutingExclusion(r: RoutingExclusionReport, now = Date.now()): string {
   const target = r.model ? `${r.provider}/${r.model}` : r.provider;
+  if (r.source === 'registry' && r.model) {
+    return `🚫 ${target} — this model does not exist on that provider (it answered "not found"). It will not be offered again unless a probe proves it works.`;
+  }
   if (r.source === 'registry') {
     return `🔒 ${target} — skipped by the model registry (every tracked model is unavailable or quota-parked). Run \`nuvira models unblock ${r.provider}\` once it recovers.`;
   }
@@ -1336,6 +1356,12 @@ export function renderModelBreadthReport(
 ): string | undefined {
   const tried = report.tried.filter((a) => !a.skipped);
   const skipped = report.tried.filter((a) => a.skipped);
+  // A registry RULING is not a park: the pair will never come back on its own,
+  // so it is reported separately (and without a "free in ~" that would wrongly
+  // promise a recovery). Everything else in `parked` is a temporary exclusion.
+  const isRuling = (r: RoutingExclusionReport): boolean => r.source === 'registry' && !!r.model;
+  const retired = report.parked.filter(isRuling);
+  const parked = report.parked.filter((r) => !isRuling(r));
   if (tried.length === 0 && report.parked.length === 0 && skipped.length === 0) return undefined;
 
   const lines: string[] = [];
@@ -1349,14 +1375,22 @@ export function renderModelBreadthReport(
     }
   }
 
-  if (report.parked.length > 0) {
+  if (parked.length > 0) {
     const now = Date.now();
     lines.push('');
     lines.push('Not available to try (parked), and why:');
-    for (const r of report.parked.slice(0, 8)) {
+    for (const r of parked.slice(0, 8)) {
       const target = r.model ? `${r.provider}/${r.model}` : r.provider;
       const wait = r.expiresAt ? ` — free in ~${formatWait(Math.max(0, r.expiresAt - now))}` : '';
       lines.push(`  • ${target} — ${failureKindPhrase(r.kind)}${wait}`);
+    }
+  }
+
+  if (retired.length > 0) {
+    lines.push('');
+    lines.push('Ruled out (this model does not exist on that provider):');
+    for (const r of retired.slice(0, 4)) {
+      lines.push(`  • ${r.provider}/${r.model}`);
     }
   }
 
@@ -1367,6 +1401,9 @@ export function renderModelBreadthReport(
 
   lines.push('');
   if (report.nextFreeInMs !== undefined) {
+    // `nextFreeInMs` is computed from ACTIVE exclusions with an expiry, so a
+    // retired pair (expiresAt 0) can never be the thing we are waiting for.
+
     lines.push(
       `A model frees up in about ${formatWait(report.nextFreeInMs)}. Want me to keep checking and run this the moment one is available, then update you here? Reply *yes* and I will keep trying until it is done.`,
     );

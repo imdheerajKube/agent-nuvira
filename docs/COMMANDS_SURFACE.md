@@ -1060,6 +1060,11 @@ NLU request understanding — debug intent/entity/action resolution
 Debug how a request is understood (rule path + optional LLM verify)
 
    - flags: `--llm`
+### `buff nlu learnings`
+
+Show the routing corrections learned from CONFIRMED misreadings (the agent improving itself)
+
+   - flags: `--forget <forget>, --json`
 ### `buff intent`
 
 Plain-English → CLI routing — resolve an ask into the exact `buff` command(s) to run
@@ -1297,4 +1302,4 @@ Delete all stored traces
 
 ---
 
-*421 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*423 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

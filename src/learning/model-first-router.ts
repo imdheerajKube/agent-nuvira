@@ -291,6 +291,13 @@ export function buildModelCandidates(
     }
 
     for (const modelEntry of allModels) {
+      // A DEAD PAIR — the provider itself answered "model not found" for this
+      // exact model (see ModelRegistryEntry.deadPair) — is never offered again.
+      // It cannot serve a request, so including it spends a fallback slot and a
+      // 404 round trip that a servable sibling should have had. Observed live:
+      // the pool offered `local/gemini-3.1-flash-lite` (an Ollama runner cannot
+      // serve a Google model) on every walk until this filter existed.
+      if (registry.isDeadPair(providerId, modelEntry.model)) continue;
       // Skip speech/audio/video/image/research models early
       const modelLower = modelEntry.model.toLowerCase();
       if (modelLower.includes('whisper') || modelLower.includes('tts') || modelLower.includes('speech')

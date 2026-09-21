@@ -47,7 +47,21 @@ export type GatewayLogEvent =
   | 'inbound.failed'
   | 'chat.failed'
   | 'pipeline.completed'
-  | 'adapter.error';
+  | 'adapter.error'
+  // Deferred retries — the lifecycle of the "Reply *yes* and I will keep
+  // trying" offer. Without these, a retry that fired (or failed to fire) hours
+  // after the original turn left no evidence anywhere: the sender's reply and
+  // the queued task were both invisible to the log.
+  | 'retry.accepted'
+  | 'retry.cancelled'
+  | 'retry.started'
+  | 'retry.succeeded'
+  | 'retry.abandoned'
+  // The intent audit — what the model said this ask really was, when a turn
+  // kept failing. This is the agent's own learning made visible: a correction
+  // here changes how the SAME ask routes from now on.
+  | 'intent.confirmed'
+  | 'intent.corrected';
 
 /** One structured log record. `at` is ISO-8601 UTC. */
 export interface GatewayLogRecord {

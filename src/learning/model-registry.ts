@@ -117,6 +117,22 @@ export interface ModelRegistryEntry {
    * because a DIFFERENT model in the same provider hit a rate limit.
    */
   providerParked?: boolean;
+  /**
+   * A model-not-found is DEFINITIVE for the pair: `provider/model` does not
+   * exist and can never serve a request, however healthy the provider is.
+   *
+   * Observed live (2026-09-21): the failover walk offered `local/gemini-3.1-
+   * flash-lite` — the `local` provider is an Ollama runner that cannot serve a
+   * Google model. The pair had been marked `unavailable` ('model not found') and
+   * was STILL handed back as a candidate on every walk, paying a 404 round trip
+   * and taking the fallback slot a servable sibling should have had.
+   *
+   * An ordinary `unavailable` entry stays offerable on purpose (auth/quota may
+   * be repaired, and the walk reaches parked models deliberately). A DEAD PAIR
+   * is not offerable at all — only a real success clears it (see `markVerified`),
+   * so a provider that later adds the model re-earns its place automatically.
+   */
+  deadPair?: boolean;
   /** Where the current status came from. */
   source: ModelRegistrySource;
   /** Human reason for `unavailable` (e.g. '403 permission denied'). */
@@ -303,6 +319,36 @@ function actionLogPath(): string {
 
 function entryKey(provider: string, model: string): string {
   return `${provider}|${model || 'default'}`;
+}
+
+/**
+ * Does an `unavailable` REASON mean the provider/model pair cannot exist?
+ *
+ * Deliberately narrow: it must be an explicit "this model does not exist on
+ * this endpoint", never a permission/per-account answer (a 403 or a quota
+ * denial can be repaired, so the pair must stay reachable).
+ */
+/**
+ * Does an `unavailable` REASON mean the provider/model pair cannot exist?
+ *
+ * Deliberately narrow: it must be an explicit "this model does not exist on
+ * this endpoint", never a permission/per-account answer (a 403 or a quota
+ * denial can be repaired, so the pair must stay reachable).
+ */
+const MODEL_NOT_FOUND_REASON_RE = /model not found|not in live model list|does not exist|no such model|model_not_found/i;
+
+/**
+ * Is this entry a DEAD PAIR?
+ *
+ * The flag is the primary signal, but the reason check heals data written
+ * BEFORE the flag existed (and by any surface): an entry sitting at
+ * `unavailable` with a not-found reason IS a retired pair, and without this the
+ * live `local/gemini-3.1-flash-lite` entry would keep being offered until it
+ * failed one more time.
+ */
+function isDeadEntry(e: ModelRegistryEntry): boolean {
+  if (e.deadPair) return true;
+  return e.status === 'unavailable' && MODEL_NOT_FOUND_REASON_RE.test(e.lastError ?? '');
 }
 
 /**
@@ -523,6 +569,29 @@ export class ModelRegistry {
     return Object.values(this.data.entries).filter((e) => e.provider === provider);
   }
 
+  /**
+   * Provider × model pairs that are DEFINITIVELY dead — the provider answered
+   * "model not found" for them (see `ModelRegistryEntry.deadPair`). Sync + sub-ms.
+   *
+   * The candidate builders consult this so an impossible pair can never be
+   * offered again, and `nuvira models excluded` reports it, so "why is this
+   * model never tried?" is answerable instead of silent.
+   */
+  getDeadPairs(): Array<{ provider: string; model: string }> {
+    const out: Array<{ provider: string; model: string }> = [];
+    for (const e of Object.values(this.data.entries)) {
+      if (isDeadEntry(e)) out.push({ provider: e.provider, model: e.model });
+    }
+    return out;
+  }
+
+  /** Is this exact provider × model pair retired as definitively nonexistent? */
+  isDeadPair(provider: string, model: string | undefined): boolean {
+    if (!model || model === 'default') return false;
+    const entry = this.data.entries[entryKey(provider, model)];
+    return !!entry && isDeadEntry(entry);
+  }
+
   /** Providers that currently have at least one verified, usable model. Sync. */
   getUsableProviders(now: number = Date.now()): string[] {
     const providers = new Set<string>();
@@ -691,6 +760,11 @@ export class ModelRegistry {
         quotaParkedUntil: existing?.quotaParkedUntil || 0,
         source: 'probe',
         lastError: existing?.lastError,
+        // The provider's OWN model list is authoritative about what it serves:
+        // a pair that appears in a fresh list is not a dead pair, so the flag is
+        // dropped. A bogus list re-earns the flag on the next call (one 404), so
+        // this is self-correcting rather than a permanent re-offer loop.
+        deadPair: undefined,
       };
     }
     this.persist();
@@ -878,6 +952,10 @@ export class ModelRegistry {
       quotaParkedUntil: Math.max(existing?.quotaParkedUntil || 0, quotaParkedUntil),
       source,
       lastError: reason,
+      // A "model not found" answer is definitive for this provider × model, so
+      // the pair is retired from every candidate pool (see `deadPair`). The flag
+      // is sticky across ordinary failures and cleared only by a real success.
+      deadPair: existing?.deadPair || MODEL_NOT_FOUND_REASON_RE.test(reason),
       tokensConsumed: existing?.tokensConsumed,
       requests: existing?.requests,
       resetsInMs: existing?.resetsInMs,

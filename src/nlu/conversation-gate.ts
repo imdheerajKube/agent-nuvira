@@ -34,6 +34,9 @@
 import { isTrivialPrompt } from '../memory/provider.js';
 import { parseRequestSync, type ParsedRequest } from './parser.js';
 import { isContentArtifactAsk, stripArtifactReferences } from './intent.js';
+// The learned corrections. A plain store (mtime-cached, no routing graph), so
+// consulting it on every ask costs a comparison, not a read.
+import { applyLearning, noteLearningApplied, type NluLearning } from './learnings.js';
 
 /**
  * Verbs that are unambiguous coding TASKS when used in command position.
@@ -134,12 +137,48 @@ export function resolveAskKind(
   text: string | null | undefined,
   parsed?: ParsedRequest,
 ): AskKind {
+  return explainAskKind(text, parsed).kind;
+}
+
+/** One routing verdict WITH the reason it differs from the rules. */
+export interface AskKindExplanation {
+  /** The route to use. */
+  kind: AskKind;
+  /** What the deterministic rules alone would have said. */
+  base: AskKind;
+  /** The learned correction that overrode those rules, when there is one. */
+  learning?: NluLearning;
+}
+
+/**
+ * Resolve the route AND explain it — the same function `resolveAskKind` uses,
+ * split out so the CLI can say WHY a route differs from the rules. An override
+ * nobody can see is its own bug.
+ *
+ * A LEARNED correction outranks the rules: it exists because this exact ask was
+ * read wrong before and the model confirmed what it really is (see
+ * `intent-confirm.ts`), so the rules have already been shown to fail here. It is
+ * checked against the HEURISTIC verdict — a learning that agrees with the rules
+ * is not an override, and must not be reported as one.
+ */
+export function explainAskKind(
+  text: string | null | undefined,
+  parsed?: ParsedRequest,
+): AskKindExplanation {
   const t = String(text ?? '').trim();
-  if (!t) return 'chat';
-  if (isTrivialPrompt(t)) return 'chat';
-  if (hasCodingAction(t)) return 'pipeline';
-  const p = parsed ?? parseRequestSync(t);
-  return p.action.run === 'pipeline' ? 'pipeline' : 'chat';
+  if (!t) return { kind: 'chat', base: 'chat' };
+  if (isTrivialPrompt(t)) return { kind: 'chat', base: 'chat' };
+
+  const base: AskKind = hasCodingAction(t)
+    ? 'pipeline'
+    : (parsed ?? parseRequestSync(t)).action.run === 'pipeline'
+      ? 'pipeline'
+      : 'chat';
+
+  const learned = applyLearning(t, base);
+  if (!learned) return { kind: base, base };
+  noteLearningApplied(learned.learning.id);
+  return { kind: learned.kind, base, learning: learned.learning };
 }
 
 /**
