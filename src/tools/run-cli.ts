@@ -33,6 +33,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ToolContext } from './registry.js';
 import { resolveAsk } from '../commands/intent-router.js';
+import { decideCliIntentConfirmation } from '../learning/autonomy-policy.js';
 import { maskSenderId } from '../utils/mask.js';
 
 /** Cap on how much CLI output is fed back to the model. */
@@ -99,14 +100,14 @@ export async function runCliTool(args: unknown, ctx: ToolContext): Promise<strin
     ask = parsed.ask;
     confirm = parsed.confirm ?? false;
   } catch (err) {
-    return `run_cli: missing/invalid arguments — expected { ask, confirm? }. ${err instanceof Error ? err.message.split('\n')[0] : ''}`.trim();
+    return `Error: run_cli: missing/invalid arguments — expected { ask, confirm? }. ${err instanceof Error ? err.message.split('\n')[0] : ''}`.trim();
   }
 
   const matches = resolveAsk(ask);
   const top = matches[0];
   if (!top) {
     return (
-      `run_cli: could not map "${ask}" to a known intent. Tell the user no matching ` +
+      `Error: run_cli: could not map "${ask}" to a known intent. Tell the user no matching ` +
       `capability was found and suggest checking 'nuvira doctor' or docs/COMMANDS.md.`
     );
   }
@@ -117,7 +118,7 @@ export async function runCliTool(args: unknown, ctx: ToolContext): Promise<strin
       .map((o) => `- "${o.when}" → \`${o.command}\``)
       .join('\n');
     return (
-      `run_cli: the ask "${ask}" is AMBIGUOUS — it maps to more than one command. ` +
+      `Error: run_cli: the ask "${ask}" is AMBIGUOUS — it maps to more than one command. ` +
       `Call ask_user with 2 choices (one per option below), then re-call run_cli with the ` +
       `resolved command phrased unambiguously:\n${choices}`
     );
@@ -125,26 +126,48 @@ export async function runCliTool(args: unknown, ctx: ToolContext): Promise<strin
 
   const command = top.command;
   if (!command) {
-    return `run_cli: intent "${top.intent}" has no executable command — tell the user to run the equivalent step manually.`;
+    return `Error: run_cli: intent "${top.intent}" has no executable command — tell the user to run the equivalent step manually.`;
   }
 
-  // Confirmation gate — destructive/system-level intents need user sign-off.
+  // ── G16: the gate's missing input is whether the USER asked for this ───────
+  // The manifest flag says the ACTION is stateful; it does not say the user has
+  // to approve what they just asked for. "Stop the dashboard" resolved to this
+  // exact command is the authorization — asking again is the manual cadence.
+  // Resolved with the SAME router the tool already used, so the tool's ask and
+  // the user's ask are compared like for like, and only on an identical command.
+  // Intents that cannot be undone (history.clear, memory.prune, publish, …) are
+  // still always gated, however the request is phrased.
+  let decidedAutonomously = false;
+  let autonomyReason = '';
   if (top.confirmation && !confirm) {
-    return (
-      `run_cli: "${top.intent}" changes running services/state and needs explicit confirmation. ` +
-      `Call ask_user with choices yes/no confirming this exact command, then re-call ` +
-      `run_cli with the SAME ask plus confirm: true only if the user agreed:\n` +
-      `\`${command}\``
-    );
+    const namedByRequest = resolveAsk(ctx.authorizationRequest ?? '').some((m) => m.command === command);
+    const verdict = decideCliIntentConfirmation({ intent: top.intent, namedByRequest });
+    if (verdict.action !== 'proceed') {
+      return (
+        `Error: run_cli: "${top.intent}" changes running services/state and needs explicit confirmation ` +
+        `(${verdict.reason}). ` +
+        `Call ask_user with choices yes/no confirming this exact command, then re-call ` +
+        `run_cli with the SAME ask plus confirm: true only if the user agreed:\n` +
+        `\`${command}\``
+      );
+    }
+    decidedAutonomously = true;
+    autonomyReason = verdict.reason;
+    ctx.emit?.('autonomy:write-applied', {
+      tool: 'run_cli',
+      intent: top.intent,
+      command,
+      reason: verdict.reason,
+    }, 'tool-loop');
   }
 
   // Execute the manifest-resolved command as a child process (the real CLI).
   const entry = cliEntry();
   if (!existsSync(entry)) {
-    return `run_cli: CLI entry not found at ${entry} — build the project first (npm run build).`;
+    return `Error: run_cli: CLI entry not found at ${entry} — build the project first (npm run build).`;
   }
   const argv = stripCliPrefix(splitCommand(command));
-  if (argv.length === 0) return `run_cli: empty command resolved for intent "${top.intent}".`;
+  if (argv.length === 0) return `Error: run_cli: empty command resolved for intent "${top.intent}".`;
 
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [entry, ...argv], {
@@ -179,9 +202,14 @@ export async function runCliTool(args: unknown, ctx: ToolContext): Promise<strin
       const body = (out || err).trim().slice(0, MAX_OUTPUT_CHARS);
       const masked = maskSenderId(body);
       const status = code === 0 ? '✅ succeeded' : `❌ failed (exit ${code ?? '?'})`;
-      resolve(
+      const body2 =
         `run_cli: \`${command}\` ${status}.\n` +
-          (masked ? `Output:\n${masked}` : '(no output)'),
+        (masked ? `Output:\n${masked}` : '(no output)');
+      resolve(
+        decidedAutonomously
+          ? `${body2}\n💡 Ran without asking: ${autonomyReason}. State the action plainly in your answer — ` +
+              'do not ask for permission to do work the user already asked for.'
+          : body2,
       );
     });
   });

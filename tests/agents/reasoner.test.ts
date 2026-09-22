@@ -173,3 +173,84 @@ describe('Technical decision injection into planner prompt', () => {
     expect(retrieved.framework).toBe('tkinter');
   });
 });
+
+/**
+ * G7 — the authored-deliverable gate.
+ *
+ * Live failure: for "write a 100-page story" the reasoner emitted
+ *   { "language": "python", "framework": "none", "deliverable": "markdown_file",
+ *     "reasoning": "…a Python script is the most efficient way to read existing
+ *                   chapters, process the outline, and update the target file…" }
+ * and the planner dutifully turned that into a plan with no prose steps.
+ * A weak model must not be able to reintroduce that category error, so the
+ * classifier's verdict is enforced after parsing.
+ */
+describe('ReasonerAgent — authored deliverables (G7)', () => {
+  const storyGoal = 'write a 100 page story about magic and suspense like Harry Potter';
+
+  /** The exact decision shape the live run produced for the story ask. */
+  const MISFRAMED = JSON.stringify({
+    language: 'python',
+    framework: 'none',
+    platform: 'cli',
+    architecture: 'multi-file',
+    dependencies: ['os'],
+    buildCommand: 'none',
+    deliverable: 'markdown_file',
+    constraints: ['Must append content to story.md'],
+    isGreenfield: false,
+    confidence: 0.95,
+    reasoning: 'The project already uses Python; a script is the most efficient way.',
+  });
+
+  it('overrides a code-framed decision for an authored goal', async () => {
+    const agent = new ReasonerAgent();
+    const context = makeContext({ goal: storyGoal });
+
+    const result = await agent.execute(context, makeCallLLM(MISFRAMED));
+    expect(result.success).toBe(true);
+
+    const decision = context.metadata.technicalDecision as Record<string, unknown>;
+    expect(decision.deliverableClass).toBe('creative');
+    // No programming language can be involved in writing a novel.
+    expect(decision.language).toBe('none');
+    expect(decision.framework).toBe('none');
+    expect(decision.platform).toBe('document');
+    expect(decision.architecture).toBe('sections');
+    expect(decision.dependencies).toEqual([]);
+    expect(decision.buildCommand).toBeUndefined();
+  });
+
+  it('tells the model the class up front and forbids a generator', async () => {
+    const agent = new ReasonerAgent();
+    const callLLM = makeCallLLM(MISFRAMED);
+    await agent.execute(makeContext({ goal: storyGoal }), callLLM);
+
+    const prompt = (callLLM as unknown as { mock: { calls: string[][] } }).mock.calls[0][0];
+    expect(prompt).toContain('DELIVERABLE CLASS: creative writing');
+    expect(prompt).toMatch(/MUST NOT plan a script, tool, or generator/);
+  });
+
+  it('leaves a normal software goal completely untouched', async () => {
+    const agent = new ReasonerAgent();
+    const context = makeContext({ goal: 'build a react dashboard for sales' });
+    const softwareDecision = JSON.stringify({
+      language: 'typescript',
+      framework: 'react',
+      platform: 'web',
+      architecture: 'multi-file',
+      dependencies: ['react'],
+      deliverable: 'web-app',
+      constraints: [],
+      isGreenfield: true,
+      confidence: 0.9,
+      reasoning: 'Standard web stack',
+    });
+
+    await agent.execute(context, makeCallLLM(softwareDecision));
+    const decision = context.metadata.technicalDecision as Record<string, unknown>;
+    expect(decision.language).toBe('typescript');
+    expect(decision.framework).toBe('react');
+    expect(decision.deliverableClass).toBe('code');
+  });
+});

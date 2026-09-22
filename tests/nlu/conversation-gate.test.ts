@@ -10,12 +10,15 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  explainAskKind,
   isConversationalQuestion,
   hasCodingAction,
+  isLongFormDeliverable,
   resolveAskKind,
   looksLikeAgentCliAsk,
 } from '../../src/nlu/conversation-gate.js';
 import { parseRequestSync } from '../../src/nlu/parser.js';
+import { isAuthoredGoal } from '../../src/learning/deliverable-class.js';
 
 describe('isConversationalQuestion — the P0.5 gate', () => {
   it('classifies genuine questions as conversational (answer directly, never the pipeline)', () => {
@@ -78,6 +81,48 @@ describe('isConversationalQuestion — the P0.5 gate', () => {
     // auth…") is — where the object is code.
     expect(isConversationalQuestion('add 2 + 2')).toBe(true);
     expect(isConversationalQuestion('add Rahul to whatsapp')).toBe(true); // contact, not code
+  });
+});
+
+/**
+ * A long-form authored deliverable must reach the machinery that can finish it.
+ *
+ * Live evidence: "write a 12 page story called Kharig Nights about a village boy
+ * who finds a lamp in a banyan root" was read as a conversational question (the
+ * NLU maps `write` to a chat action) and answered in ONE reply — no unit ledger,
+ * no progress measurement, no unattended continuation. Fine-looking for 12
+ * pages; fatal for "write a 200 page book", which is the ask this whole
+ * workstream exists to serve.
+ */
+describe('isLongFormDeliverable — a book is never a conversational question', () => {
+  it('routes an explicit multi-unit prose ask to the pipeline', () => {
+    expect(isLongFormDeliverable('write a 200 page book about the sea')).toBe(true);
+    expect(isLongFormDeliverable('write a 12 page story called Kharig Nights about a boy')).toBe(true);
+    expect(isLongFormDeliverable('tell me a story in 8 chapters about rain')).toBe(true);
+    expect(isConversationalQuestion('write a 200 page book about the sea')).toBe(false);
+    expect(resolveAskKind('write a 200 page book about the sea')).toBe('pipeline');
+    expect(explainAskKind('write a 200 page book about the sea').base).toBe('pipeline');
+  });
+
+  it('keeps a short ask conversational — one generation IS the answer', () => {
+    expect(isLongFormDeliverable('write a poem about rain')).toBe(false);
+    expect(isLongFormDeliverable('write a 1 page summary of the meeting')).toBe(false);
+    expect(isConversationalQuestion('write a poem about rain')).toBe(true);
+  });
+
+  it('does NOT invent a magnitude for a bare "book"', () => {
+    // The classifier defaults an unnumbered book to 10 chapters; a DEFAULT is
+    // not something the user asked for, so it must not re-route the ask.
+    expect(isLongFormDeliverable('write a book about the sea')).toBe(false);
+    expect(resolveAskKind("Create a book which teaches math's devision for class 4 student")).toBe('chat');
+  });
+
+  it('does not push a long CONTENT-artifact ask into the code pipeline', () => {
+    // 20 pages, but the authored classifier does not read it as content the
+    // pipeline can plan — sending it there would plan a PROGRAM for prose, the
+    // original category error.
+    expect(isAuthoredGoal('write a 20 page plan for my child')).toBe(false);
+    expect(isLongFormDeliverable('write a 20 page plan for my child')).toBe(false);
   });
 });
 

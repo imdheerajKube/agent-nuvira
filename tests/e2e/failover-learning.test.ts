@@ -196,7 +196,7 @@ describe('E2E: registry learns the block, next pick skips it', () => {
     expect(line).toContain('"provider":"nim"');
     expect(line).toContain('"outcome":"unavailable"');
     expect(line).toContain('"errorType":"rate-limit"');
-    const telemetry = registry.getActionTelemetry();
+    const telemetry = registry.getActionTelemetry({ includeSynthetic: true });
     const plan = telemetry.actions.find((a) => a.action === 'plan');
     expect(plan?.killed).toBe(1);
     expect(plan?.killedModels[0]?.provider).toBe('nim');
@@ -256,7 +256,7 @@ describe('E2E: registry learns the block, next pick skips it', () => {
     expect(decision.ranked.some((s) => s.provider === 'nim')).toBe(true);
 
     // And the action log carries the recovery: one plan kill, one plan verify.
-    const telemetry = registry.getActionTelemetry();
+    const telemetry = registry.getActionTelemetry({ includeSynthetic: true });
     const plan = telemetry.actions.find((a) => a.action === 'plan');
     expect(plan?.killed).toBe(1);
     expect(plan?.verified).toBe(1);

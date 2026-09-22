@@ -13,6 +13,30 @@ export interface TestedModel {
   parked?: boolean;
   /** Ms until the current quota window resets (0 = no window tracked). */
   resetsInMs?: number;
+  /** The Model Availability Registry's own verdict for this provider × model. */
+  registryStatus?: 'verified' | 'unverified' | 'unavailable';
+  /**
+   * The learned reason behind an `unavailable` verdict, verbatim.
+   *
+   * Rendered so the cell can say WHICH kind of unusable this is — a dead pair
+   * (the id is not served) is a permanent fact, while an auth/entitlement
+   * failure is repairable by the key's owner. Collapsing both into
+   * "unavailable" is what made "requires purchase" look like a safe guess.
+   */
+  registryError?: string;
+  /** A retired provider × model pair — the id does not exist on that endpoint. */
+  registryDead?: boolean;
+  /** What a call on this model is expected to cost (labelled, never filtered). */
+  entitlement?: { tier: 'free' | 'metered' | 'unknown'; basis: string };
+  /**
+   * True only when the ROUTER would actually use this model right now.
+   *
+   * The sibling `status` above answers a different question — "did the provider
+   * list it, given the provider's overall credit state" — and is identical for
+   * every model of a provider. Without this, a model the router skips read
+   * exactly like one it uses constantly.
+   */
+  routable?: boolean;
 }
 
 export interface ProviderHealth {
@@ -37,6 +61,19 @@ export interface ModelsHealthData {
   available: number;
   limited: number;
   unavailable: number;
+  /**
+   * Of `totalModels` LISTED, how many the router can actually route to right now
+   * (registry-verified, un-parked, not stale).
+   *
+   * The listing count and this number are different questions: a provider can
+   * list 400 ids it will never serve us, and OpenRouter alone accounts for
+   * hundreds of those. Reported separately so the page cannot present "listed"
+   * as "available" and contradict the router on the same screen.
+   */
+  routable?: number;
+  /** Registry-wide totals (all providers, including ones not probed above). */
+  registryTotal?: number;
+  registryVerified?: number;
 }
 
 // ─── Model Availability Registry Types ─────────────────────────────────────
@@ -138,8 +175,19 @@ export interface ModelRegistryInsights {
  */
 export interface ActionTelemetryInsights {
   enabled: boolean;
-  /** Total logged events (capped by the registry at MAX_ACTION_LOG_ENTRIES). */
+  /** Events INCLUDED in this view — test-origin records are excluded. */
   total: number;
+  /**
+   * Events in the log that came from a TEST process and are excluded from every
+   * number above.
+   *
+   * Surfaced, not silently dropped: the log is hash-chained, so the records are
+   * still on disk, and a reader can see exactly how much of it is synthetic. A
+   * test suite used to write real telemetry here (one fake model reached 2,110
+   * of 3,436 lines); the leak is fixed at the source, and this is the second
+   * layer — the view stays honest without rewriting a tamper-evident chain.
+   */
+  synthetic: number;
   updatedAt: number;
   /** Per-action aggregates (sorted by action name). */
   actions: Array<{
@@ -725,6 +773,19 @@ export interface TraceStep {
   /** True when this step is a REPAIR re-prompt escalated to a stronger model
    *  (v1.60.4 per-task/planner escalation). */
   escalated?: boolean;
+  /**
+   * Per-layer prompt digests + sizes (session 3). The stable-layer digest
+   * staying constant across steps is what proves the system prompt is
+   * prompt-cacheable — the flat `promptDigest` cannot show that.
+   */
+  layers?: {
+    systemDigest: string;
+    contextDigest: string;
+    volatileDigest: string;
+    systemChars: number;
+    contextChars: number;
+    volatileChars: number;
+  };
 }
 
 /** A reasoning trace (list view omits steps/previews). */
@@ -735,14 +796,23 @@ export interface TraceEntry {
   startedAt: number;
   endedAt?: number;
   durationMs?: number;
+  /**
+   * The FULL stable layer (system prompt), captured once per trace
+   * (session 3). Present in the detail view only — the list endpoint strips it.
+   */
+  systemPrompt?: string;
+  /** True length of the stable layer before the storage cap. */
+  systemPromptChars?: number;
   provider?: string;
   model?: string;
   success?: boolean;
   /**
    * What actually happened — `answered` (text reply only) vs `acted` (a tool
-   * ran), plus `delivered`/`unverifiedClaim`/`unfulfilledPromise`. This is how
-   * the Trace tab distinguishes a real send from a hallucinated "I sent it",
-   * and an announced-but-never-performed action from work in progress.
+   * ran), plus `delivered`/`unverifiedClaim`/`unfulfilledPromise` and the edit
+   * analogues `unverifiedEdit`/`unverifiedEditClaim`. This is how the Trace tab
+   * distinguishes a real send from a hallucinated "I sent it", an
+   * announced-but-never-performed action from work in progress, and a code
+   * change that was never verified from one that was.
    */
   outcome?: {
     kind: 'answered' | 'acted' | 'failed' | 'cancelled';
@@ -750,6 +820,10 @@ export interface TraceEntry {
     delivered?: boolean;
     unverifiedClaim?: boolean;
     unfulfilledPromise?: boolean;
+    /** Files changed but nothing verified the result (tests/typecheck/browser). */
+    unverifiedEdit?: boolean;
+    /** The answer asserted a code change that no verification backed. */
+    unverifiedEditClaim?: boolean;
   };
   /** Present in the detail endpoint only. */
   steps?: TraceStep[];

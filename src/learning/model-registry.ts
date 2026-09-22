@@ -201,6 +201,21 @@ export interface ActionTelemetryEntry {
   /** Correlation id of the call when the caller has one (traceability). */
   callId?: string;
   /**
+   * Where this record came from — `live` (a real run) or `test` (a test process).
+   *
+   * WHY: the charts read this log, and a test suite driving the real pipeline
+   * used to write real records for models that do not exist. One fake model
+   * (`local/nonexistent-fast-fail`) reached **2,110 of 3,436 lines** and was the
+   * largest row in "Learned from real usage". The harness leak is now fixed at
+   * the source (`tests/setup/hermetic-env.ts`), so this is the second layer:
+   * even if a record is written from a test process, the VIEW can tell, without
+   * rewriting a tamper-evident chain to hide it.
+   *
+   * Absent means `live` — an old record predates this field and was not
+   * necessarily synthetic.
+   */
+  origin?: 'live' | 'test';
+  /**
    * P4 M4.4: tokens already streamed before a `partial` (mid-stream
    * interruption) — the bigger the number, the more "almost finished" the
    * provider was. Only set for outcome 'partial'.
@@ -211,8 +226,18 @@ export interface ActionTelemetryEntry {
 /** Aggregated "learned from real usage" view — per action (dashboard panel). */
 export interface ActionTelemetryInsights {
   enabled: boolean;
-  /** Total logged events (capped at MAX_ACTION_LOG_ENTRIES). */
+  /** Total logged events INCLUDED in this view (test-origin records excluded). */
   total: number;
+  /**
+   * Records in the log that were written by a test process and are therefore
+   * excluded from every number in this view.
+   *
+   * Reported rather than silently dropped: the log is hash-chained, so the
+   * records remain on disk, and a reader who knows the total log size can see
+   * exactly how much of it is synthetic. Silence here would just be a different
+   * way of lying about the data.
+   */
+  synthetic: number;
   updatedAt: number;
   /** Per-action aggregates (actions with at least one event, sorted by name). */
   actions: Array<{
@@ -307,6 +332,34 @@ export const ERROR_RATE_HEAL_STEP = 0.1;
 
 function memoryDir(): string {
   return envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR;
+}
+
+/**
+ * Where a telemetry record originated: a real run (`live`) or a test process
+ * (`test`).
+ *
+ * WHY THIS IS A RUNTIME CHECK, NOT A CALLER ARGUMENT. Relying on every call site
+ * to pass the right value means the one that forgets silently poisons the
+ * production store — which is exactly how `local/nonexistent-fast-fail` came to
+ * be the largest row on the dashboard. Detecting it at the single write path
+ * fails closed: an unrecognised process is `live`, and a known test runner is
+ * `test` whether or not the caller remembered.
+ *
+ * Three signals, cheapest first: an explicit override (so a harness can pin the
+ * value), then the test runners' own env markers (`vitest`/`jest` both set
+ * these), then `NODE_ENV=test`.
+ */
+export function telemetryOrigin(): 'live' | 'test' {
+  // Both spellings: the bare var for an explicit operator override, and the
+  // namespaced one (NUVIRA_/BUFF_) which `envBuff` resolves — the harness sets
+  // the namespaced form so "this is a test process" is stated, not inferred.
+  const override = process.env.TELEMETRY_ORIGIN ?? envBuff('TELEMETRY_ORIGIN');
+  if (override === 'test' || override === 'live') return override;
+  if (process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.JEST_WORKER_ID) {
+    return 'test';
+  }
+  if (envBuff('NODE_ENV') === 'test') return 'test';
+  return 'live';
 }
 
 function mirrorPath(): string {
@@ -456,9 +509,20 @@ export function buildActionTimeline(
     }));
 }
 
-export function aggregateActionTelemetry(entries: ActionTelemetryEntry[]): ActionTelemetryInsights {
+export function aggregateActionTelemetry(
+  entries: ActionTelemetryEntry[],
+  options: { includeSynthetic?: boolean } = {},
+): ActionTelemetryInsights {
+  // Test-origin records are EXCLUDED from what the dashboard reports as learned
+  // behaviour — the view stays honest without rewriting the chain that records
+  // them (see `origin` on ActionTelemetryEntry). Records with no `origin`
+  // predate the field and are treated as live, so old data keeps working.
+  const syntheticEntries = entries.filter((e) => e.origin === 'test');
+  const usable = options.includeSynthetic
+    ? entries
+    : entries.filter((e) => e.origin !== 'test');
   const byAction = new Map<string, ActionTelemetryEntry[]>();
-  for (const e of entries) {
+  for (const e of usable) {
     const list = byAction.get(e.action);
     if (list) list.push(e);
     else byAction.set(e.action, [e]);
@@ -490,7 +554,8 @@ export function aggregateActionTelemetry(entries: ActionTelemetryEntry[]): Actio
     .sort((a, b) => a.action.localeCompare(b.action));
   return {
     enabled: actions.length > 0,
-    total: entries.length,
+    total: usable.length,
+    synthetic: options.includeSynthetic ? 0 : syntheticEntries.length,
     updatedAt: Date.now(),
     actions,
   };
@@ -558,6 +623,19 @@ export class ModelRegistry {
       .filter((e) => !!e.model && e.model !== 'default')
       .sort((a, b) => b.lastVerifiedAt - a.lastVerifiedAt)
       .map((e) => e.model);
+  }
+
+  /**
+   * Every provider the registry holds ANY data for — verified, unverified or
+   * dead, sorted.
+   *
+   * Deliberately broader than {@link getUsableProviders} (verified only). The
+   * warmup sweep needs the providers whose models it could VERIFY — which are
+   * exactly the ones still invisible to the router, i.e. the ones missing from
+   * the usable set.
+   */
+  getTrackedProviders(): string[] {
+    return [...new Set(Object.values(this.data.entries).map((e) => e.provider))].sort();
   }
 
   /**
@@ -1299,6 +1377,9 @@ export class ModelRegistry {
    */
   private appendActionLog(entry: ActionTelemetryEntry): void {
     try {
+      // Stamp provenance ONCE, at the single write path, so every consumer (the
+      // registry API, the dashboard, a CLI report) sees the same origin.
+      if (!entry.origin) entry.origin = telemetryOrigin();
       const dir = memoryDir();
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       const path = actionLogPath();
@@ -1331,9 +1412,16 @@ export class ModelRegistry {
     }
   }
 
-  /** Aggregated per-action "learned from real usage" view (dashboard / CLI). Sync. */
-  getActionTelemetry(): ActionTelemetryInsights {
-    return aggregateActionTelemetry(readActionTelemetryFile(actionLogPath()));
+  /**
+   * Aggregated per-action "learned from real usage" view (dashboard / CLI). Sync.
+   *
+   * `includeSynthetic` is for callers whose subject IS the log rather than the
+   * production view — a test asserting the write path, or an operator auditing a
+   * store that has test-origin rows in it. The default excludes them, because
+   * the charts read this and a test process must not be able to move them.
+   */
+  getActionTelemetry(options: { includeSynthetic?: boolean } = {}): ActionTelemetryInsights {
+    return aggregateActionTelemetry(readActionTelemetryFile(actionLogPath()), options);
   }
 
   /**

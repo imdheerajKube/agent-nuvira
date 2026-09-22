@@ -258,11 +258,19 @@ describe('ModelsCommand status --verbose', () => {
   });
 
   it('verbose status shows registry-blocked providers and per-action telemetry', async () => {
-    const { getModelRegistry } = await import('../../src/learning/model-registry.js');
-    const registry = getModelRegistry();
-    registry.markVerified('local', 'gemma4:e4b', 'spot-check');
-    registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry', 0, 'execute');
-    registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
+    // This test MODELS A LIVE RUN: it drives the real registry and then asserts
+    // the CLI reports what routing learned. Records written from a test process
+    // are tagged `origin: 'test'` and excluded from every "learned from real
+    // usage" view (the phantom-model lesson), so the origin is pinned here —
+    // which is exactly what the override exists for.
+    const originalOrigin = process.env.TELEMETRY_ORIGIN;
+    process.env.TELEMETRY_ORIGIN = 'live';
+    try {
+      const { getModelRegistry } = await import('../../src/learning/model-registry.js');
+      const registry = getModelRegistry();
+      registry.markVerified('local', 'gemma4:e4b', 'spot-check');
+      registry.markUnavailable('gemini', 'gemini-2.5-flash', 'auth', 'telemetry', 0, 'execute');
+      registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
 
     // Parse through the production CLI shape — commander parses
     // parent-action + subcommand options correctly only when `models` is a
@@ -279,14 +287,18 @@ describe('ModelsCommand status --verbose', () => {
     const output = vi.mocked(console.log).mock.calls.map((c) => String(c[0])).join('\n');
     spy.mockRestore();
 
-    expect(output).toContain('Registry-blocked providers');
-    expect(output).toContain('gemini');
-    expect(output).toContain('auth');
-    expect(output).toContain('Learned from real usage');
-    expect(output).toContain('execute');
-    expect(output).toContain('killed');
-    expect(output).toContain('chat');
-    expect(output).toContain('verified');
+      expect(output).toContain('Registry-blocked providers');
+      expect(output).toContain('gemini');
+      expect(output).toContain('auth');
+      expect(output).toContain('Learned from real usage');
+      expect(output).toContain('execute');
+      expect(output).toContain('killed');
+      expect(output).toContain('chat');
+      expect(output).toContain('verified');
+    } finally {
+      if (originalOrigin === undefined) delete process.env.TELEMETRY_ORIGIN;
+      else process.env.TELEMETRY_ORIGIN = originalOrigin;
+    }
   });
 });
 

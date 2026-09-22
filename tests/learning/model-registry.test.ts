@@ -714,7 +714,7 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     const registry = new ModelRegistry();
     registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
 
-    const tele = registry.getActionTelemetry();
+    const tele = registry.getActionTelemetry({ includeSynthetic: true });
     expect(tele.enabled).toBe(true);
     expect(tele.total).toBe(1);
     const chat = tele.actions.find((a) => a.action === 'chat');
@@ -727,7 +727,7 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     const registry = new ModelRegistry();
     registry.recordCall('gemini', 'gemini-2.5-flash', false, 'auth', 'execute');
 
-    const tele = registry.getActionTelemetry();
+    const tele = registry.getActionTelemetry({ includeSynthetic: true });
     const execute = tele.actions.find((a) => a.action === 'execute');
     expect(execute?.killed).toBe(1);
     expect(execute?.killedModels[0]).toMatchObject({ provider: 'gemini', model: 'gemini-2.5-flash', reason: 'auth' });
@@ -737,7 +737,7 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     const registry = new ModelRegistry();
     registry.recordCall('groq', 'llama-3.3-70b-versatile', false, 'server', 'chat');
 
-    const tele = registry.getActionTelemetry();
+    const tele = registry.getActionTelemetry({ includeSynthetic: true });
     const chat = tele.actions.find((a) => a.action === 'chat');
     expect(chat?.transient).toBe(1);
     expect(chat?.killed).toBe(0);
@@ -748,7 +748,7 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     const registry = new ModelRegistry();
     registry.markUnavailable('nim', 'meta/llama-3.3-70b-instruct', 'model not found', 'telemetry', 0, 'plan');
 
-    const tele = registry.getActionTelemetry();
+    const tele = registry.getActionTelemetry({ includeSynthetic: true });
     const plan = tele.actions.find((a) => a.action === 'plan');
     expect(plan?.killed).toBe(1);
     expect(plan?.killedModels[0].reason).toContain('model not found');
@@ -763,7 +763,7 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     expect(registry.isUsable('groq', 'llama-3.3-70b-versatile')).toBe(true);
     expect(registry.getEntry('gemini', 'gemini-2.5-flash')?.status).toBe('unavailable');
     // ...but no per-action rows (dashboard panel stays empty).
-    expect(registry.getActionTelemetry().enabled).toBe(false);
+    expect(registry.getActionTelemetry({ includeSynthetic: true }).enabled).toBe(false);
   });
 
   it('repeated writes dedupe to one chip per provider × model (latest wins)', () => {
@@ -771,7 +771,7 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
     registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
 
-    const tele = registry.getActionTelemetry();
+    const tele = registry.getActionTelemetry({ includeSynthetic: true });
     const chat = tele.actions.find((a) => a.action === 'chat');
     expect(chat?.verified).toBe(2); // honest volume
     expect(chat?.verifiedModels).toHaveLength(1); // one chip
@@ -792,7 +792,7 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
 
     resetModelRegistry();
     const fresh = new ModelRegistry();
-    const tele = fresh.getActionTelemetry();
+    const tele = fresh.getActionTelemetry({ includeSynthetic: true });
     expect(tele.enabled).toBe(true);
     expect(tele.actions.find((a) => a.action === 'chat')?.verified).toBe(1);
   });
@@ -802,7 +802,7 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     registry.recordCall('groq', 'llama-3.3-70b-versatile', true, undefined, 'chat');
     registry.recordCall('gemini', 'gemini-2.5-flash', false, 'auth', 'chat');
 
-    const tele = registry.getActionTelemetry();
+    const tele = registry.getActionTelemetry({ includeSynthetic: true });
     const chat = tele.actions.find((a) => a.action === 'chat');
     expect(chat?.timeline).toHaveLength(14); // TIMELINE_DAYS
     // Buckets ascend oldest → newest by UTC day start.
@@ -839,7 +839,7 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     const fs = require('node:fs') as typeof import('node:fs');
     fs.writeFileSync(join(tempDir, 'model-registry-actions.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
 
-    const tele = registry.getActionTelemetry();
+    const tele = registry.getActionTelemetry({ includeSynthetic: true });
     const execute = tele.actions.find((a) => a.action === 'execute');
     expect(execute?.verified).toBe(1);
     expect(execute?.killed).toBe(1);
@@ -861,7 +861,7 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     // A provider that STARTED streaming then died — distinct from a clean error.
     registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'server', 128);
 
-    const tele = registry.getActionTelemetry();
+    const tele = registry.getActionTelemetry({ includeSynthetic: true });
     expect(tele.enabled).toBe(true);
     const chat = tele.actions.find((a) => a.action === 'chat');
     expect(chat?.partial).toBe(1);
@@ -890,7 +890,7 @@ describe('ModelRegistry — per-action "learned from real usage" telemetry', () 
     registry.recordPartial('groq', 'llama-3.3-70b-versatile', 'chat', 'server', 512);
     registry.recordPartial('groq', 'llama-3.3-70b-instant', 'chat', 'disconnect', 8);
 
-    const tele = registry.getActionTelemetry();
+    const tele = registry.getActionTelemetry({ includeSynthetic: true });
     const chat = tele.actions.find((a) => a.action === 'chat');
     // Honest volume counts every interruption.
     expect(chat?.partial).toBe(3);

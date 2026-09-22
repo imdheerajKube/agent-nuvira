@@ -64,6 +64,12 @@ function tempBundlesDir(): string {
 describe('P6b — skill bundle store', () => {
   beforeEach(() => {
     testHome = holder.home;
+    // Keep the store root inside THIS temp home too. See
+    // tests/setup/hermetic-env.ts — the global net that stops a test writing the
+    // developer's real ~/.nuvira. `defaultBundlesRoot()` appends 'skill-bundles'
+    // to this root, hence `.nuvira` rather than `.nuvira/memory`.
+    process.env.NUVIRA_MEMORY_DIR = join(testHome, '.nuvira');
+    process.env.BUFF_MEMORY_DIR = join(testHome, '.nuvira');
     testProject = holder.project;
     resetSkillStore();
   });
@@ -169,6 +175,12 @@ describe('P6b — skill bundle store', () => {
 describe('P6b — skill tool bundle action', () => {
   beforeEach(() => {
     testHome = holder.home;
+    // Keep the store root inside THIS temp home too. See
+    // tests/setup/hermetic-env.ts — the global net that stops a test writing the
+    // developer's real ~/.nuvira. `defaultBundlesRoot()` appends 'skill-bundles'
+    // to this root, hence `.nuvira` rather than `.nuvira/memory`.
+    process.env.NUVIRA_MEMORY_DIR = join(testHome, '.nuvira');
+    process.env.BUFF_MEMORY_DIR = join(testHome, '.nuvira');
     testProject = holder.project;
     resetSkillStore();
     // Bundles persist on disk under the shared mocked home — a fresh dir per

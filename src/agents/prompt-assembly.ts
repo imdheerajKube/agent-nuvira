@@ -19,6 +19,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, basename } from 'node:path';
 import { homedir } from 'node:os';
+import { formatWorkingState, getWorkingState } from '../learning/working-state.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -62,6 +63,14 @@ export interface ProjectAssessment {
   knowledgeContent?: string;
   /** AGENTS.md content if found */
   agentsMdContent?: string;
+  /**
+   * Enterprise G4 — the project's working state (files already changed,
+   * outstanding verification debt, user-reported regressions), formatted as a
+   * compact block. Populated by {@link assessProject}; left undefined for a
+   * pristine project so it adds no prompt weight. This is how the ORCHESTRATOR
+   * path inherits the cross-turn memory the chat path gained.
+   */
+  workingState?: string;
 }
 
 // ─── Project Assessment ─────────────────────────────────────────────────────
@@ -111,6 +120,16 @@ export function assessProject(workingDirectory: string): ProjectAssessment {
 
   } catch {
     // Best-effort — assessment must never break the pipeline
+  }
+
+  // Enterprise G4 — carry the project's working state (files already changed,
+  // verification debt, user-reported regressions) into every agent prompt, so
+  // the ORCHESTRATOR path stops re-deriving what previous turns established.
+  // Best-effort and empty for a pristine project (no prompt weight added).
+  try {
+    assessment.workingState = formatWorkingState(getWorkingState(workingDirectory)) || undefined;
+  } catch {
+    // Best-effort — the ledger must never break assessment.
   }
 
   return assessment;
@@ -290,6 +309,13 @@ export function assemblePrompt(
   }
   if (projectAssessment.knowledgeContent) {
     contextParts.push(`\n## Project Knowledge\n${projectAssessment.knowledgeContent}`);
+  }
+
+  // Enterprise G4 — the cross-turn working state (files changed, verification
+  // debt, user-reported regressions). Already self-labelled, so no extra
+  // heading; absent entirely for a pristine project.
+  if (projectAssessment.workingState) {
+    contextParts.push(`\n${projectAssessment.workingState}`);
   }
 
   if (contextParts.length > 0) {

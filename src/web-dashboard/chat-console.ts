@@ -48,6 +48,12 @@ export interface ChatEngine {
       /** P4 — attached project dir; the engine recalls its sessions + facts. */
       projectPath?: string;
       /**
+       * Session 3 — channel/format POLICY merged into the STABLE (system)
+       * layer instead of being re-injected into every user turn. The gateway
+       * passes its messaging-app rules here.
+       */
+      systemPolicy?: string;
+      /**
        * P5 — the message is a picked FOLLOWUP (it matches the followups this
        * session was last offered): the engine marks it as a continuation of the
        * previous turn instead of a fresh independent request.

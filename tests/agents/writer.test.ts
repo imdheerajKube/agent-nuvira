@@ -132,3 +132,119 @@ describe('WriterAgent — parse-failure surfacing (Session 46)', () => {
     }
   });
 });
+
+/**
+ * G7/G8 — prose (long-form) mode.
+ *
+ * The code contract could never author a document: success required
+ * ``` ``filepath: …`` ``` code blocks, and the output cap was 2,048 tokens
+ * (~4 pages). These tests pin the separate contract prose units use, and pin
+ * that a short/empty response is a FAILURE rather than a green step — the
+ * original run recorded `success: true` with `responseLength: 0`.
+ */
+describe('WriterAgent — long-form prose mode', () => {
+  const proseUnit = (cwd: string) => ({
+    docPath: join(cwd, 'story.md'),
+    path: 'chapters/01-chapter-1.md',
+    absolutePath: join(cwd, 'chapters/01-chapter-1.md'),
+    title: 'Chapter 1',
+    index: 1,
+    total: 3,
+    targetWords: 900,
+    previousTail: '',
+    deliverableClass: 'creative' as const,
+    goal: 'write a 100 page story about magic and suspense',
+  });
+
+  const proseContext = (cwd: string): AgentContext => ({
+    ...makeContext(cwd),
+    metadata: { proseUnit: proseUnit(cwd) },
+  });
+
+  it('accepts RAW prose — no filepath: code blocks required', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'buff-writer-prose-'));
+    try {
+      const agent = new WriterAgent();
+      const context = proseContext(cwd);
+      const chapter = 'The lamp guttered. '.repeat(40); // ~160 words, no code fences
+      const callLLM = vi.fn().mockResolvedValue(chapter);
+
+      const result = await agent.execute(context, callLLM);
+
+      expect(result.success).toBe(true);
+      expect(result.summary).toContain('Chapter 1');
+      expect(context.fileChanges).toHaveLength(1);
+      expect(context.fileChanges[0].path).toBe('chapters/01-chapter-1.md');
+      expect(context.fileChanges[0].newContent).toContain('The lamp guttered.');
+      // The author persona — NOT "expert software engineer".
+      const prompt = callLLM.mock.calls[0][0] as string;
+      expect(prompt).toContain('You are an author');
+      expect(prompt).not.toContain('expert software engineer');
+      // A raised cap, so a ~900-word unit can actually finish.
+      expect(callLLM.mock.calls[0][1]?.maxTokens).toBeGreaterThan(2048);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('strips a wrapping code fence some models add anyway', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'buff-writer-prose2-'));
+    try {
+      const context = proseContext(cwd);
+      const callLLM = vi.fn().mockResolvedValue('```markdown\n' + 'Silence, then thunder. '.repeat(60) + '\n```');
+      const result = await new WriterAgent().execute(context, callLLM);
+      expect(result.success).toBe(true);
+      expect(context.fileChanges[0].newContent!.startsWith('Silence, then thunder.')).toBe(true);
+      expect(context.fileChanges[0].newContent).not.toContain('```');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('FAILS on an empty response instead of stamping a green step', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'buff-writer-prose3-'));
+    try {
+      const context = proseContext(cwd);
+      // The live failure: local/gpt-oss:120b-cloud returned '' in 1.6s and the
+      // step was recorded as success with 0 output tokens.
+      const callLLM = vi.fn().mockResolvedValue('');
+      const result = await new WriterAgent().execute(context, callLLM);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/too little prose|truncated or empty/);
+      expect(context.fileChanges).toHaveLength(0);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('FAILS on a truncated fragment (a few words is not a chapter)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'buff-writer-prose4-'));
+    try {
+      const context = proseContext(cwd);
+      const callLLM = vi.fn().mockResolvedValue('I will write the chapter next.');
+      const result = await new WriterAgent().execute(context, callLLM);
+      expect(result.success).toBe(false);
+      expect(context.fileChanges).toHaveLength(0);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('hands a CONTINUING unit the previous unit tail and forbids "The End"', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'buff-writer-prose5-'));
+    try {
+      const context = proseContext(cwd);
+      (context.metadata.proseUnit as Record<string, unknown>).previousTail = '…and the door closed behind her.';
+      (context.metadata.proseUnit as Record<string, unknown>).index = 2;
+      const callLLM = vi.fn().mockResolvedValue('Rain fell for three days. '.repeat(30));
+
+      await new WriterAgent().execute(context, callLLM);
+      const prompt = callLLM.mock.calls[0][0] as string;
+      expect(prompt).toContain('the door closed behind her');
+      expect(prompt).toMatch(/Do NOT write "The End"/);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});

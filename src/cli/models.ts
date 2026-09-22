@@ -472,6 +472,13 @@ export class ModelsCommand extends BaseCommand {
     const tele = registry.getActionTelemetry();
     if (!tele.enabled) {
       logger.info('  No per-action telemetry yet — use chat / execute / plan / edit and this fills in.');
+      // Same provenance rule as the dashboard: a record written by a test
+      // process is not evidence about routing, so it is excluded from the view —
+      // and SAID OUT LOUD, so a polluted store is visible instead of the section
+      // simply looking empty.
+      if (tele.synthetic > 0) {
+        logger.info(`  (${tele.synthetic} test-origin event(s) excluded — they are in the log, not in this view.)`);
+      }
     } else {
       for (const a of tele.actions) {
         const chips: string[] = [];
@@ -487,6 +494,9 @@ export class ModelsCommand extends BaseCommand {
         }
       }
       console.log(`\n  ${tele.total} events total · a provider killed by any action is skipped by all`);
+      if (tele.synthetic > 0) {
+        console.log(`  ${tele.synthetic} test-origin event(s) excluded from this view (still in the hash-chained log)`);
+      }
     }
   }
 

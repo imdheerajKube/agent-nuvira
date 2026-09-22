@@ -108,6 +108,16 @@ export class TraceCommand {
       return;
     }
 
+    // Session 3 — the FULL stable layer, captured once per trace. Without this
+    // the prompt was unreviewable (the preview showed 80 chars of it).
+    if (trace.systemPrompt) {
+      const total = trace.systemPromptChars ?? trace.systemPrompt.length;
+      const shown = trace.systemPrompt.length > 2000 ? trace.systemPrompt.slice(0, 2000) + '\n… (truncated)' : trace.systemPrompt;
+      console.log(`   ── System prompt (stable layer, ${total} chars) ──`);
+      console.log(shown.split('\n').map((l) => `   │ ${l}`).join('\n'));
+      console.log('');
+    }
+
     console.log('   ── Step summary ──');
     for (const step of trace.steps) {
       const icon = step.success ? '✅' : '❌';
@@ -118,6 +128,13 @@ export class TraceCommand {
         `   ${String(step.seq).padStart(3)}. ${icon} ${step.agentType.padEnd(16)} ${step.provider}/${step.model}${routing}`,
       );
       console.log(`       ${(step.latencyMs / 1000).toFixed(2)}s · ${step.inputTokens} in / ${step.outputTokens} out tok · digest ${step.promptDigest}`);
+      // Per-layer digests: sys stable across steps = prompt-cacheable.
+      if (step.layers) {
+        const L = step.layers;
+        console.log(
+          `       layers: sys ${L.systemChars}c/${L.systemDigest} · ctx ${L.contextChars}c/${L.contextDigest} · vol ${L.volatileChars}c/${L.volatileDigest}`,
+        );
+      }
       if (step.description && step.description.length > 110) {
         console.log(`       ${step.description.slice(0, 110)}…`);
       } else if (step.description) {
@@ -145,6 +162,14 @@ export class TraceCommand {
     console.log(`  Started:   ${new Date(trace.startedAt).toLocaleString()}`);
     console.log(`  Duration:  ${trace.durationMs !== undefined ? (trace.durationMs / 1000).toFixed(1) + 's' : 'running…'}`);
     console.log(`  Total:     ${trace.steps.length} LLM call(s)`);
+    // Session 3 — full stable layer (the persona / tool contract / rules).
+    if (trace.systemPrompt) {
+      const total = trace.systemPromptChars ?? trace.systemPrompt.length;
+      const body = full || trace.systemPrompt.length <= 3000 ? trace.systemPrompt : trace.systemPrompt.slice(0, 3000) + '\n… (use --full for the whole system prompt)';
+      console.log('');
+      console.log(`  ── System prompt (stable layer, ${total} chars) ──`);
+      console.log(body.split('\n').map((l) => `  │ ${l}`).join('\n'));
+    }
     console.log('');
 
     if (trace.steps.length === 0) {
@@ -168,6 +193,13 @@ export class TraceCommand {
         }
       }
       console.log(`  Prompt:    digest ${step.promptDigest} (${step.promptPreview.length}+ chars)`);
+      if (step.layers) {
+        const L = step.layers;
+        console.log(
+          `  Layers:    sys ${L.systemChars}c/${L.systemDigest} · ctx ${L.contextChars}c/${L.contextDigest} · vol ${L.volatileChars}c/${L.volatileDigest}`,
+        );
+        console.log('             (sys stable across steps ⇒ the stable layer is prompt-cacheable)');
+      }
       if (step.promptPreview) {
         console.log(`  ┌─ prompt preview ─────────────────────────────`);
         console.log(`  │ ${step.promptPreview.split('\n').slice(0, 6).join('\n  │ ').slice(0, previewChars)}`);

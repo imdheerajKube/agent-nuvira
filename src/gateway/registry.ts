@@ -54,6 +54,7 @@ import {
   markFailoverAttempts,
   modelBreadthReport,
   renderModelBreadthReport,
+  reportWarrantsRetry,
 } from '../learning/resilient-call.js';
 // The intent audit: on a REPEATED failure, ask the model what the ask really
 // needs and feed a confirmed correction back into the NLU (see learnings.ts).
@@ -82,6 +83,15 @@ import {
   type DeferredAskKind,
   type DeferredTask,
 } from '../learning/deferred-task.js';
+import {
+  UnattendedRunner,
+  type BatchOutcome,
+  type UnattendedJob,
+} from '../learning/unattended-job.js';
+import {
+  measureUnattendedProgress,
+  scheduleFromPendingWork,
+} from '../learning/unattended-progress.js';
 import { logger } from '../utils/logger.js';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -635,6 +645,16 @@ export class GatewayRegistry {
   private retryTimer: NodeJS.Timeout | null = null;
   /** Serializes retry runs so a long one is never started twice. */
   private retryChain: Promise<unknown> = Promise.resolve();
+  /**
+   * Enterprise G11 — unattended continuation of unfinished work.
+   *
+   * The story audit's ask arrived HERE (WhatsApp) and died here: 39 units of a
+   * book cannot finish in one turn, so every batch used to end by asking the
+   * sender to reply "continue". The runner keeps going on its own until the
+   * deliverable is complete, a decision is genuinely needed, or the budget runs
+   * out — and reports to the same chat.
+   */
+  private unattendedTimer: NodeJS.Timeout | null = null;
   /** Epoch ms of start() — the uptime reported in the heartbeat. */
   private startedAt = 0;
   /** Beats written this run (monotonic; a stalled count means a stalled loop). */
@@ -1223,10 +1243,23 @@ export class GatewayRegistry {
       const breadth = this.hasConfiguredModel()
         ? modelBreadthReport(attemptMark, this.configManager)
         : undefined;
-      const detail = breadth ? renderModelBreadthReport(breadth, { task: msg.text }) : undefined;
+      // CHAT branch: no answer was generated at all, which is a MODEL-layer
+      // failure by construction — so a retry is the right remedy even when the
+      // walk recorded no attempt (it can throw before recording anything).
+      const detail = breadth
+        ? renderModelBreadthReport(breadth, { task: msg.text, modelLayerFailure: true })
+        : undefined;
       // The offer above is only honest if something ENFORCES it: queue the ask
       // and retry it when a model is back (see drainDeferredTasks).
-      if (detail) this.deferFailedAsk(msg, 'chat', breadth?.nextFreeInMs, line);
+      //
+      // G9: and only when a retry could actually help. When the pool was fine
+      // and the failure was the ask itself (a wrong plan, an artifact the
+      // writer cannot emit), the report no longer offers a retry — so queueing
+      // one would retry SILENTLY for 6 hours and fail identically every time.
+      // The renderer and the queue must agree, so both ask this one predicate.
+      if (detail && reportWarrantsRetry(breadth, { modelLayerFailure: true })) {
+        this.deferFailedAsk(msg, 'chat', breadth?.nextFreeInMs, line);
+      }
       const full = [line, detail, audit?.note].filter(Boolean).join('\n\n');
       await replyTo(full);
       record('chat', full);
@@ -1278,6 +1311,12 @@ export class GatewayRegistry {
     this.runChain = run.catch(() => undefined);
     const result = await run;
 
+    // G11 — a run that ended with unfinished long work is CONTINUED by the
+    // unattended drain, not by asking the sender to reply "continue". Scheduled
+    // before the reply so the sender is told the work is ongoing: unexplained
+    // silence followed by chapters arriving hours later reads as a bug.
+    const continued = scheduleFromPendingWork(result.result?.pendingWork, ref);
+
     const reply = composePipelineReply({
       success: result.success,
       summary: result.summary,
@@ -1321,10 +1360,24 @@ export class GatewayRegistry {
     const report = result.success
       ? undefined
       : modelBreadthReport(pipelineAttemptMark, this.configManager);
+    // PIPELINE branch: the tasks may have run and failed. With a healthy pool
+    // that is a task-shape failure (live: 6 identical runs in 32 minutes), so
+    // no `modelLayerFailure` — the report decides honestly instead.
     const breadth = report ? renderModelBreadthReport(report, { task: msg.text }) : undefined;
-    // Queue the ask so the retry offer in that report is actually enforced.
-    if (breadth) this.deferFailedAsk(msg, 'pipeline', report?.nextFreeInMs, reply);
-    const finalReply = [reply, breadth, intentNote].filter(Boolean).join('\n\n');
+    // Queue the ask so the retry offer in that report is actually enforced —
+    // but only when the report actually OFFERED a retry (G9). A pipeline
+    // failure with a healthy pool is a task-shape failure: 40 queued attempts
+    // would each reproduce it, so nothing is queued and the reply says so.
+    // Never BOTH: when the work is already scheduled to continue, a queued retry
+    // would re-run the same ask on a different timer and race it on the same
+    // files. Continuation wins — it is the mechanism that can actually finish.
+    if (breadth && reportWarrantsRetry(report) && !continued) {
+      this.deferFailedAsk(msg, 'pipeline', report?.nextFreeInMs, reply);
+    }
+    const continuationLine = continued
+      ? '🤖 This is bigger than one pass — I\'m continuing automatically and will report back here when it\'s done. No reply needed.'
+      : undefined;
+    const finalReply = [reply, continuationLine, breadth, intentNote].filter(Boolean).join('\n\n');
     await replyTo(finalReply);
     // Only a SUCCESSFUL run settles the retry: on failure the branch above has
     // already re-queued this same task with a fresh wait.
@@ -1558,17 +1611,26 @@ export class GatewayRegistry {
       const continuation = isSuggestedFollowup(msg.text, lastFollowups);
       // P2 — origin context: the chat model knows who it's talking to, so its
       // gateway_send calls target the right contact/channel.
-      // The response format rules ensure the user gets a clean, direct answer
-      // without leaked internal reasoning or planning.
-      const prompt = [
-        `[Origin: ${origin} — this message was sent from a messaging app (WhatsApp/Telegram/etc). Your text response is automatically delivered back to the sender — do NOT call gateway_send for this conversation unless you need to send to a DIFFERENT target.]`,
-        '',
+      //
+      // Session 3 — CHANNEL POLICY MOVED TO THE STABLE LAYER. The response-
+      // format rules are byte-identical on EVERY inbound message, so prepending
+      // them to the user turn re-injected ~330 chars as volatile content every
+      // message (an audit of the last 30 traces found they were ~80% of the
+      // visible user turn on WhatsApp turns) and buried the ask. They now ride
+      // in the system prompt via `systemPolicy` — prompt-cacheable, and visible
+      // in the layered trace's `systemDigest`.
+      const CHANNEL_POLICY = [
         'RESPONSE FORMAT (non-negotiable for messaging app replies):',
-        '- If you need to think or plan, put your reasoning inside <think> and </think> tags. Only the text OUTSIDE these tags is shown to the user.',
+        '- If you need to think or plan, put your reasoning inside  thinking and </think> tags. Only the text OUTSIDE these tags is shown to the user.',
         '- Deliver your answer DIRECTLY. No preamble, no "I would be happy to...", no restating the request.',
-        '- Do NOT include planning, constraints, self-evaluation, or tool deliberation in your visible response. Put ALL reasoning in <think> tags.',
+        '- Do NOT include planning, constraints, self-evaluation, or tool deliberation in your visible response. Put ALL reasoning in  thinking tags.',
         '- For creative tasks (poems, stories, messages): just write the content. No meta-commentary about how you wrote it.',
         '- End with suggest_followups (3 suggestions) — but NEVER include the suggest_followups JSON in your response text; use the tool call.',
+      ].join('\n');
+      // The open user turn now carries ONLY what genuinely varies per message:
+      // who it came from, and the ask itself.
+      const prompt = [
+        `[Origin: ${origin} — this message was sent from a messaging app (WhatsApp/Telegram/etc). Your text response is automatically delivered back to the sender — do NOT call gateway_send for this conversation unless you need to send to a DIFFERENT target.]`,
         '',
         msg.text,
       ].join('\n');
@@ -1599,6 +1661,8 @@ export class GatewayRegistry {
         provider: useAuto ? 'auto' : providerType,
         model: useAuto ? 'auto' : providerConfig.model,
         history,
+        // Session 3 — the channel rules go in the STABLE layer, not the ask.
+        systemPolicy: CHANNEL_POLICY,
         // P5 — a replied followup carries the continuation marker into the
         // model thread (the previous answer is already in `history`).
         ...(continuation ? { continuation: true } : {}),
@@ -1817,6 +1881,13 @@ export class GatewayRegistry {
       void this.drainDeferredTasks().catch(() => undefined);
     }, RETRY_DRAIN_INTERVAL_MS);
     void this.drainDeferredTasks().catch(() => undefined);
+
+    // G11: keep unfinished LONG work going. Persisted too, so a book that was
+    // half-written when the gateway restarted continues instead of being lost.
+    this.unattendedTimer = setInterval(() => {
+      void this.drainUnattendedJobs().catch(() => undefined);
+    }, RETRY_DRAIN_INTERVAL_MS);
+    void this.drainUnattendedJobs().catch(() => undefined);
   }
 
   /**
@@ -2181,6 +2252,74 @@ export class GatewayRegistry {
   }
 
   /**
+   * G11 — advance every unfinished LONG job whose turn is due.
+   *
+   * The other half of the story fix. `drainDeferredTasks` retries a turn that
+   * FAILED; this keeps going a turn that SUCCEEDED but is 4 units into a
+   * 39-unit deliverable. Without it the sender was asked to type "continue" ten
+   * times for a book they had already asked for once.
+   *
+   * Ownership is filtered by platform like the retry drain (the dashboard owns
+   * its own sessions), and a job belongs to the chat it was asked in, so the
+   * progress lands back where the ask came from.
+   */
+  private async drainUnattendedJobs(): Promise<void> {
+    const runner = new UnattendedRunner({
+      owns: (job) => job.surface.platform !== 'dashboard',
+      runBatch: (job) => this.runUnattendedBatch(job),
+      notify: async (job, line) => {
+        const ref: ChannelRef = {
+          platform: job.surface.platform as Platform,
+          channelId: job.surface.channelId,
+        };
+        await this.sendToRef(ref, line);
+      },
+    });
+    await runner.drain();
+  }
+
+  /**
+   * Run ONE continuation batch for a job and report what it MEASURED.
+   *
+   * Serialized through `runChain` exactly like a first-time pipeline run: two
+   * batches must never build the same chapters concurrently, and the board
+   * events have to stream to the right chat.
+   */
+  private async runUnattendedBatch(job: UnattendedJob): Promise<BatchOutcome> {
+    const ref: ChannelRef = {
+      platform: job.surface.platform as Platform,
+      channelId: job.surface.channelId,
+    };
+    const origin = `${PLATFORM_LABELS[ref.platform] ?? ref.platform} continuation of a larger task`;
+    const run = this.runChain.then(async () => {
+      this.activeChannel = ref;
+      return runPipelineTool(job.continuationPrompt, this.configManager, { board: false, origin });
+    });
+    this.runChain = run.catch(() => undefined);
+
+    let outcome: Awaited<ReturnType<typeof runPipelineTool>>;
+    try {
+      outcome = await run;
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+
+    const measured = measureUnattendedProgress(job);
+    // Refresh the schedule from the newest snapshot: a composite job only knows
+    // its full artifact list once its phases have been planned.
+    scheduleFromPendingWork(outcome.result?.pendingWork, job.surface);
+
+    // Measured, not claimed (see unattended-job.ts): a failed batch that still
+    // wrote chapters is progress; a failed batch that moved nothing is a real
+    // failure and counts toward the failure cap.
+    const moved = (measured.progress ?? 0) > job.progress;
+    if (!outcome.success && !measured.finished && !moved) {
+      return { ...measured, error: outcome.error || outcome.summary || 'continuation batch failed' };
+    }
+    return measured;
+  }
+
+  /**
    * Run every deferred ask whose wait is over (and report the ones that ran
    * out of road).
    *
@@ -2338,6 +2477,13 @@ export class GatewayRegistry {
     if (this.retryTimer) {
       clearInterval(this.retryTimer);
       this.retryTimer = null;
+    }
+    // Unattended jobs are NOT cleared either: they live in their own persisted
+    // store so a restart resumes them (and `stop()` runs on registries that
+    // were never started).
+    if (this.unattendedTimer) {
+      clearInterval(this.unattendedTimer);
+      this.unattendedTimer = null;
     }
     for (const adapter of this.adapters.values()) {
       try { await adapter.stop(); } catch { /* best-effort */ }

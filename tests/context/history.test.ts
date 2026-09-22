@@ -33,7 +33,15 @@ const testDirHolder = vi.hoisted(() => {
   const { join } = require('node:path');
   // Cross-platform temp base — hardcoded '/tmp' doesn't exist on Windows.
   const base = process.env.TMPDIR || process.env.TEMP || '/tmp';
-  return { value: mkdtempSync(join(base, 'buff-history-')) };
+  const value: string = mkdtempSync(join(base, 'buff-history-'));
+  // The store honours BOTH `os.homedir()` and `NUVIRA_MEMORY_DIR`, and the
+  // harness sets the env var globally (every suite gets a throwaway store, so a
+  // test can never write to the developer's real ~/.nuvira). Pinning it to the
+  // SAME root the mocked homedir resolves to keeps this file's expectation
+  // (<testDir>/.nuvira/memory/history.json) true while staying hermetic — and
+  // before imports, because history.ts resolves MEMORY_DIR at module load.
+  process.env.NUVIRA_MEMORY_DIR = join(value, '.nuvira', 'memory');
+  return { value };
 });
 
 vi.mock('node:os', () => ({

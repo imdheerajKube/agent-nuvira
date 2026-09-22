@@ -26,6 +26,7 @@ import { join } from 'node:path';
 import { Orchestrator } from '../../src/agents/orchestrator.js';
 import { ProviderFactory } from '../../src/inference/factory.js';
 import { resetWorkspaceStore } from '../../src/config/workspace.js';
+import { resetLearnedMaxTokensLimits } from '../../src/learning/provider-limits.js';
 
 const root = mkdtempSync(join(tmpdir(), 'buff-relfix-'));
 const cfgDir = join(root, '.nuvira');
@@ -83,6 +84,8 @@ describe('Session 46 reliability fixes — end-to-end', () => {
   beforeEach(() => {
     orchestrator = new Orchestrator();
     createSpy = vi.spyOn(ProviderFactory, 'createProvider');
+    // G15 learned caps are process-local; each test starts from none learned.
+    resetLearnedMaxTokensLimits();
   });
 
   afterEach(() => {
@@ -216,5 +219,80 @@ describe('Session 46 reliability fixes — end-to-end', () => {
     // success with an empty deliverable — the repair prompt proves it reached
     // the repair engine.
     expect(fake.prompts.some((p) => p.includes('[REPAIR ATTEMPT 1]'))).toBe(true);
+  });
+
+  // ── G15: a provider that NAMES its output cap must not fail every step ────
+  //
+  // The live unattended story run failed EVERY prose unit with a Groq 400
+  // (`max_tokens` must be <= 512) because our own call asked for 8192. These
+  // tests pin the two halves of the fix against a fake provider that enforces
+  // the cap for real: the named limit is learned, and the learn-from-error path
+  // is the orchestrator's SINGLE call point — so it covers every agent.
+  const GROQ_CAP_400 =
+    'Groq API error (400): {"error":{"message":"`max_tokens` must be less than ' +
+    'or equal to `512`, the maximum value for `max_tokens` is less than the ' +
+    '`context_window` for this model","type":"invalid_request_error","param":"max_tokens"}}';
+
+  /** Provider that rejects any request above its real output cap. */
+  function cappedProvider(cap: number) {
+    const seen: number[] = [];
+    const generate = vi.fn(async (_prompt: string, options?: { maxTokens?: number }) => {
+      const asked = options?.maxTokens ?? 0;
+      seen.push(asked);
+      if (asked > cap) throw new Error(GROQ_CAP_400);
+      return HANDLER_FILE;
+    });
+    return { generate, seen };
+  }
+
+  it('a provider-named output cap is obeyed on retry instead of failing the step', async () => {
+    const fake = cappedProvider(512);
+    createSpy.mockImplementation(() => fake as any);
+
+    const result = await orchestrator.execute('Build the NVDA addon shortcut', {
+      provider: 'local',
+      model: 'test-model',
+      prefillPlan: [WRITER_STEP],
+      dryRun: true,
+      useToolCalling: false,
+    });
+
+    // The step SUCCEEDS: the cap is our misconfiguration, not a broken model.
+    expect(result.success).toBe(true);
+    expect(result.fileChanges).toContain('addon/addon_handler.py');
+    // The first send genuinely exceeded the cap, and the retry used the number
+    // the provider itself named — not a smaller guess, not 8192 again.
+    expect(fake.seen[0]).toBeGreaterThan(512);
+    expect(fake.seen[1]).toBe(512);
+  });
+
+  it('the learned cap is applied predictively to later calls (one rejection, not one per call)', async () => {
+    const fake = cappedProvider(512);
+    createSpy.mockImplementation(() => fake as any);
+
+    const result = await orchestrator.execute('Build the NVDA addon shortcut', {
+      provider: 'local',
+      model: 'test-model',
+      prefillPlan: [
+        WRITER_STEP,
+        {
+          id: 'step-2',
+          agentType: 'reviewer',
+          description: 'Review the complete addon code',
+          dependsOn: ['step-1'],
+          status: 'pending' as const,
+          complexity: 'complex' as const,
+        },
+      ],
+      dryRun: true,
+      useToolCalling: false,
+    });
+
+    expect(result.success).toBe(true);
+    // Exactly ONE call was ever rejected. Without the learned cap, every
+    // request above 512 would be rejected and the 400 would repeat per step —
+    // which is what made the live run burn 6 batches on the same mistake.
+    const rejected = fake.seen.filter((n) => n > 512);
+    expect(rejected).toHaveLength(1);
   });
 });

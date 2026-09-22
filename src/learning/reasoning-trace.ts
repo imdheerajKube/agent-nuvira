@@ -28,6 +28,7 @@ import { homedir } from 'node:os';
 import type { LLMCallFn } from '../agents/agent.js';
 import type { InferenceOptions } from '../config/types.js';
 import { estimateTokens } from './cost-tracker.js';
+import { splitPromptLayers, digestPromptLayers, type PromptLayerDigests } from './prompt-layers.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -76,6 +77,14 @@ export interface TraceStep {
   error?: string;
   /** Auto-router decision snapshot when the call was auto-routed. */
   routing?: TraceRoutingSnapshot;
+  /**
+   * PER-LAYER prompt digests (stable / context / volatile) + their sizes.
+   * The flat `promptDigest` hashes the whole thread, which grows every step —
+   * so it can never show whether the STABLE layer (system prompt) was
+   * byte-stable across steps. These three digests answer that, which is what
+   * makes prompt-caching regressions reviewable at all.
+   */
+  layers?: PromptLayerDigests;
   /** True when this step is a REPAIR re-prompt escalated to a stronger model
    *  (v1.60.4 per-task/planner escalation — the routing snapshot then carries
    *  the escalated decision at the next complexity level). */
@@ -113,6 +122,19 @@ export interface TraceOutcome {
    * instead of letting it read as work in progress.
    */
   unfulfilledPromise?: boolean;
+  /**
+   * True when this turn MUTATED the workspace (`edit_file`/`write_file`) and
+   * ran nothing that could observe the result (`run_terminal`/`test`/`browser`
+   * /`run_cli`). The edit is real but "it works" is unproven — the Trace tab
+   * surfaces this so an unverified change never reads as a verified one.
+   */
+  unverifiedEdit?: boolean;
+  /**
+   * True when the answer ASSERTED a completed code change while the turn was
+   * unverified (see `detectUnverifiedEditClaim`). This is the edit analogue of
+   * `unverifiedClaim` — the honesty flag for a false "I have fixed it".
+   */
+  unverifiedEditClaim?: boolean;
 }
 
 /** A full reasoning trace — one pipeline execution. */
@@ -140,6 +162,15 @@ export interface ReasoningTrace {
   outcome?: TraceOutcome;
   /** LLM calls in execution order. */
   steps: TraceStep[];
+  /**
+   * The FULL stable layer (system prompt), captured ONCE per trace.
+   * Previously every trace exposed only the first 80 characters of it, so the
+   * persona / tool contract / response rules were unreviewable. Capped to keep
+   * the trace file bounded; `systemPromptChars` records the true size.
+   */
+  systemPrompt?: string;
+  /** True length of the stable layer (before the storage cap). */
+  systemPromptChars?: number;
 }
 
 /** Aggregated stats over all stored traces. */
@@ -186,6 +217,8 @@ const CURRENT_VERSION = 1;
 export const MAX_TRACES = 60;
 /** Cap steps per trace at 200 (a long pipeline still fits). */
 const MAX_STEPS_PER_TRACE = 200;
+/** Cap the stored stable layer so 60 traces stay bounded (true size is kept). */
+const MAX_SYSTEM_PROMPT_CHARS = 16_000;
 /** Preview lengths (keep trace files small). */
 const PROMPT_PREVIEW_CHARS = 300;
 const RESPONSE_PREVIEW_CHARS = 1000;
@@ -266,13 +299,30 @@ export function beginTrace(
  * Record one LLM call as a step in the trace. Best-effort: never throws.
  * seq is assigned automatically from the current step count.
  */
-export function recordStep(traceId: string, step: Omit<TraceStep, 'seq' | 'timestamp'>): void {
+export function recordStep(
+  traceId: string,
+  step: Omit<TraceStep, 'seq' | 'timestamp'> & { promptFull?: string },
+): void {
   try {
     const data = readFile();
     const trace = data.traces.find((t) => t.id === traceId);
     if (!trace) return;
+    // Layered review (session 3): when the caller passes the FULL prompt we
+    // derive per-layer digests and capture the stable layer ONCE per trace.
+    // `promptFull` itself is never stored — only the digests + the system layer.
+    const { promptFull, ...rest } = step;
+    let layers: PromptLayerDigests | undefined;
+    if (promptFull) {
+      const split = splitPromptLayers(promptFull);
+      layers = digestPromptLayers(split);
+      if (split.system && trace.systemPrompt === undefined) {
+        trace.systemPrompt = split.system.slice(0, MAX_SYSTEM_PROMPT_CHARS);
+        trace.systemPromptChars = split.system.length;
+      }
+    }
     trace.steps.push({
-      ...step,
+      ...rest,
+      ...(layers ? { layers } : {}),
       seq: trace.steps.length + 1,
       timestamp: Date.now(),
     });
@@ -318,6 +368,8 @@ export function buildTraceOutcome(input: {
   tools?: readonly string[];
   unverifiedActionClaim?: boolean;
   unfulfilledPromise?: boolean;
+  unverifiedEdit?: boolean;
+  unverifiedEditClaim?: boolean;
 }): TraceOutcome {
   const tools = [...(input.tools ?? [])];
   if (input.cancelled) return { kind: 'cancelled', tools };
@@ -329,6 +381,8 @@ export function buildTraceOutcome(input: {
     ...(delivered ? { delivered: true } : {}),
     ...(input.unverifiedActionClaim ? { unverifiedClaim: true } : {}),
     ...(input.unfulfilledPromise ? { unfulfilledPromise: true } : {}),
+    ...(input.unverifiedEdit ? { unverifiedEdit: true } : {}),
+    ...(input.unverifiedEditClaim ? { unverifiedEditClaim: true } : {}),
   };
 }
 
@@ -412,7 +466,18 @@ export function withTraceCapture(
     let output = '';
     try {
       output = await callLLM(prompt, inferenceOptions);
-      success = true;
+      // G10 — an EMPTY response is not a success. Live evidence: the story
+      // session's writer step was recorded as `success: true` with
+      // `responseLength: 0` / `outputTokens: 0` from `local/gpt-oss:120b-cloud`.
+      // A green step for a call that returned nothing made the trace actively
+      // misleading — it hid the failure behind a passing checkmark, which is
+      // the same "ran ≠ worked" conflation the edit-verification gate exists
+      // to kill. Every call site wrapped here is a plain text generation (the
+      // orchestrator's planner/reasoner/per-task LLMs), so an empty string can
+      // only mean the provider returned no content.
+      const empty = output.trim().length === 0;
+      success = !empty;
+      if (empty) errorMsg = 'empty response — the provider returned no content (0 chars)';
     } catch (err) {
       errorMsg = err instanceof Error ? err.message : String(err);
       throw err;
@@ -421,6 +486,9 @@ export function withTraceCapture(
         agentType: ctx.agentType,
         taskId: ctx.taskId,
         description: ctx.description,
+        // Session 3 — the FULL prompt feeds the layered digests + the one-time
+        // stable-layer capture (never stored raw).
+        promptFull: prompt,
         provider: ctx.routing?.provider || ctx.provider || 'unknown',
         model: inferenceOptions?.model || ctx.model || ctx.routing?.model || 'unknown',
         promptDigest: sha256Prefix(prompt),

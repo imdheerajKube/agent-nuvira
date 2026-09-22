@@ -29,6 +29,7 @@ import {
   formatWait,
   modelBreadthReport,
   renderModelBreadthReport,
+  reportWarrantsRetry,
 } from '../../src/learning/resilient-call.js';
 
 const attempt = (provider: string, model: string, kind = 'rate-limit', skipped = false) => ({
@@ -121,10 +122,62 @@ describe('renderModelBreadthReport', () => {
     expect(text).toMatch(/Reply \*yes\*/i);
   });
 
-  it('offers to keep checking even when nothing will free up soon', () => {
-    const text = renderModelBreadthReport({ tried: [attempt('a', 'b', 'timeout')], parked: [] })!;
+  it('offers to keep checking when the pool is GENUINELY empty', () => {
+    // `poolSize: 0` is the measured claim that there is nothing to route to.
+    // Only a measured-empty pool earns the global-drought sentence (G9).
+    const text = renderModelBreadthReport({ tried: [attempt('a', 'b', 'timeout')], parked: [], poolSize: 0, poolProviders: 0 })!;
     expect(text).toMatch(/No suitable model is available right now/);
     expect(text).toMatch(/keep checking in the background/);
+  });
+
+  it('separates a dead pair from a shortage, and still helps when models actually failed', () => {
+    // The live bug: a report whose only exclusions were two dead `local` pairs
+    // told the user "No suitable model is available right now" while 507 models
+    // were eligible and the provider answered 52 seconds later. Here a model WAS
+    // reached and failed, so the retry offer legitimately stands — but the dead
+    // pairs must never be presented as the cause, and no drought may be claimed.
+    const text = renderModelBreadthReport({
+      tried: [attempt('local', 'gpt-oss:120b-cloud', 'model-not-found')],
+      parked: [
+        { provider: 'local', model: 'nonexistent-fast-fail', kind: 'model-not-found' as never, scope: 'model' as never, recordedAt: 0, expiresAt: 0, active: true, source: 'registry' as never },
+      ],
+      poolSize: 507,
+      poolProviders: 5,
+    })!;
+
+    expect(text).toContain('Pool at the time: 507 eligible models across 5 providers.');
+    expect(text).toMatch(/Ruled out/);
+    // The excluded pairs must not be presented as the reason for the failure.
+    expect(text).toContain('these are excluded pairs only');
+    expect(text).not.toMatch(/No suitable model is available right now/);
+    expect(text).toMatch(/keep checking in the background/);
+    expect(text).toMatch(/Reply \*yes\*/);
+  });
+
+  it('says plainly when NO model call was ever made, and offers no dead-end retry (G9)', () => {
+    // The exact live story shape: 507 models eligible, zero attempts recorded,
+    // two dead pairs ruled out, six identical failures. A retry would reproduce
+    // it, so none is offered — and the pairs must not be blamed.
+    const text = renderModelBreadthReport({
+      tried: [],
+      parked: [
+        { provider: 'local', model: 'nonexistent-fast-fail', kind: 'model-not-found' as never, scope: 'model' as never, recordedAt: 0, expiresAt: 0, active: true, source: 'registry' as never },
+      ],
+      poolSize: 500,
+      poolProviders: 6,
+    })!;
+    expect(text).toMatch(/No model call was made for this run/);
+    expect(text).toMatch(/Pool at the time: 500 eligible models/);
+    expect(text).not.toMatch(/No suitable model is available/);
+    expect(text).toMatch(/not a model shortage/);
+    expect(text).not.toMatch(/Reply \*yes\*/);
+  });
+
+  it('stays silent about the pool when the caller never measured it', () => {
+    // A hand-built report must not assert a shortage it did not check.
+    const text = renderModelBreadthReport({ tried: [attempt('a', 'b', 'timeout')], parked: [] })!;
+    expect(text).not.toMatch(/Pool at the time/);
+    expect(text).not.toMatch(/No suitable model is available right now/);
   });
 
   it('returns undefined when there is nothing concrete to report', () => {
@@ -145,6 +198,28 @@ describe('renderModelBreadthReport', () => {
   });
 });
 
+describe('reportWarrantsRetry (G9 — the offer and the queue must agree)', () => {
+  it('does NOT warrant a retry when the pool was healthy and nothing was attempted', () => {
+    expect(reportWarrantsRetry({ tried: [], parked: [], poolSize: 507, poolProviders: 5 })).toBe(false);
+  });
+
+  it('DOES warrant a retry when models were reached and failed', () => {
+    expect(reportWarrantsRetry({ tried: [attempt('groq', 'llama-3.3-70b', 'timeout')], parked: [], poolSize: 507 })).toBe(true);
+  });
+
+  it('warrants a retry when something is actually coming back', () => {
+    expect(reportWarrantsRetry({ tried: [], parked: [], poolSize: 507, nextFreeInMs: 60_000 })).toBe(true);
+  });
+
+  it('warrants a retry when the pool is genuinely empty', () => {
+    expect(reportWarrantsRetry({ tried: [], parked: [], poolSize: 0 })).toBe(true);
+  });
+
+  it('never warrants a retry without a report', () => {
+    expect(reportWarrantsRetry(undefined)).toBe(false);
+  });
+});
+
 describe('modelBreadthReport', () => {
   it('collects the attempts since a mark and never throws without a config', () => {
     const mark = markFailoverAttempts();
@@ -152,5 +227,9 @@ describe('modelBreadthReport', () => {
     const report = modelBreadthReport(mark);
     expect(report.tried.map((a) => a.provider)).toContain('local');
     expect(Array.isArray(report.parked)).toBe(true);
+    // The producer always measures the pool — that measurement is what makes
+    // a drought claim legal (G9).
+    expect(typeof report.poolSize).toBe('number');
+    expect(typeof report.poolProviders).toBe('number');
   });
 });

@@ -163,6 +163,21 @@ describe('buildTraceOutcome', () => {
     expect(buildTraceOutcome({ generationFailed: true, tools: ['x'] }).kind).toBe('failed');
     expect(buildTraceOutcome({ cancelled: true, tools: ['x'] }).kind).toBe('cancelled');
   });
+  // G1 + G2 — the edit analogues ride the same outcome contract.
+  it('carries the unverified-edit flag', () => {
+    const o = buildTraceOutcome({ tools: ['edit_file'], unverifiedEdit: true });
+    expect(o.kind).toBe('acted');
+    expect(o.unverifiedEdit).toBe(true);
+  });
+  it('carries the unverified-edit-claim flag', () => {
+    const o = buildTraceOutcome({ tools: ['edit_file'], unverifiedEdit: true, unverifiedEditClaim: true });
+    expect(o.unverifiedEditClaim).toBe(true);
+  });
+  it('omits the edit flags on a verified turn', () => {
+    const o = buildTraceOutcome({ tools: ['edit_file', 'run_terminal'] });
+    expect(o.unverifiedEdit).toBeUndefined();
+    expect(o.unverifiedEditClaim).toBeUndefined();
+  });
 });
 
 describe('detectUnfulfilledIntentPromise (dangling promise)', () => {

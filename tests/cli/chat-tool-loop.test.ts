@@ -647,4 +647,104 @@ describe('ChatCommand — P4 answer token streaming (dashboard typewriter)', () 
     expect(out.content).toBe('The user table now has an index — your request is implemented.');
     expect(out.generationFailed).toBeFalsy();
   });
+
+  // ── G3 + G4 — working-state memory (cross-turn + regression) ──────────────
+
+  it('G4 — injects the project working state into the model-facing thread', async () => {
+    const { recordWorkingState } = await import('../../src/learning/working-state.js');
+    // Seed a ledger for the turn's project (runChatAnswer defaults to cwd).
+    recordWorkingState(process.cwd(), {
+      filesTouched: ['script.js', 'style.css'],
+      unverifiedEdit: true,
+      userMessage: 'still same issue with the dropdowns',
+    });
+
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn().mockResolvedValue({ content: 'Acknowledged.', toolCalls: [] }),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+
+    const cmd = new ChatCommand() as unknown as { runChatAnswer: Function };
+    await cmd.runChatAnswer('continue', [], { type: 'groq', provider, model: 'mock-model' }, {}, false, {
+      auto: false,
+    });
+
+    const sent = (provider.generateTools as ReturnType<typeof vi.fn>).mock.calls[0][0] as Array<{
+      role: string;
+      content: string;
+    }>;
+    const block = sent.find((m) => m.content.includes('Working state'));
+    expect(block).toBeDefined();
+    expect(block!.content).toContain('script.js');
+    expect(block!.content).toContain('NEVER verified');
+    expect(block!.content).toContain('dropdowns');
+  });
+
+  it('session 3 — channel policy rides in the STABLE layer, never the user turn', async () => {
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn().mockResolvedValue({ content: 'Delivered directly.', toolCalls: [] }),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+
+    const cmd = new ChatCommand() as unknown as { runChatAnswer: Function };
+    await cmd.runChatAnswer(
+      '[Origin: WhatsApp chat 91…]\n\nwrite a haiku',
+      [],
+      { type: 'groq', provider, model: 'mock-model' },
+      {},
+      false,
+      { auto: false },
+      undefined,
+      { systemPolicy: 'RESPONSE FORMAT (non-negotiable for messaging app replies):' },
+    );
+
+    const sent = (provider.generateTools as ReturnType<typeof vi.fn>).mock.calls[0][0] as Array<{
+      role: string;
+      content: string;
+    }>;
+    const system = sent.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+    const users = sent.filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+    // The policy is part of the stable layer...
+    expect(system).toContain('RESPONSE FORMAT (non-negotiable');
+    // ...and NOT re-injected into the ask.
+    expect(users).not.toContain('RESPONSE FORMAT (non-negotiable');
+    expect(users).toContain('write a haiku');
+  });
+
+  it('G3 — records a user regression report to the ledger', async () => {
+    const { getWorkingState, clearWorkingState } = await import('../../src/learning/working-state.js');
+    clearWorkingState(process.cwd());
+
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn().mockResolvedValue({ content: 'Looking into it.', toolCalls: [] }),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+
+    const cmd = new ChatCommand() as unknown as { runChatAnswer: Function };
+    await cmd.runChatAnswer(
+      'still same issue — the converter dropdowns are empty',
+      [],
+      { type: 'groq', provider, model: 'mock-model' },
+      {},
+      false,
+      { auto: false },
+    );
+
+    const state = getWorkingState(process.cwd());
+    expect(state).not.toBeNull();
+    expect(state!.corrections).toBeGreaterThanOrEqual(1);
+    expect(state!.openIssues.some((i) => i.includes('dropdowns'))).toBe(true);
+  });
 });

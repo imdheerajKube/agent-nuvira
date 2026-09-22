@@ -25,6 +25,12 @@
 
 import { Agent, type AgentContext, type AgentResult, type LLMCallFn } from '../agent.js';
 import { assessProject, type ProjectAssessment } from '../prompt-assembly.js';
+import {
+  authoredDeliverableGuidance,
+  classifyDeliverable,
+  deliverableClassLabel,
+  type DeliverableClass,
+} from '../../learning/deliverable-class.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -46,6 +52,13 @@ export interface TechnicalDecision {
   deliverable: string;
   /** Constraints that must be satisfied */
   constraints: string[];
+  /**
+   * G7 — what KIND of thing the user asked for. Assigned deterministically by
+   * `classifyDeliverable` (see deliverable-class.ts), never by the model: a
+   * weak model that reads "write a story" as a software project must not be
+   * able to reintroduce the category error that killed the story task.
+   */
+  deliverableClass: DeliverableClass;
   /** Whether this is a greenfield (from-scratch) project */
   isGreenfield: boolean;
   /** Confidence in the decisions (0-1) */
@@ -69,6 +82,11 @@ const REASONER_SYSTEM_PROMPT = [
   '6. Build: How to produce the deliverable (pyinstaller, dotnet publish, npm build, etc.)',
   '7. Deliverable: What the final output should be (executable, web-app, library, etc.)',
   '8. Constraints: What must be true about the solution',
+  '9. Deliverable class: code | document | creative | data | research — the KIND of',
+  '   thing requested. Use "creative" for stories/novels/poems and "document" for',
+  '   reports/essays/articles: for those, the artifact is WRITTEN CONTENT and the',
+  '   language is "none". You must NEVER answer such a request with a script or',
+  '   program that would produce the content — writing it IS the task.',
   '',
   'Rules:',
   '- Be SPECIFIC: "Python+tkinter" not "a language"',
@@ -87,6 +105,7 @@ const REASONER_SYSTEM_PROMPT = [
   '  "dependencies": ["string"],',
   '  "buildCommand": "string (optional)",',
   '  "deliverable": "string",',
+  '  "deliverableClass": "code | document | creative | data | research",',
   '  "constraints": ["string"],',
   '  "isGreenfield": boolean,',
   '  "confidence": number (0-1),',
@@ -121,6 +140,15 @@ export class ReasonerAgent extends Agent {
         // Best-effort — assessment must never break the reasoner
       }
 
+      // ── Deliverable class (deterministic, before any LLM sees the goal) ──
+      // For an authored ask this is reported to the model as already DECIDED,
+      // with the consequences spelled out — the live failure was the model
+      // choosing "python + a Python script is the most efficient way" for a
+      // request to write a novel.
+      const verdict = classifyDeliverable(context.goal);
+      context.metadata.deliverableClass = verdict.class;
+      context.metadata.deliverableAuthored = verdict.authored;
+
       // Build the prompt
       const promptParts: string[] = [
         REASONER_SYSTEM_PROMPT,
@@ -131,6 +159,15 @@ export class ReasonerAgent extends Agent {
         '## Working Directory',
         context.workingDirectory,
       ];
+
+      // G12 — the guidance is substrate-aware: a hybrid ask (web-based book with
+      // narration) must be told that the presentation layer is required BUT a
+      // Python service is optional, or the reasoner re-frames the whole thing as
+      // software and the prose never gets written.
+      const authoredGuidance = verdict.authored
+        ? authoredDeliverableGuidance(verdict.class, verdict.substrates)
+        : '';
+      if (authoredGuidance) promptParts.push(authoredGuidance);
 
       // Inject project assessment if available
       if (assessment) {
@@ -173,16 +210,41 @@ export class ReasonerAgent extends Agent {
         };
       }
 
+      // ── ENFORCE the authored class (G7) ────────────────────────────────
+      // The classifier decided this before the model was called. If the model
+      // still answered with a programming stack — exactly what happened live
+      // ("language":"python", framework "none", reasoning "a Python script is
+      // the most efficient way") — the decision is corrected here rather than
+      // passed downstream, because the PLANNER consumes this document and would
+      // faithfully turn it into a code plan.
+      if (verdict.authored) {
+        decision.deliverableClass = verdict.class === 'document' ? 'document' : 'creative';
+        decision.language = 'none';
+        decision.framework = 'none';
+        decision.platform = 'document';
+        decision.architecture = 'sections';
+        decision.dependencies = [];
+        decision.buildCommand = undefined;
+        if (!decision.deliverable || decision.deliverable === 'unknown' || /script|program|app$/i.test(decision.deliverable)) {
+          decision.deliverable = 'markdown_file';
+        }
+      } else {
+        decision.deliverableClass = verdict.class;
+      }
+
       // Store the decision in the vault for the planner to use
       context.metadata.technicalDecision = decision;
 
       this.report(context, 'decided',
-        `Technical decisions: ${decision.language}+${decision.framework} → ${decision.platform} → ${decision.deliverable}`
+        `Technical decisions: ${deliverableClassLabel(decision.deliverableClass)} → ` +
+        `${decision.language}+${decision.framework} → ${decision.platform} → ${decision.deliverable}`
       );
 
       return {
         success: true,
-        summary: `Technical decisions made: ${decision.language}+${decision.framework} on ${decision.platform}`,
+        summary:
+          `Technical decisions made: ${deliverableClassLabel(decision.deliverableClass)} — ` +
+          `${decision.language}+${decision.framework} on ${decision.platform}`,
       };
     } catch (err) {
       return {
@@ -213,6 +275,9 @@ export class ReasonerAgent extends Agent {
         return null;
       }
 
+      const VALID_CLASSES: DeliverableClass[] = ['code', 'document', 'creative', 'data', 'research'];
+      const cls = VALID_CLASSES.includes(parsed.deliverableClass) ? parsed.deliverableClass : 'code';
+
       return {
         language: String(parsed.language),
         framework: String(parsed.framework),
@@ -221,6 +286,7 @@ export class ReasonerAgent extends Agent {
         dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies : [],
         buildCommand: parsed.buildCommand ? String(parsed.buildCommand) : undefined,
         deliverable: String(parsed.deliverable || 'unknown'),
+        deliverableClass: cls,
         constraints: Array.isArray(parsed.constraints) ? parsed.constraints : [],
         isGreenfield: Boolean(parsed.isGreenfield),
         confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,

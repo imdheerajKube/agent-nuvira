@@ -18,6 +18,10 @@ import {
   type StepResponse,
 } from '../../src/tools/tool-loop.js';
 import { getTool, type ToolContext, type FollowupSuggestion } from '../../src/tools/registry.js';
+import { requestAuthorizesWrites } from '../../src/learning/autonomy-policy.js';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 /** Run the REAL registry tool (so sinks + askUser injection are exercised). */
 async function realExecute(name: string, args: Record<string, unknown>, c: ToolContext): Promise<string> {
@@ -728,5 +732,315 @@ describe('tool loop — bounded auto-continuation', () => {
     expect(result.continuations).toBe(1);
     // 2 initial + 2 continuation steps; the model never terminates itself.
     expect(deps.callModel).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('tool loop — G1 verification gate + G2 edit-claim honesty', () => {
+  const editCall = (n: string): StepResponse => ({
+    content: '',
+    toolCalls: [{ id: `e${n}`, name: 'edit_file', arguments: { path: 'a.js', old_string: 'x', new_string: 'y' } }],
+  });
+
+  it('nudges ONCE when files changed and nothing verified them', async () => {
+    const deps = mockDeps([
+      editCall(1),
+      { content: 'I have fixed the bug.', toolCalls: [] },
+      { content: 'I have fixed the bug.', toolCalls: [] },
+    ]);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'fix it' }], context: ctx, deps });
+    // step 1 edit, step 2 answer -> nudge, step 3 answer -> end.
+    expect(deps.callModel).toHaveBeenCalledTimes(3);
+    expect(result.unverifiedEdit).toBe(true);
+    expect(result.unverifiedEditClaim).toBe(true);
+  });
+
+  it('does NOT nudge when a verification tool ran', async () => {
+    const deps = mockDeps([
+      editCall(1),
+      { content: '', toolCalls: [{ id: 't1', name: 'run_terminal', arguments: { command: 'npm test' } }] },
+      { content: 'I fixed it and the tests pass.', toolCalls: [] },
+    ]);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'fix it' }], context: ctx, deps });
+    expect(deps.callModel).toHaveBeenCalledTimes(3);
+    expect(result.unverifiedEdit).toBeUndefined();
+    expect(result.unverifiedEditClaim).toBeUndefined();
+  });
+
+  it('requireVerification: false suppresses the nudge but STILL flags the edit', async () => {
+    const deps = mockDeps([
+      editCall(1),
+      { content: 'I have fixed it.', toolCalls: [] },
+    ]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'fix it' }],
+      context: ctx,
+      deps,
+      requireVerification: false,
+    });
+    expect(deps.callModel).toHaveBeenCalledTimes(2);
+    expect(result.unverifiedEdit).toBe(true);
+    expect(result.unverifiedEditClaim).toBe(true);
+  });
+
+  it('fires the gate on the concluding suggest_followups exit too (the common edit-turn shape)', async () => {
+    const deps = mockDeps([
+      editCall(1),
+      {
+        content: 'I have fixed it.',
+        toolCalls: [{ id: 's1', name: 'suggest_followups', arguments: { followups: [{ prompt: 'Verify now?' }] } }],
+      },
+      { content: 'I have fixed it.', toolCalls: [] },
+    ]);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'fix it' }], context: ctx, deps });
+    expect(deps.callModel).toHaveBeenCalledTimes(3);
+    expect(result.unverifiedEdit).toBe(true);
+  });
+
+  it('leaves a plain read-only turn completely unaffected', async () => {
+    const deps = mockDeps([
+      { content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'a.js' } }] },
+      { content: 'Here is what the file does.', toolCalls: [] },
+    ]);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'explain a.js' }], context: ctx, deps });
+    expect(deps.callModel).toHaveBeenCalledTimes(2);
+    expect(result.unverifiedEdit).toBeUndefined();
+    expect(result.unverifiedEditClaim).toBeUndefined();
+  });
+
+  it('an IRRELEVANT successful run does not satisfy the gate (echo hi)', async () => {
+    // Session 4: success alone is not verification — the run must exercise the
+    // changed artifact. `echo hi` succeeds and proves nothing.
+    const deps = mockDeps(
+      [
+        editCall(1),
+        { content: '', toolCalls: [{ id: 't1', name: 'run_terminal', arguments: { command: 'echo hi' } }] },
+        { content: 'I have fixed it.', toolCalls: [] },
+        { content: 'I have fixed it.', toolCalls: [] },
+      ],
+      async (name) =>
+        name === 'run_terminal'
+          ? 'run_terminal: `echo hi` ✅ succeeded.\nOutput:\nhi'
+          : `executed ${name}`,
+    );
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'fix it' }], context: ctx, deps });
+    expect(result.unverifiedEdit).toBe(true);
+  });
+
+  it('a RELEVANT run (npm test / naming the file) satisfies the gate', async () => {
+    const deps = mockDeps(
+      [
+        editCall(1),
+        { content: '', toolCalls: [{ id: 't1', name: 'run_terminal', arguments: { command: 'npm test' } }] },
+        { content: 'Fixed.', toolCalls: [] },
+      ],
+      async (name) =>
+        name === 'run_terminal' ? 'run_terminal: `npm test` ✅ succeeded.' : `executed ${name}`,
+    );
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'fix it' }], context: ctx, deps });
+    expect(result.unverifiedEdit).toBeUndefined();
+  });
+
+  it('a FAILED verification does not satisfy the gate (live no-op run_terminal)', async () => {
+    // Observed live: the model answered the verification nudge with a
+    // `run_terminal` carrying no command. The tool must report an Error so the
+    // turn still counts as unverified.
+    const deps = mockDeps(
+      [
+        editCall(1),
+        { content: '', toolCalls: [{ id: 't1', name: 'run_terminal', arguments: {} }] },
+        { content: 'I have fixed it.', toolCalls: [] },
+        { content: 'I have fixed it.', toolCalls: [] },
+      ],
+      async (name) => (name === 'run_terminal' ? 'Error: run_terminal: empty command — supply the `command` to run.' : `executed ${name}`),
+    );
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'fix it' }], context: ctx, deps });
+    expect(result.unverifiedEdit).toBe(true);
+    expect(result.unverifiedEditClaim).toBe(true);
+  });
+});
+
+/**
+ * G13 — the loop must not end a turn on a request for permission to do work the
+ * user's own request already authorized.
+ *
+ * Observed live: given "develop a web-based interactive book…", the loop ended
+ * with "Do you want me to create the full project structure…?" — and over a chat
+ * surface that question IS the answer, so the user had to reply before anything
+ * was built.
+ */
+describe('tool loop — authorized-work nudge', () => {
+  const STORY_ASK =
+    'write a 12 page story called Kharig Nights about a village boy who finds a lamp in a banyan root';
+
+  const PERMISSION_QUESTION =
+    'I have the plan ready. Do you want me to create the full project structure with all the chapter files?';
+
+  it('nudges the model to proceed, and delivers the real answer instead of the question', async () => {
+    const deps = mockDeps([
+      { content: PERMISSION_QUESTION, toolCalls: [] },
+      { content: 'Chapter 1 is written and saved to chapters/01-chapter-1.md.', toolCalls: [] },
+    ]);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: STORY_ASK }], context: ctx, deps });
+
+    expect(deps.callModel).toHaveBeenCalledTimes(2);
+    expect(result.content).toContain('Chapter 1 is written');
+    expect(result.content).not.toContain('Do you want me to create');
+    // The nudge tells the model the request already authorized the work.
+    const secondCall = deps.callModel.mock.calls[1][0] as Array<{ role: string; content: string }>;
+    expect(secondCall.some((m) => m.role === 'user' && m.content.includes('already asked for this work'))).toBe(true);
+  });
+
+  it('does NOT nudge when the request never authorized the work', async () => {
+    const deps = mockDeps([{ content: PERMISSION_QUESTION, toolCalls: [] }]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'what does the writer agent do?' }],
+      context: ctx,
+      deps,
+    });
+
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+    expect(result.content).toBe(PERMISSION_QUESTION);
+  });
+
+  it('does NOT nudge on a genuine content question', async () => {
+    const deps = mockDeps([{ content: 'Which of these two titles do you prefer?', toolCalls: [] }]);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: STORY_ASK }], context: ctx, deps });
+
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+    expect(result.content).toContain('Which of these two titles');
+  });
+
+  it('is bounded to ONE nudge — a model that keeps asking cannot loop', async () => {
+    const deps = mockDeps([
+      { content: PERMISSION_QUESTION, toolCalls: [] },
+      { content: PERMISSION_QUESTION, toolCalls: [] },
+      { content: PERMISSION_QUESTION, toolCalls: [] },
+    ]);
+    await runToolLoop({ messages: [{ role: 'user', content: STORY_ASK }], context: ctx, deps });
+
+    expect(deps.callModel).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps real work delivered when the request authorized it (nudge only when nothing was done)', async () => {
+    // The question is the LAST sentence after a substantive deliverable: the
+    // nudge must not throw the deliverable away.
+    //
+    // Hermetic: `realExecute` runs the REAL `write_file`, so the workspace is a
+    // temp dir — never the repo (an earlier version of this test wrote a stray
+    // `chapters/01.md` into the project root).
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-nudge-'));
+    try {
+      const deps = mockDeps(
+        [
+          { content: '', toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: 'chapters/01.md', content: 'prose' } }] },
+          { content: 'Chapter 1 is on disk.\n\nDo you want me to create the next chapter?', toolCalls: [] },
+          { content: 'Chapter 2 is on disk too.', toolCalls: [] },
+        ],
+        realExecute,
+      );
+      const result = await runToolLoop({
+        messages: [{ role: 'user', content: STORY_ASK }],
+        context: { ...ctx, cwd: workdir, writesAuthorized: requestAuthorizesWrites(STORY_ASK) },
+        deps,
+        requireVerification: false,
+      });
+
+      expect(result.toolCalls).toContain('write_file');
+      // The post-nudge answer is delivered — and the trailing PERMISSION
+      // question is not what the user is handed. Without stripping it, the
+      // longer "Chapter 1 is on disk.\n\nDo you want me to…?" would outrank the
+      // real follow-up under the longest-substantive rule.
+      expect(result.content).toContain('Chapter 2 is on disk too');
+      expect(result.content).not.toContain('Do you want me to create the next chapter');
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('tool loop — the request itself is the authorization (G16)', () => {
+  // The wiring test for the whole audit: the gates can only stop asking for
+  // permission if the RAW request reaches them. The loop used to derive a single
+  // file-shaped boolean, which cannot answer "does the request name THIS file".
+  const FIX_ASK = 'fix the calculator so that division by zero returns 0 instead of NaN';
+
+  it('threads the raw request into the tools, so a named file is edited without a round trip', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-authz-'));
+    try {
+      mkdirSync(join(workdir, 'src'), { recursive: true });
+      writeFileSync(join(workdir, 'src/calc.ts'), 'export const div = (a: number, b: number) => a / b;\n', 'utf-8');
+
+      const deps = mockDeps(
+        [
+          {
+            content: '',
+            toolCalls: [
+              {
+                id: 'e1',
+                name: 'edit_file',
+                arguments: {
+                  path: 'src/calc.ts',
+                  old_string: 'a / b;',
+                  new_string: 'b === 0 ? 0 : a / b;',
+                },
+              },
+            ],
+          },
+          { content: 'Fixed: division by zero now returns 0.', toolCalls: [] },
+        ],
+        realExecute,
+      );
+
+      const result = await runToolLoop({
+        messages: [{ role: 'user', content: FIX_ASK }],
+        // NOTE: no `writesAuthorized` is passed — the loop must derive both the
+        // verdict and the raw text from the messages itself.
+        context: { ...ctx, cwd: workdir },
+        deps,
+        requireVerification: false,
+      });
+
+      expect(result.toolCalls).toContain('edit_file');
+      expect(readFileSync(join(workdir, 'src/calc.ts'), 'utf-8')).toContain('b === 0 ? 0 : a / b;');
+      // The tool reported the judgment call back to the model, which is the
+      // proof it applied the edit rather than asking for permission.
+      const fedBack = JSON.stringify(deps.callModel.mock.calls[1][0]);
+      expect(fedBack).toContain('Applied without asking');
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('still hands the tools NO authorization when the request never asked for the work', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-authz-'));
+    try {
+      writeFileSync(join(workdir, 'keep.txt'), 'original\n', 'utf-8');
+
+      const deps = mockDeps(
+        [
+          {
+            content: '',
+            toolCalls: [
+              { id: 'e2', name: 'edit_file', arguments: { path: 'keep.txt', old_string: 'original', new_string: 'changed' } },
+            ],
+          },
+          { content: 'Done.', toolCalls: [] },
+        ],
+        realExecute,
+      );
+
+      await runToolLoop({
+        messages: [{ role: 'user', content: 'what does the writer agent do?' }],
+        context: { ...ctx, cwd: workdir },
+        deps,
+        requireVerification: false,
+      });
+
+      // Unauthorized work is untouched, and the model was told to ask.
+      expect(readFileSync(join(workdir, 'keep.txt'), 'utf-8')).toBe('original\n');
+      expect(JSON.stringify(deps.callModel.mock.calls[1][0])).toContain('state-changing — NOT applied');
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
   });
 });

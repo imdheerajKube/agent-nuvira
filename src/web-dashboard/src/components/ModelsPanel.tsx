@@ -213,6 +213,26 @@ function ProgressBar({ data }: { data: ModelsHealthData }) {
         <span><span style={{ color: '#d29922' }}>●</span> Limited</span>
         <span><span style={{ color: '#f85149' }}>●</span> Unavailable</span>
       </div>
+      {/*
+        Reconciliation. The bar above is a LISTING breakdown — it says a provider
+        offers these ids, not that the router can use them. Stating both numbers
+        together is what stops this section from contradicting both the registry
+        card below it and the router's actual behaviour.
+      */}
+      {typeof data.routable === 'number' && (
+        <div style={{ marginTop: 6, fontSize: 12, color: '#8b949e', lineHeight: 1.5 }}>
+          <strong style={{ color: '#e6edf3' }}>{total}</strong> listed by providers ·{' '}
+          <strong style={{ color: data.routable > 0 ? '#3fb950' : '#d29922' }}>{data.routable}</strong>{' '}
+          routable right now (verified, un-parked, not stale)
+          {typeof data.registryTotal === 'number' && data.registryTotal > 0 && (
+            <>
+              {' '}· registry tracks{' '}
+              <strong style={{ color: '#e6edf3' }}>{data.registryVerified ?? 0}</strong> of{' '}
+              <strong style={{ color: '#e6edf3' }}>{data.registryTotal}</strong> verified
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1246,6 +1266,21 @@ function ActionTelemetrySection({ registry }: { registry: ModelRegistryInsights 
             <div className="stat-label">Last update</div>
           </div>
         </div>
+        {/*
+          Provenance, stated rather than implied. A test suite once wrote real
+          records into this log (one fake model was 2,110 of 3,436 lines), so
+          the view excludes test-origin records AND says how many it excluded.
+          Hiding them silently would be a different way of lying about the data.
+        */}
+        {tele.synthetic > 0 && (
+          <div className="stat-card" title="Written by a test process — excluded from every number on this panel. The records remain in the hash-chained log.">
+            <span className="stat-icon">🧪</span>
+            <div className="stat-body">
+              <div className="stat-value" style={{ color: '#d29922' }}>{tele.synthetic}</div>
+              <div className="stat-label">Test-origin, excluded</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {tele.actions.map((a) => <ActionTelemetryCard key={a.action} entry={a} />)}
@@ -1439,6 +1474,49 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
             {quotaText}
           </span>
         </div>
+
+        {/* Routable (registry) vs listed (provider). The status box above is a
+            PROVIDER-level verdict — identical for every model of that provider —
+            so without this line a model the router never picks looks exactly like
+            the one it picks for 87% of calls. */}
+        {model.routable === false && (
+          <div style={{ fontSize: 10, color: '#d29922', lineHeight: 1.3, marginTop: 2 }}>
+            {model.registryStatus === 'unavailable'
+              ? model.registryDead
+                ? '✗ Not served here — this id does not exist on the endpoint'
+                : '✗ Your key cannot use this model (auth / entitlement / access)'
+              : model.registryStatus === 'verified'
+                ? '◌ Parked or gone stale — not routable now'
+                : model.registryStatus === 'unverified'
+                  ? '◌ Listed but never verified — the router cannot pick it'
+                  : '◌ Not in the registry — never probed'}
+          </div>
+        )}
+
+        {/* The learned reason, verbatim. Kept in the cell so "cannot use this
+            model" is auditable — e.g. a 403 (repairable by the key's owner) reads
+            differently from a 404 (the id is simply not served). */}
+        {model.routable === false && model.registryError && (
+          <div style={{ fontSize: 10, color: '#6e7681', lineHeight: 1.3, marginTop: 1 }}>
+            {model.registryError.length > 60 ? model.registryError.slice(0, 57) + '…' : model.registryError}
+          </div>
+        )}
+
+        {/* Cost/entitlement — LABELLED, never used to hide a model. A user who
+            just bought credits must still see the models they paid for. */}
+        {model.entitlement && model.entitlement.tier !== 'unknown' && (
+          <div
+            title={model.entitlement.basis}
+            style={{
+              fontSize: 10,
+              lineHeight: 1.3,
+              marginTop: 2,
+              color: model.entitlement.tier === 'free' ? '#3fb950' : '#8b949e',
+            }}
+          >
+            {model.entitlement.tier === 'free' ? '🎁 free' : '💸 metered'}
+          </div>
+        )}
 
         {/* Extra: reason if limited/unavailable */}
         {model.status !== 'available' && model.statusReason && (

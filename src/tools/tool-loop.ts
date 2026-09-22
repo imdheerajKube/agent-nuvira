@@ -17,7 +17,20 @@
  */
 
 import { getTool, toolJsonSchemas, type ToolContext, type ToolJsonSchema } from './registry.js';
+import {
+  detectPermissionSeeking,
+  requestAuthorizesWrites,
+  stripTrailingPermissionSeek,
+} from '../learning/autonomy-policy.js';
 import { normalizeFollowups, type FollowupSuggestion } from './followup-utils.js';
+import {
+  assessEditActivity,
+  detectUnverifiedEditClaim,
+  isVerificationTool,
+  VERIFICATION_NUDGE,
+  AUTHORIZED_WORK_NUDGE,
+  type ToolCallEvidence,
+} from './edit-verification.js';
 import { effectiveToolJsonSchemas, coreToolJsonSchemas, isToolEnabled, toolsetForTool } from './toolsets.js';
 import { appendToolArtifact } from './artifact-append.js';
 import type { ToolMessage } from '../inference/interface.js';
@@ -182,6 +195,16 @@ export interface ToolLoopOptions {
   /** Bound on steps per turn (default: 8) — never an infinite loop. */
   maxSteps?: number;
   /**
+   * G1 — VERIFICATION GATE (default ON). When a turn mutated the workspace
+   * (`edit_file`/`write_file` succeeded) and ran nothing that could observe
+   * the result (`run_terminal`/`test`/`browser`/`run_cli`), the loop spends
+   * ONE bounded nudge asking the model to verify before it can end the turn.
+   * The residual signal is `ToolLoopResult.unverifiedEdit` (which is annotated
+   * whether or not the nudge runs). Set false to restore the pre-gate behavior
+   * (kept for tests that assert step counts on pure-edit scripts).
+   */
+  requireVerification?: boolean;
+  /**
    * Bounded auto-continuation budget (default: 2). A turn that dies MID-WAY —
    * the provider walk exhausted every candidate at step N, or the step bound
    * was reached while the model still had work to do — is RESUMED rather than
@@ -282,6 +305,26 @@ export interface ToolLoopResult {
    * as "in progress".
    */
   unfulfilledPromise?: boolean;
+  /**
+   * G1 — VERIFICATION GATE — a workspace mutation (`edit_file`/`write_file`)
+   * SUCCEEDED this turn and NOTHING that could observe the result
+   * (`run_terminal`/`test`/`browser`/`run_cli`) ran. The edit is real, but "it
+   * works" is unproven: the caller must not present the turn as a verified
+   * change (the dashboard shows a warning; the trace records it). Set by the
+   * loop; never guessed by callers. Unlike `unverifiedActionClaim` (which is
+   * about an outbound DELIVERY), this is about a CODE change.
+   */
+  unverifiedEdit?: boolean;
+  /**
+   * G2 — HONESTY FLAG — the answer ASSERTS a completed code change ("I have
+   * successfully fixed…", "now fully operational") while the turn mutated the
+   * workspace and verified nothing. The delivery-claim guard deliberately
+   * ignores code edits, so a false "I fixed it" after a botched `edit_file`
+   * passed unreported eight turns in a row in the calculator session. When
+   * true, the claim is unverified — the caller appends a correction and the
+   * trace flags it.
+   */
+  unverifiedEditClaim?: boolean;
 }
 
 /** An orphan reasoning block or bare <think> is a think-only response. */
@@ -470,6 +513,10 @@ export interface ToolLoopProgress {
   successfulToolCalls: string[];
   /** True when a delivery tool reported an actual `✅` send. */
   deliveryConfirmed: boolean;
+  /** Session 4 — paths mutated successfully this turn (for verification relevance). */
+  mutatedPaths: string[];
+  /** Session 4 — successful verification calls (args + result) to judge relevance. */
+  verificationEvidence: ToolCallEvidence[];
 }
 
 /**
@@ -485,6 +532,11 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   let continuations = 0;
   // Bounded dangling-promise nudges spent this turn (see INTENT_PROMISE_RE).
   let intentNudges = 0;
+  // G1 — bounded verification nudges spent this turn (see requireVerification).
+  let verificationNudges = 0;
+  // G13 — bounded "the request already authorized this" nudges (see
+  // detectPermissionSeeking).
+  let permissionNudges = 0;
   // The EFFECTIVE bound: starts at maxSteps and is extended (never beyond the
   // continuation budget) so a turn that still has work can finish.
   let stepLimit = maxSteps;
@@ -506,9 +558,25 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       followups.push(...next);
     },
   };
+  // ── G13: does the CURRENT request authorize file writes? ────────────────
+  // Derived once, from the last user message, and handed to every tool. The
+  // confirm-before-write gate needs this to tell "is this write the user's
+  // stated intent?" apart from "is this a surprise?" — without it the gate can
+  // only ask, so an unattended run whose ask is literally "write a 12 page
+  // story" stops to ask "Do you want me to create the files?". Callers that
+  // pass no messages (direct tool tests) get `undefined`, which preserves the
+  // gate exactly as it was.
+  const requestText = lastUserText(opts.messages);
+  const authorization = requestAuthorizesWrites(requestText);
   const ctx: ToolContext = {
     ...context,
     followups: context.followups || sink,
+    writesAuthorized: authorization,
+    // The RAW text too, not only the file-shaped verdict: each gated tool needs
+    // the evidence its own question requires (does the request name this file?
+    // ask for a commit? resolve to this CLI command?), and a single boolean
+    // computed for a different question cannot answer any of them.
+    authorizationRequest: requestText,
   };
 
   // Resolve the tool set — stable JSON schemas for every native step
@@ -774,11 +842,70 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         });
         continue;
       }
+      // ── G13 — AUTHORIZED-WORK nudge (bounded, once) ──────────────────────
+      // The model closed the turn asking PERMISSION for work the user's own
+      // request already authorized ("Do you want me to create the full project
+      // structure…?"). Over a chat surface that question IS the answer: the
+      // turn ends, the user has to reply, and nothing gets built — the manual
+      // cadence again. The autonomy policy decides it instead: the ask was the
+      // authorization, so tell the model to proceed with its default and report
+      // the decision. Deliberately a conjunction of two independent facts
+      // (permission-seeking AND an authorized request) so a genuine question
+      // about unrequested work — or a question naming an irreversible action —
+      // is left exactly where it is for the user to answer.
+      if (
+        permissionNudges < 1 &&
+        authorization.authorized &&
+        schemas.length > 0 &&
+        detectPermissionSeeking(
+          response.content.length >= lastContent.length ? response.content : lastContent,
+        )
+      ) {
+        permissionNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.('   🤖 Turn ended asking permission for work the request already authorized — telling the model to proceed.');
+        // The question must not become the delivered answer. When nothing was
+        // done this turn the whole step is the question, so drop it. When real
+        // work WAS done, keep the work and cut only the trailing question —
+        // otherwise a longer "…Do you want me to…?" outranks a short, real
+        // follow-up answer under the longest-substantive rule below.
+        if (progress.successfulToolCalls.length === 0) {
+          lastContent = '';
+        } else {
+          lastContent = stripTrailingPermissionSeek(
+            response.content.length >= lastContent.length ? response.content : lastContent,
+          );
+        }
+        thread.push({ role: 'assistant', content: response.content });
+        thread.push({ role: 'user', content: AUTHORIZED_WORK_NUDGE });
+        continue;
+      }
       // S1 (both exits): the MOST SUBSTANTIVE content seen wins here too —
       // a short closing step ("Sent it to her! ✅") with no tool calls must
       // not clobber the deliverable (poem/essay) the model composed in an
       // earlier step alongside a real tool call. Same rule as the
       // suggest_followups exit below.
+      //
+      // G1 — VERIFICATION GATE: before the turn can end, if it MUTATED the
+      // workspace and ran nothing that observed the result, spend ONE bounded
+      // nudge asking for the check. The gate is deliberately a nudge, not a
+      // hard block: a task with no runnable check (a prose answer, a config
+      // edit outside the workspace) must still be deliverable — the residual
+      // `unverifiedEdit` flag carries the honesty for that case.
+      if (
+        verificationNudges < 1 &&
+        opts.requireVerification !== false &&
+        schemas.length > 0 &&
+        assessEditActivity(progress.successfulToolCalls, progress.verificationEvidence, progress.mutatedPaths)
+          .needsVerification
+      ) {
+        verificationNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.('   🔎 Files were changed but nothing verified them — asking the model to run a check.');
+        thread.push({ role: 'assistant', content: response.content });
+        thread.push({ role: 'user', content: VERIFICATION_NUDGE });
+        continue;
+      }
       return {
         content: response.content.length >= lastContent.length ? response.content : lastContent,
         followups,
@@ -964,6 +1091,18 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       if (call.name === 'gateway_send' && deliveryResultSucceeded(rawResult)) {
         progress.deliveryConfirmed = true;
       }
+      // Session 4 — capture the EVIDENCE the gate needs to judge whether a
+      // verification actually exercised the changed artifact: the mutated
+      // paths, and each successful verification call's args + result.
+      if (ranOk) {
+        if (call.name === 'edit_file' || call.name === 'write_file') {
+          const a = call.arguments as { path?: unknown; file_path?: unknown; file?: unknown } | undefined;
+          const p = a?.path ?? a?.file_path ?? a?.file;
+          if (typeof p === 'string' && p) progress.mutatedPaths.push(p);
+        } else if (isVerificationTool(call.name)) {
+          progress.verificationEvidence.push({ tool: call.name, args: call.arguments, result: rawResult });
+        }
+      }
       let resultText = executed[i];
       // P3c — on error/denial, append the deterministic fallback hint for
       // this tool (advisory — the model still decides; never on success).
@@ -1043,6 +1182,24 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     const hasRealAnswer = lastContent.trim() !== '' && !isBareAcknowledgment(lastContent);
     const thisStepIsReal = response.content.trim() !== '' && !isBareAcknowledgment(response.content);
     if (endedAfterConcluding && (thisStepIsReal || hasRealAnswer)) {
+      // G1 — VERIFICATION GATE (concluding path). Most edit turns end here (the
+      // model calls suggest_followups after editing), so the gate must fire on
+      // this exit too or it would be inert in practice. Bounded exactly once,
+      // same as the no-tools exit above.
+      if (
+        verificationNudges < 1 &&
+        opts.requireVerification !== false &&
+        schemas.length > 0 &&
+        assessEditActivity(progress.successfulToolCalls, progress.verificationEvidence, progress.mutatedPaths)
+          .needsVerification
+      ) {
+        verificationNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.('   🔎 Files were changed but nothing verified them — asking the model to run a check.');
+        thread.push({ role: 'assistant', content: response.content });
+        thread.push({ role: 'user', content: VERIFICATION_NUDGE });
+        continue;
+      }
       const content = response.content.length >= lastContent.length ? response.content : lastContent;
       return {
         content,
@@ -1217,7 +1374,12 @@ export function detectUnfulfilledIntentPromise(content: string): boolean {
  * distinguish "generated a reply" from "actually performed the action".
  */
 export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult> {
-  const progress: ToolLoopProgress = { successfulToolCalls: [], deliveryConfirmed: false };
+  const progress: ToolLoopProgress = {
+    successfulToolCalls: [],
+    deliveryConfirmed: false,
+    mutatedPaths: [],
+    verificationEvidence: [],
+  };
   const result = await runToolLoopInner(opts, progress);
   if (!result.cancelled && !result.generationFailed) {
     result.successfulToolCalls = [...progress.successfulToolCalls];
@@ -1235,8 +1397,42 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     if (result.successfulToolCalls.length === 0 && detectUnfulfilledIntentPromise(result.content)) {
       result.unfulfilledPromise = true;
     }
+    // G1 + G2 — EDIT honesty. Classify what the turn actually did: a workspace
+    // mutation with no observing run is an UNVERIFIED edit, and any completed
+    // code-change assertion in the answer is then an unverified claim. This
+    // runs whether or not the nudge was enabled, so the flag is never a
+    // function of configuration.
+    const activity = assessEditActivity(
+      result.successfulToolCalls,
+      progress.verificationEvidence,
+      progress.mutatedPaths,
+    );
+    if (activity.needsVerification) {
+      result.unverifiedEdit = true;
+    }
+    if (detectUnverifiedEditClaim(result.content, activity.mutations, activity.verifications)) {
+      result.unverifiedEditClaim = true;
+    }
   }
   return result;
+}
+
+/**
+ * The text of the LAST user message in the thread — what the user is actually
+ * asking for right now, as opposed to the history above it. Used to derive
+ * write authorization for the turn (see `writesAuthorized`).
+ *
+ * The most recent user message wins because a continuation ("continue", "yes")
+ * carries its own authorization, and an earlier, longer ask that has already
+ * been partially served must not keep re-authorizing new work.
+ */
+function lastUserText(messages: readonly ToolMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== 'user') continue;
+    return typeof message.content === 'string' ? message.content : '';
+  }
+  return '';
 }
 
 /** Compact argument preview for the event line. */

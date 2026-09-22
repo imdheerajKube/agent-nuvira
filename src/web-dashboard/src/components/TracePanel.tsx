@@ -57,6 +57,21 @@ function outcomeBadge(outcome: TraceEntry['outcome']): { text: string; color: st
   if (outcome.unfulfilledPromise) {
     return { text: '⚠️ unfulfilled promise — announced an action it never performed', color: '#d29922', bg: '#3d2c00', border: '#d29922' };
   }
+  // G1 + G2 — edit honesty. A claimed fix that nothing verified outranks the
+  // generic "acted" badge: `success` only means a reply was generated, and a
+  // botched edit_file is not evidence the change works.
+  if (outcome.unverifiedEditClaim) {
+    return {
+      text: '⚠️ unverified edit claim — asserted a fix, but nothing verified it',
+      color: '#d29922', bg: '#3d2c00', border: '#d29922',
+    };
+  }
+  if (outcome.unverifiedEdit) {
+    return {
+      text: `⚠️ unverified edit — ${outcome.tools?.length ?? 0} tool(s), no test/typecheck/browser run`,
+      color: '#d29922', bg: '#3d2c00', border: '#d29922',
+    };
+  }
   if (outcome.kind === 'acted') {
     return {
       text: outcome.delivered ? '✅ action performed — message sent' : `🔧 acted — ${outcome.tools?.length ?? 0} tool(s)`,
@@ -180,6 +195,19 @@ function StepRow({ step }: { step: TraceStep }) {
               )}
             </div>
           )}
+          {step.layers && (
+            <div style={{
+              marginBottom: 6, fontSize: 11, color: '#6e7681',
+              fontFamily: "'SFMono-Regular', Consolas, monospace",
+            }}>
+              <span style={{ color: '#58a6ff' }}>sys</span> {step.layers.systemChars}c/#{step.layers.systemDigest} ·{' '}
+              <span style={{ color: '#7ee787' }}>ctx</span> {step.layers.contextChars}c/#{step.layers.contextDigest} ·{' '}
+              <span style={{ color: '#d29922' }}>vol</span> {step.layers.volatileChars}c/#{step.layers.volatileDigest}
+              <div style={{ color: '#484f58', marginTop: 2 }}>
+                a constant <span style={{ color: '#58a6ff' }}>sys</span> digest across steps ⇒ the stable layer is prompt-cacheable
+              </div>
+            </div>
+          )}
           {step.error && (
             <div style={{ color: '#f85149', marginBottom: 6 }}>⚠️ {step.error.slice(0, 300)}</div>
           )}
@@ -268,6 +296,22 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
           </span>
         )}
       </div>
+
+      {trace.systemPrompt && (
+        <details style={{ marginBottom: 12 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 12, color: '#58a6ff' }}>
+            🧬 System prompt — stable layer ({trace.systemPromptChars ?? trace.systemPrompt.length} chars)
+          </summary>
+          <pre style={{
+            background: '#161b22', border: '1px solid #21262d', borderRadius: 6,
+            padding: 10, margin: '8px 0 0 0', color: '#8b949e', whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word', maxHeight: 320, overflowY: 'auto',
+            fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 11,
+          }}>
+            {trace.systemPrompt}
+          </pre>
+        </details>
+      )}
 
       {error && (
         <div style={{ color: '#f85149', fontSize: 12, marginBottom: 10 }}>

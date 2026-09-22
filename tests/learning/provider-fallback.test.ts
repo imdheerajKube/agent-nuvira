@@ -675,7 +675,7 @@ describe('ProviderFallback', () => {
       process.env.NUVIRA_TELEMETRY_ACTION = 'ide-execute';
       recordRegistryFailure('gemini', 'gemini-2.0-flash-exp', new Error('403 permission denied'), 'auth', 'execute');
 
-      const actions = getModelRegistry().getActionTelemetry().actions;
+      const actions = getModelRegistry().getActionTelemetry({ includeSynthetic: true }).actions;
       expect(actions.some((a) => a.action === 'ide-execute')).toBe(true);
       // The caller's tag must NOT appear — the IDE attribution replaces it.
       expect(actions.some((a) => a.action === 'execute')).toBe(false);
@@ -688,7 +688,7 @@ describe('ProviderFallback', () => {
       process.env.NUVIRA_TELEMETRY_ACTION = 'ide-inline';
       recordRegistrySuccess('groq', 'llama-3.3-70b-versatile', 'chat');
 
-      const actions = getModelRegistry().getActionTelemetry().actions;
+      const actions = getModelRegistry().getActionTelemetry({ includeSynthetic: true }).actions;
       expect(actions.some((a) => a.action === 'ide-inline')).toBe(true);
       expect(actions.some((a) => a.action === 'chat')).toBe(false);
       const tagged = actions.find((a) => a.action === 'ide-inline');
@@ -698,7 +698,7 @@ describe('ProviderFallback', () => {
 
     it('no env override → telemetry uses the natural action tag', () => {
       recordRegistrySuccess('groq', 'llama-3.3-70b-versatile', 'plan');
-      const actions = getModelRegistry().getActionTelemetry().actions;
+      const actions = getModelRegistry().getActionTelemetry({ includeSynthetic: true }).actions;
       expect(actions.some((a) => a.action === 'plan')).toBe(true);
     });
   });

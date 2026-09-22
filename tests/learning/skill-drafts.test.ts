@@ -98,6 +98,13 @@ function validSkillMd(name = 's3-upload'): string {
 describe('P6a — draft store (skill-drafts.ts)', () => {
   beforeEach(() => {
     testHome = holder.home;
+    // Pin the store root to the temp home this file mocks. The global test setup
+    // (tests/setup/hermetic-env.ts) points every store at a throwaway dir so a
+    // test can never write the developer's real ~/.nuvira — and
+    // `defaultDraftsRoot()` appends 'skill-drafts' to that root, so it is
+    // `.nuvira` here (not `.nuvira/memory`) that the assertions below address.
+    process.env.NUVIRA_MEMORY_DIR = join(testHome, '.nuvira');
+    process.env.BUFF_MEMORY_DIR = join(testHome, '.nuvira');
     testProject = holder.project;
     resetSkillStore();
     // Fresh slate under the SHARED mocked home (accept tests write the store).
@@ -184,6 +191,13 @@ describe('P6a — draft store (skill-drafts.ts)', () => {
 describe('P6a — skill tool skill_manage actions', () => {
   beforeEach(() => {
     testHome = holder.home;
+    // Pin the store root to the temp home this file mocks. The global test setup
+    // (tests/setup/hermetic-env.ts) points every store at a throwaway dir so a
+    // test can never write the developer's real ~/.nuvira — and
+    // `defaultDraftsRoot()` appends 'skill-drafts' to that root, so it is
+    // `.nuvira` here (not `.nuvira/memory`) that the assertions below address.
+    process.env.NUVIRA_MEMORY_DIR = join(testHome, '.nuvira');
+    process.env.BUFF_MEMORY_DIR = join(testHome, '.nuvira');
     testProject = holder.project;
     resetSkillStore();
     // The compiled store + drafts live under the SHARED mocked home — a fresh

@@ -195,7 +195,7 @@ describe('E2E: gateway 429 teaches the registry and the router skips it on the n
     expect(line).toContain('"provider":"nuvira"');
     expect(line).toContain('"outcome":"unavailable"');
     expect(line).toContain('"errorType":"rate-limit"');
-    const telemetry = registry.getActionTelemetry();
+    const telemetry = registry.getActionTelemetry({ includeSynthetic: true });
     const plan = telemetry.actions.find((a) => a.action === 'plan');
     expect(plan?.killed).toBe(1);
     expect(plan?.killedModels[0]?.provider).toBe('nuvira');
@@ -255,7 +255,7 @@ describe('E2E: gateway 429 teaches the registry and the router skips it on the n
     expect(decision.ranked.some((s) => s.provider === 'nuvira')).toBe(true);
 
     // And the action log carries the recovery: one plan kill, one plan verify.
-    const telemetry = registry.getActionTelemetry();
+    const telemetry = registry.getActionTelemetry({ includeSynthetic: true });
     const plan = telemetry.actions.find((a) => a.action === 'plan');
     expect(plan?.killed).toBe(1);
     expect(plan?.verified).toBe(1);

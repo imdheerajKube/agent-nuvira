@@ -34,6 +34,8 @@
 import { isTrivialPrompt } from '../memory/provider.js';
 import { parseRequestSync, type ParsedRequest } from './parser.js';
 import { isContentArtifactAsk, stripArtifactReferences } from './intent.js';
+import { isAuthoredGoal } from '../learning/deliverable-class.js';
+import { parseLongFormTarget } from '../learning/long-form.js';
 // The learned corrections. A plain store (mtime-cached, no routing graph), so
 // consulting it on every ask costs a comparison, not a read.
 import { applyLearning, noteLearningApplied, type NluLearning } from './learnings.js';
@@ -91,6 +93,40 @@ export function hasCodingAction(text: string): boolean {
 }
 
 /**
+ * Is this a LONG-FORM authored deliverable — content the pipeline must build in
+ * bounded units rather than answer in one reply?
+ *
+ * WHY THIS EXISTS (live evidence): "write a 12 page story called Kharig Nights
+ * about a village boy who finds a lamp in a banyan root" was read as a
+ * CONVERSATIONAL question — the NLU maps `write` to a chat action — and answered
+ * in a single reply, bypassing the unit ledger entirely. For 12 pages that
+ * looked acceptable; for "write a 200 page book" it is fatal: the ask never
+ * reaches the machinery that decomposes it, so nothing measures progress,
+ * nothing resumes, and nothing continues unattended. A long-form deliverable is
+ * not a question, whatever verb introduces it.
+ *
+ * BOTH conditions are required:
+ *   1. an EXPLICIT magnitude (pages/chapters/words/sections) splitting into more
+ *      than one unit — "write a story" keeps answering directly, and the
+ *      DEFAULT chapter count invented for a bare "book" does not count as one;
+ *   2. the deliverable classifier reads the ask as authored content. Without
+ *      this, "write a 20 page plan for my child" would be pushed into a pipeline
+ *      whose authored path does not recognise it — reintroducing exactly the
+ *      category error (plan a program for prose) this workstream exists to
+ *      remove.
+ */
+export function isLongFormDeliverable(text: string | null | undefined): boolean {
+  const t = String(text ?? '').trim();
+  if (!t) return false;
+  const target = parseLongFormTarget(t);
+  if (!target || target.unitCount <= 1) return false;
+  // `source` is the matched phrase ("100 pages") or a sentence describing a
+  // default — a default magnitude is not something the user asked for.
+  if (/^default\b/.test(target.source)) return false;
+  return isAuthoredGoal(t);
+}
+
+/**
  * The P0.5 gate: return true when the ask is a conversational question that
  * must be ANSWERED DIRECTLY and must NEVER run the multi-agent pipeline
  * (which would create a python program to "answer" it).
@@ -104,6 +140,9 @@ export function isConversationalQuestion(text: string | null | undefined): boole
   const t = String(text ?? '').trim();
   if (!t) return false;
   if (isTrivialPrompt(t)) return true;
+  // A long-form deliverable outranks the NLU's chat mapping for `write`: the
+  // machinery that can actually finish it must be the one that receives it.
+  if (isLongFormDeliverable(t)) return false;
   if (hasCodingAction(t)) return false;
   const parsed = parseRequestSync(t);
   return parsed.action.run === 'chat';
@@ -169,7 +208,9 @@ export function explainAskKind(
   if (!t) return { kind: 'chat', base: 'chat' };
   if (isTrivialPrompt(t)) return { kind: 'chat', base: 'chat' };
 
-  const base: AskKind = hasCodingAction(t)
+  const base: AskKind = isLongFormDeliverable(t)
+    ? 'pipeline'
+    : hasCodingAction(t)
     ? 'pipeline'
     : (parsed ?? parseRequestSync(t)).action.run === 'pipeline'
       ? 'pipeline'

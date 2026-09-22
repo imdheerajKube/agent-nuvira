@@ -382,6 +382,32 @@ export function pickBestModelCandidate(
 }
 
 /**
+ * Count what the pool ACTUALLY offers right now.
+ *
+ * WHY THIS EXISTS (G9): the failure report used to decide its closing sentence
+ * from the PARK list alone — and a dead pair (a provider that answered "model
+ * not found") has no expiry, so a report whose only exclusions were dead pairs
+ * printed "No suitable model is available right now". Live, that sentence was
+ * shown while 507 models were eligible and the provider served a request 52
+ * seconds later. A report that cannot count the pool cannot claim it is empty,
+ * so the count is computed through the SAME filtering the router uses (dead
+ * pairs + non-chat models excluded) — the report can never disagree with what
+ * routing would actually consider.
+ */
+export function countEligibleModels(allowedProviders?: string[]): { models: number; providers: number } {
+  try {
+    // A neutral, class-agnostic description: we want the SIZE of the pool, not
+    // a ranking. Complexity only shifts score weights, never eligibility.
+    const candidates = buildModelCandidates('general task', 'moderate' as ComplexityLevel, undefined, allowedProviders);
+    const providers = new Set<string>();
+    for (const c of candidates) providers.add(c.provider);
+    return { models: candidates.length, providers: providers.size };
+  } catch {
+    return { models: 0, providers: 0 };
+  }
+}
+
+/**
  * Get the top N model candidates for failover.
  */
 export function topModelCandidates(

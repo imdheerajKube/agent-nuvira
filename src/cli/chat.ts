@@ -27,6 +27,7 @@ import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict } from '.
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
+import { startWarmupDaemon } from '../learning/model-warmup.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { runSingleShotAuto } from './failover-runner.js';
@@ -48,6 +49,7 @@ import {
   stripToolCallArtifacts,
 } from '../inference/tool-call-utils.js';
 import { beginTrace, endTrace, recordStep, buildTraceOutcome } from '../learning/reasoning-trace.js';
+import { recordWorkingState, getWorkingState, formatWorkingState } from '../learning/working-state.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile, shouldSkipNativeTools } from '../learning/model-harness.js';
 import { resolveAdapterDefault, hasCredentials } from '../learning/model-selection.js';
@@ -470,6 +472,24 @@ export class ChatCommand extends BaseCommand {
   private coldStartProbeFired = false;
 
   /**
+   * G5 — TRACE FIDELITY. The Auto-router decision snapshot for the current
+   * turn, stashed at resolve time so the reasoning trace can record WHY a step
+   * used the provider/model it did. The audit of the calculator session found
+   * 98/99 steps stamped with the session default `gemini/gemini-3.1-flash-lite`
+   * and **0/99** steps carrying a routing snapshot — so the Trace tab's "model
+   * used" column was really "the session's default model".
+   */
+  private lastRouteSnapshot?: import('../learning/reasoning-trace.js').TraceRoutingSnapshot;
+
+  /**
+   * G5 — the provider/model of the LAST generation attempt (post-failover,
+   * post-default-resolution). Read by the chat trace recorder so a step names
+   * the model that actually ran it, instead of whatever the session default
+   * happened to be.
+   */
+  private lastAttempt?: { provider: string; model?: string };
+
+  /**
    * P3 — programmatic single-turn answer for the dashboard chat console.
    *
    * Runs one tool-loop turn — the EXACT engine behind `nuvira chat "<prompt>"` —
@@ -529,6 +549,17 @@ export class ChatCommand extends BaseCommand {
      * project, cwd-aware).
      */
     projectContext?: string;
+    /**
+     * Session 3 — CHANNEL / FORMAT POLICY for the STABLE layer.
+     *
+     * The gateway used to prepend the "RESPONSE FORMAT (non-negotiable…)" block
+     * to every INBOUND USER TURN — i.e. the same policy was re-injected as
+     * volatile content on every message (~80% of the visible user turn on
+     * WhatsApp turns). Policy is identical every turn, so it belongs in the
+     * system prompt: it is then byte-stable (prompt-cacheable) and shows up in
+     * the layered trace's `systemDigest` instead of polluting the ask.
+     */
+    systemPolicy?: string;
     /**
      * P4 — the attached project's directory. When set, the turn ALSO recalls
      * that project's prior sessions + facts (`autoRecall`) and injects them
@@ -654,7 +685,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -1130,6 +1161,12 @@ export class ChatCommand extends BaseCommand {
        * per ChatCommand instance here as the default).
        */
       planStore?: import('../tools/plan-store.js').PlanStoreLike;
+      /**
+       * Session 3 — channel/format policy merged into the STABLE (system)
+       * layer rather than re-injected into every user turn. See
+       * `answerOnce`'s `systemPolicy`.
+       */
+      systemPolicy?: string;
       /** Live gateway for gateway_send (gateway-triggered chat answers reuse the connected bridge). */
       gateway?: ToolContext['gateway'];
       /**
@@ -1277,8 +1314,21 @@ export class ChatCommand extends BaseCommand {
       }
     }
 
+    // G4 — carry THIS project's working state (files changed, verification debt,
+    // user-reported regressions) into the turn, so the model does not re-derive
+    // what previous turns already established. This is the fix for the
+    // calculator session's core drift (it re-diagnosed the same root cause six
+    // times, then undid its own earlier fixes).
+    const workingStatePath = ctxOverrides?.projectPath || process.cwd();
+    const workingStateBlock = formatWorkingState(getWorkingState(workingStatePath));
+
+    // Session 3 — channel/format policy lives in the STABLE layer. It is
+    // identical on every message, so keeping it here makes the system prompt
+    // byte-stable (prompt-cacheable) AND removes it from the volatile user
+    // turn, where it used to occupy ~80% of the ask on WhatsApp turns.
+    const systemPolicyBlock = ctxOverrides?.systemPolicy ? `\n\n${ctxOverrides.systemPolicy}` : '';
     const thread: ToolMessage[] = [
-      { role: 'system', content: systemText + skillHint },
+      { role: 'system', content: systemText + systemPolicyBlock + skillHint },
       // P3 — the attached project's bounded snapshot (path + file tree +
       // symbol map) rides in before the conversation, exactly like --file
       // context: the model knows what it is looking at without being told.
@@ -1294,6 +1344,8 @@ export class ChatCommand extends BaseCommand {
       ...(ctxOverrides?.recallContext
         ? [{ role: 'user' as const, content: ctxOverrides.recallContext }]
         : []),
+      // G4 — the deterministic working-state ledger (never a summary).
+      ...(workingStateBlock ? [{ role: 'user' as const, content: workingStateBlock }] : []),
       ...(fileContext
         ? [{ role: 'user' as const, content: `[File context]\n${fileContext}` }]
         : []),
@@ -1319,6 +1371,9 @@ export class ChatCommand extends BaseCommand {
     // loader channel the tool writes and the loop reads. 'all' (default)
     // keeps the pre-tiering behavior byte-identical.
     const loadedExtraTools = new Set<string>();
+    // G3 — the files this turn mutates, observed on the tool event stream so
+    // the ledger can remember them (the loop reports tool NAMES, not paths).
+    const touchedFiles = new Set<string>();
     const toolContext: ToolContext = {
       configManager: this.configManager,
       loadedExtraTools,
@@ -1326,6 +1381,15 @@ export class ChatCommand extends BaseCommand {
       // agent operates inside the project (not the dashboard server's cwd).
       cwd: ctxOverrides?.projectPath || process.cwd(),
       emit: (event, data, source) => {
+        // G3 — collect mutated file paths from `tool:started` (which carries
+        // the arguments) so the working-state ledger knows what changed.
+        if (event === 'tool:started') {
+          const t = data as { tool?: string; args?: Record<string, unknown> } | undefined;
+          if (t?.tool === 'edit_file' || t?.tool === 'write_file') {
+            const p = t.args?.path ?? t.args?.file_path ?? t.args?.file;
+            if (typeof p === 'string' && p) touchedFiles.add(p);
+          }
+        }
         // P0.6 — forward tool-call lifecycle events to the GUI before they
         // reach the bus (the bus drives hooks; the override drives the card
         // stream). Other events keep flowing to the bus untouched.
@@ -1402,20 +1466,28 @@ export class ChatCommand extends BaseCommand {
         const promptPreview = lastUserIdx !== -1
           ? `${prompt.slice(0, 80)}…\n\n${prompt.slice(lastUserIdx)}`.slice(0, 500)
           : prompt.slice(0, 300);
+        // G5 — the REAL per-call model/provider (post-failover) and the
+        // Auto-router snapshot, plus estimateTokens (the old chars/4 estimate
+        // misreported usage). Falls back to the session default only when no
+        // attempt was recorded (e.g. a cached/offline step).
         recordStep(chatTraceId, {
           agentType: 'chat',
           description: message.slice(0, 120),
-          provider: session.type,
-          model: session.model ?? 'unknown',
+          // Session 3 — the FULL prompt feeds the layered digests and the
+          // one-time stable-layer capture (see `promptFull` in recordStep).
+          promptFull: prompt,
+          provider: this.lastAttempt?.provider || session.type,
+          model: this.lastAttempt?.model || session.model || 'unknown',
           promptDigest: digest,
           promptPreview,
           responsePreview: output.slice(0, 1000),
           responseLength: output.length,
-          inputTokens: Math.ceil(prompt.length / 4),
-          outputTokens: Math.ceil(output.length / 4),
+          inputTokens: estimateTokens(prompt),
+          outputTokens: estimateTokens(output),
           latencyMs,
           success: ok,
           error,
+          ...(mode.auto && this.lastRouteSnapshot ? { routing: this.lastRouteSnapshot } : {}),
         });
       } catch {
         // Best-effort — a trace write must never break the turn.
@@ -1516,8 +1588,45 @@ export class ChatCommand extends BaseCommand {
         tools: result.successfulToolCalls ?? result.toolCalls,
         unverifiedActionClaim: result.unverifiedActionClaim,
         unfulfilledPromise: result.unfulfilledPromise,
+        unverifiedEdit: result.unverifiedEdit,
+        unverifiedEditClaim: result.unverifiedEditClaim,
       }),
     );
+
+    // G3 — record what this turn actually did so the NEXT turn starts from it
+    // (files changed, whether anything verified the work, and whether the user
+    // reported a regression). Best-effort: the ledger must never break a turn.
+    try {
+      const activity = result.successfulToolCalls ?? [];
+      const verified = activity.some(
+        (t) => t === 'run_terminal' || t === 'test' || t === 'browser' || t === 'run_cli',
+      );
+      recordWorkingState(workingStatePath, {
+        filesTouched: [...touchedFiles],
+        toolsUsed: activity,
+        verified,
+        unverifiedEdit: result.unverifiedEdit === true,
+        userMessage: message,
+      });
+    } catch {
+      // Best-effort.
+    }
+
+    // G1 + G2 — surface the unverified-edit warning ON THE CONSOLE too (the
+    // trace badge alone is invisible to a CLI/gateway user). Printed, never
+    // appended to `content`, so the delivered answer, the gateway bubble and
+    // the answer cache all stay clean.
+    try {
+      if (result.unverifiedEditClaim) {
+        logger.warn(
+          '   ⚠️  This reply asserts a code change, but NOTHING verified it (no test / typecheck / build / browser run). Treat the change as UNVERIFIED.',
+        );
+      } else if (result.unverifiedEdit) {
+        logger.warn('   ⚠️  Files were changed this turn but no verification ran — the change is unverified.');
+      }
+    } catch {
+      // Best-effort — a warning must never break the turn.
+    }
 
     // Finalize the turn (cache + memory + registry telemetry).
     // E3c: a generationFailed turn is NOT cached/persisted — the caller may
@@ -1685,6 +1794,9 @@ export class ChatCommand extends BaseCommand {
         // Record the ATTEMPTED model immediately so a failed step's trace and
         // telemetry name the model that failed, instead of "unknown".
         if (effectiveModel) session.model = effectiveModel;
+        // G5 — and name the attempt itself, so the trace recorder reports the
+        // real provider/model (post-failover) rather than the session default.
+        this.lastAttempt = { provider: typ, model: effectiveModel };
         const nativeKey = `${typ}|${effectiveModel ?? ''}`;
         // Answer-quality resilience: a CONFUSED reply — the model talking about
         // the tool contract (e.g. apologizing that "the provided example call
@@ -2148,6 +2260,15 @@ export class ChatCommand extends BaseCommand {
         this.configManager,
       ),
     );
+    // G5 — record the routing snapshot now (the winner + why), so the reasoning
+    // trace for this turn can show the decision instead of a blank column.
+    this.lastRouteSnapshot = {
+      provider: decision.provider,
+      model: decision.model,
+      score: decision.score,
+      complexity: String(decision.complexity),
+      explanation: decision.explanation,
+    };
 
     // Walk the ranked candidates (winner first) and return the first available
     // provider — never a provider that lacks a key or endpoint. Providers that
@@ -2161,6 +2282,17 @@ export class ChatCommand extends BaseCommand {
       return expiresAt !== undefined && expiresAt > exclusionTime;
     };
     // ── Cold-start probe (suggestion 3) ─────────────────────────────────────
+    // Start the background warmup/exploration daemon on EVERY chat session, not
+    // only a cold one (Models-page audit). It is idempotent (already-running is
+    // a no-op) and unref'd, so it cannot hold the process open — and it is the
+    // only thing that verifies models the router cannot see yet. Left cold-only,
+    // the verified pool could only ever shrink as staleness retired models.
+    try {
+      startWarmupDaemon(this.configManager);
+    } catch {
+      // Best-effort — warmup must never break chat.
+    }
+
     // A fresh registry has zero verified models → routing would fall back to
     // credential-based defaults and possibly fail into dead ends. Fire ONE
     // background probe+spot-check so the registry learns from real API data.

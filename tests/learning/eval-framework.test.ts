@@ -25,7 +25,16 @@ const testDirHolder = vi.hoisted(() => {
   const { mkdtempSync } = require('node:fs');
   const { join } = require('node:path');
   const base = process.env.TMPDIR || process.env.TEMP || '/tmp';
-  return { value: mkdtempSync(join(base, 'buff-evaltest-')) };
+  const value = mkdtempSync(join(base, 'buff-evaltest-'));
+  // Pin the memory dir to the mocked home BEFORE the module computes EVAL_PATH
+  // (it resolves at load time). This file's own history is why it matters:
+  // without isolation these tests wrote to and WIPED the user's real
+  // ~/.nuvira/memory/evals.json. The global test setup
+  // (tests/setup/hermetic-env.ts) now points every store at a throwaway dir, and
+  // this keeps that guarantee while following the temp home this file mocks.
+  process.env.NUVIRA_MEMORY_DIR = join(value, '.nuvira', 'memory');
+  process.env.BUFF_MEMORY_DIR = join(value, '.nuvira', 'memory');
+  return { value };
 });
 
 vi.mock('node:os', () => ({

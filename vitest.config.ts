@@ -9,9 +9,14 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.{ts,tsx}'],
-    // Disable parallel test file execution because memory tests share
-    // a JSON file store at ~/.buff/memory/. Parallel threads corrupt
-    // the shared file system state. The full suite runs in <1s.
+    // Every test file gets a throwaway memory store, so a test can never write
+    // the developer's real ~/.nuvira/memory — the files the dashboard reports
+    // and the router obeys. Without this, a test that drives the real pipeline
+    // records real routing telemetry (see tests/setup/hermetic-env.ts).
+    setupFiles: ['tests/setup/hermetic-env.ts'],
+    // Disable parallel test file execution because the JSON file stores are
+    // shared within a process. Parallel threads corrupt the shared file system
+    // state. The full suite runs in <1s.
     fileParallelism: false,
     coverage: {
       provider: 'v8',

@@ -33,7 +33,7 @@ import { resolveNuviraConfigDir, resolveNuviraDataPath } from '../config/paths.j
 import { getAutoRouter, type AutoRouteResult, type ScoredProvider } from './auto-router.js';
 import { analyzeComplexity, type ComplexityLevel } from './hybrid-router.js';
 import { buildAutoResolveOptions } from './resolve-options.js';
-import { buildModelCandidates, buildTieredFailoverChain } from './model-first-router.js';
+import { buildModelCandidates, buildTieredFailoverChain, countEligibleModels } from './model-first-router.js';
 import { recordModelUsage } from './model-warmup.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { getDefaultModel } from '../inference/provider-catalog.js';
@@ -1305,6 +1305,60 @@ export interface ModelBreadthReport {
   parked: RoutingExclusionReport[];
   /** ms until the soonest parked model frees up (absent when none will). */
   nextFreeInMs?: number;
+  /**
+   * How many models the router would ACTUALLY consider right now (dead pairs
+   * and non-chat models already excluded). Optional so callers that construct
+   * a report by hand (tests, focused diagnostics) keep working, but the real
+   * producer always fills it — without it, no drought claim can be justified.
+   */
+  poolSize?: number;
+  /** Providers with at least one eligible model. */
+  poolProviders?: number;
+}
+
+/**
+ * Should a failed ask be QUEUED for a background retry?
+ *
+ * G9: the retry offer used to be printed unconditionally, and the gateway then
+ * dutifully queued 40 attempts over 6 hours. But a retry only helps when the
+ * cause is transient availability — something waitable, or a genuinely empty
+ * pool that later fills. A task-shape failure (the plan was wrong, the writer
+ * cannot emit that artifact) fails identically on every retry, so promising
+ * "I will keep trying until it is done" is a 6-hour lie. This predicate is the
+ * single source of truth for that decision, shared by every caller.
+ */
+/**
+ * What KIND of failure is being reported — the report alone cannot always tell.
+ *
+ * A chat turn that failed to GENERATE is a model-layer failure by construction,
+ * so a retry is the right remedy even when nothing was parked and no attempt
+ * was recorded (the walk may have thrown before it recorded anything). A
+ * PIPELINE that failed to complete its tasks with a healthy pool is a
+ * task-shape failure, and a retry only reproduces it. The caller knows which
+ * one it is; the report does not.
+ */
+export interface FailureContext {
+  /** The model layer itself failed (no answer was generated at all). */
+  modelLayerFailure?: boolean;
+}
+
+export function reportWarrantsRetry(report: ModelBreadthReport | undefined, ctx?: FailureContext): boolean {
+  if (!report) return false;
+  // A generation failure can only be retried — the task never got to run.
+  if (ctx?.modelLayerFailure) return true;
+  // Something with an expiry is coming back — waiting is honest.
+  if (report.nextFreeInMs !== undefined) return true;
+  // Nothing to wait for, but the pool is genuinely empty — a later turn may
+  // have models again (a key added, a provider restored).
+  if ((report.poolSize ?? 0) === 0) return true;
+  // The pool is healthy AND at least one model was actually reached and failed.
+  // That is a real model-layer outage, and retrying is the right response.
+  const attempted = report.tried.filter((a) => !a.skipped).length;
+  if (attempted > 0) return true;
+  // Healthy pool, and NOTHING was ever called: the failure is not the model
+  // layer (live: six identical orchestrator runs, zero attempts recorded, 507
+  // models eligible). A retry reproduces it exactly, so no retry is offered.
+  return false;
 }
 
 /**
@@ -1326,7 +1380,16 @@ export function modelBreadthReport(mark: number, configManager?: ConfigManager):
     const wait = Math.max(0, r.expiresAt - now);
     return acc === undefined || wait < acc ? wait : acc;
   }, undefined);
-  return { tried, parked, ...(nextFreeInMs !== undefined ? { nextFreeInMs } : {}) };
+  // The pool size is measured, never assumed — it is what decides whether a
+  // "no model is available" claim is allowed to be made at all (G9).
+  const pool = countEligibleModels();
+  return {
+    tried,
+    parked,
+    poolSize: pool.models,
+    poolProviders: pool.providers,
+    ...(nextFreeInMs !== undefined ? { nextFreeInMs } : {}),
+  };
 }
 
 /** "2m", "55m", "3h" — a wait a person can read. */
@@ -1352,7 +1415,7 @@ export function formatWait(ms: number): string {
  */
 export function renderModelBreadthReport(
   report: ModelBreadthReport,
-  opts: { task?: string } = {},
+  opts: { task?: string } & FailureContext = {},
 ): string | undefined {
   const tried = report.tried.filter((a) => !a.skipped);
   const skipped = report.tried.filter((a) => a.skipped);
@@ -1362,12 +1425,30 @@ export function renderModelBreadthReport(
   const isRuling = (r: RoutingExclusionReport): boolean => r.source === 'registry' && !!r.model;
   const retired = report.parked.filter(isRuling);
   const parked = report.parked.filter((r) => !isRuling(r));
-  if (tried.length === 0 && report.parked.length === 0 && skipped.length === 0) return undefined;
+  const poolSize = report.poolSize ?? 0;
+  const poolProviders = report.poolProviders ?? 0;
+  // `poolSize === undefined` means the caller built the report by hand and the
+  // pool was never measured. Treat that as "unknown" and stay silent about it
+  // rather than asserting a shortage we did not check.
+  const poolMeasured = typeof report.poolSize === 'number';
+  const emptyPool = poolMeasured && poolSize === 0;
+  const nothingTried = tried.length === 0 && skipped.length === 0;
+  // Nothing concrete to say → keep the caller's existing (already actionable)
+  // error line rather than printing an empty report. A ruled-out pair DOES
+  // count as concrete: it is the thing the user was told about while the pool
+  // was in fact healthy, so it must be rendered and corrected (G9).
+  if (nothingTried && report.parked.length === 0) return undefined;
 
   const lines: string[] = [];
   lines.push(opts.task ? `😞 I couldn't finish: ${opts.task.slice(0, 120)}` : "😞 I couldn't finish that task.");
 
-  if (tried.length > 0) {
+  // "Nothing was attempted" and "everything was attempted and failed" are
+  // different failures with different fixes. Saying neither (as the old
+  // renderer did) is what let a two-entry park list read as a dead pool.
+  if (nothingTried) {
+    lines.push('');
+    lines.push('No model call was made for this run — it failed before reaching the pool.');
+  } else if (tried.length > 0) {
     lines.push('');
     lines.push(`I tried ${tried.length} model${tried.length === 1 ? '' : 's'}:`);
     for (const a of tried.slice(0, 8)) {
@@ -1392,11 +1473,23 @@ export function renderModelBreadthReport(
     for (const r of retired.slice(0, 4)) {
       lines.push(`  • ${r.provider}/${r.model}`);
     }
+    if (!emptyPool) {
+      // The critical correction: a ruled-out pair is not a shortage. The
+      // excluded pairs are listed as a NOTE, never as the reason the task died.
+      lines.push('  (these are excluded pairs only — they are not the reason above)');
+    }
   }
 
   if (skipped.length > 0 && tried.length === 0) {
     lines.push('');
     lines.push(`Every candidate was skipped before it could be called (${skipped.length}).`);
+  }
+
+  if (poolMeasured && !emptyPool) {
+    lines.push('');
+    lines.push(
+      `Pool at the time: ${poolSize.toLocaleString()} eligible model${poolSize === 1 ? '' : 's'} across ${poolProviders} provider${poolProviders === 1 ? '' : 's'}.`,
+    );
   }
 
   lines.push('');
@@ -1407,9 +1500,26 @@ export function renderModelBreadthReport(
     lines.push(
       `A model frees up in about ${formatWait(report.nextFreeInMs)}. Want me to keep checking and run this the moment one is available, then update you here? Reply *yes* and I will keep trying until it is done.`,
     );
-  } else {
+  } else if (emptyPool) {
     lines.push(
-      'No suitable model is available right now. Want me to keep checking in the background and run this as soon as one comes back? Reply *yes* and I will keep trying until it is done.',
+      'No suitable model is available right now — the eligible pool is empty. Want me to keep checking in the background and run this as soon as one comes back? Reply *yes* and I will keep trying until it is done.',
+    );
+  } else if (reportWarrantsRetry(report, opts)) {
+    // Availability-shaped: models were reached and failed (or the caller knows
+    // the model layer itself failed). Waiting is a real remedy, so the offer
+    // stands and the caller queues it.
+    lines.push(
+      'Want me to keep checking in the background and run this as soon as one comes back? Reply *yes* and I will keep trying until it is done.',
+    );
+  } else {
+    // Healthy pool, nothing attempted: NOT a model shortage. Queuing a retry
+    // would burn hours reproducing an identical failure (live: 6 identical
+    // orchestrator runs in 32 minutes), so no retry is offered — and the user
+    // is told why, instead of being asked to wait for a model that was never
+    // the problem. The retry decision uses the same predicate the QUEUE uses,
+    // so the offer and the queue can never disagree.
+    lines.push(
+      'This was not a model shortage, so queuing a retry would only repeat the same failure. The ask needs a different approach rather than a different model.',
     );
   }
   return lines.join('\n');

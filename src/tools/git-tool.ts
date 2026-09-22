@@ -35,6 +35,7 @@
 
 import { execFileSync } from 'node:child_process';
 import type { ToolContext } from './registry.js';
+import { decideStateChange, requestRequestsCommit } from '../learning/autonomy-policy.js';
 
 /** The tool's args (zod-validated in the registry). */
 export interface GitToolArgs {
@@ -161,12 +162,38 @@ export async function runGitTool(args: GitToolArgs, ctx: ToolContext): Promise<s
   if (!message) {
     return 'Error: git commit needs a message (git refuses empty messages — it would open an editor). Call ask_user for the commit message, then re-call with it.';
   }
+  // ── G16: the gate's missing input is whether the USER asked for the commit ─
+  // "Commit these changes" IS the approval, and asking for it again is a round
+  // trip in the most common dev flow. Note the asymmetry, and why it is right:
+  // the commit is local and recoverable (a reflog entry, not a lost file), but
+  // it is NOT marked `recoverable` here — only the request NAMING a commit
+  // unlocks it, so a commit the model decided on its own still asks.
+  let decidedAutonomously = false;
+  let autonomyReason = '';
   if (!args.confirm) {
-    return (
-      'git commit: this changes the repository history and needs explicit confirmation. ' +
-      'Call ask_user (yes/no — show the diff card first so the user sees exactly what will be committed), ' +
-      'then re-call git commit with the SAME message plus confirm:true only if the user agreed.'
-    );
+    const verdict = decideStateChange({
+      tool: 'git commit',
+      action: 'recording a commit in this repository',
+      changeClass: 'local-state',
+      namedByRequest: requestRequestsCommit(ctx.authorizationRequest ?? ''),
+      authorizedByRequest: ctx.writesAuthorized?.authorized === true,
+    });
+    if (verdict.action !== 'proceed') {
+      return (
+        'git commit: this changes the repository history and needs explicit confirmation ' +
+        `(${verdict.reason}). ` +
+        'Call ask_user (yes/no — show the diff card first so the user sees exactly what will be committed), ' +
+        'then re-call git commit with the SAME message plus confirm:true only if the user agreed.'
+      );
+    }
+    decidedAutonomously = true;
+    autonomyReason = verdict.reason;
+    ctx.emit?.('autonomy:write-applied', {
+      tool: 'git commit',
+      message,
+      files: args.files ?? [],
+      reason: verdict.reason,
+    }, 'tool-loop');
   }
   if (SHELL_METACHARS.test(message)) {
     return 'Error: git commit message contains shell metacharacters — denied (argv exec would still be safe, but refuse anyway).';
@@ -187,5 +214,12 @@ export async function runGitTool(args: GitToolArgs, ctx: ToolContext): Promise<s
     return `git commit failed: ${committed.out}`;
   }
   const what = files.length > 0 ? files.join(', ') : 'all changes';
-  return `✅ Committed (${what}):\n${committed.out.slice(0, 800)}`;
+  const result = `✅ Committed (${what}):\n${committed.out.slice(0, 800)}`;
+  if (!decidedAutonomously) return result;
+  // Reported, never silent: the user must be able to see (and undo) a commit
+  // they did not explicitly request in this turn's wording.
+  return (
+    `${result}\n💡 Committed without asking: ${autonomyReason}. ` +
+    'State the commit in your answer so the user can amend or reset it.'
+  );
 }

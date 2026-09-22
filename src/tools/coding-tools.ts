@@ -40,6 +40,12 @@ import { existsSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { formatUnifiedDiff } from './unified-diff.js';
 import type { ToolContext } from './registry.js';
+import {
+  decideStateChange,
+  decideWriteConfirmation,
+  isSurgicalEdit,
+  requestNamesPath,
+} from '../learning/autonomy-policy.js';
 
 /** Max characters returned by read_file (a 40MB file must not flood context). */
 const MAX_READ_CHARS = 60000;
@@ -515,13 +521,6 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
   if (pairs.length === 0) {
     return "edit_file: no replacement given — pass old_string/new_string (single) or replacements[] (batch).";
   }
-  if (!args.confirm && !dryRun) {
-    if (multi) {
-      return `edit_file: state-changing — NOT applied. Ask the user first via ask_user ("Apply ${pairs.length} replacements to ${args.path}?" with a one-line summary), then retry edit_file with confirm:true once they approve.`;
-    }
-    return confirmFirst('edit_file', args.path, `this edit: replace "${abbrev(pairs[0].old_string)}" with "${abbrev(pairs[0].new_string)}"`);
-  }
-
   const gated = await gateReal(ctx.cwd, args.path);
   if (!gated.ok) return `edit_file: ${gated.reason}`;
 
@@ -547,6 +546,51 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
     ].join('\n');
   }
 
+  // ── G16: decide the gate with EVIDENCE, and only after validating ────────
+  // Two things were wrong with asking first. (1) The user was asked to approve
+  // an edit whose `old_string` might not even match — the approval was spent on
+  // a change that would then fail. (2) Every iteration of the verify loop this
+  // design is built around (run → read the failure → edit → re-run) needed a
+  // human. So: validate first (above), then decide with what the tool can
+  // measure — does the request name this file, and is the edit surgical (small
+  // relative to the file, which is what makes it recoverable)?
+  let decidedAutonomously = false;
+  let autonomyReason = '';
+  if (!args.confirm && !dryRun) {
+    const fileChars = content.length;
+    const oldChars = pairs.reduce((n, p) => n + (p.old_string ?? '').length, 0);
+    const newChars = pairs.reduce((n, p) => n + (p.new_string ?? '').length, 0);
+    const touched = Math.max(oldChars, newChars);
+    const share = fileChars > 0 ? Math.round((touched / fileChars) * 100) : 100;
+    const verdict = decideStateChange({
+      tool: 'edit_file',
+      action: `rewriting ${share}% of '${gated.rel}'`,
+      changeClass: 'modify',
+      namedByRequest: requestNamesPath(ctx.authorizationRequest ?? '', gated.rel),
+      recoverable: isSurgicalEdit(fileChars, oldChars, newChars),
+      authorizedByRequest: ctx.writesAuthorized?.authorized === true,
+    });
+    if (verdict.action !== 'proceed') {
+      const question = multi
+        ? `Apply ${pairs.length} replacements to ${gated.rel}?`
+        : `Apply this edit to ${gated.rel}? — replace "${abbrev(pairs[0].old_string)}" with "${abbrev(pairs[0].new_string)}"`;
+      return (
+        `edit_file: state-changing — NOT applied (${verdict.reason}). ` +
+        `Ask the user first via ask_user ("${question}" with a one-line summary), ` +
+        'then retry edit_file with confirm:true once they approve.'
+      );
+    }
+    decidedAutonomously = true;
+    autonomyReason = verdict.reason;
+    ctx.emit?.('autonomy:write-applied', {
+      tool: 'edit_file',
+      path: gated.rel,
+      share,
+      reason: verdict.reason,
+      authorization: ctx.writesAuthorized?.reason,
+    }, 'tool-loop');
+  }
+
   // Compute the diff once (used by dry_run and the multi-pair result).
   const needDiff = multi || dryRun;
   const diff = needDiff ? formatUnifiedDiff(content.split('\n'), working.split('\n'), { path: gated.rel }) : null;
@@ -566,22 +610,30 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
   }
 
   // Single-pair keeps its original, byte-compatible message.
+  let result: string;
   if (!multi) {
     const o = outcomes[0];
     const what = o.occurrences! > 1 && pairs[0].allow_multiple
       ? `all ${o.occurrences} occurrences`
       : `lines ${o.startLine}${o.endLine !== o.startLine ? `–${o.endLine}` : ''}`;
-    return `edit_file: applied to '${gated.rel}' (${what}). Written ${pairs[0].new_string.length} chars. Re-read the file to verify the change.`;
+    result = `edit_file: applied to '${gated.rel}' (${what}). Written ${pairs[0].new_string.length} chars. Re-read the file to verify the change.`;
+  } else {
+    const oldLineCount = logicalLineCount(content);
+    const newLineCount = logicalLineCount(working);
+    const delta = newLineCount - oldLineCount;
+    result = [
+      `edit_file: applied ${pairs.length} replacement(s) to '${gated.rel}' (${oldLineCount} → ${newLineCount} lines, ${delta >= 0 ? '+' : ''}${delta}).`,
+      ...outcomes.map(formatOutcomeLine),
+      diff ? `\n${diff}` : '\n(diff omitted — file too large to summarize inline)',
+    ].join('\n');
   }
-
-  const oldLineCount = logicalLineCount(content);
-  const newLineCount = logicalLineCount(working);
-  const delta = newLineCount - oldLineCount;
-  return [
-    `edit_file: applied ${pairs.length} replacement(s) to '${gated.rel}' (${oldLineCount} → ${newLineCount} lines, ${delta >= 0 ? '+' : ''}${delta}).`,
-    ...outcomes.map(formatOutcomeLine),
-    diff ? `\n${diff}` : '\n(diff omitted — file too large to summarize inline)',
-  ].join('\n');
+  if (!decidedAutonomously) return result;
+  // Reported, never silent: a judgment call the user cannot see is
+  // indistinguishable from a bug.
+  return (
+    `${result}\n💡 Applied without asking: ${autonomyReason}. State the change plainly in your answer — ` +
+    'do not ask for permission to do work the user already asked for.'
+  );
 }
 
 /** ─── write_file (create / overwrite, confirmation-gated) ───────────────── */
@@ -599,20 +651,53 @@ export interface WriteFileArgs {
  * escapes) instead of the target itself.
  */
 export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promise<string> {
-  if (!args.confirm) {
-    return confirmFirst('write_file', args.path, `writing ${args.content.length} chars${abbrev(args.content) ? ` ("${abbrev(args.content)}")` : ''}`);
-  }
   const gated = await gateWrite(ctx.cwd, args.path);
   if (!gated.ok) return `write_file: ${gated.reason}`;
 
   const existed = existsSync(gated.abs);
+
+  // ── G13: the gate needs to know WHAT the user asked for ────────────────────
+  // The gate was binary — confirm or refuse — so a run whose ask was "write a
+  // 12 page story" stopped to ask "Do you want me to create the files?". The
+  // autonomy policy supplies the missing input: creating a file the request
+  // asked for, where nothing exists yet, destroys nothing and is undone by
+  // deleting it, so it proceeds and REPORTS the decision. Authorization is
+  // absent without a loop context and overwriting stays gated either way.
+  let decidedAutonomously = false;
+  if (!args.confirm) {
+    const verdict = decideWriteConfirmation({
+      tool: 'write_file',
+      path: gated.rel,
+      exists: existed,
+      authorizedByRequest: ctx.writesAuthorized?.authorized === true,
+    });
+    if (verdict.action !== 'proceed') {
+      return confirmFirst('write_file', args.path, `writing ${args.content.length} chars${abbrev(args.content) ? ` ("${abbrev(args.content)}")` : ''}`);
+    }
+    decidedAutonomously = true;
+    ctx.emit?.('autonomy:write-applied', {
+      tool: 'write_file',
+      path: gated.rel,
+      reason: verdict.reason,
+      authorization: ctx.writesAuthorized?.reason,
+    }, 'tool-loop');
+  }
+
   try {
     await mkdir(dirname(gated.abs), { recursive: true });
     await writeFile(gated.abs, args.content, 'utf-8');
   } catch (err) {
     return `write_file: write failed on '${gated.rel}': ${(err as Error).message}`;
   }
-  return `write_file: ${existed ? 'overwrote' : 'created'} '${gated.rel}' (${args.content.length} chars).`;
+  const outcome = `write_file: ${existed ? 'overwrote' : 'created'} '${gated.rel}' (${args.content.length} chars).`;
+  if (!decidedAutonomously) return outcome;
+  // Reported, never silent: the model must tell the user what it decided, or
+  // the judgment call is indistinguishable from a bug.
+  return (
+    `${outcome}\n💡 Applied without asking: the request already authorized creating this file ` +
+    'and nothing existed at that path. State plainly in your answer that you created it — do not ' +
+    'ask for permission to do work the user already asked for.'
+  );
 }
 
 /** A short preview of a value for confirmation messages (60 chars max). */

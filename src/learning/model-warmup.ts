@@ -26,26 +26,86 @@
  */
 
 import { getModelRegistry, type ModelRegistryEntry } from './model-registry.js';
-import { spotCheckModel } from '../inference/model-probe.js';
+import { spotCheckModel, refreshModelRegistry } from '../inference/model-probe.js';
+import { detectCredentialChange } from './credential-fingerprint.js';
+import { ProviderFactory } from '../inference/factory.js';
 import type { ConfigManager } from '../config/manager.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-/** How often to run the warmup cycle (ms). */
-const WARMUP_INTERVAL_MS = 60_000; // 1 minute
+/**
+ * Every bound this module spends against a free tier, in one place and
+ * OVERRIDABLE.
+ *
+ * These were module constants, which made the sweep's cost a property of the
+ * build rather than of the user's plan. The sweep is safe because it is bounded,
+ * so the bounds are exactly what an operator needs to see and tune — for a free
+ * tier one probe per cycle may be right, for a paid key tens are harmless. Env
+ * overrides keep that a configuration decision, never a source edit and a
+ * rebuild.
+ */
+export interface WarmupConfig {
+  /** How often the daemon runs a cycle (ms). */
+  intervalMs: number;
+  /** Minimum time between warmups of the same model (ms). */
+  warmThrottleMs: number;
+  /** Max HOT (already-in-use) models warmed per cycle. */
+  hotPerCycle: number;
+  /** Max NEVER-VERIFIED models spot-checked per cycle (the exploration budget). */
+  explorePerCycle: number;
+  /** Never re-probe the same unverified model more often than this (ms). */
+  exploreThrottleMs: number;
+  /** Models used within this window are "hot" (ms). */
+  hotWindowMs: number;
+  /** Models used within this window are "warm" (ms). */
+  warmWindowMs: number;
+}
 
-/** Minimum time between warmups of the same model (ms). */
-const WARMUP_THROTTLE_MS = 300_000; // 5 minutes
+/** Parse a positive-integer env override; anything else falls back. */
+function positiveInt(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
 
-/** Maximum models to warm up per cycle. */
-const MAX_WARMUPS_PER_CYCLE = 10;
+/**
+ * Resolve the sweep's bounds (env overrides → defaults).
+ *
+ * Read per call, not captured at import, so a test — or a long-running daemon
+ * whose env was set after boot — observes the value in force at that moment.
+ */
+export function warmupConfig(env: NodeJS.ProcessEnv = process.env): WarmupConfig {
+  return {
+    intervalMs: positiveInt(env.NUVIRA_WARMUP_INTERVAL_MS, 60_000),
+    warmThrottleMs: positiveInt(env.NUVIRA_WARMUP_THROTTLE_MS, 300_000),
+    hotPerCycle: positiveInt(env.NUVIRA_WARMUP_HOT_PER_CYCLE, 10),
+    explorePerCycle: positiveInt(env.NUVIRA_WARMUP_EXPLORE_PER_CYCLE, 6),
+    exploreThrottleMs: positiveInt(env.NUVIRA_WARMUP_EXPLORE_THROTTLE_MS, 600_000),
+    hotWindowMs: positiveInt(env.NUVIRA_WARMUP_HOT_WINDOW_MS, 30_600_000),
+    warmWindowMs: positiveInt(env.NUVIRA_WARMUP_WARM_WINDOW_MS, 86_400_000),
+  };
+}
 
-/** Models used within this window are considered "hot" (ms). */
-const HOT_WINDOW_MS = 30_600_000; // ~8.5 hours
-
-/** Models used within this window are considered "warm" (ms). */
-const WARM_WINDOW_MS = 86_400_000; // 24 hours
+/**
+ * HOW MANY NEVER-VERIFIED MODELS ONE CYCLE MAY SPOT-CHECK (the exploration
+ * budget) — now `explorePerCycle` in {@link warmupConfig}.
+ *
+ * WHY THE POOL WAS FROZEN (Models-page audit). The cycle only ever considered
+ * `usageMap` — the models THIS process had already used — so a model that had
+ * never served a call could never be a candidate, could never be verified, and
+ * therefore could never serve a call. Verified-and-in-use models win every pick,
+ * so the pool was self-sealing: 12 verified models (3 providers) against 496
+ * unverified ones, with `gemini-3.1-flash-lite` taking 223 of 255 calls in a day.
+ * The consequence is not just narrow model choice — the registry's own 7-day
+ * staleness rule then RETIRES models nothing re-verifies, so the pool shrinks
+ * (4 of the 12 were already at 142.8h).
+ *
+ * A spot-check is a 1-token generation, so this is cheap AND bounded: six per
+ * cycle by default, six per model at most every ten minutes, and the sweep is
+ * self-terminating (a model leaves the candidate set once it is verified or
+ * marked unavailable).
+ */
 
 // ─── Usage Tracking ─────────────────────────────────────────────────────────
 
@@ -107,7 +167,7 @@ function scoreWarmupPriority(
 
   // Recency score: 0-1 (1 = just used, 0 = used long ago)
   const timeSinceUse = now - record.lastUsedAt;
-  const recencyScore = Math.max(0, 1 - (timeSinceUse / HOT_WINDOW_MS));
+  const recencyScore = Math.max(0, 1 - (timeSinceUse / warmupConfig().hotWindowMs));
 
   // Frequency score: 0-1 (1 = used many times)
   const frequencyScore = Math.min(1, record.useCount / 100);
@@ -142,22 +202,33 @@ let isRunning = false;
 
 /**
  * Start the warmup daemon.
- * Runs periodically to keep frequently-used models warm.
+ * Runs periodically to keep frequently-used models warm — and to GROW the
+ * verified pool (see {@link selectExplorationCandidates}).
  */
-export function startWarmupDaemon(configManager: ConfigManager): void {
+export function startWarmupDaemon(configManager: ConfigManager, deps: WarmupDeps = {}): void {
   if (warmupTimer) return; // Already running
 
-  logger.info('[warmup] Starting model warmup daemon');
+  const intervalMs = warmupConfig().intervalMs;
+  logger.info(`[warmup] Starting model warmup daemon (every ${intervalMs}ms)`);
   warmupTimer = setInterval(() => {
     if (!isRunning) {
       isRunning = true;
-      runWarmupCycle(configManager).finally(() => { isRunning = false; });
+      runWarmupCycle(configManager, deps).finally(() => { isRunning = false; });
     }
-  }, WARMUP_INTERVAL_MS);
+  }, intervalMs);
+  // The daemon must never hold the process open.
+  //
+  // Without this, starting it on a normal run would hang every CLI command
+  // forever — which is why it was only ever started from the COLD-START branch
+  // (`getUsableProviders().length === 0`). That made the whole module dead in
+  // practice: once ANY model was verified, nothing ever warmed or verified
+  // another one. `unref()` is the same idiom the model probe already uses, and
+  // it is what makes starting this on every run safe.
+  (warmupTimer as unknown as { unref?: () => void }).unref?.();
 
   // Run first cycle immediately
   isRunning = true;
-  runWarmupCycle(configManager).finally(() => { isRunning = false; });
+  runWarmupCycle(configManager, deps).finally(() => { isRunning = false; });
 }
 
 /**
@@ -171,72 +242,186 @@ export function stopWarmupDaemon(): void {
   }
 }
 
+/** What one cycle did — returned, so the caller reports it instead of guessing. */
+export interface WarmupCycleResult {
+  /** Hot models spot-checked (already in use — the original behaviour). */
+  warmed: number;
+  /** NEVER-VERIFIED models spot-checked to grow the routing pool. */
+  explored: number;
+  /** Spot-checks of either kind that came back `verified`. */
+  verified: number;
+  /** Hot candidates the per-cycle cap left for the next cycle. */
+  skipped: number;
+  /**
+   * True when the credential shape changed, so this cycle forced a full catalog
+   * re-probe before spot-checking. Reported because it explains why one cycle
+   * did noticeably more network work than its neighbours.
+   */
+  catalogRefreshed: boolean;
+}
+
+/** Injectable seams for tests — the real spot-check talks to a provider. */
+export interface WarmupDeps {
+  spotCheck?: (
+    provider: string,
+    model: string,
+    cm: ConfigManager,
+  ) => Promise<'verified' | 'unavailable' | 'skipped' | 'error'>;
+  /**
+   * Seam for the credential-change catalog re-probe. Defaults to the real
+   * `refreshModelRegistry`; injected so a test asserts the re-probe HAPPENS
+   * without any provider traffic.
+   */
+  refreshCatalog?: (cm: ConfigManager) => Promise<unknown>;
+  /** Seam for credential-change detection (defaults to the real sidecar). */
+  detectCredentialChange?: (cm: ConfigManager) => { changed: boolean };
+}
+
+/** Can this provider actually serve? Real adapter + credentials. */
+function isServable(provider: string, configManager: ConfigManager): boolean {
+  try {
+    if (!ProviderFactory.isConstructible(provider)) return false;
+    return configManager.hasRequiredCredentials(provider) === true;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Run one warmup cycle.
+ * Pick unverified models worth a one-token spot-check — the models the router
+ * cannot currently see.
+ *
+ * The ORDER is the fix. Providers with the FEWEST verified models come first,
+ * because that is where the routing pool is thinnest: broadening a *provider*
+ * is what breaks winner-take-all, while verifying a thirteenth model on the
+ * provider that already wins every pick changes nothing about how the agent
+ * behaves. Unservable providers are excluded outright, so a cycle can never
+ * spend its whole budget on something that cannot answer.
  */
-async function runWarmupCycle(configManager: ConfigManager): Promise<void> {
-  const registry = getModelRegistry();
-  const now = Date.now();
+export function selectExplorationCandidates(
+  registry: ReturnType<typeof getModelRegistry>,
+  configManager: ConfigManager,
+  now: number,
+  limit: number,
+): WarmupCandidate[] {
+  if (limit <= 0) return [];
+  const rows: Array<WarmupCandidate & { verifiedInProvider: number }> = [];
 
-  // Get all usage records
-  const records = Array.from(usageMap.values());
-  if (records.length === 0) return;
-
-  // Score and sort by priority
-  const candidates: WarmupCandidate[] = [];
-  for (const record of records) {
-    // Skip if warmed up recently
-    const key = usageKey(record.provider, record.model);
-    const entry = registry.getEntry(record.provider, record.model);
-    if (entry && entry.lastUsedAt && now - entry.lastUsedAt < WARMUP_THROTTLE_MS) {
-      continue;
-    }
-
-    // Skip unavailable models
-    if (entry?.status === 'unavailable') continue;
-
-    // Skip if not used recently enough
-    if (now - record.lastUsedAt > WARM_WINDOW_MS) continue;
-
-    const priority = scoreWarmupPriority(record, entry);
-    if (priority > 0.1) { // Minimum threshold
-      candidates.push({
-        provider: record.provider,
-        model: record.model,
-        priority,
-      });
+  const exploreThrottleMs = warmupConfig().exploreThrottleMs;
+  for (const provider of registry.getTrackedProviders()) {
+    if (!isServable(provider, configManager)) continue;
+    const verifiedInProvider = registry.getProviderStats(provider).verified;
+    for (const entry of registry.getAllModelsForProvider(provider)) {
+      if (entry.status !== 'unverified') continue;
+      // The config sentinel is not a model id (same guard the router uses).
+      if (!entry.model || entry.model === 'default') continue;
+      if (entry.quotaParkedUntil > now) continue;
+      if (now - (entry.lastProbedAt ?? 0) < exploreThrottleMs) continue;
+      rows.push({ provider, model: entry.model, priority: -verifiedInProvider, verifiedInProvider });
     }
   }
 
-  // Sort by priority (highest first)
-  candidates.sort((a, b) => b.priority - a.priority);
+  rows.sort(
+    (a, b) =>
+      a.verifiedInProvider - b.verifiedInProvider ||
+      a.provider.localeCompare(b.provider) ||
+      a.model.localeCompare(b.model),
+  );
+  return rows.slice(0, limit).map(({ provider, model, priority }) => ({ provider, model, priority }));
+}
 
-  // Warm up top N models
-  const toWarmup = candidates.slice(0, MAX_WARMUPS_PER_CYCLE);
-  if (toWarmup.length === 0) return;
+/**
+ * Run one warmup cycle: keep hot models warm, and grow the verified pool.
+ *
+ * Both halves matter and neither is optional. The hot half keeps in-use models
+ * from going stale; the exploration half is what stops the pool from freezing —
+ * and note it runs even when `usageMap` is empty, which is exactly the state of
+ * a fresh process (the old `if (records.length === 0) return;` made the first
+ * cycle of every short-lived CLI run a no-op).
+ */
+export async function runWarmupCycle(
+  configManager: ConfigManager,
+  deps: WarmupDeps = {},
+): Promise<WarmupCycleResult> {
+  const registry = getModelRegistry();
+  const now = Date.now();
+  const cfg = warmupConfig();
+  const spotCheck = deps.spotCheck ?? spotCheckModel;
+  const result: WarmupCycleResult = {
+    warmed: 0,
+    explored: 0,
+    verified: 0,
+    skipped: 0,
+    catalogRefreshed: false,
+  };
 
-  logger.debug(`[warmup] Warming up ${toWarmup.length} models`);
+  // ── Half 0: did the KEY SET change since the last run? ──────────────────
+  // The pool can only hold models a probe has verified, and there is no
+  // per-model entitlement API to ask — so the one case a user notices ("I just
+  // bought credits, where are the models?") was invisible until an unrelated
+  // cold start happened to re-probe. Noticing the change and forcing the probe
+  // is cheap and idempotent, and it fires ONCE per change (the sidecar records
+  // the new shape before returning).
+  try {
+    const detect = deps.detectCredentialChange ?? detectCredentialChange;
+    if (detect(configManager).changed) {
+      const refresh = deps.refreshCatalog ?? ((cm: ConfigManager) => refreshModelRegistry(cm, { spotCheck: true }));
+      result.catalogRefreshed = true;
+      logger.info('[warmup] Credentials changed — re-probing the catalog');
+      await refresh(configManager);
+    }
+  } catch {
+    // Best-effort — a failed re-probe must never break warmup.
+  }
 
-  for (const candidate of toWarmup) {
+  // ── Half 1: models already in use (hot → keep them warm) ────────────────
+  const hot: WarmupCandidate[] = [];
+  for (const record of usageMap.values()) {
+    const entry = registry.getEntry(record.provider, record.model);
+    if (entry && entry.lastUsedAt && now - entry.lastUsedAt < cfg.warmThrottleMs) continue;
+    if (entry?.status === 'unavailable') continue;
+    if (now - record.lastUsedAt > cfg.warmWindowMs) continue;
+    const priority = scoreWarmupPriority(record, entry);
+    if (priority > 0.1) hot.push({ provider: record.provider, model: record.model, priority });
+  }
+  hot.sort((a, b) => b.priority - a.priority);
+
+  const toWarm = hot.slice(0, cfg.hotPerCycle);
+  result.skipped = hot.length - toWarm.length;
+
+  // ── Half 2: never-verified models (the pool the router cannot see) ──────
+  const exploration = selectExplorationCandidates(
+    registry,
+    configManager,
+    now,
+    cfg.explorePerCycle,
+  );
+
+  const exploreKeys = new Set(exploration.map((c) => usageKey(c.provider, c.model)));
+  const cycle = [...toWarm, ...exploration];
+  if (cycle.length === 0) return result;
+
+  logger.debug(
+    `[warmup] ${toWarm.length} hot · ${exploration.length} unverified candidates`,
+  );
+
+  for (const candidate of cycle) {
+    const key = usageKey(candidate.provider, candidate.model);
     try {
-      const result = await spotCheckModel(
-        candidate.provider,
-        candidate.model,
-        configManager,
-      );
-
-      if (result === 'verified') {
-        // Update usage record
-        const key = usageKey(candidate.provider, candidate.model);
+      const outcome = await spotCheck(candidate.provider, candidate.model, configManager);
+      if (outcome === 'verified') result.verified += 1;
+      if (exploreKeys.has(key)) result.explored += 1;
+      else result.warmed += 1;
+      if (outcome === 'verified') {
         const record = usageMap.get(key);
-        if (record) {
-          record.lastUsedAt = now; // Reset the clock
-        }
+        if (record) record.lastUsedAt = now; // Reset the clock
       }
     } catch {
       // Best-effort — warmup must never break routing
     }
   }
+
+  return result;
 }
 
 // ─── Statistics ─────────────────────────────────────────────────────────────
@@ -251,6 +436,7 @@ export function getWarmupStats(): {
   lastCycleAt: number;
 } {
   const now = Date.now();
+  const cfg = warmupConfig();
   const records = Array.from(usageMap.values());
 
   let hotModels = 0;
@@ -258,8 +444,8 @@ export function getWarmupStats(): {
 
   for (const record of records) {
     const timeSinceUse = now - record.lastUsedAt;
-    if (timeSinceUse < HOT_WINDOW_MS) hotModels++;
-    else if (timeSinceUse < WARM_WINDOW_MS) warmModels++;
+    if (timeSinceUse < cfg.hotWindowMs) hotModels++;
+    else if (timeSinceUse < cfg.warmWindowMs) warmModels++;
   }
 
   return {
@@ -281,11 +467,12 @@ export function getTrackedModels(): Array<{
   status: 'hot' | 'warm' | 'cold';
 }> {
   const now = Date.now();
+  const cfg = warmupConfig();
   return Array.from(usageMap.values()).map(record => {
     const timeSinceUse = now - record.lastUsedAt;
     let status: 'hot' | 'warm' | 'cold' = 'cold';
-    if (timeSinceUse < HOT_WINDOW_MS) status = 'hot';
-    else if (timeSinceUse < WARM_WINDOW_MS) status = 'warm';
+    if (timeSinceUse < cfg.hotWindowMs) status = 'hot';
+    else if (timeSinceUse < cfg.warmWindowMs) status = 'warm';
 
     return {
       provider: record.provider,

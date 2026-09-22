@@ -34,6 +34,24 @@ import { ContextVault } from './context-vault.js';
 import { saveCheckpoint, loadCheckpoint, checkpointIdFor } from './checkpoint-store.js';
 import { Agent } from './agent.js';
 import type { AgentContext, LLMCallFn, AgentResult, TaskStep, OnRateLimit } from './agent.js';
+import {
+  buildLongFormPlan,
+  isContinuationAsk,
+  type LongFormPlan,
+  type ProseUnit,
+} from './long-form-plan.js';
+import { buildCompositePlan, type CompositePlan } from './composite-plan.js';
+import {
+  assembleDocument,
+  countWords,
+  findInProgressJob,
+  formatProgress,
+  jobProgress,
+  recordSectionOutcome,
+  type LongFormJob,
+} from '../learning/long-form.js';
+import { artifactsPresence } from '../learning/unattended-progress.js';
+import { resolveDefaultProvider } from '../learning/model-selection.js';
 import { buildProjectFileTree, truncateTree, SOURCE_EXTENSIONS, IGNORE_DIRS } from './utils/file-tree.js';
 import type { RunResult } from './agents/runner.js';
 import { cleanupSandbox } from './agents/tester.js';
@@ -80,11 +98,13 @@ import { classifyFallbackError, getProviderFallback, recordRegistrySuccess } fro
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { sweepTransientFailures, sessionRevivalStore } from '../learning/provider-revival.js';
 import { resolveContextBudget, resolveContextFileBudget, resolveMaxOutputTokens } from '../learning/context-budget.js';
+import { clampMaxTokens, learnMaxTokensLimitFromError } from '../learning/provider-limits.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { withTraceCapture, beginTrace, endTrace } from '../learning/reasoning-trace.js';
+import { recordWorkingState } from '../learning/working-state.js';
 import { createResilientCallLLM, type ResilientCallOptions } from '../learning/resilient-call.js';
 import { createReviewFromResult } from '../team/review.js';
 import { indexFiles, retrieve, recordRetrievalStats, retrievalOptionsFromConfig, estimateTokens as retrievalEstimateTokens } from '../learning/retrieval.js';
@@ -287,6 +307,12 @@ export interface OrchestrationResult {
   agentResults: Array<{ agent: string; success: boolean; summary: string }>;
   /** File change summary */
   fileChanges: string;
+  /**
+   * Enterprise G3 — the PATHS the pipeline changed (excluding deletions), used
+   * to feed the working-state ledger so the next run knows what this one
+   * touched. `fileChanges` stays the human-readable diff summary.
+   */
+  changedFiles?: string[];
   /** Runner output (from executed commands) */
   runOutput?: string;
   /** Error message if failed */
@@ -300,6 +326,78 @@ export interface OrchestrationResult {
   /** The execution plan (lightweight — descriptions only); used by the
    *  self-improvement loop to capture failed runs into episodic memory. */
   taskPlan?: TaskStep[];
+  /**
+   * Enterprise G11 — work this run did NOT finish but that must KEEP GOING
+   * without the user typing "continue".
+   *
+   * The orchestrator decides WHAT still needs doing (it has the ledger); the
+   * calling surface decides who to report to and owns the tick that drives it.
+   * That split is what lets the same unfinished book be continued by the CLI,
+   * the dashboard or a messaging gateway without the orchestrator knowing which
+   * it is.
+   */
+  pendingWork?: PendingWork;
+}
+
+/**
+ * Include `pendingWork` only when there is genuinely something left to do.
+ *
+ * Extracted so the rule lives in one place: every surface treats a handed-over
+ * job as work to schedule, so handing over a COMPLETE deliverable would make it
+ * rebuild the thing the user already has.
+ */
+function buildPendingWork(pending: PendingWork | undefined): { pendingWork?: PendingWork } {
+  if (!pending) return {};
+  if (pending.percent >= 100) return {};
+  return { pendingWork: pending };
+}
+
+/**
+ * Unfinished work that the calling surface must keep scheduling.
+ *
+ * Present only when a run ended with a deliverable that is genuinely
+ * incomplete — the honest alternative to the old "Reply *continue*" cadence,
+ * which made a 100-page book take ten human turns.
+ */
+export interface PendingWork {
+  kind: 'long-form' | 'phased';
+  /** The ORIGINAL ask, so a batch hours later still restates real intent. */
+  goal: string;
+  /** Absolute project root. */
+  projectPath: string;
+  /** What drives the next batch ("continue" resumes the ledger). */
+  continuationPrompt: string;
+  /** Files that must all exist for the deliverable to count as finished. */
+  expectedArtifacts?: string[];
+  /** Measured progress, e.g. "chapter 12/39 · 9,800/35,000 words". */
+  progressLine: string;
+  /** Measured percentage complete. */
+  percent: number;
+  /** Why it is not finished, in one line. */
+  reason: string;
+}
+
+/**
+ * The plan for authored work, in one shape.
+ *
+ * Both planning modes feed the same execution path, so the orchestrator does
+ * not need to branch on "is this a book or an interactive book" anywhere below
+ * the planning step — it just gets steps to run and a ledger to measure.
+ */
+interface AuthoredPlan {
+  steps: TaskStep[];
+  /** Measured progress line, e.g. "Chapter 3/39 · 2,700/35,000 words". */
+  progressLine: string;
+  /** True when the work RESUMED existing content rather than starting fresh. */
+  resumed: boolean;
+  kind: 'long-form' | 'phased';
+  /** One-line description for logs and the agent-results board. */
+  label: string;
+  /** Files the whole deliverable promises (composite plans only). */
+  expectedArtifacts?: string[];
+  job: LongFormJob;
+  /** The phase plan, when this is a hybrid deliverable. */
+  composite?: CompositePlan;
 }
 
 /**
@@ -534,11 +632,17 @@ export class Orchestrator {
     // P0 reasoning trace: begin the per-pipeline trace so every planner,
     // memory, and task LLM call lands in ~/.nuvira/memory/reasoning-traces.json
     // (best-effort — a trace failure must never break the pipeline).
+    // Audit honesty: record the provider×model that will ACTUALLY serve the
+    // calls. `options.provider` is undefined whenever the user did not pin one
+    // (`nuvira run "…"` with no --provider), and the trace then labelled every
+    // step `provider: unknown` — including the writer steps of a live 5-page
+    // story run. A trace nobody can attribute is not an audit trail.
+    const auditRoute = this.resolveAuditRoute(options);
     this.activeTraceId = beginTrace({
       goal,
       source: 'orchestrator',
-      provider: options.provider,
-      model: options.model,
+      provider: auditRoute.provider,
+      model: auditRoute.model,
     });
     let result: OrchestrationResult | undefined;
     try {
@@ -563,6 +667,24 @@ export class Orchestrator {
         endTrace(this.activeTraceId, result?.success);
       } catch {
         // Best-effort — never break the result delivery over telemetry.
+      }
+      // Enterprise G3 — record what this run DID for the next one: the files it
+      // changed, whether a verification agent (tester/runner/verifier) ran, and
+      // the goal itself (scanned for a regression signal). Best-effort.
+      try {
+        const changed = result?.changedFiles ?? [];
+        const verificationRan = (result?.agentResults ?? []).some(
+          (r) => r.success && /test|runner|verif|audit/i.test(r.agent),
+        );
+        recordWorkingState(process.cwd(), {
+          filesTouched: changed,
+          toolsUsed: ['pipeline'],
+          verified: result?.success === true && verificationRan,
+          unverifiedEdit: changed.length > 0 && !(result?.success === true && verificationRan),
+          userMessage: goal,
+        });
+      } catch {
+        // Best-effort — a ledger write must never break result delivery.
       }
       this.activeTraceId = null;
       // K2: persist runtime metrics (memory hits/misses, rule/LLM latency)
@@ -1049,34 +1171,92 @@ export class Orchestrator {
         }
       }
     } else {
+      // ── AUTHORED DELIVERABLES plan themselves — BEFORE the design layers ──
+      // The planner's output for "write a 100-page story" was a Python script
+      // that would write the story: ZERO prose steps, and the failing run died
+      // before even that script existed. Two conclusions follow, and both are
+      // why this is computed FIRST rather than after planning:
+      //   1. the unit plan IS the plan for an authored ask — the code planner
+      //      has no vocabulary for "39 chapters", so its output is replaced;
+      //   2. a planner failure must not sink a story. The live session's six
+      //      failures were all JSON/planning-layer deaths; a book does not need
+      //      the planner to exist, so it is no longer a dependency of one.
+      //
+      // G14 — it also runs before the REASONER now, because whether this run is
+      // CONTINUING work that is already in flight decides whether the design
+      // layers run at all (see below).
+      const priorAuthoredJob = this.findInFlightAuthoredJob(vault);
+      let longFormPlan: AuthoredPlan | null = null;
+      try {
+        longFormPlan = this.planAuthored(vault, goal, options);
+      } catch (err) {
+        // Best-effort — a long-form planning failure must never break the run.
+        logger.debug(`long-form planning failure: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      // ── G14: a CONTINUATION batch does not re-decide the design ──────────
+      // Continuing an in-flight authored job re-derives the unit/phase plan from
+      // the ledger and REPLACES whatever the reasoner and planner produce — the
+      // deliverable class is in the ledger, the structure is a deterministic
+      // function of it, and nothing about the design is still open. Running them
+      // anyway costs two LLM round trips per batch and, worse, adds a failure
+      // surface the plan does not need: live evidence from the unattended web-book
+      // run shows the planner failing with `provider-error` on EVERY batch from
+      // batch 4 onward and burning its entire repair budget before the real work
+      // started. Both layers are now skipped, and the skip is REPORTED rather
+      // than hidden — "no planner was needed" is a fact about the run.
+      //
+      // Scoped deliberately to CONTINUATIONS. A first, fresh authored ask still
+      // runs both: that is the one run where the class is being established, and
+      // it is a single batch, not one per batch.
+      const continuingAuthored = !!(longFormPlan && priorAuthoredJob);
+
       // ── 3d. Reasoner (technical decisions before planning) ─────────────
       // The reasoner makes high-level technical decisions (language, framework,
       // platform, architecture) BEFORE the planner creates steps. This replaces
       // generic "create a game" with specific "Create a Python+tkinter game,
       // single file, package with pyinstaller" — the planner then creates
       // precise steps based on these decisions.
-      try {
-        if (options.verbose) logger.highlight('\n🧠 Reasoning...');
-        const reasoner = this.moduleRegistry.getModule('reasoner');
-        const reasonerResult = await this.runAgent(reasoner, vault, plannerCallLLM, options);
-        agentResults.push({ agent: 'Reasoner', success: reasonerResult.success, summary: reasonerResult.summary });
-        if (options.verbose && reasonerResult.success) {
-          const decision = vault.getMeta<import('./agents/reasoner.js').TechnicalDecision>('technicalDecision');
-          if (decision) {
-            logger.info(`   🧠 ${decision.language}+${decision.framework} → ${decision.platform} → ${decision.deliverable}`);
-            if (decision.reasoning) logger.info(`   🧠 ${decision.reasoning}`);
-          }
+      if (continuingAuthored) {
+        agentResults.push({
+          agent: 'Reasoner',
+          success: true,
+          summary: 'Skipped — continuing in-flight authored work (the deliverable class is already decided)',
+        });
+        if (options.verbose) {
+          logger.info('   ⏭️  Continuing in-flight authored work — reasoner skipped');
         }
-        // Best-effort — reasoning failure must never block planning
-      } catch (err) {
-        logger.debug(`Reasoner failed (non-critical): ${err}`);
+      } else {
+        try {
+          if (options.verbose) logger.highlight('\n🧠 Reasoning...');
+          const reasoner = this.moduleRegistry.getModule('reasoner');
+          const reasonerResult = await this.runAgent(reasoner, vault, plannerCallLLM, options);
+          agentResults.push({ agent: 'Reasoner', success: reasonerResult.success, summary: reasonerResult.summary });
+          if (options.verbose && reasonerResult.success) {
+            const decision = vault.getMeta<import('./agents/reasoner.js').TechnicalDecision>('technicalDecision');
+            if (decision) {
+              logger.info(`   🧠 ${decision.language}+${decision.framework} → ${decision.platform} → ${decision.deliverable}`);
+              if (decision.reasoning) logger.info(`   🧠 ${decision.reasoning}`);
+            }
+          }
+          // Best-effort — reasoning failure must never block planning
+        } catch (err) {
+          logger.debug(`Reasoner failed (non-critical): ${err}`);
+        }
       }
 
-      if (options.verbose) logger.highlight('\n📋 Planning...');
+      if (options.verbose && !continuingAuthored) logger.highlight('\n📋 Planning...');
 
       // Planner with auto-repair — if planning fails, try alternative approaches
       // instead of immediately giving up with "Planning failed".
-      let planResult = await this.runAgent(this.moduleRegistry.getModule('planner'), vault, plannerCallLLM, options);
+      // (Skipped on a continuation; the synthesized result is a RECORD of that,
+      // not a claim that planning succeeded — see the summary text.)
+      let planResult: AgentResult = continuingAuthored
+        ? {
+            success: true,
+            summary: 'Skipped — continuing in-flight authored work (the unit plan is the plan)',
+          }
+        : await this.runAgent(this.moduleRegistry.getModule('planner'), vault, plannerCallLLM, options);
       if (!planResult.success) {
         // MODEL ESCALATION on planner failure (assessment P0: "deliver the
         // goal, complete the task in iterations"). A planner failure is almost
@@ -1139,7 +1319,22 @@ export class Orchestrator {
       }
       agentResults.push({ agent: 'Planner', success: planResult.success, summary: planResult.summary });
 
-      if (!planResult.success) {
+      if (longFormPlan) {
+        // The unit/phase plan IS the plan. Adopt it whether or not the code
+        // planner succeeded — and REPLACE a code plan when it did, because the
+        // planner CANNOT express this deliverable correctly (it asks for a
+        // script that would write the story instead of writing the story).
+        vault.context.taskPlan = longFormPlan.steps;
+        agentResults.push({
+          agent: longFormPlan.kind === 'phased' ? 'CompositePlanner' : 'LongFormPlanner',
+          success: true,
+          summary: `${longFormPlan.steps.length} step(s) planned${longFormPlan.resumed ? ' (resumed)' : ''} — ${longFormPlan.label}`,
+        });
+        logger.info(`   ${longFormPlan.kind === 'phased' ? '🛠️' : '📖'} ${longFormPlan.kind === 'phased' ? 'Composite plan' : 'Long-form plan'}: ${longFormPlan.label}`);
+        if (!planResult.success) {
+          logger.warn('   ⚠️ Planner failed — continuing with the content plan (no planner needed for an authored deliverable)');
+        }
+      } else if (!planResult.success) {
         const errMsg = planResult.error || 'Planning failed';
         // Provide actionable guidance based on the error type.
         let hint = '';
@@ -1537,8 +1732,15 @@ export class Orchestrator {
     // Format as text for the result summary
     const reportText = this.reportModule.format(report, 'text');
 
+    // ── Long-form work: state what EXISTS, not just whether the batch ran ──
+    // A 100-page book cannot finish in one run, so "success" for the batch is
+    // NOT "the deliverable is done". This appends the honest progress line
+    // (units written, words on disk, how to continue) that the original six
+    // failing runs never produced.
+    const longFormSummary = this.longFormProgressNote(vault);
+
     return this.buildResult(!hasFailures, goal, agentResults, vault, {
-      summary: reportText,
+      summary: longFormSummary ? `${reportText}\n\n${longFormSummary}` : reportText,
       tasksCompleted: completed,
       tasksTotal: total,
       trajectoryId,
@@ -1859,10 +2061,19 @@ export class Orchestrator {
         // Output cap: explicit option → configured value → the model's real
         // capability. The old flat `4096` held a 200K+ model to a small-model
         // ceiling, so the better the model, the more of it the constant wasted.
-        maxTokens:
+        //
+        // Then clamped by anything the provider has TAUGHT us (G15): a model
+        // with a large context window and a tiny output cap (the live story run
+        // hit a 512-token cap on a big-window model) rejects the window-derived
+        // number with a 400 every single call, and a hard-coded caller constant
+        // like the prose path's 8192 cannot be allowed to do that silently.
+        maxTokens: clampMaxTokens(
           inferenceOptions?.maxTokens ??
-          config.maxTokens ??
-          resolveMaxOutputTokens({ provider: providerType, model: servedModel }),
+            config.maxTokens ??
+            resolveMaxOutputTokens({ provider: providerType, model: servedModel }),
+          providerType,
+          servedModel,
+        ),
       };
       // The strongest signal the provider×model is NOT usable: a real call
       // failed. Feed the SHARED registry telemetry path (the same one chat
@@ -1876,6 +2087,33 @@ export class Orchestrator {
       try {
         output = await provider.generate(prompt, mergedOptions);
       } catch (err) {
+        // A provider that NAMES its output limit has told us what to do, and
+        // retrying at that number is strictly better than failing the step
+        // (G15 — the live story run burned 6 batches of prose units this way).
+        // One retry, only when the named limit is actually below what we sent.
+        const namedLimit = learnMaxTokensLimitFromError(err, providerType, servedModel);
+        if (namedLimit !== null && mergedOptions.maxTokens !== undefined && mergedOptions.maxTokens > namedLimit) {
+          logger.warn(
+            `${providerType}/${servedModel} caps output at ${namedLimit} tokens (we sent ` +
+              `${mergedOptions.maxTokens}) — clamping and retrying once`,
+          );
+          try {
+            output = await provider.generate(prompt, { ...mergedOptions, maxTokens: namedLimit });
+            recordRegistrySuccess(providerType, mergedOptions.model, 'execute');
+            this.stats.llmCalls += 1;
+            this.stats.inputTokens += estimateTokens(prompt);
+            this.stats.outputTokens += estimateTokens(output);
+            return output;
+          } catch (retryErr) {
+            // The cap was not the (only) problem — surface the ORIGINAL error
+            // with the retry attached, so the audit reads the first cause.
+            recordActionFailure(this.failureSession, providerType, retryErr, this.configManager, {
+              model: mergedOptions.model,
+              action: 'execute',
+            });
+            throw retryErr;
+          }
+        }
         // FULL shared bookkeeping (Nuvira-Router M0.2 Stage C): the previous
         // bare recordRegistryFailure only updated health scores — a mid-pipeline
         // 429 now also parks the provider in the quota ledger (so the NEXT task
@@ -2275,6 +2513,11 @@ export class Orchestrator {
     // batches: writer/runner look up "the running task" in the shared plan, so
     // a per-task marker disambiguates when several run concurrently.
     vault.setMeta('currentTaskId', task.id);
+    // Long-form unit? Hand the writer its unit brief (title, path, word target,
+    // and the previous unit's tail for continuity). Cleared for every other
+    // step so a code task can never inherit a prose contract — or vice versa.
+    const proseEntry = this.proseUnits.get(task.id);
+    vault.setMeta('proseUnit', proseEntry ? proseEntry.unit : undefined);
     await tryUpdateDAGNode(task.id, { status: 'running' });
     this.eventBus.emit(EventNames.ORCHESTRATOR_TASK_STARTED, {
       taskId: task.id,
@@ -2306,6 +2549,10 @@ export class Orchestrator {
       const agentModel = options.model || options.agentModels?.[effectiveAgentType] || options.agentModels?.[task.agentType];
       let taskBoundProvider: string | undefined;
       const useResilient = autoRouting && (options.resilientRouting !== false);
+      // The provider×model that will actually serve this step's calls (see
+      // `resolveAuditRoute`). Resolved ONCE per step so the trace records a
+      // real attribution even when the user pinned nothing.
+      const stepAuditRoute = this.resolveAuditRoute(options, agentModel);
       const routedAgentCallLLM = autoRouting
         ? (useResilient
             ? this.createResilientAutoRoutedLLM(
@@ -2340,8 +2587,8 @@ export class Orchestrator {
               agentType: effectiveAgentType,
               taskId: task.id,
               description: task.description,
-              provider: options.provider,
-              model: agentModel || options.model,
+              provider: stepAuditRoute.provider,
+              model: stepAuditRoute.model,
             },
           );
 
@@ -2397,7 +2644,20 @@ export class Orchestrator {
       // of a single-shot LLM call.
       let actualAgentType = effectiveAgentType;
       if (resolveUseToolCalling(options)) {
-        if (effectiveAgentType === 'writer') {
+        // A long-form PROSE unit must NOT go to the tool-calling writer: that
+        // agent speaks a read→propose_change→edit protocol for code, and would
+        // try to emit file changes from tool calls instead of writing prose.
+        // The one-shot WriterAgent owns the author path (G7/G8).
+        const isProseUnit = this.proseUnits.has(task.id);
+        // Same for a step that CREATES a file in a project that does not exist
+        // yet (a composite plan's scaffold/experience/services steps). The
+        // tool-calling writer's value is the read→edit→verify loop, and there is
+        // nothing to read on a greenfield. Live evidence: it returned ZERO file
+        // changes for the site scaffold and the pipeline died on step 1 of 8 —
+        // the whole composite deliverable unreachable for a reason that had
+        // nothing to do with the plan.
+        const isCreationStep = this.creationSteps.has(task.id);
+        if (effectiveAgentType === 'writer' && !isProseUnit && !isCreationStep) {
           actualAgentType = 'writer-tc';
         } else if (effectiveAgentType === 'reviewer') {
           actualAgentType = 'reviewer-tc';
@@ -2834,6 +3094,48 @@ export class Orchestrator {
             vault.context.artifacts[existing] = artifact;
           } else {
             vault.context.artifacts.push(artifact);
+          }
+        }
+      }
+
+      // ── Long-form unit finished: measure it, record it, assemble when done ──
+      // "The writer step succeeded" is not the same as "the unit exists", so
+      // the outcome is measured from the FILE that landed on disk. The ledger
+      // turns that into progress the next turn can resume from.
+      const prose = this.proseUnits.get(task.id);
+      if (prose) {
+        const job = this.longFormJobs.get(prose.jobKey);
+        // The unit brief carries the absolute path of its own file.
+        const abs = prose.unit.absolutePath;
+        let words = 0;
+        try {
+          if (existsSync(abs)) words = countWords(readFileSync(abs, 'utf-8'));
+        } catch {
+          words = 0;
+        }
+        const ok = result.success && words > 0;
+        if (job) {
+          recordSectionOutcome(job, prose.unit.index, {
+            ok,
+            words,
+            error: ok ? undefined : result.error || `unit produced ${words} words`,
+          });
+          this.longFormJobs.set(prose.jobKey, job);
+          vault.setMeta('longFormJobKey', prose.jobKey);
+          // Keep the hand-off honest: the surface schedules the NEXT batch from
+          // this snapshot, so it must reflect the units just written.
+          const prior = this.pendingWork;
+          this.pendingWork = this.pendingWorkFor(job, prior?.kind ?? 'long-form', prior?.expectedArtifacts);
+          if (options.verbose) {
+            logger.info(`      📖 ${prose.unit.title}: ${words} words recorded`);
+          }
+          if (ok) {
+            const assembled = assembleDocument(job);
+            if (assembled) {
+              logger.success(
+                `   📖 Document assembled: ${assembled.path} — ${assembled.words.toLocaleString()} words (~${assembled.pages} pages, ${assembled.files} units)`,
+              );
+            }
           }
         }
       }
@@ -3503,6 +3805,20 @@ export class Orchestrator {
    * Fire-and-forget: never awaited, never blocks, never throws.
    */
   private maybeFireColdStartProbe(): void {
+    // ── The warmup daemon is NOT cold-start-only (Models-page audit) ───────
+    // It used to start ONLY from the cold branch below, so from the first
+    // verified model onward nothing ever warmed or verified anything again: the
+    // routing pool froze at whatever the cold probe found, and then the
+    // registry's own 7-day staleness rule began retiring models nothing
+    // re-verified (observed: 12 verified models against 496 unverified, four of
+    // the 12 within 24h of going stale).
+    //
+    // Starting it on every run is safe because it is unref'd (it can never hold
+    // the process open) and its per-cycle budget is bounded. That unref is what
+    // makes this possible — without it, starting the daemon on a normal run
+    // would hang every CLI command forever.
+    this.maybeStartWarmupDaemon();
+
     if (this.coldStartProbeFired) return;
     try {
       const registry = getModelRegistry();
@@ -3512,18 +3828,26 @@ export class Orchestrator {
         logger.info(
           `   🌱 Cold-start registry probe: ${result.providersProbed.length} provider(s), ${result.verified} verified, ${result.unavailable} unavailable`,
         );
-        // Start warmup daemon to keep frequently-used models warm
-        try {
-          const { startWarmupDaemon } = require('../learning/model-warmup.js');
-          startWarmupDaemon(this.configManager);
-        } catch {
-          // Best-effort — warmup must never break routing
-        }
       }).catch(() => {
         // Best-effort — a failed probe must never break the pipeline.
       });
     } catch {
       // Best-effort.
+    }
+  }
+
+  /** Whether this instance already started the background warmup daemon. */
+  private warmupDaemonStarted = false;
+
+  /** Start the background model warmup/exploration daemon exactly once. */
+  private maybeStartWarmupDaemon(): void {
+    if (this.warmupDaemonStarted) return;
+    this.warmupDaemonStarted = true;
+    try {
+      const { startWarmupDaemon } = require('../learning/model-warmup.js');
+      startWarmupDaemon(this.configManager);
+    } catch {
+      // Best-effort — warmup must never break routing
     }
   }
 
@@ -3629,6 +3953,247 @@ export class Orchestrator {
     return count;
   }
 
+  /** Long-form jobs in flight this run, keyed by job key. */
+  private longFormJobs = new Map<string, LongFormJob>();
+
+  /**
+   * Enterprise G11 — the work this run leaves unfinished, handed to the calling
+   * surface so it can keep going without a "continue" turn.
+   */
+  private pendingWork?: PendingWork;
+
+  /**
+   * The config's effective provider/model, resolved once per run.
+   *
+   * Only used for ATTRIBUTION (traces, events, review bundles). When the user
+   * pinned a provider or a model those win; otherwise the running default is
+   * looked up, so a trace says `gemini · gemini-2.0-flash` instead of
+   * `unknown · unknown`. A live 5-page story run recorded every step as
+   * unknown — the audit trail could not say which model wrote the book.
+   */
+  private defaultRoute: { provider?: string; model?: string } | null = null;
+
+  private resolveAuditRoute(
+    options: Pick<OrchestratorOptions, 'provider' | 'model'>,
+    agentModel?: string,
+  ): { provider?: string; model?: string } {
+    const model = agentModel || options.model;
+    if (options.provider && model) return { provider: options.provider, model };
+
+    if (!this.defaultRoute) {
+      let provider: string | undefined;
+      let configuredModel: string | undefined;
+      try {
+        provider = resolveDefaultProvider(this.configManager);
+        configuredModel = this.configManager.getProviderConfig(provider as ProviderType).config?.model;
+      } catch {
+        // Best-effort attribution — an unresolvable default stays undefined
+        // and the trace falls back to its own 'unknown' marker.
+      }
+      this.defaultRoute = { provider, model: configuredModel };
+    }
+
+    return { provider: options.provider ?? this.defaultRoute.provider, model: model ?? this.defaultRoute.model };
+  }
+
+  /** The prose unit + owning job for each long-form task id. */
+  private proseUnits = new Map<string, { unit: ProseUnit; jobKey: string }>();
+
+  /** Steps that create files from scratch, keyed by task id (one-shot writer). */
+  private creationSteps = new Set<string>();
+
+  /**
+   * Plan an authored ask as bounded prose units.
+   *
+   * Returns null for every non-authored goal, so the ordinary code path is
+   * untouched. For an authored goal whose units are already all written, the
+   * finished document is assembled and no work is planned — a "continue" turn
+   * after completion must not restart the book.
+   */
+  private planAuthored(
+    vault: ContextVault,
+    goal: string,
+    options: OrchestratorOptions,
+  ): AuthoredPlan | null {
+    const workingDir = vault.context.workingDirectory || process.cwd();
+    const forceResume = isContinuationAsk(goal);
+
+    // ── Hybrid asks get PHASES, not units ──────────────────────────────────
+    // "a web-based interactive book with voice" is authored content AND an
+    // application. Planning it as either alone loses half the ask, so it is
+    // planned as ordered phases (shape → content → experience → services →
+    // verify) with a deterministic verification step at the end.
+    let composite: CompositePlan | null = null;
+    try {
+      composite = buildCompositePlan({ goal, workingDir });
+    } catch (err) {
+      logger.debug(`composite planning skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    if (composite) {
+      const presence = artifactsPresence(workingDir, composite.expectedArtifacts);
+      const progress = jobProgress(composite.job);
+      // Everything already on disk? Then there is nothing to plan. (A re-run of
+      // a finished ask must never rebuild the shell over finished chapters.)
+      if (progress.complete && presence.present === presence.total) {
+        const assembled = assembleDocument(composite.job);
+        if (assembled) {
+          logger.success(`   🛠️ Deliverable already complete — assembled ${assembled.path}`);
+        }
+        return null;
+      }
+      this.longFormJobs.set(composite.job.key, composite.job);
+      for (const [stepId, unit] of composite.proseUnits) {
+        this.proseUnits.set(stepId, { unit, jobKey: composite.job.key });
+      }
+      // Greenfield creation steps go to the one-shot writer (see the exception
+      // in `runAgent`): a read→edit loop has nothing to read in a directory that
+      // does not exist yet.
+      for (const id of composite.creationStepIds) this.creationSteps.add(id);
+      vault.setMeta('longFormJobKey', composite.job.key);
+      vault.setMeta('compositeArtifacts', composite.expectedArtifacts);
+      const plan: AuthoredPlan = {
+        steps: composite.steps,
+        progressLine: composite.progressLine,
+        resumed: forceResume,
+        kind: 'phased',
+        label: `${composite.deliverableSummary} — ${composite.progressLine}`,
+        expectedArtifacts: composite.expectedArtifacts,
+        job: composite.job,
+        composite,
+      };
+      this.pendingWork = this.pendingWorkFor(composite.job, 'phased', composite.expectedArtifacts);
+      if (options.verbose) {
+        logger.info(`   🛠️ ${composite.substrates.join(' + ')} → ${composite.phases.map((p) => p.title).join(' → ')}`);
+      }
+      return plan;
+    }
+
+    // ── Everything else: the single-substrate unit plan (G8) ───────────────
+    // A bare "continue" carries no class or magnitude — the ledger does, so it
+    // resumes the project's in-flight job instead of starting a second book
+    // from the default filename.
+    const plan = buildLongFormPlan({ goal, workingDir, forceResume });
+    if (!plan) return null;
+
+    if (plan.steps.length === 0) {
+      const assembled = assembleDocument(plan.job);
+      if (assembled) {
+        logger.success(
+          `   📖 Nothing left to write — assembled ${assembled.path} (${assembled.words.toLocaleString()} words, ~${assembled.pages} pages)`,
+        );
+      }
+      return null;
+    }
+
+    this.longFormJobs.set(plan.job.key, plan.job);
+    for (const [stepId, unit] of plan.units) {
+      this.proseUnits.set(stepId, { unit, jobKey: plan.job.key });
+    }
+    vault.setMeta('longFormJobKey', plan.job.key);
+    const authored: AuthoredPlan = {
+      steps: plan.steps,
+      progressLine: plan.progressLine,
+      resumed: plan.resumed,
+      kind: 'long-form',
+      label: plan.progressLine,
+      job: plan.job,
+    };
+    this.pendingWork = this.pendingWorkFor(plan.job, 'long-form');
+    if (options.verbose && plan.resumed) {
+      logger.info(`   📖 Resuming long-form work — ${plan.progressLine}`);
+    }
+    return authored;
+  }
+
+  /**
+   * The in-flight authored job for this project, if any (G14).
+   *
+   * The signal is the LEDGER, not the wording of the ask. A composite
+   * continuation re-sends the ORIGINAL goal — its phases are re-derived against
+   * the ledger — so `isContinuationAsk('continue')` would miss it entirely. An
+   * in-flight job for this project IS the continuation, whichever surface
+   * scheduled it.
+   */
+  private findInFlightAuthoredJob(vault: ContextVault): LongFormJob | null {
+    try {
+      const workingDir = vault.context.workingDirectory || process.cwd();
+      return findInProgressJob(workingDir);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Describe what is still outstanding, so the calling SURFACE can keep it
+   * going without the user typing "continue".
+   *
+   * Measured from the ledger, never from the run's own success flag: a batch
+   * that succeeded is 4 chapters of a 39-chapter book, and reporting that as
+   * "done" is the overclaim this whole workstream exists to remove.
+   */
+  private pendingWorkFor(
+    job: LongFormJob,
+    kind: 'long-form' | 'phased',
+    expectedArtifacts?: string[],
+  ): PendingWork {
+    const progress = jobProgress(job);
+    const presence = artifactsPresence(job.projectPath, expectedArtifacts);
+    const unitsLeft = progress.total - progress.done;
+    const filesLeft = presence.total - presence.present;
+    const complete = progress.complete && filesLeft === 0;
+    return {
+      kind,
+      goal: job.goal,
+      projectPath: job.projectPath,
+      // A composite deliverable is re-planned from the ORIGINAL ask (its phases
+      // are re-derived against the ledger); a plain book resumes on "continue".
+      continuationPrompt: kind === 'phased' ? job.goal : 'continue',
+      ...(expectedArtifacts ? { expectedArtifacts } : {}),
+      progressLine: formatProgress(job),
+      percent: complete ? 100 : progress.percent,
+      reason: complete
+        ? 'the content is complete but the deliverable has not been assembled yet'
+        : unitsLeft > 0
+          ? `${unitsLeft} of ${progress.total} content units remaining`
+          : `${filesLeft} deliverable file(s) remaining`,
+    };
+  }
+
+  /**
+   * The honest progress line for the pipeline summary.
+   *
+   * Reported even when the batch SUCCEEDED, because for a 39-unit book a
+   * successful batch is 4 chapters — presenting that as "done" (or as a bare
+   * "success") is the kind of overclaim this hardening exists to remove.
+   *
+   * It no longer asks the user to reply: the work is scheduled to continue on
+   * its own (the surface reads `result.pendingWork`), so demanding a "continue"
+   * would be asking for permission the ask already granted.
+   */
+  private longFormProgressNote(vault: ContextVault): string {
+    const key = vault.getMeta<string>('longFormJobKey');
+    if (!key) return '';
+    const job = this.longFormJobs.get(key);
+    if (!job) return '';
+    const pending = this.pendingWork;
+    const progress = jobProgress(job);
+    if (progress.complete) {
+      const presence = artifactsPresence(job.projectPath, pending?.expectedArtifacts);
+      if (presence.total > 0 && presence.present < presence.total) {
+        return (
+          `✅ All ${progress.total} content units written — ${progress.words.toLocaleString()} words. ` +
+          `Still to produce: ${presence.missing.join(', ')}. Continuing automatically.`
+        );
+      }
+      return `✅ All ${progress.total} units written — ${progress.words.toLocaleString()} words (~${progress.pagesTarget} pages).`;
+    }
+    return (
+      `${formatProgress(job)} — continuing automatically; ` +
+      `${progress.total - progress.done} unit(s) left, no reply needed.`
+    );
+  }
+
   private buildResult(
     success: boolean,
     goal: string,
@@ -3646,11 +4211,24 @@ export class Orchestrator {
       tasksTotal: total,
       agentResults,
       fileChanges: vault.getDiffSummary(),
+      // Enterprise G3 — the changed paths for the working-state ledger.
+      changedFiles:
+        overrides.changedFiles ??
+        vault.context.fileChanges.filter((c) => c.status !== 'deleted').map((c) => c.path),
       runOutput: overrides.runOutput,
       error: overrides.error,
       trajectoryId: overrides.trajectoryId,
       reviewId: overrides.reviewId,
       stats: overrides.stats ?? this.stats,
+      // Enterprise G11 — unfinished work, so the surface can continue it
+      // unattended instead of asking the user to say "continue".
+      //
+      // Present only while work REMAINS, which is the whole contract: a surface
+      // schedules whatever it is handed, so reporting 100%-complete work as
+      // pending would make the runner re-run a finished deliverable. `percent`
+      // is 100 exactly when the content is complete AND every promised artifact
+      // exists (see `pendingWorkFor`), so that is the test.
+      ...(buildPendingWork(overrides.pendingWork ?? this.pendingWork)),
     };
   }
 }

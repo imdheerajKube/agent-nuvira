@@ -36,6 +36,7 @@ import { applyActiveModel } from './model.js';
 import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
 import { isAutoModel } from '../learning/auto-router.js';
+import { startWarmupDaemon } from '../learning/model-warmup.js';
 import { parseRequestSync } from '../nlu/parser.js';
 import { resolveEngine, readEngineModeConfig } from '../learning/engine-router.js';
 import { runLoopExecutor } from './loop-executor.js';
@@ -52,6 +53,26 @@ import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { listCheckpoints } from '../agents/checkpoint-store.js';
 import { logger, setSilent } from '../utils/logger.js';
 import { PipelineBoard, PipelineEventStream } from './pipeline-board.js';
+import {
+  getUnattendedJob,
+  jobPercent,
+  UnattendedRunner,
+} from '../learning/unattended-job.js';
+import {
+  measureUnattendedProgress,
+  scheduleFromPendingWork,
+} from '../learning/unattended-progress.js';
+
+/**
+ * Enterprise G11 — how many continuation batches one CLI run may execute.
+ *
+ * Deliberately far above the runner's default: the whole point of the CLI
+ * autopilot is that "write a 100-page book" finishes in ONE command instead of
+ * ten. The run is still bounded — by the stall cap (3 no-progress batches), the
+ * consecutive-failure cap (6) and the job's 10-hour deadline — so this number
+ * is a runaway guard, not the working limit.
+ */
+const MAX_UNATTENDED_BATCHES_CLI = 200;
 
 // ─── Shared Options Type ────────────────────────────────────────────────────
 
@@ -1655,6 +1676,16 @@ export class ExecuteCommand extends BaseCommand {
     model: string | undefined,
     options: ExecuteOptions,
   ): Promise<SingleGoalResult> {
+    // The background warmup/exploration daemon also runs for the LOOP engine
+    // (Models-page audit). The loop path never calls the orchestrator's
+    // cold-start hook, so on a loop-engine-only day not even the probe ran and
+    // the verified pool the router reads could only decay. Idempotent + unref'd:
+    // safe to start on every goal.
+    try {
+      startWarmupDaemon(this.configManager);
+    } catch {
+      // Best-effort — warmup must never break the run.
+    }
     try {
       const result = await runLoopExecutor(goal, this.configManager, {
         provider,
@@ -1833,7 +1864,7 @@ export class ExecuteCommand extends BaseCommand {
       }
 
       const orchestrator = new Orchestrator(this.configManager);
-      const result = await orchestrator.execute(goal, {
+      const execOptions = {
         provider,
         model,
         taskIntentHint: dispatch.taskIntentHint,
@@ -1858,7 +1889,60 @@ export class ExecuteCommand extends BaseCommand {
         useToolCalling: options.toolCalling !== false,
         ...checkpointOptions(options.checkpoint, options.resume),
         spinner: board,
-      });
+      };
+      const result = await orchestrator.execute(goal, execOptions);
+
+      // ── G11: finish the job, do NOT ask for a "continue" ──────────────────
+      // A 100-page book is ~39 units; the ledger already made that possible, but
+      // it used to end every batch by asking the user to reply. The ask itself
+      // is the authorization, so the remaining batches run HERE, in this same
+      // command, until the deliverable is complete or something real stops it.
+      //
+      // Skipped in --json-events mode (a machine consumer gets one result
+      // event) and in dry-run (nothing is executed, so nothing can progress).
+      if (!options.jsonEvents && !options.dryRun) {
+        const pending = result.pendingWork;
+        if (pending) {
+          const surface = { platform: 'cli', channelId: process.cwd() };
+          const scheduled = scheduleFromPendingWork(pending, surface);
+          if (scheduled) {
+            console.log(
+              `\n🤖 Unfinished work detected — ${pending.reason}. Continuing automatically; no reply needed.`,
+            );
+            const runner = new UnattendedRunner({
+              maxBatchesPerDrain: MAX_UNATTENDED_BATCHES_CLI,
+              owns: (job) => job.surface.platform === 'cli' && job.surface.channelId === process.cwd(),
+              notify: (_job, line) => {
+                console.log(`\n${line}`);
+              },
+              runBatch: async (batchJob) => {
+                // A FRESH orchestrator per batch: each batch is its own run, and
+                // reusing the instance would carry the previous run's counters
+                // and trace id into the next one.
+                const batchResult = await new Orchestrator(this.configManager).execute(
+                  batchJob.continuationPrompt,
+                  { ...execOptions, spinner: undefined },
+                );
+                const measured = measureUnattendedProgress(batchJob);
+                // "The batch ran" is not "the work moved". A failed batch that
+                // ALSO produced no measurable progress is a failure (it counts
+                // toward the failure cap); a failed batch that still wrote
+                // chapters is just a partial success, and the ledger decides.
+                const moved = (measured.progress ?? 0) > batchJob.progress;
+                if (!batchResult.success && !measured.finished && !moved) {
+                  return { ...measured, error: batchResult.error || batchResult.summary || 'batch failed' };
+                }
+                // Refresh with the newest snapshot: the composite's expected
+                // artifacts can only be known once its phases have been planned.
+                scheduleFromPendingWork(batchResult.pendingWork, surface);
+                return measured;
+              },
+            });
+            await runner.drain();
+            this.reportUnattendedOutcome(scheduled.id);
+          }
+        }
+      }
 
       board.finish(result.success);
       if (options.jsonEvents) {
@@ -1905,6 +1989,43 @@ export class ExecuteCommand extends BaseCommand {
       return { success: false };
     } finally {
       if (options.jsonEvents) setSilent(false);
+    }
+  }
+
+  // ─── Unattended Completion ─────────────────────────────────────────────
+
+  /**
+   * Report where an unattended run actually ended up.
+   *
+   * Four distinct outcomes, and the wording never blurs them: DONE (the
+   * deliverable exists), BLOCKED (a decision only the user can make — the one
+   * case where asking is correct), FAILED (a real error, reported with its
+   * reason), and STILL RUNNING out of budget (resumable, because the ledger
+   * holds the progress). Reporting the last one as "failed" was the original
+   * session's core dishonesty: it had done real work on disk and called it a
+   * failure six times.
+   */
+  private reportUnattendedOutcome(jobId: string): void {
+    const job = getUnattendedJob(jobId);
+    if (!job) return;
+    const batches = `${job.batches} batch${job.batches === 1 ? '' : 'es'}`;
+    switch (job.status) {
+      case 'done':
+        logger.success(
+          `\n✅ Finished unattended — ${job.progressLine ?? 'deliverable complete'} (${batches}).`,
+        );
+        break;
+      case 'blocked':
+        console.log(`\n❓ ${job.pendingQuestion ?? job.stopReason ?? 'I need your input to continue.'}`);
+        break;
+      case 'failed':
+        logger.warn(`\n⚠️  Stopped before finishing — ${job.stopReason ?? 'unknown reason'} (${batches}).`);
+        break;
+      default:
+        logger.info(
+          `\n⏳ Not finished yet — ${job.progressLine ?? ''} (${jobPercent(job)}%). ` +
+            'Progress is saved; run the same command again to resume from where it stopped.',
+        );
     }
   }
 

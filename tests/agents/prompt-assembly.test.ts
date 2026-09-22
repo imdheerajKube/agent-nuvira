@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   assessProject,
   assemblePrompt,
@@ -155,6 +155,71 @@ describe('prompt-assembly', () => {
       );
 
       expect(prompt).toContain('Greenfield');
+    });
+  });
+
+  // Enterprise G4 — the ORCHESTRATOR path inherits the cross-turn working state.
+  describe('working-state injection (G4)', () => {
+    let memDir: string;
+    let prevMem: string | undefined;
+
+    beforeEach(() => {
+      memDir = mkdtempSync(join(tmpdir(), 'pa-ws-'));
+      prevMem = process.env.NUVIRA_MEMORY_DIR;
+      process.env.NUVIRA_MEMORY_DIR = memDir;
+    });
+
+    afterEach(() => {
+      if (prevMem === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+      else process.env.NUVIRA_MEMORY_DIR = prevMem;
+      rmSync(memDir, { recursive: true, force: true });
+    });
+
+    it('assessProject attaches nothing for a pristine project', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'pa-clean-'));
+      try {
+        expect(assessProject(dir).workingState).toBeUndefined();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('assessProject carries the ledger for a project with recorded work', async () => {
+      const { recordWorkingState } = await import('../../src/learning/working-state.js');
+      const dir = mkdtempSync(join(tmpdir(), 'pa-worked-'));
+      try {
+        recordWorkingState(dir, {
+          filesTouched: ['script.js'],
+          unverifiedEdit: true,
+          userMessage: 'still broken',
+        });
+        const assessment = assessProject(dir);
+        expect(assessment.workingState).toBeDefined();
+        expect(assessment.workingState).toContain('script.js');
+        expect(assessment.workingState).toContain('NEVER verified');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('assemblePrompt renders the working state into the context layer', () => {
+      const assessment: ProjectAssessment = {
+        isGreenfield: false,
+        hasTests: false,
+        keyFiles: [],
+        workingState: '[Working state — carried from previous turns in THIS project]\n• Files changed: script.js',
+      };
+      const prompt = assemblePrompt('You are a helpful assistant', assessment, 'Fix the converter', 'writer');
+      expect(prompt).toContain('[Working state');
+      expect(prompt).toContain('script.js');
+      // The task layer still follows the context layer.
+      expect(prompt).toContain('## Task');
+    });
+
+    it('assemblePrompt omits the block when there is no state', () => {
+      const assessment: ProjectAssessment = { isGreenfield: true, hasTests: false, keyFiles: [] };
+      const prompt = assemblePrompt('You are a helpful assistant', assessment, 'Create a game', 'writer');
+      expect(prompt).not.toContain('[Working state');
     });
   });
 });

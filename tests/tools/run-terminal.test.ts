@@ -164,6 +164,46 @@ describe('runTerminalTool — the verify loop', () => {
   });
 });
 
+describe('run_terminal — no-op refusals are FAILURES (Error: prefix)', () => {
+  // Enterprise G1: the loop's honest accounting treats a non-`Error:` result as
+  // a success, and the verification gate counts a successful run_terminal as
+  // proof. A no-op (`empty command`) MUST therefore be an error, otherwise a
+  // turn reads as “verified” while nothing ran — observed live.
+  it('an empty command is an Error, not a silent success', async () => {
+    const { ctx } = makeWorkspace();
+    const out = await runTerminalTool({ command: '   ' }, ctx);
+    expect(out.startsWith('Error:')).toBe(true);
+    expect(out).toContain('empty command');
+  });
+
+  it('a denied command is an Error', async () => {
+    const { ctx } = makeWorkspace();
+    const out = await runTerminalTool({ command: 'git push origin main' }, ctx);
+    expect(out.startsWith('Error:')).toBe(true);
+  });
+
+  it('a state-changing command without confirmation is an Error', async () => {
+    const { ctx } = makeWorkspace();
+    const out = await runTerminalTool({ command: 'npm install left-pad' }, ctx);
+    expect(out.startsWith('Error:')).toBe(true);
+    expect(out).toContain('explicit confirmation');
+  });
+
+  it('a FAILING command (non-zero exit) is an Error, so it cannot count as verification', async () => {
+    const { ctx } = makeWorkspace();
+    const out = await runTerminalTool({ command: 'node -e "process.exit(1)"', confirm: true }, ctx);
+    expect(out.startsWith('Error:')).toBe(true);
+    expect(out).toContain('❌ failed (exit 1)');
+  });
+
+  it('a SUCCESSFUL command is not an Error (it can count as verification)', async () => {
+    const { ctx } = makeWorkspace();
+    const out = await runTerminalTool({ command: 'node -e "process.exit(0)"', confirm: true }, ctx);
+    expect(out.startsWith('Error:')).toBe(false);
+    expect(out).toContain('✅ succeeded');
+  });
+});
+
 describe('toolset gating — run_terminal joins the coding toolset', () => {
   it('registers run_terminal in the registry', () => {
     const tool = getTool('run_terminal');

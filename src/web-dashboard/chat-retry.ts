@@ -45,6 +45,7 @@ import {
   markFailoverAttempts,
   modelBreadthReport,
   renderModelBreadthReport,
+  reportWarrantsRetry,
   type ModelBreadthReport,
 } from '../learning/resilient-call.js';
 
@@ -130,8 +131,15 @@ export class ChatRetryBroker {
   onFailure(sessionId: string, text: string, mark?: number): string | undefined {
     try {
       const report = (this.deps.breadth ?? modelBreadthReport)(mark ?? this.mark(), this.deps.configManager);
-      const rendered = renderModelBreadthReport(report, { task: text });
+      // A dashboard turn that failed to produce an answer is a model-layer
+      // failure, so the retry offer is appropriate (G9 uses this hint to keep
+      // the offer and the queue in step).
+      const rendered = renderModelBreadthReport(report, { task: text, modelLayerFailure: true });
       if (!rendered) return undefined;
+      // G9: the report only promises a retry when one can help. When it says
+      // "this was not a model shortage", queueing would contradict the reply
+      // the user is about to read — so the queue and the offer stay in step.
+      if (!reportWarrantsRetry(report, { modelLayerFailure: true })) return rendered;
       deferTask({
         platform: DASHBOARD_PLATFORM,
         channelId: sessionId,

@@ -395,6 +395,44 @@ const modelsHealth = {
   ],
 };
 
+/**
+ * The reconciliation case: a model the PROVIDER lists and the ROUTER cannot
+ * pick. `status: 'available'` is the provider-level verdict (identical for every
+ * model of that provider), so without the registry fields the cell would read
+ * exactly like the model taking 87% of calls.
+ */
+const modelsHealthWithRegistryVerdicts = {
+  ...modelsHealth,
+  totalModels: 3,
+  routable: 1,
+  registryTotal: 3,
+  registryVerified: 1,
+  providers: [
+    {
+      ...modelsHealth.providers[0],
+      routable: 1,
+      models: [
+        { id: 'llama3.2', name: 'llama3.2', status: 'available', routable: true, registryStatus: 'verified', entitlement: { tier: 'free', basis: 'Runs on this machine — no per-call cost' } },
+        { id: 'deepseek-coder', name: 'deepseek-coder', status: 'available', routable: false, registryStatus: 'unavailable', registryDead: true, registryError: 'model not found in live model list' },
+        { id: 'paid-one', name: 'paid-one', status: 'available', routable: false, registryStatus: 'unverified', entitlement: { tier: 'metered', basis: 'List price $0.00059/$0.00079 per 1K in/out' } },
+      ],
+    },
+  ],
+};
+
+/** Registry payload carrying per-action telemetry with test-origin rows. */
+const registryWithSynthetic = {
+  enabled: true,
+  providers: [],
+  actionTelemetry: {
+    enabled: true,
+    total: 5,
+    synthetic: 7,
+    updatedAt: Date.now(),
+    actions: [],
+  },
+};
+
 const jsonResponse = (data: unknown): Response =>
   new Response(JSON.stringify(data), {
     status: 200,
@@ -420,6 +458,57 @@ describe('ModelsPanel fetch degradation', () => {
     render(<ModelsPanel />);
     expect(await screen.findByText(/Model health endpoint returned an unexpected response/i)).toBeTruthy();
     // The panel survives — no uncaught "Unexpected token '<'" crash.
+  });
+
+  it('states listed-vs-routable, and why an unusable model is unusable', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/model-registry')) return Promise.resolve(jsonResponse({ enabled: false }));
+      return Promise.resolve(jsonResponse(modelsHealthWithRegistryVerdicts));
+    });
+
+    render(<ModelsPanel />);
+
+    // The listing is no longer presented as availability.
+    expect(await screen.findByText(/routable right now/i)).toBeTruthy();
+    // A dead pair is a permanent fact, stated as such — NOT "requires purchase".
+    expect(screen.getByText(/does not exist on the endpoint/i)).toBeTruthy();
+    // An unverified model is described by what we know, not by a guess.
+    expect(screen.getByText(/never verified — the router cannot pick it/i)).toBeTruthy();
+    // Cost is LABELLED. A metered model stays visible — hiding it is how a user
+    // who just bought credits concludes the purchase failed.
+    expect(screen.getByText(/🎁 free/)).toBeTruthy();
+    expect(screen.getByText(/💸 metered/)).toBeTruthy();
+  });
+
+  it('reports how many test-origin telemetry rows were excluded from the view', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/model-registry')) return Promise.resolve(jsonResponse(registryWithSynthetic));
+      return Promise.resolve(jsonResponse(modelsHealth));
+    });
+
+    render(<ModelsPanel />);
+
+    expect(await screen.findByText(/Test-origin, excluded/i)).toBeTruthy();
+    expect(screen.getByText('7')).toBeTruthy();
+  });
+
+  it('shows no test-origin card when there is nothing synthetic to exclude', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/model-registry')) {
+        return Promise.resolve(jsonResponse({ ...registryWithSynthetic, actionTelemetry: { ...registryWithSynthetic.actionTelemetry, synthetic: 0 } }));
+      }
+      return Promise.resolve(jsonResponse(modelsHealth));
+    });
+
+    render(<ModelsPanel />);
+
+    // Wait for the telemetry section to have rendered at all, then assert the
+    // provenance card is conditional rather than always-on noise.
+    expect(await screen.findByText(/Learned from real usage/i)).toBeTruthy();
+    expect(screen.queryByText(/Test-origin, excluded/i)).toBeNull();
   });
 
   it('keeps the health grid when only /api/model-registry is HTML (registry/telemetry degrade, grid survives)', async () => {

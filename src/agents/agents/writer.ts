@@ -28,6 +28,8 @@ import {
 } from '../rate-limit-retry.js';
 import { referenceDocsFor } from '../reference-docs.js';
 import { assessProject, type ProjectAssessment } from '../prompt-assembly.js';
+import { countWords } from '../../learning/long-form.js';
+import type { ProseUnit } from '../long-form-plan.js';
 
 /**
  * Build the writer system prompt with project-specific context.
@@ -138,6 +140,19 @@ const EXT_BY_LANG: Record<string, string> = {
 };
 
 /**
+ * Strip a single wrapping code fence from a prose response.
+ *
+ * Not all models obey "no code blocks" — some return the chapter wrapped in
+ * ```markdown. Without this, the chapter file would open with a stray fence.
+ * Only an OUTER wrap is removed, so fenced examples inside prose survive.
+ */
+function stripFences(text: string): string {
+  const t = text.trim();
+  const outer = t.match(/^```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)\n?```$/);
+  return outer ? outer[1] : t;
+}
+
+/**
  * Extract plain fenced code blocks (```lang\n...\n```) WITHOUT a
  * `filepath:` prefix — the blocks the strict parser rejects but the lenient
  * fallback recovers. Returns { lang, content } pairs.
@@ -191,6 +206,34 @@ const MAX_CONTEXT_CHARS = 16_000;
 const MAX_API_RETRIES = 2;
 
 /**
+ * ── Prose (long-form) mode ────────────────────────────────────────────────
+ *
+ * The code path above — `maxTokens: 2048` and a contract that requires
+ * ``` ``filepath: …`` ``` code blocks — CANNOT author a document. A 100-page
+ * story is ~35,000 words; 2,048 tokens is ~1,500 words (~4 pages), and prose
+ * is not code, so a correct response would be rejected as "no parseable
+ * output". Those two facts, NOT model availability, are what killed the
+ * WhatsApp story task across six runs (see the audit in
+ * ENTERPRISE_GRADE_TRACKER.md), and no model in the pool could have changed
+ * the outcome.
+ *
+ * So a long-form unit takes a different path with the right contract:
+ *   - an AUTHOR persona (not "expert software engineer")
+ *   - a raised output cap sized for ~900 words with headroom
+ *   - the response IS the artifact — raw prose, no code-block ceremony
+ *   - a minimum word count, so a truncated or empty response is a FAILURE
+ *     instead of a green step (the original run recorded `success: true`
+ *     with `responseLength: 0`)
+ */
+// Sized for the LARGEST unit long-form planning produces: a chapter target is
+// `WORDS_PER_CHAPTER` (2,500 words ≈ 3,400 tokens), so the cap has to clear
+// that with headroom or every chapter truncates — which is precisely how the
+// code path failed (2048 tokens for a request it could never satisfy).
+const PROSE_MAX_TOKENS = 8192;
+/** A unit below this is not a chapter — it is a truncated or empty response. */
+const PROSE_MIN_WORDS = 120;
+
+/**
  * Distinguish a GENUINE "no changes needed" LLM judgment from a format
  * failure (Session 46). A writer that explicitly declines — nothing to
  * change, already implemented, no modifications required — produced a valid
@@ -233,6 +276,30 @@ export class WriterAgent extends Agent {
   async execute(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult> {
     let lastError: string | undefined;
     let latestCallLLM = callLLM;
+
+    // Long-form unit? Author prose, do not write code. Dispatched before the
+    // code path so no code-shaped instruction (or code-shaped parser) can ever
+    // touch an authored deliverable.
+    if (context.metadata.proseUnit) {
+      this.report(context, 'drafting', 'Writing the next unit of the document…');
+      let lastProseError: string | undefined;
+      for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
+        try {
+          const proseResult = await this.attemptProseWrite(context, callLLM, attempt > 0);
+          if (proseResult.success) return proseResult;
+          lastProseError = proseResult.error || proseResult.summary;
+          if (/rate.?limit|429/i.test(lastProseError)) break;
+        } catch (err) {
+          lastProseError = err instanceof Error ? err.message : String(err);
+          if (!/rate.?limit|429|timeout|network|ECONN/i.test(lastProseError)) break;
+        }
+      }
+      return {
+        success: false,
+        summary: 'Writer failed to produce the unit',
+        error: lastProseError || 'unknown prose failure',
+      };
+    }
 
     this.report(context, 'thinking', `Reviewing task and gathered context (${context.artifacts.length} file(s) available)…`);
 
@@ -351,6 +418,143 @@ export class WriterAgent extends Agent {
       success: false,
       summary: 'Writer failed to generate changes',
       error: lastError || 'Unknown error',
+    };
+  }
+
+  /**
+   * Build the AUTHOR prompt for one long-form unit.
+   *
+   * The continuity section is what makes a multi-unit book read as one work
+   * rather than 39 unrelated fragments: the previous unit's TAIL is included
+   * (not its whole text — that would blow the context budget on unit 35), which
+   * is enough for voice, tense, and plot position to carry over.
+   */
+  private buildProsePrompt(context: AgentContext, unit: ProseUnit, isRetry: boolean): string {
+    const isFinal = unit.index >= unit.total;
+    // Read the predecessor AT EXECUTION TIME when we know its path: the
+    // plan-time tail is stale for any unit after the first in a batch (its
+    // predecessor's file did not exist when the batch was planned).
+    const previousTail = this.resolvePreviousTail(unit);
+    const continuity = previousTail.trim().length > 0
+      ? [
+          '## Where you are picking up',
+          'The previous unit ended like this (verbatim):',
+          '',
+          previousTail.trim(),
+          '',
+          'Continue DIRECTLY from that point in the same voice and tense. Do not',
+          'restate, summarise, or re-introduce what already happened.',
+        ].join('\n')
+      : [
+          '## Where you are starting',
+          'This is the OPENING unit. Establish the setting, the voice, and the',
+          'central characters/arguments within the first few paragraphs.',
+        ].join('\n');
+
+    return [
+      `You are an author. You write finished ${unit.deliverableClass === 'creative' ? 'fiction' : 'non-fiction prose'} to a professional standard.`,
+      '',
+      '## The work being written',
+      unit.goal.replace(/\s+/g, ' ').slice(0, 1_200),
+      '',
+      `Form: ${unit.deliverableClass} · ${unit.title} · unit ${unit.index} of ${unit.total}`,
+      '',
+      continuity,
+      '',
+      '## This unit',
+      isFinal
+        ? `Write the CONCLUDING unit — ${unit.title}. Bring the work to a satisfying close.`
+        : `Write ${unit.title}. Target roughly ${unit.targetWords} words (within about a quarter either way).`,
+      '',
+      '## Output rules — follow exactly',
+      '- Output ONLY the prose of this unit. Nothing else.',
+      '- No title line, no headings, no bullet lists, no code blocks or fences.',
+      '- No preamble, no note about what you are doing, no self-commentary.',
+      '- Never mention being an AI or describe your process.',
+      '- Do not repeat the previous unit or summarise it.',
+      '- Match the language the user wrote the request in.',
+      isFinal
+        ? '- Finish the narrative arc completely.'
+        : '- Do NOT write "The End" — the work continues after this unit.',
+      isRetry
+        ? '\nThe previous response was rejected because it was too short, or contained commentary/code instead of prose. Return prose only, and meet the word target.'
+        : '',
+    ].filter(Boolean).join('\n');
+  }
+
+  /**
+   * The tail of the previous unit, preferring the file on disk so a later unit
+   * in the same batch joins up with prose that actually exists.
+   */
+  private resolvePreviousTail(unit: ProseUnit): string {
+    if (unit.previousPath) {
+      try {
+        if (existsSync(unit.previousPath)) {
+          const text = readFileSync(unit.previousPath, 'utf-8').trim();
+          if (text.length > 0) return text.length <= 1_200 ? text : text.slice(text.length - 1_200);
+        }
+      } catch {
+        // Fall through to the plan-time tail.
+      }
+    }
+    return unit.previousTail || '';
+  }
+
+  /**
+   * Write ONE unit of a long-form document.
+   *
+   * Unlike `attemptWrite`, there is no file-change parsing: the model's
+   * response IS the artifact. Trimming fences is defensive (some models wrap
+   * prose in ``` even when told not to) but a short or empty response is a
+   * hard FAILURE, never a success — the whole point of this path is that
+   * "the step ran" must not be confused with "the work exists".
+   */
+  private async attemptProseWrite(
+    context: AgentContext,
+    callLLM: LLMCallFn,
+    isRetry: boolean = false,
+  ): Promise<AgentResult> {
+    const unit = context.metadata.proseUnit as ProseUnit;
+    const prompt = this.buildProsePrompt(context, unit, isRetry);
+    const response = await callLLM(prompt, { temperature: isRetry ? 0.5 : 0.7, maxTokens: PROSE_MAX_TOKENS });
+
+    const prose = stripFences(response || '').trim();
+    const words = countWords(prose);
+
+    if (words < PROSE_MIN_WORDS) {
+      return {
+        success: false,
+        summary: 'Writer produced too little prose',
+        error:
+          `Unit ${unit.index} (${unit.title}) produced ${words} words (${response.length} chars), ` +
+          `below the ${PROSE_MIN_WORDS}-word minimum — treated as a truncated or empty response. ` +
+          `Response preview: ${(response || '').slice(0, 200)}`,
+      };
+    }
+
+    const absolutePath = unit.absolutePath;
+    let status: 'created' | 'modified' = 'created';
+    let originalContent: string | undefined;
+    try {
+      if (existsSync(absolutePath)) {
+        status = 'modified';
+        originalContent = readFileSync(absolutePath, 'utf-8');
+      }
+    } catch {
+      // Best-effort — a read failure just means we report `created`.
+    }
+
+    const change = { path: unit.path, newContent: `${prose}\n`, originalContent, status };
+    const existing = context.fileChanges.findIndex((c) => c.path === change.path);
+    if (existing >= 0) context.fileChanges[existing] = change;
+    else context.fileChanges.push(change);
+
+    this.report(context, 'decided', `Wrote ${unit.title}: ${words} words → ${unit.path}`);
+
+    return {
+      success: true,
+      summary: `Wrote ${unit.title} (${words} words)`,
+      details: `  \u{1F4C4} ${unit.path} (${words} words, unit ${unit.index}/${unit.total})`,
     };
   }
 

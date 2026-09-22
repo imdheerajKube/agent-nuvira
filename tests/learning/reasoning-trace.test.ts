@@ -212,6 +212,32 @@ describe('reasoning-trace store', () => {
     await expect(traced('any prompt')).resolves.toContain('still works');
   });
 
+  it('G10: an EMPTY response is recorded as a failure, never a success', async () => {
+    // Live evidence: the story session's writer step was recorded with
+    // `success: true`, `responseLength: 0`, `outputTokens: 0`. A green step for
+    // a call that returned nothing hid the failure behind a passing checkmark.
+    for (const empty of ['', '   ', '\n\n']) {
+      const id = beginTrace({ goal: 'empty-response probe', source: 'orchestrator' });
+      // A provider that returns the empty string verbatim (fakeLLM appends a
+      // suffix, which would not be empty).
+      const traced = withTraceCapture(async () => empty, { traceId: id, agentType: 'writer' });
+      await traced('write the chapter');
+
+      const step = getTrace(id)!.steps[0];
+      expect(step.responseLength).toBe(empty.length);
+      expect(step.success).toBe(false);
+      expect(step.error).toMatch(/empty response/);
+    }
+  });
+
+  it('G10: a non-empty response still records success', async () => {
+    const id = beginTrace({ goal: 'ok-response probe', source: 'orchestrator' });
+    const traced = withTraceCapture(fakeLLM('real content'), { traceId: id, agentType: 'writer' });
+    await traced('write the chapter');
+    expect(getTrace(id)!.steps[0].success).toBe(true);
+    expect(getTrace(id)!.steps[0].error).toBeUndefined();
+  });
+
   it('listTraces returns most-recent-first; deleteTrace and clearTraces work', () => {
     const a = beginTrace({ goal: 'first', source: 'orchestrator' });
     const b = beginTrace({ goal: 'second', source: 'orchestrator' });
@@ -266,5 +292,64 @@ describe('reasoning-trace store', () => {
     expect(traces[MAX_TRACES - 1].goal).toBe('goal-5');
     expect(getTrace(ids[0])).toBeNull();
     expect(getTrace(ids[MAX_TRACES + 4])).not.toBeNull();
+  });
+});
+
+// ─── Session 3 — layered prompt tracing ─────────────────────────────────────
+
+describe('reasoning-trace — layered prompt tracing', () => {
+  beforeEach(() => clearTraces());
+  afterEach(() => clearTraces());
+
+  const base = {
+    agentType: 'chat',
+    provider: 'gemini',
+    model: 'm',
+    promptDigest: 'd',
+    promptPreview: 'p',
+    responsePreview: 'r',
+    responseLength: 1,
+    inputTokens: 1,
+    outputTokens: 1,
+    latencyMs: 1,
+    success: true,
+  };
+
+  it('records per-layer digests derived from the FULL prompt', () => {
+    const id = beginTrace({ goal: 'g', source: 'chat' });
+    recordStep(id, { ...base, promptFull: '[System]\nYou are Nuvira.\n\n[User]\nadd auth' });
+    const step = getTrace(id)!.steps[0];
+    expect(step.layers).toBeDefined();
+    expect(step.layers!.systemChars).toBeGreaterThan(0);
+    expect(step.layers!.systemDigest).toMatch(/^[0-9a-f]{16}$/);
+    expect(step.layers!.volatileChars).toBeGreaterThan(0);
+  });
+
+  it('captures the FULL stable layer ONCE per trace', () => {
+    const id = beginTrace({ goal: 'g', source: 'chat' });
+    recordStep(id, { ...base, promptFull: '[System]\nYou are Nuvira, the agent.\n\n[User]\nfirst' });
+    recordStep(id, { ...base, promptFull: '[System]\nYou are Nuvira, the agent.\n\n[User]\nsecond' });
+    const trace = getTrace(id)!;
+    expect(trace.systemPrompt).toContain('You are Nuvira, the agent.');
+    expect(trace.systemPromptChars).toBe(trace.systemPrompt!.length);
+    // Both steps share the same stable-layer digest (prompt-cacheable).
+    expect(trace.steps[0].layers!.systemDigest).toBe(trace.steps[1].layers!.systemDigest);
+  });
+
+  it('does not store the raw prompt (only the digests + the stable layer)', () => {
+    const id = beginTrace({ goal: 'g', source: 'chat' });
+    recordStep(id, {
+      ...base,
+      promptFull: '[System]\nSYS\n\n[User]\nSECRET-USER-TEXT',
+    });
+    const step = getTrace(id)!.steps[0] as Record<string, unknown>;
+    expect(step.promptFull).toBeUndefined();
+    expect(JSON.stringify(getTrace(id))).not.toContain('SECRET-USER-TEXT');
+  });
+
+  it('leaves layers undefined when no full prompt is supplied (back-compat)', () => {
+    const id = beginTrace({ goal: 'g', source: 'chat' });
+    recordStep(id, { ...base });
+    expect(getTrace(id)!.steps[0].layers).toBeUndefined();
   });
 });

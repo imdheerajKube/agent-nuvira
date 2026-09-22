@@ -27,6 +27,7 @@ import { join } from 'path';
 import { envBuff } from '../config/paths';
 import { z, toJSONSchema, type ZodType } from 'zod';
 import { ACTION_BY_INTENT } from '../nlu/actions.js';
+import { detectPermissionSeeking, IRREVERSIBLE_ACTION_RE } from '../learning/autonomy-policy.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -90,6 +91,34 @@ export interface ToolContext {
    * Returns the user's answer(s).
    */
   askUser?: (question: string, choices: AskUserChoice[], multiSelect: boolean) => Promise<AskUserAnswer>;
+  /**
+   * G13 — does the CURRENT request authorize file writes?
+   *
+   * Set once per turn by the tool loop from the last user message (see
+   * `requestAuthorizesWrites` in learning/autonomy-policy.ts). The
+   * confirm-before-write gate and `ask_user` read it to tell "the user already
+   * ordered this" apart from "this would be a surprise", so an unattended run
+   * does not stop to ask permission for the work it was asked to do.
+   *
+   * `undefined` (no loop, direct tool invocation, a test) keeps the original
+   * confirm-or-refuse behaviour exactly.
+   */
+  writesAuthorized?: import('../learning/autonomy-policy.js').WriteAuthorization;
+  /**
+   * The raw last user message the verdict above was derived from.
+   *
+   * The verdict answers "did the request ask for FILES" — but each gate needs
+   * the evidence ITS OWN question requires, and that evidence lives in the
+   * request text: whether the request names the file being edited
+   * (`edit_file`), asks for a commit (`git commit`), or resolves to the exact
+   * CLI command being run (`run_cli`). Handing the gates the text lets each one
+   * measure for itself instead of guessing from a boolean that was computed for
+   * a different question.
+   *
+   * `undefined` (no loop, a direct tool call, a test) means every gate keeps
+   * its original confirm-or-refuse behaviour exactly.
+   */
+  authorizationRequest?: string;
   /** Emit an event on the observability bus (for pipeline runs). */
   emit?: (event: string, data: unknown, source?: string) => void;
   /** LLM call fn for C2 verify (resolved provider already chosen). */
@@ -284,15 +313,15 @@ export const runCliSchema = z.object({
     .boolean()
     .optional()
     .default(false)
-    .describe('Set true ONLY after the user explicitly confirmed a destructive/system-level command (stop/shutdown/publish/clear/disallow). The tool refuses without it.'),
+    .describe('Set true ONLY after the user explicitly confirmed a destructive/system-level command you initiated. When the user’s own request resolves to the exact command (they asked to stop the dashboard), that IS the confirmation — the tool applies it. Irreversible intents (history.clear, memory.prune, stats.cost.clear, publish) always need it.'),
 });
 
 /** P3b — gated git args: structured status/log/diff/commit. */
 export const gitToolSchema = z.object({
-  action: z.enum(['status', 'log', 'diff', 'commit']).describe('What to do — status/log are read-only; diff returns a structured diff (rendered as a card); commit is GATED (confirm:true after ask_user)'),
+  action: z.enum(['status', 'log', 'diff', 'commit']).describe('What to do — status/log are read-only; diff returns a structured diff (rendered as a card); commit is GATED unless the user’s own request asked for the commit.'),
   message: z.string().optional().describe('Commit message (action=commit, required)'),
   files: z.array(z.string()).optional().describe('Files to stage+commit — the ACCEPTED subset after the user reviewed the diff card (absent = all changes)'),
-  confirm: z.boolean().default(false).describe('Commit gate — true ONLY after the user approved via ask_user'),
+  confirm: z.boolean().default(false).describe('Commit gate — required only when the MODEL initiated the commit. When the user’s own request asks for a commit ("commit these changes"), that request IS the approval: call it with confirm:false and it applies.'),
   limit: z.number().int().min(1).max(100).optional().describe('Log limit (action=log, default 20)'),
 });
 
@@ -452,20 +481,20 @@ const editFileSchema = z.object({
     .optional()
     .describe('Several replacements to this ONE file in a single call, applied in order. TRANSACTIONAL: if any replacement fails to match, NOTHING is written — so a refactor can never half-apply. Use one call instead of many edits.'),
   dry_run: z.boolean().default(false).describe('Validate and preview the change (returns the unified diff) without writing anything. Needs no confirmation.'),
-  confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed this edit via ask_user. State-changing — refused without it.'),
+  confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed an edit you initiated. A surgical edit (small relative to the file) to a file the request asked for is applied directly, as is an edit to a file the request names. Refused without it when the edit would rewrite most of the file — a re-run cannot recover that, so it is the user’s call.'),
 });
 
 /** P0.3 — write_file tool args: create/overwrite a file (confirmed). */
 const writeFileSchema = z.object({
   path: z.string().describe('Path to write, relative to the workspace root (parent directories are created as needed). Overwrites existing content.'),
   content: z.string().describe('The FULL new file content (replaces any existing content).'),
-  confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed this write via ask_user. State-changing — refused without it.'),
+  confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed this write via ask_user. CREATING a new file the request asked for needs no confirmation — it is applied directly. Refused without it only when it would REPLACE content that already exists.'),
 });
 
 /** P0.4 — run_terminal tool args: verify commands + gated shell execution. */
 const runTerminalSchema = z.object({
-  command: z.string().min(1).describe('The shell command to run in the workspace — e.g. "npx vitest run tests/foo.test.ts", "npx tsc --noEmit", "npm run build", "git diff --stat". Read-only verify commands run directly; state-changing commands need confirm:true after the user approves via ask_user. Destructive/system commands are denied outright.'),
-  confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed this command via ask_user. Required for state-changing commands (installs, mutations, network, arbitrary code).'),
+  command: z.string().min(1).describe('The shell command to run in the workspace — e.g. "npx vitest run tests/foo.test.ts", "npx tsc --noEmit", "npm run build", "git diff --stat". Read-only verify commands run directly. Recoverable workspace commands (dependency installs, mkdir/touch/cp/mv, git add, npm init) also run directly when the request authorized the work; every other state-changing command needs confirm:true after the user approves via ask_user. Destructive/system commands are denied outright.'),
+  confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed a command you initiated. Required for state-changing commands outside the recoverable workspace set (network fetches, arbitrary code, global installs, anything that leaves the machine).'),
   timeout_ms: z.number().int().min(1000).max(300000).optional().describe('Timeout in ms (default 120000).'),
 });
 
@@ -545,15 +574,16 @@ export const TOOL_CONTRACT = `You have tools available. Call them when appropria
 - If a request is ambiguous or incomplete, call \`ask_user\` with a question and 2–4 choices — never guess, never ask in plain text.
 - If a request needs code written, debugged, or prior work resumed, call \`build\`, \`repair\`, or \`resume\` with the goal.
 - If a request needs documentation, a website, analysis of a project, or running tests, call \`document\`, \`website\`, \`analyze\`, or \`test\` with the goal.
-- If a request asks to publish a release (npm/GitHub), call \`publish\`. It is irreversible — confirm the bump type and target with the user via \`ask_user\` first unless they already specified them.
+- If a request asks to publish a release (npm/GitHub), call \`publish\`. It leaves this machine and is irreversible — confirm the bump type and target with the user via \`ask_user\` first unless they already specified them.
 - If a request's completeness is uncertain, call \`verify_requirement\` first.
 - If a request asks to deliver a message or result to a DIFFERENT contact/channel than the one you are currently chatting on (WhatsApp, Telegram, Slack, email, …), call \`gateway_send\` with the target (e.g. \`whatsapp:Alex\`) and the text. Do NOT call gateway_send to reply to the CURRENT conversation — your text response is automatically delivered back. If the target contact is not configured, tell the user what to set up.
-- If a request asks to manage the system/agent itself in plain English — start/stop the dashboard or gateway, check status, add/remove a verified sender, configure a platform (telegram/whatsapp), run evals, show stats — call \`run_cli\` with the plain-English ask. It resolves the exact \`buff\` command and runs it. If the tool reports AMBIGUOUS or asks for confirmation, call \`ask_user\` first, then retry run_cli with the user's answer.
+- If a request asks to manage the system/agent itself in plain English — start/stop the dashboard or gateway, check status, add/remove a verified sender, configure a platform (telegram/whatsapp), run evals, show stats — call \`run_cli\` with the plain-English ask. It resolves the exact \`buff\` command and runs it. If the user's own request already resolves to that command ("stop the dashboard"), it just runs — do not ask for permission to do what was just asked. If it reports AMBIGUOUS, call \`ask_user\` with the two choices; if the intent is one YOU chose rather than the user (or is irreversible: history.clear, memory.prune, stats.cost.clear, publish), call \`ask_user\` first and retry with confirm:true.
 - If a subtask can be delegated to a specialized sub-agent (gather context, review, security scan, run tests), call \`delegate\` with the agent type, a focused prompt, and optional file paths.
 - To find code matching a pattern (context gathering, locating definitions/usages), call \`code_search\` with the pattern and optional globs.
 - To READ the project: call \`read_file\` to open a file (with line numbers), \`list_dir\` to see a directory's contents, or \`glob\` to find files by pattern. Always prefer reading the actual file over assuming its contents — a large file reports a line range, continue with offset/limit.
-- To CHANGE code (after reading it): call \`edit_file\` for a surgical exact-text replacement, or \`write_file\` to create/replace a file. Both are state-changing and refuse without confirm — call \`ask_user\` to confirm the change with a one-line summary, then retry with confirm:true.
-- To VERIFY code by actual invocation: call \`run_terminal\` with the real command (\`npx vitest run tests/x.test.ts\`, \`npx tsc --noEmit\`, \`npm run build\`, \`git diff\`). Read-only verify commands run directly; state-changing ones need confirm:true after the user approves via ask_user. Never guess that a test passes — run it and read the output. Use run_cli (not run_terminal) for buff/agent-nuvira control commands.
+- To CHANGE code (after reading it): call \`edit_file\` for a surgical exact-text replacement, or \`write_file\` to create/replace a file. CREATING a file the request asked for is applied directly — no confirmation needed, so just call it. An \`edit_file\` that is surgical (small relative to the file) also applies directly, as does one on a file the request names — the verify loop must not need a human between iterations. A whole-file write over existing content, or an edit that rewrites most of a file, refuses without confirm — call \`ask_user\` with a one-line summary, then retry with confirm:true.
+- NEVER ask for permission to do work the user already asked for — not via \`ask_user\` and never in plain text. Decide it yourself, state the decision in your answer, and continue. Reserve \`ask_user\` for a decision that is genuinely the user's: it cannot proceed without an answer, it is high-impact AND irreversible, and there is no sensible default (overwriting existing work, deleting data, spending money, publishing).
+- To VERIFY code by actual invocation: call \`run_terminal\` with the real command (\`npx vitest run tests/x.test.ts\`, \`npx tsc --noEmit\`, \`npm run build\`, \`git diff\`). Read-only verify commands run directly, and so do recoverable workspace commands (\`npm/pnpm/yarn/bun install\`, \`pip install\`, \`mkdir\`, \`touch\`, \`cp\`, \`mv\`, \`git add\`, \`npm init\`) when the request authorized the work — the build you were asked for is your job to set up. Everything else state-changing (network fetches, arbitrary code, global installs, anything leaving the machine) needs confirm:true after the user approves via ask_user. Never guess that a test passes — run it and read the output. Use run_cli (not run_terminal) for buff/agent-nuvira control commands, and the \`git\` tool (not run_terminal) to commit.
 - END EVERY RESPONSE by calling \`suggest_followups\` with exactly 3 followups the user is likely to want next — natural next questions, deeper dives, or related directions that build on what you just said; specific to this conversation, not generic.
 - If you have nothing to add, answer directly and still end with suggest_followups.
 - ORDERING (non-negotiable): deliver the user's answer FIRST, then suggest_followups. The followup call must come only AFTER the complete answer is written — never before it, never instead of it. A bare lead-in ("Sure, I can help!") is NOT an answer; write the full answer in the same step as the followup call.`;
@@ -657,6 +687,37 @@ registerTool({
   endsAgentStep: false,
   run: async (args, ctx) => {
     const { question, choices, multi_select } = askUserSchema.parse(args);
+    // ── G13: do not round-trip a permission question the ask already answered ─
+    // Over a chat surface (WhatsApp/Telegram) an ask_user call is a MESSAGE to
+    // the user, so a reflexive "Do you want me to create the full project
+    // structure?" costs a full turn and delivers nothing. When the request
+    // already authorized the work (and the question is not about something
+    // irreversible), the autonomy policy settles it here instead: the model is
+    // told to proceed with its own default and to state the decision.
+    //
+    // Narrow on purpose — both conditions must hold, and any question naming an
+    // irreversible action (overwrite, delete, publish, deploy, send, pay…) is
+    // passed straight through, because that decision IS the user's.
+    if (
+      ctx.writesAuthorized?.authorized === true &&
+      detectPermissionSeeking(question) &&
+      !IRREVERSIBLE_ACTION_RE.test(question)
+    ) {
+      const recommended = choices[0]?.label ?? '';
+      ctx.emit?.('autonomy:consult-suppressed', {
+        question,
+        authorization: ctx.writesAuthorized.reason,
+      }, 'tool-loop');
+      return (
+        'Not shown to the user: their request already authorized this work, and this is a ' +
+        'permission question about doing it. Decide it yourself and continue.\n' +
+        (recommended ? `Recommended default: "${recommended}".\n` : '') +
+        'Carry the work out now and state the decision in your answer so the user can redirect. ' +
+        'Only if the choice is genuinely theirs — it cannot proceed without an answer, is ' +
+        'high-impact and irreversible, and has no sensible default — re-call ask_user naming ' +
+        'that specific irreversible choice (e.g. whether to overwrite an existing file).'
+      );
+    }
     const render = ctx.askUser || (await import('./ask-user.js')).renderAskUser;
     const answer = await render(question, choices, multi_select);
     const picked = Array.isArray(answer.answer) ? answer.answer.join(', ') : answer.answer;

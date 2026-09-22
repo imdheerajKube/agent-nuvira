@@ -26,7 +26,13 @@ import { getAutoRouter } from '../learning/auto-router.js';
 import { readRecallHits } from '../context/session-recall.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
 import { AUTH_CLEAR_THRESHOLD } from '../learning/key-hygiene.js';
-import { ACTION_LOG_FILENAME, aggregateActionTelemetry, readActionTelemetryFile } from '../learning/model-registry.js';
+import {
+  ACTION_LOG_FILENAME,
+  aggregateActionTelemetry,
+  readActionTelemetryFile,
+  getModelRegistry,
+} from '../learning/model-registry.js';
+import { classifyModelEntitlement } from '../inference/model-entitlement.js';
 import type { ActionTelemetryInsights } from '../learning/model-registry.js';
 import {
   AdminSessions,
@@ -1049,7 +1055,9 @@ export function readTracesData(): {
   const traces = [...file.traces]
     .sort((a, b) => b.startedAt - a.startedAt)
     .map((t) => {
-      const { steps, ...rest } = t;
+      // Session 3 — the full stable layer is detail-only (the index would grow
+      // by ~16KB per trace otherwise); it is shown in the replay view.
+      const { steps, systemPrompt: _systemPrompt, ...rest } = t as DashboardTrace & { systemPrompt?: string };
       const stepCount = steps.length;
       const failedSteps = steps.filter((s) => !s.success).length;
       const totalTokens = steps.reduce((sum, s) => sum + s.inputTokens + s.outputTokens, 0);
@@ -1222,12 +1230,20 @@ function rateLimitStatus(remaining?: number, total?: number): { status: 'availab
  * LM Studio, and vLLM/TGI.
  */
 async function readModelsHealth(): Promise<{
-  providers: ModelCheckResult[];
+  providers: Array<ModelCheckResult & { routable: number }>;
   lastChecked: number;
   totalModels: number;
   available: number;
   limited: number;
   unavailable: number;
+  /**
+   * Of `totalModels` LISTED across all providers, how many the router can
+   * actually route to (registry-verified, un-parked, not stale).
+   */
+  routable: number;
+  /** Registry-wide totals, for reconciliation on the page. */
+  registryTotal: number;
+  registryVerified: number;
 }> {
   const results = await Promise.all([
     checkLocalProvider(),
@@ -1250,13 +1266,83 @@ async function readModelsHealth(): Promise<{
     checkBedrockProvider(),
   ]);
 
-  const providers = results.filter(Boolean) as ModelCheckResult[];
-  const totalModels = providers.reduce((sum, p) => sum + p.models.length, 0);
-  const available = providers.reduce((sum, p) => sum + p.models.filter((m) => m.status === 'available').length, 0);
-  const limited = providers.reduce((sum, p) => sum + p.models.filter((m) => m.status === 'limited').length, 0);
-  const unavailable = providers.reduce((sum, p) => sum + p.models.filter((m) => m.status === 'unavailable').length, 0);
+  const probed = results.filter(Boolean) as ModelCheckResult[];
+  const totalModels = probed.reduce((sum, p) => sum + p.models.length, 0);
+  const available = probed.reduce((sum, p) => sum + p.models.filter((m) => m.status === 'available').length, 0);
+  const limited = probed.reduce((sum, p) => sum + p.models.filter((m) => m.status === 'limited').length, 0);
+  const unavailable = probed.reduce((sum, p) => sum + p.models.filter((m) => m.status === 'unavailable').length, 0);
 
-  return { providers, lastChecked: Date.now(), totalModels, available, limited, unavailable };
+  // ── Reconcile the LISTING with the ROUTER (Models-page audit) ─────────────
+  // Everything above answers "does the provider LIST this model?" — and for
+  // OpenRouter that is 400+ ids stamped with the PROVIDER's rate-limit status,
+  // so hundreds of models read "Available" that the router can never pick (the
+  // registry holds 443 OpenRouter entries with 0 verified). Observed live: the
+  // page said 509 available while the agent routed 87% of a day's calls to one
+  // model. Two truths about the same models, on the same screen, with nothing
+  // connecting them — which is what made the page untrustworthy.
+  //
+  // The fix is to ask the REGISTRY, through the SAME predicate routing uses
+  // (`isUsable`). Duplicating the staleness/park rules here would recreate the
+  // exact divergence this is closing.
+  const registry = getModelRegistry();
+  const now = Date.now();
+  let routable = 0;
+  let registryTotal = 0;
+  let registryVerified = 0;
+  for (const provider of registry.getTrackedProviders()) {
+    for (const entry of registry.getAllModelsForProvider(provider)) {
+      registryTotal += 1;
+      if (entry.status === 'verified') registryVerified += 1;
+    }
+  }
+
+  const providers = probed.map((p) => {
+    let providerRoutable = 0;
+    const models = p.models.map((m) => {
+      const entry = registry.getEntry(p.provider, m.id);
+      const usable = entry ? registry.isUsable(p.provider, m.id, now) : false;
+      if (usable) {
+        providerRoutable += 1;
+        routable += 1;
+      }
+      return {
+        ...m,
+        /** The registry's own verdict for this exact pair. */
+        registryStatus: entry?.status,
+        /** True only when the ROUTER would use it right now. */
+        routable: usable,
+        // WHY each unusable verdict is unusable — the raw learned reason, so the
+        // cell can distinguish "this id does not exist on the endpoint" from
+        // "your key cannot use it". Without it the page could only say
+        // "unavailable", which is the ambiguity that made "requires purchase"
+        // tempting and wrong.
+        registryError: entry?.lastError,
+        /** A retired provider × model pair (the id is not served there). */
+        registryDead: entry?.deadPair === true,
+        // Cost/entitlement, LABELLED never filtered — a user who just bought
+        // credits must still see the models they paid for.
+        entitlement: classifyModelEntitlement(p.provider, m.id),
+        // Parked/quota state lived only in the registry payload, so the per-model
+        // health cells could never render it — the type and the chips existed but
+        // nothing populated them on this path.
+        parked: entry ? entry.quotaParkedUntil > now : false,
+        resetsInMs: entry?.resetsInMs ?? 0,
+      };
+    });
+    return { ...p, models, routable: providerRoutable };
+  });
+
+  return {
+    providers,
+    lastChecked: now,
+    totalModels,
+    available,
+    limited,
+    unavailable,
+    routable,
+    registryTotal,
+    registryVerified,
+  };
 }
 
 /** Check local Ollama provider — no rate limits to parse */
