@@ -19,9 +19,11 @@
 import { getTool, toolJsonSchemas, type ToolContext, type ToolJsonSchema } from './registry.js';
 import {
   detectPermissionSeeking,
+  replyAsksTheReader,
   requestAuthorizesWrites,
   stripTrailingPermissionSeek,
 } from '../learning/autonomy-policy.js';
+import { wantsAuthoredArtifact } from '../learning/deliverable-class.js';
 import { normalizeFollowups, type FollowupSuggestion } from './followup-utils.js';
 import {
   assessEditActivity,
@@ -29,9 +31,22 @@ import {
   isVerificationTool,
   VERIFICATION_NUDGE,
   AUTHORIZED_WORK_NUDGE,
+  deliverableNudge,
   type ToolCallEvidence,
 } from './edit-verification.js';
 import { effectiveToolJsonSchemas, coreToolJsonSchemas, isToolEnabled, toolsetForTool } from './toolsets.js';
+import type { TraceEvent, TraceGateName } from '../learning/reasoning-trace.js';
+
+/**
+ * G18 — one NON-LLM fact about a loop turn, as the loop observed it.
+ *
+ * Type-only on purpose: the loop DESCRIBES what happened and the surface
+ * decides where to record it (this module must not reach into the trace store,
+ * which is what kept the loop invisible in the first place — see the G18 entry
+ * in ENTERPRISE_GRADE_TRACKER.md). `seq`/`timestamp` belong to the store, so
+ * they are assigned there, exactly like a trace step.
+ */
+export type LoopTraceEvent = Omit<TraceEvent, 'seq' | 'timestamp'>;
 import { appendToolArtifact } from './artifact-append.js';
 import type { ToolMessage } from '../inference/interface.js';
 import { logger } from '../utils/logger.js';
@@ -205,6 +220,39 @@ export interface ToolLoopOptions {
    */
   requireVerification?: boolean;
   /**
+   * G13b — DELIVERABLE GATE (default ON). When the request asks for an AUTHORED
+   * deliverable to be produced ("write a 12 page story at /path/Mahagatha.md")
+   * and the turn ends having written NOTHING to disk, the loop spends ONE
+   * bounded nudge naming the destination the request gave, then reports the
+   * residual honestly (`ToolLoopResult.undeliveredArtifact`).
+   *
+   * Why a nudge and not a refusal: the loop reaches this in the cases the engine
+   * router cannot cover — a chat surface, or an explicit `engineMode='loop'`
+   * override — and in those cases the right outcome is still the ARTIFACT, not a
+   * lecture. The router sends the default path to the pipeline engine (which
+   * plans units and assembles the document); this gate is what makes "the
+   * artifact lands" true on every entry point rather than only the default one.
+   * Set false to restore the pre-gate behaviour.
+   */
+  requireDeliverable?: boolean;
+  /**
+   * G18 — OBSERVABILITY SINK for the loop's non-LLM facts: every tool call that
+   * ran (name, args, ok/error, duration), every gate DECISION (a nudge spent,
+   * or a bound reached), and every REFUSAL (a call declined pending
+   * confirmation, an unknown/disabled tool, a repeated dispatch).
+   *
+   * Why the loop must report its own refusals: they are the one class that
+   * reads as nothing at all in a trace — the store showed 0 confirmation
+   * refusals not because there were none but because it could not see them, and
+   * the audit of the confirmation gates had to be done by reading code and
+   * driving the real tools instead. A closed turn is a claim; this is the
+   * evidence behind it.
+   *
+   * Best-effort by contract: the sink is called inside a try/catch, so a broken
+   * recorder can never break the turn it observes.
+   */
+  onTraceEvent?: (event: LoopTraceEvent) => void;
+  /**
    * Bounded auto-continuation budget (default: 2). A turn that dies MID-WAY —
    * the provider walk exhausted every candidate at step N, or the step bound
    * was reached while the model still had work to do — is RESUMED rather than
@@ -315,6 +363,18 @@ export interface ToolLoopResult {
    * about an outbound DELIVERY), this is about a CODE change.
    */
   unverifiedEdit?: boolean;
+  /**
+   * HONESTY FLAG (G13b) — the request asked for an AUTHORED deliverable to be
+   * PRODUCED and this turn wrote NOTHING to disk, so the answer is prose about
+   * the work rather than the work.
+   *
+   * Distinct from `unfulfilledPromise` (the model announced an action and did
+   * nothing) and from `unverifiedEdit` (it wrote and nothing checked): here the
+   * model DID the composition and simply never produced the artifact. Annotated
+   * on every exit path and independent of the nudge being enabled, because a
+   * caller must never read "the story is done" from a turn that wrote no file.
+   */
+  undeliveredArtifact?: boolean;
   /**
    * G2 — HONESTY FLAG — the answer ASSERTS a completed code change ("I have
    * successfully fixed…", "now fully operational") while the turn mutated the
@@ -537,6 +597,21 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // G13 — bounded "the request already authorized this" nudges (see
   // detectPermissionSeeking).
   let permissionNudges = 0;
+  // G13b — bounded "the request asked for a file and none was written" nudges
+  // (see wantsAuthoredArtifact).
+  let deliverableNudges = 0;
+  /**
+   * G18 — the sink, wrapped so an observability failure can never become a
+   * turn failure (a recorder that throws is a bug in the instrument, not in
+   * the work being observed).
+   */
+  const traceEvent = (event: LoopTraceEvent): void => {
+    try {
+      opts.onTraceEvent?.(event);
+    } catch {
+      // Best-effort.
+    }
+  };
   // The EFFECTIVE bound: starts at maxSteps and is extended (never beyond the
   // continuation budget) so a turn that still has work can finish.
   let stepLimit = maxSteps;
@@ -805,6 +880,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // Feed an empty assistant step so the model continues in-context.
         thread.push({ role: 'assistant', content: response.content });
         deps.onEvent?.('   🧠 model reasoning… (continuing)');
+        traceEvent({
+          kind: 'decision',
+          summary: 'the model replied with its own reasoning instead of an answer — the step continued',
+        });
         continue;
       }
       // ── Dangling-promise nudge (bounded, once) ──────────────────────────
@@ -827,6 +906,11 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         intentNudges += 1;
         stepLimit += 1;
         deps.onEvent?.('   🔁 Answer announced an action but performed none — asking the model to carry it out.');
+        traceEvent({
+          kind: 'gate',
+          gate: 'promise',
+          summary: 'the turn closed on an announced action with nothing performed — one bounded nudge to carry it out',
+        });
         // The promise is NOT a candidate answer: drop it from the
         // longest-substantive memory so the post-nudge answer (or result) is
         // what the turn delivers. Safe because the gate only fires when no
@@ -864,6 +948,11 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         permissionNudges += 1;
         stepLimit += 1;
         deps.onEvent?.('   🤖 Turn ended asking permission for work the request already authorized — telling the model to proceed.');
+        traceEvent({
+          kind: 'gate',
+          gate: 'permission',
+          summary: `the turn asked permission for authorized work (${authorization.reason}) — one bounded nudge to proceed`,
+        });
         // The question must not become the delivered answer. When nothing was
         // done this turn the whole step is the question, so drop it. When real
         // work WAS done, keep the work and cut only the trailing question —
@@ -886,6 +975,26 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // earlier step alongside a real tool call. Same rule as the
       // suggest_followups exit below.
       //
+      // G13b — DELIVERABLE GATE (no-tools path, the one a story ask actually
+      // takes). Same rule and same bounded budget as the concluding path BELOW,
+      // placed before it so the first ending that can satisfy the request gets
+      // the nudge, never both.
+      if (deliverableNudges < 1 && deliverableGateApplies(opts, response.content.length >= lastContent.length ? response.content : lastContent, progress, schemas.length, requestText)) {
+        deliverableNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.('   📄 The request asked for a file and none was written — asking the model to produce it.');
+        traceEvent({
+          kind: 'gate',
+          gate: 'deliverable',
+          summary: authorization.requestedPath
+            ? `an authored deliverable was requested at ${authorization.requestedPath} and no file was written — one bounded nudge to produce it`
+            : 'an authored deliverable was requested and no file was written — one bounded nudge to produce it',
+        });
+        thread.push({ role: 'assistant', content: response.content });
+        thread.push({ role: 'user', content: deliverableNudge(authorization.requestedPath) });
+        continue;
+      }
+      //
       // G1 — VERIFICATION GATE: before the turn can end, if it MUTATED the
       // workspace and ran nothing that observed the result, spend ONE bounded
       // nudge asking for the check. The gate is deliberately a nudge, not a
@@ -902,6 +1011,11 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         verificationNudges += 1;
         stepLimit += 1;
         deps.onEvent?.('   🔎 Files were changed but nothing verified them — asking the model to run a check.');
+        traceEvent({
+          kind: 'gate',
+          gate: 'verification',
+          summary: 'the turn mutated the workspace and nothing observed the result — one bounded nudge to verify',
+        });
         thread.push({ role: 'assistant', content: response.content });
         thread.push({ role: 'user', content: VERIFICATION_NUDGE });
         continue;
@@ -993,6 +1107,9 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     });
 
     // ── Phase 2 — execute (read-only runs fan out; everything else serial) ──
+    /** Wall-clock per call id, so the G18 event can carry a real duration
+     *  without re-timing (the emit below is the only place that knows it). */
+    const toolDurations = new Map<string, number>();
     const runOne = async (plan: PlannedCall): Promise<string> => {
       const { call } = plan;
       if (plan.refuse !== undefined) return plan.refuse;
@@ -1039,6 +1156,8 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           durationMs: Date.now() - startedAt,
         });
         return `Error: ${message}`;
+      } finally {
+        toolDurations.set(call.id, Date.now() - startedAt);
       }
     };
 
@@ -1084,7 +1203,17 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // not a success, and a delivery tool only counts when it reported `✅`).
       // `toolCallsRun` stays the attempted list for telemetry; these two drive
       // the honesty flag and the trace outcome.
+      // A DECLINED call is not a success, whatever prefix it used. Found live on
+      // the first G18 verification run: `write_file` refused an absolute path
+      // that escaped the workspace and returned "… escapes the workspace … —
+      // denied" with NO `Error:` prefix, so the loop counted it as a call that
+      // RAN, pushed it to `successfulToolCalls`, and recorded it in the trace as
+      // "write_file ran". That is the exact shape G18 exists to eliminate — an
+      // outcome reading the same as its opposite — so the refusal classifier is
+      // now the authority for both the event KIND and the success verdict.
+      const refusal = classifyToolRefusal(rawResult);
       const ranOk =
+        refusal === null &&
         !rawResult.startsWith('Error:') &&
         (!DELIVERY_TOOL_NAMES.has(call.name) || deliveryResultSucceeded(rawResult));
       if (ranOk) progress.successfulToolCalls.push(call.name);
@@ -1113,6 +1242,24 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       const parallelTip = parallel.note(call.name, !resultText.startsWith('Error:'));
       if (parallelTip) resultText = `${resultText}\n\n${parallelTip}`;
       delivered[i] = resultText;
+      // G18 — record what this call DID, in the model's own call order, with the
+      // evidence a later reader needs: the args the gate saw, the first line of
+      // the result, the verdict, and the wall-clock. A declined call is recorded
+      // as a REFUSAL with its cause, so "nothing happened here" can never again
+      // read the same as "nothing was refused" (see classifyToolRefusal).
+      // `rawResult` is the pre-decoration text — hints and tips are the loop's
+      // own additions and must not be mistaken for what the tool returned.
+      const durationMs = toolDurations.get(call.id);
+      traceEvent({
+        kind: ranOk ? 'tool' : 'refusal',
+        tool: call.name,
+        ...(refusal?.gate ? { gate: refusal.gate } : {}),
+        summary: ranOk ? `${call.name} ran` : refusal?.summary ?? `${call.name} returned an error`,
+        args: summarizeArgs(call.arguments),
+        result: previewToolResult(rawResult),
+        ok: ranOk,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      });
       thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
     }
 
@@ -1196,8 +1343,31 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         verificationNudges += 1;
         stepLimit += 1;
         deps.onEvent?.('   🔎 Files were changed but nothing verified them — asking the model to run a check.');
+        traceEvent({
+          kind: 'gate',
+          gate: 'verification',
+          summary: 'the turn mutated the workspace and nothing observed the result — one bounded nudge to verify',
+        });
         thread.push({ role: 'assistant', content: response.content });
         thread.push({ role: 'user', content: VERIFICATION_NUDGE });
+        continue;
+      }
+      // G13b — DELIVERABLE GATE (concluding path). AFTER the verification gate
+      // on purpose: a turn that wrote nothing has nothing to verify, so the two
+      // cannot both apply, and this order leaves edit turns byte-identical.
+      if (deliverableNudges < 1 && deliverableGateApplies(opts, response.content.length >= lastContent.length ? response.content : lastContent, progress, schemas.length, requestText)) {
+        deliverableNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.('   📄 The request asked for a file and none was written — asking the model to produce it.');
+        traceEvent({
+          kind: 'gate',
+          gate: 'deliverable',
+          summary: authorization.requestedPath
+            ? `an authored deliverable was requested at ${authorization.requestedPath} and no file was written — one bounded nudge to produce it`
+            : 'an authored deliverable was requested and no file was written — one bounded nudge to produce it',
+        });
+        thread.push({ role: 'assistant', content: response.content });
+        thread.push({ role: 'user', content: deliverableNudge(authorization.requestedPath) });
         continue;
       }
       const content = response.content.length >= lastContent.length ? response.content : lastContent;
@@ -1216,6 +1386,11 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // extends the bound otherwise) — the turn is honestly bounded.
   bounded = true;
   deps.onEvent?.(`   ⚠️ Tool loop reached its ${stepLimit}-step budget — returning the last response.`);
+  traceEvent({
+    kind: 'decision',
+    gate: 'budget',
+    summary: `the step budget (${stepLimit}) was reached — the turn ended on its last response instead of finishing`,
+  });
   return {
     content: lastContent || 'I reached my step limit for this request.',
     followups,
@@ -1413,8 +1588,58 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     if (detectUnverifiedEditClaim(result.content, activity.mutations, activity.verifications)) {
       result.unverifiedEditClaim = true;
     }
+    // G13b — DELIVERABLE honesty, the same way and for the same reason: the
+    // flag is a function of what the turn DID, never of configuration. A turn
+    // that was asked for a file and wrote none must not be readable as
+    // "finished" by any caller, whether or not the gate was enabled.
+    if (
+      !result.cancelled &&
+      progress.mutatedPaths.length === 0 &&
+      !replyAsksTheReader(result.content) &&
+      wantsAuthoredArtifact(lastUserText(opts.messages))
+    ) {
+      result.undeliveredArtifact = true;
+    }
   }
   return result;
+}
+
+/**
+ * Does the DELIVERABLE gate apply to this turn (G13b)?
+ *
+ * The conjunction is the whole point, and every term is an independent fact:
+ *
+ *   - the request asks for an AUTHORED deliverable to be PRODUCED
+ *     (`wantsAuthoredArtifact` — the same predicate the engine router uses, so
+ *     "what the user asked for" is defined once);
+ *   - the turn wrote NOTHING (`mutatedPaths` is the loop's own evidence that a
+ *     write landed, so a turn that used a heredoc through `run_terminal` is not
+ *     nudged for a file it already wrote);
+ *   - tools are actually available (a caller that exposed none cannot comply);
+ *   - the turn did not END on a question to the reader (`replyAsksTheReader`).
+ *     This is the line between the two failures that look alike: "Do you want me
+ *     to create the files?" is a stall, and the permission nudge already settles
+ *     it above; "Which of these two titles do you prefer?" is a decision input
+ *     the user asked to be consulted on, and bulldozing it would be the manual
+ *     -cadence complaint in reverse;
+ *   - the bound is unspent, and the caller has not disabled the gate.
+ *
+ * A turn that already wrote something is deliberately out of scope: the gate is
+ * about the artifact never being produced, not about the artifact being short.
+ */
+function deliverableGateApplies(
+  opts: ToolLoopOptions,
+  content: string,
+  progress: ToolLoopProgress,
+  schemaCount: number,
+  requestText: string,
+): boolean {
+  if (opts.requireDeliverable === false) return false;
+  if (schemaCount === 0) return false;
+  if (progress.mutatedPaths.length > 0) return false;
+  if (!requestText.trim()) return false;
+  if (replyAsksTheReader(content)) return false;
+  return wantsAuthoredArtifact(requestText);
 }
 
 /**
@@ -1433,6 +1658,64 @@ function lastUserText(messages: readonly ToolMessage[]): string {
     return typeof message.content === 'string' ? message.content : '';
   }
   return '';
+}
+
+/**
+ * One bounded line from a tool result — the EVIDENCE a gate verdict read (G18).
+ *
+ * The first non-empty line, whitespace-collapsed: enough to tell an applied edit
+ * from a declined one ("Error: write_file: … needs explicit confirmation"), a
+ * failing test from a passing one, without pasting a whole file into the trace
+ * store. The store keeps the tail of a long run; a full result per call would
+ * push the interesting end of the turn out of it.
+ */
+function previewToolResult(result: string, max = 200): string {
+  const first = (result || '').split(/\r?\n/).find((line) => line.trim() !== '') ?? '';
+  const flat = first.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max)}\u2026` : flat;
+}
+
+/**
+ * Classify a DECLINED call's result text (G18).
+ *
+ * The single class this exists for is the confirmation refusal: a tool that
+ * says "call ask_user first, then retry with confirm:true" has not failed — it
+ * has handed the decision to the user, and that is exactly the event the trace
+ * store could not see at all (the G18 audit read "0 refusals" and could not
+ * tell it from "no refusals"). The remaining cases are the loop's own guards,
+ * named so the record distinguishes *why* work did not happen: a guard is not a
+ * provider error — the turn can continue either way, and only the record knows.
+ *
+ * Returns null when the result is an ordinary tool/runtime error, so the caller
+ * keeps its own wording rather than inventing a cause.
+ */
+export function classifyToolRefusal(result: string): { gate?: TraceGateName; summary: string } | null {
+  const text = result || '';
+  if (/needs explicit confirmation|requires confirmation|retry with confirm|call ask_user/i.test(text)) {
+    return { gate: 'confirmation', summary: 'declined until the user approves — the gate asked before acting' };
+  }
+  // A BOUNDARY denial is the other refusal that did not read as one. The
+  // workspace guard returns "… escapes the workspace (…) — denied" with no
+  // `Error:` prefix, so it counted as a successful call (found live). Anchored
+  // to the boundary phrasings rather than the bare word "denied", because a
+  // `run_terminal` that reads a log containing "Permission denied" is a
+  // successful call, not a refusal.
+  if (/escapes the workspace|outside the workspace|outside the project|outside this project|not allowed by the workspace/i.test(text)) {
+    return { gate: 'workspace', summary: 'declined — the path is outside the workspace the tools may touch' };
+  }
+  if (/already called|already dispatched/i.test(text)) {
+    return { summary: 'declined by the loop guard — that dispatch already happened this turn' };
+  }
+  if (/^Error: unknown tool/i.test(text)) {
+    return { summary: 'declined — the model called a tool that is not on its surface' };
+  }
+  if (/toolset is not loaded this turn/i.test(text)) {
+    return { summary: 'declined — that tool\'s toolset was never loaded this turn' };
+  }
+  if (/is disabled — its toolset is turned off/i.test(text)) {
+    return { summary: 'declined — the tool is turned off in configuration' };
+  }
+  return null;
 }
 
 /** Compact argument preview for the event line. */

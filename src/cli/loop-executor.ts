@@ -46,6 +46,16 @@ import { hasCredentials } from '../learning/model-selection.js';
 import { resolveEngine } from '../learning/engine-router.js';
 import { logger } from '../utils/logger.js';
 import {
+  beginTrace,
+  endTrace,
+  recordStep,
+  recordTraceEvent,
+  buildTraceOutcome,
+} from '../learning/reasoning-trace.js';
+import type { LoopTraceEvent } from '../tools/tool-loop.js';
+import { estimateTokens } from '../learning/cost-tracker.js';
+import { createHash } from 'node:crypto';
+import {
   toUserFacingGenerationError,
   detectAnswerQualityFailure,
   answerQualityError,
@@ -53,6 +63,42 @@ import {
 } from '../inference/tool-call-utils.js';
 import type { InferenceProvider, ToolMessage } from '../inference/interface.js';
 import type { ToolJsonSchema } from '../tools/registry.js';
+
+/**
+ * Serialize the loop's thread the way the chat transport does, so the SAME
+ * layer splitter (and therefore the same per-layer digests) applies to both
+ * (G18). Without the role markers a loop prompt lands in the "unknown shape"
+ * branch and the stable layer is the whole thread — which grows every step, so
+ * the one question the layers exist to answer (did the system layer stay byte-
+ * stable?) could never be answered for an `execute` run.
+ */
+function serializeLoopThread(messages: readonly ToolMessage[]): string {
+  const marker: Record<string, string> = {
+    system: '[System]',
+    user: '[User]',
+    assistant: '[Assistant]',
+    tool: '[Tool result]',
+  };
+  return messages
+    .map((m) => `${marker[m.role] ?? `[${m.role}]`}\n${m.content ?? ''}`)
+    .join('\n');
+}
+
+/** sha256 hex prefix — the same digest shape the store uses. */
+function digestOf(text: string): string {
+  try {
+    return createHash('sha256').update(text).digest('hex').slice(0, 16);
+  } catch {
+    return String(text.length);
+  }
+}
+
+/** One bounded line, for the verbose console echo of a tool result. */
+function previewLine(text: string, max = 200): string {
+  const first = (text || '').split(/\r?\n/).find((l) => l.trim() !== '') ?? '';
+  const flat = first.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max)}\u2026` : flat;
+}
 
 /** The loop executor's result — every metric the Phase 0 eval needs. */
 export interface LoopExecutorResult {
@@ -74,6 +120,15 @@ export interface LoopExecutorResult {
   model: string;
   /** The engine decision explanation (Phase 2 audit trail). */
   engineExplanation: string;
+  /**
+   * G18 — the trace id this run was recorded under (`nuvira trace show <id>`),
+   * echoed so a live run says where its own evidence lives.
+   */
+  traceId?: string;
+  /** G18 — refusals recorded this turn (declined calls), for the CLI summary. */
+  refusals?: number;
+  /** G18 — gate decisions recorded this turn (nudges spent, bounds reached). */
+  gateDecisions?: number;
 }
 
 /** Options for runLoopExecutor — mirrors the pipeline arm's surface. */
@@ -98,6 +153,14 @@ export interface LoopExecutorOptions {
   maxSteps?: number;
   /** Quiet mode: no progress logging (eval arms). */
   quiet?: boolean;
+  /**
+   * G18 — echo each tool RESULT (first line, bounded) under the call line.
+   * Previously even `-v` printed only the call (`⚙ edit_file({path: …})`) and
+   * never what came back, so a live run could not distinguish "the gate applied
+   * the edit autonomously" from "the model passed confirm:true" — the exact
+   * ambiguity the confirmation-gate audit had to resolve by reading code.
+   */
+  verbose?: boolean;
 }
 
 /** The system prompt for the execute-loop arm (verification-first). */
@@ -127,6 +190,31 @@ export async function runLoopExecutor(
   opts: LoopExecutorOptions = {},
 ): Promise<LoopExecutorResult> {
   const startedAt = Date.now();
+
+  // ── G18 — THE LOOP LEAVES A TRACE ────────────────────────────────────────
+  // Recorded from the FIRST line of the run (before routing) on purpose: a run
+  // that dies in routing is exactly the one a reader needs to see, and a trace
+  // that only exists for successful runs cannot explain a failure. `source:
+  // 'loop'` distinguishes these from pipeline ('orchestrator') and 'chat'
+  // traces in `nuvira trace list` — the old gap was that an `execute` run
+  // wrote NOTHING here, so the engine that runs by default was the one
+  // engine with no evidence trail.
+  const traceId = beginTrace({ goal, source: 'loop' });
+  /** Refusals/gates recorded this turn — reported in the CLI summary. */
+  const recorded = { refusals: 0, gateDecisions: 0 };
+  /**
+   * G18 — one sink for the loop's non-LLM facts: persisted to the trace store,
+   * and (only under `-v`) echoed to the console so a live run is readable
+   * without opening the JSON. Timestamps/ordering are the store's job.
+   */
+  const onTraceEvent = (event: LoopTraceEvent): void => {
+    recordTraceEvent(traceId, event);
+    if (event.kind === 'refusal') recorded.refusals += 1;
+    if (event.kind === 'gate') recorded.gateDecisions += 1;
+    if (!opts.quiet && opts.verbose && (event.kind === 'tool' || event.kind === 'refusal')) {
+      logger.info(`   ${event.ok ? '↳' : '⛔'} ${event.tool}: ${previewLine(event.result ?? event.summary)}`);
+    }
+  };
 
   // ── Route: explicit provider/model wins; otherwise the AutoModelRouter ──
   let providerType = 'auto';
@@ -304,6 +392,8 @@ export async function runLoopExecutor(
       }
     }
   } catch (err) {
+    // G18 — a routing failure is a FAILED trace, not a missing one.
+    endTrace(traceId, false, { kind: 'failed', tools: [] });
     return failureResult(
       // User-facing reason is sanitized (no provider wire text); the raw error
       // rides along as the technical explanation below.
@@ -316,6 +406,7 @@ export async function runLoopExecutor(
   }
 
   if (!provider) {
+    endTrace(traceId, false, { kind: 'failed', tools: [] });
     return failureResult(
       'No available provider for the loop engine (check API keys / local runner).',
       startedAt,
@@ -606,9 +697,78 @@ export async function runLoopExecutor(
         configManager,
         loadedExtraTools,
         cwd: process.cwd(),
+        // G18 — the autonomy gates report their DECISIONS on this bus
+        // (`autonomy:write-applied`, emitted by write_file/edit_file/
+        // run_terminal/run_cli/git). Forwarding them here is what makes "the
+        // gate proceeded on the request's own authorization, and here is its
+        // reason" reviewable after the fact instead of inferred from a missing
+        // round trip.
+        emit: (event, data) => {
+          if (event !== 'autonomy:write-applied') return;
+          const d = data as { tool?: string; reason?: string } | undefined;
+          onTraceEvent({
+            kind: 'gate',
+            gate: 'autonomy',
+            ...(d?.tool ? { tool: d.tool } : {}),
+            summary: d?.reason
+              ? `proceeded without asking — ${d.reason}`
+              : 'proceeded without asking — the request itself was the authorization',
+          });
+        },
       },
       deps: {
-        callModel,
+        // G18 — the LLM steps of the loop are recorded like every other
+        // engine's, so the Trace tab can show WHY the loop answered as it did
+        // (prompt digests, per-layer stability, model, tokens, latency).
+        callModel: async (messages, schemas, onToken, signal) => {
+          const started = Date.now();
+          const promptText = serializeLoopThread(messages);
+          try {
+            const resp = await callModel(messages, schemas, onToken, signal);
+            // G10 — an EMPTY step is not a success: a step with neither content
+            // nor a tool call produced nothing, and must not read as one.
+            const produced = resp.content.trim().length > 0 || resp.toolCalls.length > 0;
+            recordStep(traceId, {
+              agentType: 'loop',
+              description: `${schemas.length} tool schema(s) exposed`,
+              promptFull: promptText,
+              provider: providerType,
+              model,
+              promptDigest: digestOf(promptText),
+              // The TAIL is the ask + the most recent tool results — the part a
+              // reader needs; the head is the system prompt (kept once, whole,
+              // as the trace's stable layer).
+              promptPreview: promptText.length > 800 ? `…${promptText.slice(-800)}` : promptText,
+              responsePreview: resp.content.slice(0, 1000),
+              responseLength: resp.content.length,
+              inputTokens: estimateTokens(promptText),
+              outputTokens: estimateTokens(resp.content),
+              latencyMs: Date.now() - started,
+              success: produced,
+              ...(produced ? {} : { error: 'empty step — no answer text and no tool call' }),
+            });
+            return resp;
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            recordStep(traceId, {
+              agentType: 'loop',
+              description: `${schemas.length} tool schema(s) exposed`,
+              promptFull: promptText,
+              provider: providerType,
+              model,
+              promptDigest: digestOf(promptText),
+              promptPreview: promptText.length > 800 ? `…${promptText.slice(-800)}` : promptText,
+              responsePreview: '',
+              responseLength: 0,
+              inputTokens: estimateTokens(promptText),
+              outputTokens: 0,
+              latencyMs: Date.now() - started,
+              success: false,
+              error: message,
+            });
+            throw err;
+          }
+        },
         executeTool: async (name, args, ctx) => {
           const tool = getTool(name);
           if (!tool) throw new Error(`Unknown tool: ${name}`);
@@ -630,7 +790,30 @@ export async function runLoopExecutor(
         },
         onEvent: opts.quiet ? undefined : (line) => logger.info(line),
       },
+      // G18 — the loop's tool calls, gate decisions and refusals all reach the
+      // trace store through this one sink (an OPTION, not a dep: the loop
+      // describes, the surface records).
+      onTraceEvent,
     });
+
+    // G18 — WHAT ACTUALLY HAPPENED, in the same shape the chat and gateway
+    // paths record: a declined call, an unverified edit, an unsatisfied
+    // deliverable and a dropped promise are all facts about the turn, and the
+    // outcome is what the Trace tab reads instead of "the model answered".
+    endTrace(
+      traceId,
+      !result.generationFailed,
+      buildTraceOutcome({
+        generationFailed: result.generationFailed,
+        cancelled: result.cancelled,
+        tools: result.successfulToolCalls ?? result.toolCalls,
+        unverifiedActionClaim: result.unverifiedActionClaim,
+        unfulfilledPromise: result.unfulfilledPromise,
+        unverifiedEdit: result.unverifiedEdit,
+        unverifiedEditClaim: result.unverifiedEditClaim,
+        undeliveredArtifact: result.undeliveredArtifact,
+      }),
+    );
 
     return {
       content: result.content,
@@ -642,8 +825,12 @@ export async function runLoopExecutor(
       provider: providerType,
       model,
       engineExplanation,
+      traceId,
+      refusals: recorded.refusals,
+      gateDecisions: recorded.gateDecisions,
     };
   } catch (err) {
+    endTrace(traceId, false, { kind: 'failed', tools: [] });
     return failureResult(
       toUserFacingGenerationError(err),
       startedAt,

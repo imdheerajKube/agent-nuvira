@@ -135,6 +135,77 @@ export interface TraceOutcome {
    * `unverifiedClaim` — the honesty flag for a false "I have fixed it".
    */
   unverifiedEditClaim?: boolean;
+  /**
+   * G13b — True when the request asked for an AUTHORED deliverable to be
+   * PRODUCED and the turn wrote NOTHING to disk (see
+   * `ToolLoopResult.undeliveredArtifact`). The reply may be excellent prose —
+   * the 12-page story that was composed into a chat window instead of a file —
+   * but the deliverable does not exist, so the Trace tab must not read it as
+   * finished work.
+   */
+  undeliveredArtifact?: boolean;
+}
+
+/**
+ * Which gate made a decision, or refused one.
+ *
+ * `confirmation` is the family the G18 audit could not see at all: a tool that
+ * declined to act until a human approved. `permission`/`verification`/
+ * `deliverable`/`promise` are the loop's own bounded nudges; `autonomy` is a
+ * gate that DECIDED to proceed on the request's own authorization; `budget` is
+ * a bound (step/continuation) being reached.
+ */
+export type TraceGateName =
+  | 'permission'
+  | 'verification'
+  | 'deliverable'
+  | 'promise'
+  | 'confirmation'
+  | 'workspace'
+  | 'autonomy'
+  | 'budget';
+
+/**
+ * A NON-LLM fact about a turn: a tool call, a gate decision, or a refusal.
+ *
+ * WHY THIS IS NOT A `TraceStep`. `steps` are LLM calls — they carry a prompt
+ * digest, a model, tokens, and they feed `getTraceStats`. A tool call has none
+ * of those, and folding it in would corrupt every aggregate the Trace tab and
+ * the stats command already report. This is the separate, equally honest
+ * record: WHAT THE TURN DID, alongside what the model was asked.
+ *
+ * The gap it closes was recorded as G18: the loop engine wrote no trace at all,
+ * and the audit of the confirmation gates had to be done by reading code and
+ * driving the real tools, because "the trace store showed 0 refusals" meant
+ * "it cannot see refusals" — not "there were none".
+ */
+export interface TraceEvent {
+  /** 1-based position within the trace's event list. */
+  seq: number;
+  /** Epoch ms when the event was recorded. */
+  timestamp: number;
+  /**
+   * `tool`     — a tool call that actually ran (ok/error, duration, args);
+   * `gate`     — a gate made a DECISION (nudge spent, or autonomy proceeded);
+   * `refusal`  — a call was DECLINED (`Error:` result, confirmation gate,
+   *              unknown/disabled tool, repeat dispatch);
+   * `decision` — a non-tool decision worth auditing (e.g. the provider walk
+   *              abandoning a candidate, a loop bound being reached).
+   */
+  kind: 'tool' | 'gate' | 'refusal' | 'decision';
+  /** Tool name for `tool`/`refusal` events. */
+  tool?: string;
+  /** Which gate/nudge/bound this is about (see {@link TraceGateName}). */
+  gate?: TraceGateName;
+  /** One line, human-readable — the same wording the console prints. */
+  summary: string;
+  /** Bounded args preview for a tool call (what the gate actually saw). */
+  args?: string;
+  /** Bounded result/error preview (the evidence the verdict was read from). */
+  result?: string;
+  /** True when the call succeeded; false for an error or a refusal. */
+  ok?: boolean;
+  durationMs?: number;
 }
 
 /** A full reasoning trace — one pipeline execution. */
@@ -163,6 +234,12 @@ export interface ReasoningTrace {
   /** LLM calls in execution order. */
   steps: TraceStep[];
   /**
+   * Non-LLM facts about the run, in order: tool calls, gate decisions, and
+   * refusals (G18). Absent on traces written before this existed — readers must
+   * treat `undefined` as "no events were recorded", never as "none happened".
+   */
+  events?: TraceEvent[];
+  /**
    * The FULL stable layer (system prompt), captured ONCE per trace.
    * Previously every trace exposed only the first 80 characters of it, so the
    * persona / tool contract / response rules were unreviewable. Capped to keep
@@ -185,6 +262,18 @@ export interface TraceStats {
   byAgentType: Record<string, number>;
   /** Steps by model. */
   byModel: Record<string, number>;
+  /**
+   * G18 — non-LLM facts recorded across all traces (tool calls, gate decisions,
+   * refusals). Counted separately from `totalSteps` on purpose: an event is not
+   * an LLM call, and adding it to the token/latency averages would make both
+   * wrong. `refusals` is the number the confirmation-gate audit could not obtain
+   * before this existed.
+   */
+  totalEvents: number;
+  /** How many of those events are refusals (declined calls). */
+  refusals: number;
+  /** How many are gate DECISIONS (a nudge spent, or autonomy proceeding). */
+  gateDecisions: number;
   updatedAt: number;
 }
 
@@ -217,6 +306,13 @@ const CURRENT_VERSION = 1;
 export const MAX_TRACES = 60;
 /** Cap steps per trace at 200 (a long pipeline still fits). */
 const MAX_STEPS_PER_TRACE = 200;
+/**
+ * Cap NON-LLM events per trace at 400 — deliberately higher than the step cap:
+ * a busy agentic turn runs many tools per step, and the tail (the last actions
+ * before the turn ended) is what an audit reads. Like the step cap, this keeps
+ * 60 traces bounded instead of letting one long run dominate the file.
+ */
+const MAX_EVENTS_PER_TRACE = 400;
 /** Cap the stored stable layer so 60 traces stay bounded (true size is kept). */
 const MAX_SYSTEM_PROMPT_CHARS = 16_000;
 /** Preview lengths (keep trace files small). */
@@ -286,6 +382,7 @@ export function beginTrace(
     provider: meta.provider,
     model: meta.model,
     steps: [],
+    events: [],
   });
   // Cap: keep the most recent MAX_TRACES.
   if (data.traces.length > MAX_TRACES) {
@@ -339,6 +436,35 @@ export function recordStep(
 }
 
 /**
+ * Record one NON-LLM event (a tool call, a gate decision, a refusal) — G18.
+ *
+ * Same contract as {@link recordStep}: best-effort, never throws, and the tail
+ * is kept when the cap is hit (the most recent actions are the ones an audit
+ * reads). The caller passes WHAT HAPPENED; `seq`/`timestamp` are assigned here
+ * so two recorders can never disagree about ordering.
+ */
+export function recordTraceEvent(
+  traceId: string,
+  event: Omit<TraceEvent, 'seq' | 'timestamp'>,
+): void {
+  try {
+    const data = readFile();
+    const trace = data.traces.find((t) => t.id === traceId);
+    if (!trace) return;
+    const events = trace.events ?? (trace.events = []);
+    events.push({ ...event, seq: events.length + 1, timestamp: Date.now() });
+    if (events.length > MAX_EVENTS_PER_TRACE) {
+      trace.events = events.slice(-MAX_EVENTS_PER_TRACE);
+      // Re-number so seq stays 1-based contiguous, exactly like the step cap.
+      trace.events.forEach((e, i) => { e.seq = i + 1; });
+    }
+    writeFile(data);
+  } catch {
+    // Best-effort — an instrument must never break the run it observes.
+  }
+}
+
+/**
  * Mark a trace finished (sets endedAt, durationMs, success). Idempotent: a
  * second endTrace (e.g. from a finally block after an early close) is a no-op.
  */
@@ -370,6 +496,7 @@ export function buildTraceOutcome(input: {
   unfulfilledPromise?: boolean;
   unverifiedEdit?: boolean;
   unverifiedEditClaim?: boolean;
+  undeliveredArtifact?: boolean;
 }): TraceOutcome {
   const tools = [...(input.tools ?? [])];
   if (input.cancelled) return { kind: 'cancelled', tools };
@@ -383,6 +510,7 @@ export function buildTraceOutcome(input: {
     ...(input.unfulfilledPromise ? { unfulfilledPromise: true } : {}),
     ...(input.unverifiedEdit ? { unverifiedEdit: true } : {}),
     ...(input.unverifiedEditClaim ? { unverifiedEditClaim: true } : {}),
+    ...(input.undeliveredArtifact ? { undeliveredArtifact: true } : {}),
   };
 }
 
@@ -421,6 +549,9 @@ export function getTraceStats(): TraceStats {
   let totalSteps = 0;
   let latencySum = 0;
   let tokenSum = 0;
+  let totalEvents = 0;
+  let refusals = 0;
+  let gateDecisions = 0;
   for (const trace of data.traces) {
     for (const step of trace.steps) {
       totalSteps++;
@@ -428,6 +559,11 @@ export function getTraceStats(): TraceStats {
       tokenSum += step.inputTokens + step.outputTokens;
       byAgentType[step.agentType] = (byAgentType[step.agentType] || 0) + 1;
       byModel[step.model] = (byModel[step.model] || 0) + 1;
+    }
+    for (const event of trace.events ?? []) {
+      totalEvents++;
+      if (event.kind === 'refusal') refusals++;
+      if (event.kind === 'gate') gateDecisions++;
     }
   }
   return {
@@ -437,6 +573,9 @@ export function getTraceStats(): TraceStats {
     totalTokens: tokenSum,
     byAgentType,
     byModel,
+    totalEvents,
+    refusals,
+    gateDecisions,
     updatedAt: Date.now(),
   };
 }

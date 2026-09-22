@@ -108,6 +108,8 @@ export interface ChatEngine {
     toolCalls?: string[];
     /** True when the answer claimed a delivery no delivery tool performed. */
     unverifiedActionClaim?: boolean;
+    /** G13b — the request asked for an authored file and none was written. */
+    undeliveredArtifact?: boolean;
     /** True when the answer closed on a promise the turn never carried out. */
     unfulfilledPromise?: boolean;
     provider?: string;
@@ -776,6 +778,15 @@ export class ChatConsole {
         honestContent +=
           '\n\n⚠️ Note: I described what I was about to do, but I did not actually carry it out yet. ' +
           'Say "go ahead" and I will do it now.';
+      }
+      // G13b — the deliverable case, which reads MOST like success: a complete
+      // story in the bubble and no file anywhere. The correction is appended to
+      // the bubble (the trace records the flag) so the reader is not left to
+      // discover the missing artifact by opening a path that was never created.
+      if (answer.undeliveredArtifact) {
+        honestContent +=
+          '\n\n⚠️ Note: this request asked for a written deliverable, but no file was written — ' +
+          'the text above is the answer, not the artifact. Say "save it to a file" and I will write it now.';
       }
       return {
         ok: true,

@@ -259,6 +259,34 @@ export const AUTHORIZED_WORK_NUDGE =
   'default — and never ask for permission in plain text.';
 
 /**
+ * The nudge sent when the request asked for an AUTHORED deliverable to be
+ * produced and the turn ended having written nothing to disk (G13b).
+ *
+ * WHY THIS IS NOT THE EXISTING DANGLING-PROMISE NUDGE. That one fires when the
+ * model announces an action and does nothing — it keys on the model's closing
+ * line. The failure here is quieter and was the one that shipped a 12-page story
+ * into a chat window: the model DID the work, in prose, and simply never wrote
+ * it anywhere. There is no promise to detect and no missing tool call to point
+ * at, so the gate has to key on the REQUEST and the ABSENCE of a file.
+ *
+ * It names the destination when the request gave one ("write it to the path the
+ * request named") because "write it somewhere" leaves the model free to answer
+ * with a filename it invented; it also says plainly that composing the text was
+ * not enough, since that is exactly what the model believes it already did.
+ */
+export function deliverableNudge(requestedPath?: string): string {
+  const destination = requestedPath
+    ? `the request named the destination \u2014 write the complete work to ${requestedPath}`
+    : 'write the complete work to a file (naming it after the deliverable) in the workspace';
+  return (
+    'The request asked for a written deliverable to be PRODUCED, and you composed the text in your ' +
+    'reply but wrote no file \u2014 so nothing has been delivered. Composing it in the answer does not ' +
+    'satisfy the request: ' + destination + ', using write_file. The request itself already authorised ' +
+    'this, so do not stop to ask. When the file is written, say which path it landed at.'
+  );
+}
+
+/**
  * The correction appended to a delivered answer whose code-change claim was
  * never verified. Kept short and honest — it states what is known, not a
  * verdict about whether the edit is correct.

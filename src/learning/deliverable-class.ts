@@ -31,6 +31,9 @@
  * orchestrator plans SECTIONS instead of a program.
  */
 
+import { requestAuthorizesWrites } from './autonomy-policy.js';
+import { parseLongFormTarget } from './long-form.js';
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /**
@@ -39,6 +42,7 @@
  * `code` is the historical default and keeps every software ask on its
  * existing path — this module must never change how a code task is planned.
  */
+
 export type DeliverableClass = 'code' | 'document' | 'creative' | 'data' | 'research';
 
 /**
@@ -414,6 +418,73 @@ function classifySubstrates(
  */
 export function isAuthoredGoal(goal: string): boolean {
   return classifyDeliverable(goal).authored;
+}
+
+/**
+ * Is this goal an authored deliverable too large to fit ONE generation?
+ *
+ * The single source of truth for "needs the unit-planning engine": an explicit
+ * magnitude that resolves to more than one bounded unit, or a book/novel with an
+ * EXPLICIT count. A DEFAULT magnitude for an unnumbered book ("write a book")
+ * is deliberately excluded — a default is not something the user asked for, so
+ * it must not re-route the ask. `isLongFormDeliverable` in the conversation gate
+ * delegates here so the rule can never be defined twice and drift.
+ */
+export function isLongFormAuthoredGoal(goal: string): boolean {
+  const g = (goal || '').trim();
+  if (!g) return false;
+  const target = parseLongFormTarget(g);
+  if (!target || target.unitCount <= 1) return false;
+  if (/^default\b/.test(target.source)) return false;
+  return isAuthoredGoal(g);
+}
+
+/**
+ * Is this goal an authored deliverable whose size argues for the ASSEMBLY
+ * engine — either a magnitude that needs more than one unit ("a 200 page
+ * book"), or a NAMED DESTINATION ("write a 2 page story to /path/x.md")?
+ *
+ * This is the narrow half of G13b, for the surfaces that must decide between a
+ * chat answer and a produced artifact (`conversation-gate.ts`). It is narrow on
+ * purpose: for "write a poem about rain" the text IS the deliverable, and turning
+ * every short creative ask into a multi-agent pipeline run would be the original
+ * category error in reverse. Pinned chat asks: a poem, a song, an essay, a 1-page
+ * summary, and a bare "a book" (a DEFAULT magnitude is not something the user
+ * asked for).
+ */
+export function asksForAuthoredFile(goal: string): boolean {
+  if (!isAuthoredGoal(goal)) return false;
+  if (isLongFormAuthoredGoal(goal)) return true;
+  // The verdict is the SAME one the write gate uses, so "the user named a
+  // destination" can never mean two different things in two places.
+  return requestAuthorizesWrites(goal).requestedPath !== undefined;
+}
+
+/**
+ * Is this goal an authored deliverable the user asked to be PRODUCED?
+ *
+ * G13b. `isAuthoredGoal` says WHAT the deliverable is; this says the user asked
+ * for the ARTIFACT rather than merely for the text. The gap it closes was found
+ * live: `write a 12 page story at /path/Mahagatha.md` and `tell me a story`
+ * looked the same to the engine router, so the loop engine answered the first
+ * one in chat — a complete, genuinely good story in the reply and NOTHING at the
+ * path the user named.
+ *
+ * This is the BROAD half, and its callers are the ones that run only AFTER the
+ * ask is already known to be a task rather than a chat answer:
+ *
+ *   - the engine ROUTER (`engine-router.ts`) — among tasks, an authored
+ *     deliverable belongs to the pipeline, which plans units and ASSEMBLES the
+ *     document, including the hybrid "web-based book" shape;
+ *   - the loop engine's DELIVERABLE GATE (`tool-loop.ts`) — the backstop for an
+ *     explicit `--engine loop` run, where the right outcome is still the file.
+ *
+ * The two halves differ by exactly that context, so `conversation-gate.ts` uses
+ * {@link asksForAuthoredFile} and these two use this one.
+ */
+export function wantsAuthoredArtifact(goal: string): boolean {
+  if (!isAuthoredGoal(goal)) return false;
+  return requestAuthorizesWrites(goal).authorized;
 }
 
 /**

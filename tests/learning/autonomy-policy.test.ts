@@ -13,6 +13,9 @@ import {
   autonomouslyDecidedLine,
   consultLine,
   decideAutonomously,
+  extractRequestedPath,
+  replyAsksTheReader,
+  requestAuthorizesWrites,
 } from '../../src/learning/autonomy-policy.js';
 
 describe('decideAutonomously — proceed by default', () => {
@@ -122,5 +125,64 @@ describe('reporting lines', () => {
     expect(line).toMatch(/1\. replace/);
     expect(line).toMatch(/recommendation/);
     expect(line).toMatch(/"go"/);
+  });
+});
+
+/**
+ * G13b — the two reply/request readings the DELIVERABLE gate is built from.
+ *
+ * `extractRequestedPath` exists so \"the request names a destination\" and \"here
+ * is that destination\" can never disagree (the failure being a gate that asks
+ * for a file while the request visibly names one), and so the gate never has to
+ * INVENT a filename. `replyAsksTheReader` draws the line between the two endings
+ * that look alike: \"Do you want me to create the files?\" is a stall, while
+ * \"Which of these two titles do you prefer?\" is a decision input the user asked
+ * to be consulted on.
+ */
+describe('extractRequestedPath — the destination the request actually gave', () => {
+  it('reads an absolute path', () => {
+    expect(extractRequestedPath('write a story to /Users/d/story/Mahagatha.md')).toBe(
+      '/Users/d/story/Mahagatha.md',
+    );
+  });
+
+  it('reads a home-relative path', () => {
+    expect(extractRequestedPath('write the plan to ~/docs/plan.md please')).toBe('~/docs/plan.md');
+  });
+
+  it('drops trailing sentence punctuation', () => {
+    expect(extractRequestedPath('save it at /tmp/x/story.md.')).toBe('/tmp/x/story.md');
+  });
+
+  it('returns undefined when the request names no path — the gate must not invent one', () => {
+    expect(extractRequestedPath('write a 12 page story called Kharig Nights')).toBeUndefined();
+    expect(extractRequestedPath('')).toBeUndefined();
+  });
+
+  it('agrees with the authorization verdict it is paired with', () => {
+    // If the verdict names a path as the evidence, the extractor must find it.
+    const request = 'write a 12 page story to /Users/d/story/Mahagatha.md';
+    const auth = requestAuthorizesWrites(request);
+    expect(auth.authorized).toBe(true);
+    expect(auth.reason).toMatch(/destination path/);
+    expect(auth.requestedPath).toBe('/Users/d/story/Mahagatha.md');
+  });
+});
+
+describe('replyAsksTheReader — a consult is not a stall', () => {
+  it('is true when the reply ends on a question', () => {
+    expect(replyAsksTheReader('Which of these two titles do you prefer?')).toBe(true);
+    expect(replyAsksTheReader('Here is the outline.\n\nDo you prefer the first or the second?')).toBe(true);
+  });
+
+  it('is false for a delivered answer', () => {
+    expect(replyAsksTheReader('The story is written. It is 12 pages.')).toBe(false);
+    expect(replyAsksTheReader('')).toBe(false);
+  });
+
+  it('judges only the CLOSING — a question mid-answer is narration, not a consult', () => {
+    expect(
+      replyAsksTheReader('What went wrong? The cache was stale. I have fixed it and the tests pass.'),
+    ).toBe(false);
   });
 });

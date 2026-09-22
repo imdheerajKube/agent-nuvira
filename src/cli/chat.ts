@@ -48,7 +48,7 @@ import {
   isToolCallingUnsupported,
   stripToolCallArtifacts,
 } from '../inference/tool-call-utils.js';
-import { beginTrace, endTrace, recordStep, buildTraceOutcome } from '../learning/reasoning-trace.js';
+import { beginTrace, endTrace, recordStep, recordTraceEvent, buildTraceOutcome } from '../learning/reasoning-trace.js';
 import { recordWorkingState, getWorkingState, formatWorkingState } from '../learning/working-state.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile, shouldSkipNativeTools } from '../learning/model-harness.js';
@@ -604,6 +604,12 @@ export class ChatCommand extends BaseCommand {
    * carried out. Surfaces must not present such a turn as "in progress".
    */
   unfulfilledPromise?: boolean;
+  /**
+   * G13b — the request asked for an authored deliverable to be produced and
+   * the turn wrote nothing to disk. The reply may be excellent prose; the
+   * artifact does not exist, so no surface may read it as finished work.
+   */
+  undeliveredArtifact?: boolean;
   provider?: string;
   model?: string;
 }> {
@@ -715,6 +721,7 @@ export class ChatCommand extends BaseCommand {
       toolCalls: answer.toolCalls,
       unverifiedActionClaim: answer.unverifiedActionClaim,
       unfulfilledPromise: answer.unfulfilledPromise,
+      undeliveredArtifact: answer.undeliveredArtifact,
       provider: type,
       model,
     };
@@ -1223,6 +1230,8 @@ export class ChatCommand extends BaseCommand {
     unverifiedActionClaim?: boolean;
     /** True when the answer closed on a promise the turn never carried out. */
     unfulfilledPromise?: boolean;
+    /** G13b — asked for an authored file and wrote none (see the gate). */
+    undeliveredArtifact?: boolean;
   }> {
     // Cache check first (same as the legacy path).
     const cache = getCache();
@@ -1374,6 +1383,13 @@ export class ChatCommand extends BaseCommand {
     // G3 — the files this turn mutates, observed on the tool event stream so
     // the ledger can remember them (the loop reports tool NAMES, not paths).
     const touchedFiles = new Set<string>();
+    /**
+     * G18 — the turn's trace id, for the autonomy-gate events that tools emit
+     * DURING the loop. Assigned a few lines below (the trace begins once the
+     * thread and tool surface exist); the emit can only fire from tool
+     * execution, which is strictly after that assignment.
+     */
+    let traceIdForEvents: string | undefined;
     const toolContext: ToolContext = {
       configManager: this.configManager,
       loadedExtraTools,
@@ -1408,6 +1424,21 @@ export class ChatCommand extends BaseCommand {
         // card with accept / edit / reject).
         if (ctxOverrides?.onSkillDraft && event === 'skill:draft') {
           ctxOverrides.onSkillDraft(data as import('../tools/skill-tool.js').SkillDraftPayload);
+        }
+        // G18 — an autonomy gate DECIDING to proceed is a fact about the turn
+        // ("this change was applied without asking, and here is why"), not just
+        // a bus notification: record it on the turn's trace so the decision is
+        // auditable after the fact.
+        if (event === 'autonomy:write-applied' && traceIdForEvents) {
+          const d = data as { tool?: string; reason?: string } | undefined;
+          recordTraceEvent(traceIdForEvents, {
+            kind: 'gate',
+            gate: 'autonomy',
+            ...(d?.tool ? { tool: d.tool } : {}),
+            summary: d?.reason
+              ? `proceeded without asking — ${d.reason}`
+              : 'proceeded without asking — the request itself was the authorization',
+          });
         }
         getEventBus().emit(event as never, data, source);
       },
@@ -1450,6 +1481,8 @@ export class ChatCommand extends BaseCommand {
       provider: session.type,
       model: session.model,
     });
+    // G18 — the tool-context emit (declared above) now has somewhere to write.
+    traceIdForEvents = chatTraceId;
     const seenStepDigests = new Set<string>();
     const digestPrompt = (p: string): string => {
       try { return createHash('sha256').update(p).digest('hex').slice(0, 16); } catch { return String(p.length); }
@@ -1528,6 +1561,10 @@ export class ChatCommand extends BaseCommand {
         maxParallelReads: harness.maxParallelReads,
         onToken: ctxOverrides?.onToken,
         signal: ctxOverrides?.signal,
+        // G18 — the same sink the execute loop uses: tool calls, gate decisions
+        // and refusals land on the turn's trace, so the chat surface can answer
+        // "what did it actually run, and what did it decline?" from evidence.
+        onTraceEvent: (event) => recordTraceEvent(chatTraceId, event),
         deps: {
           callModel: callModelWithTrace,
           executeTool: async (name, args, ctx) => {
@@ -1590,6 +1627,7 @@ export class ChatCommand extends BaseCommand {
         unfulfilledPromise: result.unfulfilledPromise,
         unverifiedEdit: result.unverifiedEdit,
         unverifiedEditClaim: result.unverifiedEditClaim,
+        undeliveredArtifact: result.undeliveredArtifact,
       }),
     );
 
@@ -1626,6 +1664,21 @@ export class ChatCommand extends BaseCommand {
       }
     } catch {
       // Best-effort — a warning must never break the turn.
+    }
+
+    // G13b — the DELIVERABLE warning, on the console for the same reason: the
+    // trace badge is invisible to a CLI user, and this failure is the one that
+    // looks most like success. The reply reads as a finished 12-page story while
+    // no file exists, so the reader is told plainly that the deliverable is
+    // missing rather than left to discover it when the path is not there.
+    try {
+      if (result.undeliveredArtifact) {
+        logger.warn(
+          '   ⚠️  This request asked for a written deliverable, but NO file was written this turn — the text above is the answer, not the artifact.',
+        );
+      }
+    } catch {
+      // Best-effort.
     }
 
     // Finalize the turn (cache + memory + registry telemetry).
@@ -1672,6 +1725,7 @@ export class ChatCommand extends BaseCommand {
       toolCalls: result.toolCalls,
       unverifiedActionClaim: result.unverifiedActionClaim,
       unfulfilledPromise: result.unfulfilledPromise,
+      undeliveredArtifact: result.undeliveredArtifact,
     };
   }
 

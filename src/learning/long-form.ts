@@ -518,9 +518,20 @@ export function jobProgress(job: LongFormJob): LongFormProgress {
   const total = job.sections.length;
   const done = job.sections.filter((s) => s.status === 'done').length;
   const words = job.sections.reduce((sum, s) => sum + (s.status === 'done' ? s.words : 0), 0);
-  const percent = job.target.wordsTarget > 0
+  const wordsPercent = job.target.wordsTarget > 0
     ? Math.min(100, Math.round((words / job.target.wordsTarget) * 100))
     : 0;
+  // The completion percentage is the MINIMUM of the two ways the deliverable can
+  // be incomplete, and that is deliberate. Writers routinely OVERSHOOT the per-
+  // chapter target — a live 100-page run hit 43,906 words against a 35,000 target
+  // by chapter 31 of 39 — so a word-only percentage saturated at 100 while eight
+  // units were still owed: the progress line read "31/39 complete … 100%", which
+  // is the same class of contradiction as a listing count presented as a
+  // capability. Units are the generation boundary and the work still outstanding,
+  // so the lower of the two is the honest number, and 100% means the deliverable
+  // EXISTS (all units done) rather than "the word count ran out of road".
+  const unitPercent = total > 0 ? Math.round((done / total) * 100) : 0;
+  const percent = Math.min(wordsPercent, unitPercent);
   return {
     done,
     total,

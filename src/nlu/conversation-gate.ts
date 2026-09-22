@@ -34,8 +34,7 @@
 import { isTrivialPrompt } from '../memory/provider.js';
 import { parseRequestSync, type ParsedRequest } from './parser.js';
 import { isContentArtifactAsk, stripArtifactReferences } from './intent.js';
-import { isAuthoredGoal } from '../learning/deliverable-class.js';
-import { parseLongFormTarget } from '../learning/long-form.js';
+import { asksForAuthoredFile, isLongFormAuthoredGoal } from '../learning/deliverable-class.js';
 // The learned corrections. A plain store (mtime-cached, no routing graph), so
 // consulting it on every ask costs a comparison, not a read.
 import { applyLearning, noteLearningApplied, type NluLearning } from './learnings.js';
@@ -115,15 +114,17 @@ export function hasCodingAction(text: string): boolean {
  *      category error (plan a program for prose) this workstream exists to
  *      remove.
  */
+/**
+ * Does this ask need more than one unit of work?
+ *
+ * Kept as a named export because callers and tests read it by this name, but it
+ * now DELEGATES to `isLongFormAuthoredGoal` — one definition, in the module that
+ * owns deliverable classification. The rule used to exist twice (here and in
+ * the classifier), which is exactly how "what counts as longer than one
+ * generation" drifts.
+ */
 export function isLongFormDeliverable(text: string | null | undefined): boolean {
-  const t = String(text ?? '').trim();
-  if (!t) return false;
-  const target = parseLongFormTarget(t);
-  if (!target || target.unitCount <= 1) return false;
-  // `source` is the matched phrase ("100 pages") or a sentence describing a
-  // default — a default magnitude is not something the user asked for.
-  if (/^default\b/.test(target.source)) return false;
-  return isAuthoredGoal(t);
+  return isLongFormAuthoredGoal(String(text ?? ''));
 }
 
 /**
@@ -140,9 +141,26 @@ export function isConversationalQuestion(text: string | null | undefined): boole
   const t = String(text ?? '').trim();
   if (!t) return false;
   if (isTrivialPrompt(t)) return true;
-  // A long-form deliverable outranks the NLU's chat mapping for `write`: the
-  // machinery that can actually finish it must be the one that receives it.
-  if (isLongFormDeliverable(t)) return false;
+  // An authored deliverable that has to land ON DISK outranks the NLU's chat
+  // mapping for `write`: the machinery that can actually produce the artifact
+  // must be the one that receives it. Two evidence kinds qualify, and both are
+  // precise — a magnitude needing more than one unit ("a 200 page book"), or a
+  // NAMED DESTINATION ("write a 2 page story to /path/kharig-nights.md").
+  //
+  // The second one is G13b, found live: "2 pages" resolves to a single unit, so
+  // `isLongFormDeliverable` fails it and the ask fell through to the NLU's chat
+  // mapping — a complete story in the reply, and no file at the path the user
+  // named. This gate is the only place that could fix it: every surface routes
+  // through here, and the engine router (which would have sent it to the
+  // pipeline) is never reached when the ask is called chat.
+  //
+  // Deliberately NOT trigger-happy — this is `asksForAuthoredFile`, the narrow
+  // half. A creation verb on an authored noun alone does not qualify, so "write a
+  // poem about rain", "write an essay about my village" and "write a book about
+  // the sea" (default magnitude) stay chat answers: for those the text IS the
+  // deliverable. The broader `wantsAuthoredArtifact` would re-route every one of
+  // them, which is the original category error in reverse.
+  if (asksForAuthoredFile(t)) return false;
   if (hasCodingAction(t)) return false;
   const parsed = parseRequestSync(t);
   return parsed.action.run === 'chat';
@@ -208,7 +226,13 @@ export function explainAskKind(
   if (!t) return { kind: 'chat', base: 'chat' };
   if (isTrivialPrompt(t)) return { kind: 'chat', base: 'chat' };
 
-  const base: AskKind = isLongFormDeliverable(t)
+  // Same two artifact rules as `isConversationalQuestion`, in the same order:
+  // the two must agree, or a surface that calls one and a surface that calls the
+  // other would route the identical ask differently (the disagreement this
+  // function was written to end). `asksForAuthoredFile` is the whole rule — it
+  // already covers the long-form magnitude case that used to be spelled out
+  // separately here.
+  const base: AskKind = asksForAuthoredFile(t)
     ? 'pipeline'
     : hasCodingAction(t)
     ? 'pipeline'

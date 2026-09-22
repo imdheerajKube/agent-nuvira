@@ -31,6 +31,7 @@
  */
 
 import { getCatalogProvider } from '../inference/provider-catalog.js';
+import { wantsAuthoredArtifact } from './deliverable-class.js';
 import type { ComplexityLevel } from './hybrid-router.js';
 
 /** The executable engines (Addendum v4 guiding decision). */
@@ -52,6 +53,7 @@ export type EngineReason =
   | 'config-override'
   | 'local-provider'
   | 'weak-reasoning-tier'
+  | 'authored-artifact'
   | 'strong-tier-default'
   | 'unknown-provider-default';
 
@@ -67,6 +69,12 @@ export interface EngineDecision {
     model: string | undefined;
     complexity: ComplexityLevel | undefined;
     configMode: EngineModeConfig;
+    /**
+     * The goal this decision was made for (G13b) — echoed only when the caller
+     * supplied one, so a caller that passes no goal produces the same decision
+     * object as before this input existed.
+     */
+    goal?: string;
   };
 }
 
@@ -113,12 +121,18 @@ export function resolveEngine(opts: {
   model?: string;
   complexity?: ComplexityLevel;
   configManager?: EngineRouterConfigLike;
+  /**
+   * The user's goal (G13b). Optional and purely ADDITIVE: omitted, every rule
+   * below behaves exactly as it did before this input existed.
+   */
+  goal?: string;
 }): EngineDecision {
   const inputs = {
     provider: opts.provider,
     model: opts.model,
     complexity: opts.complexity,
     configMode: readEngineModeConfig(opts.configManager),
+    ...(opts.goal !== undefined ? { goal: opts.goal } : {}),
   };
 
   // 1. Explicit override — absolute (CI pins 'pipeline', enthusiasts pin 'loop').
@@ -148,6 +162,34 @@ export function resolveEngine(opts: {
       engine: 'pipeline',
       reason: 'weak-reasoning-tier',
       explanation: `provider '${opts.provider}' reasoning baseline ${catalog.capabilities.reasoning} < ${WEAK_REASONING_FLOOR} — guided pipeline`,
+      inputs,
+    };
+  }
+
+  // 2.5 G13b — an AUTHORED ARTIFACT the user asked to be produced goes to the
+  //     pipeline, whatever the provider tier.
+  //
+  //     Why tier is the wrong input for this class of ask: the loop engine is
+  //     optimised for a turn that ACTS with tools, and for "write a 12 page
+  //     story at /path/Mahagatha.md" it produced a complete, genuinely good
+  //     story in chat and wrote NOTHING to disk. The turn was reported as a
+  //     success, the ledger never saw a deliverable to continue or assemble,
+  //     and the same ask over the pipeline engine — which plans units, keeps
+  //     continuity across batches, and ASSEMBLES the document — finished
+  //     unattended with the chapters and the book on disk.
+  //
+  //     The predicate is deliberately narrow (`wantsAuthoredArtifact`): authored
+  //     work AND evidence the user asked for it to be produced. "Tell me a
+  //     story" and "explain how to write a story to a file" are unaffected, so a
+  //     chat answer stays a chat answer. `config-override` above still wins — an
+  //     explicit `routing.engineMode='loop'` is obeyed, which is why the loop
+  //     engine ALSO carries a deliverable gate of its own.
+  if (opts.goal && wantsAuthoredArtifact(opts.goal)) {
+    return {
+      engine: 'pipeline',
+      reason: 'authored-artifact',
+      explanation:
+        'the request asks for an authored deliverable to be produced — pipeline (plans units, keeps continuity, assembles the document)',
       inputs,
     };
   }

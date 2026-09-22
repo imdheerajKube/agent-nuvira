@@ -84,6 +84,14 @@ export const STALE_RUNNING_MS = 25 * 60_000;
 /** Bounded store — a queue is a convenience, not a backlog. */
 const MAX_JOBS = 25;
 
+/**
+ * Per-batch economy rows kept for the run report. A 100-page book is ~39
+ * batches, so the cap is far above a normal run; a job that somehow runs
+ * thousands of batches keeps its most recent window rather than an unbounded
+ * file.
+ */
+const MAX_BATCH_STATS = 100;
+
 const FILE_NAME = 'unattended-jobs.json';
 const CURRENT_VERSION = 1;
 
@@ -143,6 +151,16 @@ export interface UnattendedJob {
   /** Report progress to the user as the job runs (off for silent builds). */
   notify: boolean;
   /**
+   * Total spend across the job's batches (USD), summed from MEASURED windows.
+   * Undefined until a surface reports economy data — never defaulted to 0, so
+   * "free" and "not measured" stay distinguishable in a report.
+   */
+  costUsd?: number;
+  /** Total tokens across the job's batches (measured windows). */
+  tokens?: number;
+  /** Per-batch economy and duration, oldest first (bounded to MAX_BATCH_STATS). */
+  batchStats?: BatchStat[];
+  /**
    * Files that must ALL exist for the deliverable to count as finished.
    *
    * Set by a composite plan (site + chapters + optional tools). The progress
@@ -151,6 +169,30 @@ export interface UnattendedJob {
    * experience layer is still missing.
    */
   expectedArtifacts?: string[];
+}
+
+/**
+ * One batch's measured economy and duration, kept for the run report (G27).
+ *
+ * Recorded for EVERY batch, including failures: a failed batch still spent
+ * tokens, and hiding its cost is exactly the accounting gap that makes a long
+ * unattended run's bill a surprise.
+ */
+export interface BatchStat {
+  /** 1-based batch number within the job. */
+  index: number;
+  /** Measured completion 0–100 after the batch. */
+  progress: number;
+  /** Human-readable progress line after the batch. */
+  progressLine?: string;
+  /** Measured spend for this batch's window (USD). */
+  costUsd?: number;
+  /** Measured tokens for this batch's window. */
+  tokens?: number;
+  /** Wall-clock duration of the batch. */
+  durationMs?: number;
+  /** Short failure reason, when the batch failed. */
+  error?: string;
 }
 
 /** What a surface tells the store after running one batch. */
@@ -170,6 +212,12 @@ export interface BatchOutcome {
   question?: string;
   /** The batch failed (provider error, verification failure). */
   error?: string;
+  /** Wall-clock duration of the batch in ms (measured by the surface). */
+  durationMs?: number;
+  /** Spend during the batch window (USD), measured from the cost ledger. */
+  costUsd?: number;
+  /** Tokens during the batch window, measured from the cost ledger. */
+  tokens?: number;
 }
 
 /** Everything needed to schedule ongoing work. */
@@ -481,6 +529,26 @@ export function recordBatchOutcome(
   job.pendingQuestion = undefined;
   if (outcome.progressLine) job.progressLine = outcome.progressLine;
 
+  // ── Per-batch economy (G27), recorded for failures too. ──────────────────
+  // A batch that died on a provider error still burned tokens; a report that
+  // counted only the batches that reached the success path would understate
+  // the bill of exactly the runs most likely to be expensive. `progress` here
+  // is the batch's MEASURED completion (a finished batch measures 100).
+  if (outcome.costUsd !== undefined) job.costUsd = round6((job.costUsd ?? 0) + outcome.costUsd);
+  if (outcome.tokens !== undefined) job.tokens = (job.tokens ?? 0) + outcome.tokens;
+  job.batchStats = [
+    ...(job.batchStats ?? []),
+    {
+      index: job.batches,
+      progress: typeof outcome.progress === 'number' ? outcome.progress : job.progress,
+      ...(outcome.progressLine ? { progressLine: outcome.progressLine } : {}),
+      ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
+      ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
+      ...(outcome.durationMs !== undefined ? { durationMs: outcome.durationMs } : {}),
+      ...(outcome.error ? { error: outcome.error.slice(0, 200) } : {}),
+    },
+  ].slice(-MAX_BATCH_STATS);
+
   // ── A hard failure is checked FIRST, before completion. ──────────────────
   // A batch that failed verification can leave every file on disk and still
   // not be a delivered deliverable (a site that does not present the chapters).
@@ -572,6 +640,75 @@ export function resumeUnattendedJob(id: string, extraDeadlineMs = 0, now: number
 /** Percentage complete, clamped. */
 export function jobPercent(job: UnattendedJob): number {
   return Math.max(0, Math.min(100, Math.round(job.progress)));
+}
+
+/** USD at micro-cent precision — the same rounding the cost ledger uses. */
+function round6(value: number): number {
+  return Math.round(value * 100000) / 100000;
+}
+
+/** A compact human duration (`850ms`, `12.4s`, `3m 07s`, `1h 12m`). */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${String(Math.round(seconds % 60)).padStart(2, '0')}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, '0')}m`;
+}
+
+/**
+ * Per-batch cost and latency report for an unattended run (G27).
+ *
+ * WHY. The run reported a batch COUNT and a percentage, which answers neither
+ * of the two questions a long unattended job actually raises: what did it
+ * cost, and is it slowing down. Those had to be reconstructed by hand from the
+ * cost ledger afterwards.
+ *
+ * HONESTY. A dash means the surface did not measure that column — never a
+ * fabricated 0, which would read as "free" for a batch that simply was not
+ * metered. Token/cost columns come from the persisted cost ledger's timestamps
+ * (see `costSince`), so a resumed job in a new process reports accurately.
+ *
+ * @returns a printable block, or '' when no batch measured anything.
+ */
+export function formatBatchReport(job: UnattendedJob): string {
+  const stats = job.batchStats ?? [];
+  if (stats.length === 0) return '';
+
+  const rows: string[] = [];
+  for (const s of stats) {
+    const tokens = s.tokens === undefined ? '—' : s.tokens.toLocaleString('en-US');
+    const cost = s.costUsd === undefined ? '—' : `$${s.costUsd.toFixed(5)}`;
+    const time = s.durationMs === undefined ? '—' : formatDuration(s.durationMs);
+    const note = s.error ? `  ✗ ${s.error.replace(/\s+/g, ' ').slice(0, 60)}` : '';
+    rows.push(
+      `   ${String(s.index).padStart(5)}  ${`${Math.round(s.progress)}%`.padStart(6)}  ` +
+        `${tokens.padStart(11)}  ${cost.padStart(10)}  ${time.padStart(8)}${note}`,
+    );
+  }
+
+  const totalTokens = job.tokens;
+  const totalCost = job.costUsd;
+  const timedRows = stats.filter((s) => s.durationMs !== undefined);
+  const totalMs = timedRows.reduce((sum, s) => sum + (s.durationMs ?? 0), 0);
+  const averageMs = timedRows.length > 0 ? totalMs / timedRows.length : undefined;
+
+  const totals =
+    `   ${'total'.padStart(5)}  ${`${jobPercent(job)}%`.padStart(6)}  ` +
+    `${(totalTokens === undefined ? '—' : totalTokens.toLocaleString('en-US')).padStart(11)}  ` +
+    `${(totalCost === undefined ? '—' : `$${totalCost.toFixed(5)}`).padStart(10)}  ` +
+    `${(averageMs === undefined ? '—' : `~${formatDuration(averageMs)} avg`).padStart(8)}`;
+
+  return [
+    '',
+    '📊 Per-batch cost & latency',
+    `   ${'batch'.padStart(5)}  ${'done'.padStart(6)}  ${'tokens'.padStart(11)}  ${'cost'.padStart(10)}  ${'time'.padStart(8)}`,
+    ...rows,
+    totals,
+  ].join('\n');
 }
 
 /**

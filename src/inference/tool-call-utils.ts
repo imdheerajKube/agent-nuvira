@@ -353,6 +353,92 @@ function looksLikeDeliverableTail(text: string): boolean {
 }
 
 /**
+ * A leading line that is the model's OWN working notes or an echo of the
+ * prompt's fields, rather than the deliverable itself.
+ *
+ * Observed live (a 2-page story unit): the file opened with
+ *
+ *     # Chapter 1
+ *     Author.
+ *     Village boy finds a lamp in a banyan root.
+ *     Chapter 1 (the concluding unit of the opening).
+ *         *   *Note:* The prompt asks for the "CONCLUDING unit — Chapter 1" of an
+ *             "OPENING unit". This is slightly contradictory…
+ *
+ * before the prose started. The unit prompt already forbids all of this
+ * ("Output ONLY the prose", "No title line, no headings", "No preamble, no
+ * note about what you are doing") — but prompt compliance is a probability, and
+ * for a 39-unit book a violated prompt pollutes every chapter. The deliverable
+ * needs a guarantee, not a request.
+ *
+ * Deliberately narrow, and only ever applied to a LEADING block: an echoed
+ * field label (`Author.`, `Title:`), a heading line (`# Chapter 1`), a note
+ * marker, or a sentence that talks about the prompt/task itself.
+ */
+const AUTHOR_NOTE_LINE =
+  /^(?:#{1,6}\s*)?(?:author|title|form|book|chapter|unit|word\s*count|target|summary|requirements?|style|genre|logline|premise|setting|characters?)\s*[:.\u2014-]/i;
+const AUTHOR_HEADING_LINE = /^#{1,6}\s+\S/;
+const AUTHOR_NOTE_MARKER = /^\s*(?:\*{1,2}\s*)?(?:note|n\.b\.|nb|reminder)\s*[:.]?/i;
+const AUTHOR_META_SENTENCE =
+  /\b(?:the prompt|this prompt|the task|the instructions?|as an ai|as a language model|i (?:am|will|need|should|must)\b|here(?:'s| is) (?:the|my)|the (?:concluding|opening) unit|following the (?:prompt|instructions)|word target|as requested)\b/i;
+
+/** Does ONE line look like working notes rather than delivered prose? */
+function isAuthorNoteLine(line: string): boolean {
+  const t = line.trim();
+  if (!t) return false;
+  if (AUTHOR_NOTE_MARKER.test(t)) return true;
+  if (AUTHOR_NOTE_LINE.test(t)) return true;
+  if (AUTHOR_HEADING_LINE.test(t)) return true;
+  return t.length <= 400 && AUTHOR_META_SENTENCE.test(t);
+}
+
+/**
+ * Strip a LEADING block of the model's own working notes from an authored unit,
+ * so the artifact holds the work rather than a preamble about the work.
+ *
+ * Stops at the first line that is prose — so a note that legitimately appears
+ * inside the text is untouched — and returns the input UNCHANGED when stripping
+ * would leave too little to be the unit (a prose opening that merely happens to
+ * match one of the shapes must never cost the deliverable).
+ */
+export function stripLeadingAuthorNotes(content: string): string {
+  const text = content || '';
+  if (!text.trim()) return text;
+
+  const lines = text.split(/\r?\n/);
+  let cut = 0;
+  let sawNote = false;
+  let blankRun = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.trim() === '') {
+      // Blanks inside the leading block belong to it; a blank BEFORE any note
+      // cannot occur (leading whitespace is skipped by whoever trims first).
+      blankRun += 1;
+      if (sawNote) cut = i + 1;
+      continue;
+    }
+    if (!isAuthorNoteLine(line)) break;
+    // A heading is only a note in the LEADING position, and only when it looks
+    // like a container (`# Chapter 1`), never a short line of prose the author
+    // happened to bold.
+    if (AUTHOR_HEADING_LINE.test(line.trim()) && line.trim().replace(/#+\s*/, '').split(/\s+/).length > 6) break;
+    sawNote = true;
+    cut = i + 1;
+    blankRun = 0;
+  }
+  if (!sawNote) return text;
+  void blankRun;
+
+  const remainder = lines.slice(cut).join('\n').replace(/^\s*\n/, '');
+  // Never trade a real deliverable for a tidy one: require the surviving text
+  // to be a substantial majority of what came in, and to be non-empty.
+  if (remainder.trim().length < 100) return text;
+  if (remainder.trim().length < text.trim().length * 0.5) return text;
+  return remainder;
+}
+
+/**
  * Salvage the deliverable from a reply that opens with a reasoning trace.
  *
  * `looksLikeReasoningLeakReply` only answers "is this thinking?". Two of the

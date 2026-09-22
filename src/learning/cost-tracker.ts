@@ -400,6 +400,28 @@ export function getCostTracker(): CostTracker {
 }
 
 /**
+ * Spend and tokens recorded at or after `since` (epoch ms) — the per-batch
+ * economy window for unattended runs (G27).
+ *
+ * Read from the PERSISTED ledger rather than a session counter on purpose: a
+ * continuation batch runs through a fresh orchestrator (and after a resume, a
+ * fresh process), so an instance counter would report zero for every batch but
+ * the first. A timestamp window is the only measure that survives that.
+ */
+export function costSince(since: number): { costUsd: number; tokens: number; requests: number } {
+  let costUsd = 0;
+  let tokens = 0;
+  let requests = 0;
+  for (const entry of readCosts().entries) {
+    if (entry.timestamp < since) continue;
+    costUsd += entry.costUsd;
+    tokens += entry.totalTokens;
+    requests += 1;
+  }
+  return { costUsd: Math.round(costUsd * 100000) / 100000, tokens, requests };
+}
+
+/**
  * M2.2: record a call preferring MEASURED wire tokens when the provider
  * reported usage; otherwise fall back to the length-based estimate. Shared by
  * the OpenAI-compatible adapters so the measured-vs-estimated logic lives in

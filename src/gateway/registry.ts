@@ -92,6 +92,7 @@ import {
   measureUnattendedProgress,
   scheduleFromPendingWork,
 } from '../learning/unattended-progress.js';
+import { costSince } from '../learning/cost-tracker.js';
 import { logger } from '../utils/logger.js';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -2291,6 +2292,8 @@ export class GatewayRegistry {
       channelId: job.surface.channelId,
     };
     const origin = `${PLATFORM_LABELS[ref.platform] ?? ref.platform} continuation of a larger task`;
+    // G27: time the batch and measure its spend from the cost ledger window.
+    const startedAt = Date.now();
     const run = this.runChain.then(async () => {
       this.activeChannel = ref;
       return runPipelineTool(job.continuationPrompt, this.configManager, { board: false, origin });
@@ -2301,9 +2304,21 @@ export class GatewayRegistry {
     try {
       outcome = await run;
     } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) };
+      const economy = costSince(startedAt);
+      return {
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Date.now() - startedAt,
+        costUsd: economy.costUsd,
+        tokens: economy.tokens,
+      };
     }
 
+    const economy = costSince(startedAt);
+    const envelope = {
+      durationMs: Date.now() - startedAt,
+      costUsd: economy.costUsd,
+      tokens: economy.tokens,
+    };
     const measured = measureUnattendedProgress(job);
     // Refresh the schedule from the newest snapshot: a composite job only knows
     // its full artifact list once its phases have been planned.
@@ -2314,9 +2329,13 @@ export class GatewayRegistry {
     // failure and counts toward the failure cap.
     const moved = (measured.progress ?? 0) > job.progress;
     if (!outcome.success && !measured.finished && !moved) {
-      return { ...measured, error: outcome.error || outcome.summary || 'continuation batch failed' };
+      return {
+        ...measured,
+        ...envelope,
+        error: outcome.error || outcome.summary || 'continuation batch failed',
+      };
     }
-    return measured;
+    return { ...measured, ...envelope };
   }
 
   /**

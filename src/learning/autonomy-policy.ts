@@ -213,6 +213,18 @@ export interface WriteAuthorization {
   authorized: boolean;
   /** Why — recorded so the judgment is auditable rather than a vibe. */
   reason: string;
+  /**
+   * The destination path the request NAMED, when it named one (`… at
+   * /path/Mahagatha.md`).
+   *
+   * Carried because "the user asked for a file" and "the user asked for THIS
+   * file" are different amounts of information, and the deliverable gate needs
+   * the second: telling a model "write the deliverable to disk" is a suggestion,
+   * while naming the destination the request itself gave is an instruction it
+   * can satisfy. Absent when the request named no path — the caller must not
+   * invent one.
+   */
+  requestedPath?: string;
 }
 
 /**
@@ -245,8 +257,13 @@ export function requestAuthorizesWrites(request: string): WriteAuthorization {
   }
 
   const analyzing = ANALYSIS_OPENER_RE.test(text);
-  if (PATH_RE.test(text) && CREATE_VERB_RE.test(text) && !analyzing) {
-    return { authorized: true, reason: 'the request names a destination path for the work' };
+  const namedPath = extractRequestedPath(text);
+  if (namedPath && CREATE_VERB_RE.test(text) && !analyzing) {
+    return {
+      authorized: true,
+      reason: 'the request names a destination path for the work',
+      requestedPath: namedPath,
+    };
   }
   if (analyzing) {
     return { authorized: false, reason: 'the request asks ABOUT the work rather than for it to be produced' };
@@ -264,6 +281,26 @@ export function requestAuthorizesWrites(request: string): WriteAuthorization {
     return { authorized: true, reason: 'the request directs a change to work that already exists' };
   }
   return { authorized: false, reason: 'the request does not ask for files to be created' };
+}
+
+/**
+ * Pull the destination path out of a request, when it names one.
+ *
+ * Uses the same pattern the authorization verdict keys on, so "the request
+ * names a path" and "here is that path" can never disagree — the failure mode
+ * being a gate that refuses for lack of a path while the request visibly
+ * contains one. Returns the trimmed match with trailing sentence punctuation
+ * removed ("…at /path/x.md." is the file `/path/x.md`).
+ */
+export function extractRequestedPath(request: string): string | undefined {
+  const text = (request || '').trim();
+  if (!text) return undefined;
+  const match = text.match(PATH_RE);
+  const raw = match?.[0]?.trim();
+  if (!raw) return undefined;
+  // PATH_RE starts on a boundary character (whitespace/quote/paren); drop it.
+  const path = raw.replace(/^[\s"'`(]+/, '').replace(/[.,;:!?)\]]+$/, '').trim();
+  return path.length > 0 ? path : undefined;
 }
 
 /**
@@ -384,6 +421,25 @@ export function detectPermissionSeeking(content: string): boolean {
   const text = (content || '').trim();
   if (!text) return false;
   return splitSentences(text).slice(-2).some(isPermissionSeekingSentence);
+}
+
+/**
+ * Does the reply END by asking the reader something?
+ *
+ * The companion question to {@link detectPermissionSeeking}, and the difference
+ * matters for the DELIVERABLE gate: "Do you want me to create the files?" is a
+ * stall the agent must decide past, while "Which of these two titles do you
+ * prefer?" is a decision input the user asked to be consulted on. Treating them
+ * alike would either stall on the first or bulldoze the second.
+ *
+ * Only the closing is judged (the gate's window is the turn's END), and only a
+ * literal question — an answer that merely mentions questions mid-text is
+ * finished prose.
+ */
+export function replyAsksTheReader(content: string): boolean {
+  const sentences = splitSentences((content || '').trim());
+  const last = sentences[sentences.length - 1];
+  return Boolean(last && last.trim().endsWith('?'));
 }
 
 /**

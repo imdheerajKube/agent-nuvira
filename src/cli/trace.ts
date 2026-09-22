@@ -18,7 +18,13 @@
  */
 
 import { Command } from 'commander';
-import { getTrace, listTraces, clearTraces, getTraceStats } from '../learning/reasoning-trace.js';
+import {
+  getTrace,
+  listTraces,
+  clearTraces,
+  getTraceStats,
+  type TraceEvent,
+} from '../learning/reasoning-trace.js';
 
 export class TraceCommand {
   create(): Command {
@@ -61,6 +67,13 @@ export class TraceCommand {
     console.log(`🔍 Reasoning Traces — ${stats.total} trace(s), ${stats.totalSteps} LLM call(s) recorded\n`);
     console.log(`   Total estimated tokens: ${stats.totalTokens.toLocaleString()}`);
     console.log(`   Avg per-call latency:   ${stats.avgLatencyMs}ms`);
+    // G18 — the non-LLM half: what the loops actually DID (tool calls, gate
+    // decisions) and what they DECLINED. Reported at the top level because
+    // "0 refusals" used to be unanswerable: the store could not see refusals at
+    // all, so it could not tell "none were declined" from "nothing is looking".
+    console.log(
+      `   Events:                 ${stats.totalEvents} (${stats.gateDecisions} gate decision(s), ${stats.refusals} refusal(s))`,
+    );
     console.log('');
 
     if (traces.length === 0) {
@@ -74,9 +87,15 @@ export class TraceCommand {
       const duration = trace.durationMs !== undefined ? `${(trace.durationMs / 1000).toFixed(1)}s` : 'running…';
       const started = new Date(trace.startedAt).toLocaleString();
       const agents = [...new Set(trace.steps.map((s) => s.agentType))].join(', ');
+      const eventCount = trace.events?.length ?? 0;
+      const refusals = (trace.events ?? []).filter((e) => e.kind === 'refusal').length;
       console.log(`   ${successIcon} ${trace.id}`);
       console.log(`      ${trace.goal.slice(0, 90)}`);
-      console.log(`      ${trace.steps.length} call(s) · ${duration} · started ${started}`);
+      console.log(
+        `      ${trace.steps.length} call(s) · ${eventCount} event(s)${
+          refusals > 0 ? ` (${refusals} refused)` : ''
+        } · ${duration} · started ${started}`,
+      );
       if (agents) console.log(`      agents: ${agents}`);
       console.log('');
     }
@@ -143,6 +162,25 @@ export class TraceCommand {
       if (step.error) console.log(`       ⚠️ ${step.error.slice(0, 120)}`);
     }
     console.log('');
+
+    // G18 — the loop's non-LLM facts. Printed for EVERY trace that has them,
+    // including pipeline traces: a refusal or a gate decision is the same kind
+    // of fact whichever engine produced it.
+    if ((trace.events?.length ?? 0) > 0) {
+      const counts = countEvents(trace.events ?? []);
+      console.log(
+        `   ── Events (${trace.events!.length}: ${counts.tool} tool call(s), ${counts.gate} gate decision(s), ` +
+          `${counts.refusal} refusal(s), ${counts.decision} decision(s)) ──`,
+      );
+      for (const event of trace.events!) {
+        console.log(`   ${String(event.seq).padStart(3)}. ${eventIcon(event)} ${eventLine(event)}`);
+      }
+      console.log('');
+    } else if (trace.steps.length > 0) {
+      console.log('   (no non-LLM events recorded — the run predates event capture)');
+      console.log('');
+    }
+
     console.log('   Run `${getCliName()} trace replay <id>` for the full step-by-step reasoning replay.');
   }
 
@@ -169,6 +207,17 @@ export class TraceCommand {
       console.log('');
       console.log(`  ── System prompt (stable layer, ${total} chars) ──`);
       console.log(body.split('\n').map((l) => `  │ ${l}`).join('\n'));
+    }
+    // G18 — the non-LLM half of the run, BEFORE the LLM steps: what the turn
+    // actually did (and declined) is the first thing an audit needs, and the
+    // step list below explains what the model was asked.
+    if ((trace.events?.length ?? 0) > 0) {
+      console.log('');
+      console.log(`  ── Loop events (${trace.events!.length}) ──`);
+      for (const event of trace.events!) {
+        console.log(`  ${String(event.seq).padStart(4)} ${eventIcon(event)} ${eventLine(event)}`);
+        if (event.result) console.log(`        ↳ ${event.result}`);
+      }
     }
     console.log('');
 
@@ -221,3 +270,58 @@ export class TraceCommand {
     console.log('🗑️  All reasoning traces cleared.');
   }
 }
+
+// ─── Event rendering (G18) ──────────────────────────────────────────────────
+
+/** Per-kind counts, so a section header states the composition, not just a total. */
+function countEvents(events: readonly TraceEvent[]): {
+  tool: number;
+  gate: number;
+  refusal: number;
+  decision: number;
+} {
+  return {
+    tool: events.filter((e) => e.kind === 'tool').length,
+    gate: events.filter((e) => e.kind === 'gate').length,
+    refusal: events.filter((e) => e.kind === 'refusal').length,
+    decision: events.filter((e) => e.kind === 'decision').length,
+  };
+}
+
+/** The icon names the KIND first — a refusal must never look like a call. */
+function eventIcon(event: TraceEvent): string {
+  switch (event.kind) {
+    case 'tool':
+      return event.ok === false ? '⚠️' : '🔧';
+    case 'refusal':
+      return '⛔';
+    case 'gate':
+      switch (event.gate) {
+        case 'autonomy':
+          return '🤖';
+        case 'verification':
+          return '🔎';
+        case 'deliverable':
+          return '📄';
+        case 'promise':
+          return '🔁';
+        case 'permission':
+          return '🛡️';
+        default:
+          return '🚦';
+      }
+    default:
+      return '🧭';
+  }
+}
+
+/** One line per event: subject, the args the gate saw, timing, and the verdict. */
+function eventLine(event: TraceEvent): string {
+  const subject = event.tool ?? (event.gate ? `${event.gate} gate` : event.kind);
+  const args = event.args && event.args !== '{}' ? ` ${event.args}` : '';
+  const timing = event.durationMs !== undefined ? ` (${(event.durationMs / 1000).toFixed(2)}s)` : '';
+  return `${subject.padEnd(16)}${args}${timing} — ${event.summary}`;
+}
+
+/** Exported for tests — the rendering is pure, so it can be asserted directly. */
+export const traceEventRender = { countEvents, eventIcon, eventLine };

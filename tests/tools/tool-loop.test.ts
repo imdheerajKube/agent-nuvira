@@ -14,6 +14,7 @@ import {
   extractFallbackToolCalls,
   fallbackHintForTool,
   makeParallelSuggester,
+  type LoopTraceEvent,
   type ToolLoopDeps,
   type StepResponse,
 } from '../../src/tools/tool-loop.js';
@@ -880,7 +881,17 @@ describe('tool loop — authorized-work nudge', () => {
       { content: PERMISSION_QUESTION, toolCalls: [] },
       { content: 'Chapter 1 is written and saved to chapters/01-chapter-1.md.', toolCalls: [] },
     ]);
-    const result = await runToolLoop({ messages: [{ role: 'user', content: STORY_ASK }], context: ctx, deps });
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: STORY_ASK }],
+      context: ctx,
+      deps,
+      // This test isolates the PERMISSION nudge. The deliverable gate (G13b)
+      // would also fire here — the scripted reply claims a file was saved and no
+      // write happened — and it has its own tests below. Disabling it here keeps
+      // the two gates independently assertable, the same way step-count tests
+      // disable the verification gate.
+      requireDeliverable: false,
+    });
 
     expect(deps.callModel).toHaveBeenCalledTimes(2);
     expect(result.content).toContain('Chapter 1 is written');
@@ -1042,5 +1053,371 @@ describe('tool loop — the request itself is the authorization (G16)', () => {
     } finally {
       rmSync(workdir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * G13b — THE DELIVERABLE GATE.
+ *
+ * The failure this closes, captured live: a request that asked for a 12-page
+ * story to be WRITTEN was answered with a complete, genuinely good story in the
+ * chat reply and NOTHING on disk. The turn reported success, so every surface
+ * read it as finished work, the ledger never saw a deliverable to continue or
+ * assemble, and the one ask where the artifact matters most was the one path
+ * that never checked for it.
+ *
+ * Two properties are load-bearing here and are asserted separately: the gate
+ * asks for the artifact (bounded, once, naming the destination the REQUEST gave),
+ * and the residual is reported honestly whether or not the gate ran.
+ */
+describe('tool loop — deliverable gate (G13b)', () => {
+  /** A file-shaped authored ask that names its destination. */
+  const STORY_TO_PATH =
+    'write a 12 page story to /tmp/kharig-nights.md about a village boy who finds a lamp';
+  /** The same work, asked as CHAT — no artifact requested. */
+  const CHAT_STORY = 'tell me a story about a village boy who finds a lamp';
+  const PROSE = 'Once, in the village of Kharig, a boy found a lamp in a banyan root. The end.';
+
+  it('does not let a story ask be satisfied by prose — the artifact is written', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-deliverable-'));
+    try {
+      const target = join(workdir, 'kharig-nights.md');
+      const deps = mockDeps(
+        [
+          // Step 1 — the model composes the whole story in the reply and calls
+          // no tool. This is the exact shipped failure.
+          { content: PROSE, toolCalls: [] },
+          // Step 2 — after the nudge, it writes the file.
+          {
+            content: '',
+            toolCalls: [
+              { id: 'w1', name: 'write_file', arguments: { path: target, content: PROSE } },
+            ],
+          },
+          { content: `Saved to ${target}.`, toolCalls: [] },
+        ],
+        realExecute,
+      );
+
+      const result = await runToolLoop({
+        messages: [{ role: 'user', content: `write a 12 page story to ${target} about a village boy` }],
+        context: { ...ctx, cwd: workdir },
+        deps,
+      });
+
+      // The artifact EXISTS — the whole point of the gate.
+      expect(readFileSync(target, 'utf-8')).toContain('Kharig');
+      // The nudge told the model the destination the REQUEST gave, not one it
+      // would otherwise have invented.
+      const nudgeTurn = JSON.stringify(deps.callModel.mock.calls[1][0]);
+      expect(nudgeTurn).toContain('write a 12 page story to ' + target);
+      expect(nudgeTurn).toContain('write the complete work to');
+      // A turn that produced the file is not flagged as undelivered.
+      expect(result.undeliveredArtifact).toBeFalsy();
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('names no destination it was not given — and still asks for the artifact', async () => {
+    const deps = mockDeps([
+      { content: PROSE, toolCalls: [] },
+      { content: 'Understood.', toolCalls: [] },
+    ]);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'write a 12 page story called Kharig Nights about a village boy' }],
+      context: ctx,
+      deps,
+    });
+
+    expect(deps.callModel).toHaveBeenCalledTimes(2);
+    const nudgeTurn = JSON.stringify(deps.callModel.mock.calls[1][0]);
+    expect(nudgeTurn).toContain('write the complete work to a file');
+    // Never invents a path the request did not give.
+    expect(nudgeTurn).not.toContain('/tmp/');
+    // …and if the model still writes nothing, the residual is reported.
+    expect(result.undeliveredArtifact).toBe(true);
+  });
+
+  it('is bounded to ONE nudge', async () => {
+    const deps = mockDeps([
+      { content: PROSE, toolCalls: [] },
+      { content: PROSE, toolCalls: [] },
+      { content: PROSE, toolCalls: [] },
+    ]);
+
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'write a 12 page story called Kharig Nights' }],
+      context: ctx,
+      deps,
+    });
+
+    expect(deps.callModel).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a CHAT story ask alone — no artifact was requested', async () => {
+    const deps = mockDeps([{ content: PROSE, toolCalls: [] }]);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: CHAT_STORY }],
+      context: ctx,
+      deps,
+    });
+
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+    expect(result.content).toBe(PROSE);
+    expect(result.undeliveredArtifact).toBeFalsy();
+  });
+
+  it('leaves a consult alone — a turn that ENDS on a question to the reader', async () => {
+    // "Which title do you prefer?" is a decision input the user asked to be
+    // consulted on, unlike "Do you want me to create the files?" (a stall the
+    // permission nudge settles). Bulldozing it would be the cadence complaint
+    // in reverse.
+    const deps = mockDeps([{ content: 'Which of these two titles do you prefer?', toolCalls: [] }]);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'write a 12 page story called Kharig Nights' }],
+      context: ctx,
+      deps,
+    });
+
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+    expect(result.undeliveredArtifact).toBeFalsy();
+  });
+
+  it('a turn that already wrote files is never nudged for a missing artifact', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-deliverable-'));
+    try {
+      const target = join(workdir, 'chapter-01.md');
+      const deps = mockDeps(
+        [
+          {
+            content: '',
+            toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: target, content: 'Chapter 1.' } }],
+          },
+          { content: 'Chapter 1 is written.', toolCalls: [] },
+        ],
+        realExecute,
+      );
+
+      const result = await runToolLoop({
+        messages: [{ role: 'user', content: `write a story to ${target}` }],
+        context: { ...ctx, cwd: workdir },
+        deps,
+        // The VERIFICATION gate is a different feature with its own tests; it
+        // would fire here (a write with no check) and add a third call.
+        requireVerification: false,
+      });
+
+      expect(deps.callModel).toHaveBeenCalledTimes(2);
+      expect(result.undeliveredArtifact).toBeFalsy();
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('requireDeliverable:false restores the pre-gate behaviour exactly', async () => {
+    const deps = mockDeps([{ content: PROSE, toolCalls: [] }]);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'write a 12 page story called Kharig Nights' }],
+      context: ctx,
+      deps,
+      requireDeliverable: false,
+    });
+
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+    expect(result.content).toBe(PROSE);
+  });
+});
+
+/**
+ * G18 — the loop engine's non-LLM facts: tool calls, gate decisions and
+ * REFUSALS.
+ *
+ * The gap this closes was recorded as a limit on every earlier audit: the loop
+ * wrote no trace, so "the trace store showed 0 refusals" meant *it cannot see
+ * refusals*, not *there were none*, and the audit of the confirmation gates had
+ * to be done by reading code and driving the real tools. These tests pin the
+ * three event kinds AND the honesty property that came out of the first live
+ * verification run: a DECLINED call must not be recorded — or COUNTED — as work
+ * done.
+ */
+describe('tool loop — trace events (G18)', () => {
+  /** Collect every event the loop emits for one turn. */
+  function collect(): { events: LoopTraceEvent[]; sink: (e: LoopTraceEvent) => void } {
+    const events: LoopTraceEvent[] = [];
+    return { events, sink: (e) => events.push(e) };
+  }
+
+  it('records a tool call with its args, result preview, verdict and duration', async () => {
+    const { events, sink } = collect();
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'src/router.ts' } }] },
+        { content: 'Read it.', toolCalls: [] },
+      ],
+      async () => 'export const router = 1;',
+    );
+
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'read src/router.ts' }],
+      context: ctx,
+      deps,
+      onTraceEvent: sink,
+    });
+
+    const tool = events.find((e) => e.kind === 'tool');
+    expect(tool?.tool).toBe('read_file');
+    expect(tool?.ok).toBe(true);
+    expect(tool?.args).toContain('src/router.ts');
+    expect(tool?.result).toContain('export const router');
+    expect(typeof tool?.durationMs).toBe('number');
+  });
+
+  it('records a CONFIRMATION refusal with its gate, and never as a success', async () => {
+    const { events, sink } = collect();
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'write_file', arguments: { path: 'a.md', content: 'x' } }] },
+        { content: 'Understood.', toolCalls: [] },
+      ],
+      async () =>
+        'Error: write_file: needs explicit confirmation — call ask_user first, then retry with confirm:true',
+    );
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'write a poem about rain' }],
+      context: ctx,
+      deps,
+      requireDeliverable: false,
+      onTraceEvent: sink,
+    });
+
+    const refusal = events.find((e) => e.kind === 'refusal');
+    expect(refusal?.tool).toBe('write_file');
+    expect(refusal?.gate).toBe('confirmation');
+    expect(refusal?.ok).toBe(false);
+    expect(result.successfulToolCalls ?? []).not.toContain('write_file');
+  });
+
+  it('records a WORKSPACE-boundary denial as a refusal — the denial that used no `Error:` prefix', async () => {
+    // Found live on the first G18 verification run: the workspace guard returned
+    // "… escapes the workspace (…) — denied" with NO `Error:` prefix, so the loop
+    // counted the call as one that RAN and the trace said "write_file ran". An
+    // outcome reading the same as its opposite is the exact shape G18 exists to
+    // eliminate.
+    const { events, sink } = collect();
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'write_file', arguments: { path: '/etc/hosts', content: 'x' } }] },
+        { content: 'I could not write there.', toolCalls: [] },
+      ],
+      async () => "write_file: path '/etc/hosts' escapes the workspace (/tmp/proj) — denied",
+    );
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'write the report to /etc/hosts' }],
+      context: ctx,
+      deps,
+      requireDeliverable: false,
+      onTraceEvent: sink,
+    });
+
+    const refusal = events.find((e) => e.kind === 'refusal');
+    expect(refusal?.tool).toBe('write_file');
+    expect(refusal?.gate).toBe('workspace');
+    expect(refusal?.ok).toBe(false);
+    // Attempted, but NOT done — the two lists must disagree here.
+    expect(result.toolCalls).toContain('write_file');
+    expect(result.successfulToolCalls ?? []).not.toContain('write_file');
+  });
+
+  it('records the authorized-work nudge as a gate DECISION', async () => {
+    const { events, sink } = collect();
+    const deps = mockDeps([
+      {
+        content: 'I have the plan ready. Do you want me to create the full project structure?',
+        toolCalls: [],
+      },
+      { content: 'Created the structure.', toolCalls: [] },
+    ]);
+
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'create the project files for a booking app' }],
+      context: ctx,
+      deps,
+      requireDeliverable: false,
+      onTraceEvent: sink,
+    });
+
+    const gate = events.find((e) => e.kind === 'gate');
+    expect(gate?.gate).toBe('permission');
+    expect(gate?.summary).toMatch(/permission/i);
+  });
+
+  it('records the DELIVERABLE nudge as a gate decision naming the requested path', async () => {
+    const { events, sink } = collect();
+    const deps = mockDeps([
+      { content: 'Here is the story: once upon a time…', toolCalls: [] },
+      { content: 'Saved.', toolCalls: [] },
+    ]);
+
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'write a 12 page story to /tmp/kharig-nights.md' }],
+      context: ctx,
+      deps,
+      onTraceEvent: sink,
+    });
+
+    const gate = events.find((e) => e.kind === 'gate' && e.gate === 'deliverable');
+    expect(gate).toBeTruthy();
+    expect(gate?.summary).toContain('/tmp/kharig-nights.md');
+  });
+
+  it('records the step bound as a decision when the turn runs out of road', async () => {
+    const { events, sink } = collect();
+    // The model loops forever on the same call — the bound is what ends it.
+    const deps = mockDeps([
+      { content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'a.ts' } }] },
+    ]);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'keep reading a.ts' }],
+      context: ctx,
+      deps,
+      maxSteps: 3,
+      onTraceEvent: sink,
+    });
+
+    expect(result.bounded).toBe(true);
+    const bound = events.find((e) => e.gate === 'budget');
+    expect(bound?.kind).toBe('decision');
+    // The summary names the EFFECTIVE bound (the continuation budget extends it
+    // past `maxSteps`), so the number is asserted as present rather than equal.
+    expect(bound?.summary).toMatch(/step budget \(\d+\) was reached/);
+  });
+
+  it('does not let a broken sink break the turn it observes', async () => {
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'a.ts' } }] },
+        { content: 'Read it.', toolCalls: [] },
+      ],
+      async () => 'contents',
+    );
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'read a.ts' }],
+      context: ctx,
+      deps,
+      onTraceEvent: () => {
+        throw new Error('recorder exploded');
+      },
+    });
+
+    expect(result.content).toBe('Read it.');
   });
 });

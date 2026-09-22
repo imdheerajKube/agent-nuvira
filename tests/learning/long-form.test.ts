@@ -178,6 +178,23 @@ describe('the ledger — start, resume, record', () => {
     recordSectionOutcome(job, job.sections[job.sections.length - 1].index, { ok: true, words: 100 });
     expect(jobProgress(job).complete).toBe(true);
   });
+
+  it('never reports 100% while units are still owed — overshooting the word target is not completion', () => {
+    // The live 100-page run: writers overshoot, so by chapter 31 of 39 the word
+    // total was 43,906 against a 35,000 target. A word-only percentage saturated
+    // at 100 and the line read "31/39 complete … 100%" — the same contradiction
+    // as a listing count presented as a capability.
+    const target = parseLongFormTarget('write 4 chapters')!;
+    const { job } = startOrResumeJob({ projectPath: projectDir, docPath: join(projectDir, 'ov.md'), goal: 'write 4 chapters', target, deliverableClass: 'creative' });
+    // Three of four units, each 10% over its own target — so the word total is
+    // already past the target while a quarter of the book is still owed.
+    const perUnit = Math.ceil(target.wordsTarget / target.unitCount) + 2_000;
+    for (const s of job.sections.slice(0, 3)) recordSectionOutcome(job, s.index, { ok: true, words: perUnit });
+    const p = jobProgress(job);
+    expect(p.words).toBeGreaterThan(target.wordsTarget); // the word target is met…
+    expect(p.complete).toBe(false); // …and the book is not done.
+    expect(p.percent).toBe(75); // 3 of 4 units — the LOWER of the two numbers.
+  });
 });
 
 describe('bounded batches — a run always ends with delivered work', () => {

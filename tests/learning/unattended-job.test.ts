@@ -21,6 +21,8 @@ import {
   clearUnattendedJobs,
   dueUnattendedJobs,
   findUnattendedJob,
+  formatBatchReport,
+  formatDuration,
   listUnattendedJobs,
   recordBatchOutcome,
   resumeUnattendedJob,
@@ -385,6 +387,95 @@ describe('artifactsPresence', () => {
 
   it('treats a missing artifact list as "nothing to check"', () => {
     expect(artifactsPresence(projectDir, undefined)).toEqual({ present: 0, total: 0, missing: [] });
+  });
+});
+
+/**
+ * G27 — a long unattended run must account for itself: what each batch cost and
+ * how long it took. The report is measured (a dash means "not measured", never
+ * a fabricated 0), and a FAILED batch is included because that is where a bill
+ * hides.
+ */
+describe('per-batch cost & latency (G27)', () => {
+  it('accumulates measured cost and tokens across batches, failures included', () => {
+    const { job } = startUnattendedJob({ kind: 'long-form', goal: 'g', projectPath: projectDir, surface: SURFACE });
+    claimUnattendedJob(job.id);
+    recordBatchOutcome(job.id, { progress: 10, costUsd: 0.00123, tokens: 1000, durationMs: 1500 });
+    claimUnattendedJob(job.id);
+    const after = recordBatchOutcome(job.id, {
+      error: 'provider 503 on batch 2',
+      costUsd: 0.00077,
+      tokens: 500,
+      durationMs: 800,
+    })!;
+
+    expect(after.costUsd).toBeCloseTo(0.002, 6);
+    expect(after.tokens).toBe(1500);
+    expect(after.batchStats).toHaveLength(2);
+    // The batch that DIED is accounted for — the failure path is exactly where
+    // a report that counted only successes would hide spend.
+    expect(after.batchStats![1].error).toMatch(/503/);
+    expect(after.batchStats![1].costUsd).toBeCloseTo(0.00077, 6);
+    expect(after.batchStats![1].tokens).toBe(500);
+  });
+
+  it('renders per-batch rows plus a measured total', () => {
+    const { job } = startUnattendedJob({ kind: 'long-form', goal: 'g', projectPath: projectDir, surface: SURFACE });
+    claimUnattendedJob(job.id);
+    recordBatchOutcome(job.id, { progress: 50, costUsd: 0.002, tokens: 2000, durationMs: 2000 });
+    claimUnattendedJob(job.id);
+    recordBatchOutcome(job.id, { progress: 100, finished: true, costUsd: 0.001, tokens: 1000, durationMs: 4000 });
+
+    const report = formatBatchReport(listUnattendedJobs()[0]);
+    expect(report).toMatch(/Per-batch cost & latency/);
+    expect(report).toMatch(/^\s*batch\s+done\s+tokens\s+cost\s+time/m);
+    expect(report).toMatch(/^\s*total\s+100%/m);
+    expect(report).toMatch(/\$0\.00300/);
+    expect(report).toMatch(/3,000/);
+    expect(report).toMatch(/~3\.0s avg/);
+  });
+
+  it('prints a dash — never a fabricated 0 — for a column a surface did not measure', () => {
+    const { job } = startUnattendedJob({ kind: 'long-form', goal: 'g', projectPath: projectDir, surface: SURFACE });
+    claimUnattendedJob(job.id);
+    recordBatchOutcome(job.id, { progress: 25, progressLine: 'chapter 1/4' });
+
+    const stored = listUnattendedJobs()[0];
+    // Absent, not zero: "free" and "not measured" must stay distinguishable.
+    expect(stored.costUsd).toBeUndefined();
+    expect(stored.tokens).toBeUndefined();
+    expect(formatBatchReport(stored)).toMatch(/—/);
+  });
+
+  it('renders nothing for a job that has run no batches', () => {
+    const { job } = startUnattendedJob({ kind: 'long-form', goal: 'g', projectPath: projectDir, surface: SURFACE });
+    expect(formatBatchReport(job)).toBe('');
+  });
+
+  it('persists the per-batch economy across a reload', () => {
+    const { job } = startUnattendedJob({ kind: 'long-form', goal: 'g', projectPath: projectDir, surface: SURFACE });
+    claimUnattendedJob(job.id);
+    recordBatchOutcome(job.id, { progress: 30, costUsd: 0.004, tokens: 4000, durationMs: 1200 });
+
+    const reloaded = listUnattendedJobs()[0] as UnattendedJob;
+    expect(reloaded.costUsd).toBeCloseTo(0.004, 6);
+    expect(reloaded.tokens).toBe(4000);
+    expect(reloaded.batchStats).toHaveLength(1);
+    expect(reloaded.batchStats![0].durationMs).toBe(1200);
+  });
+});
+
+describe('formatDuration', () => {
+  it('reads as a human duration at every scale', () => {
+    expect(formatDuration(850)).toBe('850ms');
+    expect(formatDuration(12_400)).toBe('12.4s');
+    expect(formatDuration(187_000)).toBe('3m 07s');
+    expect(formatDuration(4_320_000)).toBe('1h 12m');
+  });
+
+  it('never fabricates a value for a non-finite duration', () => {
+    expect(formatDuration(Number.NaN)).toBe('—');
+    expect(formatDuration(-5)).toBe('—');
   });
 });
 

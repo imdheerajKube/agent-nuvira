@@ -54,6 +54,7 @@ import { listCheckpoints } from '../agents/checkpoint-store.js';
 import { logger, setSilent } from '../utils/logger.js';
 import { PipelineBoard, PipelineEventStream } from './pipeline-board.js';
 import {
+  formatBatchReport,
   getUnattendedJob,
   jobPercent,
   UnattendedRunner,
@@ -62,6 +63,7 @@ import {
   measureUnattendedProgress,
   scheduleFromPendingWork,
 } from '../learning/unattended-progress.js';
+import { costSince } from '../learning/cost-tracker.js';
 
 /**
  * Enterprise G11 — how many continuation batches one CLI run may execute.
@@ -1691,6 +1693,11 @@ export class ExecuteCommand extends BaseCommand {
         provider,
         model,
         quiet: !!options.jsonEvents,
+        // G18 — `-v` echoes each tool's result (first line) under its call, so a
+        // live run shows what came BACK, not only what was attempted. Without
+        // it, "the gate applied the edit autonomously" and "the model passed
+        // confirm:true" were indistinguishable from the console.
+        verbose: options.verbose,
       });
       // The loop engine's answer is rendered by THIS command while the gateway
       // and dashboard console both sanitize it before showing it. Without this
@@ -1719,6 +1726,12 @@ export class ExecuteCommand extends BaseCommand {
           engineExplanation: result.engineExplanation,
           toolCalls: result.toolCalls,
           erroredTools: result.erroredTools,
+          // G18 — the evidence pointer: a machine consumer can follow up with
+          // `nuvira trace show <id>` (or `/api/traces/<id>`) instead of taking
+          // the summary on faith.
+          traceId: result.traceId,
+          refusals: result.refusals,
+          gateDecisions: result.gateDecisions,
           durationMs: result.durationMs,
           ts: Date.now(),
         }) + '\n');
@@ -1727,6 +1740,13 @@ export class ExecuteCommand extends BaseCommand {
         if (content) console.log(content + '\n');
         if (!success) {
           logger.error(content || 'The loop engine could not complete this goal.');
+        }
+        // G18 — where this run's evidence lives. Printed under `-v` only, so the
+        // default output stays the answer.
+        if (options.verbose && result.traceId) {
+          logger.info(
+            `   🔍 Trace: ${result.traceId} — \`nuvira trace show ${result.traceId}\` (tool calls, gate decisions, refusals)`,
+          );
         }
       }
       return { success };
@@ -1775,6 +1795,13 @@ export class ExecuteCommand extends BaseCommand {
           provider,
           model,
           configManager: { getAll: () => ({ routing: { engineMode: effective } }) },
+          // G13b — the GOAL is an input to the engine decision. "Write a 12 page
+          // story at /path/Mahagatha.md" and "tell me a story" route
+          // differently: the first asks for an artifact, so the pipeline that
+          // plans units and assembles the document runs it, and the second is a
+          // chat answer. Omitted before this input existed, which is exactly why
+          // the artifact ask was answered in prose and written nowhere.
+          goal,
         });
         if (decision.engine === 'loop') {
           if (!options.jsonEvents) {
@@ -1916,6 +1943,11 @@ export class ExecuteCommand extends BaseCommand {
                 console.log(`\n${line}`);
               },
               runBatch: async (batchJob) => {
+                // G27: time the batch and measure what it COST from the ledger's
+                // timestamps. A fresh orchestrator per batch runs through this
+                // loop too, so a session counter would report zero for every
+                // batch after the first.
+                const startedAt = Date.now();
                 // A FRESH orchestrator per batch: each batch is its own run, and
                 // reusing the instance would carry the previous run's counters
                 // and trace id into the next one.
@@ -1923,6 +1955,12 @@ export class ExecuteCommand extends BaseCommand {
                   batchJob.continuationPrompt,
                   { ...execOptions, spinner: undefined },
                 );
+                const economy = costSince(startedAt);
+                const envelope = {
+                  durationMs: Date.now() - startedAt,
+                  costUsd: economy.costUsd,
+                  tokens: economy.tokens,
+                };
                 const measured = measureUnattendedProgress(batchJob);
                 // "The batch ran" is not "the work moved". A failed batch that
                 // ALSO produced no measurable progress is a failure (it counts
@@ -1930,12 +1968,16 @@ export class ExecuteCommand extends BaseCommand {
                 // chapters is just a partial success, and the ledger decides.
                 const moved = (measured.progress ?? 0) > batchJob.progress;
                 if (!batchResult.success && !measured.finished && !moved) {
-                  return { ...measured, error: batchResult.error || batchResult.summary || 'batch failed' };
+                  return {
+                    ...measured,
+                    ...envelope,
+                    error: batchResult.error || batchResult.summary || 'batch failed',
+                  };
                 }
                 // Refresh with the newest snapshot: the composite's expected
                 // artifacts can only be known once its phases have been planned.
                 scheduleFromPendingWork(batchResult.pendingWork, surface);
-                return measured;
+                return { ...measured, ...envelope };
               },
             });
             await runner.drain();
@@ -2027,6 +2069,12 @@ export class ExecuteCommand extends BaseCommand {
             'Progress is saved; run the same command again to resume from where it stopped.',
         );
     }
+
+    // G27: the run's cost and latency, per batch — a long unattended job must
+    // account for itself instead of leaving the bill to be reconstructed from
+    // the cost ledger by hand afterwards.
+    const report = formatBatchReport(job);
+    if (report) console.log(report);
   }
 
   // ─── Checkpoint Listing ────────────────────────────────────────────────

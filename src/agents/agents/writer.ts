@@ -26,6 +26,7 @@ import {
   parseModelName,
   parseRetryAfterHint,
 } from '../rate-limit-retry.js';
+import { stripLeadingAuthorNotes } from '../../inference/tool-call-utils.js';
 import { referenceDocsFor } from '../reference-docs.js';
 import { assessProject, type ProjectAssessment } from '../prompt-assembly.js';
 import { countWords } from '../../learning/long-form.js';
@@ -518,7 +519,12 @@ export class WriterAgent extends Agent {
     const prompt = this.buildProsePrompt(context, unit, isRetry);
     const response = await callLLM(prompt, { temperature: isRetry ? 0.5 : 0.7, maxTokens: PROSE_MAX_TOKENS });
 
-    const prose = stripFences(response || '').trim();
+    // The model's response IS the artifact, so the deliverable is cleaned
+    // deterministically rather than trusted: the unit prompt forbids headings,
+    // preambles and notes, and a model that violates it would otherwise write
+    // its notes into EVERY chapter of a 39-unit book (observed live: a chapter
+    // opening with `# Chapter 1 / Author. / … *Note:* The prompt asks for …`).
+    const prose = stripLeadingAuthorNotes(stripFences(response || '').trim()).trim();
     const words = countWords(prose);
 
     if (words < PROSE_MIN_WORDS) {

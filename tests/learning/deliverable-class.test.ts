@@ -14,12 +14,15 @@
 import { describe, it, expect } from 'vitest';
 import {
   AUTHORED_CONFIDENCE_FLOOR,
+  asksForAuthoredFile,
   authoredDeliverableGuidance,
   classifyDeliverable,
   deliverableClassLabel,
   describeSubstrates,
   isAuthoredGoal,
   isCompositeGoal,
+  isLongFormAuthoredGoal,
+  wantsAuthoredArtifact,
 } from '../../src/learning/deliverable-class.js';
 
 /** The verbatim goal from the failing orchestrator traces. */
@@ -229,5 +232,102 @@ describe('deliverableClassLabel', () => {
     expect(deliverableClassLabel('data')).toMatch(/data analysis/);
     expect(deliverableClassLabel('research')).toMatch(/research/);
     expect(deliverableClassLabel('code')).toBe('software');
+  });
+});
+
+/**
+ * G13b — `wantsAuthoredArtifact`: an authored deliverable the user asked to be
+ * PRODUCED, as opposed to authored content they asked to be TOLD.
+ *
+ * The conjunction is the whole design. `isAuthoredGoal` alone cannot tell "write
+ * a 12 page story to /path/Mahagatha.md" from "tell me a story", and treating
+ * them alike is what let the first one be answered with prose and no file. The
+ * authorization half supplies the missing evidence (a creation verb on a
+ * file-shaped deliverable, or a named destination), so the chat ask keeps its
+ * chat answer.
+ */
+describe('wantsAuthoredArtifact — produced vs told (G13b)', () => {
+  it('is true for an authored ask that names its destination', () => {
+    expect(wantsAuthoredArtifact('write a 12 page story to /Users/d/story/Mahagatha.md')).toBe(true);
+  });
+
+  it('is true for an authored ask with a creation verb and no path', () => {
+    expect(wantsAuthoredArtifact('write a 5 page story called Kharig Nights')).toBe(true);
+    expect(wantsAuthoredArtifact('create a 20 chapter book about a village boy')).toBe(true);
+  });
+
+  it('is true for a HYBRID web book', () => {
+    expect(
+      wantsAuthoredArtifact('develop an interactive web-based book with voice narration'),
+    ).toBe(true);
+  });
+
+  it('is FALSE for the same content asked as chat', () => {
+    expect(wantsAuthoredArtifact('tell me a story about a village boy')).toBe(false);
+    expect(wantsAuthoredArtifact('read me a poem about the monsoon')).toBe(false);
+  });
+
+  it('is FALSE for a question ABOUT producing the artifact', () => {
+    expect(wantsAuthoredArtifact('how do I write a story to a file?')).toBe(false);
+    expect(wantsAuthoredArtifact('explain how to write a story to a file')).toBe(false);
+  });
+
+  it('is FALSE for engineering asks — this must never capture code work', () => {
+    expect(wantsAuthoredArtifact('fix the calculator so division by zero returns 0')).toBe(false);
+    expect(wantsAuthoredArtifact('build an api for booking')).toBe(false);
+    expect(wantsAuthoredArtifact('refactor the router')).toBe(false);
+  });
+
+  it('is FALSE for an empty goal', () => {
+    expect(wantsAuthoredArtifact('')).toBe(false);
+  });
+});
+
+/**
+ * `asksForAuthoredFile` — the NARROW half, for the chat-vs-task gate.
+ *
+ * The split exists because the two callers have different context. The engine
+ * router and the loop's deliverable gate only run once the ask is already a
+ * TASK, so "a creation verb on an authored noun" is enough evidence there. The
+ * conversation gate decides chat-vs-task, and must be narrower: "write a poem
+ * about rain" is pinned as a CHAT answer (the text IS the deliverable), and
+ * re-routing it to the pipeline is the original category error in reverse.
+ *
+ * So the narrow rule needs the artifact to be SIZE-ARGUING (more than one unit)
+ * or PLACED (a named destination) — exactly the two cases the pipeline exists to
+ * serve.
+ */
+describe('asksForAuthoredFile — the narrow chat-vs-task rule (G13b)', () => {
+  it('is true when a magnitude needs more than one unit', () => {
+    expect(asksForAuthoredFile('write a 200 page book about the sea')).toBe(true);
+    expect(asksForAuthoredFile('write a 12 page story called Kharig Nights')).toBe(true);
+  });
+
+  it('is true when the request NAMES a destination — the live failure', () => {
+    // "2 pages" resolves to ONE unit, so magnitude alone misses it; the named
+    // path is what the user actually asked for.
+    expect(asksForAuthoredFile('write a 2 page story to /tmp/kharig-nights.md about a village boy')).toBe(true);
+  });
+
+  it('is FALSE for the short authored asks that ARE the chat answer', () => {
+    expect(asksForAuthoredFile('write a poem about rain')).toBe(false);
+    expect(asksForAuthoredFile('Write a song in Hindi for my daughter')).toBe(false);
+    expect(asksForAuthoredFile('write a poem and send it to Alex')).toBe(false);
+    expect(asksForAuthoredFile('write an essay about my village')).toBe(false);
+    expect(asksForAuthoredFile('write a 1 page summary of the meeting')).toBe(false);
+  });
+
+  it('is FALSE for a bare "book" — a DEFAULT magnitude is not a request', () => {
+    expect(asksForAuthoredFile('write a book about the sea')).toBe(false);
+    expect(isLongFormAuthoredGoal('write a book about the sea')).toBe(false);
+  });
+
+  it('is narrower than wantsAuthoredArtifact — and both are true for a file ask', () => {
+    const goal = 'write a 12 page story to /Users/d/story/Mahagatha.md';
+    expect(asksForAuthoredFile(goal)).toBe(true);
+    expect(wantsAuthoredArtifact(goal)).toBe(true);
+    // …and the poem separates them, which is the whole reason for the split.
+    expect(wantsAuthoredArtifact('write a poem about rain')).toBe(true);
+    expect(asksForAuthoredFile('write a poem about rain')).toBe(false);
   });
 });

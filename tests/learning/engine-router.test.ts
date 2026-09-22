@@ -104,3 +104,94 @@ describe('engine router — helpers', () => {
     expect(readEngineModeConfig({ getAll: () => ({ routing: { engineMode: 'bogus' as never } }) })).toBe('auto');
   });
 });
+
+/**
+ * G13b — an AUTHORED ARTIFACT the user asked to be produced goes to the
+ * pipeline, whatever the provider tier.
+ *
+ * WHY THE TIER WAS THE WRONG INPUT. The loop produced a complete, genuinely
+ * good 12-page story for `write a 12 page story at /path/Mahagatha.md` and wrote
+ * NOTHING to disk, while the same ask on the pipeline finished unattended with
+ * the chapters and the assembled book. The loop is optimised for a turn that
+ * ACTS with tools; an authored deliverable needs units, continuity across
+ * batches and an assembly step.
+ *
+ * The negations matter as much as the rule: this must not capture a CHAT ask for
+ * the same content, and it must not override an explicit user choice of engine.
+ */
+describe('engine router — authored artifact routing (G13b)', () => {
+  const strong = 'groq';
+
+  it('routes an authored deliverable that names a destination to the pipeline', () => {
+    const d = resolveEngine({
+      provider: strong,
+      goal: 'write a 12 page story to /Users/d/story/Mahagatha.md about a village boy',
+    });
+    expect(d.engine).toBe('pipeline');
+    expect(d.reason).toBe('authored-artifact');
+    expect(d.explanation).toMatch(/authored deliverable/i);
+  });
+
+  it('routes an authored deliverable with no path (the ask is still for a file)', () => {
+    const d = resolveEngine({ provider: strong, goal: 'write a 5 page story called Kharig Nights' });
+    expect(d.engine).toBe('pipeline');
+    expect(d.reason).toBe('authored-artifact');
+  });
+
+  it('routes a HYBRID web book to the pipeline (phases, not a single-mode plan)', () => {
+    const d = resolveEngine({
+      provider: strong,
+      goal: 'develop an interactive web-based book with voice narration for every chapter',
+    });
+    expect(d.engine).toBe('pipeline');
+    expect(d.reason).toBe('authored-artifact');
+  });
+
+  it('leaves a CHAT story ask on the loop — no artifact was requested', () => {
+    const d = resolveEngine({ provider: strong, goal: 'tell me a story about a village boy' });
+    expect(d.engine).toBe('loop');
+    expect(d.reason).toBe('strong-tier-default');
+  });
+
+  it('leaves a question ABOUT the work on the loop', () => {
+    const d = resolveEngine({
+      provider: strong,
+      goal: 'explain how to write a story to a file',
+    });
+    expect(d.engine).toBe('loop');
+  });
+
+  it('leaves a genuine engineering ask on the loop', () => {
+    const d = resolveEngine({
+      provider: strong,
+      goal: 'fix the calculator so division by zero returns 0',
+    });
+    expect(d.engine).toBe('loop');
+  });
+
+  it('still obeys an explicit loop override — which is why the loop gate exists', () => {
+    const d = resolveEngine({
+      provider: strong,
+      goal: 'write a 12 page story to /Users/d/story/Mahagatha.md',
+      configManager: { getAll: () => ({ routing: { engineMode: 'loop' } }) },
+    });
+    expect(d.engine).toBe('loop');
+    expect(d.reason).toBe('config-override');
+  });
+
+  it('is unchanged when no goal is supplied (every existing caller)', () => {
+    const d = resolveEngine({ provider: strong, model: 'm' });
+    expect(d.engine).toBe('loop');
+    expect(d.reason).toBe('strong-tier-default');
+    // The echoed inputs do not grow a `goal` key it was never given.
+    expect('goal' in d.inputs).toBe(false);
+  });
+
+  it('stays deterministic — the same goal always yields the same engine', () => {
+    const goal = 'write a 12 page story called Kharig Nights';
+    const first = resolveEngine({ provider: strong, goal });
+    const second = resolveEngine({ provider: strong, goal });
+    expect(second.engine).toBe(first.engine);
+    expect(second.reason).toBe(first.reason);
+  });
+});
