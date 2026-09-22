@@ -461,7 +461,24 @@ export class DashboardAPI {
       authenticated: d.authenticated,
       user: typeof d.user === 'string' ? d.user : null,
       role: typeof d.role === 'string' ? d.role : null,
+      mustChangePassword: d.mustChangePassword === true,
     };
+  }
+
+  /**
+   * Change the signed-in admin's password. This is the ONLY mutating admin call
+   * the server allows while the first-run default is still in place, so it is
+   * what clears the forced-change gate.
+   */
+  async changeAdminPassword(currentPassword: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
+    const r = await this.sendAdminRequest('/api/admin/change-password', 'POST', {
+      currentPassword,
+      newPassword,
+    });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true };
+    return { ok: false, error: d.error || 'Could not change the password.' };
   }
 
   /** The dashboard admin users (role.manage = admin only). */

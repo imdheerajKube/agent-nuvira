@@ -876,6 +876,12 @@ export interface AdminAuthStatus {
   user?: string | null;
   /** The acting RBAC role ('admin' | 'operator' | 'viewer') — gates the write surface. */
   role?: string | null;
+  /**
+   * The signed-in account is still on the published first-run default
+   * (admin/admin) and must change it before any mutating route will work — the
+   * server refuses those with 403 `password_change_required`.
+   */
+  mustChangePassword?: boolean;
 }
 
 /** One dashboard admin user (never carries salt/hash). */
@@ -997,7 +1003,43 @@ export interface DashboardData {
    * an older server won't send these, so the panel hides when absent.
    */
   traces?: TracesData;
+  /**
+   * Unattended runs and their per-batch economy (G27) — the dashboard half of
+   * `nuvira execute`'s per-batch cost/latency table. Optional: an older server
+   * won't send these, so the Run Timeline renders without it.
+   */
+  unattendedJobs?: { total: number; jobs: UnattendedJobView[] };
   serverTime: number;
+}
+
+// ─── Unattended Run Batch Economy (G27) ─────────────────────────────────────
+
+/** One batch's measured economy and duration within an unattended run. */
+export interface UnattendedBatchView {
+  index: number;
+  progress: number;
+  progressLine?: string;
+  /** Measured spend for this batch's window (USD). Undefined = not metered. */
+  costUsd?: number;
+  tokens?: number;
+  durationMs?: number;
+  error?: string;
+}
+
+/** An unattended run (long-form book, phased build) and its batch rows. */
+export interface UnattendedJobView {
+  id: string;
+  kind: 'long-form' | 'phased';
+  status: string;
+  goal: string;
+  progress: number;
+  progressLine?: string;
+  batches: number;
+  costUsd?: number;
+  tokens?: number;
+  stopReason?: string;
+  updatedAt: number;
+  batchStats: UnattendedBatchView[];
 }
 
 // ─── Pipeline Run Timeline Types ────────────────────────────────────────────

@@ -38,6 +38,19 @@ const ENV_HASH_SALT = 'buff-dashboard-env-admin-v1';
 /** Minimum password length for the bootstrap setup (reject typos-adjacent weak setups). */
 export const MIN_ADMIN_PASSWORD_LENGTH = 8;
 
+/**
+ * The zero-setup FIRST-RUN credential.
+ *
+ * A GUI-first user should not have to invent a password before they can look at
+ * the dashboard, so a fresh install bootstraps `admin` / `admin`. That pair is
+ * PUBLISHED — anyone who can reach the port knows it — which is why the account
+ * it creates is deliberately crippled (see `mustChangePassword`): every
+ * mutating route is refused until the password is changed. The default is a
+ * doorway, never a resting state.
+ */
+export const DEFAULT_ADMIN_USER = 'admin';
+export const DEFAULT_ADMIN_PASSWORD = 'admin';
+
 /** One dashboard admin user: scrypt-hashed password + a governance role. */
 export interface AdminUser {
   user: string;
@@ -45,6 +58,12 @@ export interface AdminUser {
   salt: string;
   hash: string;
   createdAt: number;
+  /**
+   * The stored password is the published first-run default and MUST be changed
+   * before this account may change anything else. Absent = false; the env
+   * override never sets it, so automation is never locked out.
+   */
+  mustChangePassword?: boolean;
 }
 
 /** The on-disk store: a versioned users map. */
@@ -125,17 +144,70 @@ export function readAdminUsers(configDir?: string): Record<string, AdminUser> | 
   }
 }
 
-/** Upsert an admin user (scrypt-hashed). Returns the stored record. */
-export function writeAdminUser(user: string, password: string, role: Role, configDir?: string): AdminUser {
+/**
+ * Upsert an admin user (scrypt-hashed). Returns the stored record.
+ *
+ * Writing a password CLEARS `mustChangePassword` unless the caller asks for it
+ * explicitly — setting a new password is exactly the action the forced-change
+ * gate exists to force, so a normal write must not leave the account crippled.
+ */
+export function writeAdminUser(
+  user: string,
+  password: string,
+  role: Role,
+  configDir?: string,
+  opts?: { mustChangePassword?: boolean },
+): AdminUser {
   if (!ROLES.includes(role)) throw new Error(`Invalid role "${role}". Valid: ${ROLES.join(', ')}`);
   const dir = configDir ?? resolveBuffConfigDir();
   mkdirSync(dir, { recursive: true });
   const existing = readAdminUsers(configDir) || {};
   const { salt, hash } = hashAdminPassword(password);
-  const record: AdminUser = { user, role, salt, hash, createdAt: existing[user]?.createdAt ?? Date.now() };
+  const record: AdminUser = {
+    user,
+    role,
+    salt,
+    hash,
+    createdAt: existing[user]?.createdAt ?? Date.now(),
+    ...(opts?.mustChangePassword ? { mustChangePassword: true } : {}),
+  };
   existing[user] = record;
   writeFileSync(adminConfigPath(configDir), JSON.stringify({ version: ADMIN_FILE_VERSION, users: existing }, null, 2), 'utf-8');
   return record;
+}
+
+/**
+ * True when this account is still on the published first-run default and must
+ * change its password before it may change anything else.
+ *
+ * The env override always reports false: an operator who set
+ * `BUFF_DASHBOARD_ADMIN_PASSWORD` has already chosen a secret, and a gate that
+ * could lock automation out of its own dashboard would be a worse bug than the
+ * one it prevents.
+ */
+export function mustChangePasswordFor(user: string, configDir?: string): boolean {
+  if (envAdminOverride()) return false;
+  return readAdminUsers(configDir)?.[user]?.mustChangePassword === true;
+}
+
+/**
+ * Bootstraps `admin` / `admin` on a FRESH install (no-op once any admin exists).
+ *
+ * Called by the dashboard launcher, not by the server module, so a test that
+ * constructs the server directly stays hermetic and keeps asserting the
+ * unconfigured state. Returns the created user, or null when nothing was done.
+ *
+ * `NUVIRA_DASHBOARD_DEFAULT_ADMIN=0` opts out entirely (a deployment that wants
+ * the old setup-wizard-only behaviour).
+ */
+export function ensureDefaultAdmin(configDir?: string): string | null {
+  if (envBuff('DASHBOARD_DEFAULT_ADMIN') === '0') return null;
+  if (envAdminOverride()) return null;
+  if (isAdminConfigured(configDir)) return null;
+  writeAdminUser(DEFAULT_ADMIN_USER, DEFAULT_ADMIN_PASSWORD, 'admin', configDir, {
+    mustChangePassword: true,
+  });
+  return DEFAULT_ADMIN_USER;
 }
 
 /** Remove an admin user. Returns true when one existed. */

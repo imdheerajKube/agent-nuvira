@@ -34,11 +34,13 @@ import {
 } from '../learning/model-registry.js';
 import { classifyModelEntitlement } from '../inference/model-entitlement.js';
 import type { ActionTelemetryInsights } from '../learning/model-registry.js';
+import { listUnattendedJobs } from '../learning/unattended-job.js';
 import {
   AdminSessions,
   countAdminRoleUsers,
   isAdminConfigured,
   listAdminUsers,
+  mustChangePasswordFor,
   removeAdminUser,
   roleForUser,
   verifyAdmin,
@@ -875,6 +877,82 @@ export function readPipelineRuns(): { total: number; runs: PipelineRun[] } {
     return { total: 0, runs: [] };
   }
   return { total: data.runs.length, runs: data.runs };
+}
+
+/**
+ * Per-batch economy of an unattended run, exposed to the dashboard (G27).
+ *
+ * WHY. The per-batch cost/latency table is the one artifact that answers "what
+ * did this long run cost, and is it slowing down" — and it shipped only to the
+ * CLI, so the dashboard's Run Timeline showed a percentage while the money and
+ * the wall clock were invisible. This is the same measured data (`batchStats`
+ * from the persisted job store), not a re-derivation, so the two surfaces can
+ * never disagree.
+ *
+ * An undefined column stays undefined rather than becoming 0: a batch that was
+ * not metered must never render as "free".
+ */
+export interface UnattendedBatchView {
+  index: number;
+  progress: number;
+  progressLine?: string;
+  costUsd?: number;
+  tokens?: number;
+  durationMs?: number;
+  error?: string;
+}
+
+export interface UnattendedJobView {
+  id: string;
+  kind: 'long-form' | 'phased';
+  status: string;
+  goal: string;
+  progress: number;
+  progressLine?: string;
+  batches: number;
+  costUsd?: number;
+  tokens?: number;
+  stopReason?: string;
+  updatedAt: number;
+  batchStats: UnattendedBatchView[];
+}
+
+/**
+ * Read unattended jobs for the dashboard, most recently updated first.
+ *
+ * Never throws: a corrupt/absent store must leave the Run Timeline rendering,
+ * exactly like every other dashboard reader.
+ */
+export function readUnattendedJobs(): { total: number; jobs: UnattendedJobView[] } {
+  try {
+    const jobs = listUnattendedJobs()
+      .map((job): UnattendedJobView => ({
+        id: job.id,
+        kind: job.kind,
+        status: job.status,
+        goal: job.goal,
+        progress: Math.max(0, Math.min(100, Math.round(job.progress))),
+        ...(job.progressLine ? { progressLine: job.progressLine } : {}),
+        batches: job.batches,
+        ...(job.costUsd === undefined ? {} : { costUsd: job.costUsd }),
+        ...(job.tokens === undefined ? {} : { tokens: job.tokens }),
+        ...(job.stopReason ? { stopReason: job.stopReason } : {}),
+        updatedAt: job.updatedAt,
+        batchStats: (job.batchStats ?? []).map((s) => ({
+          index: s.index,
+          progress: s.progress,
+          ...(s.progressLine ? { progressLine: s.progressLine } : {}),
+          ...(s.costUsd === undefined ? {} : { costUsd: s.costUsd }),
+          ...(s.tokens === undefined ? {} : { tokens: s.tokens }),
+          ...(s.durationMs === undefined ? {} : { durationMs: s.durationMs }),
+          ...(s.error ? { error: s.error } : {}),
+        })),
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return { total: jobs.length, jobs };
+  } catch {
+    return { total: 0, jobs: [] };
+  }
 }
 
 /**
@@ -3241,6 +3319,74 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       authenticated: session !== null,
       user: session?.user ?? null,
       role: session?.role ?? null,
+      // Drives the forced-change banner: the account exists and is still on the
+      // published first-run default, so the GUI must take the user straight to
+      // setting a real password instead of letting them wander the dashboard.
+      mustChangePassword: session ? mustChangePasswordFor(session.user) : false,
+    });
+    return;
+  }
+
+  // ── Forced first-run password change ──────────────────────────────────────
+  // A fresh install bootstraps admin/admin so a non-technical user has zero
+  // setup, which means the credential is PUBLIC. This is the single gate that
+  // makes that safe: while the flag is set, EVERY mutating admin route is
+  // refused — provider config, API keys, users, shutdown — so a stranger who
+  // typed the default password cannot do anything but change it.
+  //
+  // Deliberately ONE check rather than per-route: the admin write surface is
+  // ~50 hand-written routes, and the route that forgets is exactly how a known
+  // credential quietly becomes a real one. GET reads stay allowed (they expose
+  // no secrets), and change-password/logout must remain reachable or the user
+  // could never escape.
+  const PASSWORD_CHANGE_EXEMPT = new Set(['/api/admin/change-password', '/api/admin/logout']);
+  if (
+    pathname.startsWith('/api/admin/') &&
+    req.method !== 'GET' &&
+    !PASSWORD_CHANGE_EXEMPT.has(pathname)
+  ) {
+    const session = adminSessions.validate(bearerToken(req));
+    if (session && mustChangePasswordFor(session.user)) {
+      writeJson(res, 403, {
+        ok: false,
+        code: 'password_change_required',
+        error: 'This dashboard is still using the default admin password. Change it to continue.',
+      });
+      return;
+    }
+  }
+
+  if (pathname === '/api/admin/change-password' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Sign in first.' });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const current = typeof body?.currentPassword === 'string' ? body.currentPassword : '';
+      const next = typeof body?.newPassword === 'string' ? body.newPassword : '';
+      if (next.length < MIN_ADMIN_PASSWORD_LENGTH) {
+        writeJson(res, 400, {
+          ok: false,
+          error: `Choose a password of at least ${MIN_ADMIN_PASSWORD_LENGTH} characters.`,
+        });
+        return;
+      }
+      if (next === current) {
+        writeJson(res, 400, { ok: false, error: 'The new password must differ from the current one.' });
+        return;
+      }
+      if (!verifyAdmin(session.user, current)) {
+        writeJson(res, 401, { ok: false, error: 'Current password is incorrect.' });
+        return;
+      }
+      // A normal write CLEARS the forced-change flag — this is the one action
+      // the gate exists to force, so it must be able to satisfy it.
+      writeAdminUser(session.user, next, roleForUser(session.user));
+      writeJson(res, 200, { ok: true, user: session.user });
+    })().catch((err) => {
+      writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
     });
     return;
   }
@@ -4681,6 +4827,15 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // Per-batch cost/latency of unattended runs (G27) — the same measured rows
+  // the CLI prints, so the Run Timeline stops showing a percentage without the
+  // money and the wall clock.
+  if (pathname === '/api/unattended-jobs') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(readUnattendedJobs()));
+    return;
+  }
+
   // P0 reasoning traces: list (summarized) + single-trace detail. The list
   // omits prompt/response previews so the dashboard index stays small; the
   // detail endpoint returns the full steps for the replay view.
@@ -4723,6 +4878,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       requests: readRequestsData(),
       dag: readDAGData(),
       pipelineRuns: readPipelineRuns(),
+      unattendedJobs: readUnattendedJobs(),
       traces: readTracesData(),
       serverTime: Date.now(),
     }));
@@ -4750,6 +4906,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       modelRegistry: readModelRegistryData(),
       dag: readDAGData(),
       pipelineRuns: readPipelineRuns(),
+      unattendedJobs: readUnattendedJobs(),
       serverTime: Date.now(),
     };
     res.write(`event: init\ndata: ${JSON.stringify(allData)}\n\n`);
@@ -4783,6 +4940,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           requests: readRequestsData(),
           dag: readDAGData(),
           pipelineRuns: readPipelineRuns(),
+          unattendedJobs: readUnattendedJobs(),
           serverTime: Date.now(),
         };
         res.write(`event: refresh\ndata: ${JSON.stringify(data)}\n\n`);

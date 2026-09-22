@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { dashboardAPI } from '../api';
 import type { DashboardData, AgentNode, AgentEdge, DAGData } from '../types';
 import PhaseTimeline, { collectPipelineRuns } from './PhaseTimeline';
+import BatchEconomy from './BatchEconomy';
 
 interface DAGViewProps {
   data: DashboardData | null;
@@ -264,8 +265,14 @@ export default function DAGView({ data }: DAGViewProps) {
   const hasLiveDAG = !!(displayDAG && (displayDAG.nodes.length > 0 || displayDAG.active));
   const hasRuns = pipelineRuns.length > 0;
   const hasLoopTurn = !!loopTurn;
+  // G27 — an unattended run's batch economy is worth showing even when no
+  // pipeline run was recorded for it (the gateway owns those runs), so it
+  // counts toward "there is something here" and is not swallowed by the
+  // empty state.
+  const unattendedJobs = data?.unattendedJobs?.jobs ?? [];
+  const hasBatchEconomy = unattendedJobs.some((j) => j.batchStats.length > 0);
 
-  if (!hasLiveDAG && !hasRuns && !hasLoopTurn) {
+  if (!hasLiveDAG && !hasRuns && !hasLoopTurn && !hasBatchEconomy) {
     return <EmptyDAGState memoryTotal={memoryTotal} />;
   }
 
@@ -292,6 +299,10 @@ export default function DAGView({ data }: DAGViewProps) {
           <PhaseTimeline runs={pipelineRuns} onScrub={handleScrub} />
         </div>
       )}
+
+      {/* G27 — per-batch cost & latency of unattended runs, the dashboard half
+          of the CLI's `📊 Per-batch cost & latency` table. */}
+      <BatchEconomy jobs={unattendedJobs} />
 
       {/* Phase 4 — Loop-turn telemetry card (the chat/execute loop engine):
           per-turn tool-call stats, rendered even with no pipeline nodes. */}

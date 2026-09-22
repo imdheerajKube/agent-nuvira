@@ -3,7 +3,7 @@
  *
  * The user-facing half of the intent router (src/commands/intent-router.ts):
  * type "stop the dashboard", "add Rahul's mobile +919958604222 to whatsapp",
- * "start the gateway", "run the eval suite" and see exactly which `buff`
+ * "start the gateway", "run the eval suite" and see exactly which `nuvira`
  * command the agent would execute — including a clarifying question when the
  * ask is ambiguous (verified list vs send-by-name mapping, …).
  *
@@ -21,7 +21,7 @@ import { runIntentEval } from '../learning/intent-eval.js';
 export class IntentCommand {
   create(): Command {
     const cmd = new Command('intent')
-      .description('Plain-English → CLI routing — resolve an ask into the exact `buff` command(s) to run');
+      .description('Plain-English → CLI routing — resolve an ask into the exact `nuvira` command(s) to run');
 
     cmd
       .command('resolve')

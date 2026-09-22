@@ -28,6 +28,10 @@ import {
   envAdminOverride,
   AdminSessions,
   MIN_ADMIN_PASSWORD_LENGTH,
+  DEFAULT_ADMIN_USER,
+  DEFAULT_ADMIN_PASSWORD,
+  ensureDefaultAdmin,
+  mustChangePasswordFor,
 } from './admin-auth';
 
 describe('hashAdminPassword / verifyAdminPassword', () => {
@@ -273,5 +277,87 @@ describe('AdminSessions (role-carrying)', () => {
 describe('MIN_ADMIN_PASSWORD_LENGTH', () => {
   it('is enforced by the server-facing constant (8 chars)', () => {
     expect(MIN_ADMIN_PASSWORD_LENGTH).toBe(8);
+  });
+});
+
+/**
+ * Zero-setup first run: admin/admin is created so a GUI-first user is never
+ * blocked by a setup form — and the account it creates is CRIPPLED until the
+ * password is changed, which is what makes a published default safe.
+ */
+describe('first-run default admin (ensureDefaultAdmin)', () => {
+  let dir: string;
+
+  const savedDefault = process.env.NUVIRA_DASHBOARD_DEFAULT_ADMIN;
+  const savedPw = process.env.NUVIRA_DASHBOARD_ADMIN_PASSWORD;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'buff-default-admin-'));
+    delete process.env.NUVIRA_DASHBOARD_DEFAULT_ADMIN;
+    delete process.env.NUVIRA_DASHBOARD_ADMIN_PASSWORD;
+    delete process.env.BUFF_DASHBOARD_ADMIN_PASSWORD;
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    if (savedDefault === undefined) delete process.env.NUVIRA_DASHBOARD_DEFAULT_ADMIN;
+    else process.env.NUVIRA_DASHBOARD_DEFAULT_ADMIN = savedDefault;
+    if (savedPw === undefined) delete process.env.NUVIRA_DASHBOARD_ADMIN_PASSWORD;
+    else process.env.NUVIRA_DASHBOARD_ADMIN_PASSWORD = savedPw;
+  });
+
+  it('creates admin/admin on a fresh install, flagged must-change', () => {
+    const created = ensureDefaultAdmin(dir);
+    expect(created).toBe(DEFAULT_ADMIN_USER);
+    expect(isAdminConfigured(dir)).toBe(true);
+    // The published pair actually works…
+    expect(verifyAdmin(DEFAULT_ADMIN_USER, DEFAULT_ADMIN_PASSWORD, dir)).toBe(true);
+    // …and the account knows it is on a default.
+    expect(mustChangePasswordFor(DEFAULT_ADMIN_USER, dir)).toBe(true);
+  });
+
+  it('never overwrites an existing admin', () => {
+    writeAdminUser('dheeraj', 'a-real-password-1', 'admin', dir);
+    expect(ensureDefaultAdmin(dir)).toBeNull();
+    expect(readAdminUsers(dir)?.admin).toBeUndefined();
+    expect(mustChangePasswordFor('dheeraj', dir)).toBe(false);
+  });
+
+  it('a normal password write clears the forced-change flag', () => {
+    ensureDefaultAdmin(dir);
+    expect(mustChangePasswordFor(DEFAULT_ADMIN_USER, dir)).toBe(true);
+    writeAdminUser(DEFAULT_ADMIN_USER, 'a-real-password-1', 'admin', dir);
+    expect(mustChangePasswordFor(DEFAULT_ADMIN_USER, dir)).toBe(false);
+  });
+
+  it('opts out entirely with NUVIRA_DASHBOARD_DEFAULT_ADMIN=0', () => {
+    process.env.NUVIRA_DASHBOARD_DEFAULT_ADMIN = '0';
+    expect(ensureDefaultAdmin(dir)).toBeNull();
+    expect(isAdminConfigured(dir)).toBe(false);
+  });
+
+  it('never creates a default while the env override supplies the credential', () => {
+    process.env.NUVIRA_DASHBOARD_ADMIN_PASSWORD = 'operator-chosen-secret';
+    expect(ensureDefaultAdmin(dir)).toBeNull();
+    // The env path is never locked into a forced change — automation must not
+    // be able to brick its own dashboard.
+    expect(mustChangePasswordFor('admin', dir)).toBe(false);
+  });
+
+  it('stores only a hash — the default password is never written as a value', () => {
+    ensureDefaultAdmin(dir);
+    const raw = readFileSync(join(dir, 'dashboard-admin.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as {
+      users: Record<string, { salt: string; hash: string; mustChangePassword?: boolean }>;
+    };
+    const record = parsed.users[DEFAULT_ADMIN_USER];
+
+    // A real scrypt digest, not the plaintext ('admin' is also the user key, so
+    // asserting on the raw text would be an assertion about the USERNAME).
+    expect(record.hash).toMatch(/^[0-9a-f]{128}$/);
+    expect(record.salt).toMatch(/^[0-9a-f]{32}$/);
+    expect(verifyAdminPassword(DEFAULT_ADMIN_PASSWORD, record.salt, record.hash)).toBe(true);
+    expect(raw).not.toContain('"password"');
+    expect(record.mustChangePassword).toBe(true);
   });
 });

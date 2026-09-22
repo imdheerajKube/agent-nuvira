@@ -3,7 +3,8 @@ import { ConfigManager } from '../config/manager.js';
 
 /**
  * Detect the CLI invocation name from process.argv.
- * Supports 'nuvira', 'agent-nuvira', or 'buff'.
+ * Supports 'nuvira' and 'agent-nuvira'. `buff` is a legacy alias kept only so
+ * an old shell script does not break — it is never the name we print.
  */
 export function getCliName(): string {
   // Fast path: router sets this early
@@ -12,7 +13,7 @@ export function getCliName(): string {
   const arg0 = process.argv[1] || '';
   if (/nuvira/i.test(arg0)) return 'nuvira';
   if (/agent-nuvira/i.test(arg0)) return 'agent-nuvira';
-  return 'buff';
+  return 'nuvira';
 }
 
 /**

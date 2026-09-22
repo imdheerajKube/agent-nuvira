@@ -37,6 +37,11 @@ import {
   confirmStaleRestart,
 } from './dashboard-restart.js';
 import { createDashboardServer } from '../web-dashboard/server.js';
+import {
+  DEFAULT_ADMIN_PASSWORD,
+  DEFAULT_ADMIN_USER,
+  ensureDefaultAdmin,
+} from '../web-dashboard/src/admin-auth.js';
 import { guardRbacAction } from './rbac-guard.js';
 import { logger } from '../utils/logger.js';
 
@@ -218,6 +223,25 @@ function stopProcessHint(): string {
         settle('running');
         process.exit(0);
       };
+
+      // Zero-setup first run: create admin/admin so a GUI-first user can log in
+      // without inventing a password first. The account is deliberately
+      // crippled until the password is changed (every mutating route returns
+      // 403 password_change_required), so a published credential is a doorway,
+      // not an open door. No-op once any admin exists.
+      const bootstrapped = ensureDefaultAdmin();
+      if (bootstrapped) {
+        logger.info('');
+        logger.info('  ┌─ First run: a default admin account was created ─────────────┐');
+        logger.info(`  │  username: ${DEFAULT_ADMIN_USER}`);
+        logger.info(`  │  password: ${DEFAULT_ADMIN_PASSWORD}`);
+        logger.info('  │                                                            │');
+        logger.info('  │  This password is PUBLIC — the dashboard will insist you    │');
+        logger.info('  │  change it before it will save anything. Anyone on your      │');
+        logger.info('  │  network can sign in until you do.                          │');
+        logger.info('  └────────────────────────────────────────────────────────────┘');
+        logger.info('');
+      }
 
       try {
         // Port/host passed EXPLICITLY: createDashboardServer reads them at

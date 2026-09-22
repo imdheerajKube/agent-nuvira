@@ -83,12 +83,16 @@ const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', 
 export function createCLI(): Command {
   const program = new Command();
 
-  // Detect invocation name: supports 'nuvira', 'agent-nuvira', or 'buff'
+  // Detect invocation name: 'nuvira' or 'agent-nuvira'.
+  //
+  // The product is agent-nuvira, so every help line, usage string and error
+  // hint says `nuvira`. This used to default to the legacy `buff` alias, which
+  // meant a plain `--help` announced the wrong product name on every install.
   const invoker = (() => {
     const arg0 = process.argv[1] || '';
     if (/nuvira/i.test(arg0)) return 'nuvira';
     if (/agent-nuvira/i.test(arg0)) return 'agent-nuvira';
-    return 'buff';
+    return 'nuvira';
   })();
 
   // Expose detected name so all CLI commands can use it in help text

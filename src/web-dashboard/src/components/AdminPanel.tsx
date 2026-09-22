@@ -71,6 +71,11 @@ export default function AdminPanel() {
   // Auth (Session 18 control layer) + RBAC role (Session 19)
   const [authStatus, setAuthStatus] = useState<{ configured: boolean; authenticated: boolean } | null>(null);
   const [authed, setAuthed] = useState(false);
+  // First-run default password still in place → the server refuses every
+  // mutating call, so the panel must show the way out, not a wall of 403s.
+  const [mustChange, setMustChange] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [role, setRole] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
   const [user, setUser] = useState('');
@@ -127,6 +132,7 @@ export default function AdminPanel() {
       setAuthed(s.authenticated);
       setRole(s.role ?? null);
       setUserName(s.user ?? null);
+      setMustChange(s.mustChangePassword === true);
       if (s.authenticated) {
         void refresh();
         void loadCatalog();
@@ -158,6 +164,11 @@ export default function AdminPanel() {
       setUserName(r.user ?? null);
       setUser('');
       setPassword('');
+      // The login response carries no flag; ask the server whether this account
+      // is still on the published default so the banner is right immediately.
+      void dashboardAPI.fetchAdminAuthStatus().then((s) => {
+        if (s) setMustChange(s.mustChangePassword === true);
+      });
       void refresh();
       void loadCatalog();
       void loadUsers();
@@ -410,10 +421,94 @@ export default function AdminPanel() {
           </button>
           {isSetup ? (
             <p className="admin-hint">
-              Automation alternative: set <code>BUFF_DASHBOARD_ADMIN_USER</code> and{' '}
-              <code>BUFF_DASHBOARD_ADMIN_PASSWORD</code> in the dashboard's environment.
+              Automation alternative: set <code>NUVIRA_DASHBOARD_ADMIN_USER</code> and{' '}
+              <code>NUVIRA_DASHBOARD_ADMIN_PASSWORD</code> in the dashboard's environment.
             </p>
           ) : null}
+        </form>
+      </div>
+    );
+  }
+
+  // ─── Forced first-run password change ────────────────────────────────────
+  // A fresh install boots with admin/admin so there is zero setup, which makes
+  // that pair public. The server answers every mutating route with 403
+  // `password_change_required` until this is done — so this screen is the only
+  // thing that works, and it says so plainly.
+  if (mustChange) {
+    const tooShort = newPassword.length > 0 && newPassword.length < 8;
+    const mismatch = confirmPassword.length > 0 && confirmPassword !== newPassword;
+    const handleChangePassword = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (tooShort || mismatch || !newPassword) return;
+      setAuthBusy(true);
+      setAuthError(null);
+      const r = await dashboardAPI.changeAdminPassword(password, newPassword);
+      if (r.ok) {
+        setMustChange(false);
+        setPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        void refresh();
+        void loadCatalog();
+        void loadUsers();
+      } else {
+        setAuthError(r.error || 'Could not change the password.');
+      }
+      setAuthBusy(false);
+    };
+
+    return (
+      <div className="admin-header">
+        <h2 className="section-title">🔐 Set your own password</h2>
+        <p className="admin-subtitle">
+          This dashboard is running on its <strong>published default password</strong>, so
+          anyone who can reach this port can sign in. Until you replace it, the agent
+          will refuse to save anything — API keys, provider settings, users.
+        </p>
+        <form className="admin-gate-form" onSubmit={handleChangePassword}>
+          <label>
+            <span>Current password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              placeholder="admin"
+            />
+          </label>
+          <label>
+            <span>New password</span>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              autoComplete="new-password"
+              placeholder="at least 8 characters"
+            />
+          </label>
+          {tooShort ? (
+            <div className="admin-error">Use at least 8 characters.</div>
+          ) : null}
+          <label>
+            <span>Confirm new password</span>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              autoComplete="new-password"
+              placeholder="repeat it"
+            />
+          </label>
+          {mismatch ? <div className="admin-error">The two passwords do not match.</div> : null}
+          {authError ? <div className="admin-error">{authError}</div> : null}
+          <button
+            className="admin-refresh-btn"
+            type="submit"
+            disabled={authBusy || !password || !newPassword || tooShort || mismatch}
+          >
+            {authBusy ? '⏳ …' : '🔐 Save new password'}
+          </button>
         </form>
       </div>
     );

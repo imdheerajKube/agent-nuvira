@@ -21,7 +21,12 @@ features:
 
 # Agent-Nuvira — `agent-nuvira`
 
-> **Developed by Dheeraj Sharma <imdheeraj@gmail.com>**
+> **Developed by Dheeraj Sharma <imdheeraj@gmail.com>** · 🌐 **[www.agent-nuvira.com](https://www.agent-nuvira.com)**
+
+[![npm version](https://img.shields.io/npm/v/agent-nuvira.svg)](https://www.npmjs.com/package/agent-nuvira)
+[![npm downloads](https://img.shields.io/npm/dw/agent-nuvira.svg)](https://www.npmjs.com/package/agent-nuvira)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Website](https://img.shields.io/badge/website-www.agent-nuvira.com-6363f2.svg)](https://www.agent-nuvira.com)
 
 **Autonomous AI agent** with a **visual dashboard** and **powerful CLI** — codes, creates, writes, analyzes, and automates anything. Run models locally (Ollama) or route across 22+ cloud providers (Groq, Gemini, OpenRouter, Bedrock, Azure, Anthropic, OpenAI, and more). Specialized agents plan, write, review, test, create images, generate videos, write documents, and ship code — learning from every run.
 
@@ -35,6 +40,25 @@ agent-nuvira edit main.go --instruction "add input validation"
 agent-nuvira plan . --task "implement user authentication"
 agent-nuvira config list
 ```
+
+---
+
+## Traction
+
+Numbers below come from the **public npm registry** (`api.npmjs.org`, package
+`agent-nuvira`), read on **22 Sep 2026**. They are reproducible with the exact
+URLs shown — no self-reported figures.
+
+| Metric | Value | Source |
+|---|---|---|
+| **Peak installs in a single week** | **11,341** | `api.npmjs.org/downloads/range/2026-08-01:2026-09-22/agent-nuvira` — best 7-day window, 25–31 Aug 2026 |
+| Total installs since first publish (16 Jul 2026) | **45,635** | `api.npmjs.org/downloads/point/2026-01-01:2026-09-22/agent-nuvira` |
+| Installs, last 30 days | **18,259** | `api.npmjs.org/downloads/point/last-month/agent-nuvira` |
+
+> **We publish the peak, not a flattering average, and we date it.** Install counts move;
+> re-run the URLs above to see the current figure. Download counts include CI and
+> mirror traffic, so they measure reach rather than active users — stated here so the
+> number can be read for what it is.
 
 ---
 

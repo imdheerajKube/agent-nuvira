@@ -49,7 +49,7 @@ export function parseAskWaitDuration(value: string | undefined): number | null {
 export class ConfigCommand extends BaseCommand {
   create(): Command {
     const command = new Command('config')
-      .description('Manage Buff configuration')
+      .description('Manage Nuvira configuration')
       .addCommand(this.createSetCommand())
       .addCommand(this.createGetCommand())
       .addCommand(this.createListCommand())
@@ -718,7 +718,7 @@ export class ConfigCommand extends BaseCommand {
 
   private initConfig(): void {
     logger.info('Configuration already initialized with defaults.');
-    logger.info('Edit ~/.nuvira/buffconfig.json or use: nuvira config set <key> <value>');
+    logger.info('Edit ~/.nuvira/nuviraconfig.json or use: nuvira config set <key> <value>');
     logger.info('Set API keys via environment variables or the config file.');
     console.log('');
     this.displayConfig();

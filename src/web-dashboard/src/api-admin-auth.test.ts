@@ -26,7 +26,14 @@ const htmlResponse = (): Response =>
     headers: { 'Content-Type': 'text/html' },
   });
 
-const AUTHED = { configured: true, authenticated: true, user: 'admin', role: 'admin' };
+const AUTHED = {
+  configured: true,
+  authenticated: true,
+  user: 'admin',
+  role: 'admin',
+  // Absent from the wire on an older server → parsed as false, never undefined.
+  mustChangePassword: false,
+};
 const USERS = [
   { user: 'admin', role: 'admin', createdAt: 100 },
   { user: 'view', role: 'viewer', createdAt: 200 },
@@ -43,6 +50,14 @@ describe('DashboardAPI admin auth surface', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(AUTHED));
     const api = new DashboardAPI('http://test');
     expect(await api.fetchAdminAuthStatus()).toEqual(AUTHED);
+  });
+
+  it('surfaces the forced-change flag so the GUI can gate the dashboard', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({ ...AUTHED, mustChangePassword: true }),
+    );
+    const api = new DashboardAPI('http://test');
+    expect((await api.fetchAdminAuthStatus())?.mustChangePassword).toBe(true);
   });
 
   it('returns null for a stale server answering HTML — no crash', async () => {
