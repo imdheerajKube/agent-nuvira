@@ -42,8 +42,10 @@ describe('docs/COMMANDS_SURFACE.md — live-CLI drift guard', () => {
   it.skipIf(!existsSync(distRouter) || !existsSync(doc))('documents the current version line in its header source', () => {
     const text = require('node:fs').readFileSync(doc, 'utf-8');
     expect(text).toContain('Source of truth: src/cli/cli-program.ts (createCLI)');
-    expect(text).toContain('### `buff chat`');
-    expect(text).toContain('### `buff execute`');
-    expect(text).toContain('### `buff skills`');
+    // The product is agent-nuvira: the surface must name the CLI `nuvira`, not
+    // the legacy `buff` alias.
+    expect(text).toContain('### `nuvira chat`');
+    expect(text).toContain('### `nuvira execute`');
+    expect(text).toContain('### `nuvira skills`');
   });
 });

@@ -217,7 +217,11 @@ describe('DashboardCommand', () => {
   it('should not call execSync when --build is not set', async () => {
     await runDashboard(cmd, {});
 
-    expect(mockExecSync).not.toHaveBeenCalled();
+    // Narrowed to the BUILD invocation on purpose: `nuvira dashboard` now starts
+    // the messaging gateway alongside itself, and detecting an already-running
+    // gateway shells out to `ps`. "execSync was never called" is no longer the
+    // right assertion — "the dashboard was not built" is.
+    expect(mockExecSync).not.toHaveBeenCalledWith('npm run build:dashboard', expect.anything());
   });
 
   // ── Build failure ─────────────────────────────────────────────────────

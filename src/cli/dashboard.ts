@@ -43,6 +43,8 @@ import {
   ensureDefaultAdmin,
 } from '../web-dashboard/src/admin-auth.js';
 import { guardRbacAction } from './rbac-guard.js';
+import { isGatewayRunning } from './process-control.js';
+import type { ChildProcess } from 'node:child_process';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -60,6 +62,8 @@ function stopProcessHint(): string {
 
   export class DashboardCommand extends BaseCommand {
   private server: ReturnType<typeof createDashboardServer> | null = null;
+  /** The gateway we started alongside this dashboard (never a pre-existing one). */
+  private gatewayChild: ChildProcess | null = null;
 
   create(): Command {
     const command = new Command('dashboard')
@@ -75,7 +79,20 @@ function stopProcessHint(): string {
       .option('--build', 'Build the dashboard (npm run build:dashboard) before starting')
       .option('--force', 'Detect a stale dashboard on the port (API/SSE mismatch) and offer to restart it')
       .option('--cwd <dir>', 'Working directory for the dashboard (default: process.cwd())')
-      .action(async (options?: { port?: number; host?: string; open?: boolean; build?: boolean; force?: boolean; cwd?: string }) => {
+      .option('--no-gateway', 'Do not start the messaging gateway alongside the dashboard')
+      .option('--keep-gateway', 'Leave the gateway running after the dashboard exits')
+      .option('--gateway-port <port>', 'Webhook receiver port for the gateway', (v: string) => parseInt(v, 10), 8787)
+      .action(async (options?: {
+        port?: number;
+        host?: string;
+        open?: boolean;
+        build?: boolean;
+        force?: boolean;
+        cwd?: string;
+        gateway?: boolean;
+        keepGateway?: boolean;
+        gatewayPort?: number;
+      }) => {
         await this.launchDashboard(options || {});
       });
 
@@ -103,6 +120,85 @@ function stopProcessHint(): string {
     }
   }
 
+  /**
+   * Start the messaging gateway alongside the dashboard, unless one is already
+   * running.
+   *
+   * WHY. The gateway is what makes the agent reachable from WhatsApp/Telegram/
+   * Slack, and needing a second terminal to get it is exactly the manual cadence
+   * a GUI-first user should not have to discover. Starting it here makes one
+   * command the whole product.
+   *
+   * IDEMPOTENT BY CONSTRUCTION. A second gateway cannot bind the webhook port,
+   * so an existing one is reused rather than duplicated — and we then record
+   * `gatewayChild = null`, which is what guarantees the dashboard never kills a
+   * gateway it did not start.
+   *
+   * CHILD OF THIS PROCESS, deliberately not detached: it dies with the dashboard
+   * unless `--keep-gateway` is given, so there is no orphan holding port 8787.
+   */
+  private async startGateway(port: number): Promise<void> {
+    const existing = await isGatewayRunning({ port });
+    if (existing.running) {
+      logger.info(
+        `🌐 Gateway already running${existing.pid ? ` (PID ${existing.pid})` : ''} — reusing it.`,
+      );
+      return;
+    }
+
+    const entry = process.argv[1];
+    if (!entry) {
+      logger.warn('Could not determine the CLI entry point — start messaging with: nuvira gateway start');
+      return;
+    }
+
+    let child: ChildProcess;
+    try {
+      child = spawn(process.execPath, [entry, 'gateway', 'start', '--port', String(port)], {
+        stdio: 'ignore',
+        env: process.env,
+      });
+    } catch (err) {
+      logger.warn(`Could not start the gateway: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    this.gatewayChild = child;
+
+    // A gateway that cannot bind its port exits within a moment. Reporting
+    // "started" for a process that is already dead is the exact kind of claim
+    // this product exists to avoid, so wait and check before saying anything.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // `exitCode != null` (loose) is deliberate: a real ChildProcess reports
+    // `null` while running and a number once dead, and a test double that omits
+    // the field must read as "still running" rather than as a crash.
+    if (child.exitCode != null) {
+      this.gatewayChild = null;
+      logger.warn(
+        `Gateway exited immediately (code ${child.exitCode}) — messaging is off. ` +
+          `Run \`${getCliName()} gateway status\` to see why.`,
+      );
+      return;
+    }
+
+    logger.info(`🌐 Gateway started (PID ${child.pid}) — messaging channels are live alongside the dashboard.`);
+  }
+
+  /**
+   * Stop the gateway THIS dashboard started. A pre-existing gateway
+   * (`gatewayChild === null`) is never touched — auto-start must not silently
+   * take ownership of a process the user started themselves.
+   */
+  private stopOwnedGateway(): void {
+    const child = this.gatewayChild;
+    if (!child || child.exitCode != null) return;
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      /* already gone */
+    }
+    this.gatewayChild = null;
+  }
+
   private async launchDashboard(options: {
     port?: number;
     host?: string;
@@ -110,6 +206,9 @@ function stopProcessHint(): string {
     build?: boolean;
     force?: boolean;
     cwd?: string;
+    gateway?: boolean;
+    keepGateway?: boolean;
+    gatewayPort?: number;
   }): Promise<void> {
     // --cwd overrides the dashboard's working directory: the 'current dir'
     // chip in the chat picker reflects process.cwd(), so changing it early
@@ -129,6 +228,11 @@ function stopProcessHint(): string {
     const shouldOpen = options.open !== false;
     const shouldBuild = options.build === true;
     const force = options.force === true;
+    // The gateway runs ALONGSIDE the dashboard by default: a GUI-first user
+    // should get messaging channels live without discovering a second command.
+    const shouldStartGateway = options.gateway !== false;
+    const keepGateway = options.keepGateway === true;
+    const gatewayPort = options.gatewayPort || 8787;
 
     // ── Build the dashboard if requested ────────────────────────────────
     if (shouldBuild) {
@@ -160,7 +264,11 @@ function stopProcessHint(): string {
     // pathological loop can't hang the CLI.
     let attempts = 0;
     while (attempts < 3) {
-      const outcome = await this.serve(port, host, shouldOpen, force);
+      const outcome = await this.serve(port, host, shouldOpen, force, {
+        shouldStartGateway,
+        keepGateway,
+        gatewayPort,
+      });
       if (outcome !== 'restart') return;
       attempts++;
     }
@@ -199,7 +307,9 @@ function stopProcessHint(): string {
     host: string,
     shouldOpen: boolean,
     force: boolean,
+    gateway: { shouldStartGateway: boolean; keepGateway: boolean; gatewayPort: number },
   ): Promise<'running' | 'restart' | 'failed'> {
+    const { shouldStartGateway, keepGateway, gatewayPort } = gateway;
     process.env.NUVIRA_DASHBOARD_PORT = String(port);
     process.env.NUVIRA_DASHBOARD_HOST = host;
 
@@ -216,6 +326,12 @@ function stopProcessHint(): string {
 
       const shutdown = () => {
         logger.info('\nShutting down dashboard...');
+        // Stop the gateway we started, so no orphan holds the webhook port.
+        // `--keep-gateway` leaves it up for messaging that must outlive the GUI.
+        if (!keepGateway) {
+          this.stopOwnedGateway();
+          if (shouldStartGateway) logger.info('Gateway stopped with the dashboard (\`--keep-gateway\` leaves it running).');
+        }
         if (this.server) {
           this.closeAllListeners();
           this.server = null;
@@ -271,6 +387,12 @@ function stopProcessHint(): string {
         started = true;
         logger.success(`Dashboard running at: ${url}`);
         console.log('  Press Ctrl+C to stop the dashboard.\n');
+        // Gateway LAST: started only once the dashboard actually bound, so a
+        // failed start (EADDRINUSE on a stale dashboard) never leaves a stray
+        // gateway behind.
+        if (shouldStartGateway) {
+          void this.startGateway(gatewayPort);
+        }
         // Auto-open browser only once we're actually serving.
         if (shouldOpen) {
           this.openBrowser(url);

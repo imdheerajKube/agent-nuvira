@@ -175,15 +175,14 @@ function isNodeProcess(command: string): boolean {
 }
 
 /**
- * Stop a running gateway: locate the `gateway start` process (command-line
- * match first, then the webhook receiver port, default 8787) and SIGTERM it.
+ * Locate the processes that ARE the gateway: a `gateway start` command-line
+ * match (node processes preferred over the shells/tmux wrappers that merely
+ * mention it), falling back to whatever is bound to the webhook port.
  *
- * `--supervise` runs TWO processes (a parent that restarts the child), so every
- * matching node process is stopped — the supervisor forwards SIGTERM to its
- * child, and an orphaned child (supervisor already gone) is caught directly.
+ * Shared by {@link stopGateway} and {@link isGatewayRunning} so "is it up?" and
+ * "stop it" can never disagree.
  */
-export async function stopGateway(opts?: { port?: number }): Promise<StopResult> {
-  const port = opts?.port ?? 8787;
+async function findGatewayPids(port: number): Promise<number[]> {
   const pattern = /\bgateway\s+start\b/;
   const candidates = findPidsByCommandLine(pattern);
   // Prefer the node processes; fall back to whatever matched (a non-node
@@ -196,14 +195,42 @@ export async function stopGateway(opts?: { port?: number }): Promise<StopResult>
       return false;
     }
   });
-  let targets = nodePids.length > 0 ? nodePids : candidates;
+  const targets = nodePids.length > 0 ? nodePids : candidates;
+  if (targets.length > 0) return targets;
+  const { findPidOnPort } = await import('./dashboard-restart.js');
+  const onPort = await findPidOnPort(port);
+  return onPort === null ? [] : [onPort];
+}
+
+/**
+ * Is a gateway already running?
+ *
+ * `nuvira dashboard` auto-starts the gateway, and auto-start MUST be
+ * idempotent: a second gateway cannot bind the webhook port (default 8787) and
+ * the user would be left with two competing processes and a stale one holding
+ * the port. Shares `findGatewayPids` with {@link stopGateway} so "is it up?" and
+ * "stop it" can never disagree.
+ */
+export async function isGatewayRunning(
+  opts?: { port?: number },
+): Promise<{ running: boolean; pid?: number }> {
+  const targets = await findGatewayPids(opts?.port ?? 8787);
+  return targets.length > 0 ? { running: true, pid: targets[0] } : { running: false };
+}
+
+/**
+ * Stop a running gateway: locate the `gateway start` process (command-line
+ * match first, then the webhook receiver port, default 8787) and SIGTERM it.
+ *
+ * `--supervise` runs TWO processes (a parent that restarts the child), so every
+ * matching node process is stopped — the supervisor forwards SIGTERM to its
+ * child, and an orphaned child (supervisor already gone) is caught directly.
+ */
+export async function stopGateway(opts?: { port?: number }): Promise<StopResult> {
+  const port = opts?.port ?? 8787;
+  const targets = await findGatewayPids(port);
   if (targets.length === 0) {
-    const { findPidOnPort } = await import('./dashboard-restart.js');
-    const onPort = await findPidOnPort(port);
-    if (onPort === null) {
-      return { stopped: false, reason: `no running gateway process found (port ${port} or \`gateway start\`)` };
-    }
-    targets = [onPort];
+    return { stopped: false, reason: `no running gateway process found (port ${port} or \`gateway start\`)` };
   }
   let stoppedAny = false;
   let last: number | undefined;
