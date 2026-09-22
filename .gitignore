@@ -56,6 +56,11 @@ issues/
 # scripts/generate-commands-surface.mjs, drift-guarded in CI) — a doc that is
 # CODE-adjacent build output, not hand-written prose.
 !docs/COMMANDS_SURFACE.md
+# The curated command reference README.md links to. It MUST be tracked: it was
+# silently untracked (caught by `*.md`) while being both the documented home for
+# every command AND the target of a README link — a published URL that 404s, and
+# a coverage guard that would skip itself on every fresh clone.
+!docs/COMMANDS.md
 # The default skill registry (.agents/skills/) — SKILL.md files are CODE
 # artifacts served by the registry, not user docs. Generated + committed via
 # scripts/sync-hub-skills.mjs so the configured default registry resolves.

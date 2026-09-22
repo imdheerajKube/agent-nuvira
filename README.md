@@ -41,6 +41,15 @@ agent-nuvira plan . --task "implement user authentication"
 agent-nuvira config list
 ```
 
+> 📖 **[Every command, with examples → docs/COMMANDS.md](docs/COMMANDS.md)**
+> The complete CLI reference — **all 288 commands**, each with what it is for, the
+> exact syntax, and copy-pasteable examples, plus a **first-run walkthrough** that
+> explains why the first launch is slower and the model list looks incomplete.
+> If you only open one file in this repo, open that one.
+>
+> 🔧 Machine-readable surface: [docs/COMMANDS_SURFACE.md](docs/COMMANDS_SURFACE.md)
+> (generated from the live CLI tree, drift-guarded in CI).
+
 ---
 
 ## Traction
@@ -2262,6 +2271,8 @@ npx tsc --noEmit
 
 **Phases 1–11 are complete** — from Foundation (Phase 0) through TS Compiler API-Aware Structural Editing (Phase 11). See [UPGRADE_ROADMAP.md](./UPGRADE_ROADMAP.md) for the full implementation journey.
 
+> 🛠️ **Complete CLI reference:** [docs/COMMANDS.md](./docs/COMMANDS.md) — every command with objective, exact syntax and examples, plus the first-run expectations. [docs/COMMANDS_SURFACE.md](./docs/COMMANDS_SURFACE.md) — the same surface, generated from the live command tree and drift-guarded in CI.
+>
 > 📊 **Architecture, strategy & contribution materials:** [ARCHITECTURE.md](./ARCHITECTURE.md) — Modular execution engine design with 7 module specifications, extensibility/observability systems, and phased migration plan. [ARCHITECTURE_DIAGRAMS.md](./ARCHITECTURE_DIAGRAMS.md) — Mermaid-rendered versions of all architecture diagrams (Module Architecture, Extensibility, Safe Execution, Data Flow, Observability Bus). [PRODUCT_STRATEGY.md](./PRODUCT_STRATEGY.md) — Competitive landscape, positioning map, OKR framework, and risk register. [PITCH_DECK.md](./PITCH_DECK.md) — 10-slide investor presentation outline with talking points and data. [CONTRIBUTING.md](./CONTRIBUTING.md) — Quick-reference contributor guide with docs map, dev setup, and contribution workflow. [GATEWAY.md](./docs/GATEWAY.md) — Complete user guide for the 22-platform multi-channel gateway: what it offers, CLI + dashboard setup for every platform, channel aliases, guaranteed delivery, natural-language task dispatch, security, and troubleshooting.
 
 | Phase | Feature | Status |

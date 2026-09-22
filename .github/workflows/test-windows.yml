@@ -110,6 +110,16 @@ jobs:
         run: npm run build
         shell: bash
 
+      # Registered != runnable. Executes every documented command with
+      # `nuvira <cmd> --help` so a command that only resolves in the docs fails
+      # in CI instead of for a user. Windows matters most here: argv/path
+      # handling is exactly where a command that works on Unix breaks.
+      - name: Verify every command resolves (nuvira <cmd> --help)
+        run: npm run verify:commands
+        shell: bash
+        env:
+          NO_COLOR: '1'
+
       - name: Run all tests
         run: npx vitest run --reporter=verbose
         shell: bash

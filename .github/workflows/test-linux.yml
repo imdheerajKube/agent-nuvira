@@ -67,6 +67,17 @@ jobs:
       - name: Build project
         run: npm run build
 
+      # Every command in the documented surface must be RUNNABLE, not merely
+      # registered. The generated surface proves a command EXISTS in the
+      # commander tree; this executes each one with `nuvira <cmd> --help` so a
+      # command that resolves only in the doc (a sub-parser never attached, an
+      # import that throws on that code path) fails here instead of for a user.
+      # Safe by construction: --help never runs the action.
+      - name: Verify every command resolves (nuvira <cmd> --help)
+        run: npm run verify:commands
+        env:
+          NO_COLOR: '1'
+
       # Nuvira-Router M0.1 regression gate (baseline lock). Runs BEFORE the
       # full suite so a routing/learning regression fails fast with a clearly
       # labeled step. Covers: bandit / promotion / auto-router / tier0 /
