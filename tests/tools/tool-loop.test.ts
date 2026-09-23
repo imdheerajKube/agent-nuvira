@@ -405,6 +405,47 @@ describe('tool loop — helpers', () => {
     expect(text).toContain('broken');
   });
 
+  /**
+   * The shape models ACTUALLY write — our tool's name as the ARGUMENTS key.
+   * Live: a dashboard chat (2026-09-22) ended 13 of 16 assistant turns with
+   * this block; the strip could not see it and the followups were thrown away,
+   * so the reader got raw JSON and no chips. Recovery must produce a REAL
+   * suggest_followups call so the loop's sink collects them for every surface.
+   */
+  it('recovers a name-keyed suggest_followups payload as a real call', () => {
+    const raw =
+      'The project is ready.\n\n---\n' +
+      '{"suggest_followups":[' +
+      '{"label":"Verify tab switching","prompt":"The tab switching is now working correctly."},' +
+      '{"label":"Finalize project","prompt":"I am happy with the features."}]}';
+    const { text, calls } = extractFallbackToolCalls(raw);
+    expect(text).toBe('The project is ready.');
+    expect(calls.length).toBe(1);
+    expect(calls[0].name).toBe('suggest_followups');
+    const followups = (calls[0].arguments as { followups: { prompt: string; label?: string }[] }).followups;
+    expect(followups.map((f) => f.label)).toEqual(['Verify tab switching', 'Finalize project']);
+    expect(followups.every((f) => f.prompt.length > 0)).toBe(true);
+  });
+
+  it('recovers the name-keyed payload from a fenced block too', () => {
+    const raw =
+      'All done.\n```json\n{"suggest_followups":[{"prompt":"Go deeper"}]}\n```';
+    const { text, calls } = extractFallbackToolCalls(raw);
+    expect(text).toBe('All done.');
+    expect(calls.map((c) => c.name)).toEqual(['suggest_followups']);
+  });
+
+  it('leaves user JSON under that key alone (no call, text intact)', () => {
+    const strings = 'Here is your config:\n{"suggest_followups":["alpha","beta"]}';
+    const { text, calls } = extractFallbackToolCalls(strings);
+    expect(text).toBe(strings);
+    expect(calls.length).toBe(0);
+    const scalar = 'Note: {"suggest_followups": "see section 4"}';
+    expect(extractFallbackToolCalls(scalar).text).toBe(scalar);
+    // Unterminated (no closing brace) — must NOT be mistaken for the payload.
+    expect(extractFallbackToolCalls('Answer {"tool": broken').text).toContain('broken');
+  });
+
   it('isBareAcknowledgment flags short lead-ins but not real answers', () => {
     expect(isBareAcknowledgment('Sure, I can help with that!')).toBe(true);
     expect(isBareAcknowledgment('Let me write that essay for you.')).toBe(true);

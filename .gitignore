@@ -61,6 +61,10 @@ issues/
 # every command AND the target of a README link — a published URL that 404s, and
 # a coverage guard that would skip itself on every fresh clone.
 !docs/COMMANDS.md
+# The CLI demo cast (docs/demos/nuvira-cli-tour.cast) is a reproducible build
+# artifact linked from README.md, and its README documents how to play and
+# regenerate it — both must be tracked or the README link 404s.
+!docs/demos/README.md
 # The default skill registry (.agents/skills/) — SKILL.md files are CODE
 # artifacts served by the registry, not user docs. Generated + committed via
 # scripts/sync-hub-skills.mjs so the configured default registry resolves.

@@ -775,6 +775,19 @@ function parseJsonLoose(text: string): unknown {
 }
 
 /**
+ * The list inside a value keyed by our own tool NAME — either the list itself
+ * or a `{followups: …}` wrapper. `undefined` when it is neither.
+ */
+function namedFollowupList(value: unknown): unknown {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') {
+    const list = (value as { followups?: unknown }).followups;
+    if (Array.isArray(list)) return list;
+  }
+  return undefined;
+}
+
+/**
  * Is this parsed value the model's `suggest_followups` payload?
  *
  * Accepts the tool-call object (`{tool:'suggest_followups',…}`) and the bare
@@ -782,23 +795,98 @@ function parseJsonLoose(text: string): unknown {
  * BARE ARRAY under a `**suggest_followups**` caption (both observed live
  * 2026-09-21 from `nuvira execute`).
  *
+ * ALSO accepts our tool's ARGUMENTS keyed by our own tool NAME
+ * (`{"suggest_followups":[{prompt,label},…]}`) — the shape models actually
+ * hand-write when they cannot emit a real call. Observed live 2026-09-22 on the
+ * dashboard chat: 14 of 116 stored assistant turns ended with this block, and
+ * it was delivered to the reader verbatim while the suggestions were lost
+ * entirely (no chips) — the contract's own documented shape (`{"tool":…}`)
+ * appeared ZERO times, so matching only that shape matched nothing in practice.
+ *
  * CONSERVATISM ON PLAIN STRINGS: an entry that is a `{prompt}` object is the
  * tool's own schema and is accepted anywhere; a plain STRING entry is only
  * accepted when the model captioned the payload with the tool name, because
  * `{"followups":["Do you like it?"]}` is also a perfectly ordinary config a
  * user could have asked for and a bare one must survive. (These flags are
  * deliberately asymmetric rather than perfectly symmetric — this helper must
- * never delete a deliverable.)
+ * never delete a deliverable.) The name-keyed branch is ALWAYS strict about
+ * this for the same reason: the tool's schema only ever allows `{prompt}`
+ * objects, so a list of plain strings under that key is almost certainly the
+ * user's own JSON, not our contract.
  */
 function isFollowupsPayload(value: unknown, allowStringEntries: boolean): boolean {
   if (!value || typeof value !== 'object') return false;
   if (Array.isArray(value)) return isFollowupList(value, allowStringEntries);
   const o = value as { tool?: unknown; arguments?: unknown; followups?: unknown };
   if (o.tool === 'suggest_followups') return true;
+  if ('suggest_followups' in o) return isFollowupList(namedFollowupList(o.suggest_followups), false);
   const nested = (o.arguments ?? {}) as { followups?: unknown };
   const list = Array.isArray(o.followups) ? o.followups : nested.followups;
   return isFollowupList(list, allowStringEntries);
 }
+
+/**
+ * `isFollowupsPayload` for a payload written as TEXT with no caption — the
+ * question the tool loop's recovery asks before consuming a block it found by
+ * the name-keyed opener. Exported so the strip and the recovery share one
+ * definition of "this is our contract".
+ */
+export function isTextualFollowupsPayload(value: unknown): boolean {
+  return isFollowupsPayload(value, false);
+}
+
+/**
+ * The followup entries a parsed `suggest_followups` payload carries — for
+ * RECOVERY, as opposed to `isFollowupsPayload`'s strip-or-keep question.
+ *
+ * Returns null when the payload is ours but carries nothing usable (the model
+ * wrote the call with no arguments): the block still gets stripped, there is
+ * simply nothing to offer the user.
+ *
+ * Exported so the tool loop's text-call recovery and the strip share ONE
+ * definition of which shapes are the contract. They drifted apart once already
+ * — the strip knew a shape the recovery's gate did not, which is exactly how
+ * 14 turns lost their followups.
+ */
+export function followupEntriesFromPayload(value: unknown): FollowupSuggestion[] | null {
+  if (!value || typeof value !== 'object') return null;
+  // One expression per accepted shape, in the order the shapes appear on the
+  // wire: the list itself, the name-keyed arguments, then the arguments
+  // object (directly or wrapped in a `{tool, arguments}` call).
+  const o = value as Record<string, unknown>;
+  const nested = (o.arguments && typeof o.arguments === 'object' ? o.arguments : {}) as {
+    followups?: unknown;
+  };
+  const list = Array.isArray(value)
+    ? value
+    : 'suggest_followups' in o
+      ? namedFollowupList(o.suggest_followups)
+      : Array.isArray(o.followups)
+        ? o.followups
+        : nested.followups;
+  if (!isFollowupList(list, false)) return null;
+  const entries = (list as unknown[])
+    .map((f) => {
+      const e = f as { prompt?: unknown; label?: unknown };
+      return {
+        prompt: typeof e?.prompt === 'string' ? e.prompt : '',
+        ...(typeof e?.label === 'string' && e.label ? { label: e.label } : {}),
+      };
+    })
+    .filter((e) => e.prompt.trim());
+  return entries.length > 0 ? entries : null;
+}
+
+/**
+ * Cheap pre-check for "could this text carry a tool call written as JSON?".
+ *
+ * Deliberately shape-agnostic: it matches the canonical `{"tool":…}` opener
+ * AND the name-keyed `{"suggest_followups":…}` one. The tool loop's recovery
+ * used to gate on the literal `"tool"` substring, so a model that wrote a real
+ * call in the name-keyed shape never reached the extractor at all. A gate that
+ * only knows one shape is a gate that silently disables the fix for the other.
+ */
+export const TEXTUAL_TOOL_CALL_HINT = /[{[]\s*"(?:tool|suggest_followups)"\s*:/;
 
 /** A non-empty list of followup entries (`{prompt,label?}` objects, ± strings). */
 function isFollowupList(list: unknown, allowStringEntries: boolean): boolean {
@@ -808,6 +896,21 @@ function isFollowupList(list: unknown, allowStringEntries: boolean): boolean {
       (allowStringEntries && typeof f === 'string') ||
       (f !== null && typeof f === 'object' && typeof (f as { prompt?: unknown }).prompt === 'string'),
   );
+}
+
+/**
+ * The exact name-keyed opener — our tool's own NAME as the JSON key.
+ * A truncated payload (the model hit a token cap mid-block) is scaffolding too,
+ * and it is only safe to strip when the block is BOUNDED by fences, which is
+ * what `isTruncatedNamedPayload` is for; the tool loop's own extraction handles
+ * the unbounded case before any surface sees the text.
+ */
+const NAMED_PAYLOAD_OPENER = /^\s*\{\s*"suggest_followups"\s*:/;
+
+/** A fenced body that only BEGINS the name-keyed payload (cut off mid-JSON). */
+function isTruncatedNamedPayload(body: string): boolean {
+  if (!NAMED_PAYLOAD_OPENER.test(body)) return false;
+  return parseJsonLoose(body) === null;
 }
 
 /** Does the text immediately before a payload end on a tool-name caption? */
@@ -828,6 +931,20 @@ function stripTrailingFollowupsPayload(text: string): string {
   const trimmed = text.replace(/\s+$/, '');
   if (!trimmed) return text;
 
+  // 0. An UNTERMINATED trailing fence whose body BEGINS with our tool name as
+  //    the key — the model was cut off mid-payload (token cap) and the fence
+  //    never closed. Only the exact name-keyed opener qualifies, so a truncated
+  //    code block the user actually asked for is untouched.
+  if (!trimmed.endsWith('```')) {
+    const fenceOpen = trimmed.lastIndexOf('```');
+    if (fenceOpen >= 0) {
+      const afterFence = trimmed.slice(fenceOpen + 3);
+      const nl = afterFence.indexOf('\n');
+      const body = nl >= 0 ? afterFence.slice(nl + 1) : afterFence.replace(/^[a-zA-Z]*/, '');
+      if (isTruncatedNamedPayload(body)) return stripTrailingFollowupsHeader(trimmed.slice(0, fenceOpen));
+    }
+  }
+
   // 1. The LAST fenced block, when it ends the text and its body parses to
   //    the payload. (Anchoring on the last block — not the first — keeps an
   //    answer+code-block+followups-fence sequence correct.)
@@ -838,7 +955,10 @@ function stripTrailingFollowupsPayload(text: string): string {
       const newline = trimmed.indexOf('\n', opening);
       if (newline >= 0 && newline < closing) {
         const body = trimmed.slice(newline + 1, closing);
-        if (isFollowupsPayload(parseJsonLoose(body), hasFollowupsCaption(trimmed.slice(0, opening)))) {
+        if (
+          isFollowupsPayload(parseJsonLoose(body), hasFollowupsCaption(trimmed.slice(0, opening))) ||
+          isTruncatedNamedPayload(body)
+        ) {
           return stripTrailingFollowupsHeader(trimmed.slice(0, opening));
         }
       }
@@ -867,11 +987,17 @@ function stripTrailingFollowupsPayload(text: string): string {
  * `**suggest_followups**` label and/or the horizontal rule the model tends to
  * put in front of it. Only ever called once a payload WAS removed, so an
  * answer that legitimately ends in `---` on its own is untouched.
+ *
+ * The separator match tolerates a trailing NEWLINE (`\s*$`, not `[ \t]*$`):
+ * the caller slices the text at the payload's opening brace, so a model that
+ * wrote `…answer\n\n---\n{payload}` hands this function `…answer\n\n---\n`.
+ * Requiring the rule to sit at the very end missed exactly that — the common
+ * case — and left a dangling `---` under every cleaned answer.
  */
-function stripTrailingFollowupsHeader(text: string): string {
+export function stripTrailingFollowupsHeader(text: string): string {
   return text
     .replace(/\n+\s*\*{0,2}\s*suggest[_ ]?follow[_ ]?ups\s*\*{0,2}\s*:?[ \t]*$/i, '')
-    .replace(/\n+\s*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/, '')
+    .replace(/\n+\s*(?:-{3,}|\*{3,}|_{3,})\s*$/, '')
     .replace(/\s+$/, '');
 }
 

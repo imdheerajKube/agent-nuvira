@@ -387,7 +387,7 @@ export class ChatConsole {
 
   /** The stored turns for a session (empty when unknown). */
   history(sessionId: string): ChatTurn[] {
-    return this.sessions.get(sessionId)?.turns ?? [];
+    return sanitizeStoredTurns(this.sessions.get(sessionId)?.turns ?? []);
   }
 
   /**
@@ -438,9 +438,15 @@ export class ChatConsole {
   /**
    * P4 — the full persisted record for one session (transcript for resume).
    * Returns null when unknown.
+   *
+   * Sanitized on read like `history()`: this is what `GET /api/sessions/:id`
+   * serves, so it is the path that re-rendered an OLD turn's raw tool JSON when
+   * the reader reopened the conversation. Sanitizing only the live turn would
+   * leave every existing session permanently unreadable.
    */
   get(sessionId: string): ChatSessionRecord | null {
-    return this.sessions.get(sessionId) ?? null;
+    const rec = this.sessions.get(sessionId);
+    return rec ? { ...rec, turns: sanitizeStoredTurns(rec.turns) } : null;
   }
 
   /** P4 — write the session store through to disk (atomic-ish: temp + rename). */
@@ -923,10 +929,33 @@ export class ChatConsole {
 }
 
 /** P4 — the last assistant text (truncated) for the sidebar preview. */
+/**
+ * Sanitize stored turns ON READ — never on write.
+ *
+ * A stored transcript is the USER'S record and is not ours to rewrite. But the
+ * content in it is whatever the engine returned at the time, so a turn stored
+ * BEFORE a strip was fixed keeps its raw artifact forever: reopening an old
+ * conversation (or the 15-second refresh) re-rendered the model's
+ * `{"suggest_followups":[…]}` block as the answer. These turns are the real
+ * evidence of that — one calculator session had 13 of them — and a fix that
+ * only covers new turns leaves every existing session permanently unreadable.
+ *
+ * The same sanitized view is what seeds the NEXT turn's context, which is the
+ * other half of why read-side is the right place: the model should not be fed
+ * its own tool JSON back as conversation history.
+ */
+function sanitizeStoredTurns(turns: ChatTurn[]): ChatTurn[] {
+  return turns.map((t) => {
+    if (t.role !== 'assistant' || !t.content) return t;
+    const clean = stripToolCallArtifacts(t.content);
+    return clean === t.content ? t : { ...t, content: clean };
+  });
+}
+
 function lastAssistantText(turns: ChatTurn[]): string {
   for (let i = turns.length - 1; i >= 0; i -= 1) {
     if (turns[i].role === 'assistant' && turns[i].content.trim()) {
-      const text = turns[i].content.replace(/\s+/g, ' ').trim();
+      const text = stripToolCallArtifacts(turns[i].content).replace(/\s+/g, ' ').trim();
       return text.length > 90 ? `${text.slice(0, 87)}…` : text;
     }
   }

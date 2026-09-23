@@ -33,7 +33,9 @@
     "prepare": "node scripts/prepare-install.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "npm run build && npm test",
-    "verify:commands": "node scripts/verify-commands.mjs"
+    "verify:commands": "node scripts/verify-commands.mjs",
+    "demo:cli": "node scripts/generate-cli-demo.mjs",
+    "demo:cli:all": "node scripts/generate-cli-demo.mjs --only all"
   },
   "keywords": [
     "ai",

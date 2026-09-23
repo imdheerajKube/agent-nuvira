@@ -78,6 +78,51 @@ describe('answerOnce — suggest_followups reach the caller', () => {
     expect(out.content).not.toContain('"tool"');
   });
 
+  /**
+   * The shape the model writes BY HAND — our tool's name as the arguments key.
+   * Live: a dashboard chat (gemini-3.1-flash-lite, 2026-09-22) ended 13 of its
+   * 16 assistant turns with this block. The reader got the raw JSON in the
+   * bubble AND no followups reached the caller, so no chips ever appeared.
+   * Both halves are asserted here: the text is clean and the suggestions
+   * survive as data.
+   */
+  it('recovers a name-keyed suggest_followups payload written as text', async () => {
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn(async () => ({
+        content:
+          'The project is ready.\n\n---\n' +
+          '{"suggest_followups":[' +
+          '{"label":"Verify tab switching","prompt":"The tab switching is now working correctly."},' +
+          '{"label":"Finalize project","prompt":"I am happy with the features."}]}',
+        toolCalls: [],
+      })),
+      generate: vi.fn().mockResolvedValue('The project is ready.'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+
+    vi.spyOn(ChatCommand.prototype as unknown as Proto, 'getProvider').mockResolvedValue({ type: 'groq', provider });
+    vi.spyOn(ChatCommand.prototype as unknown as Proto, 'routeMessageAuto').mockResolvedValue({
+      type: 'gemini',
+      provider,
+      model: 'gemini-3.1-flash-lite',
+    });
+
+    const out = await (new ChatCommand() as unknown as { answerOnce: Function }).answerOnce(
+      'enhance the calculator',
+      {},
+    );
+
+    expect(out.content).not.toContain('suggest_followups');
+    expect(out.content).not.toContain('"followups"');
+    expect(out.followups.map((f: { prompt: string }) => f.prompt)).toEqual([
+      'The tab switching is now working correctly.',
+      'I am happy with the features.',
+    ]);
+  });
+
   it('returns the collected followups when the model co-emits answer + followup call', async () => {
     const provider = {
       name: 'Mock',

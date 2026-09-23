@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { ChatConsole, type ChatEngine } from '../../src/web-dashboard/chat-console.js';
 
 interface EngineCall {
@@ -511,6 +511,50 @@ describe('ChatConsole', () => {
         'continue',
         'echo: continue',
       ]);
+    });
+
+    /**
+     * The read path must clean what is ALREADY on disk. Live evidence: one
+     * calculator session stored 13 assistant turns ending in the raw
+     * `{"suggest_followups":[…]}` block, so reopening the dashboard (or the
+     * 15s refresh) re-rendered the model's tool JSON as the answer — fixing only
+     * newly produced turns would leave every existing session unreadable.
+     */
+    it('sanitizes the raw tool JSON already stored in a session (read path)', async () => {
+      const raw =
+        'The project is ready.\n\n---\n' +
+        '{"suggest_followups":[{"label":"Verify tab switching","prompt":"The tab switching is now working correctly."}]}';
+      writeFileSync(
+        storePath,
+        JSON.stringify({
+          sessions: {
+            s1: {
+              title: 'enhance the calculator',
+              createdAt: 1,
+              updatedAt: 2,
+              turns: [
+                { role: 'user', content: 'enhance the calculator' },
+                { role: 'assistant', content: raw },
+              ],
+            },
+          },
+        }),
+      );
+
+      const reopened = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      const history = reopened.history('s1');
+      expect(history[1].content).toBe('The project is ready.');
+      expect(history[1].content).not.toContain('suggest_followups');
+      // The sidebar preview is cleaned too (it renders the same content).
+      expect(reopened.list()[0].preview).toBe('The project is ready.');
+      // …and so is `get()` — the accessor `GET /api/sessions/:id` serves, i.e.
+      // the exact path that re-rendered an old turn's JSON on reopen.
+      expect(reopened.get('s1')?.turns[1].content).toBe('The project is ready.');
+      // …and the STORE is untouched — the transcript is the user's record.
+      const onDisk = JSON.parse(readFileSync(storePath, 'utf8')) as {
+        sessions: Record<string, { turns: { content: string }[] }>;
+      };
+      expect(onDisk.sessions.s1.turns[1].content).toBe(raw);
     });
 
     it('P8 — attachments ride into the turn as [Attachment: name] context', async () => {

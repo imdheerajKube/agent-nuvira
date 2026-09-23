@@ -406,6 +406,49 @@ describe('stripToolCallArtifacts', () => {
     expect(stripToolCallArtifacts('Answer.\n\n**suggest_followups**\n{"followups":["Next?"]}')).toBe('Answer.');
   });
 
+  /**
+   * The FIFTH shape — and the one that actually reaches real users: our tool's
+   * own name used as the ARGUMENTS key. Captured verbatim from a dashboard chat
+   * (2026-09-22, gemini-3.1-flash-lite): 13 of that session's 16 assistant
+   * turns ended with this block, delivered to the reader as raw JSON while the
+   * suggestions were lost entirely.
+   *
+   * The contract's own documented shape (`{"tool":"…"}`) appeared ZERO times
+   * across 116 stored assistant turns — matching only that shape matched
+   * nothing in practice, which is why this leaked for as long as it did.
+   */
+  const NAMED_PAYLOAD =
+    '{"suggest_followups":[{"label":"Verify tab switching","prompt":"The tab switching is now working correctly."}]}';
+
+  it('removes the ARGUMENTS keyed by our tool NAME (the live dashboard leak)', () => {
+    expect(stripToolCallArtifacts(`The project is ready.\n\n---\n${NAMED_PAYLOAD}`)).toBe(
+      'The project is ready.',
+    );
+    expect(stripToolCallArtifacts(`The project is ready.\n${NAMED_PAYLOAD}`)).toBe(
+      'The project is ready.',
+    );
+    expect(stripToolCallArtifacts(`The project is ready.\n\`\`\`json\n${NAMED_PAYLOAD}\n\`\`\``)).toBe(
+      'The project is ready.',
+    );
+  });
+
+  it('removes a TRUNCATED name-keyed payload (the model hit a token cap)', () => {
+    expect(stripToolCallArtifacts('Done.\n```json\n{"suggest_followups":[{"prompt":"Next')).toBe('Done.');
+    expect(stripToolCallArtifacts('Done.\n```json{"suggest_followups":[{"prompt":"Next')).toBe('Done.');
+  });
+
+  it('NEVER removes user JSON that merely uses that key (the tool schema is {prompt} objects)', () => {
+    // A list of plain strings under the key is not our contract — an answer
+    // like this is a config the user asked for, and must survive.
+    const strings = 'Here is your config:\n{"suggest_followups":["alpha","beta"]}';
+    expect(stripToolCallArtifacts(strings)).toBe(strings);
+    const scalar = 'Note: {"suggest_followups": "see section 4"}';
+    expect(stripToolCallArtifacts(scalar)).toBe(scalar);
+    // …and an unterminated block that is NOT our opener is untouched.
+    const truncated = 'Here is the schema:\n```json\n{"type":"object"';
+    expect(stripToolCallArtifacts(truncated)).toBe(truncated);
+  });
+
   it('keeps a real earlier code block and only drops the trailing payload', () => {
     const mixed =
       'See:\n\n```js\nconst a = 1;\n```\n\n**suggest_followups**\n```json\n{"followups":[{"prompt":"N"}]}\n```';

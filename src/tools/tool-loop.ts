@@ -50,7 +50,13 @@ export type LoopTraceEvent = Omit<TraceEvent, 'seq' | 'timestamp'>;
 import { appendToolArtifact } from './artifact-append.js';
 import type { ToolMessage } from '../inference/interface.js';
 import { logger } from '../utils/logger.js';
-import { toUserFacingGenerationError } from '../inference/tool-call-utils.js';
+import {
+  toUserFacingGenerationError,
+  TEXTUAL_TOOL_CALL_HINT,
+  isTextualFollowupsPayload,
+  followupEntriesFromPayload,
+  stripTrailingFollowupsHeader,
+} from '../inference/tool-call-utils.js';
 
 export { type ToolMessage };
 
@@ -400,7 +406,8 @@ export function isThinkOnlyResponse(content: string): boolean {
 
 /**
  * Extract JSON fallback tool calls from model text:
- * `{"tool":"name","arguments":{...}}` blocks, possibly fenced or multiple.
+ * `{"tool":"name","arguments":{...}}` blocks, possibly fenced or multiple —
+ * plus the name-keyed `{"suggest_followups":[…]}` shape models actually write.
  * Uses brace-matching (string-aware) so nested argument objects parse
  * correctly. Returns the cleaned content (blocks stripped) + parsed calls.
  */
@@ -444,10 +451,58 @@ export function extractFallbackToolCalls(content: string): { text: string; calls
       // Unparseable block — dropped from the answer, no tool call.
     }
   }
+  // ── Pass 2: our tool's ARGUMENTS keyed by our own tool NAME ─────────────
+  //   {"suggest_followups":[{"label":"…","prompt":"…"}, …]}
+  // This is the shape models ACTUALLY hand-write: across 116 stored assistant
+  // turns the canonical `{"tool":"…"}` form appeared ZERO times and this one
+  // 14. Pass 1 could not see it at all, so the block was delivered verbatim to
+  // the reader AND the suggestions were thrown away (no chips, no menu).
+  //
+  // The block is consumed in exactly two cases: it parses to OUR payload (the
+  // shared predicate — the same one the strip uses, so the two can never
+  // disagree), or it does not parse at all (truncated scaffolding is never
+  // prose). A value that parses cleanly to something demonstrably NOT the
+  // contract — `{"suggest_followups": "a note"}` — is left untouched, so a
+  // user's own JSON still survives.
+  const namedAt = /\(?\s*\{\s*"suggest_followups"\s*:/g;
+  let named: RegExpExecArray | null;
+  while ((named = namedAt.exec(cleaned)) !== null) {
+    const end = findMatchingBrace(cleaned, named.index);
+    if (end === -1) {
+      // Cut off mid-call: everything from the marker on is scaffolding.
+      cleaned = cleaned.slice(0, named.index);
+      strippedAny = true;
+      break;
+    }
+    const block = cleaned.slice(named.index, end + 1);
+    let parsed: unknown = null;
+    let unparseable = false;
+    try {
+      parsed = JSON.parse(block) as unknown;
+    } catch {
+      unparseable = true;
+    }
+    if (!unparseable && !isTextualFollowupsPayload(parsed)) continue;
+    cleaned = cleaned.slice(0, named.index) + cleaned.slice(end + 1);
+    namedAt.lastIndex = named.index;
+    strippedAny = true;
+    const entries = followupEntriesFromPayload(parsed);
+    if (entries) {
+      calls.push({
+        id: `call_${calls.length + 1}`,
+        name: 'suggest_followups',
+        arguments: { followups: entries },
+      });
+    }
+  }
   if (!strippedAny) return { text: content, calls };
   // Remove empty fenced blocks left behind when a fenced JSON block's BODY was
-  // the tool call (e.g. "```json\n\n```").
-  const text = cleaned.replace(/\n?```[a-z]*\s*\n?\s*```\s*/gi, '\n').trim();
+  // the tool call (e.g. "```json\n\n```"), plus any caption/separator the model
+  // put in FRONT of the block. Without the second step the delivered answer
+  // ends on a dangling `---` — the visible half of the leak this recovers from.
+  const text = stripTrailingFollowupsHeader(
+    cleaned.replace(/\n?```[a-z]*\s*\n?\s*```\s*/gi, '\n'),
+  ).trim();
   return { text, calls };
 }
 
@@ -845,7 +900,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // console, gateway) recovers the calls, and strip the block from the
     // visible answer either way: a raw `{"tool":…}` block must never be the
     // answer. Idempotent with the JSON transport (which already strips it).
-    if (response.toolCalls.length === 0 && response.content.includes('"tool"')) {
+    if (response.toolCalls.length === 0 && TEXTUAL_TOOL_CALL_HINT.test(response.content)) {
       const extracted = extractFallbackToolCalls(response.content);
       if (extracted.text !== response.content) {
         response.content = extracted.text;
