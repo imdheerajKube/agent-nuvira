@@ -1,0 +1,160 @@
+# Publish Docs — rebuild and re-audit the public documentation site
+#
+# The public repository (imdheerajKube/agent-nuvira-documentation) is a RENDER of
+# this private one. It contains no source code — only the documents selected by
+# scripts/build-docs-repo.mjs, which is the single place where documents are
+# chosen, personal data is scrubbed, links to internal files are repaired, and
+# the site scaffolding is emitted. Publishing therefore has to be a build, not a
+# copy: a hand-copied bundle drifts the moment the source changes, and a scrub
+# applied once is a scrub that silently stops being applied.
+#
+# This workflow runs that build on every push that can change the docs, then
+# re-audits the RESULT with `--check` and pushes only when the audit is clean and
+# the output actually changed. Nothing is published when the audit finds a
+# secret, a phone number, a home-directory path, or a link to a file the public
+# repository does not contain.
+#
+# Done when: docs change → pushed → site live, with no local step.
+#
+# Prerequisites:
+#   - DOCS_PUBLISH_TOKEN secret: a FINE-GRAINED personal access token with
+#       Contents: Read and write  on  imdheerajKube/agent-nuvira-documentation
+#       (Repository access: only that repository)
+#     Create at https://github.com/settings/personal-access-tokens/new
+#     A classic PAT with `repo` scope also works, but grants far more than needed.
+#
+# Why a PAT instead of GITHUB_TOKEN: GITHUB_TOKEN is scoped to THIS repository and
+# cannot push to another one. A PAT push also counts as a real push, so the docs
+# repository's own Pages workflow fires. A GITHUB_TOKEN push is ignored by
+# downstream workflows, which would silently stop the site from updating — the
+# worst possible failure, because everything looks green.
+#
+# Do NOT add [skip ci] to the generated commit: the Pages build in the public
+# repository runs off exactly that push.
+#
+# The public repository is GENERATED. Edit the source here, never there — a
+# direct edit there is either overwritten by the next publish or turns into a
+# rebase conflict that fails this job.
+
+name: publish-docs
+
+on:
+  push:
+    branches: [main]
+    # Only rebuild when something the bundle is built FROM actually changes, so
+    # code-only commits do not churn the documentation repository.
+    paths:
+      - 'README.md'
+      - 'ARCHITECTURE.md'
+      - 'PITCH_DECK.md'
+      - 'PRODUCT_STRATEGY.md'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+      - 'docs/COMMANDS.md'
+      - 'docs/COMMANDS_SURFACE.md'
+      - 'docs/USER_MANUAL.md'
+      - 'docs/PUBLIC_README.md'
+      - 'docs/demos/**'
+      - 'assets/docs-brand/**'
+      - 'scripts/build-docs-repo.mjs'
+      - 'scripts/generate-docs-brand.mjs'
+      - '.github/workflows/publish-docs.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Only the source is read here; the write goes to the other repository via the PAT.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Rebuild, audit and publish the documentation site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout source (this repository)
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Verify publish token present
+        run: |
+          if [ -z "${{ secrets.DOCS_PUBLISH_TOKEN }}" ]; then
+            echo "::error::DOCS_PUBLISH_TOKEN is not set."
+            echo "Create a fine-grained PAT with 'Contents: Read and write' on"
+            echo "imdheerajKube/agent-nuvira-documentation, then add it to this"
+            echo "repository's secrets as DOCS_PUBLISH_TOKEN."
+            echo "https://github.com/settings/personal-access-tokens/new"
+            exit 1
+          fi
+
+      - name: Checkout published documentation repository
+        uses: actions/checkout@v4
+        with:
+          repository: imdheerajKube/agent-nuvira-documentation
+          token: ${{ secrets.DOCS_PUBLISH_TOKEN }}
+          path: docs
+          # Full history so the rebase before pushing cannot fail a shallow clone.
+          fetch-depth: 0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+
+      - name: Install dependencies
+        working-directory: source
+        run: npm ci
+
+      # Writes the bundle AND audits it. sharp — used to rasterize the logo,
+      # favicon and social card — arrives through the lockfile's own dependency
+      # tree, so the install above is all that is needed.
+      - name: Build the documentation bundle
+        working-directory: source
+        run: node scripts/build-docs-repo.mjs --out "$GITHUB_WORKSPACE/docs"
+
+      # Deliberately a separate step from the build: this is the gate. A pass
+      # here is what makes the push below safe to do unattended.
+      - name: Audit the bundle (secrets, personal data, dead links)
+        working-directory: source
+        run: node scripts/build-docs-repo.mjs --check --out "$GITHUB_WORKSPACE/docs"
+
+      - name: Publish when the result changed
+        id: publish
+        working-directory: docs
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Documentation is already current — nothing to publish."
+            exit 0
+          fi
+
+          echo "Changed files:"
+          git status --short
+
+          git config user.name "Agent-Nuvira Docs"
+          git config user.email "noreply@agent-nuvira.com"
+          git add -A
+          git commit -m "docs: rebuild from ${GITHUB_SHA::7}" \
+            -m "Generated from imdheerajKube/agent-nuvira@${GITHUB_SHA}, and audited for secrets, personal data and dead links before it was committed."
+          git pull --rebase --quiet origin main
+          git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Documentation publish"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Source commit | \`${GITHUB_SHA::7}\` |"
+            echo "| Published | ${{ steps.publish.outputs.changed == 'true' && 'yes' || 'no change' }} |"
+            echo "| Site | https://imdheerajkube.github.io/agent-nuvira-documentation/ |"
+          } >> "$GITHUB_STEP_SUMMARY"

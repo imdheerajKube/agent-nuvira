@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   runToolLoop,
   isThinkOnlyResponse,
+  MAX_THINK_CONTINUES,
   isBareAcknowledgment,
   extractFallbackToolCalls,
   fallbackHintForTool,
@@ -106,6 +107,59 @@ describe('tool loop — end-turn semantics', () => {
     });
     expect(askUser).toHaveBeenCalledWith('Build or answer?', [{ label: 'Build it' }, { label: 'Fix it' }], false);
     expect(result.content).toBe('Fixing it now.');
+  });
+
+  /**
+   * Found by RUNNING the loop, not by reading it (two live eval runs,
+   * 2026-09-23): continuing on reasoning was UNBOUNDED, so a model that emitted
+   * reasoning-without-acting produced 31 consecutive continue steps, one tool
+   * call and a 0% score — printing "model reasoning… (continuing)" the whole
+   * way. A spin is not a stall the user can act on.
+   */
+  it('BOUNDS a think-only spin — reasoning must not eat the whole budget', async () => {
+    const onTraceEvent = vi.fn();
+    // `hmm` is the reasoning-keyword form of think-only output (pinned beside
+    // this test), used here so the literal needs no angle brackets.
+    const deps = mockDeps([{ content: 'hmm', toolCalls: [] }]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'q' }],
+      context: ctx,
+      deps,
+      onTraceEvent,
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.steps).toBeLessThanOrEqual(MAX_THINK_CONTINUES + 2);
+    // Reported honestly as unfinished, never as a completed answer.
+    expect(result.bounded).toBe(true);
+    const summaries = onTraceEvent.mock.calls.map((c) => String((c[0] as LoopTraceEvent).summary ?? ''));
+    expect(summaries.some((s) => /reasoning-only output repeated/.test(s))).toBe(true);
+  });
+
+  /**
+   * The distinction that makes the trace evidence honest: `isThinkOnlyResponse('')`
+   * is true (an empty string holds no answer), so a provider returning NOTHING
+   * was reported as "the model is reasoning". The two are bounded together but
+   * named apart — one is the agent deliberating, the other is a transport
+   * failure, and a system whose own record confuses them is untrustworthy about
+   * both.
+   */
+  it('names an EMPTY response as a provider failure, not as the model reasoning', async () => {
+    const onTraceEvent = vi.fn();
+    const deps = mockDeps([{ content: '', toolCalls: [] }]);
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'q' }],
+      context: ctx,
+      deps,
+      onTraceEvent,
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    const summaries = onTraceEvent.mock.calls.map((c) => String((c[0] as LoopTraceEvent).summary ?? ''));
+    expect(summaries.some((s) => /empty response/.test(s))).toBe(true);
+    expect(summaries.some((s) => /reasoning instead of an answer/.test(s))).toBe(false);
   });
 
   it('continues on think-only responses', async () => {

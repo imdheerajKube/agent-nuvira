@@ -85,6 +85,20 @@ describe('classifyCommand — deny-first three-class model', () => {
     }
   });
 
+  it('classifies read-only PARSE checks as verify (they were the ask loop)', () => {
+    // A live turn asked the user FOUR times in one turn to run `node -c
+    // script.js`. It classified as confirm, so the refusal said "call ask_user,
+    // then retry" — and a check that cannot mutate anything produced a prompt
+    // every time. A parse check executes nothing and must never be gated.
+    for (const cmd of ['node -c script.js', 'node --check script.js', 'node -c src/app.js']) {
+      expect(classifyCommand(cmd), cmd).toBe('verify');
+    }
+    // …while arbitrary code execution stays confirm-class (the boundary is
+    // "parses a file" vs "runs a program", not "mentions node").
+    expect(classifyCommand('node script.js')).toBe('confirm');
+    expect(classifyCommand('node -e "console.log(1)"')).toBe('confirm');
+  });
+
   it('classifies state-changing commands as confirm', () => {
     for (const cmd of [
       'touch marker.txt',

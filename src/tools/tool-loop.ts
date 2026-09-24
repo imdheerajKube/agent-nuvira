@@ -19,17 +19,35 @@
 import { getTool, toolJsonSchemas, type ToolContext, type ToolJsonSchema } from './registry.js';
 import {
   detectPermissionSeeking,
+  isAffirmativeReply,
   replyAsksTheReader,
   requestAuthorizesWrites,
   stripTrailingPermissionSeek,
 } from '../learning/autonomy-policy.js';
+import {
+  envelopeFromPlan,
+  envelopeFromRequest,
+  getEnvelope,
+  grantEnvelope,
+  isEnvelopeKey,
+  type IntentEnvelope,
+} from '../learning/intent-envelope.js';
+import {
+  detectProcessComplaint,
+  isTraceKey,
+  repeatNudge,
+  runTraceFor,
+  RunTrace,
+  type RunTraceSnapshot,
+} from '../learning/run-trace.js';
 import { wantsAuthoredArtifact } from '../learning/deliverable-class.js';
 import { normalizeFollowups, type FollowupSuggestion } from './followup-utils.js';
 import {
   assessEditActivity,
   detectUnverifiedEditClaim,
   isVerificationTool,
-  VERIFICATION_NUDGE,
+  verificationNudgeFor,
+  THINK_ONLY_ESCALATION,
   AUTHORIZED_WORK_NUDGE,
   deliverableNudge,
   type ToolCallEvidence,
@@ -314,6 +332,13 @@ export interface ToolLoopResult {
    * "action performed — message sent".
    */
   deliveryConfirmed?: boolean;
+  /**
+   * Stage 2 — what this turn did to the USER, as counts: how many questions it
+   * asked them (`shownAsks`), how many of those repeated an earlier one
+   * (`repeatedAsks`), and what it changed. The behaviour metric: a good turn of
+   * a multi-step task contains ZERO interruptions.
+   */
+  runTrace?: RunTraceSnapshot;
   /** Steps consumed. */
   steps: number;
   /** True when the step bound was hit before an end turn. */
@@ -592,6 +617,16 @@ const MAX_PARALLEL_READS = 4;
 // bounded number of times — the model keeps its thread, completed tool calls
 // are never re-run, and the loop can never spin forever.
 
+/**
+ * Consecutive REASONING-ONLY steps the loop tolerates before it escalates, and
+ * then one more before it ends the turn.
+ *
+ * Small on purpose. A `<think>`-then-answer model needs a step or two, so the
+ * limit cannot be zero — but unbounded, this path is a spin: two live eval runs
+ * produced 31 reasoning-only steps, one tool call, and a 0% score on a task they
+ * were well able to do (see `THINK_ONLY_ESCALATION`).
+ */
+export const MAX_THINK_CONTINUES = 3;
 /** Default continuations granted per turn when the option is omitted. */
 export const DEFAULT_MAX_CONTINUATIONS = 2;
 /** Default extra steps granted per continuation. */
@@ -632,6 +667,14 @@ export interface ToolLoopProgress {
   mutatedPaths: string[];
   /** Session 4 — successful verification calls (args + result) to judge relevance. */
   verificationEvidence: ToolCallEvidence[];
+  /**
+   * Stage 2 — the live run trace, handed out so the caller can report the
+   * turn's own behaviour as NUMBERS (how many questions reached the user, how
+   * many repeated). A live object, snapshotted at the end of the turn — every
+   * surface that wants the metric (the loop result, the eval framework, the
+   * dashboard) reads the same counting instead of re-deriving it.
+   */
+  runTrace?: RunTrace;
 }
 
 /**
@@ -652,6 +695,14 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // G13 — bounded "the request already authorized this" nudges (see
   // detectPermissionSeeking).
   let permissionNudges = 0;
+  // Stage 2 — the repetition nudge's own bound (see the block after the
+  // permission nudge). Separate from `permissionNudges` on purpose: that one
+  // asks the model to PROCEED, this one asks it to stop REPEATING, and the two
+  // fire on independent evidence.
+  let repeatNudges = 0;
+  // Bounded think-only continuation (see THINK_ONLY_ESCALATION). Counts the
+  // consecutive reasoning-only steps so the loop cannot spin on them.
+  let thinkContinues = 0;
   // G13b — bounded "the request asked for a file and none was written" nudges
   // (see wantsAuthoredArtifact).
   let deliverableNudges = 0;
@@ -698,6 +749,44 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // gate exactly as it was.
   const requestText = lastUserText(opts.messages);
   const authorization = requestAuthorizesWrites(requestText);
+  // ── INTENT ENVELOPE (the durable grant) ──────────────────────────────────
+  // `writesAuthorized` above answers "does the LAST message ask for files?" —
+  // once per turn, and forgotten at the turn boundary. That is why permission
+  // was re-asked for every operation and why an approval given minutes ago was
+  // worth nothing on the next turn. The envelope is the same verdict as a
+  // DURABLE, SCOPED object, keyed to the conversation (the dashboard console
+  // keeps one plan store per session and re-injects it every turn; the CLI keeps
+  // one per ChatCommand), so an approval outlives the turn that granted it.
+  //
+  // Grant order is deliberate: an APPROVED PLAN is the high-trust path (the user
+  // saw the plan and said yes), then a fresh directive request, then whatever is
+  // still live for this conversation.
+  const envelopeKey = isEnvelopeKey(context.planStore) ? (context.planStore as object) : undefined;
+  let envelope: IntentEnvelope | null = getEnvelope(envelopeKey);
+  if (envelopeKey) {
+    const plan = context.planStore?.snapshot?.() ?? null;
+    if (plan && isAffirmativeReply(requestText)) {
+      envelope = envelopeFromPlan(plan.goal);
+      grantEnvelope(envelopeKey, envelope);
+      deps.onEvent?.('   ✅ Plan approved — running it under one grant; no per-step permission.');
+    } else {
+      const fresh = envelopeFromRequest(requestText);
+      if (fresh) {
+        envelope = fresh;
+        grantEnvelope(envelopeKey, fresh);
+      }
+    }
+  }
+  // ── RUN TRACE (the loop's representation of its own behaviour) ────────────
+  // The envelope above answers "what may I do"; the trace answers "what have I
+  // been DOING" — the question nothing in the architecture could answer, which
+  // is why it could not notice its own loop and could not respond to a user
+  // asking about one. Keyed to the conversation like the envelope, with a
+  // per-turn fallback when there is no session handle so repetition WITHIN a
+  // single turn is still caught.
+  const traceKey = isTraceKey(context.planStore) ? (context.planStore as object) : undefined;
+  const runTrace: RunTrace = traceKey ? runTraceFor(traceKey) : new RunTrace();
+  progress.runTrace = runTrace;
   const ctx: ToolContext = {
     ...context,
     followups: context.followups || sink,
@@ -707,6 +796,11 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // ask for a commit? resolve to this CLI command?), and a single boolean
     // computed for a different question cannot answer any of them.
     authorizationRequest: requestText,
+    // The durable grant every gate consults FIRST (see learning/intent-envelope.ts).
+    envelope,
+    // The run's own behaviour, so a gate can refuse to RE-ASK a question the
+    // user already answered (see learning/run-trace.ts).
+    runTrace,
   };
 
   // Resolve the tool set — stable JSON schemas for every native step
@@ -759,6 +853,29 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   };
 
   const thread: ToolMessage[] = [...messages];
+  // ── Stage 2: answer a question ABOUT the run from the run ────────────────
+  // The live audit's worst moment was the user asking "why are you asking me
+  // this again and again?" and the turn replying with an edit plan — not through
+  // indifference, but because nothing held the fact that it had asked four
+  // times. Handing the trace in makes the honest answer possible; the framing
+  // line keeps it from being mistaken for a plan.
+  if (detectProcessComplaint(requestText)) {
+    deps.onEvent?.('   🪞 The user asked about your own behaviour — answering from the run trace.');
+    traceEvent({
+      kind: 'gate',
+      gate: 'repeat',
+      summary: `the user asked about the agent's own behaviour — trace provided (${runTrace.countAsks()} ask(s), ${runTrace.repeatedAskCount()} repeated)`,
+    });
+    thread.push({
+      role: 'system',
+      content:
+        `${runTrace.selfReport()}\n\n` +
+        'The user is asking about THIS behaviour, not about the code. Answer them directly: ' +
+        'state what you did (how many questions you asked, which one you repeated, and what they ' +
+        'answered), acknowledge the repetition plainly if there was one, and say what you will do ' +
+        'instead. Do not answer a question about your own process with a plan for the work.',
+    });
+  }
   const budgetChars = opts.threadBudgetChars ?? DEFAULT_THREAD_BUDGET_CHARS;
   // P3d — per-turn parallel suggester: after 2+ successful independent gather
   // steps, one advisory delegate suggestion fires (bounded, deterministic).
@@ -934,12 +1051,69 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       if (deps.isThinkOnly ? deps.isThinkOnly(response.content) : isThinkOnlyResponse(response.content)) {
         // Feed an empty assistant step so the model continues in-context.
         thread.push({ role: 'assistant', content: response.content });
-        deps.onEvent?.('   🧠 model reasoning… (continuing)');
+        thinkContinues += 1;
+        // AN EMPTY RESPONSE IS A FAILURE, NOT REASONING. `isThinkOnlyResponse('')`
+        // returns true, so a provider returning nothing (the loop arm falls over
+        // to `local/gpt-oss:120b-cloud`, which reliably returns length 0) was
+        // reported as "model reasoning… (continuing)" — the system's own evidence
+        // saying the agent was thinking when it was being handed nothing. That
+        // is the exact class of defect this work exists to remove, so the two
+        // cases are named apart even though they are bounded together.
+        const emptyResponse = response.content.trim().length === 0;
+        // BOUNDED (see THINK_ONLY_ESCALATION). Continuing on reasoning is right
+        // for a `<think>`-then-answer model and catastrophic without a limit:
+        // two live eval runs produced 31 reasoning-only steps, one tool call and
+        // a 0% score, printing "model reasoning… (continuing)" the whole way.
+        if (thinkContinues <= MAX_THINK_CONTINUES) {
+          deps.onEvent?.(
+            emptyResponse
+              ? `   ⚠️ the provider returned an EMPTY response (${thinkContinues}/${MAX_THINK_CONTINUES}) — retrying the step.`
+              : `   🧠 model reasoning… (continuing ${thinkContinues}/${MAX_THINK_CONTINUES})`,
+          );
+          traceEvent({
+            kind: 'decision',
+            summary: emptyResponse
+              ? 'the provider returned an empty response — no answer text and no tool call; the step was retried'
+              : 'the model replied with its own reasoning instead of an answer — the step continued',
+          });
+          continue;
+        }
+        if (thinkContinues === MAX_THINK_CONTINUES + 1) {
+          // One escalation: it has no answer yet, so tell it to act or answer.
+          stepLimit += 1;
+          deps.onEvent?.(
+            emptyResponse
+              ? '   ⚠️ The provider keeps returning empty responses — asking for one real step.'
+              : '   🧠 Reasoning only, repeatedly — telling the model to act or answer now.',
+          );
+          traceEvent({
+            kind: 'gate',
+            gate: 'repeat',
+            summary: emptyResponse
+              ? `the provider returned an empty response ${thinkContinues} times — one bounded escalation for a real step`
+              : `the model produced reasoning-only output ${thinkContinues} times with no tool call and no answer — ` +
+                'one bounded escalation to act or answer',
+          });
+          thread.push({ role: 'user', content: THINK_ONLY_ESCALATION });
+          continue;
+        }
+        // Still spinning after the escalation: END the turn rather than burn the
+        // rest of the budget. `bounded` is set so every surface reads this as
+        // "stopped before finishing", never as a completed answer.
+        bounded = true;
+        deps.onEvent?.(
+          emptyResponse
+            ? '   ⚠️ Empty responses kept coming — ending the turn instead of spinning. This is a PROVIDER failure, not the agent thinking.'
+            : '   🧠 Reasoning-only output kept repeating — ending the turn instead of spinning.',
+        );
         traceEvent({
-          kind: 'decision',
-          summary: 'the model replied with its own reasoning instead of an answer — the step continued',
+          kind: 'gate',
+          gate: 'repeat',
+          summary: emptyResponse
+            ? `the provider returned ${thinkContinues} consecutive empty responses — the turn ended; this is a transport failure, not agent stuckness`
+            : `reasoning-only output repeated ${thinkContinues} times after an escalation — the turn ended to avoid an unbounded spin`,
         });
-        continue;
+        break;
       }
       // ── Dangling-promise nudge (bounded, once) ──────────────────────────
       // The model closed the turn announcing what it is ABOUT to do ("I will
@@ -1024,6 +1198,44 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         thread.push({ role: 'user', content: AUTHORIZED_WORK_NUDGE });
         continue;
       }
+      // ── Stage 2 — REPETITION nudge (bounded, once) ───────────────────────
+      // The permission nudge above fires only when the request AUTHORIZED the
+      // work, and it asks the model to PROCEED. A repeated question is a defect
+      // on its own terms: the user already answered it, whatever their latest
+      // message authorized — which is precisely the case a live turn fell
+      // through, because the complaint about repeated questions was itself the
+      // message that failed to authorize. This nudge therefore does NOT depend
+      // on authorization, and deliberately does NOT say "proceed" (unsafe when
+      // the answer was no) — it says the answer is in hand, so act on it or say
+      // what blocks you. The evidence is the RUN TRACE, not the current text.
+      if (
+        repeatNudges < 1 &&
+        schemas.length > 0 &&
+        detectPermissionSeeking(
+          response.content.length >= lastContent.length ? response.content : lastContent,
+        ) &&
+        runTrace.priorAskMatches(
+          response.content.length >= lastContent.length ? response.content : lastContent,
+        ).length > 0
+      ) {
+        const closing = response.content.length >= lastContent.length ? response.content : lastContent;
+        repeatNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.('   🔁 The turn asked a question the user has already answered — telling the model to act on the answer.');
+        traceEvent({
+          kind: 'gate',
+          gate: 'repeat',
+          summary: 'the turn repeated a question already asked and answered in this conversation — one bounded nudge to use the answer',
+        });
+        if (progress.successfulToolCalls.length === 0) {
+          lastContent = '';
+        } else {
+          lastContent = stripTrailingPermissionSeek(closing);
+        }
+        thread.push({ role: 'assistant', content: response.content });
+        thread.push({ role: 'user', content: repeatNudge(closing, runTrace.priorAnswer(closing)) });
+        continue;
+      }
       // S1 (both exits): the MOST SUBSTANTIVE content seen wins here too —
       // a short closing step ("Sent it to her! ✅") with no tool calls must
       // not clobber the deliverable (poem/essay) the model composed in an
@@ -1072,7 +1284,14 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           summary: 'the turn mutated the workspace and nothing observed the result — one bounded nudge to verify',
         });
         thread.push({ role: 'assistant', content: response.content });
-        thread.push({ role: 'user', content: VERIFICATION_NUDGE });
+        // Stage 3 — name THIS project's strongest check instead of describing a
+        // preference order. A live turn reached for `node -c` because the nudge
+        // left the choice to the model; `verificationNudgeFor` reads the
+        // workspace and asks for the real command, so there is nothing to guess.
+        thread.push({
+          role: 'user',
+          content: verificationNudgeFor(ctx.cwd ?? process.cwd(), progress.mutatedPaths),
+        });
         continue;
       }
       return {
@@ -1282,10 +1501,22 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         if (call.name === 'edit_file' || call.name === 'write_file') {
           const a = call.arguments as { path?: unknown; file_path?: unknown; file?: unknown } | undefined;
           const p = a?.path ?? a?.file_path ?? a?.file;
-          if (typeof p === 'string' && p) progress.mutatedPaths.push(p);
+          if (typeof p === 'string' && p) {
+            progress.mutatedPaths.push(p);
+            // Stage 2 — the run's own record of what it CHANGED, so a self-report
+            // can answer "what have you been doing" from data rather than from a
+            // re-read of the transcript.
+            runTrace.recordMutation(call.name, p);
+          }
         } else if (isVerificationTool(call.name)) {
           progress.verificationEvidence.push({ tool: call.name, args: call.arguments, result: rawResult });
         }
+      } else if (refusal !== null || rawResult.startsWith('Error:')) {
+        // Stage 2 — the other half of noticing a loop: the SAME refusal, twice.
+        // The run records it with its reason, so a later step (or a self-report)
+        // can see "blocked twice, identically" instead of rediscovering it — and
+        // so the repetition gate has a refusal signal as well as an ask signal.
+        runTrace.recordRefusal(call.name, refusal?.gate ?? 'error', rawResult);
       }
       let resultText = executed[i];
       // P3c — on error/denial, append the deterministic fallback hint for
@@ -1404,7 +1635,14 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           summary: 'the turn mutated the workspace and nothing observed the result — one bounded nudge to verify',
         });
         thread.push({ role: 'assistant', content: response.content });
-        thread.push({ role: 'user', content: VERIFICATION_NUDGE });
+        // Stage 3 — name THIS project's strongest check instead of describing a
+        // preference order. A live turn reached for `node -c` because the nudge
+        // left the choice to the model; `verificationNudgeFor` reads the
+        // workspace and asks for the real command, so there is nothing to guess.
+        thread.push({
+          role: 'user',
+          content: verificationNudgeFor(ctx.cwd ?? process.cwd(), progress.mutatedPaths),
+        });
         continue;
       }
       // G13b — DELIVERABLE GATE (concluding path). AFTER the verification gate
@@ -1614,6 +1852,8 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
   if (!result.cancelled && !result.generationFailed) {
     result.successfulToolCalls = [...progress.successfulToolCalls];
     result.deliveryConfirmed = progress.deliveryConfirmed;
+    // Stage 2 — the turn's own behaviour, as counts (see learning/run-trace.ts).
+    result.runTrace = progress.runTrace?.snapshot();
     // Judge the "I have sent it" claim against what actually DELIVERED, not
     // against the attempted tool list — a failed gateway_send must not silence
     // the honesty correction.

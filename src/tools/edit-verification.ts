@@ -17,7 +17,17 @@
  *
  * Both are pure + deterministic (no LLM, no I/O), so they can be unit-tested
  * exhaustively and behave identically across the CLI, dashboard, and gateway.
+ *
+ * A third question is answered here too, and it is the one exception to that
+ * rule: WHICH check this project can actually run (`verificationNudgeFor` /
+ * `detectAvailableChecks`). It reads workspace markers (package.json scripts,
+ * tsconfig/vitest/jest/cargo/go) — filesystem only, never the network and never
+ * a model — because "the strongest check" is a property of THIS project, and a
+ * nudge that names it is actionable where a generic preference order is not.
  */
+
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 /**
  * Tools that CHANGE the workspace. A turn that ran one of these has produced
@@ -91,9 +101,56 @@ export interface ToolCallEvidence {
  * Commands that exercise the WHOLE project, so any change in it is covered.
  * `npm test`, a typecheck, a build, a linter — these observe the artifact even
  * when they never name the changed file.
+ *
+ * `node --check` USED to be in this list, which is what let the calculator
+ * session report "verified" after running `node -c script.js`. See
+ * `PARSE_ONLY_RE` below for why that cannot count.
  */
 const GENERIC_VERIFY_RE =
-  /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|lint|typecheck|check|ci)\b|\b(?:tsc|vitest|jest|pytest|mocha|cargo\s+test|go\s+test|gradle|mvn|make|node\s+--check)\b/i;
+  /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|lint|typecheck|check|ci)\b|\b(?:tsc|vitest|jest|pytest|mocha|cargo\s+test|go\s+test|gradle|mvn|make)\b/i;
+
+/**
+ * Commands that only PARSE the files they are handed. They prove the source is
+ * syntactically valid and nothing else.
+ *
+ * WHY THIS EXISTS. The 2026-09-23 calculator re-test reproduced the audit's
+ * finding through a new door: asked to review a project, the agent ran
+ * `node -c script.js` and the gate accepted it as verification. It then
+ * reported the code "in good shape" while a live correctness bug sat on line
+ * 102 — a bug a parser cannot see, because a parser has no notion of what
+ * `display.value` holds at runtime. A modification to BEHAVIOUR cannot be
+ * observed by a syntax check, so these never satisfy the gate.
+ *
+ * The same reasoning as the `echo hi` hole this module already closed: a run
+ * counts only when it can observe the thing that changed.
+ */
+const PARSE_ONLY_RE =
+  /\bnode\s+(?:--check|-c)\b|\bpython[23]?\s+-m\s+(?:py_compile|compileall)\b|\bpy_compile\b|\b(?:ruby|perl)\s+-c\b|\bphp\s+-l\b|\bbash\s+-n\b|\bgcc\s+-fsyntax-only\b/i;
+
+/** The text an evidence entry exposes to the relevance + parse-only checks. */
+function evidenceText(e: ToolCallEvidence): string {
+  let text = e.result ?? '';
+  if (e.args) {
+    try {
+      text += ` ${JSON.stringify(e.args)}`;
+    } catch {
+      // Unserializable args — the result text alone is still usable.
+    }
+  }
+  return text;
+}
+
+/**
+ * Is this evidence a parse/syntax check rather than an observation of
+ * behaviour?
+ *
+ * A run that ALSO performs a real check (`node -c a.js && npm test`) is judged
+ * on the real check — it is not demoted for the parse step it contains.
+ */
+export function isParseOnlyCheck(evidence: ToolCallEvidence): boolean {
+  const text = evidenceText(evidence);
+  return PARSE_ONLY_RE.test(text) && !GENERIC_VERIFY_RE.test(text);
+}
 
 /**
  * Did this turn's verification actually EXERCISE the artifact it changed?
@@ -114,7 +171,10 @@ export function verificationExercisedArtifact(
   evidence: readonly ToolCallEvidence[],
   changedFiles: readonly string[],
 ): boolean {
-  if (evidence.length === 0) return false;
+  // A parse check observes syntax, never behaviour — drop it before judging,
+  // so it can satisfy neither the relevance match nor the file-name match.
+  const observed = evidence.filter((e) => !isParseOnlyCheck(e));
+  if (observed.length === 0) return false;
   // Unknown changed paths → cannot judge relevance; don't cry wolf.
   if (changedFiles.length === 0) return true;
 
@@ -126,16 +186,9 @@ export function verificationExercisedArtifact(
     if (base) names.add(base);
   }
 
-  for (const e of evidence) {
+  for (const e of observed) {
     if (e.tool === 'test' || e.tool === 'browser') return true;
-    let text = e.result ?? '';
-    if (e.args) {
-      try {
-        text += ` ${JSON.stringify(e.args)}`;
-      } catch {
-        // Unserializable args — the result text alone is still usable.
-      }
-    }
+    const text = evidenceText(e);
     if (GENERIC_VERIFY_RE.test(text)) return true;
     for (const n of names) {
       if (n && text.includes(n)) return true;
@@ -231,12 +284,157 @@ export function detectUnverifiedEditClaim(
  * Deliberately concrete (names the tools) so a weak model can act on it
  * without inventing a syntax — the same principle as `TOOL_FALLBACK_HINTS`.
  */
+/** One check the project actually HAS, strongest first. */
+export interface AvailableCheck {
+  /** The exact command to run. */
+  command: string;
+  /** Where it comes from, phrased for the model ("the \"test\" script in package.json"). */
+  label: string;
+  /** Higher = observes more. Used only for ordering. */
+  strength: number;
+}
+
+/** Read a JSON file, returning null on any failure (never throws at the gate). */
+function readJsonSafe(path: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** Does this path exist as a file? (Never throws.) */
+function fileExists(path: string): boolean {
+  try {
+    return existsSync(path);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Which verification checks does THIS project actually have?
+ *
+ * The nudge used to name a generic preference order ("the project's own test
+ * command, a typecheck or build, a real run"). That is the right ORDER but it is
+ * not actionable on its own: a model holding it still has to guess what the
+ * project has, and the guess it reached for in a live turn was `node -c` — the
+ * cheapest thing available, and the one that is not allowed to count. Asking for
+ * the strongest check only works if the loop NAMES it, so this detects the real
+ * command instead of describing one.
+ *
+ * Deterministic, filesystem-only, never throws — a project with no checks at all
+ * is a normal answer (and produces the honest "say so explicitly" nudge).
+ */
+export function detectAvailableChecks(cwd: string): AvailableCheck[] {
+  const checks: AvailableCheck[] = [];
+  const add = (command: string, label: string, strength: number): void => {
+    if (!checks.some((c) => c.command === command)) checks.push({ command, label, strength });
+  };
+
+  const pkg = fileExists(join(cwd, 'package.json')) ? readJsonSafe(join(cwd, 'package.json')) : null;
+  const scripts = ((pkg?.scripts ?? {}) as Record<string, unknown>) || {};
+  const hasScript = (k: string): boolean => typeof scripts[k] === 'string' && String(scripts[k]).trim().length > 0;
+
+  // The project's OWN test command is the strongest observation there is.
+  if (hasScript('test')) add('npm test', 'the "test" script in package.json', 100);
+  if (hasScript('tests')) add('npm test', 'the "tests" script in package.json', 100);
+  if (hasScript('typecheck')) add('npm run typecheck', 'the "typecheck" script in package.json', 80);
+  if (hasScript('type-check')) add('npm run type-check', 'the "type-check" script in package.json', 80);
+  if (hasScript('build')) add('npm run build', 'the "build" script in package.json', 60);
+  if (hasScript('lint')) add('npm run lint', 'the "lint" script in package.json', 40);
+  if (hasScript('check')) add('npm run check', 'the "check" script in package.json', 40);
+
+  // A runner configured without a package script is still a real test command.
+  if (!checks.some((c) => c.strength >= 90)) {
+    for (const name of ['vitest.config.ts', 'vitest.config.mts', 'vitest.config.js']) {
+      if (fileExists(join(cwd, name))) {
+        add('npx vitest run', `a ${name}`, 95);
+        break;
+      }
+    }
+    for (const name of ['jest.config.js', 'jest.config.ts', 'jest.config.cjs', 'jest.config.mjs']) {
+      if (fileExists(join(cwd, name))) {
+        add('npx jest', `a ${name}`, 95);
+        break;
+      }
+    }
+    if (fileExists(join(cwd, 'pytest.ini')) || fileExists(join(cwd, 'pyproject.toml'))) {
+      add('pytest', 'a Python test setup', 95);
+    }
+    if (fileExists(join(cwd, 'Cargo.toml'))) add('cargo test', 'a Cargo project', 95);
+    if (fileExists(join(cwd, 'go.mod'))) add('go test ./...', 'a Go module', 95);
+  }
+
+  // A typechecker with no script is still the strongest static observation.
+  if (fileExists(join(cwd, 'tsconfig.json'))) add('npx tsc --noEmit', 'a tsconfig.json', 70);
+
+  return checks.sort((a, b) => b.strength - a.strength);
+}
+
+/**
+ * The nudge sent when a turn mutated the workspace and verified nothing.
+ *
+ * Deliberately concrete (names the tools) so a weak model can act on it
+ * without inventing a syntax — the same principle as `TOOL_FALLBACK_HINTS`.
+ * Static text, exported for callers that have no workspace (and for back-compat);
+ * the loop uses {@link verificationNudgeFor}, which names THIS project's checks.
+ */
 export const VERIFICATION_NUDGE =
   'You changed files this turn but nothing VERIFIED the change — an edit is not ' +
-  'evidence that it works. Before finishing, run the check that actually observes ' +
-  'the artifact (e.g. run_terminal for a typecheck/test/build, the test pipeline, ' +
-  'or a browser run), then report what that check showed. If no such check is ' +
-  'possible here, say so explicitly and do NOT claim the change works.';
+  'evidence that it works, and neither is a syntax/parse check (`node --check` / ' +
+  '`node -c`, `python -m py_compile`): those prove the file PARSES, not that it ' +
+  'behaves correctly, so they do not count. Run the strongest check this project ' +
+  'actually has, in this order of preference: (1) the project\u2019s own test command ' +
+  '(package.json "test", or `nuvira test`), (2) a typecheck or build, (3) the ' +
+  'browser tool or a real run that exercises the changed code with actual input. ' +
+  'Then report what that check showed. If genuinely no such check exists here, ' +
+  'say so explicitly and do NOT claim the change works.';
+
+/**
+ * The verification nudge for a specific workspace — the strongest check it
+ * actually HAS, named.
+ *
+ * The difference from {@link VERIFICATION_NUDGE} is the difference between
+ * "run the strongest check you have" and "run `npm test`". A model handed the
+ * first re-derives the answer and reaches for the cheapest thing that looks like
+ * a check; a model handed the second has nothing to guess. When the project has
+ * no runnable check at all the instruction is a REAL RUN, and failing that an
+ * explicit admission — never a claim.
+ */
+export function verificationNudgeFor(cwd: string, changedFiles: readonly string[] = []): string {
+  const checks = detectAvailableChecks(cwd);
+  const changed = changedFiles.filter(Boolean).slice(0, 5);
+  const head =
+    'You changed files this turn' +
+    (changed.length > 0 ? ` (${changed.join(', ')})` : '') +
+    ' but nothing VERIFIED the change — an edit is not evidence that it works, and neither ' +
+    'is a syntax/parse check (`node --check` / `node -c`, `python -m py_compile`): those prove ' +
+    'the file PARSES, not that it behaves correctly, so they do not count.';
+
+  if (checks.length === 0) {
+    return (
+      `${head}\n` +
+      'No test, typecheck or build command was found in this project, so the strongest check ' +
+      'AVAILABLE to you is a REAL RUN that exercises the changed code — the `browser` tool, or ' +
+      '`run_terminal` with a command that executes the changed behaviour with real input. Then ' +
+      'report what it showed. If even that is impossible, say so explicitly and do NOT claim ' +
+      'the change works.'
+    );
+  }
+
+  const list = checks
+    .slice(0, 3)
+    .map((c, i) => `  ${i + 1}. \`${c.command}\` — ${c.label}`)
+    .join('\n');
+  return (
+    `${head}\n` +
+    `This project's strongest available checks, best first:\n${list}\n` +
+    'Run the strongest one and report what it showed. If it does not apply to this change, say ' +
+    'which you tried and why. If none of them runs, say so explicitly and do NOT claim the ' +
+    'change works.'
+  );
+}
 
 /**
  * The nudge sent when a turn ended asking PERMISSION for work the user's own
@@ -249,6 +447,30 @@ export const VERIFICATION_NUDGE =
  * proceed unless the decision is blocking, high-impact, irreversible and has
  * no sensible default.
  */
+/**
+ * The escalation sent when the model produces REASONING ONLY, repeatedly, with
+ * no tool call and no answer.
+ *
+ * WHY THIS EXISTS (a live eval run, 2026-09-23). A think-only response makes the
+ * loop `continue` so a model that emits a reasoning block then its answer in the
+ * next step is not cut off — sensible, but UNBOUNDED: nothing counted the
+ * continuations and nothing ever changed the instruction. Both groq and gemini
+ * therefore produced 31 consecutive reasoning-only steps, one `list_dir` call,
+ * and a 0% score on a task they were perfectly capable of doing — with the exact
+ * "model reasoning… (continuing)" spam a user had already reported in a real
+ * dashboard turn. A spin is not a stall the user can act on; it burns the whole
+ * budget and looks like the agent thinking hard while nothing happens.
+ *
+ * Deliberately an ESCALATION rather than a hard stop on the first repeat: a
+ * legitimate `<think>`-then-answer model needs a step or two, so the loop allows
+ * a small budget, then says this, then ends the turn honestly if it still spins.
+ */
+export const THINK_ONLY_ESCALATION =
+  'You have produced only reasoning for several steps — no tool call and no answer to the ' +
+  'user. Stop reasoning and ACT: call the tool you need now, or write your final answer. ' +
+  'If you are unsure, make the decision you can defend and proceed — the user is waiting on ' +
+  'a result, not on deliberation.';
+
 export const AUTHORIZED_WORK_NUDGE =
   'The user\u2019s own request already asked for this work, so asking whether to ' +
   'proceed is a round trip that delivers nothing. Do NOT end the turn on a request ' +

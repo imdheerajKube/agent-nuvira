@@ -18,7 +18,7 @@ import { homedir } from 'node:os';
 import { resolveNuviraHome } from '../config/paths.js';
 
 import type { Skill, SkillSummary, SkillParameter } from './skill-types.js';
-import { MAX_SKILLS } from './skill-types.js';
+import { MAX_SKILLS, SKILL_PRECEDENCE_NOTE } from './skill-types.js';
 import { ALL_BUNDLED_SKILLS as BUNDLED_SKILLS } from '../skills/bundled-skills.js';
 import { logger } from '../utils/logger.js';
 
@@ -642,6 +642,11 @@ export class SkillStore {
         sections.push(`- **${param.name}** ${required}${defaultVal}: ${param.description}`);
       }
     }
+
+    // Precedence — stated before the steps so they are read as methodology,
+    // never as an authorisation to override the live request.
+    sections.push('\n## Precedence');
+    sections.push(SKILL_PRECEDENCE_NOTE);
 
     // Steps (the core methodology)
     sections.push('\n## Execution Steps');

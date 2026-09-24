@@ -129,6 +129,16 @@ export interface EvalTask {
   }>;
   /** Token budget for token-efficiency scoring */
   tokenBudget: number;
+  /**
+   * INTERRUPTION BUDGET — how many questions the run may put to the user before
+   * it counts as a process failure. 0 means "do this without stopping to ask".
+   *
+   * Needed because completion and test-pass cannot see this: a task can pass
+   * every hidden test and still have interrupted the user four times, which is
+   * exactly the reported experience ("it kept asking me for every small thing").
+   * Absent = not measured (the pipeline arms have no user to interrupt).
+   */
+  maxPermissionAsks?: number;
   /** Time estimate */
   timeEstimate: 'quick' | 'medium' | 'slow';
   /** Per-task wall-clock timeout in ms (default 10 min) */
@@ -188,6 +198,18 @@ export interface EvalMetrics {
   toolSchemaChars?: number;
   /** Loop hit its step bound before an end turn (bounded-ness signal). */
   bounded?: boolean;
+  /**
+   * How many questions actually REACHED the user this run (loop arm only). The
+   * behaviour metric from the intent-envelope / run-trace work: a multi-step
+   * task that was properly authorized should produce ZERO interruptions.
+   */
+  permissionAsks?: number;
+  /**
+   * `permissionAsks` normalized per COMPLETED task — the number a user feels.
+   * A run that asked 4 times and completed once scores 4;
+   * an incomplete run has no meaningful ratio and leaves this undefined.
+   */
+  asksPerCompletedTask?: number;
 }
 
 /** Result of running one eval task */
@@ -228,6 +250,8 @@ export interface EvalSummary {
   recoveryRate: number;
   avgCompositeScore: number;
   totalCostUsd: number;
+  /** Mean interruptions per run (loop arm; 0 on the pipeline arms). */
+  avgPermissionAsks: number;
 }
 
 /** Stored eval data on disk */
@@ -366,6 +390,197 @@ const EVAL_TASKS: EvalTask[] = [
     tokenBudget: 8000,
     timeEstimate: 'quick',
     timeoutMs: 180_000,
+  },
+
+  // ── Autonomy: a well-specified task must NOT interrupt the user ──────
+  //
+  // THE MEASUREMENT THAT MOTIVATED IT (2026-09-23, session f624a182). A user
+  // fixing a four-file calculator approved "yes" roughly every second operation,
+  // and the recorded turn replayed through the OLD gates renders FOUR permission
+  // questions — all of them variations of "may I run `node -c script.js`?".
+  // Completion and test-pass cannot see this: the task passed, and it still
+  // interrupted the user four times. So the interruption count is measured
+  // directly (`maxPermissionAsks`), from the run trace the loop now reports.
+  //
+  // The goal is deliberately COMPLETE — the file, the exact requirements, the
+  // test to write, and the command to run. That is the point: when nothing is
+  // ambiguous, the count must be ZERO. A vague goal would measure the model's
+  // judgment about whether to ask, which is a different question.
+  {
+    id: 'loop-autonomy-multistep',
+    title: 'Complete a fully-specified multi-step task without asking anything',
+    category: 'feature',
+    difficulty: 'easy',
+    goal:
+      'Make these four changes in this project, then verify them: ' +
+      '(1) `add(a, b)` in math.js must return the true sum a + b — the current ' +
+      'implementation drops the sign of a negative second operand; ' +
+      '(2) add and export `subtract(a, b)` returning a - b; ' +
+      '(3) write test.js that requires both functions from "./math", asserts ' +
+      'add(2, -3) === -1, add(-2, -3) === -5 and subtract(5, 3) === 2, and prints ' +
+      '"ALL TESTS PASSED" when they hold; ' +
+      '(4) run the test (npm test or `node test.js`) and report exactly what it printed.',
+    setupFiles: [
+      {
+        path: 'math.js',
+        content: [
+          '// Arithmetic helpers.',
+          '/**',
+          ' * Add two numbers.',
+          ' * @param {number} a',
+          ' * @param {number} b',
+          ' * @returns {number}',
+          ' */',
+          'function add(a, b) {',
+          '  // BUG: the absolute value discards a negative operand\u2019s sign.',
+          '  return a + Math.abs(b);',
+          '}',
+          'module.exports = { add };',
+          '',
+        ].join('\n'),
+      },
+      {
+        path: 'package.json',
+        content: JSON.stringify(
+          { name: 'autonomy-loop-task', version: '1.0.0', scripts: { test: 'node test.js' } },
+          null,
+          2,
+        ),
+      },
+    ],
+    hiddenTests: [{ file: 'test.js', command: 'node test.js' }],
+    referencePatterns: [{ file: 'math.js', mustContain: ['subtract'], mustNotContain: ['Math.abs(b)'] }],
+    // THE POINT OF THE TASK: a complete specification must produce no questions.
+    maxPermissionAsks: 0,
+    tokenBudget: 12000,
+    timeEstimate: 'quick',
+    timeoutMs: 180_000,
+  },
+
+  // ── Bug fix: defect that only a STATE TRACE reveals ──────────────────
+  //
+  // THE MEASUREMENT THAT MOTIVATED IT (2026-09-23). Asked to "review the code
+  // for correctness bugs", the agent read `script.js`, cited lines 96 and
+  // 106-111 of the real file, and reported only cosmetic findings — while the
+  // bug sat on line 102, BETWEEN two lines it quoted. A second run that simply
+  // ASKED for the state trace ("what does the display hold when the user types
+  // 5, +, 5, then sin?") found it immediately: the capability was never
+  // missing, the methodology never asked the question. `code-assessment`
+  // v1.1.0 adds that step; this task measures whether the work follows from it.
+  //
+  // The goal deliberately does NOT name the defect — it asks for a correct
+  // calculator and says to verify, the way a user would. A goal that described
+  // the bug would measure instruction-following instead. The hidden test is
+  // BEHAVIOURAL (it loads the agent's script.js into a VM with a stubbed DOM
+  // and drives the real functions, no dependencies), so a plausible-looking
+  // edit cannot satisfy it: the agent has to discover that the display holds an
+  // EXPRESSION, not a number.
+  {
+    id: 'js-display-state-trace-fix',
+    title: 'Fix a defect visible only via a state trace',
+    category: 'bug-fix',
+    difficulty: 'medium',
+    goal:
+      'Review this project for correctness bugs and fix them in script.js. The scientific buttons must operate on the correct value, and must never silently compute something the user did not ask for. Keep the existing function names and the interface unchanged, and verify your fix by running the tests.',
+    setupFiles: [
+      {
+        path: 'index.html',
+        content: [
+          '<!DOCTYPE html>',
+          '<html lang="en">',
+          '<head><meta charset="UTF-8"><title>Scientific Calculator</title></head>',
+          '<body>',
+          '  <input type="text" id="calc-display" disabled>',
+          '  <button class="btn-num" data-val="5">5</button>',
+          '  <button class="btn-op" data-val="+">+</button>',
+          '  <button class="btn-op" id="btn-clear">AC</button>',
+          '  <button class="btn-op" id="btn-calc">=</button>',
+          '  <button class="btn-sci" data-func="sin">sin</button>',
+          '  <button class="btn-sci" data-func="cos">cos</button>',
+          '  <script src="script.js"></script>',
+          '</body>',
+          '</html>',
+          '',
+        ].join('\n'),
+      },
+      {
+        path: 'script.js',
+        content: [
+          '// Scientific calculator.',
+          'document.addEventListener(\'DOMContentLoaded\', () => {',
+          '  document.querySelectorAll(\'.btn-num\').forEach((btn) =>',
+          '    btn.addEventListener(\'click\', () => append(btn.dataset.val)),',
+          '  );',
+          '  document.querySelectorAll(\'.btn-op\').forEach((btn) => {',
+          '    if (btn.id === \'btn-clear\') btn.addEventListener(\'click\', clearDisplay);',
+          '    else if (btn.id === \'btn-calc\') btn.addEventListener(\'click\', calculate);',
+          '    else btn.addEventListener(\'click\', () => append(btn.dataset.val));',
+          '  });',
+          '  document.querySelectorAll(\'.btn-sci\').forEach((btn) =>',
+          '    btn.addEventListener(\'click\', () => scientific(btn.dataset.func)),',
+          '  );',
+          '});',
+          '',
+          'function append(val) {',
+          '  if (val === undefined || val === null) return;',
+          '  document.getElementById(\'calc-display\').value += val;',
+          '}',
+          '',
+          'function clearDisplay() {',
+          '  document.getElementById(\'calc-display\').value = \'\';',
+          '}',
+          '',
+          'function calculate() {',
+          '  const display = document.getElementById(\'calc-display\');',
+          '  const expression = display.value.trim();',
+          '  if (!expression) return;',
+          '  if (!/^[0-9+\\-*/().\\s]+$/.test(expression)) {',
+          '    display.value = \'Error\';',
+          '    return;',
+          '  }',
+          '  try {',
+          '    const result = new Function(\'return (\' + expression + \')\')();',
+          '    display.value = Number.isFinite(result) ? result : \'Error\';',
+          '  } catch {',
+          '    display.value = \'Error\';',
+          '  }',
+          '}',
+          '',
+          '// Applies a scientific function to the current display value.',
+          'function scientific(func) {',
+          '  const display = document.getElementById(\'calc-display\');',
+          '  const val = parseFloat(display.value);',
+          '  if (isNaN(val)) return;',
+          '',
+          '  switch (func) {',
+          '    case \'sin\': display.value = Math.sin(val).toFixed(8); break;',
+          '    case \'cos\': display.value = Math.cos(val).toFixed(8); break;',
+          '    case \'sqrt\': display.value = val < 0 ? \'Error\' : Math.sqrt(val).toFixed(8); break;',
+          '  }',
+          '}',
+          '',
+        ].join('\n'),
+      },
+      {
+        path: 'package.json',
+        content: JSON.stringify({ name: 'calculator-assess', version: '1.0.0', private: true }, null, 2),
+      },
+    ],
+    hiddenTests: [
+      {
+        file: 'verify-behavior.js',
+        command: 'node verify-behavior.js',
+      },
+    ],
+    referencePatterns: [
+      {
+        file: 'script.js',
+        mustContain: ['Math.sin'],
+      },
+    ],
+    tokenBudget: 20000,
+    timeEstimate: 'medium',
+    timeoutMs: 300_000,
   },
 
   // ── Bug fix: JavaScript closure (var → let) ──────────────────────────
@@ -811,6 +1026,23 @@ const EVAL_TASKS: EvalTask[] = [
 // templates (kept separately so the dataset stays readable above).
 
 const HIDDEN_TEST_FILES: Record<string, string> = {
+  // Behavioural, and independent of the test the agent was asked to write: the
+  // task's real question is not "did it fix add()" (any edit passes that) but
+  // "did it do the whole job WITHOUT stopping to ask". The interruption count
+  // comes from the run trace; this file only guards against a run that answered
+  // questions beautifully and changed nothing.
+  'loop-autonomy-multistep': [
+    'const assert = require("assert");',
+    'const { add, subtract } = require("./math");',
+    '',
+    'assert.strictEqual(add(2, -3), -1, "add must honour a negative operand");',
+    'assert.strictEqual(add(-2, -3), -5, "add must honour two negatives");',
+    'assert.strictEqual(add(0, 0), 0);',
+    'assert.strictEqual(typeof subtract, "function", "subtract must be exported");',
+    'assert.strictEqual(subtract(5, 3), 2);',
+    'console.log("ALL TESTS PASSED");',
+    '',
+  ].join('\n'),
   'js-fizzbuzz-fix': [
     'const assert = require("assert");',
     'const { getFizzBuzz } = require("./fizzbuzz");',
@@ -821,6 +1053,75 @@ const HIDDEN_TEST_FILES: Record<string, string> = {
     'assert.strictEqual(seq[14], "FizzBuzz");',
     'assert.strictEqual(seq[2], "Fizz");',
     'assert.strictEqual(seq[4], "Buzz");',
+    'console.log("ALL TESTS PASSED");',
+    '',
+  ].join('\n'),
+  // Behavioural: loads the agent's script.js into a VM with a stubbed DOM and
+  // drives the real functions, so the score reflects what the code DOES. A
+  // report-grep verifier would have been cheaper and would have let a
+  // plausible-sounding edit pass — the exact failure this task exists to catch.
+  'js-display-state-trace-fix': [
+    'const fs = require("fs");',
+    'const vm = require("vm");',
+    '',
+    'const problems = [];',
+    'function need(label, ok, hint) {',
+    '  if (!ok) problems.push(label + (hint ? " \u2014 " + hint : ""));',
+    '}',
+    '',
+    '// Minimal DOM stub — the calculator needs one element that remembers its',
+    '// value, plus no-op listeners. No jsdom, no install step.',
+    'const display = { value: "" };',
+    'const document = {',
+    '  addEventListener() {},',
+    '  querySelectorAll() { return []; },',
+    '  getElementById(id) {',
+    '    return id === "calc-display" ? display : { value: "", addEventListener() {} };',
+    '  },',
+    '};',
+    'const sandbox = { document, console, Math, Number, isNaN, parseFloat, String, Function };',
+    'vm.createContext(sandbox);',
+    'vm.runInContext(fs.readFileSync("script.js", "utf8"), sandbox);',
+    '',
+    '// 1. The defect: the display holds an EXPRESSION, so the function must',
+    '//    operate on its RESULT. sin(5+5) is sin(10) = -0.54402111.',
+    'display.value = "5+5";',
+    'sandbox.scientific("sin");',
+    'const wantSin10 = Math.sin(10).toFixed(8);',
+    'need("sin operates on the expression result (5+5 -> sin(10))", display.value === wantSin10,',
+    '  "expected " + wantSin10 + ", got " + display.value);',
+    '',
+    '// 2. A bare number must keep working (no regression).',
+    'display.value = "5";',
+    'sandbox.scientific("sin");',
+    'const wantSin5 = Math.sin(5).toFixed(8);',
+    'need("sin on a bare number still works", display.value === wantSin5,',
+    '  "expected " + wantSin5 + ", got " + display.value);',
+    '',
+    '// 3. An incomplete expression must NOT silently compute a wrong value.',
+    'display.value = "5+";',
+    'sandbox.scientific("sin");',
+    'need("an incomplete expression does not compute silently",',
+    '  display.value === "Error" || display.value === "5+",',
+    '  "expected an Error (or an unchanged display), got " + display.value);',
+    '',
+    '// 4. Any scientific function, not just the one we traced.',
+    'display.value = "9+7";',
+    'sandbox.scientific("sqrt");',
+    'need("sqrt operates on the expression result (9+7 -> sqrt(16))", display.value === (4).toFixed(8),',
+    '  "expected " + (4).toFixed(8) + ", got " + display.value);',
+    '',
+    '// 5. Existing behaviour is untouched.',
+    'display.value = "";',
+    'sandbox.append("7"); sandbox.append("*"); sandbox.append("6");',
+    'sandbox.calculate();',
+    'need("calculate() still evaluates an expression", display.value === 42 || display.value === "42",',
+    '  "expected 42, got " + display.value);',
+    '',
+    'if (problems.length > 0) {',
+    '  for (const p of problems) console.log("FAIL: " + p);',
+    '  process.exit(1);',
+    '}',
     'console.log("ALL TESTS PASSED");',
     '',
   ].join('\n'),
@@ -1103,6 +1404,8 @@ export async function runEvalTask(
   let toolCallCount = 0;
   let erroredToolCount = 0;
   let bounded = false;
+  /** Stage 2 — interruptions this run, when the arm can observe them. */
+  let permissionAsks: number | undefined;
 
   try {
     if (options.executeGoal) {
@@ -1130,6 +1433,10 @@ export async function runEvalTask(
         toolCallCount = loopResult.toolCalls.length;
         erroredToolCount = loopResult.erroredTools.length;
         bounded = loopResult.bounded;
+        // Interruptions the user actually saw. Counting the ASKS rather than the
+        // ask attempts is the honest number, and it is only available because
+        // the loop now reports its own trace (see learning/run-trace.ts).
+        permissionAsks = loopResult.runTrace?.shownAsks;
         result = {
           success: !loopResult.generationFailed,
           goal: task.goal,
@@ -1233,6 +1540,9 @@ export async function runEvalTask(
     toolCallCount,
     erroredToolCount,
     bounded,
+    // Stage 2 — the interruption metric (loop arm only).
+    ...(permissionAsks !== undefined ? { permissionAsks } : {}),
+    ...(permissionAsks !== undefined && result.success ? { asksPerCompletedTask: permissionAsks } : {}),
   };
 
   // Estimate cost from token usage (reuse the cost-tracker pricing model)
@@ -1374,6 +1684,7 @@ export function computeEvalSummary(results: EvalResult[]): EvalSummary {
       recoveryRate: 0,
       avgCompositeScore: 0,
       totalCostUsd: 0,
+      avgPermissionAsks: 0,
     };
   }
 
@@ -1388,6 +1699,12 @@ export function computeEvalSummary(results: EvalResult[]): EvalSummary {
   const finiteFixTimes = passed
     .map((r) => r.metrics.timeToFixMs)
     .filter((t) => t !== null && isFinite(t));
+  // Interruptions are only observable on an arm that HAS a user to interrupt, so
+  // the average is taken over the runs that reported the metric — averaging in a
+  // pipeline arm's structural 0 would make a regression look like an improvement.
+  const askReports = results
+    .map((r) => r.metrics.permissionAsks)
+    .filter((n): n is number => typeof n === 'number');
 
   return {
     totalTasks: results.length,
@@ -1404,6 +1721,9 @@ export function computeEvalSummary(results: EvalResult[]): EvalSummary {
     recoveryRate: hadFailures.length > 0 ? recovered.length / hadFailures.length : 1,
     avgCompositeScore: results.reduce((a, r) => a + r.compositeScore, 0) / results.length,
     totalCostUsd: results.reduce((a, r) => a + r.metrics.costUsd, 0),
+    avgPermissionAsks: askReports.length > 0
+      ? askReports.reduce((a, b) => a + b, 0) / askReports.length
+      : 0,
   };
 }
 
@@ -1569,6 +1889,11 @@ export function formatEvalReport(run: EvalRun): string {
   lines.push(`  Engine: ${arms.join(' + ')}`);
   lines.push(`  Duration: ${elapsed}s`);
   lines.push(`  Composite score: ${(s.avgCompositeScore * 100).toFixed(1)}%`);
+  // Stage 2 — the behaviour metric that correctness cannot see: a task can pass
+  // every hidden test and still have interrupted the user four times.
+  lines.push(
+    `  Interruptions (avg questions shown to the user): ${s.avgPermissionAsks.toFixed(1)}`,
+  );
   lines.push('');
   lines.push('  ── Reliability Metrics ──');
   lines.push(`  ✅ Task completion rate:  ${(s.completionRate * 100).toFixed(0)}%`);

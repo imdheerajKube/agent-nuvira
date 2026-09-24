@@ -136,3 +136,24 @@ export const SKILL_COMPILATION_INTERVAL = 5;
 
 /** Skills storage directory version */
 export const SKILL_STORE_VERSION = 1;
+
+/**
+ * The precedence rule attached to every skill whose steps are handed to the
+ * model as instructions (the `skill` tool and the store's skill view).
+ *
+ * WHY THIS EXISTS. A skill's methodology was arriving with the same authority
+ * as the user's request, and on 2026-09-23 that lost: asked to assess a project
+ * with the explicit constraint "do NOT modify any files yet — just report", the
+ * agent loaded `code-assessment`, hit the step that says produce the artifact,
+ * and wrote `CODE_ASSESSMENT.md` anyway. A skill is reusable METHODOLOGY; it
+ * is never an authorisation to override what the person in this conversation
+ * just told you. Keeping the text in one place means every surface that
+ * injects steps states the same rule.
+ */
+export const SKILL_PRECEDENCE_NOTE =
+  'PRECEDENCE — explicit constraints in the user\u2019s CURRENT request outrank these steps. A skill is ' +
+  'a methodology, not an authorization: if the request says "do not modify files", "report only", ' +
+  '"change nothing yet", or names a scope, honour it even when a step below tells you to write an ' +
+  'artifact or edit code. When the two conflict, the user wins \u2014 carry out the part that is still ' +
+  'compatible and say in one line what you skipped and why, instead of quietly doing the thing they ' +
+  'forbade.';

@@ -46,6 +46,7 @@ import {
   isSurgicalEdit,
   requestNamesPath,
 } from '../learning/autonomy-policy.js';
+import { envelopeCoversAction, envelopeNamesPath } from '../learning/intent-envelope.js';
 
 /** Max characters returned by read_file (a 40MB file must not flood context). */
 const MAX_READ_CHARS = 60000;
@@ -562,14 +563,25 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
     const newChars = pairs.reduce((n, p) => n + (p.new_string ?? '').length, 0);
     const touched = Math.max(oldChars, newChars);
     const share = fileChars > 0 ? Math.round((touched / fileChars) * 100) : 100;
-    const verdict = decideStateChange({
+    // The durable grant is consulted FIRST: inside an approved intent, the edit
+    // is EXECUTION, not a new decision — which is the whole point of agreeing
+    // the work once instead of confirming it per keystroke. When there is no
+    // envelope, the original evidence-based judgment runs unchanged.
+    const envVerdict = envelopeCoversAction(ctx.envelope, {
       tool: 'edit_file',
-      action: `rewriting ${share}% of '${gated.rel}'`,
+      path: gated.rel,
       changeClass: 'modify',
-      namedByRequest: requestNamesPath(ctx.authorizationRequest ?? '', gated.rel),
-      recoverable: isSurgicalEdit(fileChars, oldChars, newChars),
-      authorizedByRequest: ctx.writesAuthorized?.authorized === true,
     });
+    const verdict = envVerdict.covered
+      ? { action: 'proceed' as const, reason: envVerdict.reason }
+      : decideStateChange({
+          tool: 'edit_file',
+          action: `rewriting ${share}% of '${gated.rel}'`,
+          changeClass: 'modify',
+          namedByRequest: requestNamesPath(ctx.authorizationRequest ?? '', gated.rel),
+          recoverable: isSurgicalEdit(fileChars, oldChars, newChars),
+          authorizedByRequest: ctx.writesAuthorized?.authorized === true,
+        });
     if (verdict.action !== 'proceed') {
       const question = multi
         ? `Apply ${pairs.length} replacements to ${gated.rel}?`
@@ -665,12 +677,26 @@ export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promi
   // absent without a loop context and overwriting stays gated either way.
   let decidedAutonomously = false;
   if (!args.confirm) {
-    const verdict = decideWriteConfirmation({
+    // Consult the durable grant first, then the per-request judgment.
+    const envVerdict = envelopeCoversAction(ctx.envelope, {
       tool: 'write_file',
       path: gated.rel,
-      exists: existed,
-      authorizedByRequest: ctx.writesAuthorized?.authorized === true,
+      changeClass: existed ? 'modify' : 'create',
     });
+    // A whole-file REPLACE is inside the grant only when the envelope NAMES the
+    // path. A project-wide grant (“fix the calculator”) must not authorize
+    // clobbering a file the request never mentioned — a re-run cannot recover a
+    // wholesale overwrite, so that stays the user’s call. CREATING a file the
+    // intent covers is safe either way.
+    const verdict =
+      envVerdict.covered && (!existed || envelopeNamesPath(ctx.envelope, gated.rel))
+        ? { action: 'proceed' as const, reason: envVerdict.reason }
+        : decideWriteConfirmation({
+            tool: 'write_file',
+            path: gated.rel,
+            exists: existed,
+            authorizedByRequest: ctx.writesAuthorized?.authorized === true,
+          });
     if (verdict.action !== 'proceed') {
       return confirmFirst('write_file', args.path, `writing ${args.content.length} chars${abbrev(args.content) ? ` ("${abbrev(args.content)}")` : ''}`);
     }

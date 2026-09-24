@@ -4,7 +4,7 @@ Reproducible terminal recordings of the real CLI — not hand-written output.
 
 | File | Commands | Purpose |
 |---|---|---|
-| `nuvira-cli-tour.cast` | 22 | The curated tour: identity → health → routing → surface → safety → gateway → GUI. Linked from the README. |
+| `nuvira-cli-tour.cast` | 21 | The curated tour: identity → health → routing → surface → safety → gateway → GUI. Linked from the README. |
 | `nuvira-commands-all.cast` | every command in `docs/COMMANDS_SURFACE.md` | The full sweep, for verification. Generated on demand, not committed. |
 
 Both are [asciinema v2](https://docs.asciinema.org/manual/asciicast/v2/) casts:
@@ -27,12 +27,30 @@ The recordings are captured from the **built** CLI, so build first:
 
 ```bash
 npm run build
-npm run demo:cli          # the curated 22-command tour → nuvira-cli-tour.cast
+npm run demo:cli          # the curated 21-command tour → nuvira-cli-tour.cast
 npm run demo:cli:all      # every documented command → nuvira-commands-all.cast
 ```
 
 The generator is `scripts/generate-cli-demo.mjs`; `--bin`, `--out` and `--only`
 are accepted for custom runs.
+
+## Guards
+
+Both run in `npm test` (`tests/docs/cli-demo.test.ts`), so a stale or leaky cast
+cannot be committed:
+
+```bash
+# Validate the committed cast: asciinema v2 header, SECONDS-scale monotonic
+# timestamps, no secrets, and a recorded --version matching package.json.
+node scripts/generate-cli-demo.mjs --check-cast docs/demos/nuvira-cli-tour.cast
+
+# Run every curated command against the BUILT CLI and fail if one prints local
+# state, or if its redacted output still matches a secret pattern.
+node scripts/generate-cli-demo.mjs --check
+```
+
+The guard and the scrubber share one `SECRET_PATTERNS` list by construction, so
+extending the redaction is the only way to add a pattern the guard accepts.
 
 ## Safety — no observable effect
 

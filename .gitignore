@@ -52,6 +52,13 @@ issues/
 !docs/ASSESSMENT_CAPABILITY_GAPS.md
 !docs/IMPLEMENTATION_BRIEFS.md
 !docs/DASHBOARD_FIRST_PLAN.md
+# The desktop architecture decision record (Electron shell, ONE GUI-only
+# interface, Hermes Desktop as the reference). It settles questions that cost a
+# full research pass to answer — renderer choice, single-interface vs panes,
+# GUI-only enforcement, and the CLI→GUI parity matrix. Untracked, the next
+# session re-litigates a ratified decision and re-does that research; tracked,
+# it is the document every desktop change is checked against.
+!docs/DESKTOP_APP_PLAN.md
 # Machine-derived CLI surface (generated from the live commander tree by
 # scripts/generate-commands-surface.mjs, drift-guarded in CI) — a doc that is
 # CODE-adjacent build output, not hand-written prose.
@@ -61,6 +68,13 @@ issues/
 # every command AND the target of a README link — a published URL that 404s, and
 # a coverage guard that would skip itself on every fresh clone.
 !docs/COMMANDS.md
+# Inputs to the public documentation build (scripts/build-docs-repo.mjs renders
+# them into imdheerajKube/agent-nuvira-documentation). They MUST be tracked: the
+# publish workflow checks this repository out and fails with "missing source
+# file" when a generator input is absent, so an ignored .md here becomes a
+# publish that only breaks in CI.
+!docs/PUBLIC_README.md
+!docs/USER_MANUAL.md
 # The CLI demo cast (docs/demos/nuvira-cli-tour.cast) is a reproducible build
 # artifact linked from README.md, and its README documents how to play and
 # regenerate it — both must be tracked or the README link 404s.

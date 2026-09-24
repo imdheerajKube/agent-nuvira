@@ -163,6 +163,7 @@ export type TraceGateName =
   | 'confirmation'
   | 'workspace'
   | 'autonomy'
+  | 'repeat'
   | 'budget';
 
 /**

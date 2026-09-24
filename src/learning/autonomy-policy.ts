@@ -167,8 +167,20 @@ export function decideAutonomously(request: DecisionRequest): DecisionVerdict {
  * Verbs that mean "produce the artifact", not "tell me about it".
  * Deliberately includes the edit verbs: "add a chapter", "update the README".
  */
-const CREATE_VERB_RE =
-  /\b(?:create|build|write|make|generate|develop|implement|scaffold|set\s+up|setup|add|produce|draft|code|rewrite|refactor|fix|update|change|edit|modify|migrate|upgrade|convert|render|export|deploy|install|save|store|persist)\b/i;
+const CREATE_VERB_BODY =
+  'set\\s+up|setup|creat|build|writ|mak|generat|develop|implement|scaffold|add|produc|draft|cod|rewrit|refactor|fix|updat|chang|edit|modif|migrat|upgrad|convert|render|export|deploy|install|sav|stor|persist';
+
+/**
+ * Verb ENDINGS, so an inflected verb is the same evidence as its base form.
+ *
+ * The old regexes anchored on the base form (`\bupdate\b`), so "updating" — the
+ * form people actually write — matched NOTHING. The stems above drop the final
+ * `e` (`updat`, `chang`, `cod`), which is what makes the -ing/-ed forms work
+ * (`updat`+`ing`, `chang`+`ing`, `cod`+`ing`) alongside the base (`updat`+`e`).
+ */
+const VERB_SUFFIX = '(?:e|es|s|d|ed|ing)?';
+
+const CREATE_VERB_RE = new RegExp(`\\b(?:${CREATE_VERB_BODY})${VERB_SUFFIX}\\b`, 'i');
 
 /** Nouns that name a FILE-SHAPED deliverable (the thing that lands on disk). */
 const DELIVERABLE_NOUN_RE =
@@ -185,8 +197,10 @@ const PATH_RE = /(?:^|[\s"'`(])(?:~|\/|\.{1,2}\/)[\w./-]+/;
  * object already says the work is to change what is there. Still vetoed by an
  * analysis opener, so "why is the build failing?" remains a question.
  */
-const MAINTENANCE_VERB_RE =
-  /\b(?:fix|repair|refactor|update|change|edit|modify|migrate|upgrade|improve|optimize|optimise|clean\s*up|rewrite|rename|remove|delete|correct|debug|patch|tweak)\b/i;
+const MAINTENANCE_VERB_BODY =
+  'clean\\s*up|fix|repair|refactor|updat|chang|edit|modif|migrat|upgrad|improv|optimiz|optimis|rewrit|renam|remov|delet|correct|debugg|debug|patch|tweak';
+
+const MAINTENANCE_VERB_RE = new RegExp(`\\b(?:${MAINTENANCE_VERB_BODY})${VERB_SUFFIX}\\b`, 'i');
 
 /**
  * An analysis/interrogative opener means the user is asking ABOUT something,
@@ -249,38 +263,82 @@ export function requestAuthorizesWrites(request: string): WriteAuthorization {
   const text = (request || '').trim();
   if (!text) return { authorized: false, reason: 'no request text to judge' };
 
-  if (text.length <= 40 && SHORT_AFFIRMATIVE_RE.test(text)) {
+  if (isAffirmativeReply(text)) {
     return { authorized: true, reason: 'the user confirmed the work already proposed' };
   }
   if (CONTINUATION_RE.test(text)) {
     return { authorized: true, reason: 'the request continues work that was already authorized' };
   }
 
-  const analyzing = ANALYSIS_OPENER_RE.test(text);
+  // Judge the message CLAUSE BY CLAUSE, never by its opener alone.
+  //
+  // The old shape vetoed the WHOLE message the moment it began with an analysis
+  // word: `if (ANALYSIS_OPENER_RE.test(text)) return { authorized: false }`. A
+  // live turn proved how bad that is — the user wrote: "why are you asking me
+  // this again and again ? 🤔 Apply a safe expression parser … by updating
+  // script.js". The `why` de-authorized the entire turn, which switched OFF the
+  // autonomy gates that would have stopped the prompting. A complaint about
+  // repeated permission questions therefore INCREASED them. A message can carry
+  // a question AND a directive; only a message with no directive clause is a
+  // question.
   const namedPath = extractRequestedPath(text);
-  if (namedPath && CREATE_VERB_RE.test(text) && !analyzing) {
-    return {
-      authorized: true,
-      reason: 'the request names a destination path for the work',
-      requestedPath: namedPath,
-    };
+  let sawQuestion = false;
+
+  for (const clause of splitSentences(text)) {
+    if (isQuestionClause(clause)) {
+      sawQuestion = true;
+      continue;
+    }
+    if (namedPath && CREATE_VERB_RE.test(clause)) {
+      return {
+        authorized: true,
+        reason: 'the request names a destination path for the work',
+        requestedPath: namedPath,
+      };
+    }
+    if (CREATE_VERB_RE.test(clause) && DELIVERABLE_NOUN_RE.test(clause)) {
+      return { authorized: true, reason: 'the request asks for a file-shaped deliverable' };
+    }
+    // The noun list names ARTIFACT TYPES (file, app, story, script…), so it misses
+    // the most common dev ask there is: "fix the calculator" names no artifact at
+    // all, and this verdict came back NOT authorized — which meant the edit gate
+    // would still stop to ask for permission to fix the thing the user asked to
+    // have fixed. A directive verb is its own evidence: it asks for a change to
+    // work that already exists.
+    if (MAINTENANCE_VERB_RE.test(clause)) {
+      return { authorized: true, reason: 'the request directs a change to work that already exists' };
+    }
   }
-  if (analyzing) {
+
+  if (sawQuestion) {
     return { authorized: false, reason: 'the request asks ABOUT the work rather than for it to be produced' };
   }
-  if (CREATE_VERB_RE.test(text) && DELIVERABLE_NOUN_RE.test(text)) {
-    return { authorized: true, reason: 'the request asks for a file-shaped deliverable' };
-  }
-  // The noun list names ARTIFACT TYPES (file, app, story, script…), so it misses
-  // the most common dev ask there is: "fix the calculator" names no artifact at
-  // all, and this verdict came back NOT authorized — which meant the edit gate
-  // would still stop to ask for permission to fix the thing the user asked to
-  // have fixed. A directive verb is its own evidence: it asks for a change to
-  // work that already exists.
-  if (MAINTENANCE_VERB_RE.test(text)) {
-    return { authorized: true, reason: 'the request directs a change to work that already exists' };
-  }
   return { authorized: false, reason: 'the request does not ask for files to be created' };
+}
+
+/**
+ * Is this message a plain confirmation of work already proposed ("yes", "go
+ * ahead", "do it")? Exported because the intent grant reads it: an affirmative
+ * reply to a plan is what turns that plan into an approved envelope.
+ */
+export function isAffirmativeReply(request: string): boolean {
+  const text = (request || '').trim();
+  return text.length <= 40 && SHORT_AFFIRMATIVE_RE.test(text);
+}
+
+/**
+ * Is this CLAUSE asking a question rather than directing work?
+ *
+ * Deliberately narrower than "ends with a question mark": a polite request is
+ * a request ("Can you fix the calculator?", "Could you update the README?" are
+ * authorized — the analysis-opener list excludes can/could/would/do for exactly
+ * this reason). Only an analysis OPENING is treated as a question, so a
+ * directive that happens to be phrased politely keeps its authority.
+ */
+function isQuestionClause(clause: string): boolean {
+  const c = (clause || '').trim();
+  if (!c) return true;
+  return ANALYSIS_OPENER_RE.test(c);
 }
 
 /**

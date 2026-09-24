@@ -36,6 +36,7 @@ import { existsSync } from 'node:fs';
 import type { ToolContext } from './registry.js';
 import { maskSenderId } from '../utils/mask.js';
 import { decideStateChange } from '../learning/autonomy-policy.js';
+import { envelopeCoversAction } from '../learning/intent-envelope.js';
 
 /** Cap on how much terminal output is fed back to the model. */
 const MAX_OUTPUT_CHARS = 6000;
@@ -84,6 +85,14 @@ const VERIFY_PREFIXES: string[] = [
   'tsc', 'npx tsc', 'vitest', 'npx vitest', 'jest', 'npx jest', 'mocha', 'eslint', 'npx eslint',
   'npm test', 'npm run typecheck', 'npm run lint', 'npm run check', 'npm run build',
   'npm run test', 'npm run verify', 'npm run test:unit', 'npm run type-check',
+  // Read-only PARSE checks. These execute nothing — they parse the file and
+  // report a syntax error. They were absent from this allowlist, so the model's
+  // cheapest verification (`node -c script.js`, the one a small project always
+  // reaches for) classified as CONFIRM, the tool refused, and the refusal said
+  // "call ask_user, then retry". A live turn produced exactly that loop: four
+  // permission questions in one turn, all for a syntax check that cannot change
+  // anything. A check that cannot mutate state must never generate a prompt.
+  'node -c', 'node --check',
   // Git read-only.
   'git status', 'git diff', 'git log', 'git show', 'git branch', 'git rev-parse',
   // Basic read-only shell.
@@ -263,13 +272,23 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
   let autonomyReason = '';
   if (cls === 'confirm' && !args.confirm) {
     const recoverable = isRecoverableWorkspaceCommand(command);
-    const verdict = decideStateChange({
+    // The durable grant is consulted first. It can only cover `local-state` —
+    // `external` is refused by the envelope itself, so this cannot widen what
+    // may run: it only makes an already-authorized class stay authorized across
+    // turns instead of being forgotten at the turn boundary.
+    const envVerdict = envelopeCoversAction(ctx.envelope, {
       tool: 'run_terminal',
-      action: `running "${command}"`,
       changeClass: recoverable ? 'local-state' : 'external',
-      recoverable,
-      authorizedByRequest: ctx.writesAuthorized?.authorized === true,
     });
+    const verdict = envVerdict.covered
+      ? { action: 'proceed' as const, reason: envVerdict.reason }
+      : decideStateChange({
+          tool: 'run_terminal',
+          action: `running "${command}"`,
+          changeClass: recoverable ? 'local-state' : 'external',
+          recoverable,
+          authorizedByRequest: ctx.writesAuthorized?.authorized === true,
+        });
     if (verdict.action !== 'proceed') {
       return (
         `Error: run_terminal: "${command}" changes state and needs explicit confirmation ` +

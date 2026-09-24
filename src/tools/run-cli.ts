@@ -33,7 +33,8 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ToolContext } from './registry.js';
 import { resolveAsk } from '../commands/intent-router.js';
-import { decideCliIntentConfirmation } from '../learning/autonomy-policy.js';
+import { decideCliIntentConfirmation, RECOVERABLE_CLI_INTENTS } from '../learning/autonomy-policy.js';
+import { envelopeCoversAction } from '../learning/intent-envelope.js';
 import { maskSenderId } from '../utils/mask.js';
 
 /** Cap on how much CLI output is fed back to the model. */
@@ -141,7 +142,19 @@ export async function runCliTool(args: unknown, ctx: ToolContext): Promise<strin
   let autonomyReason = '';
   if (top.confirmation && !confirm) {
     const namedByRequest = resolveAsk(ctx.authorizationRequest ?? '').some((m) => m.command === command);
-    const verdict = decideCliIntentConfirmation({ intent: top.intent, namedByRequest });
+    // Stage 3 — the durable grant is consulted first, and ONLY for the intents
+    // the CLI policy itself classifies as RECOVERABLE. Everything else is handed
+    // to the envelope as `destructive`, which it never covers, so this cannot
+    // widen what may run: irreversible intents keep the gate they had, and this
+    // only lets an approved plan carry out system work without a round trip per
+    // command.
+    const envVerdict = envelopeCoversAction(ctx.envelope, {
+      tool: 'run_cli',
+      changeClass: RECOVERABLE_CLI_INTENTS.has(top.intent) ? 'local-state' : 'destructive',
+    });
+    const verdict = envVerdict.covered
+      ? { action: 'proceed' as const, reason: envVerdict.reason }
+      : decideCliIntentConfirmation({ intent: top.intent, namedByRequest });
     if (verdict.action !== 'proceed') {
       return (
         `Error: run_cli: "${top.intent}" changes running services/state and needs explicit confirmation ` +

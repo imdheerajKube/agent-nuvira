@@ -27,6 +27,7 @@
 
 import type { ToolContext } from './registry.js';
 import type { Skill, SkillParameter } from '../learning/skill-types.js';
+import { SKILL_PRECEDENCE_NOTE } from '../learning/skill-types.js';
 import { SkillCompiler } from '../learning/skill-compiler.js';
 import { getCliName } from '../cli/commands.js';
 // `isEnvVarPersisted` / `getEnvVarValue` read the credential .env FILE first and
@@ -251,6 +252,8 @@ function compiledMethodology(skill: Skill, params: Record<string, string>): stri
     `   Goal: ${skill.goalPattern} | Quality: ${(skill.qualityScore * 100).toFixed(0)}% | Used: ${skill.usageCount}x`,
     paramLine,
     '',
+    `   ${SKILL_PRECEDENCE_NOTE}`,
+    '',
     `   Steps (${skill.steps.length}):`,
     steps,
   ].join('\n');
@@ -282,6 +285,8 @@ function hubMethodology(resolved: ResolvedSkill): string {
     `🧠 ${resolved.name} — ${resolved.description}`,
     `   (hub skill — SKILL.md methodology)`,
     ...hints,
+    '',
+    `   ${SKILL_PRECEDENCE_NOTE}`,
     '',
     resolved.body ?? '(no body)',
   ].join('\n');

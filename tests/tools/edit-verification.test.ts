@@ -7,14 +7,20 @@
  * operational"). These tests pin the two pure guards that close that gap.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   assessEditActivity,
   classifyEditActivity,
+  detectAvailableChecks,
   detectUnverifiedEditClaim,
   isMutationTool,
+  isParseOnlyCheck,
   isVerificationTool,
   verificationExercisedArtifact,
+  verificationNudgeFor,
   MUTATION_TOOLS,
   VERIFICATION_TOOLS,
 } from '../../src/tools/edit-verification.js';
@@ -115,7 +121,7 @@ describe('verificationExercisedArtifact — relevance, not just success', () => 
   const run = (tool: string, args: Record<string, unknown>, result: string) => ({ tool, args, result });
 
   it('accepts a generic project check even when it never names the file', () => {
-    for (const cmd of ['npm test', 'npm run build', 'pnpm run typecheck', 'tsc --noEmit', 'npx vitest run', 'node --check script.js']) {
+    for (const cmd of ['npm test', 'npm run build', 'pnpm run typecheck', 'tsc --noEmit', 'npx vitest run']) {
       expect(
         verificationExercisedArtifact([run('run_terminal', { command: cmd }, `run_terminal: done`)], ['app.js']),
         cmd,
@@ -156,6 +162,82 @@ describe('verificationExercisedArtifact — relevance, not just success', () => 
   });
 });
 
+/**
+ * A parse check proves the source PARSES. It cannot observe behaviour, so it
+ * must never close the verification gate — the 2026-09-23 re-test: the agent
+ * ran `node -c script.js`, was counted "verified", and reported a buggy file
+ * "in good shape" while the defect sat on the next line.
+ */
+describe('parse-only checks are not verification', () => {
+  const run = (tool: string, args: Record<string, unknown>, result: string) => ({ tool, args, result });
+
+  it('recognises parse-only commands', () => {
+    for (const cmd of [
+      'node --check script.js',
+      'node -c script.js',
+      'python -m py_compile app.py',
+      'python3 -m py_compile app.py',
+      'ruby -c app.rb',
+      'php -l index.php',
+      'bash -n deploy.sh',
+    ]) {
+      expect(isParseOnlyCheck(run('run_terminal', { command: cmd }, `run_terminal: \u2705 succeeded`)), cmd).toBe(true);
+    }
+  });
+
+  it('does NOT treat a real check (or a combined run) as parse-only', () => {
+    for (const cmd of ['npm test', 'npx vitest run', 'tsc --noEmit', 'npm run build']) {
+      expect(isParseOnlyCheck(run('run_terminal', { command: cmd }, 'ok')), cmd).toBe(false);
+    }
+    // A run that parses AND tests is judged on the test, not demoted.
+    expect(isParseOnlyCheck(run('run_terminal', { command: 'node -c a.js && npm test' }, 'ok'))).toBe(false);
+  });
+
+  it('rejects a parse check that NAMES the changed file (the live case)', () => {
+    // This is exactly what the calculator re-test ran.
+    expect(
+      verificationExercisedArtifact(
+        [run('run_terminal', { command: 'node -c script.js' }, 'run_terminal: \u2705 succeeded\n(no output)')],
+        ['script.js'],
+      ),
+    ).toBe(false);
+    expect(
+      verificationExercisedArtifact(
+        [run('run_terminal', { command: 'node --check script.js' }, 'script.js: syntax ok')],
+        ['script.js'],
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects a parse check even when the changed paths are unknown', () => {
+    expect(
+      verificationExercisedArtifact([run('run_terminal', { command: 'node --check a.js' }, 'ok')], []),
+    ).toBe(false);
+  });
+
+  it('keeps the gate open when a parse check is all that ran', () => {
+    const a = assessEditActivity(
+      ['edit_file', 'run_terminal'],
+      [{ tool: 'run_terminal', args: { command: 'node -c script.js' }, result: 'ok' }],
+      ['script.js'],
+    );
+    expect(a.mutations).toEqual(['edit_file']);
+    expect(a.needsVerification).toBe(true);
+  });
+
+  it('closes the gate once a real check also ran', () => {
+    const a = assessEditActivity(
+      ['edit_file', 'run_terminal'],
+      [
+        { tool: 'run_terminal', args: { command: 'node -c script.js' }, result: 'ok' },
+        { tool: 'run_terminal', args: { command: 'npm test' }, result: 'ok' },
+      ],
+      ['script.js'],
+    );
+    expect(a.needsVerification).toBe(false);
+  });
+});
+
 describe('assessEditActivity — the single gate decision', () => {
   it('needs verification when the only run exercised nothing', () => {
     const a = assessEditActivity(
@@ -178,5 +260,84 @@ describe('assessEditActivity — the single gate decision', () => {
 
   it('never needs verification when nothing was mutated', () => {
     expect(assessEditActivity(['read_file'], [], []).needsVerification).toBe(false);
+  });
+});
+
+/**
+ * Stage 3 — the verification LADDER.
+ *
+ * The nudge already stated the right preference order (tests > typecheck > real
+ * run) and still failed in a live turn, because the model had to guess what the
+ * project HAD — and reached for `node -c`, the cheapest thing available. Naming
+ * the actual command is the fix: "run `npm test`" leaves nothing to guess.
+ */
+describe('detectAvailableChecks + verificationNudgeFor', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'nuvira-ladder-'));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const withPkg = (scripts: Record<string, string>): void => {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'x', scripts }), 'utf-8');
+  };
+
+  it('prefers the project\u2019s own test script above everything else', () => {
+    withPkg({ test: 'vitest run', build: 'tsc', lint: 'eslint .' });
+    const checks = detectAvailableChecks(root);
+    expect(checks[0].command).toBe('npm test');
+    expect(checks[0].strength).toBeGreaterThan(checks[1].strength);
+  });
+
+  it('finds a typecheck and a build when there is no test script', () => {
+    withPkg({ typecheck: 'tsc --noEmit', build: 'tsc' });
+    const commands = detectAvailableChecks(root).map((c) => c.command);
+    expect(commands).toContain('npm run typecheck');
+    expect(commands).toContain('npm run build');
+  });
+
+  it('recognises a configured runner with no package script', () => {
+    withPkg({ build: 'tsc' });
+    writeFileSync(join(root, 'vitest.config.ts'), 'export default {}', 'utf-8');
+    expect(detectAvailableChecks(root)[0].command).toBe('npx vitest run');
+  });
+
+  it('falls back to a bare typechecker from tsconfig.json', () => {
+    writeFileSync(join(root, 'tsconfig.json'), '{}', 'utf-8');
+    expect(detectAvailableChecks(root).map((c) => c.command)).toContain('npx tsc --noEmit');
+  });
+
+  it('returns nothing for a project with no checks (a normal answer)', () => {
+    expect(detectAvailableChecks(root)).toEqual([]);
+  });
+
+  it('never throws on an unreadable package.json', () => {
+    writeFileSync(join(root, 'package.json'), 'not json at all', 'utf-8');
+    expect(() => detectAvailableChecks(root)).not.toThrow();
+  });
+
+  it('NAMES the strongest check in the nudge (the whole point)', () => {
+    withPkg({ test: 'vitest run', build: 'tsc' });
+    const nudge = verificationNudgeFor(root, ['script.js']);
+    expect(nudge).toContain('npm test');
+    expect(nudge).toContain('script.js');
+    // The parse-check exclusion stays explicit, so `node -c` is never the answer.
+    expect(nudge).toContain('node --check');
+    expect(nudge).toMatch(/do not count/);
+  });
+
+  it('directs to a REAL RUN when the project has no check to run', () => {
+    const nudge = verificationNudgeFor(root, ['script.js']);
+    expect(nudge).toMatch(/No test, typecheck or build command/);
+    expect(nudge).toMatch(/REAL RUN/);
+    expect(nudge).toMatch(/do NOT claim/);
+  });
+
+  it('offers at most three checks — an unbounded list is noise', () => {
+    withPkg({ test: 'a', typecheck: 'b', build: 'c', lint: 'd', check: 'e' });
+    const listed = verificationNudgeFor(root, []).split('\n').filter((l) => /^  \d\./.test(l));
+    expect(listed).toHaveLength(3);
   });
 });

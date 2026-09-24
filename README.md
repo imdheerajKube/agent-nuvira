@@ -51,7 +51,7 @@ agent-nuvira config list
 > (generated from the live CLI tree, drift-guarded in CI).
 >
 > 🎬 **[Watch the CLI tour → docs/demos/nuvira-cli-tour.cast](docs/demos/nuvira-cli-tour.cast)**
-> A reproducible asciinema recording of a 22-command sweep across the whole
+> A reproducible asciinema recording of a 21-command sweep across the whole
 > surface — every line captured from the live CLI, with private paths and
 > secrets redacted. Regenerate it with `npm run demo:cli`
 > (see [docs/demos/README.md](docs/demos/README.md)).

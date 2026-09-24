@@ -119,6 +119,35 @@ export interface ToolContext {
    * its original confirm-or-refuse behaviour exactly.
    */
   authorizationRequest?: string;
+  /**
+   * The approved INTENT ENVELOPE for this conversation — the durable, scoped
+   * grant that replaced per-action permission (see
+   * `learning/intent-envelope.ts`).
+   *
+   * `writesAuthorized` answers "does the last message ask for files?" and is
+   * recomputed every turn, so it forgets an approval the moment the next
+   * message arrives. The envelope does not: it is granted once (a directive
+   * request, or — the high-trust path — the user approving a plan) and lives
+   * for the conversation, so inside it reversible work executes with no
+   * prompt while `external` and `destructive` actions still ask.
+   *
+   * Absent/`null` (no loop, a direct tool call, a test) keeps every gate's
+   * original confirm-or-refuse behaviour exactly.
+   */
+  envelope?: import('../learning/intent-envelope.js').IntentEnvelope | null;
+  /**
+   * The run's OWN behaviour — every question asked, every refusal, every
+   * mutation — so a gate can refuse to RE-ASK a question the user already
+   * answered (see `learning/run-trace.ts`).
+   *
+   * The envelope answers "what may I do"; the trace answers "what have I been
+   * doing". Without it the loop could not notice its own repetition (nothing
+   * counted it), could not stop it, and could not answer the user asking why it
+   * was repeating — the three failures of the live audit, which are one failure.
+   *
+   * Absent (a direct tool call, a test) keeps every gate's original behaviour.
+   */
+  runTrace?: import('../learning/run-trace.js').RunTrace;
   /** Emit an event on the observability bus (for pipeline runs). */
   emit?: (event: string, data: unknown, source?: string) => void;
   /** LLM call fn for C2 verify (resolved provider already chosen). */
@@ -687,6 +716,35 @@ registerTool({
   endsAgentStep: false,
   run: async (args, ctx) => {
     const { question, choices, multi_select } = askUserSchema.parse(args);
+    // ── Stage 2: REPETITION gate — never re-ask a question already answered ──
+    // Checked FIRST, before the authorization suppression below, because asking
+    // the same question twice is a defect on its own terms whatever the request
+    // authorized. The evidence is the RUN TRACE, not the current text: the
+    // question is compared to every question the agent has already asked in this
+    // conversation, and a repeat is refused with the answer the user gave.
+    //
+    // This is the mechanism the live audit lacked. A turn asked four variants of
+    // "may I run `node -c script.js`?" and nothing in the system held the fact
+    // that it had asked before, so it could not stop, and could not answer the
+    // user asking why it kept asking. Irreversible choices are exempt: "which of
+    // these two files should I delete?" is a genuine new decision each time.
+    const priorAsks = ctx.runTrace?.priorAskMatches(question) ?? [];
+    if (priorAsks.length > 0 && !IRREVERSIBLE_ACTION_RE.test(question)) {
+      const answer = ctx.runTrace?.priorAnswer(question);
+      ctx.runTrace?.recordAsk(question, false, answer);
+      ctx.emit?.('autonomy:repeat-suppressed', {
+        question,
+        times: priorAsks.length + 1,
+        answer,
+      }, 'tool-loop');
+      return (
+        `Not shown to the user: you have already asked this ${priorAsks.length === 1 ? 'once' : `${priorAsks.length} times`} in this conversation` +
+        (answer ? `, and they answered "${answer}"` : '') +
+        '. Do NOT ask it again — the answer you have is the answer. Act on it, or state plainly ' +
+        'what blocks you. If something genuinely NEW has appeared that the user has not seen, ask ' +
+        'about THAT new thing instead of re-asking this.'
+      );
+    }
     // ── G13: do not round-trip a permission question the ask already answered ─
     // Over a chat surface (WhatsApp/Telegram) an ask_user call is a MESSAGE to
     // the user, so a reflexive "Do you want me to create the full project
@@ -699,20 +757,28 @@ registerTool({
     // irreversible action (overwrite, delete, publish, deploy, send, pay…) is
     // passed straight through, because that decision IS the user's.
     if (
-      ctx.writesAuthorized?.authorized === true &&
+      (ctx.writesAuthorized?.authorized === true || Boolean(ctx.envelope)) &&
       detectPermissionSeeking(question) &&
       !IRREVERSIBLE_ACTION_RE.test(question)
     ) {
       const recommended = choices[0]?.label ?? '';
+      // Read the authorizer from whichever one is live, so the audit line names
+      // the real reason ("the user approved this plan" reads very differently
+      // from "this message asked for files").
+      const authorization = ctx.envelope
+        ? `approved envelope: ${ctx.envelope.goal} (${ctx.envelope.source})`
+        : (ctx.writesAuthorized?.reason ?? 'the request authorized this work');
       ctx.emit?.('autonomy:consult-suppressed', {
         question,
-        authorization: ctx.writesAuthorized.reason,
+        authorization,
       }, 'tool-loop');
+      ctx.runTrace?.recordAsk(question, false);
       return (
-        'Not shown to the user: their request already authorized this work, and this is a ' +
-        'permission question about doing it. Decide it yourself and continue.\n' +
+        'Not shown to the user: their request or approved plan already authorized this work, ' +
+        'and this is a permission question about doing it. Decide it yourself and continue.\n' +
         (recommended ? `Recommended default: "${recommended}".\n` : '') +
         'Carry the work out now and state the decision in your answer so the user can redirect. ' +
+        'Do NOT ask again for the same work — the answer is already yes. ' +
         'Only if the choice is genuinely theirs — it cannot proceed without an answer, is ' +
         'high-impact and irreversible, and has no sensible default — re-call ask_user naming ' +
         'that specific irreversible choice (e.g. whether to overwrite an existing file).'
@@ -721,6 +787,10 @@ registerTool({
     const render = ctx.askUser || (await import('./ask-user.js')).renderAskUser;
     const answer = await render(question, choices, multi_select);
     const picked = Array.isArray(answer.answer) ? answer.answer.join(', ') : answer.answer;
+    // Recorded SHOWN and with the answer, so the trace can hand both back when
+    // the agent tries to ask it a second time (and so a self-report can say what
+    // the user actually replied, instead of "asked 4×, no answer recorded").
+    ctx.runTrace?.recordAsk(question, true, picked);
     return `User answered: ${picked}${answer.custom ? ` (custom: ${answer.custom})` : ''}`;
   },
 });

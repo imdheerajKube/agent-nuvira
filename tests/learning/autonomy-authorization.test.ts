@@ -38,6 +38,24 @@ describe('requestAuthorizesWrites', () => {
       'a directive verb on existing work names no artifact at all — the noun list must not be the only way in',
     ],
     ['update the parser to handle unicode paths', 'directive verb, no artifact noun'],
+    // ── The live regression: a question AND a directive in one message ────────
+    // Verbatim from session f624a182, turn 38. The message OPENS with an
+    // analysis word ("why"), which used to veto the whole turn — switching off
+    // the autonomy gates and producing four permission prompts for a syntax
+    // check. A complaint about repeated questions therefore caused them. The
+    // directive clause is the authorization; the question is commentary.
+    [
+      'why are you asking me this again and again ? 🤔 Apply a safe expression parser ' +
+        '(supporting parentheses, advanced functions, and a degree/radian toggle) by ' +
+        'updating script.js — replace calculate & scientific functions',
+      'a leading question must not de-authorize the directive that follows it',
+    ],
+    ['why is the converter broken? fix it and add a regression test', 'question clause + directive clause'],
+    ['Remove the old parser. How is the build configured?', 'directive clause first, question after'],
+    // Verb INFLECTIONS are the same evidence as the base form — "updating" and
+    // "created" are how people actually write, and `\bupdate\b` missed them.
+    ['updating the converter styles', 'inflected directive verb'],
+    ['fixing the divide-by-zero path', 'inflected maintenance verb'],
   ];
 
   for (const [request, why] of authorized) {
@@ -52,7 +70,8 @@ describe('requestAuthorizesWrites', () => {
     ['explain how to create a file in node', 'analysis opener + create verb must NOT authorize'],
     ['how do I write a story to a file?', 'analysis opener'],
     ['compare vite and webpack', 'analysis opener'],
-    ['why is the build failing?', 'analysis opener'],
+    ['why is the build failing?', 'a question with no directive clause stays a question'],
+    ['how do I update the parser?', 'analysis opener + directive verb is still a question'],
     ['read the story and tell me what you think', 'no creation verb'],
     ['thanks, that looks great', 'no request at all'],
   ];

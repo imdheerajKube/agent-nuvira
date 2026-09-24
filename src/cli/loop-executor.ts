@@ -127,6 +127,13 @@ export interface LoopExecutorResult {
   traceId?: string;
   /** G18 — refusals recorded this turn (declined calls), for the CLI summary. */
   refusals?: number;
+  /**
+   * Stage 2 — the turn's own behaviour, as counts (see learning/run-trace.ts).
+   * Carried because "did the agent do the task WITHOUT stopping to ask" is a
+   * property of the run that no hidden test can observe: a task can pass every
+   * test and still have interrupted the user four times.
+   */
+  runTrace?: import('../learning/run-trace.js').RunTraceSnapshot;
   /** G18 — gate decisions recorded this turn (nudges spent, bounds reached). */
   gateDecisions?: number;
 }
@@ -828,6 +835,7 @@ export async function runLoopExecutor(
       traceId,
       refusals: recorded.refusals,
       gateDecisions: recorded.gateDecisions,
+      ...(result.runTrace ? { runTrace: result.runTrace } : {}),
     };
   } catch (err) {
     endTrace(traceId, false, { kind: 'failed', tools: [] });

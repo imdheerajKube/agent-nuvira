@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Isolate persistence from the real ~/.nuvira store: eval-framework's EVAL_PATH
@@ -466,6 +466,63 @@ describe('computeEvalSummary', () => {
     // One task had failures and recovered → recoveryRate 0.5
     expect(s.recoveryRate).toBe(0.5);
     expect(s.avgCompositeScore).toBe((results[0].compositeScore + results[1].compositeScore) / 2);
+  });
+});
+
+/**
+ * Stage 2 — the INTERRUPTION metric.
+ *
+ * Completion and test-pass cannot see the reported defect: a task can pass every
+ * hidden test and still have stopped to ask the user four times. This measures
+ * the count directly, from the run trace the loop now reports, so the intent-
+ * envelope / run-trace work is judged by BEHAVIOUR rather than by tests passing.
+ */
+describe('permission-asks per completed task', () => {
+  it('ships the task that motivated the metric, with a zero budget', () => {
+    const task = getEvalTask('loop-autonomy-multistep');
+    expect(task).toBeDefined();
+    // ZERO is the assertion: a fully-specified task must not interrupt at all.
+    expect(task!.maxPermissionAsks).toBe(0);
+    expect(task!.hiddenTests.length).toBeGreaterThan(0);
+  });
+
+  it('the goal is COMPLETE — otherwise it would measure judgment, not autonomy', () => {
+    const task = getEvalTask('loop-autonomy-multistep')!;
+    // The file, the requirements, the test to write and the command to run are
+    // all named, so "did it need to ask?" has one honest answer: no.
+    expect(task.goal).toContain('math.js');
+    expect(task.goal).toContain('subtract');
+    expect(task.goal).toContain('test.js');
+  });
+
+  it('is observable: the metric is recorded when the loop reports it', () => {
+    const im = makeMetrics({ permissionAsks: 4, completed: true, testPassed: true } as Partial<EvalMetrics>);
+    expect(im.permissionAsks).toBe(4);
+  });
+
+  it('averages only the runs that REPORTED it — a pipeline 0 is not an improvement', () => {
+    const withAsks = makeResult({ taskId: 'asks', metrics: makeMetrics({ permissionAsks: 4 }) });
+    const noReport = makeResult({ taskId: 'pipeline', metrics: makeMetrics({}) });
+    expect(computeEvalSummary([withAsks, noReport]).avgPermissionAsks).toBe(4);
+  });
+
+  it('is zero when nothing reported it', () => {
+    expect(computeEvalSummary([makeResult({ taskId: 'a', metrics: makeMetrics({}) })]).avgPermissionAsks).toBe(0);
+    expect(computeEvalSummary([]).avgPermissionAsks).toBe(0);
+  });
+
+  it('does NOT silently change the composite score — it is reported, not weighted', () => {
+    // A weight added here would move every historical score and make an
+    // unrelated regression look like an autonomy regression. The metric is
+    // surfaced for comparison first; it can be weighted once it has a baseline.
+    const clean = makeMetrics({ testPassed: true, completed: true });
+    const noisy = makeMetrics({
+      testPassed: true,
+      completed: true,
+      permissionAsks: 9,
+      asksPerCompletedTask: 9,
+    } as Partial<EvalMetrics>);
+    expect(scoreEvalMetrics(noisy)).toBe(scoreEvalMetrics(clean));
   });
 });
 
@@ -997,5 +1054,115 @@ describe('clearEvals', () => {
       const data = JSON.parse(readFileSync(evalPath, 'utf-8'));
       expect(data.runs).toEqual([]);
     }
+  });
+});
+
+// ─── js-display-state-trace-fix — the state-trace bug-fix task ───────────────
+//
+// The 2026-09-23 finding: asked to "review the code for correctness bugs", the
+// agent read the file, cited lines on BOTH sides of the defect, and reported
+// only cosmetics. This task is how that regression is caught, so its verifier
+// must be BEHAVIOURAL. A verifier that greps a report, or that only checks the
+// buggy call was deleted, would score a non-fix as a pass.
+
+describe('js-display-state-trace-fix — measures the state-trace fix', () => {
+  const TASK_ID = 'js-display-state-trace-fix';
+  const workspaces: string[] = [];
+
+  afterEach(() => {
+    while (workspaces.length > 0) {
+      const dir = workspaces.pop();
+      if (dir) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  const scaffold = (): string => {
+    const task = getEvalTask(TASK_ID);
+    expect(task, `${TASK_ID} must exist in the eval set`).toBeDefined();
+    const dir = scaffoldWorkspace(task as EvalTask);
+    workspaces.push(dir);
+    return dir;
+  };
+
+  const run = (dir: string) => runHiddenTest(dir, 'node verify-behavior.js');
+  const readSrc = (dir: string) => readFileSync(join(dir, 'script.js'), 'utf-8');
+
+  /** The fix a state trace leads to: evaluate the expression, THEN apply. */
+  const FIXED_SCIENTIFIC = [
+    'function scientific(func) {',
+    '  const display = document.getElementById("calc-display");',
+    '  const expression = display.value.trim();',
+    '  if (!expression) return;',
+    '  let val;',
+    '  try {',
+    '    val = new Function("return (" + expression + ")")();',
+    '  } catch {',
+    '    display.value = "Error";',
+    '    return;',
+    '  }',
+    '  if (!Number.isFinite(val)) { display.value = "Error"; return; }',
+    '  switch (func) {',
+    '    case "sin": display.value = Math.sin(val).toFixed(8); break;',
+    '    case "cos": display.value = Math.cos(val).toFixed(8); break;',
+    '    case "sqrt": display.value = val < 0 ? "Error" : Math.sqrt(val).toFixed(8); break;',
+    '    default: break;',
+    '  }',
+    '}',
+  ].join('\n');
+
+  /** Swap the fixture's scientific() for `replacement`, keeping the rest. */
+  const applyFix = (dir: string, replacement: string) => {
+    const src = readSrc(dir);
+    const start = src.indexOf('// Applies a scientific function');
+    expect(start, 'the fixture still exposes the buggy scientific()').toBeGreaterThan(-1);
+    writeFileSync(join(dir, 'script.js'), src.slice(0, start) + replacement + '\n', 'utf-8');
+  };
+
+  it('ships the real defect with no giveaway comment', () => {
+    const dir = scaffold();
+    const src = readSrc(dir);
+    expect(src).toContain('parseFloat(display.value)');
+    // The state trace must be what finds it — a "// BUG:" comment would make
+    // the task measure comment-reading instead.
+    expect(src.toUpperCase()).not.toContain('BUG');
+    const task = getEvalTask(TASK_ID) as EvalTask;
+    expect(task.category).toBe('bug-fix');
+    expect(task.loopOnly).toBeUndefined();
+  });
+
+  it('FAILS on the unmodified fixture — the verifier really detects the bug', () => {
+    const dir = scaffold();
+    const r = run(dir);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.output).toContain('sin operates on the expression result');
+  });
+
+  it('fails a naive fix that still never applies the function', () => {
+    const dir = scaffold();
+    // The obvious edit: swap parseFloat for Number. "5+5" is NaN, so the
+    // function bails out and sin is never applied — still wrong.
+    applyFix(
+      dir,
+      [
+        'function scientific(func) {',
+        '  const display = document.getElementById("calc-display");',
+        '  const val = Number(display.value);',
+        '  if (isNaN(val)) return;',
+        '  if (func === "sin") display.value = Math.sin(val).toFixed(8);',
+        '}',
+      ].join('\n'),
+    );
+    const r = run(dir);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.output).toContain('sin operates on the expression result');
+  });
+
+  it('passes the fix a state trace leads to', () => {
+    const dir = scaffold();
+    applyFix(dir, FIXED_SCIENTIFIC);
+    const r = run(dir);
+    expect(r.output).toBeTruthy();
+    expect(r.exitCode).toBe(0);
+    expect(r.output).toContain('ALL TESTS PASSED');
   });
 });
