@@ -79,6 +79,11 @@ issues/
 # artifact linked from README.md, and its README documents how to play and
 # regenerate it — both must be tracked or the README link 404s.
 !docs/demos/README.md
+# The full-sweep cast is a LOCAL verification artifact (docs/demos/README.md: "generated
+# on demand, not committed") — ~214 KB rebuilt on every `demo:cli:all`. Without this it
+# shows up as untracked noise after a regeneration and is one `git add -A` from being
+# committed, which the README says it is not.
+docs/demos/nuvira-commands-all.cast
 # The default skill registry (.agents/skills/) — SKILL.md files are CODE
 # artifacts served by the registry, not user docs. Generated + committed via
 # scripts/sync-hub-skills.mjs so the configured default registry resolves.

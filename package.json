@@ -1,6 +1,6 @@
 {
   "name": "agent-nuvira",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "description": "Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter)",
   "type": "module",
   "main": "dist/index.js",
@@ -34,7 +34,7 @@
     "prepack": "npm run build",
     "prepublishOnly": "npm run build && npm test",
     "verify:commands": "node scripts/verify-commands.mjs",
-    "demo:cli": "node scripts/generate-cli-demo.mjs",
+    "demo:cli": "node scripts/generate-cli-demo.mjs --only highlight",
     "demo:cli:all": "node scripts/generate-cli-demo.mjs --only all"
   },
   "keywords": [
