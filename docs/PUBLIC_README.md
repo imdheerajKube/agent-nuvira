@@ -9,17 +9,17 @@ Plans, writes, reviews, tests and publishes code — from your terminal, a dashb
 or any of 22 messaging platforms. Local models or cloud APIs, bring your own keys.</p>
 
 <p align="center">
-  <a href="https://docs.agent-nuvira.com/"><b>📖 Documentation</b></a>
+  <a href="docs/index.md"><b>📖 Documentation</b></a>
   &nbsp;·&nbsp;
-  <a href="https://docs.agent-nuvira.com/user-manual/">User Manual</a>
+  <a href="docs/user-manual.md">User Manual</a>
   &nbsp;·&nbsp;
-  <a href="https://docs.agent-nuvira.com/capabilities/">Capabilities</a>
+  <a href="docs/capabilities.md">Capabilities</a>
   &nbsp;·&nbsp;
-  <a href="https://docs.agent-nuvira.com/commands/">Commands</a>
+  <a href="docs/commands.md">Commands</a>
   &nbsp;·&nbsp;
-  <a href="https://docs.agent-nuvira.com/architecture/">Architecture</a>
+  <a href="docs/architecture.md">Architecture</a>
   &nbsp;·&nbsp;
-  <a href="https://docs.agent-nuvira.com/demos/">CLI tour</a>
+  <a href="docs/demos/index.md">CLI tour</a>
 </p>
 
 <p align="center">
@@ -121,7 +121,7 @@ interface that does not exist.
 
 <p align="center">
   <b>MIT licensed</b> · Built by Dheeraj Sharma<br>
-  <a href="https://docs.agent-nuvira.com/">Documentation</a>
+  <a href="docs/index.md">Documentation</a>
   &nbsp;·&nbsp;
   <a href="https://github.com/imdheerajKube/agent-nuvira-documentation/issues">Issues</a>
 </p>

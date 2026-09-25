@@ -33,6 +33,7 @@ import {
 import { join, resolve, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -49,6 +50,17 @@ const OUT = resolve(
 );
 
 const README_URL = 'https://github.com/imdheerajKube/agent-nuvira-documentation';
+
+/**
+ * The marketing site, published with the docs so its deploy runs for free.
+ *
+ * agent-nuvira.com is served by a Cloudflare Pages project wired to this public
+ * repository through Cloudflare's GitHub App, with `website/` as the output
+ * directory and no build command at all. A push is therefore the deploy: no
+ * Actions workflow and no repository secrets are involved, which matters
+ * because the private repo's metered Actions will not start jobs.
+ */
+const WEBSITE_SRC = resolve(repoRoot, 'website');
 
 /**
  * The one place the public site's address is defined.
@@ -507,8 +519,10 @@ nuvira chat "explain what this project does"
 
 Requires Node **>= 18.18.0**.
 
-- Source (private): [github.com/imdheerajKube/agent-nuvira](https://github.com/imdheerajKube/agent-nuvira)
-- This documentation: [${README_URL.replace('https://', '')}](${README_URL})
+- This repository: [${README_URL.replace('https://', '')}](${README_URL})
+
+> There is no public source repository. The site and this page are the published surface;
+> issues and corrections are welcome here.
 `;
 }
 
@@ -619,6 +633,71 @@ validation:
 copyright: MIT License · Copyright (c) 2026 Dheeraj Sharma
 `;
 
+/**
+ * The marketing site's deploy workflow, published into the documentation
+ * repository alongside the site itself.
+ *
+ * WHY IT LIVES HERE. The private repository cannot run it: its Actions are
+ * metered and currently refuse to start jobs at all, while a public
+ * repository's Actions are free. So the site travels with the docs, and a push
+ * here is what puts it live.
+ *
+ * WHY NOT THE CLOUDFLARE GIT INTEGRATION. A `source: github` Pages project can
+ * be created against this repository and it will build when asked, but pushes
+ * to main never produce a deployment — Cloudflare does not react to the push at
+ * all. So the Git integration cannot be the thing that ships the site; an
+ * explicit upload from this workflow is the mechanism that actually fires.
+ *
+ * Prerequisites (repository secrets):
+ *   CLOUDFLARE_API_TOKEN   "Cloudflare Pages: Edit" on the account below
+ *   CLOUDFLARE_ACCOUNT_ID  7bfea81d4bfe569521359bb90b608ff4
+ */
+const WEBSITE_WORKFLOW = `name: Deploy website
+
+on:
+  push:
+    branches: [main]
+    # Only the site matters here, not the documentation pages beside it.
+    paths:
+      - 'website/**'
+      - '.github/workflows/deploy-website.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the Cloudflare credentials are configured
+        env:
+          CF_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CF_TOKEN" ] || [ -z "$CF_ACCOUNT" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID are not set."
+            echo "Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+      # No build step: website/ is already the artifact, and it is the version
+      # the generator writes (with content-hashed CSS and JS URLs). Cloudflare
+      # serves it as-is.
+      - name: Deploy website to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy website --project-name agent-nuvira --commit-dirty=true
+`;
+
 const PAGES_WORKFLOW = `name: Publish docs
 
 # The docs site is a pure render of this repository. Code never enters this
@@ -647,6 +726,18 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: mkdocs build
+
+      # docs.agent-nuvira.com is served by a Cloudflare Pages project. Its Git
+      # integration does not build on push, so the rendered site is uploaded
+      # from here instead — the same build that feeds GitHub Pages, which is
+      # kept only because it redirects github.io to the live address.
+      - name: Publish to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy site --project-name agent-nuvira-docs --commit-dirty=true
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -758,6 +849,7 @@ const GENERATED = [
   },
   { to: 'requirements.txt', content: () => REQUIREMENTS },
   { to: '.github/workflows/pages.yml', content: () => PAGES_WORKFLOW },
+  { to: '.github/workflows/deploy-website.yml', content: () => WEBSITE_WORKFLOW },
   { to: '.gitignore', content: () => GITIGNORE },
 ];
 
@@ -864,6 +956,68 @@ for (const { to, content } of GENERATED) {
   writeFileSync(dest, retargetSiteUrls(scrub(content())), 'utf8');
   written.push(to);
 }
+
+/**
+ * Copy a directory verbatim.
+ *
+ * The marketing site is copied, never transformed: it is already a public
+ * artifact (the whole point of it is being served to strangers), so there is
+ * nothing to scrub, and running HTML through the markdown link fixer would
+ * corrupt it.
+ */
+function copyDir(from, to) {
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    if (entry.name === '.DS_Store') continue;
+    const src = join(from, entry.name);
+    const dest = join(to, entry.name);
+    if (entry.isDirectory()) copyDir(src, dest);
+    else writeFileSync(dest, readFileSync(src));
+  }
+}
+
+/**
+ * Tag the stylesheet and script with their own content hash.
+ *
+ * agent-nuvira.com sits behind a zone whose Browser Cache TTL is four hours,
+ * and that setting wins over anything the `_headers` file says — so a browser
+ * that loaded the site just before a stylesheet change keeps the old sheet for
+ * hours afterwards and renders the page with the previous layout. Purging is
+ * not available to this toolchain, so the only reliable lever is the URL: a
+ * changed stylesheet becomes a different cache key and the stale copy is simply
+ * never asked for again.
+ *
+ * Only the bare `="styles.css"` / `="script.js"` references are rewritten, so
+ * this cannot stack a second query string on a re-run, and nothing under
+ * `assets/` is touched.
+ */
+function versionAssets(dir) {
+  const stamp = (name) => {
+    const file = join(dir, name);
+    return existsSync(file)
+      ? createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 12)
+      : null;
+  };
+  const assets = { 'styles.css': stamp('styles.css'), 'script.js': stamp('script.js') };
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.html')) continue;
+    const file = join(dir, entry.name);
+    let html = readFileSync(file, 'utf8');
+    for (const [name, hash] of Object.entries(assets)) {
+      if (hash) html = html.replaceAll(`="${name}"`, `="${name}?v=${hash}"`);
+    }
+    writeFileSync(file, html, 'utf8');
+  }
+}
+
+if (!existsSync(WEBSITE_SRC)) {
+  console.error('✗ missing source directory: website/');
+  process.exit(1);
+}
+const WEBSITE_OUT = join(OUT, 'website');
+copyDir(WEBSITE_SRC, WEBSITE_OUT);
+versionAssets(WEBSITE_OUT);
+written.push('website/**');
 
 const findings = audit(OUT);
 console.log(`✓ wrote ${written.length} file(s) to ${OUT}`);
