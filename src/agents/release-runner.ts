@@ -34,7 +34,7 @@ import { existsSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { stripTestUnsafeEnv } from '../config/live-credentials.js';
+import { TEST_UNSAFE_ENV_KEYS, stripTestUnsafeEnv } from '../config/live-credentials.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -107,10 +107,25 @@ function tail(text: string, max = 300): string {
  * Measured on the release that surfaced this: 7 files and 25 timeouts, none of
  * them named by the pipeline.
  */
-export function testFailureDigest(output: string): string {
-  // vitest colours the `FAIL` marker, so the escape sequences sit BETWEEN the
-  // marker and the path and a plain match finds nothing. Measured: the first
-  // version of this digest reported the failure kind and named no file at all.
+export interface TestFailureShape {
+  /** The failing test files vitest reported, deduped. */
+  files: string[];
+  /** The failure signatures found, e.g. `Test timed out in 15000ms`. */
+  kinds: string[];
+  /**
+   * EVERY failure was a timeout. Worth its own flag because a timeout is a claim
+   * about scheduling or a live network path, not about the code — it is the
+   * difference between "the work is broken" and "the machine or the environment
+   * was". A release must not be graded on the second by accident.
+   */
+  timeoutsOnly: boolean;
+}
+
+/** Read what failed out of a vitest run, in a form a caller can act on. */
+export function testFailureShape(output: string): TestFailureShape {
+  // vitest colours the `FAIL` marker, so escape sequences sit BETWEEN the marker
+  // and the path and a plain match finds nothing. Measured: the first version of
+  // this digest named the failure kind and no file at all.
   const clean = output.replace(/\u001B\[[0-9;]*[A-Za-z]/g, '');
 
   const files = [
@@ -127,12 +142,30 @@ export function testFailureDigest(output: string): string {
     ),
   ];
 
+  const notTimeouts = kinds.filter((kind) => !/timed out|Timed out/.test(kind));
+  return { files, kinds, timeoutsOnly: kinds.length > 0 && notTimeouts.length === 0 };
+}
+
+/**
+ * The digest a failed Test Verification reports: which files, what kind, and
+ * whether the shape is the one that means "re-run before blaming the code".
+ */
+export function testFailureDigest(output: string, context?: string): string {
+  const { files, kinds, timeoutsOnly } = testFailureShape(output);
   const lines: string[] = [];
+
   if (files.length > 0) {
     const shown = files.slice(0, 10).join(', ');
     lines.push(`${files.length} failing file(s): ${shown}${files.length > 10 ? `, +${files.length - 10} more` : ''}`);
   }
   if (kinds.length > 0) lines.push(`failure kinds: ${kinds.slice(0, 6).join('; ')}`);
+  if (timeoutsOnly) {
+    lines.push(
+      'every failure is a TIMEOUT: a timeout is about scheduling or a live network path, not an ' +
+        'assertion — re-run before treating this as a code regression',
+    );
+  }
+  if (context) lines.push(context);
   return lines.join('\n');
 }
 
@@ -239,14 +272,58 @@ export async function runTestsPhase(): Promise<PhaseRunOutcome> {
   // that same environment to `npm test` — so tests conditioned on a provider key
   // woke up and took real network paths, and Phase 1 failed on the operator's
   // shell rather than on the code. See `src/config/live-credentials.ts`.
+  // What the suite is NOT being told, reported on failure so the operator can
+  // rule the environment in or out instead of re-deriving it.
+  const withheld = TEST_UNSAFE_ENV_KEYS.filter((key) => process.env[key] !== undefined);
+  const withheldNote = withheld.length
+    ? `note: ${withheld.length} credential(s) were withheld from the suite (${withheld.slice(0, 5).join(', ')}${withheld.length > 5 ? ', …' : ''}), so a live-credential cause is already ruled out`
+    : undefined;
+
+  const startedAt = Date.now();
   const result = run('npm test', 1_800_000, undefined, stripTestUnsafeEnv());
+
   if (!result.ok) {
-    const digest = testFailureDigest(result.output);
-    const files = /^(\d+) failing file/.exec(digest)?.[1];
+    const shape = testFailureShape(result.output);
+    const firstRunMs = Date.now() - startedAt;
+
+    // RETRY ONCE, and only for the signature that means "reproduce before you
+    // conclude": every failure a timeout, on a run short enough that a second
+    // one stays cheap (10 minutes). This is the judgement a human makes by hand
+    // after a timing-shaped failure — re-run it — and a pipeline that grades a
+    // release without it reports flakes as regressions. A timeout-only failure
+    // that REPEATS is reported as real, with both attempts named.
+    if (shape.timeoutsOnly && shape.files.length > 0 && firstRunMs < 600_000) {
+      const retry = run('npm test', 1_800_000, undefined, stripTestUnsafeEnv());
+      if (retry.ok) {
+        const passed = retry.output.match(/Tests\s+.*?(\d+)\s+passed/);
+        return {
+          success: true,
+          summary:
+            `Tests passed on retry (${passed ? passed[1] : 'all'} passing) — the first run had ` +
+            `${shape.files.length} timeout-only failure(s), which did not reproduce`,
+          details: tail(retry.output, 800),
+        };
+      }
+      return {
+        success: false,
+        summary: 'Test suite failed twice, timeouts only',
+        error: [
+          testFailureDigest(result.output, withheldNote),
+          'the retry failed the same way, so treat it as real',
+          tail(retry.output, 400),
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      };
+    }
+
+    const files = shape.files.length;
     return {
       success: false,
       summary: files ? `Test suite failed (${files} file(s))` : 'Test suite failed',
-      error: [digest, tail(result.output, 400)].filter(Boolean).join('\n'),
+      error: [testFailureDigest(result.output, withheldNote), tail(result.output, 400)]
+        .filter(Boolean)
+        .join('\n'),
     };
   }
 
@@ -350,8 +427,23 @@ export async function runVersionBumpPhase(bumpType: BumpType = 'patch'): Promise
  * packages by name so the message is actionable rather than "package.json
  * changed".
  */
+const DEP_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
+
+/** The dependency sections of a parsed manifest, as one `section::name` set. */
+function dependencySet(manifest: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const section of DEP_SECTIONS) {
+    const bag = manifest[section];
+    if (!bag || typeof bag !== 'object') continue;
+    for (const [name, range] of Object.entries(bag as Record<string, unknown>)) {
+      out[`${section}::${name}`] = String(range);
+    }
+  }
+  return out;
+}
+
 export function dependencyDelta(cwd = process.cwd()): string[] {
-  const sections = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
+  const sections = DEP_SECTIONS;
   const local = readManifest(cwd);
   if (!local) return [];
 
@@ -376,6 +468,90 @@ export function dependencyDelta(cwd = process.cwd()): string[] {
     }
   }
   return changes.sort();
+}
+
+/**
+ * Which dependencies moved in a NESTED manifest — staged content vs HEAD's.
+ *
+ * `null` means NO CLAIM CAN BE MADE: the staged content cannot be read, the file
+ * is new (there is no HEAD side), or it is not JSON. A caller must treat `null`
+ * as unverifiable rather than as "nothing moved" — this guard exists so a
+ * dependency cannot enter a tagged release unseen, and "I could not read it" is
+ * not "it is fine".
+ */
+export function nestedDependencyDelta(path: string, cwd = process.cwd()): string[] | null {
+  const staged = run(`git show :"${path}"`, 20_000, cwd);
+  const head = run(`git show "HEAD:${path}"`, 20_000, cwd);
+  if (!staged.ok || !head.ok) return null;
+
+  let before: Record<string, unknown>;
+  let after: Record<string, unknown>;
+  try {
+    before = JSON.parse(head.output) as Record<string, unknown>;
+    after = JSON.parse(staged.output) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (!before || !after || typeof before !== 'object' || typeof after !== 'object') return null;
+
+  const b = dependencySet(before);
+  const a = dependencySet(after);
+  const changes: string[] = [];
+  for (const key of new Set([...Object.keys(b), ...Object.keys(a)])) {
+    if (b[key] === a[key]) continue;
+    const [section, name] = key.split('::');
+    if (!(key in b)) changes.push(`+${name} (${section})`);
+    else if (!(key in a)) changes.push(`-${name} (${section})`);
+    else changes.push(`~${name} ${b[key]} → ${a[key]} (${section})`);
+  }
+  return changes.sort();
+}
+
+export interface NestedManifestVerdict {
+  /** Dependency edits the guard can name, as `<path>: +pkg (section)`. */
+  moved: string[];
+  /** Manifests it can make no claim about: new, deleted, unreadable, or a lockfile. */
+  unverifiable: string[];
+}
+
+/**
+ * Decide what a release commit should do about the nested manifests it carries.
+ *
+ * WHY IT IS NOT "refuse every nested manifest edit". That was the first version,
+ * and it produced a FALSE POSITIVE the first time it ran for real: three
+ * sub-package manifests (`packages/sdk`, `src/agent-sdk`, `vscode-extension`)
+ * whose entire diff was a `repository` / `homepage` URL pointing at the new docs
+ * repo. No dependencies moved, yet the release could not be completed without
+ * `NUVIRA_ALLOW_DEP_CHANGES=1` — and an override that gets used on a false alarm
+ * is an override that stops meaning anything. A URL edit and a dependency edit
+ * are distinguishable, so the guard distinguishes them and keeps its teeth for
+ * the case it was built for.
+ *
+ * Lockfiles stay unverifiable on purpose: `yarn.lock`, `pnpm-lock.yaml` and
+ * `bun.lock` are not JSON, and a nested lockfile only moves when its sibling's
+ * dependencies do.
+ */
+export function evaluateNestedManifests(
+  paths: string[],
+  deltaOf: (path: string) => string[] | null,
+): NestedManifestVerdict {
+  const moved: string[] = [];
+  const unverifiable: string[] = [];
+
+  for (const path of paths) {
+    if (!path.endsWith('package.json')) {
+      unverifiable.push(path);
+      continue;
+    }
+    const delta = deltaOf(path);
+    if (delta === null) {
+      unverifiable.push(path);
+      continue;
+    }
+    moved.push(...delta.map((entry) => `${path}: ${entry}`));
+  }
+
+  return { moved, unverifiable };
 }
 
 /**
@@ -470,15 +646,31 @@ export async function runGitPhase(): Promise<PhaseRunOutcome> {
   const nestedManifests = stagedPaths.filter(
     (p) => !ROOT_MANIFESTS.has(p) && NESTED_MANIFEST_RE.test(p),
   );
-  if (nestedManifests.length > 0 && process.env.NUVIRA_ALLOW_DEP_CHANGES !== '1') {
+  const nestedVerdict =
+    nestedManifests.length > 0
+      ? evaluateNestedManifests(nestedManifests, (path) => nestedDependencyDelta(path))
+      : { moved: [], unverifiable: [] };
+
+  if (
+    (nestedVerdict.moved.length > 0 || nestedVerdict.unverifiable.length > 0) &&
+    process.env.NUVIRA_ALLOW_DEP_CHANGES !== '1'
+  ) {
+    const findings: string[] = [];
+    if (nestedVerdict.moved.length > 0) {
+      findings.push(`dependency edits: ${nestedVerdict.moved.join(', ')}`);
+    }
+    if (nestedVerdict.unverifiable.length > 0) {
+      findings.push(
+        `cannot verify (new, unreadable, or a lockfile this pipeline cannot compare): ${nestedVerdict.unverifiable.join(', ')}`,
+      );
+    }
     return {
       success: false,
       summary: 'Refusing to tag a release that changes a nested dependency manifest',
       error:
-        `${nestedManifests.join(', ')} would enter this release commit. The dependency check ` +
-        'reads only the root manifest, so a nested package.json/lockfile is a dependency ' +
-        'change this pipeline cannot verify. Commit it on its own, or set ' +
-        'NUVIRA_ALLOW_DEP_CHANGES=1 if it is genuinely part of this release.',
+        `${nestedManifests.join(', ')} would enter this release commit — ${findings.join('; ')}. ` +
+        'A release commit must not carry a dependency change it cannot name: commit it on its ' +
+        'own (and say why), or set NUVIRA_ALLOW_DEP_CHANGES=1 if it is genuinely part of this release.',
     };
   }
 
@@ -494,6 +686,12 @@ export async function runGitPhase(): Promise<PhaseRunOutcome> {
     ? `staging ${stagedPaths.length} path(s): ${stagedPaths.slice(0, 40).join(', ')}` +
       (stagedPaths.length > 40 ? ` …and ${stagedPaths.length - 40} more` : '')
     : 'nothing staged';
+
+  // Reported, not assumed: "these nested manifests were checked and carry no
+  // dependency edit" is a fact the operator can verify, unlike silence.
+  const nestedNote = nestedManifests.length > 0
+    ? `; ${nestedManifests.length} nested manifest(s) verified dependency-free: ${nestedManifests.join(', ')}`
+    : '';
 
   let committed = false;
   if (changedCount > 0) {
@@ -538,11 +736,10 @@ export async function runGitPhase(): Promise<PhaseRunOutcome> {
     };
   }
 
-  const parts = [
-    committed ? `committed ${changedCount} file(s)` : 'nothing to commit',
+  const parts = [    committed ?                `committed ${changedCount} file(s)` : 'nothing to commit',
     createdTag ? `tagged ${tag}` : `${tag} already existed`,
     `pushed to ${remote}/${branch}`,
-    stagedNote,
+    `${stagedNote}${nestedNote}`,
   ];
   return { success: true, summary: parts.join('; ') };
 }
