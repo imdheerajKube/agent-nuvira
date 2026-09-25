@@ -32,7 +32,7 @@ remaining open rows at the end are the honest current gaps.
 | 12 | render tool calls as visible steps in the conversation | `ToolCards` in ChatPage (`chat-tool-card`: running → ok/error, args, result, durationMs, live mode) | ✅ CLOSED — P0.6 |
 | 13 | clone a repo into a temp dir and analyze it (assess other people's projects) | `clone_repo` (shallow depth-1, hashed ephemeral cache, argv-only git, `ctx.cwd` scoping) | ✅ CLOSED — P3a |
 | 14 | keep the website/docs in sync after each release (compare versions, fix gaps) | — | 🔴 OPEN — P5 (release-sync loop, plan row 23) |
-| 15 | `git diff` / `git commit` gated in the conversation | `git` tool (status/log/diff/commit; structured `git:diff` event → 🔧 diff card; commit gated by `confirm:true` + accepted `files` subset; push/reset/clean structurally unexpressible) | ✅ CLOSED — P3b |
+| 15 | `git diff` / `git commit` gated in the conversation | `git` tool (status/log/diff/commit/**push**; structured `git:diff` event → 🔧 diff card; commit gated by `confirm:true` + accepted `files` subset; push gated by the user's own request naming it, else ask; reset/clean structurally unexpressible) | ✅ CLOSED — P3b (+ push added later) |
 | 16 | skills: load reusable instruction packs | `skill` tool in the chat registry (compiled store + hub catalog, deterministic loop-side hint too) | ✅ CLOSED — P0.8 + Addendum v4 Phase 3.2 |
 | 17 | plan-tracking: maintain a visible todo list across the turn | `plan_todo` tool (per-session `PlanStore`, GUI renders the live checklist; planner-loop guard in the loop) | ✅ CLOSED — P0.7 |
 | 18 | sub-agents: delegate to specialized agents (context-gatherer, reviewer, security, tester) | `delegate` tool + 18 built-in agents in `ModuleRegistry.createWithBuiltins()` | ✅ present before |

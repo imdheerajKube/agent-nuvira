@@ -197,9 +197,9 @@ jobs:
 
             ## Quick Links
 
-            - [GitHub Repository](https://github.com/imdheerajKube/agent-nuvira)
+            - [Documentation](https://github.com/imdheerajKube/agent-nuvira-documentation#readme)
+            - [User Manual](https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/user-manual.md)
             - [npm Package](https://www.npmjs.com/package/agent-nuvira)
-            - [Documentation](https://github.com/imdheerajKube/agent-nuvira#readme)
           draft: false
           prerelease: false
         env:

@@ -1,6 +1,6 @@
 # @agent-nuvira/sdk
 
-Build, test, and publish custom agents for the [agent-nuvira](https://github.com/imdheerajKube/agent-nuvira) multi-agent AI platform.
+Build, test, and publish custom agents for the [agent-nuvira](https://github.com/imdheerajKube/agent-nuvira-documentation) multi-agent AI platform.
 
 ## Installation
 
@@ -179,12 +179,11 @@ type LLMCallFn = (prompt: string, options?: {
    npm publish
    ```
 3. Add your agent to the community registry:
-   - Open a PR at: https://github.com/imdheerajKube/agent-nuvira
-   - Or submit via: https://github.com/imdheerajKube/agent-nuvira/issues
+   - Submit it at: https://github.com/imdheerajKube/agent-nuvira-documentation/issues
 
 ---
 
 ## Resources
 
-- [agent-nuvira GitHub](https://github.com/imdheerajKube/agent-nuvira)
-- [Report Issues](https://github.com/imdheerajKube/agent-nuvira/issues)
+- [agent-nuvira documentation](https://github.com/imdheerajKube/agent-nuvira-documentation#readme)
+- [Report Issues](https://github.com/imdheerajKube/agent-nuvira-documentation/issues)

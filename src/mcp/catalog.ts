@@ -16,10 +16,10 @@
 
 import { existsSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 
+import { resolveMcpConfigDir } from '../config/paths.js';
 import { logger } from '../utils/logger.js';
-import { type MCPServerConfig, MCP_CONFIG_DIR } from './types.js';
+import { type MCPServerConfig } from './types.js';
 
 // ─── Catalog entry ──────────────────────────────────────────────────────────
 
@@ -110,7 +110,7 @@ export function searchCatalog(query: string): MCPCatalogEntry[] {
 
 /** The per-server config file for an installed catalog server. */
 export function catalogConfigPath(name: string, configDir?: string): string {
-  return join(configDir ?? join(homedir(), MCP_CONFIG_DIR), `${name}.json`);
+  return join(resolveMcpConfigDir(configDir), `${name}.json`);
 }
 
 /** Is a catalog server already installed? */

@@ -32,6 +32,7 @@ import type { InferenceProvider } from '../../src/inference/interface.js';
 import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
 import { resetQuotaLedger } from '../../src/learning/quota-ledger.js';
 import { clearModelListCache } from '../../src/inference/model-validator.js';
+import { resetSubstitutionReporting } from '../../src/inference/route-resolver.js';
 import { setVectorBackendOverride, resetVectorBackendSelection } from '../../src/memory/vector-store.js';
 
 // ─── Module-level mocks (plumbing only) ─────────────────────────────────────
@@ -143,6 +144,11 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     vi.spyOn(logger, 'debug').mockImplementation(() => {});
     geminiGenerate.mockClear();
     localGenerate.mockClear();
+    // A substituted pair is announced once per PROCESS; each test stands in for
+    // its own process, so the announcement record starts empty here. Without
+    // this, the "does not repeat the warning" test would find zero warnings
+    // because the previous test had already spent this pair's one announcement.
+    resetSubstitutionReporting();
 
     // Isolate BOTH the memory dir (registry / ledger / routing history) and the
     // CONFIG dir: without the latter, ConfigManager would read the machine's

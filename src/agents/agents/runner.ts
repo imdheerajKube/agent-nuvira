@@ -32,6 +32,7 @@ import { SandboxManager } from '../../sandbox/manager.js';
 import { detectProjectImage } from '../../sandbox/images.js';
 import { getSandboxConfig } from '../../sandbox/types.js';
 import { referenceDocsFor } from '../reference-docs.js';
+import { detectNoOpCommand } from '../artifact-verification.js';
 import {
   isKnownSystemTool,
   manualInstallSteps,
@@ -81,6 +82,15 @@ export interface RunResult {
   dependencyInstallTool?: string;
   /** Whether the tool itself had to be installed first (e.g. Homebrew) */
   dependencyInstallToolInstalled?: boolean;
+  /**
+   * True when the command exited 0 while provably doing nothing — `zip` matching
+   * none of its inputs, `git` with nothing to commit. A caller must not treat an
+   * exit code as evidence of a deliverable when this is set (
+   * see `artifact-verification.ts` for the live failure this came from).
+   */
+  producedNothing?: boolean;
+  /** Why the command is considered a no-op, for the trace and the user. */
+  noOpReason?: string;
 }
 
 /** A detected dependency-install plan for a project */
@@ -280,9 +290,16 @@ export class RunnerAgent extends Agent {
 
       const result = await sandboxManager.runCommand(containerId, command, timeoutMs);
 
-      // Build run result from sandbox result
+      // Build run result from sandbox result. Same question as the host path:
+      // a successful exit is not evidence that anything was produced.
+      const noOpReason = result.success
+        ? detectNoOpCommand(command, result.stdout, result.stderr)
+        : null;
+
       const runResult: RunResult = {
         success: result.success,
+        producedNothing: noOpReason !== null,
+        noOpReason: noOpReason ?? undefined,
         command,
         exitCode: result.exitCode,
         stdout: result.stdout.slice(0, MAX_OUTPUT_LENGTH),
@@ -317,12 +334,15 @@ export class RunnerAgent extends Agent {
       await sandboxManager.destroyContainer(containerId).catch(() => {});
 
       return {
-        success: result.exitCode === 0,
-        summary: result.exitCode === 0
-          ? `✅ Command succeeded (Docker): ${command}`
-          : `❌ Command failed (exit ${result.exitCode}): ${command}`,
+        // A command that matched nothing is not a completed step, even at exit 0.
+        success: result.exitCode === 0 && noOpReason === null,
+        summary: noOpReason !== null
+          ? `⚠️ Command exited 0 but did nothing (Docker): ${noOpReason} — ${command}`
+          : result.exitCode === 0
+            ? `✅ Command succeeded (Docker): ${command}`
+            : `❌ Command failed (exit ${result.exitCode}): ${command}`,
         details: lines.join('\n'),
-        error: result.error || undefined,
+        error: noOpReason ?? (result.error || undefined),
       };
     } catch (err) {
       if (containerId) {
@@ -1050,8 +1070,16 @@ export class RunnerAgent extends Agent {
       }
     }
 
+    // Exit code 0 answers "did the process fail?", not "did it do anything?".
+    // `zip` prints `zip warning: name not matched` for every input it could not
+    // find and still exits 0 — which is precisely how a 22-byte empty archive was
+    // recorded as a finished deliverable. Ask the output as well as the status.
+    const noOpReason = exitCode === 0 ? detectNoOpCommand(command, stdout, stderr) : null;
+
     const runResult: RunResult = {
       success: exitCode === 0,
+      producedNothing: noOpReason !== null,
+      noOpReason: noOpReason ?? undefined,
       command,
       exitCode,
       stdout: stdout.slice(0, MAX_OUTPUT_LENGTH),
@@ -1100,12 +1128,17 @@ export class RunnerAgent extends Agent {
     }
 
     return {
-      success: exitCode === 0,
-      summary: exitCode === 0
-        ? `✅ Command succeeded: ${command}`
-        : toolBlockError
-          ? `❌ Required tool not available: ${command}`
-          : `❌ Command failed (exit ${exitCode}): ${command}`,
+      // The step's outcome, not the process's. `zip` exits 0 after failing to
+      // find every input it was given, so an exit code alone would let a
+      // fabricated deliverable through as a success.
+      success: exitCode === 0 && noOpReason === null,
+      summary: noOpReason !== null
+        ? `⚠️ Command exited 0 but did nothing: ${noOpReason} — ${command}`
+        : exitCode === 0
+          ? `✅ Command succeeded: ${command}`
+          : toolBlockError
+            ? `❌ Required tool not available: ${command}`
+            : `❌ Command failed (exit ${exitCode}): ${command}`,
       details: lines.join('\n'),
       error: (toolBlockError || execError) && exitCode !== 0 ? (toolBlockError || execError) : undefined,
     };

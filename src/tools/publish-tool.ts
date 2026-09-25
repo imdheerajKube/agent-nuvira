@@ -16,17 +16,42 @@
  * - Returns a summary text fed back to the model (never throws).
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { CredentialStore } from '../agents/credential-store.js';
 import { Orchestrator } from '../agents/orchestrator.js';
 import { buildPublishPhases } from '../cli/publish.js';
+import { maskSecret } from '../enterprise/secrets.js';
 import { logger } from '../utils/logger.js';
 import type { ToolContext } from './registry.js';
+
+/**
+ * One masked line naming the credentials the release will ACTUALLY use.
+ *
+ * The failure this exists to prevent: a release ran its whole pipeline and
+ * reported "complete" while holding no credentials at all, so every push and
+ * publish silently no-opped. Saying which token is in play (masked — never the
+ * value) makes that state visible in the tool result the model reads back.
+ */
+function describeReleaseCredentials(store: CredentialStore): string {
+  const gitToken = store.git?.token;
+  const sshKey = store.git?.sshKeyPath;
+  const npmToken = store.npm?.token;
+  const parts = [
+    gitToken ? `git ✓ (${maskSecret(gitToken)})` : sshKey ? 'git ✓ (ssh key)' : 'git ✗',
+    npmToken ? `npm ✓ (${maskSecret(npmToken)})` : 'npm ✗',
+  ];
+  return `🔑 Credentials: ${parts.join('   ')}`;
+}
 
 /** P5a — post-publish release-sync (website/docs kept at release level). */
 function currentPackageVersion(): string {
   try {
-    const { readFileSync } = require('node:fs') as typeof import('node:fs');
-    const raw = readFileSync(require('node:path').join(process.cwd(), 'package.json'), 'utf-8');
+    // Static ESM imports — the previous inline `require('node:fs')` threw
+    // `require is not defined` in the published build, and because this sits in
+    // a try/catch the version silently read as '' rather than failing loudly.
+    const raw = readFileSync(join(process.cwd(), 'package.json'), 'utf-8');
     return (JSON.parse(raw) as { version?: string }).version ?? '';
   } catch {
     return '';
@@ -57,13 +82,23 @@ export async function runPublishTool(args: unknown, ctx: ToolContext): Promise<s
   }
 
   if (!dry_run) {
-    // Set up the detected credentials for the session (best-effort — the CLI
-    // does the same before running phases).
+    // NON-INTERACTIVE init FIRST. `setupGitCredentials()` / `setupNpmAuth()`
+    // both refuse to run until the store is collected, and this tool never
+    // prompts — so before `initialize()` existed these two calls threw on
+    // every tool-driven release AND a single shared try/catch hid the pair.
+    // The pipeline then ran with no credentials while reporting success.
+    credStore.initialize();
+    // Separate catches: a failure to set up git auth must not swallow the npm
+    // one (and vice versa) — that is exactly how the pair went missing before.
     try {
       credStore.setupGitCredentials();
+    } catch (err) {
+      logger.warn(`  ⚠️  Git credential setup issue: ${err}`);
+    }
+    try {
       credStore.setupNpmAuth();
     } catch (err) {
-      logger.warn(`  ⚠️  Credential setup issue: ${err}`);
+      logger.warn(`  ⚠️  npm credential setup issue: ${err}`);
     }
   }
 
@@ -71,6 +106,29 @@ export async function runPublishTool(args: unknown, ctx: ToolContext): Promise<s
     git: credStore.git,
     npm: credStore.npm,
   });
+
+  // ── PREFLIGHT before anything irreversible ───────────────────────────────
+  // The same checks the CLI runs, for the same reason: a tool-driven release is
+  // MORE likely to be unattended, so starting one that cannot finish is worse
+  // here than at a terminal. Non-interactive by construction — a definitive
+  // blocker is reported back to the model, which can fix it or ask the user;
+  // "unanswerable" (offline) warns and proceeds.
+  if (!dry_run) {
+    const { runReleasePreflight, formatPreflight } = await import('../agents/release-preflight.js');
+    const { bumpVersionString, readVersion } = await import('../agents/release-runner.js');
+    const current = readVersion();
+    const targetVersion = current ? bumpVersionString(current, bump) : '';
+    const needsModel = phases.some((p) => !p.runner);
+    const preflight = await runReleasePreflight({ targetVersion, needsModel });
+    if (preflight.blocked) {
+      return [
+        formatPreflight(preflight),
+        '',
+        '❌ The release was NOT started: the checks above are definitive, so nothing was committed, tagged or published.',
+        '   Fix the blocker (or bump to a free version) and call this tool again.',
+      ].join('\n');
+    }
+  }
 
   if (dry_run) {
     return [
@@ -81,7 +139,12 @@ export async function runPublishTool(args: unknown, ctx: ToolContext): Promise<s
   }
 
   const orchestrator = new Orchestrator(ctx.configManager);
-  const lines: string[] = [];
+  const lines: string[] = [
+    // State the credentials up front, so the model (and the user reading the
+    // transcript) can see a release that is about to no-op for want of a token
+    // BEFORE it reports itself complete.
+    describeReleaseCredentials(credStore),
+  ];
   let hasFailure = false;
   // P5a — capture the PRE-publish version so a post-publish sync check can
   // diff the release markers against what was actually bumped.
@@ -91,10 +154,15 @@ export async function runPublishTool(args: unknown, ctx: ToolContext): Promise<s
     const phase = phases[i];
     lines.push(`📦 ${i + 1}/${phases.length}: ${phase.description}`);
     try {
-      const result = await orchestrator.execute(phase.goal, {
-        verbose: false,
-        skipTests: skip_tests,
-      });
+      // A phase with a runner is a mechanical step with a known-correct
+      // outcome (bump, tag, push, publish) and runs deterministically; only a
+      // phase without one needs the orchestrator to plan it.
+      const result = phase.runner
+        ? await phase.runner()
+        : await orchestrator.execute(phase.goal, {
+            verbose: false,
+            skipTests: skip_tests,
+          });
       if (result.success) {
         lines.push(`   ✅ ${result.summary ? result.summary.slice(0, 120) : 'completed'}`);
       } else {

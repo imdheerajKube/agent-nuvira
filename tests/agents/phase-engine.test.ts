@@ -147,14 +147,32 @@ describe('PhaseExecutionEngine', () => {
       expect(next!.id).toBe('p2');
     });
 
-    it('should skip failed phases too', () => {
+    it('does NOT skip a failed phase — a failed phase is re-tried', () => {
+      // Changed contract (the resumable-release fix). `getNextPhase` used to
+      // return only `pending`, so a `failed` phase was stepped over on a resume:
+      // the release continued past the phase that had actually failed. A failed
+      // phase is UNFINISHED, so it is the next thing to run.
       const scope = makeScope(engine, 'Test', [
         makePhase('p1', 'First'),
         makePhase('p2', 'Second'),
       ]);
       scope.phases[0].status = 'failed';
       const next = engine.getNextPhase(scope);
-      expect(next!.id).toBe('p2');
+      expect(next!.id).toBe('p1');
+    });
+
+    it('does NOT skip a phase left `running` by a killed process', () => {
+      // `running` is the mark a process leaves when it dies mid-phase, and the
+      // only safe reading of it is "this phase did not finish". Skipping it is
+      // exactly how a resumed release jumped to the GitHub release while its npm
+      // publish had never happened (issue #13).
+      const scope = makeScope(engine, 'Test', [
+        makePhase('p1', 'First'),
+        makePhase('p2', 'Second'),
+      ]);
+      scope.phases[0].status = 'running';
+      const next = engine.getNextPhase(scope);
+      expect(next!.id).toBe('p1');
     });
 
     it('should return null for empty scope', () => {

@@ -105,6 +105,12 @@ describe('P6a — draft store (skill-drafts.ts)', () => {
     // `.nuvira` here (not `.nuvira/memory`) that the assertions below address.
     process.env.NUVIRA_MEMORY_DIR = join(testHome, '.nuvira');
     process.env.BUFF_MEMORY_DIR = join(testHome, '.nuvira');
+    // The compiled store is isolated by the global setup as well, so pin it to the
+    // SAME mocked home that `skillsRoot()` and the wipes below address. Without
+    // this the store lives in the throwaway dir, a promotion written by one test
+    // survives the next test's wipe, and `create` sees a live skill it must not.
+    process.env.NUVIRA_SKILLS_DIR = join(testHome, '.nuvira', 'skills');
+    process.env.BUFF_SKILLS_DIR = join(testHome, '.nuvira', 'skills');
     testProject = holder.project;
     resetSkillStore();
     // Fresh slate under the SHARED mocked home (accept tests write the store).
@@ -198,6 +204,12 @@ describe('P6a — skill tool skill_manage actions', () => {
     // `.nuvira` here (not `.nuvira/memory`) that the assertions below address.
     process.env.NUVIRA_MEMORY_DIR = join(testHome, '.nuvira');
     process.env.BUFF_MEMORY_DIR = join(testHome, '.nuvira');
+    // The compiled store is isolated by the global setup as well, so pin it to the
+    // SAME mocked home that `skillsRoot()` and the wipes below address. Without
+    // this the store lives in the throwaway dir, a promotion written by one test
+    // survives the next test's wipe, and `create` sees a live skill it must not.
+    process.env.NUVIRA_SKILLS_DIR = join(testHome, '.nuvira', 'skills');
+    process.env.BUFF_SKILLS_DIR = join(testHome, '.nuvira', 'skills');
     testProject = holder.project;
     resetSkillStore();
     // The compiled store + drafts live under the SHARED mocked home — a fresh

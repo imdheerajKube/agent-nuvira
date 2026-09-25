@@ -20,7 +20,7 @@ import { BaseCommand } from './commands.js';
 import { PipelineBoard } from './pipeline-board.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { resolveProvider } from './router.js';
-import { resolveWorkingModel } from '../inference/model-validator.js';
+import { resolveRoute } from '../inference/route-resolver.js';
 import { resolveDefaultModel } from '../inference/default-model-resolver.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
@@ -330,9 +330,16 @@ export class BenchmarkCommand extends BaseCommand {
       // which can be stale (deprecated gemini-2.0-flash-exp → 404) or a
       // placeholder (nim 'new-nim-model'). Validate against the provider's live
       // list and repair to a verified-working model so benchmark --routing
-      // never benchmarks a model that 404s.
-      const workingModel = await resolveWorkingModel(resolved.provider, pick.provider, pick.model);
-      if (workingModel !== pick.model) {
+      // never benchmarks a model that 404s. resolveRoute prints the
+      // substitution itself, so this no longer repeats it.
+      const route = await resolveRoute({
+        providerType: pick.provider,
+        provider: resolved.provider,
+        model: pick.model,
+        source: 'benchmark',
+      });
+      const workingModel = route.model;
+      if (route.substituted) {
         logger.warn(`  ♻️  Model '${pick.model}' unavailable on '${pick.provider}' — benchmarking verified '${workingModel}' instead.`);
         // Keep the dashboard audit trail accurate: re-record with the model
         // actually benchmarked, carrying the router's real complexity/score.

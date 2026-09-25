@@ -380,6 +380,41 @@ export function requestRequestsCommit(request: string): boolean {
   return /\b(?:commit|check[\s-]?in)\b/i.test(text);
 }
 
+/**
+ * A request that asks for the work to LEAVE this machine's copy — a push.
+ *
+ * The same shape as {@link requestRequestsCommit}, one step further out, and the
+ * distinction it has to draw is sharper. A commit writes to this repository and
+ * is undone by a reset; a push writes to a remote that other people and CI read,
+ * so the gate must not infer it from a request that only asked to record work
+ * locally. "Commit these changes" is therefore NOT push authorization — it names
+ * no destination — while "commit and push this to GitHub" is, because the user
+ * named where it goes.
+ *
+ * Evidence, in order: a push verb, or a commit verb PAIRED with a remote
+ * destination ("get this committed to github", where the destination carries the
+ * intent the verb leaves out). An analysis opener ("how do I push?") is asking
+ * ABOUT it, and a negated push ("don't push yet") is explicitly not a request
+ * for one.
+ */
+export function requestRequestsPush(request: string): boolean {
+  const text = (request || '').trim();
+  if (!text) return false;
+  if (ANALYSIS_OPENER_RE.test(text)) return false;
+  if (/\b(?:don'?t|do\s+not|never|no|without)\s+(?:\w+\s+){0,2}push\b/i.test(text)) return false;
+
+  const pushVerb = /\bpush(?:es|ed|ing)?\b/i.test(text);
+  if (pushVerb) return true;
+
+  // No push verb: a remote DESTINATION plus a commit-shaped intent. The
+  // destination is what distinguishes this from a local-only commit request.
+  const destination =
+    /\b(?:to|onto|on|into|at)\s+(?:the\s+)?(?:git(?:hub)?|origin|remote|repo(?:sitory)?)\b/i.test(text) ||
+    /\bgit(?:hub)?\s*\.com\b/i.test(text);
+  const commitIntent = /\b(?:commit(?:ted|ting)?|check[\s-]?in|ship|release|upload)\b/i.test(text);
+  return destination && commitIntent;
+}
+
 /** Escape a literal for use inside a RegExp. */
 function escapeRegexLiteral(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

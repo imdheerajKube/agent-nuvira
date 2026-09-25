@@ -194,5 +194,11 @@ describe('injection guardrail integration with executeSingleTask', () => {
     expect(result).toBeDefined();
     expect(typeof result.success).toBe('boolean');
     expect(result.agentResults.length).toBeGreaterThanOrEqual(1);
-  });
+    // Explicit timeout: this drives the REAL pipeline against a provider whose
+    // failure has to be allowed to time out on its own (the circuit breaker it
+    // trips cools down for 120s). It settles in ~2.3s on an idle machine, so the
+    // default 5s was an assertion about machine load rather than about the
+    // guardrail — and it flaked during the unattended 3.3.2 release run, where
+    // the suite is one of two full runs and the box is busy.
+  }, 30_000);
 });

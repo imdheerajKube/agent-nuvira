@@ -14,8 +14,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
-import { resolveNuviraHome } from '../config/paths.js';
+import { envBuff, resolveNuviraDataPath } from '../config/paths.js';
 
 import type { Skill, SkillSummary, SkillParameter } from './skill-types.js';
 import { MAX_SKILLS, SKILL_PRECEDENCE_NOTE } from './skill-types.js';
@@ -24,8 +23,29 @@ import { logger } from '../utils/logger.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const SKILLS_DIR = join(resolveNuviraHome(), 'skills');
-const INDEX_PATH = join(SKILLS_DIR, 'index.json');
+/**
+ * Where the skills live: the active Nuvira data dir, or `$NUVIRA_SKILLS_DIR`.
+ *
+ * Resolved PER CALL, never at module load. This was
+ * `join(resolveNuviraHome(), 'skills')` — a module-load constant off the raw
+ * home, which is the exact reach `config/paths.ts` documents as the bug this
+ * helper exists to prevent: it ignores the isolation override, so an isolated
+ * process read and SEEDED the developer's real profile.
+ *
+ * Measured, not assumed: the test suite wrote all 152 bundled skills plus
+ * `index.json` into the real `~/.nuvira/skills` on every run, and the moment two
+ * test files ran at once they raced on that directory — `seedBundledSkills()`
+ * returned 140 where the test expected 0, and a store the test had just created
+ * saw 67 of 152 skills, because the other worker was mid-write. A store this
+ * chatty is shared state, and shared state has to sit behind the override.
+ */
+function skillsDir(): string {
+  return envBuff('SKILLS_DIR') || resolveNuviraDataPath('skills');
+}
+
+function indexPath(): string {
+  return join(skillsDir(), 'index.json');
+}
 
 // Skill decay: skills lose relevance over time
 const SKILL_TTL_DAYS = 120;              // Expire after 120 days without use
@@ -51,15 +71,16 @@ interface SkillIndex {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function ensureDir(): void {
-  if (!existsSync(SKILLS_DIR)) {
-    mkdirSync(SKILLS_DIR, { recursive: true });
+  const dir = skillsDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
 }
 
 function skillFilePath(id: string): string {
   // Sanitize ID for filesystem
   const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '_');
-  return join(SKILLS_DIR, `${safeId}.json`);
+  return join(skillsDir(), `${safeId}.json`);
 }
 
 function generateId(name: string): string {
@@ -686,10 +707,10 @@ export class SkillStore {
   private loadIndex(): SkillIndex {
     try {
       ensureDir();
-      if (!existsSync(INDEX_PATH)) {
+      if (!existsSync(indexPath())) {
         return { skills: [], version: 1 };
       }
-      const raw = readFileSync(INDEX_PATH, 'utf-8');
+      const raw = readFileSync(indexPath(), 'utf-8');
       return JSON.parse(raw) as SkillIndex;
     } catch {
       return { skills: [], version: 1 };
@@ -698,7 +719,7 @@ export class SkillStore {
 
   private saveIndex(): void {
     ensureDir();
-    writeFileSync(INDEX_PATH, JSON.stringify(this.index, null, 2), 'utf-8');
+    writeFileSync(indexPath(), JSON.stringify(this.index, null, 2), 'utf-8');
   }
 }
 

@@ -35,8 +35,8 @@ import { analyzeComplexity, type ComplexityLevel } from './hybrid-router.js';
 import { buildAutoResolveOptions } from './resolve-options.js';
 import { buildModelCandidates, buildTieredFailoverChain, countEligibleModels } from './model-first-router.js';
 import { recordModelUsage } from './model-warmup.js';
-import { resolveWorkingModel } from '../inference/model-validator.js';
 import { getDefaultModel } from '../inference/provider-catalog.js';
+import { resolveRoute } from '../inference/route-resolver.js';
 import { getModelRegistry } from './model-registry.js';
 import { recordActionFailure, type FailureSessionState } from './failure-bookkeeping.js';
 import { sweepTransientFailures } from './provider-revival.js';
@@ -706,27 +706,39 @@ export function createResilientCallLLM(
       // Try the call
       try {
         // Resolve the model at call time (ScoredProvider doesn't carry model)
-        let resolvedModel = candidate.model === 'default'
+        const desiredModel = candidate.model === 'default'
           ? resolveDesiredModel(autoRouter, candidate.provider, options.task.agentType, configManager, options.task.description)
           : candidate.model;
         // CRITICAL: 'default' is a sentinel that must NEVER reach a provider API.
         // resolveDesiredModel may return 'default' when the registry is cold and
-        // the config has model:'default'. Resolve through the live model list so
-        // the API call always uses a real model name (e.g. 'llama-3.3-70b-versatile').
-        if (!resolvedModel || resolvedModel === 'default') {
+        // the config has model:'default'.
+        //
+        // The pair is validated against `adapter` — the instance resolved from
+        // THIS candidate that the generate call below uses — for EVERY candidate
+        // model, not only an empty/`default` one (issue #10: a non-empty model
+        // that belongs to another provider skipped the validator entirely and
+        // went straight to the API as a 404). Substitutions are printed and
+        // recorded, not made silently (issue #11).
+        let resolvedModel = desiredModel;
+        try {
+          const route = await resolveRoute({
+            providerType: candidate.provider,
+            provider: adapter,
+            model: desiredModel,
+            source: 'failover',
+            agentType: options.task.agentType,
+            task: options.task.description,
+          });
+          resolvedModel = route.model;
+        } catch {
+          // Validator failed (offline, no key): keep a real id rather than the
+          // 'default' sentinel, which 404s on every provider.
           try {
-            const adapter = resolveProviderAdapter(configManager, candidate.provider);
-            if (adapter) {
-              resolvedModel = await resolveWorkingModel(adapter, candidate.provider, resolvedModel);
-            }
+            resolvedModel = desiredModel && desiredModel !== 'default'
+              ? desiredModel
+              : getDefaultModel(candidate.provider);
           } catch {
-            // Best-effort — fall through to the catalog's curated default
-            try {
-              resolvedModel = getDefaultModel(candidate.provider);
-            } catch {
-              // Last resort — never send 'default' to an API
-              resolvedModel = 'unknown';
-            }
+            resolvedModel = 'unknown';
           }
         }
         const mergedOptions: InferenceOptions = {

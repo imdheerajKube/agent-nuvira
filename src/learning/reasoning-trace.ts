@@ -305,6 +305,15 @@ const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 const CURRENT_VERSION = 1;
 /** Keep the most recent traces (pipelines are chatty; chat turns now trace too). */
 export const MAX_TRACES = 60;
+
+/**
+ * The run currently being traced in THIS process, so `recordTraceEvent` can be
+ * called without an id (see its docstring). Set by {@link beginTrace}, cleared
+ * by {@link endTrace}. One run per process is the actual invariant everywhere a
+ * trace is opened (a pipeline, a chat turn, a dashboard session), so a single
+ * slot is honest rather than a shortcut.
+ */
+let currentTraceId: string | null = null;
 /** Cap steps per trace at 200 (a long pipeline still fits). */
 const MAX_STEPS_PER_TRACE = 200;
 /**
@@ -374,6 +383,8 @@ export function beginTrace(
   meta: { goal: string; source?: 'orchestrator' | 'chat' | string; provider?: string; model?: string },
 ): string {
   const id = `trace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // The run in progress, for recorders that hold no id (see recordTraceEvent).
+  currentTraceId = id;
   const data = readFile();
   data.traces.push({
     id,
@@ -445,12 +456,21 @@ export function recordStep(
  * so two recorders can never disagree about ordering.
  */
 export function recordTraceEvent(
-  traceId: string,
+  traceId: string | undefined,
   event: Omit<TraceEvent, 'seq' | 'timestamp'>,
 ): void {
   try {
+    // No id → the run IN PROGRESS. A recorder deep in the stack (a routing
+    // substitution inside a provider call) has nothing to pass and the call it
+    // is reporting on belongs to the trace that is open right now, so the event
+    // attaches there instead of being dropped. Without this, "record it in the
+    // trace" was only possible at the few call sites that happened to hold an
+    // id, which is the same call-site-locality that let the provider×model pair
+    // bug survive two earlier fixes.
+    const id = traceId || currentTraceId;
+    if (!id) return;
     const data = readFile();
-    const trace = data.traces.find((t) => t.id === traceId);
+    const trace = data.traces.find((t) => t.id === id);
     if (!trace) return;
     const events = trace.events ?? (trace.events = []);
     events.push({ ...event, seq: events.length + 1, timestamp: Date.now() });
@@ -480,6 +500,9 @@ export function endTrace(traceId: string, success?: boolean, outcome?: TraceOutc
     if (success !== undefined) trace.success = success;
     if (outcome) trace.outcome = outcome;
     writeFile(data);
+    // Close the window for id-less recorders — an event after this belongs to
+    // the NEXT run, not to the one that just finished.
+    if (currentTraceId === traceId) currentTraceId = null;
   } catch {
     // Best-effort.
   }

@@ -25,6 +25,23 @@ import { resetWorkspaceStore } from '../../src/config/workspace.js';
 // behavior these tests were written against.
 const a2aCfgDir = mkdtempSync(join(tmpdir(), 'buff-a2a-cfg-'));
 const origA2aConfigDir = process.env.NUVIRA_CONFIG_DIR;
+// STRICT MODEL MODE, and it is load-bearing here rather than decorative.
+//
+// A pinned model the provider does not serve is now REPAIRED (substituted and
+// reported) instead of being sent to the API — that is the fix for the live
+// `Groq API error (404): The model 'gemini-3.1-flash-lite' does not exist`, and
+// it is the behaviour production wants. But it invalidates this file's premise:
+// `nonexistent-fast-fail` is absent from the reachable local model list, so the
+// resolver substituted a REAL model from it (this machine's ollama serves one),
+// the orchestrator then genuinely ran the pipeline, and these protocol tests
+// timed out at 30s instead of failing fast in ~3s (measured: 8s on HEAD, 31s
+// here, one test at 30.0s).
+//
+// Strict mode restores the fast, hermetic failure these tests were written
+// against — it refuses to substitute and names the pair — while ALSO pinning
+// that strict mode behaves as documented.
+const origStrictModel = process.env.NUVIRA_STRICT_MODEL;
+process.env.NUVIRA_STRICT_MODEL = '1';
 process.env.NUVIRA_CONFIG_DIR = a2aCfgDir;
 mkdirSync(a2aCfgDir, { recursive: true });
 writeFileSync(
@@ -65,6 +82,8 @@ afterAll(() => {
   rmSync(a2aCfgDir, { recursive: true, force: true });
   if (origA2aConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
   else process.env.NUVIRA_CONFIG_DIR = origA2aConfigDir;
+  if (origStrictModel === undefined) delete process.env.NUVIRA_STRICT_MODEL;
+  else process.env.NUVIRA_STRICT_MODEL = origStrictModel;
 });
 
 // ─── Tests: Types & Constants ───────────────────────────────────────────────

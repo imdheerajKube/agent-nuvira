@@ -8,8 +8,8 @@
 
 import { existsSync, readdirSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 
+import { resolveMcpConfigDir } from '../config/paths.js';
 import { logger } from '../utils/logger.js';
 import { MCPClient } from './client.js';
 import {
@@ -19,7 +19,6 @@ import {
   type Resource,
   type Prompt,
   type CallToolResult,
-  MCP_CONFIG_DIR,
 } from './types.js';
 
 // ─── MCP Manager ────────────────────────────────────────────────────────────
@@ -29,7 +28,10 @@ export class MCPManager {
   private configDir: string;
 
   constructor(configDir?: string) {
-    this.configDir = configDir || join(homedir(), MCP_CONFIG_DIR);
+    // Resolved through `config/paths`, never `join(homedir(), '.nuvira', …)`:
+    // that reach made every test run discover — and spawn — the developer's real
+    // MCP servers. See `resolveMcpConfigDir`.
+    this.configDir = resolveMcpConfigDir(configDir);
   }
 
   // ─── Server Discovery ─────────────────────────────────────────────────────

@@ -20,6 +20,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { formatWorkingState, getWorkingState } from '../learning/working-state.js';
+import { handoffBlockFor } from './step-handoff.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -71,6 +72,17 @@ export interface ProjectAssessment {
    * path inherits the cross-turn memory the chat path gained.
    */
   workingState?: string;
+  /**
+   * The durable hand-off block: work earlier attempts in THIS project started
+   * and did not finish, with the artifacts already on disk and the ones still
+   * missing. Populated by {@link assessProject} from step-handoff.ts, so every
+   * agent prompt carries it without each agent having to remember to ask.
+   *
+   * Distinct from `workingState` on purpose: the ledger is per-session prose
+   * memory (what changed, what the user reported broken), the hand-off is
+   * per-STEP and disk-verified (what this step still owes).
+   */
+  openHandoffs?: string;
 }
 
 // ─── Project Assessment ─────────────────────────────────────────────────────
@@ -130,6 +142,18 @@ export function assessProject(workingDirectory: string): ProjectAssessment {
     assessment.workingState = formatWorkingState(getWorkingState(workingDirectory)) || undefined;
   } catch {
     // Best-effort — the ledger must never break assessment.
+  }
+
+  // The durable hand-off — work a previous attempt in this project started and
+  // did not finish. Read on EVERY assessment (not only on an explicit resume),
+  // which is what stops a repeated or reworded ask from re-planning a step that
+  // already has half its artifacts on disk (see step-handoff.ts). Reconciled
+  // against the filesystem on read, so a step whose files have since vanished is
+  // correctly reported as outstanding again.
+  try {
+    assessment.openHandoffs = handoffBlockFor(workingDirectory) || undefined;
+  } catch {
+    // Best-effort — a hand-off read must never break assessment.
   }
 
   return assessment;
@@ -316,6 +340,11 @@ export function assemblePrompt(
   // heading; absent entirely for a pristine project.
   if (projectAssessment.workingState) {
     contextParts.push(`\n${projectAssessment.workingState}`);
+  }
+
+  // The unfinished-work hand-off (already self-labelled and self-bounded).
+  if (projectAssessment.openHandoffs) {
+    contextParts.push(`\n${projectAssessment.openHandoffs}`);
   }
 
   if (contextParts.length > 0) {

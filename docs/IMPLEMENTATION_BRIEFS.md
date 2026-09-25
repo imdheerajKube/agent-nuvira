@@ -271,8 +271,12 @@ structured accept/reject diff UI. A `GitAgent` exists in the module registry
 - A `git` tool: `git diff` (structured, rendered as a 🔧 diff card with
   accept/reject per change), `git commit` (gated: confirm via ask_user, then
   commit with the user's message), `git status`/`log` read-only.
-- Never `git push` / `git reset --hard` / `git clean` (deny list shared with
-  run_terminal).
+- Never `git reset --hard` / `git clean` (deny list shared with run_terminal).
+- `git push` is a real GATED action (added after the brief): it asks unless the
+  user's own request named the push (`requestRequestsPush` — a local-only commit
+  request does not count), while the raw `git push` SHELL string stays denied in
+  run_terminal. The structured tool is the sanctioned path: allow-listed
+  remote/branch passed as argv, so no option-injection or metacharacter travels.
 - Works from dashboard chat; the diff card is the P2 artifact pattern.
 
 **Deep backward tests:** deny-list parity with run_terminal (a command denied

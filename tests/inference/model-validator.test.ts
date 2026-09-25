@@ -220,14 +220,25 @@ describe('resolveWorkingModel', () => {
     }
   });
 
-  it('warns ONCE when no verified replacement exists yet (cold registry)', async () => {
+  it('announces a repair only when ASKED to — the announcement belongs to resolveRoute', async () => {
     const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     try {
-      // Registry is fresh (no verified models) → the live-list repair must
-      // warn once so the user learns their pin is dead and what replaced it.
+      // Registry is fresh (no verified models), so the live-list repair runs and
+      // the pin is not marked dead — the path where a repair is worth reporting.
       const provider = makeProvider([model('gemini-2.5-flash', ['chat'])]);
-      const result = await resolveWorkingModel(provider, 'gemini', 'gemini-2.0-flash-exp');
-      expect(result).toBe('gemini-2.5-flash');
+
+      // DEFAULT: silent. Every caller now resolves through `resolveRoute()`, which
+      // owns the reporting (line + routing history + run trace). Announcing here
+      // too printed TWO lines for one substitution, and in strict mode it
+      // announced a swap that then threw instead of happening.
+      const repaired = await resolveWorkingModel(provider, 'gemini', 'gemini-2.0-flash-exp');
+      expect(repaired).toBe('gemini-2.5-flash');
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      // Opt-in: the same repair, announced — so the contract is "quiet by
+      // default", not "the warning is gone".
+      const announced = await resolveWorkingModel(provider, 'gemini', 'gemini-2.0-flash-exp', true);
+      expect(announced).toBe('gemini-2.5-flash');
       expect(warnSpy).toHaveBeenCalledTimes(1);
       expect(warnSpy.mock.calls[0][0]).toContain("model 'gemini-2.0-flash-exp' is not available");
     } finally {

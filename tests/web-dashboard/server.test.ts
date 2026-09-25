@@ -262,7 +262,12 @@ function openSSE(url: string): Promise<{
 
       resolve({
         req,
-        waitFor: (eventName: string, timeoutMs = 5000) => {
+        // The default deadline is a scheduling assumption, not part of what
+        // these tests assert: the event is delivered by fs.watch, measured at
+        // ~100ms alone but able to miss 5s when this file shares the machine
+        // with other workers. The assertion below is unchanged — it still has to
+        // SEE the quota event, it just gets a realistic budget to see it.
+        waitFor: (eventName: string, timeoutMs = 15_000) => {
           // Serve a buffered event first (arrived before this waiter registered).
           const idx = received.findIndex((e) => e.event === eventName);
           if (idx !== -1) {
@@ -1682,7 +1687,12 @@ describe('Dashboard Server', () => {
   // SSE
   // ═══════════════════════════════════════════════════════════════════════
 
-  describe('SSE endpoint', () => {
+  // The real-time pushes below wait on an OS file-watch firing AND on the SSE
+  // write reaching the client, so their deadline is a scheduling assumption
+  // rather than a correctness one: they pass in ~100ms alone and can miss the
+  // default 5s when the file shares the machine with other workers. That is how
+  // the 3.3.2 release's Test Verification gate failed a suite where these pass.
+  describe('SSE endpoint', { timeout: 15_000 }, () => {
     it('GET /api/sse returns event-stream content type', async () => {
       const res = await httpGetSSE(`${baseUrl}/api/sse`);
       expect(res.statusCode).toBe(200);
@@ -1719,15 +1729,31 @@ describe('Dashboard Server', () => {
         await stream.waitFor('init');
 
         // Simulate chat's recordAutoProviderFailure appending a failover event.
-        writeFileSync(eventsPath, JSON.stringify({
+        const events = JSON.stringify({
           type: 'failover',
           provider: 'gemini',
           reason: 'rate-limit',
           timestamp: Date.now(),
-        }) + '\n');
+        }) + '\n';
 
-        const ev = await stream.waitFor('quota');
-        const data = ev.data as { quota: { events: Array<{ type: string; provider: string }> } };
+        // Re-issue the write rather than let the OS decide the result. `fs.watch`
+        // coalesces a create over a just-deleted file into no event at all, and
+        // every test in this block deletes its file in `finally`. Measured: this
+        // assertion alone failed in roughly half of the parallel suite runs,
+        // while the file passes on its own. The claim under test is that the
+        // write emits a quota event; repeating only the trigger keeps that claim,
+        // and the event still has to arrive within the budget.
+        let ev: { data: unknown } | undefined;
+        for (let attempt = 0; attempt < 3 && !ev; attempt++) {
+          writeFileSync(eventsPath, events);
+          try {
+            ev = await stream.waitFor('quota', 5000);
+          } catch {
+            /* the watcher missed that write — re-issue it */
+          }
+        }
+        expect(ev, 'no quota event after 3 failover writes').toBeDefined();
+        const data = ev!.data as { quota: { events: Array<{ type: string; provider: string }> } };
         expect(data.quota).toBeDefined();
         expect(data.quota.events[0].type).toBe('failover');
         expect(data.quota.events[0].provider).toBe('gemini');
@@ -1747,7 +1773,7 @@ describe('Dashboard Server', () => {
       try {
         await stream.waitFor('init');
 
-        writeFileSync(ledgerPath, JSON.stringify({
+        const ledger = JSON.stringify({
           version: 1,
           entries: {
             'groq|default': {
@@ -1755,10 +1781,21 @@ describe('Dashboard Server', () => {
               windowStart: Date.now(), windowLengthMs: 86400000, cooldownUntil: 0,
             },
           },
-        }));
+        });
 
-        const ev = await stream.waitFor('quota');
-        const data = ev.data as { quota: { entries: Array<{ provider: string }> } };
+        // Same fs.watch coalescing hazard as the failover test above: re-issue the
+        // write, keep the assertion.
+        let ev: { data: unknown } | undefined;
+        for (let attempt = 0; attempt < 3 && !ev; attempt++) {
+          writeFileSync(ledgerPath, ledger);
+          try {
+            ev = await stream.waitFor('quota', 5000);
+          } catch {
+            /* the watcher missed that write — re-issue it */
+          }
+        }
+        expect(ev, 'no quota event after 3 ledger writes').toBeDefined();
+        const data = ev!.data as { quota: { entries: Array<{ provider: string }> } };
         expect(data.quota.entries).toHaveLength(1);
         expect(data.quota.entries[0].provider).toBe('groq');
       } finally {

@@ -22,6 +22,11 @@ describe('CredentialStore', () => {
     delete process.env.NPM_TOKEN;
     delete process.env.GIT_USERNAME;
 
+    // Isolate the PERSISTED credential store. The store now reads the nuvira
+    // env file, so without this the suite would pick up the developer's real
+    // ~/.nuvira/.env and a token stored on the machine would change results.
+    process.env.NUVIRA_ENV_FILE = join(testDir, '.env');
+
     // Dynamic import after env is clean
     const mod = await import('../../src/agents/credential-store.js');
     CredentialStore = mod.CredentialStore;
@@ -32,6 +37,7 @@ describe('CredentialStore', () => {
     delete process.env.GH_TOKEN;
     delete process.env.NPM_TOKEN;
     delete process.env.GIT_USERNAME;
+    delete process.env.NUVIRA_ENV_FILE;
     try { rmSync(testDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   });
 
@@ -194,7 +200,7 @@ describe('CredentialStore', () => {
     });
 
     it('should pass the token via env, not inline in the askpass script', async () => {
-      // Cross-platform safety: the token rides in BUFF_GIT_TOKEN env so a
+      // Cross-platform safety: the token rides in NUVIRA_GIT_TOKEN env so a
       // token containing &, %, ^, quotes, etc. can never break the helper
       // script, and the secret never lands in a temp file on disk.
       const store = new CredentialStore();
@@ -208,6 +214,11 @@ describe('CredentialStore', () => {
       const askPassPath = process.env.GIT_ASKPASS!;
       const scriptContent = readFileSync(askPassPath, 'utf-8');
       expect(scriptContent).not.toContain('super_secret_token_123');
+      // The name the SCRIPT reads must be the name the process EXPORTS. These
+      // two drifted apart once (script read BUFF_GIT_TOKEN, code set
+      // NUVIRA_GIT_TOKEN), so the helper answered every prompt with an empty
+      // string and HTTPS auth quietly stopped working.
+      expect(scriptContent).toContain('NUVIRA_GIT_TOKEN');
       try { rmSync(askPassPath, { force: true }); } catch { /* best-effort */ }
     });
 
@@ -371,6 +382,143 @@ describe('CredentialStore', () => {
       expect(typeof status).toBe('string');
       expect(status.length).toBeGreaterThan(10);
       expect(status).toContain('Remote');
+    });
+  });
+
+  // ── Non-interactive init + the persisted store ────────────────────────
+
+  describe('initialize() — the non-interactive path the publish TOOL uses', () => {
+    it('marks the store collected so setup no longer throws', () => {
+      const store = new CredentialStore();
+      expect(store.collected).toBe(false);
+      (store as any)._git.token = 'ghp_init';
+
+      const creds = store.initialize();
+
+      expect(store.collected).toBe(true);
+      expect(creds.git.token).toBe('ghp_init');
+      // These are the two calls that threw for every tool-driven release
+      // before initialize() existed (both guarded by `_collected`).
+      expect(() => store.setupGitCredentials()).not.toThrow();
+      expect(() => store.setupNpmAuth()).not.toThrow();
+      store.cleanup();
+    });
+
+    it('is idempotent — collectAll() after initialize() never prompts', async () => {
+      const store = new CredentialStore();
+      (store as any)._git.token = 'ghp_x';
+      (store as any)._npm.token = 'npm_x';
+      store.initialize();
+
+      const creds = await store.collectAll();
+      expect(creds.git.token).toBe('ghp_x');
+      expect(creds.npm.token).toBe('npm_x');
+    });
+  });
+
+  describe('persisted store', () => {
+    it('picks up a stored GitHub token with no environment export', async () => {
+      const mod = await import('../../src/agents/credential-store.js');
+      expect(mod.storeReleaseCredential('GITHUB_TOKEN', 'ghp_stored_value_123').success).toBe(true);
+      // The whole point: the STORE carries it, not the environment.
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GH_TOKEN;
+
+      const store = new mod.CredentialStore();
+      expect(store.git.token).toBe('ghp_stored_value_123');
+      expect(store.canPush).toBe(true);
+    });
+
+    it('writes the store owner-only (0600)', async () => {
+      const mod = await import('../../src/agents/credential-store.js');
+      const result = mod.storeReleaseCredential('NPM_TOKEN', 'npm_perm_check_value');
+      expect(result.success).toBe(true);
+      const mode = (await import('node:fs')).statSync(result.path).mode & 0o777;
+      // A token file readable by other users on the box is a leak.
+      expect(mode).toBe(0o600);
+    });
+
+    it('reads a stored npm token when no .npmrc supplies one', async () => {
+      const mod = await import('../../src/agents/credential-store.js');
+      expect(mod.storeReleaseCredential('NPM_TOKEN', 'npm_stored_value_456').success).toBe(true);
+      delete process.env.NPM_TOKEN;
+
+      // Point HOME and cwd at the temp dir so the real ~/.npmrc and the repo's
+      // own .npmrc cannot supply a token — only the store can.
+      const realHome = process.env.HOME;
+      const realCwd = process.cwd();
+      process.env.HOME = testDir;
+      (process as any).cwd = () => testDir;
+      try {
+        const store = new mod.CredentialStore();
+        expect(store.npm.token).toBe('npm_stored_value_456');
+        expect(store.canPublish).toBe(true);
+      } finally {
+        if (realHome === undefined) delete process.env.HOME; else process.env.HOME = realHome;
+        (process as any).cwd = () => realCwd;
+      }
+    });
+
+    it('masks values and reports where each came from', async () => {
+      const mod = await import('../../src/agents/credential-store.js');
+      mod.storeReleaseCredential('GITHUB_TOKEN', 'ghp_abcdefghijklmnop');
+      delete process.env.GITHUB_TOKEN; // force the STORED origin
+
+      const status = mod.releaseCredentialStatus();
+      const row = status.rows.find((r: { role: string }) => r.role === 'git');
+
+      expect(row.set).toBe(true);
+      expect(row.origin).toBe('stored');
+      expect(row.masked).toBe('ghp_…mnop');
+      // The status surface must never carry the raw secret.
+      expect(JSON.stringify(status)).not.toContain('abcdefghijklmnop');
+    });
+
+    it('forgetReleaseCredential removes a stored value', async () => {
+      const mod = await import('../../src/agents/credential-store.js');
+      mod.storeReleaseCredential('NPM_TOKEN', 'npm_forget_me_now');
+      delete process.env.NPM_TOKEN;
+
+      const removed = mod.forgetReleaseCredential('NPM_TOKEN');
+      expect(removed.success).toBe(true);
+      expect(removed.removed).toBe(true);
+
+      // Isolate the `.npmrc` sources — the repo's own `.npmrc` carries a real
+      // token, so a bare assertion here would test THAT, not the store.
+      const realHome = process.env.HOME;
+      const realCwd = process.cwd();
+      process.env.HOME = testDir;
+      (process as any).cwd = () => testDir;
+      try {
+        expect(new mod.CredentialStore().npm.token).toBeFalsy();
+      } finally {
+        if (realHome === undefined) delete process.env.HOME; else process.env.HOME = realHome;
+        (process as any).cwd = () => realCwd;
+      }
+    });
+
+    it('forgetting a value that was never stored succeeds (intent already holds)', async () => {
+      const mod = await import('../../src/agents/credential-store.js');
+      const result = mod.forgetReleaseCredential('NPM_TOKEN');
+      expect(result.success).toBe(true);
+      expect(result.removed).toBe(false);
+    });
+
+    it('refuses an empty value', async () => {
+      const mod = await import('../../src/agents/credential-store.js');
+      const result = mod.storeReleaseCredential('NPM_TOKEN', '   ');
+      expect(result.success).toBe(false);
+      expect(result.reason).toBe('empty-value');
+    });
+
+    it('isReleaseCredentialKey accepts the release keys and rejects others', async () => {
+      const mod = await import('../../src/agents/credential-store.js');
+      expect(mod.isReleaseCredentialKey('GITHUB_TOKEN')).toBe(true);
+      expect(mod.isReleaseCredentialKey('NPM_TOKEN')).toBe(true);
+      expect(mod.isReleaseCredentialKey('GIT_USERNAME')).toBe(true);
+      expect(mod.isReleaseCredentialKey('NPM_REGISTRY')).toBe(true);
+      expect(mod.isReleaseCredentialKey('AWS_SECRET_ACCESS_KEY')).toBe(false);
+      expect(mod.isReleaseCredentialKey('totallymadeup')).toBe(false);
     });
   });
 

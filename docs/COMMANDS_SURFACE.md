@@ -1208,7 +1208,28 @@ Review one or more files and emit JSON findings
 
 Autonomous publish workflow — version, build, publish to npm & GitHub
 
-   - flags: `--dry-run, --major, --minor, --model <model>, --patch, --provider <provider>, --skip-tests, --verbose`
+   - flags: `--dry-run, --force, --fresh, --from <from>, --major, --minor, --model <model>, --no-preflight, --patch, --provider <provider>, --skip-tests, --verbose`
+### `nuvira credentials`
+
+Store GitHub/npm release credentials so the agent can release without re-entering them
+
+### `nuvira credentials status`
+
+Show which release credentials are available, and where each came from
+
+### `nuvira credentials set`
+
+Store a credential in the nuvira credential store
+
+   - flags: `--stdin, --value <value>`
+### `nuvira credentials forget`
+
+Delete a stored credential
+
+### `nuvira credentials verify`
+
+Check the stored GitHub and npm tokens against the live services
+
 ### `nuvira bedrock`
 
 AWS Bedrock setup and management (dedicated onboarding for Bedrock)
@@ -1302,4 +1323,4 @@ Delete all stored traces
 
 ---
 
-*423 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*429 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

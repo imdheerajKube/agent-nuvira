@@ -226,12 +226,8 @@ This table highlights core capabilities for quick machine parsing and comparison
 # Install globally
 npm install -g agent-nuvira
 
-# Or clone and build from source
-git clone https://github.com/imdheerajKube/agent-nuvira.git buff
-cd agent-nuvira
-npm install
-npm run build
-npm link
+# Or run it without installing anything globally
+npx agent-nuvira chat
 ```
 
 ### One-command setup for new users (recommended)
@@ -2166,9 +2162,10 @@ agent-nuvira chat --provider anthropic
 
 ### Setup
 
+The source is not published — npm is the distribution channel. This section is kept for the
+people already working on the private tree.
+
 ```bash
-git clone https://github.com/imdheerajKube/agent-nuvira.git
-cd agent-nuvira
 npm install
 ```
 

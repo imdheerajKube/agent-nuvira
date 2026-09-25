@@ -17,7 +17,7 @@
  */
 
 import { resolveProvider } from '../cli/router.js';
-import { resolveWorkingModel } from '../inference/model-validator.js';
+import { resolveRoute } from '../inference/route-resolver.js';
 import { getAutoRouter, isAutoProvider, isAutoModel } from '../learning/auto-router.js';
 import { Orchestrator, type OrchestrationResult } from '../agents/orchestrator.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
@@ -98,7 +98,13 @@ export async function runPipelineTool(
       );
       const resolved = resolveProvider(configManager, decision.provider);
       provider = resolved.type;
-      model = await resolveWorkingModel(resolved.provider, decision.provider, decision.model);
+      model = (await resolveRoute({
+        providerType: decision.provider,
+        provider: resolved.provider,
+        model: decision.model,
+        source: 'cli',
+        task: goal,
+      })).model;
     } catch (err) {
       return {
         success: false,

@@ -31,6 +31,7 @@ import { join } from 'node:path';
 
 import { buildGitStateDigest } from './git-digest.js';
 import { assessProject } from '../agents/prompt-assembly.js';
+import { handoffBlockFor } from '../agents/step-handoff.js';
 
 /** Hard budget: the tree block is truncated to this many lines (~1.5K tokens). */
 const MAX_TREE_LINES = 60;
@@ -142,6 +143,20 @@ export async function buildLoopProjectContext(dir: string): Promise<string> {
       lines.push('## Project', `- path: ${dir}`, `- ${bits.join('; ')}`);
     } catch {
       lines.push('## Project', `- path: ${dir}`);
+    }
+
+    // ── Unfinished work from earlier attempts in this project ──
+    // The loop engine re-reads the tree and re-plans on every turn, so without
+    // this a repeated or reworded ask restarts from zero even when a previous
+    // attempt already put half the deliverable on disk (see step-handoff.ts).
+    // Read and reconciled on EVERY context build, not only on an explicit
+    // resume. Self-labelled and self-bounded, so it is pushed as-is; a clean
+    // project adds nothing.
+    try {
+      const handoff = handoffBlockFor(dir);
+      if (handoff) lines.push('## Unfinished work (hand-off)', handoff);
+    } catch {
+      // Hand-off read is best-effort — omit on failure.
     }
 
     // ── Bounded file tree ──

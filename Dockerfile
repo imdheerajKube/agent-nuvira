@@ -58,7 +58,7 @@ FROM node:22-alpine AS runtime
 LABEL org.opencontainers.image.title="Agent-Nuvira"
 LABEL org.opencontainers.image.description="Multi-agent AI coding CLI — plan, write, review, test, and publish code"
 LABEL org.opencontainers.image.licenses="MIT"
-LABEL org.opencontainers.image.source="https://github.com/imdheerajKube/agent-nuvira"
+LABEL org.opencontainers.image.source="https://github.com/imdheerajKube/agent-nuvira-documentation"
 
 # Install minimal runtime dependencies (for child processes like git)
 RUN apk add --no-cache git

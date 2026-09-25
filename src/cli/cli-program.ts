@@ -65,6 +65,7 @@ import { MarketplaceCommand } from './marketplace.js';
 import { MCPCommand } from './mcp.js';
 import { CICommand } from './ci.js';
 import { PublishCommand } from './publish.js';
+import { CredentialsCommand } from './credentials.js';
 import { PhaseCommand } from './phase.js';
 import { RetrievalCommand } from './retrieval.js';
 import { TraceCommand } from './trace.js';
@@ -257,6 +258,9 @@ export function createCLI(): Command {
   // Register Publish command (Autonomous publish workflow)
   const publishCmd = new PublishCommand();
   program.addCommand(publishCmd.create());
+
+  // Register Credentials command (store the tokens the publish pipeline needs)
+  program.addCommand(new CredentialsCommand().create());
 
   // Register Bedrock command (dedicated AWS Bedrock onboarding)
   const bedrockCmd = new BedrockCommand();

@@ -76,6 +76,30 @@ export function resolveNuviraDataPath(...segments: string[]): string {
 }
 
 /**
+ * Resolve the directory that holds MCP server configs.
+ *
+ * Precedence: an explicit directory, `$NUVIRA_MCP_DIR` / `$BUFF_MCP_DIR`, then
+ * `<config dir>/mcp` — so `$NUVIRA_CONFIG_DIR` isolates this too — then
+ * `~/.nuvira/mcp`.
+ *
+ * WHY THIS EXISTS. Both call sites used to be a bare
+ * `join(homedir(), '.nuvira', 'mcp')`, which is the reach the note on
+ * {@link resolveNuviraHome} warns about. The cost was measured rather than
+ * assumed: the orchestrator calls `discoverConfigs()` on every run, so the test
+ * suite found the developer's REAL `github` / `exa` / `firecrawl` configs and
+ * spawned those servers mid-run. That is outbound network traffic from a test
+ * process, MCP responses arriving for clients the test had already torn down
+ * (`Received a response for an unknown message ID`), and a fully mocked test
+ * timing out at 15s. A test run must not be able to reach a live MCP server.
+ */
+export function resolveMcpConfigDir(explicitDir?: string): string {
+  if (explicitDir) return explicitDir;
+  const override = envBuff('MCP_DIR');
+  if (override) return override;
+  return join(resolveNuviraConfigDir(), 'mcp');
+}
+
+/**
  * Resolve the `.env` file that supplies provider credentials.
  *
  * Precedence: explicit `$NUVIRA_ENV_FILE` / `$BUFF_ENV_FILE`, then

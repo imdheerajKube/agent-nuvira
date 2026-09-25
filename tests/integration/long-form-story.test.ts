@@ -115,6 +115,13 @@ function ledger() {
   return JSON.parse(readFileSync(file, 'utf-8')) as { jobs: Record<string, { sections: Array<{ status: string; words: number; path: string }> }> };
 }
 
+// Every test here drives TWO real orchestrator runs (real reasoner, planner,
+// plan replacement, writer prose path, file writes, ledger) against a scripted
+// model. Measured ~3.6s each when nothing else runs, and over the default 5s
+// once the file shares the machine with other workers — which is how the 3.3.2
+// release's Test Verification gate failed on a suite where these tests pass.
+// The budget stays explicit here rather than leaning on the suite default: a
+// test this far above its peers in cost should say so at the call site.
 describe('E2E — the 100-page story ask on the hardened agent', () => {
   it('turns the hostile Python plan into bounded PROSE units and writes them to disk', async () => {
     const fake = storyProvider();
@@ -173,7 +180,7 @@ describe('E2E — the 100-page story ask on the hardened agent', () => {
     expect(result.pendingWork!.percent).toBeGreaterThan(0);
     expect(result.pendingWork!.percent).toBeLessThan(100);
     expect(result.pendingWork!.reason).toMatch(/content units remaining/);
-  });
+  }, 30_000);
 
   it('RESUMES on "continue" — it does not restart the book', async () => {
     const fake = storyProvider();
@@ -199,7 +206,7 @@ describe('E2E — the 100-page story ask on the hardened agent', () => {
     expect(Object.keys(afterSecond.jobs)).toHaveLength(1);
     expect(findInProgressJob(process.cwd())!.sections.filter((s) => s.status === 'done')).toHaveLength(8);
     expect(second.summary).toMatch(/chapter 8\/39/);
-  });
+  }, 30_000);
 
   it('does NOT re-decide the design on a continuation batch (G14)', async () => {
     // Continuing an in-flight job re-derives the unit plan from the ledger and
@@ -235,7 +242,7 @@ describe('E2E — the 100-page story ask on the hardened agent', () => {
 
     // The batch still did the real work: the next four units.
     expect(second.summary).toMatch(/chapter 8\/39/);
-  });
+  }, 30_000);
 
   it('finishes a whole work and ASSEMBLES the single document the user asked for', async () => {
     const fake = storyProvider();
@@ -271,5 +278,5 @@ describe('E2E — the 100-page story ask on the hardened agent', () => {
 
     // Nothing is left claimed-and-missing.
     expect(findInProgressJob(process.cwd())).toBeNull();
-  });
+  }, 30_000);
 });

@@ -24,6 +24,7 @@ import { getTool, type ToolContext } from '../../src/tools/registry.js';
 import { requestAuthorizesWrites } from '../../src/learning/autonomy-policy.js';
 import {
   classifyCommand,
+  addsDependency,
   isRecoverableWorkspaceCommand,
   runTerminalTool,
 } from '../../src/tools/run-terminal.js';
@@ -203,9 +204,60 @@ describe('run_terminal — recoverable workspace commands', () => {
   });
 
   it('recognises the recoverable install prefixes themselves', () => {
-    for (const command of ['npm install lodash', 'npm ci', 'pip install requests', 'git add src/x.ts', 'mkdir -p a/b']) {
+    // The DECLARED forms: they install what the manifest already says, so they
+    // introduce nothing new. (This list used to include `npm install lodash` — a
+    // command that WRITES a dependency — see the test below for why that is now
+    // a confirmation.)
+    for (const command of ['npm install', 'npm i', 'npm ci', 'pip install', 'poetry install', 'git add src/x.ts', 'mkdir -p a/b']) {
       expect(isRecoverableWorkspaceCommand(command), command).toBe(true);
     }
+  });
+
+  it('never grants autonomy to a command that ADDS a dependency', async () => {
+    // The live incident this rule exists for: `bcrypt@^6.0.0` and
+    // `express-jwt@^8.5.1` were written into this repo's package.json and
+    // package-lock.json mid-release, with no source file referencing either, one
+    // `git add -A` from being committed and published. Installing what a manifest
+    // declares is setup; DECLARING a dependency is a supply-chain decision and
+    // belongs to the human.
+    for (const command of [
+      'npm install bcrypt',
+      'npm i bcrypt express-jwt',
+      'npm add bcrypt',
+      'yarn add express-jwt',
+      'pnpm add left-pad',
+      'cargo add serde',
+      'pip install requests',
+      'uv add fastapi',
+      'composer require monolog/monolog',
+      // A flag does not make it declared: `--save-dev vitest` writes vitest into
+      // devDependencies, which is exactly the change the rule exists to gate.
+      'npm install --save-dev vitest',
+    ]) {
+      expect(isRecoverableWorkspaceCommand(command), command).toBe(false);
+    }
+
+    const out = await call('run_terminal', { command: 'npm install bcrypt' }, ctxFor(SETUP_ASK));
+    expect(out).toContain('needs explicit confirmation');
+  });
+
+  it('keeps flag-driven and path-driven installs recoverable — they declare nothing new', () => {
+    for (const command of [
+      'pip install -r requirements.txt',
+      'pip install -e .',
+      'uv pip install -r req.txt',
+    ]) {
+      expect(isRecoverableWorkspaceCommand(command), command).toBe(true);
+    }
+  });
+
+  it('names the add-only forms correctly, including the npm i alias', () => {
+    // `npm i` is an alias of `npm install`, so the BARE form is setup and the
+    // form with a package is not — the argument decides, not the command name.
+    expect(addsDependency('npm i')).toBe(false);
+    expect(addsDependency('npm i lodash')).toBe(true);
+    expect(addsDependency('go get github.com/x/y')).toBe(true);
+    expect(addsDependency('go mod tidy')).toBe(false);
   });
 });
 

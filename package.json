@@ -1,6 +1,6 @@
 {
   "name": "agent-nuvira",
-  "version": "3.3.1",
+  "version": "3.3.2",
   "description": "Agent-Nuvira: Multi-agent AI coding CLI — plan, write, review, test, and publish code with local models (Ollama) or cloud APIs (Groq, NVIDIA NIM, Google Gemini, OpenRouter)",
   "type": "module",
   "main": "dist/index.js",
@@ -21,6 +21,7 @@
     "build": "tsc && node -e \"require('fs').cpSync('src/resources','dist/resources',{recursive:true})\" && node scripts/fix-esm-extensions.mjs && node -e \"if(process.platform!=='win32')require('child_process').execSync('chmod +x dist/index.js')\" && node scripts/build-dashboard.mjs",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "release:artifacts": "npm run build && npm run demo:cli",
     "test": "vitest run",
     "test:all": "npm test && npm run test:dashboard",
     "test:dashboard": "node scripts/check-dashboard-deps.mjs && cd src/web-dashboard && npx vitest run",
@@ -62,12 +63,12 @@
   "author": "Dheeraj Sharma <imdheeraj@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/imdheerajKube/agent-nuvira.git"
+    "url": "git+https://github.com/imdheerajKube/agent-nuvira-documentation.git"
   },
   "bugs": {
-    "url": "https://github.com/imdheerajKube/agent-nuvira/issues"
+    "url": "https://github.com/imdheerajKube/agent-nuvira-documentation/issues"
   },
-  "homepage": "https://github.com/imdheerajKube/agent-nuvira#readme",
+  "homepage": "https://www.agent-nuvira.com/docs.html",
   "engines": {
     "node": ">=18.18.0"
   },

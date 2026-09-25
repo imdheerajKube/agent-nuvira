@@ -65,8 +65,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'publish',
     label: 'Publish',
-    description: 'Release publishing to npm/GitHub. IRREVERSIBLE — confirmation flows stay active.',
-    tools: ['publish'],
+    description: 'Release publishing to npm/GitHub, plus the credentials it needs (store a GitHub/npm token so a release works without an environment export). Publishing is IRREVERSIBLE — confirmation flows stay active.',
+    tools: ['publish', 'credentials'],
   },
   {
     name: 'experience',

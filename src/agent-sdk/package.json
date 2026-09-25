@@ -44,7 +44,7 @@
   "author": "Dheeraj Sharma",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/imdheerajKube/agent-nuvira.git"
+    "url": "git+https://github.com/imdheerajKube/agent-nuvira-documentation.git"
   },
   "engines": {
     "node": ">=21.7.0"

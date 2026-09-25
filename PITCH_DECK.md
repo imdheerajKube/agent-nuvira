@@ -334,7 +334,7 @@ Agent-Nuvira has reached production readiness with zero funding. We're seeking p
 
 **Closing:**
 - **Product:** `npm install -g agent-nuvira` → ready in 30 seconds
-- **Code:** github.com/imdheerajKube/agent-nuvira (MIT)
+- **Docs source:** github.com/imdheerajKube/agent-nuvira-documentation (MIT)
 - **Docs:** agent-nuvira.com
 - **Contact:** [Your contact info]
 

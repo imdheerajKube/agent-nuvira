@@ -18,6 +18,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { verifyArtifacts } from './artifact-verification.js';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pushDAGUpdate, updateDAGNode, resetDAG } from '../observability/dag-bridge.js';
@@ -31,7 +32,14 @@ import { shouldPromptWeakModel, promptWeakModelChoice, type WeakModelChoice } fr
 import { logger } from '../utils/logger.js';
 
 import { ContextVault } from './context-vault.js';
-import { saveCheckpoint, loadCheckpoint, checkpointIdFor } from './checkpoint-store.js';
+import {
+  saveCheckpoint,
+  loadCheckpoint,
+  checkpointIdFor,
+  findRelatedCheckpointFor,
+  reconcileTaskPlan,
+  planHasPendingWork,
+} from './checkpoint-store.js';
 import { Agent } from './agent.js';
 import type { AgentContext, LLMCallFn, AgentResult, TaskStep, OnRateLimit } from './agent.js';
 import {
@@ -100,11 +108,13 @@ import { sweepTransientFailures, sessionRevivalStore } from '../learning/provide
 import { resolveContextBudget, resolveContextFileBudget, resolveMaxOutputTokens } from '../learning/context-budget.js';
 import { clampMaxTokens, learnMaxTokensLimitFromError } from '../learning/provider-limits.js';
 import { resolveWorkingModel } from '../inference/model-validator.js';
+import { resolveRoute } from '../inference/route-resolver.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { withTraceCapture, beginTrace, endTrace } from '../learning/reasoning-trace.js';
 import { recordWorkingState } from '../learning/working-state.js';
+import { clearStepHandoff, deliverablesNamedIn, recordStepHandoff, stepKeyFor } from './step-handoff.js';
 import { createResilientCallLLM, type ResilientCallOptions } from '../learning/resilient-call.js';
 import { createReviewFromResult } from '../team/review.js';
 import { indexFiles, retrieve, recordRetrievalStats, retrievalOptionsFromConfig, estimateTokens as retrievalEstimateTokens } from '../learning/retrieval.js';
@@ -268,7 +278,16 @@ export interface OrchestratorOptions {
    * later with `--resume` (or a fresh run of the same goal). Checkpoints live
    * in ~/.nuvira/memory/checkpoints/ and let a crash / quota kill / token expiry
    * mid-pipeline continue from the first pending step instead of restarting.
-   * Default: false. Implied true when resumeCheckpointId is set.
+   * Default: false for the PER-BATCH saves (implied true when
+   * resumeCheckpointId is set).
+   *
+   * Independent of this flag, a run that ends with WORK UNFINISHED — a failed
+   * step, or a step that reported success whose declared deliverable is not on
+   * disk — always persists its ledger once. That is not a preference: it is the
+   * record of what still needs doing, and the run after it is the one that has
+   * to read it. Without this the live NVDA-addon failure left nothing behind for
+   * attempt #2 to inherit, which is why attempts #2 through #19 re-planned the
+   * same plan from zero.
    */
   checkpoint?: boolean;
   /**
@@ -719,31 +738,88 @@ export class Orchestrator {
       options.checkpoint === true ||
       !!options.resumeCheckpointId ||
       options.resumeRequested === true;
-    // LOAD only when the user explicitly asked to RESUME (bare --resume or an
-    // explicit id). Plain `--checkpoint` must NEVER silently resume a stale
-    // checkpoint from a previous run of the same goal — that would re-enter a
-    // completed plan and skip every task.
+    // ── The work ledger is LOADED AND RECONCILED ON EVERY RUN ────────────────
+    // v1.62.4 loaded it only on an explicit `--resume`, and that gate was
+    // justified by a real hazard: silently re-entering a COMPLETED plan would
+    // skip every task. The hazard is real, but the gate treated the checkpoint's
+    // own `completed` flags as proof — and the live NVDA-addon checkpoint said
+    // `5/5 completed` while three of those steps had produced nothing, so the
+    // one run that should have resumed was the one run forbidden from it. The
+    // same plan was then re-planned 18 times.
+    //
+    // The fix is to make the flags verifiable rather than to keep ignoring them:
+    // `reconcileTaskPlan` demotes a "completed" step whose DECLARED files are not
+    // on disk, and only then is the checkpoint consulted without being asked.
+    //
+    //   * explicit --resume        → load whatever is there, reconciled.
+    //   * same goal, no --resume   → load the auto-id checkpoint, reconciled;
+    //                                continue only if work is genuinely left.
+    //   * REWORDED goal            → the auto-id misses (it hashes goal + cwd),
+    //                                so fall back to the newest checkpoint for
+    //                                this PROJECT. This is what makes "do that
+    //                                addon thing again" resume instead of
+    //                                re-planning from zero.
+    //   * everything verified done → start fresh (the old guard, now earned).
     const resumeWanted = options.resumeRequested === true || !!options.resumeCheckpointId;
     let resumed = false;
     let vault: ContextVault;
-    if (resumeWanted) {
-      const saved = loadCheckpoint(resumeId);
-      if (saved) {
-        vault = ContextVault.fromSnapshot(saved.context);
-        resumed = true;
-        const done = saved.context.taskPlan.filter((s) => s.status === 'completed').length;
-        if (options.verbose) {
-          logger.info(`   ♻️ Resumed from checkpoint '${resumeId}' — ${done}/${saved.context.taskPlan.length} steps already complete`);
+    {
+      let saved = loadCheckpoint(resumeId);
+      let source: 'goal' | 'project' = 'goal';
+      if (!saved && !resumeWanted) {
+        // A reworded ask hashes to a different id — look for the same ask
+        // recorded differently. The goal test is required: taking the newest
+        // checkpoint in the directory would hand this run the plan of an
+        // unrelated run that merely shared a folder.
+        try {
+          saved = findRelatedCheckpointFor(process.cwd(), goal, { excludeId: resumeId });
+          if (saved) source = 'project';
+        } catch {
+          saved = null;
         }
-      } else {
-        // Resume explicitly requested but no checkpoint found — warn (a
-        // reworded goal silently misses the auto id) and start fresh with
-        // checkpointing on, so a later crash can still be resumed.
-        logger.warn(`   ⚠️ No checkpoint found for '${resumeId}' — starting a fresh pipeline (run with --checkpoint to save one)`);
-        vault = new ContextVault(goal, process.cwd());
       }
-    } else {
-      vault = new ContextVault(goal, process.cwd());
+
+      if (!saved) {
+        if (resumeWanted) {
+          // Resume explicitly requested but no checkpoint found — warn (a
+          // reworded goal silently misses the auto id) and start fresh with
+          // checkpointing on, so a later crash can still be resumed.
+          logger.warn(`   ⚠️ No checkpoint found for '${resumeId}' — starting a fresh pipeline (run with --checkpoint to save one)`);
+        }
+        vault = new ContextVault(goal, process.cwd());
+      } else {
+        const firstStep = saved.context.taskPlan.length;
+        const { context: reconciledContext, demoted } = reconcileTaskPlan(saved.context, process.cwd());
+        const workLeft = demoted.length > 0 || planHasPendingWork(reconciledContext);
+        // An explicit resume always continues. An automatic one continues only
+        // when reconciliation found real work — a plan that verifies as finished
+        // must not be re-entered (that is the hazard the old gate guarded).
+        if (resumeWanted || workLeft) {
+          vault = ContextVault.fromSnapshot(reconciledContext);
+          resumed = true;
+          const done = reconciledContext.taskPlan.filter((s) => s.status === 'completed').length;
+          if (demoted.length > 0) {
+            // Named, never silent: the checkpoint claimed these were done and
+            // the filesystem disagrees. That gap IS the bug being fixed.
+            logger.warn(
+              `   ♻️ Re-opened ${demoted.length} of ${firstStep} step(s) from checkpoint '${saved.id}' — "completed" but the deliverable is not on disk:`,
+            );
+            for (const d of demoted) logger.warn(`      ⛔ ${d.id}: ${d.reason}`);
+          }
+          if (options.verbose || demoted.length > 0) {
+            logger.info(
+              `   ♻️ ${source === 'project' ? 'Continuing this project\'s' : 'Resumed from'} checkpoint '${saved.id}' — ${done}/${reconciledContext.taskPlan.length} steps verified complete`,
+            );
+          }
+        } else {
+          // Every declared artifact is on disk — the plan is genuinely finished,
+          // so a fresh run starts fresh rather than skipping work it should do.
+          if (options.verbose) {
+            logger.info(`   ℹ️ Checkpoint '${saved.id}' verifies as complete — starting a fresh plan`);
+          }
+          vault = new ContextVault(goal, process.cwd());
+        }
+      }
     }
     // ── Transparency channel ─────────────────────────────────────────────
     // Agents call context.onAgentUpdate() (via Agent.report()) to stream
@@ -1533,7 +1609,29 @@ export class Orchestrator {
     // the COMPLETED state (including the final batch). Without this, the last
     // saved checkpoint would show the final step still 'pending', and a
     // --resume after a successful run would re-execute it.
-    if (checkpointEnabled) {
+    //
+    // ALSO saved when the run ends with work UNFINISHED, whether or not the user
+    // opted into checkpoints. A failed step, or a "completed" step whose declared
+    // deliverable is not on disk (see `reconcileTaskPlan`), means the ledger is
+    // the only thing standing between this run and the next one re-deriving the
+    // whole plan — which is exactly what happened 18 times on the live NVDA
+    // add-on ask. Bounded on purpose: a run that finished cleanly and opted out
+    // writes nothing, so the store does not grow on every invocation.
+    let persistLedger = checkpointEnabled;
+    if (!persistLedger) {
+      try {
+        const { demoted } = reconcileTaskPlan(vault.context, process.cwd());
+        persistLedger = vault.hasFailedTasks || demoted.length > 0;
+        if (persistLedger && options.verbose) {
+          logger.info(
+            `   💾 Work is unfinished (${vault.hasFailedTasks ? 'a step failed' : `${demoted.length} step(s) missing their deliverable`}) — saving the ledger for the next run`,
+          );
+        }
+      } catch {
+        // Best-effort — the ledger must never break result delivery.
+      }
+    }
+    if (persistLedger) {
       try {
         const cid = saveCheckpoint(vault.context, resumeId);
         if (cid && options.verbose) {
@@ -2042,18 +2140,33 @@ export class Orchestrator {
       // Resolve it to the provider's configured model (or best available) so
       // planner/memory/rate-limit-switch calls never crash with "no auto model".
       let requestedModel = options.model || inferenceOptions?.model || config.model;
-      // CRITICAL FIX: When no model is specified (undefined) or the sentinel 'default'
-      // is used, resolve via the provider's live model list. This ensures the pipeline
-      // never sends a literal 'default' or undefined to a provider API, which would 404.
-      if (!requestedModel || requestedModel === 'default') {
-        try {
-          const resolved = await resolveWorkingModel(provider, providerType, requestedModel);
-          requestedModel = resolved;
-        } catch {
-          // Best-effort — fall through to the original value if resolution fails
-        }
+      // 'auto' is a DIRECTIVE, not a model id: resolve it to the provider's
+      // configured model BEFORE validating, so the validator is never asked to
+      // repair a sentinel and the 'auto is not available on X' warning is not
+      // printed for a value the user never chose as a model.
+      if (isAutoModel(requestedModel)) {
+        requestedModel = config.model || undefined;
       }
-      const servedModel = isAutoModel(requestedModel) ? (config.model || requestedModel) : requestedModel;
+      // ALWAYS validate the pair — the model against THIS provider instance,
+      // which is the one that will serve the call.
+      //
+      // This used to run only when the model was empty or the literal 'default',
+      // which skipped the validator in exactly the case it was written for: a
+      // real, non-empty model id that does not belong to this provider (issue
+      // #10). A stale or foreign pin then went straight to the API and 404'd —
+      // `Groq API error (404): The model 'gemini-3.1-flash-lite' does not exist`
+      // — with the repair machinery sitting right there, unused.
+      //
+      // resolveRoute also owns the reporting: a substitution is printed and
+      // recorded rather than made silently, and NUVIRA_STRICT_MODEL=1 refuses to
+      // substitute at all (issue #11).
+      const route = await resolveRoute({
+        providerType,
+        provider,
+        model: requestedModel,
+        source: 'orchestrator',
+      });
+      const servedModel = route.model;
       const mergedOptions = {
         ...inferenceOptions,
         model: servedModel,
@@ -2973,26 +3086,66 @@ export class Orchestrator {
         stats.recoveredFailures += 1;
       }
 
-      // v1.62.4 — Deliverable verification: a writer step must actually
-      // produce its declared expectedFiles. Catches the live NVDA-addon bug
-      // where step "Create manifest.ini" reported success while writing
-      // globalPlugins/hello_anuj.py instead — a step that claims success
-      // without its deliverable is a FAILURE, so the pipeline repairs it
-      // instead of silently building on the wrong file. Checked BEFORE the
-      // result is pushed so agentResults/status reflect the corrected outcome.
-      if (effectiveAgentType === 'writer' && result.success && task.expectedFiles && task.expectedFiles.length > 0) {
-        const proposedPaths = vault.context.fileChanges
-          .filter((c) => c.status === 'created' || c.status === 'modified')
-          .map((c) => normalizeSlash(c.path));
-        const missing = task.expectedFiles.filter((f) => {
-          const norm = normalizeSlash(f);
-          // On disk (applied) OR proposed in this step's changes — either
-          // satisfies the deliverable.
-          return !proposedPaths.includes(norm) &&
-            !existsSync(isAbsolute(norm) ? norm : resolve(process.cwd(), norm));
-        });
-        if (missing.length > 0) {
-          const msg = `Deliverable mismatch — step claimed success but did not produce expected file(s): ${missing.join(', ')}`;
+      // ── The step's OWN writes reach disk BEFORE anything judges them ───────
+      // Ordering, and the reason it is load-bearing: the deliverable check just
+      // below asks whether the declared artifacts EXIST on disk. A writer's
+      // output only reaches disk in `applyFileChanges`, which used to run at the
+      // END of this block — after the check. So the check asked about a file the
+      // pipeline had not written yet, every creating writer step was reported as
+      // "step claimed success but the artifact is not there", and because the
+      // later apply is gated on `result.success` (now false) the write was then
+      // SKIPPED as well: the step failed itself AND lost its work. Both real
+      // long-form E2E tests caught it as "only unit 1 exists on disk".
+      if (result.success && !options.dryRun && (effectiveAgentType === 'writer' || effectiveAgentType === 'debugger')) {
+        const applied = this.applyFileChanges(vault);
+        if (applied > 0 && options.verbose) {
+          logger.info(
+            `      💾 Applied ${applied} file change${applied !== 1 ? 's' : ''} to disk` +
+              (effectiveAgentType === 'debugger' ? ' (debug fix)' : ''),
+          );
+        }
+      }
+
+      // Deliverable verification: a step that declares files must produce them
+      // ON DISK. Two holes in the v1.62.4 version of this guard let the live
+      // NVDA-addon failure through, and both are closed here.
+      //
+      //  1. It accepted the agent's own REPORT of what it wrote. That run's
+      //     `fileChanges` claimed .../kuttaaddon/installTasks.py was `created`
+      //     and the file did not exist — but the claim satisfied the check, so
+      //     the disk test never ran. A claim is not an artifact: only the
+      //     filesystem counts now, and a path that was reported as written while
+      //     being absent is named explicitly, because that discrepancy IS the
+      //     bug rather than a side note.
+      //  2. It only ran for `writer` steps. The step that fabricated the empty
+      //     package was a `runner` (`zip -r kuttaaddon.nvda-addon …`), so the one
+      //     step whose whole job was to produce the deliverable was structurally
+      //     exempt from the check. Any step may declare expectedFiles, so any
+      //     step is verified.
+      //
+      // The test is also no longer existence-only: an empty file is not a
+      // deliverable, and a zip holding zero entries is not a package (see
+      // artifact-verification.ts for how an empty archive is detected). Checked
+      // BEFORE the result is recorded so agentResults, the task status and the
+      // checkpoint all reflect the corrected outcome.
+      if (result.success && task.expectedFiles && task.expectedFiles.length > 0) {
+        const root = vault.context.workingDirectory || process.cwd();
+        const check = verifyArtifacts(task.expectedFiles, root);
+        if (!check.ok) {
+          const reported = new Set(
+            vault.context.fileChanges
+              .filter((c) => c.status === 'created' || c.status === 'modified')
+              .map((c) => normalizeSlash(c.path)),
+          );
+          const claimedButAbsent = check.missing.filter((f) => reported.has(normalizeSlash(f)));
+          const msg = [
+            `Deliverable mismatch — step claimed success but the artifact is not there: ${check.reason}`,
+            claimedButAbsent.length
+              ? `(reported as written but absent from disk: ${claimedButAbsent.join(', ')})`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' ');
           logger.warn(`      ⚠️ ${msg}`);
           result = {
             success: false,
@@ -3000,6 +3153,40 @@ export class Orchestrator {
             error: msg,
           };
         }
+      }
+
+      // ── DURABLE HAND-OFF: this step's outcome survives the run ─────────────
+      // A failed step writes down what it must produce and what is already on
+      // disk; a succeeded step CLEARS its own entry. That pairing is the whole
+      // mechanism — the live NVDA-addon run had no such record, so the next
+      // attempt inherited nothing and re-derived the same plan (18 times), and
+      // a step that finally succeeded would have stayed on the outstanding list
+      // forever without the clear.
+      //
+      // Keyed on the step's DECLARED artifacts when it has them, so the same
+      // deliverable asked for in different words maps to one hand-off. Root is
+      // the vault's own working directory — the same root the deliverable check
+      // above used, so the two can never disagree about where "on disk" means.
+      try {
+        const handoffRoot = vault.context.workingDirectory || process.cwd();
+        const declared = (task.expectedFiles ?? []).filter((f) => f && f.trim());
+        const runGoal = vault.context.goal;
+        if (result.success) {
+          if (declared.length > 0) clearStepHandoff(handoffRoot, stepKeyFor({ declared }));
+        } else {
+          const named = declared.length > 0 ? declared : deliverablesNamedIn(`${runGoal} ${task.description}`);
+          recordStepHandoff({
+            projectPath: handoffRoot,
+            goal: runGoal,
+            stepDescription: task.description,
+            declared: named,
+            route: effectiveAgentType,
+            kind: result.error && /refus|denied|outside the workspace/i.test(result.error) ? 'refused' : 'failed',
+            reason: result.error || result.summary,
+          });
+        }
+      } catch {
+        // Best-effort — the hand-off ledger must never break the pipeline.
       }
 
       vault.updateTaskStatus(task.id, result.success ? 'completed' : 'failed', result.summary);
@@ -3058,27 +3245,10 @@ export class Orchestrator {
         }
       }
 
-      // After debugger step: write debugger's fixes to disk immediately
-      // The DebuggerAgent's syncChangesToContext() updates context.fileChanges
-      // with LLM-generated fixes. If a runner step follows the debugger, those
-      // fixes must be on disk before the runner executes.
-      if (effectiveAgentType === 'debugger' && result.success && !options.dryRun) {
-        const applied = this.applyFileChanges(vault);
-        if (applied > 0 && options.verbose) {
-          logger.info(`      💾 Applied ${applied} debug fix(es) to disk`);
-        }
-      }
-
-      // After writer step: write files to disk immediately and sync into artifacts
-      // IMPORTANT: files MUST be on disk before the RunnerAgent tries to execute them
+      // ── Writer artifacts sync (writer/debugger writes were applied ABOVE,
+      // before the deliverable check, so a runner following this step still
+      // finds them on disk) ─────────────────────────────────────────────────
       if (effectiveAgentType === 'writer' && result.success) {
-        if (!options.dryRun) {
-          const applied = this.applyFileChanges(vault);
-          if (applied > 0 && options.verbose) {
-            logger.info(`      💾 Applied ${applied} file change${applied !== 1 ? 's' : ''} to disk`);
-          }
-        }
-
         const newArtifacts = vault.context.fileChanges
           .filter((c) => c.status === 'created' || c.status === 'modified')
           .filter((c) => c.newContent)
@@ -3681,7 +3851,18 @@ export class Orchestrator {
           try {
             const { config } = this.configManager.getProviderConfig(decision.provider as ProviderType);
             const adapter = ProviderFactory.createProvider(decision.provider as ProviderType, config);
-            workingModel = await resolveWorkingModel(adapter, decision.provider, decision.model);
+            // resolveRoute, not resolveWorkingModel: identical repair policy, but
+            // the pair is validated against the adapter that will serve the call
+            // and a substitution is printed + recorded instead of silent.
+            const route = await resolveRoute({
+              providerType: decision.provider,
+              provider: adapter,
+              model: decision.model,
+              source: 'orchestrator',
+              agentType: task.agentType,
+              task: task.description,
+            });
+            workingModel = route.model;
           } catch {
             workingModel = decision.model;
           }

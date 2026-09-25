@@ -24,6 +24,7 @@ import {
   isSurgicalEdit,
   requestNamesPath,
   requestRequestsCommit,
+  requestRequestsPush,
   IRREVERSIBLE_CLI_INTENTS,
   RECOVERABLE_CLI_INTENTS,
   EDIT_SURGICAL_MAX_FRACTION,
@@ -116,6 +117,54 @@ describe('requestRequestsCommit', () => {
       '',
     ]) {
       expect(requestRequestsCommit(request), request).toBe(false);
+    }
+  });
+});
+
+describe('requestRequestsPush — the outbound half of the commit rule', () => {
+  it('recognises a request that names a push', () => {
+    for (const request of [
+      'push this to origin',
+      'commit and push these changes',
+      'push the branch to github',
+      'push it',
+    ]) {
+      expect(requestRequestsPush(request), request).toBe(true);
+    }
+  });
+
+  it('recognises a remote DESTINATION plus a commit-shaped intent, even without the word push', () => {
+    // The live phrasing: the user asks for the work to land on GitHub and never
+    // says "push" once.
+    expect(requestRequestsPush('get this project committed to github')).toBe(true);
+    expect(requestRequestsPush('commit this to the remote')).toBe(true);
+    expect(requestRequestsPush('ship it to github.com')).toBe(true);
+  });
+
+  it('does NOT treat a LOCAL-ONLY commit request as push authorization', () => {
+    // The load-bearing distinction: the user asked to record work, not to send
+    // it anywhere — so no push may be inferred from it.
+    for (const request of [
+      'commit these changes',
+      'commit it with a good message',
+      'check in the changes',
+      'write a 12 page story',
+      'show me the diff',
+      '',
+    ]) {
+      expect(requestRequestsPush(request), request).toBe(false);
+    }
+  });
+
+  it('does NOT treat a withheld or merely-asked-about push as a request', () => {
+    for (const request of [
+      "don't push yet, I want to review",
+      'never push without asking me',
+      'do not push this anywhere',
+      'how do I push to github?',
+      'which remote should I push to?',
+    ]) {
+      expect(requestRequestsPush(request), request).toBe(false);
     }
   });
 });

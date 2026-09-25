@@ -14,10 +14,39 @@ export default defineConfig({
     // and the router obeys. Without this, a test that drives the real pipeline
     // records real routing telemetry (see tests/setup/hermetic-env.ts).
     setupFiles: ['tests/setup/hermetic-env.ts'],
-    // Disable parallel test file execution because the JSON file stores are
-    // shared within a process. Parallel threads corrupt the shared file system
-    // state. The full suite runs in <1s.
-    fileParallelism: false,
+    // The suite must not modify the project it runs in: this fails the run if a
+    // test (or something it spawns) changes the dependency set, and reports any
+    // path that became dirty during the run. See tests/setup/tree-guard.ts for
+    // why that distinction is drawn where it is.
+    globalSetup: ['tests/setup/tree-guard.ts'],
+    // The 5s default is sized for a unit test, and this suite is not all unit
+    // tests. MEASURED: three consecutive runs of the same 350 files failed a
+    // DIFFERENT single file each time — every one of them "Test timed out in
+    // 5000ms", every one green on its own (long-form-story, web-dashboard/server,
+    // orchestrator, gateway/retry-loop, composite-web-book). Chasing those one at
+    // a time cannot converge, because the next run surfaces a different subset,
+    // and a 5s deadline is a claim about machine scheduling rather than about the
+    // code. Tests that carry their own budget (30s/60s/120s/180s) are untouched —
+    // this only lifts the floor.
+    testTimeout: 15_000,
+    // Test files run in parallel. The old `fileParallelism: false` was written
+    // when every test shared one JSON memory store at ~/.buff/memory, so two
+    // files running at once corrupted the same files. `tests/setup/hermetic-env.ts`
+    // closed that: every test file now gets its own throwaway store, and under
+    // the forks pool a file runs in its own process. The guard outlived its
+    // reason and cost far more than it protected.
+    //
+    // MEASURED, not assumed. Serial execution let leaked child processes pile up
+    // as the run went on, and the suites that spawn real processes then stalled:
+    // 6 files cost ~16 minutes EACH (≈96 of a 114-minute run — 84% of the wall
+    // clock) while the other 344 files summed to ~18 minutes. The same 7
+    // process-spawning files are green in 54s wall with parallelism on, which is
+    // the difference between a suite that fits the release's Test Verification
+    // gate and one that trips it.
+    //
+    // Bounded on purpose: these suites fork node processes and bind sockets, so
+    // unbounded workers would trade one kind of contention for another.
+    maxWorkers: 4,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import inquirer from 'inquirer';
@@ -43,6 +43,7 @@ import { ConfigManager } from '../../src/config/manager.js';
 import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
 import { BUILTIN_PROVIDERS } from '../../src/learning/model-selection.js';
 import { getQuotaLedger, resetQuotaLedger } from '../../src/learning/quota-ledger.js';
+import { clearModelListCache } from '../../src/inference/model-validator.js';
 import { getAutoRouter } from '../../src/learning/auto-router.js';
 import * as modelProbe from '../../src/inference/model-probe.js';
 import { EventNames } from '../../src/observability/event-bus.js';
@@ -1433,6 +1434,174 @@ describe('Orchestrator — checkpoint resume', () => {
   });
 });
 
+// ─── Work-ledger continuity ─────────────────────────────────────────────────
+// The load-and-reconcile contract. The v1.62.4 gate loaded a checkpoint only on
+// an explicit `--resume`, justified by "re-entering a COMPLETED plan would skip
+// every task" — and the live NVDA-addon checkpoint was 5/5 on paper while empty
+// on disk, so the one run that should have resumed was the one forbidden from
+// it, and the same plan was re-derived 18 times.
+
+describe('Orchestrator — work-ledger continuity', () => {
+  let orchestrator: Orchestrator;
+  let tempDir: string;
+  let originalMemoryDir: string | undefined;
+
+  beforeEach(() => {
+    orchestrator = new Orchestrator();
+    tempDir = mkdtempSync(join(tmpdir(), 'buff-orch-ledger-'));
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
+
+    mockWriterExecute.mockReset();
+    mockPlannerExecute.mockReset();
+    mockReviewerExecute.mockReset();
+
+    vi.spyOn(orchestrator as any, 'applyFileChanges').mockReturnValue(0);
+    vi.spyOn(logger, 'info').mockImplementation(() => {});
+    vi.spyOn(logger, 'success').mockImplementation(() => {});
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    vi.spyOn(logger, 'highlight').mockImplementation(() => {});
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    vi.spyOn(logger, 'debug').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalMemoryDir === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('persists a ledger for a run that ends with an unfinished step (no --checkpoint)', async () => {
+    const { checkpointIdFor, loadCheckpoint } =
+      await import('../../src/agents/checkpoint-store.js');
+    mockPlannerExecute.mockImplementation(async (context: any) => {
+      context.taskPlan = [{
+        id: 'step-1',
+        agentType: 'writer',
+        description: 'Write the code',
+        dependsOn: [],
+        status: 'pending' as const,
+      }];
+      return { success: true, summary: 'planned' };
+    });
+    mockWriterExecute.mockImplementation(async () => ({
+      success: false,
+      summary: 'could not write the file',
+      error: 'write_file was refused',
+    }));
+
+    // No checkpoint flags at all — the default the live WhatsApp runs used.
+    await orchestrator.execute('ship the unpaid report', {
+      provider: 'groq',
+      model: 'llama-3.3-70b',
+    });
+
+    // The broken run left the next one something to inherit.
+    const saved = loadCheckpoint(checkpointIdFor('ship the unpaid report', process.cwd()));
+    expect(saved).not.toBeNull();
+    expect(saved!.context.taskPlan[0]!.status).toBe('failed');
+  });
+
+  it('re-opens a false completion and resumes on a REWORDED ask', async () => {
+    const { checkpointIdFor, saveCheckpoint } =
+      await import('../../src/agents/checkpoint-store.js');
+    const originalGoal = 'build the nvda addon package for deployment';
+    const rewordedGoal = 'build the nvda addon package for deployment and delivery';
+    // Absolute, so the reconcile root (cwd) cannot change the verdict.
+    const deliverable = join(tempDir, 'kuttaaddon.nvda-addon');
+
+    // A checkpoint that CLAIMS the packaging step is done, with nothing on disk.
+    saveCheckpoint(
+      {
+        goal: originalGoal,
+        workingDirectory: process.cwd(),
+        taskPlan: [{
+          id: 'step-04',
+          description: 'Package the addon',
+          agentType: 'writer',
+          dependsOn: [],
+          status: 'completed',
+          result: 'done',
+          expectedFiles: [deliverable],
+        }],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any,
+      checkpointIdFor(originalGoal, process.cwd()),
+    );
+    expect(existsSync(deliverable)).toBe(false);
+
+    // This time the step actually produces the package.
+    mockWriterExecute.mockImplementation(async () => {
+      writeFileSync(deliverable, 'PK\u0003\u0004 a real package with real entries inside it\n');
+      return { success: true, summary: 'packaged the add-on' };
+    });
+
+    const result = await orchestrator.execute(rewordedGoal, {
+      provider: 'groq',
+      model: 'llama-3.3-70b',
+    });
+
+    // The plan was INHERITED and reconciled, not re-derived — the whole point.
+    expect(mockPlannerExecute).not.toHaveBeenCalled();
+    // The falsely-completed step was re-opened and re-run...
+    expect(mockWriterExecute).toHaveBeenCalledTimes(1);
+    // ...and this time the deliverable is really there.
+    expect(existsSync(deliverable)).toBe(true);
+    expect(result.success).toBe(true);
+  });
+
+  it('still starts fresh when the inherited plan verifies as genuinely complete', async () => {
+    const { checkpointIdFor, saveCheckpoint } =
+      await import('../../src/agents/checkpoint-store.js');
+    const goal = 'write the release notes for the parser';
+    const deliverable = join(tempDir, 'NOTES.md');
+    writeFileSync(deliverable, '# Notes\n');
+
+    saveCheckpoint(
+      {
+        goal,
+        workingDirectory: process.cwd(),
+        taskPlan: [{
+          id: 'step-1',
+          description: 'Write the notes',
+          agentType: 'writer',
+          dependsOn: [],
+          status: 'completed',
+          result: 'done',
+          expectedFiles: [deliverable],
+        }],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {},
+      } as any,
+      checkpointIdFor(goal, process.cwd()),
+    );
+
+    mockPlannerExecute.mockImplementation(async (context: any) => {
+      context.taskPlan = [{
+        id: 'step-fresh',
+        agentType: 'writer',
+        description: 'Write fresh notes',
+        dependsOn: [],
+        status: 'pending' as const,
+      }];
+      return { success: true, summary: 'planned' };
+    });
+    mockWriterExecute.mockImplementation(async () => ({ success: true, summary: 'wrote notes' }));
+
+    await orchestrator.execute(goal, { provider: 'groq', model: 'llama-3.3-70b' });
+
+    // Nothing was outstanding, so the run did real work instead of skipping it.
+    expect(mockPlannerExecute).toHaveBeenCalledTimes(1);
+    expect(mockWriterExecute).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ─── Review Mode Integration ────────────────────────────────────────────────
 
 describe('Orchestrator — review mode integration', () => {
@@ -1804,10 +1973,22 @@ describe('Orchestrator — auto model resolution', () => {
     expect(generate).toHaveBeenCalledTimes(1);
     const options = generate.mock.calls[0][1];
     expect(options.model).not.toBe('auto');
-    // Falls back to the provider's configured model — derive it from the same
-    // config the orchestrator reads (never hardcode a machine-specific pin).
+    // …and the `default` SENTINEL must not reach the API either. This used to
+    // assert `config.model || 'default'`, which encoded the very defect that was
+    // fixed: `default` is not a model id, and handing it to a provider 404'd live
+    // (`The model 'default' does not exist` — the WhatsApp song incident).
+    //
+    // The resolver now turns `auto`/`default` into a REAL model: the provider's
+    // configured pin when it has one, otherwise a verified model for the
+    // provider. Which model that is depends on this machine's registry, so the
+    // assertion is the invariant (no directive, no sentinel) plus the pin when
+    // one exists — never a hardcoded model name.
+    expect(options.model).toBeTruthy();
+    expect(options.model).not.toBe('default');
     const { config } = cm.getProviderConfig('local');
-    expect(options.model).toBe(config.model || 'default');
+    if (config.model && config.model !== 'default') {
+      expect(options.model).toBe(config.model);
+    }
   });
 
   it('should never pass provider "auto" to ProviderFactory when createLLMProvider is called', async () => {
@@ -2383,6 +2564,20 @@ describe('Orchestrator — auto-routed failure telemetry', () => {
   });
 
   it('keeps transient (server) failures non-blocking but learned (error rate)', async () => {
+    // ISOLATE the routing STATE before deciding what this test measures.
+    //
+    // The resolver now validates every pair before calling it, so any state an
+    // earlier test left behind changes WHICH model this test's 500 is recorded
+    // against: a parked/blocked groq model is routed around (the previous test
+    // parks groq on a 429), and a live list cached from an earlier fake provider
+    // can substitute the model outright. Either way the error lands on the
+    // SUBSTITUTE and this test measures nothing — it passed alone and failed
+    // in-file before these three resets (registry, quota ledger, model-list
+    // cache).
+    resetModelRegistry();
+    resetQuotaLedger();
+    clearModelListCache();
+
     const cm = new ConfigManager();
     const orch = new Orchestrator(cm);
 

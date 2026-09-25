@@ -53,7 +53,49 @@ import {
   type ToolCallEvidence,
 } from './edit-verification.js';
 import { effectiveToolJsonSchemas, coreToolJsonSchemas, isToolEnabled, toolsetForTool } from './toolsets.js';
+import { deliverablesNamedIn, recordStepHandoff } from '../agents/step-handoff.js';
 import type { TraceEvent, TraceGateName } from '../learning/reasoning-trace.js';
+
+/**
+ * Tools that MUTATE the workspace. A refusal of one of these is the only
+ * refusal that leaves work undone — a declined `read_file` costs a step, a
+ * declined `write_file` means the deliverable was never produced.
+ */
+const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'write_file',
+  'edit_file',
+  'propose_change',
+  'run_terminal',
+  'run_cli',
+]);
+
+/** The path a mutating call was aimed at, when it named one. */
+function mutatedPathOf(args: unknown): string | undefined {
+  const a = args as { path?: unknown; file_path?: unknown; file?: unknown } | undefined;
+  const p = a?.path ?? a?.file_path ?? a?.file;
+  return typeof p === 'string' && p.trim() ? p.trim() : undefined;
+}
+
+/**
+ * The ask this turn is answering — the text a hand-off is keyed against.
+ * `authorizationRequest` is the loop's own record of the last user message;
+ * the thread scan is the fallback for callers that do not set it (tests, direct
+ * invocations). Injected blocks (`[Project context]`, the route feed) are
+ * skipped: they are the loop's own additions, not the user's words.
+ */
+function currentAsk(opts: ToolLoopOptions): string {
+  const recorded = opts.context?.authorizationRequest?.trim();
+  if (recorded) return recorded.slice(0, 600);
+  const messages = opts.messages ?? [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    const text = (m.content ?? '').trim();
+    if (!text || text.startsWith('[')) continue;
+    return text.slice(0, 600);
+  }
+  return '';
+}
 
 /**
  * G18 — one NON-LLM fact about a loop turn, as the loop observed it.
@@ -67,6 +109,8 @@ import type { TraceEvent, TraceGateName } from '../learning/reasoning-trace.js';
 export type LoopTraceEvent = Omit<TraceEvent, 'seq' | 'timestamp'>;
 import { appendToolArtifact } from './artifact-append.js';
 import type { ToolMessage } from '../inference/interface.js';
+import type { ServedRoute } from '../inference/route-resolver.js';
+import { ROUTE_FEED_MARKER, isUnresolvedModel, routeFeedFingerprint, routeFeedText } from './loop-route-feed.js';
 import { logger } from '../utils/logger.js';
 import {
   toUserFacingGenerationError,
@@ -294,6 +338,17 @@ export interface ToolLoopOptions {
   /** ToolContext for executions (configManager, followups sink, board, ...). */
   context: ToolContext;
   deps: ToolLoopDeps;
+  /**
+   * The route that is ACTUALLY serving this turn, read before every model call.
+   *
+   * The loop re-reads it each step so a mid-turn failover cannot leave the model
+   * believing it is still the model it started on — the cheap alternative (state
+   * the route once, in the system prompt) is a fact that decays. Returning `null`
+   * injects nothing: a caller that does not know the route must not be "helped"
+   * by a guess. See `src/tools/loop-route-feed.ts` for why the model is told at
+   * all.
+   */
+  servedRoute?: () => ServedRoute | null;
   /**
    * P4 — stream content tokens as the model generates them (typewriter for
    * the dashboard's final answer). Passed to every callModel; providers that
@@ -853,6 +908,8 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   };
 
   const thread: ToolMessage[] = [...messages];
+  /** Serving pairs the loop has already told the model about, oldest first. */
+  const routeFeedState = { pairs: [] as string[] };
   // ── Stage 2: answer a question ABOUT the run from the run ────────────────
   // The live audit's worst moment was the user asking "why are you asking me
   // this again and again?" and the turn replying with an edit plan — not through
@@ -922,6 +979,12 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         deps.onEvent?.(`   ✂️ ${trimmedResult.trimmed} old tool result(s) trimmed to fit the ${Math.round(budgetChars / 1000)}K-char context budget.`);
       }
     }
+    // ── The route feed, re-synced before every call ────────────────────────
+    // Placed here rather than at thread construction because THIS is the last
+    // point before the call: a failover during step N must be visible at step
+    // N+1, and a single up-front line would have the model answering about a
+    // model that has since stopped serving it.
+    syncRouteFeed(thread, opts.servedRoute, routeFeedState);
     let response: StepResponse;
     try {
       response = await deps.callModel(thread, schemas, opts.onToken, opts.signal);
@@ -1517,6 +1580,39 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // can see "blocked twice, identically" instead of rediscovering it — and
         // so the repetition gate has a refusal signal as well as an ask signal.
         runTrace.recordRefusal(call.name, refusal?.gate ?? 'error', rawResult);
+        // ── DURABLE HAND-OFF ────────────────────────────────────────────────
+        // A refused MUTATION is the one failure that must outlive the turn.
+        // The live NVDA-addon failure is exactly this: `write_file` was refused
+        // on every attempt because the target was outside the workspace, and
+        // each of the 18 following attempts rediscovered it from zero — same
+        // plan, same refusal, same empty package. Recording it here means the
+        // next candidate, the next turn and the next RUN are told which path
+        // could not be written and WHY, so they change approach instead of
+        // repeating the identical call (see step-handoff.ts).
+        //
+        // Best-effort: a hand-off write must never break the loop.
+        if (refusal !== null && MUTATING_TOOL_NAMES.has(call.name)) {
+          try {
+            const ask = currentAsk(opts);
+            const aimedAt = mutatedPathOf(call.arguments);
+            // Key on the deliverable the ASK names when there is one, so the
+            // same work asked for in different words resumes the same hand-off.
+            const named = deliverablesNamedIn(ask);
+            recordStepHandoff({
+              projectPath: opts.context?.cwd || process.cwd(),
+              goal: ask,
+              stepDescription: aimedAt
+                ? `${call.name} → ${aimedAt} (refused: ${refusal.gate ?? 'gate'})`
+                : `${call.name} (refused: ${refusal.gate ?? 'gate'})`,
+              declared: named.length > 0 ? named : aimedAt ? [aimedAt] : [],
+              route: 'loop',
+              kind: 'refused',
+              reason: `${refusal.summary}${aimedAt ? ` — path: ${aimedAt}` : ''}`,
+            });
+          } catch {
+            // Best-effort — a hand-off write must never break the loop.
+          }
+        }
       }
       let resultText = executed[i];
       // P3c — on error/denial, append the deterministic fallback hint for
@@ -1841,6 +1937,76 @@ export function detectUnfulfilledIntentPromise(content: string): boolean {
  * honest-answer flags so every surface (CLI, dashboard, gateway, trace) can
  * distinguish "generated a reply" from "actually performed the action".
  */
+/**
+ * Keep ONE route frame in the thread, current with what is serving the turn.
+ *
+ * Insert/replace is deliberate: appending a frame per step would pile up stale
+ * route claims the model can quote back ("I am gemini-2.5-flash" — from step 1,
+ * after a failover), and rewriting unconditionally would churn the thread (and
+ * the thread budget) on every step for no change in content.
+ *
+ * A caller with no route supplies nothing; a caller whose route resolves to the
+ * same fact as last step gets no write.
+ */
+function syncRouteFeed(
+  thread: ToolMessage[],
+  read: (() => ServedRoute | null) | undefined,
+  observed: { pairs: string[] },
+): void {
+  if (!read) return;
+  let route: ServedRoute | null = null;
+  try {
+    route = read();
+  } catch {
+    // A route read must never break the turn; an unknown route is a fact too.
+    return;
+  }
+  if (!route) return;
+
+  // The loop OWNS the failover history, because the loop is the only thing that
+  // sees the sequence of routes it told the model about. Requiring each caller
+  // to track it means every future caller can silently forget, and a model told
+  // only the current pair describes the whole turn as having been run by it —
+  // the same fabricated answer, one layer down.
+  const currentPair = isUnresolvedModel(route.model) ? '' : `${route.providerType}/${route.model}`;
+  const previous = [...(route.previous ?? [])];
+  for (const pair of observed.pairs) {
+    if (pair !== currentPair && !previous.includes(pair)) previous.push(pair);
+  }
+  const rendered: ServedRoute = previous.length > 0 ? { ...route, previous } : route;
+
+  const fingerprint = routeFeedFingerprint(rendered);
+  const index = thread.findIndex(
+    (m) => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith(ROUTE_FEED_MARKER),
+  );
+
+  if (currentPair && !observed.pairs.includes(currentPair)) observed.pairs.push(currentPair);
+
+  if (index === -1) {
+    const frame: ToolMessage = { role: 'system', content: routeFeedText(rendered) };
+    // Immediately after the leading system prompt when there is one — the route
+    // belongs with the run's own framing, not buried under tool output.
+    const insertAt = thread.length > 0 && thread[0].role === 'system' ? 1 : 0;
+    thread.splice(insertAt, 0, frame);
+    routeFeedFingerprints.set(frame, fingerprint);
+    return;
+  }
+
+  const existing = thread[index];
+  if (routeFeedFingerprints.get(existing) === fingerprint) return;
+  const updated: ToolMessage = { role: 'system', content: routeFeedText(rendered) };
+  thread[index] = updated;
+  routeFeedFingerprints.delete(existing);
+  routeFeedFingerprints.set(updated, fingerprint);
+}
+
+/**
+ * Fingerprint per frame object, so a thread that was trimmed and re-built does
+ * not re-write identical content. A WeakMap: a frame the loop drops is garbage
+ * the moment nothing references it.
+ */
+const routeFeedFingerprints = new WeakMap<ToolMessage, string>();
+
 export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult> {
   const progress: ToolLoopProgress = {
     successfulToolCalls: [],

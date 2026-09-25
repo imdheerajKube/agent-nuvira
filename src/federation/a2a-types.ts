@@ -261,7 +261,7 @@ export function createDefaultAgentCard(baseUrl: string, nodeName: string): Agent
     url: baseUrl,
     identity: {
       organization: 'Agent-Nuvira',
-      documentationUrl: 'https://github.com/imdheerajKube/agent-nuvira',
+      documentationUrl: 'https://github.com/imdheerajKube/agent-nuvira-documentation',
     },
     capabilities: [
       { id: 'code-generation', name: 'Code Generation', description: 'Generate new source code files and projects' },

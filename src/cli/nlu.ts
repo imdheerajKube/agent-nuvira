@@ -18,7 +18,7 @@ import { explainAskKind } from '../nlu/conversation-gate.js';
 import { listLearnings, removeLearning } from '../nlu/learnings.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { resolveProvider } from './router.js';
-import { resolveWorkingModel } from '../inference/model-validator.js';
+import { resolveRoute } from '../inference/route-resolver.js';
 import type { LLMCallFn } from '../agents/agent.js';
 
 export class NluCommand extends BaseCommand {
@@ -130,7 +130,13 @@ export class NluCommand extends BaseCommand {
         this.configManager,
       );
       const resolved = resolveProvider(this.configManager, decision.provider);
-      const model = await resolveWorkingModel(resolved.provider, decision.provider, decision.model);
+      const model = (await resolveRoute({
+        providerType: decision.provider,
+        provider: resolved.provider,
+        model: decision.model,
+        source: 'cli',
+        task: query,
+      })).model;
       const callLLM: LLMCallFn = (prompt, opts) => resolved.provider.generate(prompt, { ...opts, model });
       const verified = await parseRequest(query, callLLM, process.cwd());
       logger.info(`LLM verify  : intent=${verified.intent} confidence=${verified.confidence.toFixed(2)} source=${verified.source}`);

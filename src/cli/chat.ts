@@ -6,7 +6,7 @@ import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { BaseCommand, getCliName } from './commands.js';
 import { resolveProvider } from './router.js';
-import { resolveWorkingModel } from '../inference/model-validator.js';
+import { resolveRoute } from '../inference/route-resolver.js';
 import { showModelPicker } from './model-picker.js';
 import { ContextParser } from '../context/parser.js';
 import { getCache } from '../context/cache.js';
@@ -1548,6 +1548,11 @@ export class ChatCommand extends BaseCommand {
       });
       result = await runToolLoop({
         messages: thread,
+        // The route the model is TOLD about itself. Read fresh each step from the
+        // session, which the failover path above updates — so a turn that moves
+        // providers mid-answer describes what actually answered it, instead of
+        // whatever the config or the model's training data suggests.
+        servedRoute: () => ({ providerType: session.type, model: session.model ?? '' }),
         context: toolContext,
         maxSteps: 16,
         // Model-window-aware thread budget: a 1M-token model keeps its window
@@ -2461,8 +2466,17 @@ export class ChatCommand extends BaseCommand {
             : getAutoRouter().resolveModel(candidate.provider, 'chat', this.configManager);
           // Model health: only use models that actually exist on the provider.
           // A provider's pinned config.model can be deprecated or a placeholder
-          // (e.g. gemini-2.0-flash-exp → 404) — repair to a live model.
-          const model = await resolveWorkingModel(resolved.provider, candidate.provider, desired);
+          // (e.g. gemini-2.0-flash-exp → 404) — repair to a live model. The pair
+          // is validated against `resolved.provider`, the adapter that serves the
+          // call, and a substitution is printed rather than made silently.
+          const model = (await resolveRoute({
+            providerType: candidate.provider,
+            provider: resolved.provider,
+            model: desired,
+            source: 'chat',
+            agentType: 'chat',
+            task: message,
+          })).model;
           // Record the actually-used route for the dashboard audit trail
           recordRoutingDecision({
             source: 'chat',
@@ -2506,7 +2520,14 @@ export class ChatCommand extends BaseCommand {
       score: decision.score,
     });
     const resolved = resolveProvider(this.configManager, usableProvider);
-    const model = await resolveWorkingModel(resolved.provider, usableProvider, decision.model);
+    const model = (await resolveRoute({
+      providerType: usableProvider,
+      provider: resolved.provider,
+      model: decision.model,
+      source: 'chat',
+      agentType: 'chat',
+      task: message,
+    })).model;
     return {
       type: resolved.type,
       provider: resolved.provider,

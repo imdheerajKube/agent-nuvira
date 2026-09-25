@@ -117,10 +117,22 @@ const VERIFY_PREFIXES: string[] = [
  *   - anything fetched and executed (`curl … | bash`);
  *   - publishing, deploying, pushing (denied outright anyway);
  *   - arbitrary code (`node -e`, `python -c`) and unknown commands — the
- *     deny-first default is unchanged, so this list is the ONLY new autonomy.
+ *     deny-first default is unchanged, so this list is the ONLY new autonomy;
+ *   - **a command that ADDS a dependency** (`npm install bcrypt`, `yarn add x`,
+ *     `cargo add y`) — see {@link addsDependency}.
+ *
+ * That last carve-out is the fix for a live incident: `bcrypt@^6.0.0` and
+ * `express-jwt@^8.5.1` appeared in this repo's `package.json` and
+ * `package-lock.json` mid-release, during a run in which the release pipeline
+ * was between its commit and its publish phase — one `git add -A` from being
+ * committed and published, with no code referencing either package. A
+ * dependency is not a build step: "install what the manifest declares" is
+ * setup (recoverable), while "declare a new dependency" is a supply-chain
+ * decision, and that is a human's to make.
  */
 const RECOVERABLE_PREFIXES: string[] = [
-  // Dependency lifecycle — the requested build's own setup.
+  // Dependency lifecycle — the requested build's own setup. The ADD forms are
+  // filtered out by `addsDependency` (a new dependency is a decision).
   'npm install', 'npm i', 'npm ci', 'npm add', 'npm init',
   'pnpm install', 'pnpm i', 'pnpm add',
   'yarn install', 'yarn add',
@@ -142,6 +154,73 @@ const RECOVERABLE_PREFIXES: string[] = [
  */
 const COMPOSED_COMMAND_RE = /[;&|<>`]|\$\(/;
 
+/**
+ * Package managers whose `<cmd> <pkg>` form WRITES a new dependency into a
+ * manifest or lockfile. These always add, whatever the arguments look like.
+ * (`npm ci` is absent on purpose: it installs the lockfile and accepts no
+ * package arguments, so an argument passed to it is already out of contract —
+ * it is handled by the generic rule below.)
+ */
+const ADD_COMMAND_PREFIXES: string[] = [
+  // Only the forms that REQUIRE a package name. `npm i` is an alias of
+  // `npm install` and is handled by the argument check below, so the bare
+  // `npm i` (setup) stays recoverable while `npm i bcrypt` does not.
+  'npm add', 'yarn add', 'pnpm add', 'bun add',
+  'cargo add', 'go get', 'composer require', 'poetry add', 'uv add',
+];
+
+/**
+ * Installers that are RECOVERABLE when they read a manifest and become an ADD
+ * when they name a package (`npm install bcrypt`).
+ */
+const INSTALL_COMMAND_PREFIXES: string[] = [
+  'npm install', 'npm i', 'npm ci', 'pnpm install', 'pnpm i',
+  'yarn install', 'bun install',
+  'pip install', 'pip3 install', 'python -m pip install', 'uv pip install',
+  'poetry install',
+];
+
+/** Flags whose VALUE is the declared set (a requirements file, a local path). */
+const DECLARED_INSTALL_FLAGS = new Set(['-r', '--requirement', '-e', '--editable']);
+
+/** Bare arguments that mean "install what is already declared", not "install this". */
+const DECLARED_INSTALL_ARGS = new Set(['.', '-d', '--dev']);
+
+/**
+ * Does this command ADD a dependency (rather than install what is declared)?
+ *
+ * This is the line between setup and a supply-chain decision, and it is drawn
+ * from the command text alone: `npm install` reads the manifest, `npm install
+ * bcrypt` writes to it. A command that cannot be read this way (composed,
+ * global) is already excluded from autonomy by the callers' other gates.
+ */
+export function addsDependency(command: string): boolean {
+  const lower = normalize(command).toLowerCase();
+  if (!lower) return false;
+
+  const hasPrefix = (prefixes: string[]): boolean => {
+    const toks = leadingTokens(lower, 2);
+    return prefixes.some((p) => {
+      const pt = p.split(' ');
+      return pt.length <= toks.length && toks.slice(0, pt.length).join(' ') === p;
+    });
+  };
+
+  if (hasPrefix(ADD_COMMAND_PREFIXES)) return true;
+  if (!hasPrefix(INSTALL_COMMAND_PREFIXES)) return false;
+  // Reached only for an install form: decide from its arguments.
+
+  const rest = lower.split(' ').slice(2);
+  // `-r requirements.txt` / `-e .` ARE the declared set — the file/list that
+  // follows the flag is not a package name, so the flag itself settles it.
+  if (rest.some((a) => DECLARED_INSTALL_FLAGS.has(a))) return false;
+  // Otherwise an installer WITH a package argument declares that package.
+  const args = rest.filter((a) => !a.startsWith('-'));
+  return args.some((arg) => !DECLARED_INSTALL_ARGS.has(arg));
+}
+
+
+
 /** A global install mutates the machine, not the repo — never recoverable. */
 const GLOBAL_INSTALL_RE = /(?:^|\s)(?:-g|--global)(?:\s|$)/;
 
@@ -154,6 +233,11 @@ export function isRecoverableWorkspaceCommand(command: string): boolean {
   if (!lower) return false;
   if (COMPOSED_COMMAND_RE.test(lower)) return false;
   if (GLOBAL_INSTALL_RE.test(lower)) return false;
+  // Declaring a NEW dependency is a human decision, not a build step (see the
+  // docstring above and `addsDependency`). The bare install forms stay
+  // recoverable: they introduce nothing the manifest did not already declare.
+  if (addsDependency(lower)) return false;
+
   const toks = leadingTokens(lower, 3);
   return RECOVERABLE_PREFIXES.some((prefix) => {
     const pt = prefix.split(' ');

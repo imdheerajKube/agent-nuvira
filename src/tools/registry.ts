@@ -312,6 +312,27 @@ export const publishToolSchema = z.object({
   skip_tests: z.boolean().default(false).describe('Skip the test-verification phase'),
 });
 
+/**
+ * Release credentials (store/status/forget/verify) — the E3c publish tool can
+ * only release with a GitHub and an npm token, and this is how the agent keeps
+ * them. Storing is NOT an irreversible external action, so it is not gated —
+ * but the VALUE must come from the user: `ask_user` for it, never invent one.
+ */
+export const credentialsToolSchema = z.object({
+  action: z
+    .enum(['status', 'store', 'forget', 'verify'])
+    .default('status')
+    .describe('status = which credentials exist and where each came from; store = persist a token the user supplied; forget = delete a stored token; verify = check the tokens against the live services'),
+  key: z
+    .string()
+    .optional()
+    .describe('Credential name for store/forget: GITHUB_TOKEN | GIT_USERNAME | NPM_TOKEN | NPM_REGISTRY'),
+  value: z
+    .string()
+    .optional()
+    .describe('Value to store (action=store). Must come from the USER via ask_user — never invent, guess or reuse a token from elsewhere in the transcript.'),
+});
+
 /** E3c — the task tools all carry a goal (model-decides vocabulary). */
 const taskGoalArgs = z.object({ goal: z.string().describe('The task goal passed to the agent pipeline') });
 
@@ -345,13 +366,16 @@ export const runCliSchema = z.object({
     .describe('Set true ONLY after the user explicitly confirmed a destructive/system-level command you initiated. When the user’s own request resolves to the exact command (they asked to stop the dashboard), that IS the confirmation — the tool applies it. Irreversible intents (history.clear, memory.prune, stats.cost.clear, publish) always need it.'),
 });
 
-/** P3b — gated git args: structured status/log/diff/commit. */
+/** P3b — gated git args: structured status/log/diff/commit, plus the gated push. */
 export const gitToolSchema = z.object({
-  action: z.enum(['status', 'log', 'diff', 'commit']).describe('What to do — status/log are read-only; diff returns a structured diff (rendered as a card); commit is GATED unless the user’s own request asked for the commit.'),
+  action: z.enum(['status', 'log', 'diff', 'commit', 'push']).describe('What to do — status/log are read-only; diff returns a structured diff (rendered as a card); commit is GATED unless the user’s own request asked for the commit; push is GATED and STAYS gated unless the user’s own request named the push ("commit and push this to GitHub"). A request to commit locally does NOT authorize a push.'),
   message: z.string().optional().describe('Commit message (action=commit, required)'),
   files: z.array(z.string()).optional().describe('Files to stage+commit — the ACCEPTED subset after the user reviewed the diff card (absent = all changes)'),
-  confirm: z.boolean().default(false).describe('Commit gate — required only when the MODEL initiated the commit. When the user’s own request asks for a commit ("commit these changes"), that request IS the approval: call it with confirm:false and it applies.'),
+  confirm: z.boolean().default(false).describe('Gate for the two history-changing actions (commit, push) — required when the MODEL initiated the action. When the user’s own request asks for it, that request IS the approval: call it with confirm:false and it applies (for commit: "commit these changes"; for push: the request must name the push itself).'),
   limit: z.number().int().min(1).max(100).optional().describe('Log limit (action=log, default 20)'),
+  remote: z.string().optional().describe('Push destination (action=push, default: the repository’s first remote)'),
+  branch: z.string().optional().describe('Push source branch (action=push, default: the current branch)'),
+  tags: z.boolean().default(false).describe('action=push — also push tags after the branch'),
 });
 
 /** P3a — clone_repo args: a git URL to assess (depth-1 shallow only). */
@@ -703,6 +727,17 @@ registerTool({
   inputSchema: publishToolSchema,
   endsAgentStep: true,
   run: (args, ctx) => runPublishTool(args, ctx),
+});
+
+registerTool({
+  name: 'credentials',
+  description: 'Release credentials: status (what exists, and where from), store (persist a GitHub/npm token so releases work without an environment export), forget (delete one), verify (check the tokens against the live services). Call status before a release; if a token is missing, ask_user for it and store it — never invent one.',
+  category: 'workflow',
+  inputSchema: credentialsToolSchema,
+  // Not a dispenser: the model must read the credential picture and act on it
+  // (store the missing token, or proceed with the release).
+  endsAgentStep: false,
+  run: (args, ctx) => runCredentialsTool(args, ctx),
 });
 
 registerTool({
@@ -1145,12 +1180,13 @@ registerTool({
 // The agent can commit IN CONVERSATION, visibly: `git diff` emits a
 // structured event the dashboard renders as a 🔧 diff card (per-file +/−
 // sections); `git commit` is GATED (confirm:true after ask_user) and stages
-// only the ACCEPTED files subset. push/reset --hard/clean are structurally
-// unexpressible (the action enum) AND deny-guarded — parity with run_terminal.
+// only the ACCEPTED files subset. `git push` is a real GATED action here (the
+// only outbound one — it asks unless the user's own request named the push),
+// while reset --hard/clean remain structurally unexpressible AND deny-guarded.
 
 registerTool({
   name: 'git',
-  description: 'Structured git operations: status/log (read-only), diff (unified output + a diff card in the GUI), and commit (GATED — confirm:true only after the user approved via ask_user; optional files = the accepted subset to stage+commit). Use for the whole commit flow: diff → ask_user (accept/reject files) → commit with confirm:true.',
+  description: 'Structured git operations: status/log (read-only), diff (unified output + a diff card in the GUI), commit (GATED — confirm:true only after the user approved via ask_user; optional files = the accepted subset to stage+commit), and push (GATED — sends a branch to a remote; runs when the user’s own request named the push, otherwise ask via ask_user first). Use for the whole flow: diff → ask_user (accept/reject files) → commit → push.',
   category: 'workflow',
   inputSchema: gitToolSchema,
   endsAgentStep: false,
@@ -1258,6 +1294,11 @@ function runPipelineTool(action: string, args: unknown, ctx: ToolContext): Promi
 /** E3c — the publish workflow as a tool (non-interactive, creds via env). */
 function runPublishTool(args: unknown, ctx: ToolContext): Promise<string> {
   return import('./publish-tool.js').then((m) => m.runPublishTool(args, ctx));
+}
+
+/** Release credentials as a tool (store/status/forget/verify) — see credentials-tool.ts. */
+function runCredentialsTool(args: unknown, ctx: ToolContext): Promise<string> {
+  return import('./credentials-tool.js').then((m) => m.runCredentialsTool(args, ctx));
 }
 
 /** The C2 requirementState check — see executor.ts. */

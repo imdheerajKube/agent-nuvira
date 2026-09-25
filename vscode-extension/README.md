@@ -95,7 +95,7 @@ code --install-extension dheerajsharma.agent-nuvira-vscode
 
 ### From VSIX Package
 
-Download the latest `.vsix` from the [Releases page](https://github.com/imdheerajKube/agent-nuvira/releases) and install:
+Download the latest `.vsix` from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=dheerajsharma.agent-nuvira-vscode) or [Open VSX](https://open-vsx.org/extension/dheerajsharma/agent-nuvira-vscode) — both offer a "Download" button on the version history — and install:
 
 ```bash
 code --install-extension agent-nuvira-vscode.vsix
@@ -203,23 +203,12 @@ Right-click any source file to **Review File**, **Quick Fix**, or **Generate Tes
 
 ## Development
 
-```bash
-# Clone the repository
-git clone https://github.com/imdheerajKube/agent-nuvira.git
-cd agent-nuvira/vscode-extension
-
-# Install dependencies
-npm install
-
-# Compile TypeScript
-npm run compile
-
-# Watch mode
-npm run watch
-
-# Package into .vsix
-npm run package
-```
+The extension's source is not published — the public surface for this project is its
+[documentation](https://github.com/imdheerajKube/agent-nuvira-documentation#readme). Bug
+reports, feature requests and corrections are welcome in the
+[issue tracker](https://github.com/imdheerajKube/agent-nuvira-documentation/issues), where
+the extension version, your VS Code version and what you expected to happen are all the
+context needed.
 
 ---
 
@@ -232,4 +221,4 @@ npm run package
 
 ## License
 
-[MIT](https://github.com/imdheerajKube/agent-nuvira/blob/main/LICENSE)
+[MIT](https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/LICENSE)

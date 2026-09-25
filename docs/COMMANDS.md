@@ -1008,14 +1008,31 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ### 11.2 Autonomous publish
 
 - **Objective:** Version, build, and publish to npm & GitHub.
-- **Command:** `nuvira publish [--patch|--minor|--major] [--dry-run] [--skip-tests] [-p <provider>]`
+- **Command:** `nuvira publish [--patch|--minor|--major] [--dry-run] [--skip-tests] [--no-preflight] [--force] [--fresh] [--from <phase>] [-p <provider>]`
+- **Behaviour:** The phases are deterministic — bump (with the lockfile's own version fields), regenerate any version-pinned artifacts the project declares through a `release:artifacts` npm script, commit, annotated tag, push, `npm publish`, `gh release create`. No model is consulted for any of them, so a release cannot be derailed by plan quality or provider health. A **preflight** runs first and stops the run before anything irreversible when it finds a definitive blocker (the version is already on the registry, the tag is taken, the package is `private`, no remote, the model pair does not exist when a phase would need one); a check that cannot run (offline) warns and proceeds rather than claiming to have passed. A killed run is **resumable**: the scope records its target version, `running` counts as unfinished, and a second run continues the same release instead of bumping again — `--from <phase>` starts at a given phase, `--fresh` ignores the saved run, `--force` overrides a definitive preflight blocker.
 - **Examples:**
   ```bash
   nuvira publish --patch
   nuvira publish --minor --dry-run
+  nuvira publish --patch --from "npm Build & Publish"   # continue an interrupted release
+  nuvira publish --patch --fresh --force                 # ignore state and blockers (deliberate)
   ```
 
-### 11.3 Phase scopes (multi-goal pipelines)
+### 11.3 Release credentials
+
+- **Objective:** Store the GitHub and npm tokens a release needs, so `nuvira publish` — and the agent's own `publish` tool — work without re-exporting them every session. Values live in the nuvira credential store (owner-only, outside the repository), never in git and never in your shell history. This is also how an agent can be handed a token and then release unattended.
+- **Command:** `nuvira credentials status` · `nuvira credentials set <KEY>` · `nuvira credentials forget <KEY>` · `nuvira credentials verify`
+- **Keys:** `GITHUB_TOKEN` · `GIT_USERNAME` · `NPM_TOKEN` · `NPM_REGISTRY`
+- **Examples:**
+  ```bash
+  nuvira credentials                                            # what is set, and where each came from
+  nuvira credentials set GITHUB_TOKEN                            # prompts — nothing lands in shell history
+  gh auth token | nuvira credentials set GITHUB_TOKEN --stdin    # scripts/CI: value stays out of argv
+  nuvira credentials verify                                      # check the tokens against GitHub & npm
+  nuvira credentials forget NPM_TOKEN
+  ```
+
+### 11.4 Phase scopes (multi-goal pipelines)
 
 - **Objective:** Create and execute an ordered multi-goal project scope.
 - **Command:** `nuvira phase create [-o <file>]` · `nuvira phase execute <scope> [--non-interactive]` · `nuvira phase resume <scope>` · `nuvira phase status` · `nuvira phase list` · `nuvira phase delete <scope>`

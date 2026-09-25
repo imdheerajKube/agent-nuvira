@@ -8,12 +8,12 @@
   "icon": "icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/imdheerajKube/agent-nuvira.git"
+    "url": "https://github.com/imdheerajKube/agent-nuvira-documentation.git"
   },
   "bugs": {
-    "url": "https://github.com/imdheerajKube/agent-nuvira/issues"
+    "url": "https://github.com/imdheerajKube/agent-nuvira-documentation/issues"
   },
-  "homepage": "https://github.com/imdheerajKube/agent-nuvira/blob/main/vscode-extension/README.md",
+  "homepage": "https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/user-manual.md",
   "engines": {
     "vscode": "^1.85.0"
   },

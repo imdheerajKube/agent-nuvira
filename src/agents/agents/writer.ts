@@ -98,7 +98,14 @@ INCORRECT (do NOT use these):
     return `${base}\n\n## Project Conventions\n${conventions.join('\n')}`;
   }
 
-  return base;
+  // The durable hand-off — work an earlier attempt in this project started and
+  // did not finish, with the artifacts already on disk and the ones still
+  // missing. Appended to the SYSTEM prompt (not the task line) so it is present
+  // whether the writer is running the original task or a repair of it, and so a
+  // retried step is told not to redo what already landed.
+  const handoff = assessment?.openHandoffs ? `\n\n${assessment.openHandoffs}` : '';
+
+  return `${base}${handoff}`;
 }
 
 const WRITER_SYSTEM_PROMPT = buildWriterSystemPrompt();

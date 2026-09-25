@@ -22,7 +22,9 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 
-import type { AgentContext } from './agent.js';
+import { verifyArtifacts } from './artifact-verification.js';
+
+import type { AgentContext, TaskStep } from './agent.js';
 
 // ─── Storage ────────────────────────────────────────────────────────────────
 
@@ -108,6 +110,178 @@ export function loadCheckpoint(id: string): CheckpointFile | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The newest checkpoint for this project whose goal is the SAME ASK, possibly
+ * worded differently.
+ *
+ * `checkpointIdFor` hashes `workingDirectory + goal`, so a reworded ask hashes
+ * to a different id and finds nothing — which is why "do that addon thing"
+ * re-planned from zero while the previous attempt's plan sat on disk.
+ *
+ * The goal test is deliberately REQUIRED rather than taking the newest
+ * checkpoint in the directory. A bare "newest for this project" lookup would
+ * hand run B the plan of a completely unrelated run A that merely happened to
+ * use the same folder — and it would do so silently, which is worse than the
+ * re-plan it replaces. The caller reconciles whatever this returns against the
+ * filesystem before trusting a word of it (see `reconcileTaskPlan`).
+ *
+ * Newest-first among the matching goals, so the most recent attempt wins.
+ */
+export function findRelatedCheckpointFor(
+  workingDirectory: string,
+  goal: string,
+  options: { excludeId?: string } = {},
+): CheckpointFile | null {
+  const wanted = normalizeDir(workingDirectory);
+  const candidates = listCheckpoints()
+    .filter((c) => normalizeDir(c.workingDirectory) === wanted && c.id !== options.excludeId)
+    .sort((a, b) => b.savedAt - a.savedAt);
+  for (const meta of candidates) {
+    if (!goalsLookSame(meta.goal, goal)) continue;
+    const file = loadCheckpoint(meta.id);
+    if (file) return file;
+  }
+  return null;
+}
+
+/** Compare working directories without caring about a trailing slash. */
+function normalizeDir(dir: string): string {
+  return (dir || '').replace(/[\\/]+$/, '');
+}
+
+/** Words that carry no subject — dropped before comparing two goals. */
+const GOAL_STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'to', 'of', 'in', 'on', 'at', 'for', 'with', 'from',
+  'can', 'could', 'would', 'should', 'please', 'you', 'your', 'me', 'my', 'i', 'we', 'it', 'its',
+  'is', 'are', 'was', 'be', 'been', 'do', 'does', 'did', 'make', 'made', 'need', 'want', 'get',
+  'this', 'that', 'these', 'those', 'there', 'here', 'then', 'than', 'so', 'as', 'by', 'use',
+  'using', 'into', 'out', 'up', 'down', 'again', 'also', 'just', 'new', 'now', 'save',
+  'folder', 'file', 'path', 'directory', 'dir', 'create', 'build', 'develop', 'write',
+]);
+
+/**
+ * Subject tokens of a goal. Hyphens and underscores are JOINED, not split, so
+ * "add-on" and "addon" are the same token — the exact pair a user is most
+ * likely to vary when re-asking.
+ */
+function goalTokens(text: string): Set<string> {
+  const flat = (text || '')
+    .toLowerCase()
+    .replace(/[-_]+/g, '')
+    .replace(/[^a-z0-9]+/g, ' ');
+  const tokens = new Set<string>();
+  for (const raw of flat.split(' ')) {
+    const t = raw.trim();
+    if (!t || t.length < 3) continue;
+    if (GOAL_STOPWORDS.has(t)) continue;
+    tokens.add(t);
+  }
+  return tokens;
+}
+
+/** Shared subject tokens needed before two goals are treated as the same ask. */
+const MIN_SHARED_TOKENS = 3;
+/** Fraction of the SHORTER goal's tokens that must be shared. */
+const MIN_SHARED_RATIO = 0.6;
+
+/**
+ * Are these two the same ask, worded differently?
+ *
+ * Both a floor and a ratio are required. The ratio alone passes two long goals
+ * that share a boilerplate opening; the floor alone passes two short goals that
+ * share one incidental noun. Together they mean "most of the shorter ask's
+ * subject matter appears in the other", which is what rewording looks like and
+ * what two unrelated asks in one folder do not.
+ *
+ * The floor is capped at the shorter goal's own token count, so a SHORT ask
+ * still matches its own rewording: "Package the add-on" and "package the addon
+ * for me" are two tokens each, and demanding three shared tokens would refuse
+ * the pair the rule exists for. At two tokens that means both must match — which
+ * is still enough to keep "update the readme" and "update the dockerfile"
+ * apart.
+ */
+export function goalsLookSame(a: string, b: string): boolean {
+  const ta = goalTokens(a);
+  const tb = goalTokens(b);
+  if (ta.size === 0 || tb.size === 0) return false;
+  let shared = 0;
+  for (const t of ta) if (tb.has(t)) shared += 1;
+  const smaller = Math.min(ta.size, tb.size);
+  if (shared < Math.min(MIN_SHARED_TOKENS, smaller)) return false;
+  return shared / smaller >= MIN_SHARED_RATIO;
+}
+
+/** The outcome of checking a saved plan against the filesystem. */
+export interface PlanReconciliation {
+  /** The context with unverifiable completions demoted back to `pending`. */
+  context: AgentContext;
+  /** Steps that CLAIMED completion but whose artifacts are not on disk. */
+  demoted: Array<{ id: string; reason: string }>;
+}
+
+/**
+ * Reconcile a saved task plan against what is actually on disk.
+ *
+ * WHY THIS EXISTS (the live NVDA-addon failure): the checkpoint for that goal
+ * said `5/5 tasks completed`, so "resume unless the user asks" looked correct —
+ * re-entering a finished plan would skip every task. But three of the five
+ * completions were false: the step claimed success, `zip` exited 0 on inputs
+ * that did not exist, and the packaged deliverable was a 22-byte empty archive.
+ * A checkpoint's statuses are therefore CLAIMS, and the only thing that makes
+ * them safe to skip is the artifact behind them.
+ *
+ * The rule, in one line: a completed step whose DECLARED files are not on disk
+ * (or are empty shells) is demoted to `pending`, so a resume re-runs exactly the
+ * work that is missing instead of skipping it.
+ *
+ * Deliberately narrow: only a step's explicit `expectedFiles` is checked. A
+ * description like "Delete legacy.js" would look like an unmet deliverable if we
+ * inferred artifacts from prose, so prose is never used to decide what re-runs —
+ * that stays the planner's declared contract. Steps with nothing declared are
+ * left exactly as they are rather than being demoted on a guess.
+ *
+ * Never throws: reconciliation failure reports, it does not break a resume.
+ */
+export function reconcileTaskPlan(
+  context: AgentContext,
+  workingDirectory?: string,
+): PlanReconciliation {
+  const demoted: PlanReconciliation['demoted'] = [];
+  let plan: TaskStep[];
+  try {
+    plan = structuredClone(context.taskPlan ?? []);
+  } catch {
+    // An unclonable plan is not a verdict — hand it back untouched.
+    return { context, demoted };
+  }
+
+  const root = workingDirectory || context.workingDirectory || process.cwd();
+
+  for (const step of plan) {
+    if (step.status !== 'completed') continue;
+    const declared = (step.expectedFiles ?? []).filter((f) => f && f.trim());
+    if (declared.length === 0) continue;
+    try {
+      const check = verifyArtifacts(declared, root);
+      if (check.ok) continue;
+      step.status = 'pending';
+      step.result =
+        `re-opened on resume — the step reported success but its deliverable is not on disk (${check.reason})`;
+      demoted.push({ id: step.id, reason: check.reason ?? 'deliverable missing' });
+    } catch {
+      // Best-effort: a filesystem error must not demote a step on a guess.
+    }
+  }
+
+  if (demoted.length === 0) return { context, demoted };
+  return { context: { ...context, taskPlan: plan }, demoted };
+}
+
+/** True when the plan still has work that can be run. */
+export function planHasPendingWork(context: AgentContext): boolean {
+  return (context.taskPlan ?? []).some((s) => s.status === 'pending');
 }
 
 /** List all saved checkpoints, newest first (for `nuvira execute --checkpoint-list`). */

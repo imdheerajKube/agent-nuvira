@@ -402,7 +402,7 @@ export function prepareForPublish(templateId: string): string | null {
  * Get the URL for submitting a new template to the registry.
  */
 export function getPublishUrl(): string {
-  return 'https://github.com/imdheerajKube/agent-nuvira/issues/new?template=template-submission.md';
+  return 'https://github.com/imdheerajKube/agent-nuvira-documentation/issues/new';
 }
 
 // ─── Version & Dependency Resolution ────────────────────────────────────────

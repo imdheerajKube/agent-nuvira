@@ -155,11 +155,17 @@ Your job is to implement the requested changes by iteratively reading files, mak
       conventions.push('This is a greenfield project — create files from scratch using list_files first to see what exists.');
     }
 
+    // The durable hand-off — work an earlier attempt in this project started and
+    // did not finish. A tool-calling writer is the most likely to re-derive a
+    // plan from scratch (it re-reads the tree every run), so it is told up front
+    // what is already on disk and what is still owed.
+    const handoff = assessment?.openHandoffs ? `\n\n${assessment.openHandoffs}` : '';
+
     if (conventions.length > 0) {
-      return `${base}\n\n## Project Conventions\n${conventions.join('\n')}`;
+      return `${base}\n\n## Project Conventions\n${conventions.join('\n')}${handoff}`;
     }
 
-    return base;
+    return `${base}${handoff}`;
   }
 
   protected buildUserPrompt(context: AgentContext): string {

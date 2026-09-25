@@ -12,7 +12,15 @@
  * Hermes reference: tools/skills_tool.py:_capture_required_environment_variables()
  */
 
-import { existsSync, readFileSync } from 'fs';
+// NOTE: these must be real ESM imports. They used to be `require('fs')` calls
+// made inline at the point of use, which compile to nothing and then throw
+// `ReferenceError: require is not defined` in the published ESM build — so
+// `saveEnvValue`/`deleteEnvValue` (the skill-secret AND release-credential
+// write path) crashed in `dist/` while passing under vitest, whose transform
+// still provides `require`. A build-only failure is exactly what a unit suite
+// cannot see, which is why the fix is an import rather than a shim.
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { dirname } from 'node:path';
 import { resolveNuviraEnvFile } from '../config/paths.js';
 import { isProviderEnvBlocked } from '../config/provider-env.js';
 import { logger } from '../utils/logger.js';
@@ -216,8 +224,6 @@ export function saveEnvValue(
   }
 
   // Ensure directory exists
-  const { mkdirSync, writeFileSync } = require('fs');
-  const { dirname } = require('path');
   try {
     mkdirSync(dirname(path), { recursive: true });
   } catch {
@@ -276,7 +282,6 @@ export function deleteEnvValue(key: string): { success: boolean; path: string; r
   }
 
   try {
-    const { writeFileSync } = require('fs');
     // Drop the trailing empty element left by the final newline, then re-add
     // exactly one — matching saveEnvValue's file shape.
     const body = kept.filter((l, i) => !(i === kept.length - 1 && l === '')).join('\n');

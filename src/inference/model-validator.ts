@@ -101,12 +101,18 @@ function modelFallbackScore(m: ModelDescriptor): number {
  * @param provider      The inference provider instance (for listModels()).
  * @param providerType  Provider id (e.g. 'gemini', 'groq') for curated defaults.
  * @param desiredModel  The model Auto routing resolved (may be stale/'default').
+ * @param announce      Also print the repair here. DEFAULT `false`: every caller
+ *   now goes through `resolveRoute()`, which owns the reporting (print + routing
+ *   history + run trace). Announcing in both places produced TWO lines for one
+ *   substitution, and in strict mode it announced a swap that then threw
+ *   instead of happening — worse than silence.
  * @returns A model id guaranteed (best-effort) to exist on the provider.
  */
 export async function resolveWorkingModel(
   provider: InferenceProvider,
   providerType: string,
   desiredModel?: string,
+  announce = false,
 ): Promise<string> {
   const explicit = desiredModel && desiredModel !== 'default' ? desiredModel : undefined;
 
@@ -198,7 +204,7 @@ export async function resolveWorkingModel(
       return !!m && modelFallbackScore(m) < 100 && !registryBlocks(id);
     });
     if (chosen) {
-      if (explicit) {
+      if (explicit && announce) {
         const fromVerified = preferredModelsFor(providerType).includes(chosen);
         logger.warn(
           `♻️  Auto routing: model '${explicit}' is not available on '${providerType}' — using '${chosen}'${fromVerified ? ' (verified working)' : ''}.`,

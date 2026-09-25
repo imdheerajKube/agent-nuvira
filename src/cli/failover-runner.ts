@@ -25,7 +25,7 @@
 
 import { resolveProvider } from './router.js';
 import { getAutoRouter } from '../learning/auto-router.js';
-import { resolveWorkingModel } from '../inference/model-validator.js';
+import { resolveRoute } from '../inference/route-resolver.js';
 import { recordRoutingDecision, type RoutingSource } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { classifyFallbackError } from '../learning/provider-fallback.js';
@@ -145,8 +145,14 @@ export async function runSingleShotAuto(opts: SingleShotAutoOptions): Promise<st
         ? first.model
         : getAutoRouter().resolveModel(candidateType, opts.action, opts.configManager);
       // Model health: only use models that actually exist on the provider
-      // (a pinned config.model can be deprecated → 404) — repair to live.
-      const model = await resolveWorkingModel(resolved.provider, candidateType, desired);
+      // (a pinned config.model can be deprecated → 404) — repair to live, and
+      // say so out loud when the model is not the one that was asked for.
+      const model = (await resolveRoute({
+        providerType: candidateType,
+        provider: resolved.provider,
+        model: desired,
+        source: 'failover',
+      })).model;
       candidateModel = model;
       resolvedProvider = resolved.provider;
     } catch (err) {

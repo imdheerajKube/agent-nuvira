@@ -27,7 +27,8 @@
 
 import { ConfigManager } from '../config/manager.js';
 import { resolveProvider } from './router.js';
-import { resolveWorkingModel } from '../inference/model-validator.js';
+import { resolveRoute, servedRouteFrom, type ServedRoute } from '../inference/route-resolver.js';
+import { noteServedRoute } from '../tools/loop-route-feed.js';
 import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
 import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
 import { getModelRegistry } from '../learning/model-registry.js';
@@ -40,6 +41,7 @@ import {
 } from '../learning/provider-fallback.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
+import { deliverablesNamedIn, recordStepHandoff } from '../agents/step-handoff.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile } from '../learning/model-harness.js';
 import { hasCredentials } from '../learning/model-selection.js';
@@ -227,6 +229,12 @@ export async function runLoopExecutor(
   let providerType = 'auto';
   let model = 'default';
   let provider: InferenceProvider | null = null;
+  /**
+   * The route ACTUALLY serving this turn, kept current through every failover
+   * and handed to the loop (which re-reads it before each model call) so the
+   * model can answer about itself from a measured fact instead of a guess.
+   */
+  let servedRoute: ServedRoute | null = null;
 
   // ── Mid-turn failover candidate pool ────────────────────────────────────
   // The SAME deep chain the orchestrator/chat walk. Before this the loop only
@@ -320,9 +328,19 @@ export async function runLoopExecutor(
       const resolved = resolveProvider(configManager, opts.provider);
       providerType = resolved.type;
       provider = resolved.provider;
-      model = opts.model && !isAutoModel(opts.model)
-        ? opts.model
-        : await resolveWorkingModel(provider, providerType, undefined);
+      // Validate the pin against the provider that will serve it, ALWAYS — an
+      // explicit `--model` used to be used as-is (`opts.model ? opts.model :
+      // resolve…`), so `-p groq -m <a gemini model>` reached the API unvalidated
+      // and 404'd with the repair machinery sitting right there (issue #10).
+      const pinned = await resolveRoute({
+        providerType,
+        provider,
+        model: opts.model,
+        source: 'cli',
+        task: 'interactive loop (pinned provider)',
+      });
+      model = pinned.model;
+      servedRoute = servedRouteFrom(pinned);
       pushCandidate(providerType, model);
       // ── A PINNED RUN FAILS OVER TOO ──────────────────────────────────────
       // A pinned provider used to contribute a SINGLE candidate, so any
@@ -390,7 +408,15 @@ export async function runLoopExecutor(
               : getAutoRouter().resolveModel(pair.provider, 'execute', configManager);
             providerType = resolved.type;
             provider = resolved.provider;
-            model = await resolveWorkingModel(resolved.provider, resolved.type, desired);
+            const route = await resolveRoute({
+              providerType: resolved.type,
+              provider: resolved.provider,
+              model: desired,
+              source: 'cli',
+              task: 'interactive loop (failover chain)',
+            });
+            model = route.model;
+            servedRoute = servedRouteFrom(route);
             break;
           }
         } catch {
@@ -583,12 +609,24 @@ export async function runLoopExecutor(
         const desired = cand.model !== 'default'
           ? cand.model
           : getAutoRouter().resolveModel(cand.provider, 'execute', configManager);
-        const mdl = await resolveWorkingModel(prov, cand.provider, desired);
+        const route = await resolveRoute({
+          providerType: cand.provider,
+          provider: prov,
+          model: desired,
+          source: 'failover',
+          task: 'interactive loop (mid-turn failover)',
+        });
+        const mdl = route.model;
         // Flip the loop's active provider/model to the candidate that answers,
         // so telemetry and the NEXT step's primary pick follow the winner.
         providerType = cand.provider;
         provider = prov;
         model = mdl;
+        // The model is TOLD about this, honestly (see loop-route-feed.ts): a
+        // failover that the model does not learn about is how a turn ends up
+        // answering "which model are you?" about a model that stopped serving
+        // it several steps earlier.
+        servedRoute = noteServedRoute(servedRoute, servedRouteFrom(route));
         const resp = await tryOnce(prov, mdl, messages, schemas, abort);
         // ── ANSWER-QUALITY GATE ──────────────────────────────────────────
         // A reply that is the model's own REASONING, or its narration of the
@@ -667,6 +705,31 @@ export async function runLoopExecutor(
           }
         }
         extendWithPinnedFallbacks();
+        // ── DURABLE HAND-OFF ────────────────────────────────────────────────
+        // The failure is written down BEFORE the walk moves on, so the next
+        // candidate, the next turn and the next run all inherit it. The design
+        // already said "a broken task is handed to another model" — what was
+        // missing is the RECORD that survives the hand-off, which is why the
+        // live NVDA-addon ask re-planned the identical step 18 times and would
+        // have re-planned a 19th (see step-handoff.ts).
+        //
+        // What the record carries is deliberately not "model X failed": it is
+        // the route, the failure KIND, the reason, and the artifacts the ask
+        // named — reconciled against the filesystem on every later read, so the
+        // incoming model is told what is genuinely still outstanding.
+        try {
+          recordStepHandoff({
+            projectPath: process.cwd(),
+            goal,
+            stepDescription: goal,
+            declared: deliverablesNamedIn(goal),
+            route: `${cand.provider}:${cand.model !== 'default' ? cand.model : model}`,
+            kind: qualityKind ? 'quality' : 'failed',
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        } catch {
+          // Best-effort — a hand-off write must never mask the generation error.
+        }
         if (!opts.quiet) {
           logger.warn(
             qualityKind
@@ -691,6 +754,9 @@ export async function runLoopExecutor(
     });
     const result = await runToolLoop({
       messages: thread,
+      // Read fresh on every step: a mid-turn failover must be visible to the
+      // model, not just to the log (see the route feed).
+      servedRoute: () => servedRoute,
       maxSteps: opts.maxSteps ?? 16,
       // Model-window-aware thread budget: a 1M-token model keeps its whole
       // window instead of being trimmed to the fixed ~50K-token default.

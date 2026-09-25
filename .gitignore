@@ -52,6 +52,13 @@ issues/
 !docs/ASSESSMENT_CAPABILITY_GAPS.md
 !docs/IMPLEMENTATION_BRIEFS.md
 !docs/DASHBOARD_FIRST_PLAN.md
+# The false-success / no-resume RCA. It is the only place the *chain* is written
+down: write_file's workspace denial, `zip` exiting 0 on `name not matched`, the
+lead confirming success from the exit code, `deliverableAuthored: false` written
+next to a 5/5 taskPlan, and the resume gate that never loads any of it. Untracked,
+the next session re-derives all of that from scratch and re-ships the same bug;
+tracked, it is the document each completion change is checked against.
+!docs/rca_false_success_and_no_resume.md
 # The desktop architecture decision record (Electron shell, ONE GUI-only
 # interface, Hermes Desktop as the reference). It settles questions that cost a
 # full research pass to answer — renderer choice, single-interface vs panes,
@@ -95,6 +102,11 @@ docs/demos/nuvira-commands-all.cast
 
 # Book (internal document — not published)
 book/
+
+# Editor / IDE workspace settings — machine-local, never project source.
+# Without this the release pipeline's `git add -A` swept a stray
+# .vscode/extensions.json into the version bump commit.
+.vscode/
 
 # macOS
 .DS_Store
