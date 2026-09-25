@@ -2,5 +2,17 @@
 # Redirect www to non-www or vice versa
 https://agent-nuvira.com/* https://www.agent-nuvira.com/:splat 301
 
+# Friendly aliases for the docs page. These must come before the SPA fallback
+# below, otherwise /learn would be served index.html instead of the docs page.
+#
+# Every rule points at /docs, never at /docs.html: Cloudflare Pages already serves
+# docs.html at the extension-less path and answers the .html form with a 308 to it,
+# so a rule targeting docs.html is an infinite redirect loop
+# (/docs -> /docs.html -> /docs -> ...).
+/learn   /docs 301
+/learn/  /docs 301
+/docs.md /docs 301
+/docs/   /docs 301
+
 # SPA fallback: serve index.html for all routes
 /* /index.html 200

@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Docs &amp; Setup — Agent-Nuvira</title>
+  <meta name="description" content="Install Agent-Nuvira, connect a model provider, and run your first task. Getting started, everyday commands, copy-paste recipes and troubleshooting — on one page." />
+  <meta name="keywords" content="agent-nuvira docs, agent-nuvira setup, install agent-nuvira, quickstart, user manual, nuvira CLI, Groq, Gemini, OpenRouter, Ollama" />
+  <link rel="icon" type="image/png" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236363f2'/%3E%3Ctext x='16' y='22' text-anchor='middle' fill='white' font-size='18' font-weight='bold' font-family='system-ui'%3EN%3C/text%3E%3C/svg%3E" />
+  <meta property="og:title" content="Docs &amp; Setup — Agent-Nuvira" />
+  <meta property="og:description" content="Install, configure a provider, and run your first task. Getting started, everyday commands, recipes and troubleshooting." />
+  <meta property="og:image" content="https://www.agent-nuvira.com/assets/og-cover.webp" />
+  <meta property="og:image:width" content="900" />
+  <meta property="og:image:height" content="600" />
+  <meta property="og:url" content="https://www.agent-nuvira.com/docs.html" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Docs &amp; Setup — Agent-Nuvira" />
+  <meta name="twitter:description" content="Install, configure a provider, and run your first task — the getting-started guide, on one page." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="navbar" id="navbar">
+    <div class="container nav-inner">
+      <a href="index.html" class="nav-logo">
+        <span class="logo-icon">◆</span>
+        <span class="logo-text">Agent-<strong>Nuvira</strong></span>
+      </a>
+      <div class="nav-links" id="navLinks">
+        <a href="index.html#features" class="nav-link">Features</a>
+        <a href="index.html#pipeline" class="nav-link">Pipeline</a>
+        <a href="index.html#providers" class="nav-link">Providers</a>
+        <a href="index.html#quickstart" class="nav-link">Quick Start</a>
+        <a href="index.html#extensions" class="nav-link">Extensions</a>
+        <a href="index.html#architecture" class="nav-link">Roadmap</a>
+        <a href="docs.html" class="nav-link active">Docs</a>
+        <div class="nav-ctas">
+          <a href="https://github.com/imdheerajKube/agent-nuvira-documentation" target="_blank" rel="noopener" class="btn btn-ghost btn-sm">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            GitHub
+          </a>
+          <a href="index.html#quickstart" class="btn btn-primary btn-sm">Install</a>
+        </div>
+      </div>
+      <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Docs hero -->
+  <header class="docs-hero">
+    <div class="hero-bg"></div>
+    <div class="container">
+      <p class="docs-crumbs"><a href="index.html">Home</a> <span>/</span> Docs</p>
+      <h1 class="hero-title">Docs &amp; <span class="gradient-text">Setup</span></h1>
+      <p class="hero-subtitle">Everything you need to go from <code>npm install</code> to your first shipped change. Two minutes of setup, then one page of reference.</p>
+      <div class="hero-ctas">
+        <a href="#install" class="btn btn-primary btn-lg">Start the setup
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </a>
+        <a href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/user-manual.md" target="_blank" rel="noopener" class="btn btn-outline btn-lg">Read the full manual</a>
+      </div>
+      <p class="docs-hero-note">The complete manual, command reference and architecture notes live in the public <a href="https://github.com/imdheerajKube/agent-nuvira-documentation" target="_blank" rel="noopener">documentation repository</a>. This page covers what you need to start.</p>
+    </div>
+  </header>
+
+  <main class="docs-main">
+    <div class="container docs-layout">
+
+      <!-- Sidebar -->
+      <aside class="docs-toc" aria-label="On this page">
+        <p class="docs-toc-title">On this page</p>
+        <a href="#requirements">1. Requirements</a>
+        <a href="#install">2. Install</a>
+        <a href="#provider">3. Connect a provider</a>
+        <a href="#first-run">4. First run</a>
+        <a href="#dashboard">5. The dashboard and a channel</a>
+        <a href="#commands">6. Everyday commands</a>
+        <a href="#recipes">7. Recipes</a>
+        <a href="#troubleshooting">8. Troubleshooting</a>
+        <a href="#deeper">9. Go deeper</a>
+      </aside>
+
+      <!-- Content -->
+      <article class="docs-content">
+
+        <section class="docs-section" id="requirements">
+          <h2>1. Requirements</h2>
+          <ul class="docs-list">
+            <li><strong>Node.js &ge; 18.18.0</strong> — the CLI is an npm package.</li>
+            <li><strong>macOS, Linux or Windows.</strong></li>
+            <li><strong>A model to talk to.</strong> Either a cloud API key (Groq, Google Gemini, NVIDIA NIM, OpenRouter, OpenAI, Anthropic, Mistral, …) or a <strong>local model via Ollama</strong> — local is a first-class path, not a fallback, and costs nothing per token.</li>
+          </ul>
+          <p class="docs-note">No account with us is required, and nothing is sent anywhere except the model providers you configure yourself. There is no telemetry and no cloud dashboard — the local dashboard is the source of truth.</p>
+        </section>
+
+        <section class="docs-section" id="install">
+          <h2>2. Install</h2>
+          <p>Install globally from the public npm registry:</p>
+          <div class="code-block">
+            <button class="copy-btn" data-copy="npm install -g agent-nuvira" aria-label="Copy to clipboard">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <code><span class="prompt">$</span> npm install -g agent-nuvira</code>
+          </div>
+          <p>Then confirm the binary answers:</p>
+          <div class="code-block">
+            <button class="copy-btn" data-copy="nuvira --version" aria-label="Copy to clipboard">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <code><span class="prompt">$</span> nuvira --version</code>
+          </div>
+          <p class="docs-note"><strong><code>agent-nuvira</code>, <code>buff</code> and <code>nuvira</code> are the same program.</strong> This page uses <code>nuvira</code> because it is the shortest to type; every example works with any of the three.</p>
+        </section>
+
+        <section class="docs-section" id="provider">
+          <h2>3. Connect a provider</h2>
+          <p>Pick one provider to start — you can add more later, and the router will use all of them. A free key is enough to try everything.</p>
+
+          <div class="docs-table-wrap">
+            <table class="docs-table">
+              <thead>
+                <tr><th>Provider</th><th>Set this</th><th>Get a key</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Groq</strong> <span class="docs-tag">fast, free tier</span></td><td><code>GROQ_API_KEY</code></td><td><a href="https://console.groq.com" target="_blank" rel="noopener">console.groq.com</a></td></tr>
+                <tr><td><strong>Google Gemini</strong></td><td><code>GEMINI_API_KEY</code></td><td><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a></td></tr>
+                <tr><td><strong>NVIDIA NIM</strong></td><td><code>NVIDIA_API_KEY</code></td><td><a href="https://build.nvidia.com" target="_blank" rel="noopener">build.nvidia.com</a></td></tr>
+                <tr><td><strong>OpenRouter</strong> <span class="docs-tag">300+ models</span></td><td><code>OPENROUTER_API_KEY</code></td><td><a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a></td></tr>
+                <tr><td><strong>Ollama</strong> <span class="docs-tag">local, free</span></td><td>nothing — install &amp; run Ollama</td><td><a href="https://ollama.ai" target="_blank" rel="noopener">ollama.ai</a></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p>Environment variable (fastest):</p>
+          <div class="code-block">
+            <button class="copy-btn" data-copy="export GROQ_API_KEY='gsk_your_key_here'" aria-label="Copy to clipboard">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <code><span class="prompt">$</span> <span class="hljs-built_in">export</span> GROQ_API_KEY=<span class="hljs-string">'gsk_your_key_here'</span></code>
+          </div>
+
+          <p>Or store it in config so it survives the shell session — use the OS keychain instead of a plaintext file:</p>
+          <div class="code-block">
+            <button class="copy-btn" data-copy="nuvira config set providers.groq.apiKey &quot;gsk_...&quot;" aria-label="Copy to clipboard">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <code><span class="prompt">$</span> nuvira config set providers.groq.apiKey <span class="hljs-string">"gsk_..."</span></code>
+          </div>
+          <div class="code-block">
+            <button class="copy-btn" data-copy="nuvira config vault set groq" aria-label="Copy to clipboard">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <code><span class="prompt">$</span> nuvira config vault set groq   <span class="hljs-comment"># OS keychain instead of plaintext</span></code>
+          </div>
+          <p class="docs-note">Priority, highest first: <strong>CLI flags</strong> (<code>--provider</code>, <code>--model</code>) → <strong>environment variables</strong> → <strong>config file</strong> (<code>~/.nuvira/</code>) → defaults.</p>
+        </section>
+
+        <section class="docs-section" id="first-run">
+          <h2>4. First run</h2>
+          <div class="code-block">
+            <button class="copy-btn" data-copy="nuvira doctor" aria-label="Copy to clipboard">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <code><span class="prompt">$</span> nuvira doctor</code>
+          </div>
+          <p><code>nuvira doctor</code> is the fastest way to know whether your setup is sound. It prints a full health report — config directory, secret vault tier, memory store, plugin directories, and a probe of <strong>every</strong> provider you hold a key for.</p>
+          <div class="code-block">
+            <button class="copy-btn" data-copy="nuvira chat &quot;explain what this project does&quot;" aria-label="Copy to clipboard">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
+            <code><span class="prompt">$</span> nuvira chat <span class="hljs-string">"explain what this project does"</span></code>
+          </div>
+          <p class="docs-note"><strong>Expect the first run to be slow.</strong> Model discovery walks every provider you have a key for; later runs use the cache. If it reports nothing usable, <code>nuvira doctor --verbose</code> names exactly what it found.</p>
+        </section>
+
+        <section class="docs-section" id="dashboard">
+          <h2>5. The dashboard and a channel</h2>
+          <p>The CLI is one surface, not the whole product. The dashboard is the visual one, and the gateway puts the same agent inside a chat app. Both take a few minutes.</p>
+
+          <h3>Start it, and log in</h3>
+          <div class="code-block">
+            <button class="copy-btn" data-copy="nuvira dashboard" aria-label="Copy to clipboard"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            <code><span class="prompt">$</span> nuvira dashboard</code>
+          </div>
+          <p>It serves <code>http://127.0.0.1:3030</code> and opens a browser. <code>--port</code> moves it, <code>--host 0.0.0.0</code> exposes it on your network, <code>--no-open</code> stays quiet, <code>--force</code> restarts a stale instance, and <code>nuvira dashboard stop</code> shuts it down from any terminal.</p>
+          <p class="docs-note"><strong>Your first login is <code>admin</code> / <code>admin</code>.</strong> That pair is published, so the account it creates can do exactly one thing: change the password. Every write route — provider config, API keys, users, shutdown — is refused until you set a real one of at least 8 characters. That is deliberate: the default is a doorway, never a resting state. Sessions last 8 hours and are dropped when the server restarts.</p>
+
+          <h3>Add the people who may use it</h3>
+          <p>An admin adds users from the <strong>Admin</strong> page, each with an explicit role. You cannot remove your own user, and the last admin cannot be removed, so the UI cannot leave an installation with nobody able to administer it. An unknown user resolves to <code>viewer</code> — the failure mode is deny, not allow.</p>
+
+          <h3>Open a project in the console</h3>
+          <p>The console is directory-scoped, like the CLI. The picker offers the dashboard's own working directory plus every path attached to the session, with a folder browser behind it. Choose one and the chat, the file tools, the diffs and the run all operate on that directory — the same as starting <code>nuvira chat</code> inside it.</p>
+
+          <h3>A messaging channel in two minutes</h3>
+          <div class="code-block">
+            <button class="copy-btn" data-copy="nuvira gateway setup telegram &amp;&amp; nuvira gateway status" aria-label="Copy to clipboard"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            <code><span class="prompt">$</span> nuvira gateway setup telegram &amp;&amp; nuvira gateway status</code>
+          </div>
+          <p>The wizard asks for exactly the variables the platform needs and then <em>validates the credential against the live service</em> before telling you it worked. Telegram needs a bot from <strong>@BotFather</strong>; send your bot a message afterwards to learn your own chat id for the allow-list.</p>
+          <p>WhatsApp uses your own number through a pairing QR — no Meta Business account and no paid API:</p>
+          <div class="code-block">
+            <button class="copy-btn" data-copy="nuvira whatsapp pair" aria-label="Copy to clipboard"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            <code><span class="prompt">$</span> nuvira whatsapp pair</code>
+          </div>
+          <p class="docs-note">Platform tokens are stored in <code>~/.nuvira/.env</code>, written by both the wizard and the dashboard's Channels tab. WhatsApp is the exception: a paired session on disk, not a token.</p>
+
+          <h3>Who may trigger the agent</h3>
+          <div class="docs-table-wrap">
+            <table class="docs-table">
+              <thead>
+                <tr><th>Question</th><th>Governs</th><th>Set it with</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Who may trigger the agent?</td><td>inbound</td><td><code>nuvira config gateway allow &lt;platform&gt; user &lt;id&gt;</code></td></tr>
+                <tr><td>Who may the agent send to?</td><td>outbound</td><td><code>nuvira config gateway send-authority add &lt;platform&gt; &lt;id&gt;</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>An unknown sender is neither obeyed nor necessarily dropped — <code>nuvira gateway contact list</code> shows them pending, and <code>approve</code> or <code>reject</code> decides.</p>
+          <p class="docs-note">Adding a contact for send-by-name does <strong>not</strong> grant trigger access. They are separate lists on purpose: who may drive the agent and who may be spoken to as you are two different permissions.</p>
+
+          <h3>Keep it up</h3>
+          <p><code>nuvira gateway start --supervise</code> restarts the adapters after a crash; surviving a reboot needs a login unit — the <a href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/user-manual.md#run-it-at-login-optional" target="_blank" rel="noopener">manual has the recipe</a> for macOS, Linux and Windows. One trap: <code>nuvira dashboard</code> already starts a gateway beside itself, so don't give the same platform two owners.</p>
+        </section>
+
+        <section class="docs-section" id="commands">
+          <h2>6. Everyday commands</h2>
+          <p>The same pipeline, tools and router sit behind every surface, so you can start in the terminal and pick up the same thread in the dashboard or from a messaging channel.</p>
+
+          <div class="docs-cmd">
+            <h3><code>nuvira chat</code> <span>talk, explore, ask</span></h3>
+            <p>An interactive conversation about your code. The agent reads files, runs checks and edits — showing each step.</p>
+            <div class="code-block"><button class="copy-btn" data-copy="nuvira chat" aria-label="Copy to clipboard"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><code><span class="prompt">$</span> nuvira chat</code></div>
+          </div>
+
+          <div class="docs-cmd">
+            <h3><code>nuvira execute</code> <span>run the full multi-agent pipeline</span></h3>
+            <p>Plans the work, then runs specialist agents — context-gatherer, writer, runner, reviewer — and shows the plan as it goes.</p>
+            <div class="code-block"><button class="copy-btn" data-copy="nuvira execute &quot;add input validation to the API routes&quot; --verbose" aria-label="Copy to clipboard"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><code><span class="prompt">$</span> nuvira execute <span class="hljs-string">"add input validation to the API routes"</span> --verbose</code></div>
+          </div>
+
+          <div class="docs-cmd">
+            <h3><code>nuvira workflow run</code> <span>a fixed, repeatable plan</span></h3>
+            <p>Ten built-in pipelines (<code>bug-hunt</code>, <code>quick-fix</code>, <code>security-audit</code>, <code>refactor-module</code>, …) when you already know the shape of the job.</p>
+            <div class="code-block"><button class="copy-btn" data-copy="nuvira workflow run bug-hunt &quot;login fails when the email has a plus sign&quot;" aria-label="Copy to clipboard"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><code><span class="prompt">$</span> nuvira workflow run bug-hunt <span class="hljs-string">"login fails when the email has a plus sign"</span></code></div>
+          </div>
+
+          <div class="docs-cmd">
+            <h3><code>nuvira dashboard</code> <span>the visual surface</span></h3>
+            <p>Chat, review diffs, watch the execution graph, inspect a run's trace, see why a model was chosen, and track cost — all locally.</p>
+            <div class="code-block"><button class="copy-btn" data-copy="nuvira dashboard" aria-label="Copy to clipboard"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><code><span class="prompt">$</span> nuvira dashboard</code></div>
+          </div>
+
+          <div class="docs-cmd">
+            <h3><code>nuvira gateway</code> <span>drive it from anywhere</span></h3>
+            <p>Connect a messaging platform and the agent answers there, running the same pipeline. Two separate permission lists govern who may <em>trigger</em> the agent and who may direct it to <em>send</em> to other people.</p>
+            <div class="code-block"><button class="copy-btn" data-copy="nuvira gateway setup telegram &amp;&amp; nuvira gateway start" aria-label="Copy to clipboard"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><code><span class="prompt">$</span> nuvira gateway setup telegram &amp;&amp; nuvira gateway start</code></div>
+          </div>
+
+          <div class="docs-cmd">
+            <h3><code>nuvira models</code> / <code>nuvira provider</code> <span>see and control what runs</span></h3>
+            <p>Show which providers and models are in play, why one was chosen, and unblock one that was parked.</p>
+            <div class="code-block"><button class="copy-btn" data-copy="nuvira provider list &amp;&amp; nuvira models excluded" aria-label="Copy to clipboard"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button><code><span class="prompt">$</span> nuvira provider list &amp;&amp; nuvira models excluded</code></div>
+          </div>
+
+          <p class="docs-note">There are <strong>289 command entries across 48 groups</strong>. The <a href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/reference/commands-surface.md" target="_blank" rel="noopener">full command surface</a> is generated from the live CLI, so it cannot describe a command that does not exist.</p>
+        </section>
+
+        <section class="docs-section" id="recipes">
+          <h2>7. Recipes</h2>
+
+          <div class="docs-recipe">
+            <p class="docs-recipe-title">Fix a bug end to end</p>
+            <pre class="docs-pre"><code>nuvira workflow run bug-hunt "login fails when the email has a plus sign"
+nuvira ci check "the login plus-sign bug is fixed"</code></pre>
+          </div>
+
+          <div class="docs-recipe">
+            <p class="docs-recipe-title">Audit your own repository</p>
+            <pre class="docs-pre"><code>nuvira skill run security-audit --params "focus=secrets,ssrf"
+nuvira security scan "$(git diff --cached)"
+nuvira sbom &gt; sbom.json
+nuvira code-map src &gt; map.txt</code></pre>
+          </div>
+
+          <div class="docs-recipe">
+            <p class="docs-recipe-title">Ask about a project you do not own</p>
+            <pre class="docs-pre"><code>nuvira chat "clone vercel/next.js and summarise how routing is implemented"</code></pre>
+            <p class="docs-recipe-note">The repo is shallow-cloned into an ephemeral cache — your workspace is untouched.</p>
+          </div>
+
+          <div class="docs-recipe">
+            <p class="docs-recipe-title">Wire it into CI</p>
+            <pre class="docs-pre"><code>- run: nuvira ci check "no TypeScript errors introduced"
+- run: nuvira security scan "$(git log -1 --pretty=%B)"</code></pre>
+          </div>
+
+          <div class="docs-recipe">
+            <p class="docs-recipe-title">See what you are saving</p>
+            <pre class="docs-pre"><code>nuvira stats
+nuvira retrieval stats</code></pre>
+          </div>
+        </section>
+
+        <section class="docs-section" id="troubleshooting">
+          <h2>8. Troubleshooting</h2>
+          <div class="docs-table-wrap">
+            <table class="docs-table">
+              <thead>
+                <tr><th>Symptom</th><th>Do this</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Whole-system check</td><td><code>nuvira doctor --verbose</code></td></tr>
+                <tr><td>A provider is not being used</td><td><code>nuvira models excluded</code>, then <code>nuvira models unblock &lt;provider&gt;</code></td></tr>
+                <tr><td>"Model does not exist" errors</td><td><code>nuvira models staleness</code> — the provider/model pair may be dead; pin <code>--provider</code> and <code>--model</code> to be explicit</td></tr>
+                <tr><td>Key handling</td><td><code>nuvira config vault status</code> · <code>nuvira config vault migrate-keys</code></td></tr>
+                <tr><td>Dashboard stale or mismatched</td><td><code>nuvira dashboard --force</code></td></tr>
+                <tr><td>Gateway silent</td><td><code>nuvira gateway status</code> · <code>nuvira gateway logs</code> · <code>nuvira gateway delivery</code></td></tr>
+                <tr><td>Someone cannot trigger the bot</td><td><code>nuvira config gateway allow &lt;platform&gt; user &lt;id&gt;</code> — this is <em>separate</em> from send-by-name contacts</td></tr>
+                <tr><td>Cannot send to a third party</td><td>Grant outbound authority: <code>nuvira config gateway send-authority add …</code></td></tr>
+                <tr><td>Slow first run</td><td>Expected — model discovery walks every provider you hold a key for</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="docs-section" id="deeper">
+          <h2>9. Go deeper</h2>
+          <p>The complete documentation is public — read it in the browser on GitHub, no account needed.</p>
+          <div class="docs-links">
+            <a class="docs-link" href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/user-manual.md" target="_blank" rel="noopener">
+              <strong>User Manual</strong><span>Install, configure, and every surface in depth</span>
+            </a>
+            <a class="docs-link" href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/capabilities.md" target="_blank" rel="noopener">
+              <strong>Capabilities</strong><span>What it can do beyond writing code</span>
+            </a>
+            <a class="docs-link" href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/commands.md" target="_blank" rel="noopener">
+              <strong>Command Reference</strong><span>Curated commands with examples</span>
+            </a>
+            <a class="docs-link" href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/reference/commands-surface.md" target="_blank" rel="noopener">
+              <strong>Full Command Surface</strong><span>All 289 entries, generated from the live CLI</span>
+            </a>
+            <a class="docs-link" href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/architecture.md" target="_blank" rel="noopener">
+              <strong>Architecture</strong><span>How the execution engine is put together</span>
+            </a>
+            <a class="docs-link" href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/whats-new.md" target="_blank" rel="noopener">
+              <strong>What&rsquo;s New</strong><span>The release index</span>
+            </a>
+          </div>
+
+          <div class="docs-cta">
+            <p>Something wrong, missing, or worth asking about?</p>
+            <a href="https://github.com/imdheerajKube/agent-nuvira-documentation/issues" target="_blank" rel="noopener" class="btn btn-primary">Open an issue</a>
+          </div>
+        </section>
+
+      </article>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div class="footer-brand">
+        <span class="logo-icon">◆</span>
+        <span class="logo-text">Agent-<strong>Nuvira</strong></span>
+        <p class="footer-desc">The open-source multi-agent AI coding assistant that puts you in control. No subscriptions. No telemetry. Your models, your way.</p>
+        <div class="footer-social">
+          <a href="https://github.com/imdheerajKube/agent-nuvira-documentation" target="_blank" rel="noopener" class="social-link" aria-label="GitHub">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          </a>
+          <a href="https://www.npmjs.com/package/agent-nuvira" target="_blank" rel="noopener" class="social-link" aria-label="npm">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M0 7.334v8h6.666v1.332H12v-1.332h12V7.334H0zm6.666 6.664H5.334v-4H3.999v4H1.335V8.667h5.331v5.331zm4 0v1.336H8.667V8.667h1.999v5.33zm6.666 0h-1.333v-4h-1.333v4h-1.333v-4h-1.333v4h-1.333V8.667h6.665v5.331z"/></svg>
+          </a>
+        </div>
+      </div>
+      <div class="footer-links">
+        <div class="footer-col">
+          <h4>Product</h4>
+          <a href="index.html#features">Features</a>
+          <a href="index.html#pipeline">Pipeline</a>
+          <a href="index.html#providers">Providers</a>
+          <a href="index.html#quickstart">Installation</a>
+        </div>
+        <div class="footer-col">
+          <h4>Resources</h4>
+          <a href="docs.html">Documentation</a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/user-manual.md" target="_blank" rel="noopener">User Manual</a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/commands.md" target="_blank" rel="noopener">Command Reference</a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira-documentation/issues" target="_blank" rel="noopener">GitHub Issues</a>
+        </div>
+        <div class="footer-col">
+          <h4>Community</h4>
+          <a href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/capabilities.md" target="_blank" rel="noopener">Capabilities</a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/architecture.md" target="_blank" rel="noopener">Architecture</a>
+          <a href="https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/whats-new.md" target="_blank" rel="noopener">What&rsquo;s New</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>&copy; 2026 Agent-Nuvira. MIT License. Built by Dheeraj Sharma.</p>
+      <p class="footer-desc" style="margin-top:8px;font-size:13px;">
+        <a href="https://www.agent-nuvira.com" style="color:inherit;">www.agent-nuvira.com</a>
+        · Install counts are from the public npm registry (peak 7-day window 25–31 Aug 2026; total since first publish).
+      </p>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

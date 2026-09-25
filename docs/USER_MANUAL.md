@@ -22,9 +22,9 @@ against this build before it was written (see [§15 Verification log](#15-verifi
 6. [Channels and the Gateway](#6-channels-and-the-gateway)
 7. [Skills](#7-skills)
 8. [Workflows](#8-workflows)
-9. [Beyond code — the tool surface](#9-beyond-code--the-tool-surface)
+9. [Beyond code: the tool surface](#9-beyond-code-the-tool-surface)
 10. [Power tools](#10-power-tools)
-11. [Cookbook — copy-paste recipes](#11-cookbook--copy-paste-recipes)
+11. [Cookbook: copy-paste recipes](#11-cookbook-copy-paste-recipes)
 12. [Dashboard and CLI parity map](#12-dashboard-and-cli-parity-map)
 13. [Known issues found while validating this manual](#13-known-issues-found-while-validating-this-manual)
 14. [Troubleshooting](#14-troubleshooting)
@@ -243,6 +243,120 @@ There is also a `/bedrock` onboarding route that is not in the left nav.
 chat engine, its channel send-test uses the same gateway, and its model/routing/cost panels
 read the same ledger the CLI writes.
 
+### First login, and the password you must change
+
+A fresh install bootstraps **`admin` / `admin`**, so nobody has to invent a password before they
+can look at the dashboard. That pair is published — anyone who can reach the port knows it — which
+is exactly why the account it creates is deliberately crippled: while it is still on the default it
+can change **nothing**. Every mutating admin route (provider configuration, API keys, users,
+shutdown) is refused, and the only two operations that work are changing the password and logging
+out. Reads stay allowed, because they expose no secrets.
+
+So the first screen you meet is a forced password change. Pick at least **8 characters**; from that
+moment it is an ordinary admin account.
+
+- Credentials live in `~/.nuvira/dashboard-admin.json` (honours `NUVIRA_CONFIG_DIR`) as a scrypt
+  hash. The password itself is never written to disk.
+- Sessions are in-memory Bearer tokens with an **8-hour** expiry, and restarting the dashboard
+  invalidates them. The surface is local-first, so that is the intended trade rather than an
+  oversight.
+- Repeated failed logins are rate-limited (HTTP 429 after a handful of attempts).
+- The bootstrap runs only when no admin exists, so a real credential is never overwritten.
+- The CLI is unaffected: this gate covers the dashboard's write routes. `nuvira config set` behaves
+  exactly as it always did.
+
+Automation that cannot answer a prompt sets `NUVIRA_DASHBOARD_ADMIN_PASSWORD` (optionally with
+`NUVIRA_DASHBOARD_ADMIN_USER` and `NUVIRA_DASHBOARD_ADMIN_ROLE`). That override wins over the file
+and is exempt from the forced change, so a service can never be locked out of its own dashboard.
+`NUVIRA_DASHBOARD_DEFAULT_ADMIN=0` skips the bootstrap entirely.
+
+### Users and roles
+
+An admin adds people from the **Admin** page (`/admin`). The first user is always an admin; every
+user after that is created by an admin with an explicit role. Three details are worth knowing:
+
+- **Role resolution has one chain:** the env override for its own user, then `~/.nuvira/rbac.json`
+  when the username appears there (so the dashboard and `nuvira admin role` read the same file),
+  then the credential's own role. An unknown user resolves to `viewer` — the failure mode is deny.
+- **You cannot remove your own user, and the last admin cannot be removed**, so the UI cannot strand
+  an installation with nobody able to administer it.
+- A session carries the role it was issued with, so a role change applies at the next login.
+
+### Opening a project in the console
+
+The console is directory-scoped, like the CLI. The picker offers the dashboard's own working
+directory plus every path already attached to the session, with a folder browser for anything else.
+Choose a project there and the conversation, the file tools, the diff view and the run all operate
+on that directory — the same as starting `nuvira chat` inside it.
+
+### Run it at login (optional)
+
+`nuvira dashboard` is a foreground process, and nothing in the CLI installs a boot service. If you
+want it back after a reboot, add the unit yourself. Two details decide whether it works:
+
+1. **Use an absolute path to the binary.** A login service does not inherit your shell's `PATH`;
+   `which nuvira` gives the path to paste into the unit.
+2. **Provider keys must be reachable without your shell.** Tokens written by `nuvira gateway setup`
+   live in `~/.nuvira/.env`, which is loaded at startup, so those are fine. A key you only ever
+   `export` in `.zshrc` or `.bashrc` is **not** visible to a service: move it into the config
+   (`nuvira config vault set <provider>`) or declare it in the unit.
+
+**macOS (LaunchAgent).** Save as `~/Library/LaunchAgents/com.agent-nuvira.dashboard.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.agent-nuvira.dashboard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/absolute/path/from/which/nuvira</string>
+    <string>dashboard</string>
+    <string>--no-open</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/nuvira-dashboard.log</string>
+  <key>StandardErrorPath</key><string>/tmp/nuvira-dashboard.err</string>
+</dict></plist>
+```
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agent-nuvira.dashboard.plist
+launchctl kickstart -k gui/$(id -u)/com.agent-nuvira.dashboard   # restart it now
+launchctl bootout    gui/$(id -u)/com.agent-nuvira.dashboard   # remove it again
+```
+
+**Linux (systemd user unit).** Save as `~/.config/systemd/user/nuvira-dashboard.service`:
+
+```ini
+[Unit]
+Description=Agent-Nuvira dashboard
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/nuvira dashboard --no-open
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now nuvira-dashboard
+loginctl enable-linger "$USER"    # keep user services alive after logout (headless machines)
+```
+
+**Windows.** Task Scheduler → *Create Task* → trigger *At log on* → action `nuvira dashboard --no-open`,
+or one line:
+
+```bat
+schtasks /Create /TN "Agent-Nuvira Dashboard" /SC ONLOGON /TR "nuvira dashboard --no-open"
+```
+
 ---
 
 ## 6. Channels and the Gateway
@@ -306,6 +420,74 @@ nuvira gateway logs            # why a message did or did not go out
 nuvira whatsapp pair           # pair a personal number via QR (no paid API)
 nuvira config gateway notify add <contact>   # always receive completion summaries
 ```
+
+### First channel in five minutes
+
+The wizard handles the part people get wrong: it prompts for exactly the variables the platform
+needs, stores them where both the CLI and the dashboard read them, and then *tests* the credential
+against the live service before claiming success.
+
+```bash
+nuvira gateway setup telegram    # interactive — asks for the @BotFather token and validates it
+nuvira gateway status            # what is configured, what is reachable
+nuvira gateway start             # run the adapters in the foreground (Ctrl-C to stop)
+```
+
+**Telegram.** Open Telegram, talk to **@BotFather**, create a bot and paste the token into the
+wizard. It calls the Bot API with that token and only reports success when Telegram accepts it.
+Then send your bot a message — that first inbound message is how you learn your own chat id for the
+allow-list below.
+
+**WhatsApp** is the personal-number bridge. It needs no Meta Business account and no paid API:
+
+```bash
+nuvira whatsapp pair      # prints a QR — scan it from WhatsApp -> Linked devices
+nuvira whatsapp status
+```
+
+Pairing links your own number and runs in self-chat mode (message yourself, or use the contact
+mapping). The same pairing is available from the dashboard's WhatsApp panel, which is easier when
+you are already in the browser.
+
+**Where the credentials land.** Platform tokens are written to `~/.nuvira/.env` (`NUVIRA_ENV_FILE`
+overrides it) by both the wizard and the dashboard's Channels tab, preserving comments and unrelated
+keys. `whatsapp` is deliberately different: a **paired session on disk**, not a token. The variable
+names are `NUVIRA_TELEGRAM_TOKEN`, `NUVIRA_DISCORD_BOT_TOKEN`, `NUVIRA_SLACK_BOT_TOKEN`,
+`NUVIRA_WHATSAPP_TOKEN` (Meta Cloud API only), and so on per platform.
+
+### Adding the people who may use it
+
+A configured channel is **not** an open door. Two independent lists decide what may happen, and
+conflating them is how a bot ends up speaking for you:
+
+| Question | Governs | Set it with |
+|---|---|---|
+| Who may **trigger** the agent? | inbound | `nuvira config gateway allow <platform> user <id>` |
+| Who may the agent **send to**? | outbound | `nuvira config gateway send-authority add <platform> <id>` |
+
+```bash
+nuvira config gateway allow    whatsapp user 9198…   # this person may drive the agent
+nuvira config gateway disallow whatsapp user 9198…   # revoke it
+nuvira config gateway reply    whatsapp polite        # or: silent
+```
+
+An unknown sender is neither obeyed nor necessarily dropped: `nuvira gateway contact list` shows
+those pending, and `approve` / `reject` decides. `nuvira gateway contact add Name <number>` is only
+a **send-by-name** convenience — it deliberately does **not** grant trigger access.
+
+### Keeping it running
+
+```bash
+nuvira gateway start --supervise   # restart the adapters automatically if they exit
+nuvira gateway delivery            # guaranteed-delivery ledger (--flush drains it)
+nuvira gateway logs                # why a message did or did not go out
+```
+
+`--supervise` is the answer to a crash; it is not the answer to a reboot. For that, add a login unit
+as shown in [Run it at login](#run-it-at-login-optional). One trap: **`nuvira dashboard` starts a
+gateway beside itself** (`--no-gateway` prevents that, `--keep-gateway` keeps it after the dashboard
+stops). If you also enable a standalone gateway unit you will have two adapters answering the same
+platform — pick one owner.
 
 ---
 
@@ -393,7 +575,7 @@ nuvira workflow publish                # share your own
 
 ---
 
-## 9. Beyond code — the tool surface
+## 9. Beyond code: the tool surface
 
 The agent has **110 tools**. This is the honest list of what it can do that is not "write a
 file". Categories below are descriptive; run `nuvira tools list` for the live registry.
@@ -576,7 +758,7 @@ nuvira sdk
 
 ---
 
-## 11. Cookbook — copy-paste recipes
+## 11. Cookbook: copy-paste recipes
 
 **Fix a bug end to end**
 ```bash
@@ -733,4 +915,4 @@ servers or discovery loops.
 
 > **Agent-Nuvira v3.3.0 | MIT License | Built by Dheeraj Sharma**
 >
-> *[github.com/imdheerajKube/agent-nuvira](https://github.com/imdheerajKube/agent-nuvira)*
+> *[github.com/imdheerajKube/agent-nuvira-documentation](https://github.com/imdheerajKube/agent-nuvira-documentation)*

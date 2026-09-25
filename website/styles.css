@@ -2129,9 +2129,412 @@ code { font-family: var(--font-mono); }
   .comparison-table td { padding: 12px 14px; }
 }
 
+/* Between the inline nav's natural fit (~1000px) and the 768px mobile block, the
+   links and the CTA buttons collide. Collapsing to the hamburger here keeps the
+   nav correct at every width instead of only above ~1000px and below 768px. */
+@media (max-width: 1000px) and (min-width: 769px) {
+  .nav-links {
+    position: fixed;
+    top: 68px;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    background: rgba(6, 6, 14, 0.98);
+    backdrop-filter: blur(20px);
+    padding: 24px;
+    gap: 16px;
+    border-bottom: 1px solid var(--border-color);
+    transform: translateY(-120%);
+    transition: transform 0.3s ease;
+  }
+
+  .nav-links.active {
+    transform: translateY(0);
+  }
+
+  .nav-ctas {
+    margin-left: 0;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .nav-toggle {
+    display: flex;
+  }
+}
+
 @media (max-width: 480px) {
   .providers-grid { grid-template-columns: 1fr; }
   .footer-links { grid-template-columns: 1fr; }
   .hero-title { font-size: 28px; }
   .pipeline-features { flex-direction: column; align-items: center; }
+}
+
+/* =====================================================
+   Docs page (docs.html) — getting-started, commands,
+   recipes and troubleshooting. Reuses the site's tokens
+   so the page is the product, not a second theme.
+   ===================================================== */
+
+/* The current page in the nav. Marked here rather than in the shared nav rules
+   because only the docs page needs it. */
+.nav-link.active {
+  color: var(--text-primary);
+}
+
+.nav-link.active::after {
+  transform: scaleX(1);
+}
+
+.docs-hero {
+  position: relative;
+  padding: 132px 0 56px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border-color);
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.08) 0%, transparent 100%);
+}
+
+.docs-crumbs {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.docs-crumbs a {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.docs-crumbs a:hover { color: var(--text-primary); }
+.docs-crumbs span { margin: 0 6px; }
+
+.docs-hero .hero-title { margin-bottom: 12px; }
+
+.docs-hero .hero-subtitle {
+  max-width: 720px;
+  margin: 0 0 26px;
+}
+
+.docs-hero-note {
+  max-width: 720px;
+  margin-top: 22px;
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.docs-hero-note a { color: var(--accent-3); }
+
+.docs-main { padding: 56px 0 80px; }
+
+/* Sidebar TOC + content. The TOC is sticky so a long page stays navigable. */
+.docs-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 56px;
+  align-items: start;
+}
+
+.docs-toc {
+  position: sticky;
+  top: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+  border-left: 1px solid var(--border-color);
+}
+
+.docs-toc-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0 0 10px 16px;
+  margin: 0;
+}
+
+.docs-toc a {
+  display: block;
+  padding: 7px 16px;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  margin-left: -1px;
+  transition: color 0.2s ease, border-color 0.2s ease;
+}
+
+.docs-toc a:hover {
+  color: var(--text-primary);
+  border-left-color: var(--accent-1);
+}
+
+.docs-content { min-width: 0; max-width: 820px; }
+
+/* Anchored sections need to clear the fixed navbar when jumped to. */
+.docs-section {
+  scroll-margin-top: 96px;
+  padding-bottom: 8px;
+  margin-bottom: 40px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.docs-section:last-child { border-bottom: none; margin-bottom: 0; }
+
+.docs-section h2 {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 16px;
+  color: var(--text-primary);
+}
+
+.docs-section h3 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  color: var(--text-primary);
+}
+
+.docs-section > p {
+  color: var(--text-secondary);
+  line-height: 1.75;
+  margin: 0 0 16px;
+  font-size: 15.5px;
+}
+
+.docs-list {
+  margin: 0 0 18px;
+  padding-left: 22px;
+  color: var(--text-secondary);
+  line-height: 1.8;
+  font-size: 15.5px;
+}
+
+.docs-list li { margin-bottom: 8px; }
+
+.docs-section code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--accent-3);
+  background: rgba(99, 102, 241, 0.1);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+
+/* A code block's own <code> must not inherit the inline-chip treatment. */
+.docs-section .code-block code,
+.docs-section .docs-pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  color: inherit;
+}
+
+.docs-note {
+  padding: 14px 16px;
+  border-left: 3px solid var(--accent-1);
+  border-radius: var(--radius-sm);
+  background: rgba(99, 102, 241, 0.07);
+  font-size: 14.5px !important;
+  color: var(--text-secondary) !important;
+}
+
+.docs-section .hljs-comment { color: var(--text-muted); }
+
+.docs-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 18px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.docs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14.5px;
+}
+
+.docs-table th,
+.docs-table td {
+  text-align: left;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+
+.docs-table th {
+  background: rgba(99, 102, 241, 0.07);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.docs-table tr:last-child td { border-bottom: none; }
+.docs-table td strong { color: var(--text-primary); }
+.docs-table a { color: var(--accent-3); text-decoration: none; }
+.docs-table a:hover { text-decoration: underline; }
+
+.docs-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-3);
+  background: rgba(167, 139, 250, 0.12);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.docs-cmd {
+  padding: 18px 20px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+}
+
+.docs-cmd h3 code {
+  font-size: 16px;
+  background: none;
+  padding: 0;
+  color: var(--accent-3);
+}
+
+.docs-cmd h3 span {
+  display: block;
+  margin-top: 3px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.docs-cmd p {
+  margin: 0 0 12px;
+  font-size: 14.5px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.docs-cmd .code-block { margin: 0; }
+
+.docs-recipe {
+  margin-bottom: 16px;
+  padding: 16px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.docs-recipe-title {
+  margin: 0 0 10px !important;
+  font-size: 14px !important;
+  font-weight: 600;
+  color: var(--text-primary) !important;
+}
+
+.docs-recipe-note {
+  margin: 10px 0 0 !important;
+  font-size: 13px !important;
+  color: var(--text-muted) !important;
+}
+
+.docs-pre {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+}
+
+.docs-pre code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--text-primary);
+  white-space: pre;
+}
+
+.docs-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.docs-link {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  text-decoration: none;
+  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.docs-link:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-hover);
+  background: var(--bg-card-hover);
+}
+
+.docs-link strong { color: var(--text-primary); font-size: 15px; }
+.docs-link span { color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+
+.docs-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 20px 22px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(139, 92, 246, 0.08) 100%);
+}
+
+.docs-cta p {
+  margin: 0 !important;
+  font-size: 15px !important;
+  color: var(--text-primary) !important;
+  font-weight: 500;
+}
+
+@media (max-width: 900px) {
+  .docs-layout { grid-template-columns: 1fr; gap: 32px; }
+  .docs-toc {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px;
+    border-left: none;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 16px;
+  }
+  .docs-toc-title { width: 100%; padding-left: 0; }
+  .docs-toc a {
+    padding: 5px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    margin-left: 0;
+  }
+  .docs-toc a:hover { border-left-color: var(--border-color); background: var(--bg-card); }
+}
+
+@media (max-width: 600px) {
+  .docs-hero { padding: 108px 0 40px; }
+  .docs-section h2 { font-size: 22px; }
+  .docs-section > p,
+  .docs-list { font-size: 15px; }
+  .docs-table { font-size: 13.5px; }
+  .docs-table th,
+  .docs-table td { padding: 10px 12px; }
 }
