@@ -1643,7 +1643,7 @@ function SpeechProviderSection() {
       <div style={{ fontSize: 12, color: '#6e7681' }}>
         Speech/TTS provider support coming soon.
         {' '}<a
-          href="https://github.com/imdheerajKube/agent-nuvira/issues/new"
+          href="https://github.com/imdheerajKube/agent-nuvira-documentation/issues/new"
           target="_blank"
           rel="noopener noreferrer"
           style={{ color: '#58a6ff', textDecoration: 'none', cursor: 'pointer' }}
