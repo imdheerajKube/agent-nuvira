@@ -333,6 +333,42 @@ describe('WS0 parity — every surface, real provider, transport-depth stub', ()
     }
   }, 90_000);
 
+  it('reports a FAILED READ as failed on every surface — the false-success regression', async () => {
+    // MEASURED, before the fix: `read_file` on a missing path produced a message
+    // with no `Error:` prefix, and the loop's accounting is
+    // `ok: !result.startsWith('Error:')` (`tool-loop.ts:1526`; the child has the
+    // same rule at `child-agent-runtime.ts:405`). So every surface reported
+    // `{ tool: 'read_file', ok: true }` for a read that never happened — a claim
+    // that travelled as fact with nothing behind it, which is the defect this
+    // repo has a tracker for (`tool-refusal.ts`).
+    //
+    // This asserts `ok: false` rather than "the surfaces agree", and the
+    // difference is the whole point: agreement on a wrong answer is still wrong,
+    // and an ABSENT outcome would compare equal to an absent outcome.
+    const scenario = PARITY_SCENARIOS.find((s) => s.id === 'failing-read');
+    expect(scenario, 'the CLI no longer drives a failing-read scenario').toBeDefined();
+
+    const run = await runParityScenario(scenario!, harness.drivers);
+    expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
+    expect(run.observations.map((o) => o.surface)).toEqual([
+      'cli-chat',
+      'dashboard-chat',
+      'gateway-chat',
+      'cli-execute',
+      'subagent',
+    ]);
+
+    for (const observation of run.observations) {
+      expect(
+        observation.toolCalls,
+        `${observation.surface} reported a failed read as a successful call`,
+      ).toEqual([{ tool: 'read_file', ok: false }]);
+      // The turn still completes: a failed read is not a failed turn.
+      expect(observation.status).toBe('completed');
+      expect(observation.modelCalls, `${observation.surface} model calls`).toBe(2);
+    }
+  }, 90_000);
+
   it('runs a real turn on every surface even when the same message was answered before', async () => {
     // The regression test for the shared-cache trap, at the level it bit: run the
     // identical scenario twice in one process. Each driver clears the response

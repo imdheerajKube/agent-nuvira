@@ -225,6 +225,19 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
     },
     answer: 'Command failed.',
   },
+  {
+    id: 'failing-read',
+    message: 'open a file that does not exist, then answer',
+    // The regression guard for a REAL false-success defect, measured by this
+    // harness: `read_file` on a missing path returned a message with no `Error:`
+    // prefix, and the loop's accounting is `ok: !startsWith('Error:')`
+    // (`tools/tool-loop.ts:1526`), so a read that never happened was reported as a
+    // successful call on all five surfaces. `read_file` is the smallest
+    // reproducing case of that family — `list_dir` and `edit_file` had it too, and
+    // all three now report the failure (`tools/coding-tools.ts`).
+    toolCall: { tool: 'read_file', args: { path: 'no-such-file-parity-probe.ts' } },
+    answer: 'Read failed.',
+  },
 ];
 
 /**

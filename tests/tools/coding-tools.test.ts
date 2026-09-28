@@ -68,16 +68,43 @@ describe('read_file — the agent opens a file', () => {
     expect(out).toContain('showing lines 20–25'); // clamps at EOF, no crash
   });
 
-  it('tells the model when the path is a directory', async () => {
+  it('tells the model when the path is a directory — and says the read failed', async () => {
     const { ctx } = makeWorkspace();
     const out = await runReadFile({ path: 'src' }, ctx);
     expect(out).toContain('is a directory — use list_dir');
+    // It names the tool that can do the job, but NO read happened, and in this
+    // repo doing no work is not a success — the rule `run_terminal` settled and
+    // `tests/tools/run-terminal.test.ts` pins ("no-op refusals are FAILURES").
+    // `classifyToolRefusal` still records WHICH refusal it was, from the phrasing.
+    expect(out.startsWith('Error: ')).toBe(true);
   });
 
-  it('reports a missing file cleanly', async () => {
+  it('a successful read is NOT an Error, so it can count as verification', async () => {
+    // The other direction, and it matters: a fix that made everything an error
+    // would pass every test above and break the verification gate.
+    const { ctx } = makeWorkspace();
+    const out = await runReadFile({ path: 'src/index.ts' }, ctx);
+    expect(out.startsWith('Error: ')).toBe(false);
+  });
+
+  it('reports a missing file as a FAILED read, not a successful one', async () => {
+    // THE REGRESSION THIS PINS. The loop's whole accounting is
+    // `ok: !result.startsWith('Error:')` (`tool-loop.ts:1526`), and this message
+    // had no prefix — so a read of a file that does not exist was reported as a
+    // successful call on all five surfaces (found by the parity harness). The
+    // wording was always right; the failure was that nothing downstream could
+    // see it, which is why a `toContain` assertion never caught it.
     const { ctx } = makeWorkspace();
     const out = await runReadFile({ path: 'src/nope.ts' }, ctx);
     expect(out).toContain('no such file or directory');
+    expect(out.startsWith('Error: ')).toBe(true);
+  });
+
+  it('reports a read with no path as a failure', async () => {
+    const { ctx } = makeWorkspace();
+    const out = await runReadFile({}, ctx);
+    expect(out.startsWith('Error: ')).toBe(true);
+    expect(out).toContain('no path given');
   });
 
   it('flags binary files instead of injecting them into context', async () => {
@@ -85,6 +112,8 @@ describe('read_file — the agent opens a file', () => {
     writeFileSync(join(dir, 'blob.bin'), Buffer.from([0x00, 0x01, 0x02, 0xff]));
     const out = await runReadFile({ path: 'blob.bin' }, ctx);
     expect(out).toContain('looks binary');
+    // Nothing was read into context, so this is not a successful read either.
+    expect(out.startsWith('Error: ')).toBe(true);
   });
 
   it('names read_extract as the alternative for a document read_file cannot open', async () => {
@@ -150,8 +179,28 @@ describe('list_dir — the agent explores structure', () => {
 
   it('refuses .. traversal and reports a missing dir cleanly', async () => {
     const { ctx } = makeWorkspace();
-    expect(await runListDir({ path: '../..' }, ctx)).toContain('denied');
-    expect(await runListDir({ path: 'no-such-dir' }, ctx)).toContain('no such file or directory');
+    const denied = await runListDir({ path: '../..' }, ctx);
+    expect(denied).toContain('denied');
+    // The boundary held on purpose, and the listing still did not happen — so it
+    // is an Error for the accounting, AND a `gate: 'workspace'` refusal in the
+    // trace (`tool-loop.ts:2203` matches the phrasing, not the prefix). The two
+    // records answer different questions and both are true.
+    expect(denied.startsWith('Error: ')).toBe(true);
+
+    const missing = await runListDir({ path: 'no-such-dir' }, ctx);
+    expect(missing).toContain('no such file or directory');
+    // …whereas listing something that is not there is a failed operation.
+    expect(missing.startsWith('Error: ')).toBe(true);
+  });
+
+  it('reports listing a FILE (not a directory) as a failure', async () => {
+    // ENOTDIR: the readdir failed, so no listing happened. Without the prefix
+    // this read as a successful call and the model believed it had listed
+    // something it had not.
+    const { ctx } = makeWorkspace();
+    const out = await runListDir({ path: 'src/index.ts' }, ctx);
+    expect(out.startsWith('Error: ')).toBe(true);
+    expect(out).toContain('cannot read');
   });
 });
 
@@ -265,6 +314,18 @@ describe('edit_file — surgical exact-text edits (confirmation-gated)', () => {
     );
     const updated = await runReadFile({ path: 'src/index.ts' }, ctx);
     expect(updated).not.toContain('root2');
+  });
+
+  it('reports editing a file that does not exist as a failed call', async () => {
+    // Same defect, same door: an edit whose read failed did not apply, so it must
+    // not be counted as a call that did something.
+    const { ctx } = makeWorkspace();
+    const out = await runEditFile(
+      { path: 'src/nope.ts', old_string: 'a', new_string: 'b', confirm: true },
+      ctx,
+    );
+    expect(out).toContain('no such file or directory');
+    expect(out.startsWith('Error: ')).toBe(true);
   });
 
   it('reports a not-found old_string distinctly (the model must re-read)', async () => {

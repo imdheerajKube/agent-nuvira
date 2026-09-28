@@ -90,6 +90,30 @@ describe('read_file — batched reads (one call, many files)', () => {
     const out = await runReadFile({ paths: ['../../etc/passwd', '/etc/hosts', 'src/a.ts'] }, ctx);
     expect(out).toContain('denied');
     expect(out).toContain(`### ${p('src', 'a.ts')}`);
+    // One entry was read, so the CALL succeeded — a partial result is what the
+    // caller asked for, and the denials are named inline where they belong.
+    expect(out.startsWith('Error: ')).toBe(false);
+  });
+
+  it('a batch that read NOTHING is an Error, not a report of three successes', async () => {
+    // The defect this closes, in the batched form: three missing paths produced a
+    // perfectly formatted report of "0 read" that the loop counted as a
+    // successful call, because the header carried no `Error:` prefix.
+    const { ctx } = makeWorkspace();
+    const out = await runReadFile({ paths: ['src/nope-a.ts', 'src/nope-b.ts'] }, ctx);
+    expect(out.startsWith('Error: ')).toBe(true);
+    expect(out).toContain('0 read');
+    expect(out).toContain('no such file or directory');
+  });
+
+  it('a batch that read only SOME of its files still succeeds', async () => {
+    // The boundary of the rule above: the work happened, so the call is not an
+    // error — the unread entries are named inline.
+    const { ctx } = makeWorkspace();
+    const out = await runReadFile({ paths: ['src/a.ts', 'src/nope.ts'] }, ctx);
+    expect(out.startsWith('Error: ')).toBe(false);
+    expect(out).toContain('1 read');
+    expect(out).toContain('no such file or directory');
   });
 
   it('deduplicates repeated paths (including ./ forms)', async () => {

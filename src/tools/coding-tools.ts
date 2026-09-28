@@ -105,6 +105,45 @@ async function gateReal(root: string | undefined, p: string): Promise<GateResult
   }
 }
 
+/**
+ * A tool result that says the operation FAILED, in the one place the tool loop
+ * reads.
+ *
+ * WHY THE PREFIX, and why this is not cosmetic. The loop's accounting is
+ * `ok: !result.startsWith('Error:')` (`tool-loop.ts:1526`; the child's copy is
+ * `child-agent-runtime.ts:405`), and everything downstream trusts that flag: the
+ * dashboard renders a green step card, the verification gate counts an ok call as
+ * proof, and the model's next move depends on knowing that nothing was read.
+ *
+ * MEASURED, and the reason this exists: `read_file` on a missing path and
+ * `list_dir` on a missing directory both reported `ok: true` on every one of the
+ * five surfaces — found by the parity harness while a failing-tool scenario was
+ * being chosen. A read that never happened, counted as work, is exactly the
+ * false-success defect this repo already has a tracker and a shared contract for
+ * (`tool-refusal.ts`).
+ *
+ * A REFUSAL GOES THROUGH HERE TOO. An empty path, a boundary denial, a binary
+ * file, a path that is a directory — every one of them did NO WORK, and the rule
+ * this repo settled for `run_terminal` is that doing no work is not a success:
+ * an empty command, a denied command and a command still waiting on approval are
+ * all `Error:` there, and `tests/tools/run-terminal.test.ts` pins it ("no-op
+ * refusals are FAILURES"). `ToolRefusal` is the same idea on the typed side — it
+ * carries `ok: false` (`tool-refusal.ts`). So there is exactly one case in these
+ * tools where doing nothing is a success: a glob that matched nothing, because
+ * the search itself ran. Everything else says so.
+ *
+ * `classifyToolRefusal` (`tool-loop.ts:2203`) still records WHICH refusal it was
+ * for the trace — it matches the phrasing, not the prefix, so a denial is both an
+ * `Error:` for the accounting and a `gate: 'workspace'` refusal in the record.
+ *
+ * (Named `failureResult`, not `failed`, because `runEditFile` destructures a
+ * local `failed` out of `applyPairs` — the shadowing would silently pick the
+ * boolean and the compiler only caught it because a boolean is not callable.)
+ */
+function failureResult(tool: string, detail: string): string {
+  return `Error: ${tool}: ${detail}`;
+}
+
 /** Cheap binary sniff — a NUL byte in the first 8KB means "don't inject". */
 function looksBinary(buf: Buffer): boolean {
   const probe = buf.subarray(0, 8192);
@@ -158,6 +197,11 @@ export type ReadFileEntry = string | { path: string; offset?: number; limit?: nu
 
 interface ReadOneResult {
   rel: string;
+  /**
+   * Why the file could not be read. Never a partial success: the caller turns
+   * every one of these into the `Error:` result the loop reads — see
+   * `failureResult`.
+   */
   error?: string;
   total?: number;
   bytes?: number;
@@ -246,13 +290,13 @@ export async function runReadFile(args: ReadFileArgs, ctx: ToolContext): Promise
 
   const rawPath = args.path;
   if (!rawPath) {
-    return `read_file: no path given — pass 'path' (one file) or 'paths' (several in one call).`;
+    return failureResult('read_file', "no path given — pass 'path' (one file) or 'paths' (several in one call).");
   }
   const gated = await gateReal(ctx.cwd, rawPath);
-  if (!gated.ok) return `read_file: ${gated.reason}`;
+  if (!gated.ok) return failureResult('read_file', gated.reason);
 
   const r = await readOneFile(gated, args.offset, args.limit, MAX_READ_CHARS);
-  if (r.error) return `read_file: ${r.error}`;
+  if (r.error) return failureResult('read_file', r.error);
   const note = [
     `read_file: ${r.rel} (${r.total} lines, ${r.bytes} bytes)`,
     `showing lines ${r.offset}–${r.endLine}${r.truncated ? ' (truncated — pass offset/limit to continue)' : ''}:`,
@@ -273,7 +317,7 @@ async function runBatchedRead(args: ReadFileArgs, ctx: ToolContext): Promise<str
     ...(Array.isArray(args.paths) ? args.paths : []),
   ];
   if (raw.length === 0) {
-    return `read_file: no paths given — pass 'paths' with at least one entry.`;
+    return failureResult('read_file', "no paths given — pass 'paths' with at least one entry.");
   }
   const overflow = raw.length > MAX_BATCH_READ_ENTRIES;
   const entries = raw.slice(0, MAX_BATCH_READ_ENTRIES).map((e) =>
@@ -323,7 +367,11 @@ async function runBatchedRead(args: ReadFileArgs, ctx: ToolContext): Promise<str
     `read_file: ${entries.length} file${entries.length === 1 ? '' : 's'} requested, ${readCount} read — ${MAX_BATCH_READ_CHARS - remaining} chars used`,
     `(shared budget ${MAX_BATCH_READ_CHARS} chars; per-file cap ${MAX_READ_CHARS})${overflow ? ` (capped at ${MAX_BATCH_READ_ENTRIES} entries)` : ''}`,
   ].join(' ');
-  return [header, ...sections].join('\n\n');
+  // A batch that read NOTHING did no work, so the whole call reports as a failure
+  // even though each section is phrased as an inline note. A batch that read SOME
+  // of what it asked for succeeded — the failures stay inline, where a partial
+  // result is exactly what the caller asked for.
+  return [readCount === 0 ? failureResult('read_file', header) : header, ...sections].join('\n\n');
 }
 
 /** ─── list_dir ───────────────────────────────────────────────────────────── */
@@ -335,7 +383,7 @@ export interface ListDirArgs {
 export async function runListDir(args: ListDirArgs, ctx: ToolContext): Promise<string> {
   const target = args.path && args.path !== '' ? args.path : '.';
   const gated = await gateReal(ctx.cwd, target);
-  if (!gated.ok) return `list_dir: ${gated.reason}`;
+  if (!gated.ok) return failureResult('list_dir', gated.reason);
   // `relative(root, root)` is '' — display the workspace root as '.', not nothing.
   const display = gated.rel === '' ? '.' : gated.rel;
 
@@ -343,7 +391,9 @@ export async function runListDir(args: ListDirArgs, ctx: ToolContext): Promise<s
   try {
     entries = await readdir(gated.abs, { withFileTypes: true });
   } catch (err) {
-    return `list_dir: cannot read '${gated.rel}': ${(err as Error).message}`;
+    // ENOTDIR (a file, not a directory) and any permission/IO failure land here:
+    // the listing did not happen, so the model must not be told that it did.
+    return failureResult('list_dir', `cannot read '${gated.rel}': ${(err as Error).message}`);
   }
   const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort();
   const files = entries.filter((e) => !e.isDirectory()).map((e) => e.name).sort();
@@ -552,13 +602,15 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
     return "edit_file: no replacement given — pass old_string/new_string (single) or replacements[] (batch).";
   }
   const gated = await gateReal(ctx.cwd, args.path);
-  if (!gated.ok) return `edit_file: ${gated.reason}`;
+  if (!gated.ok) return failureResult('edit_file', gated.reason);
 
   let content: string;
   try {
     content = await readFile(gated.abs, 'utf-8');
   } catch (err) {
-    return `edit_file: cannot read '${gated.rel}': ${(err as Error).message}`;
+    // Same defect as read_file's: an edit whose read failed did not apply, so it
+    // must not be counted as a call that succeeded.
+    return failureResult('edit_file', `cannot read '${gated.rel}': ${(err as Error).message}`);
   }
 
   const { working, outcomes, failed } = applyPairs(content, pairs);
