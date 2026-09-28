@@ -19,6 +19,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { verifyArtifacts } from './artifact-verification.js';
+import { formatCount } from '../utils/format.js';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pushDAGUpdate, updateDAGNode, resetDAG } from '../observability/dag-bridge.js';
@@ -3303,7 +3304,7 @@ export class Orchestrator {
             const assembled = assembleDocument(job);
             if (assembled) {
               logger.success(
-                `   📖 Document assembled: ${assembled.path} — ${assembled.words.toLocaleString()} words (~${assembled.pages} pages, ${assembled.files} units)`,
+                `   📖 Document assembled: ${assembled.path} — ${formatCount(assembled.words)} words (~${assembled.pages} pages, ${assembled.files} units)`,
               );
             }
           }
@@ -4261,7 +4262,7 @@ export class Orchestrator {
       const assembled = assembleDocument(plan.job);
       if (assembled) {
         logger.success(
-          `   📖 Nothing left to write — assembled ${assembled.path} (${assembled.words.toLocaleString()} words, ~${assembled.pages} pages)`,
+          `   📖 Nothing left to write — assembled ${assembled.path} (${formatCount(assembled.words)} words, ~${assembled.pages} pages)`,
         );
       }
       return null;
@@ -4363,11 +4364,11 @@ export class Orchestrator {
       const presence = artifactsPresence(job.projectPath, pending?.expectedArtifacts);
       if (presence.total > 0 && presence.present < presence.total) {
         return (
-          `✅ All ${progress.total} content units written — ${progress.words.toLocaleString()} words. ` +
+          `✅ All ${progress.total} content units written — ${formatCount(progress.words)} words. ` +
           `Still to produce: ${presence.missing.join(', ')}. Continuing automatically.`
         );
       }
-      return `✅ All ${progress.total} units written — ${progress.words.toLocaleString()} words (~${progress.pagesTarget} pages).`;
+      return `✅ All ${progress.total} units written — ${formatCount(progress.words)} words (~${progress.pagesTarget} pages).`;
     }
     return (
       `${formatProgress(job)} — continuing automatically; ` +

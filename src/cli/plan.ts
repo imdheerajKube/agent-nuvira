@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { existsSync, statSync } from 'node:fs';
+import { formatCount } from '../utils/format.js';
 import inquirer from 'inquirer';
 import { BaseCommand } from './commands.js';
 import { PipelineBoard } from './pipeline-board.js';
@@ -105,7 +106,7 @@ export class PlanCommand extends BaseCommand {
       }
 
       getEventBus().emit(EventNames.ORCHESTRATOR_INSPECTION, {
-        lines: [`Analyzed ${target}`, `Context: ~${contextStr.length.toLocaleString()} chars`],
+        lines: [`Analyzed ${target}`, `Context: ~${formatCount(contextStr.length)} chars`],
       }, 'plan');
 
       if (options?.verbose) {

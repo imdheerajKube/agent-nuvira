@@ -21,6 +21,7 @@
 import { Command } from 'commander';
 
 import { BaseCommand, getCliName } from './commands.js';
+import { formatCount } from '../utils/format.js';
 import { PipelineBoard } from './pipeline-board.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { resolveProvider } from './router.js';
@@ -408,7 +409,7 @@ export class EvalCommand extends BaseCommand {
         if (paceTokens === undefined) {
           logger.warn(`--pace: no declared daily budget for ${providerName} — running unpaced. Declare one with \`${getCliName()} model quota set ${providerName} --tokens N\`.`);
         } else {
-          logger.info(`⏱  Pacing under the declared daily budget: ${paceTokens.toLocaleString()} tokens (${paceUsedBefore.toLocaleString()} used today).`);
+          logger.info(`⏱  Pacing under the declared daily budget: ${formatCount(paceTokens)} tokens (${formatCount(paceUsedBefore)} used today).`);
         }
       }
 

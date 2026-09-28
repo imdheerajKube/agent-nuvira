@@ -16,6 +16,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { envBuff, resolveNuviraHome } from '../config/paths';
+import { formatCount } from '../utils/format.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -346,7 +347,7 @@ export class CostTracker {
       '',
       '── All Time ──',
       `   Total requests: ${summary.totalRequests}`,
-      `   Total tokens: ${summary.totalTokens.toLocaleString()}`,
+      `   Total tokens: ${formatCount(summary.totalTokens)}`,
       `   Total cost: $${summary.totalCost.toFixed(6)}`,
       '',
     ];

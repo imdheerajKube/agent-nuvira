@@ -18,6 +18,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import {envBuff, resolveNuviraHome} from '../config/paths';
+import { formatCount } from '../utils/format.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -633,7 +634,7 @@ export function formatBenchmarkReport(run: BenchmarkRun): string {
   lines.push(`  Avg quality: ${(s.avgQualityScore * 100).toFixed(1)}%`);
   lines.push(`  Median latency: ${s.medianLatencyMs}ms`);
   lines.push(`  Total cost: $${s.totalCostUsd.toFixed(6)}`);
-  lines.push(`  Total tokens: ${s.totalTokens.toLocaleString()}`);
+  lines.push(`  Total tokens: ${formatCount(s.totalTokens)}`);
   lines.push('');
 
   // Results table
@@ -678,7 +679,7 @@ export function formatBenchmarkMarkdown(run: BenchmarkRun): string {
     `- **Avg Quality Score:** ${(s.avgQualityScore * 100).toFixed(1)}%`,
     `- **Median Latency:** ${s.medianLatencyMs}ms`,
     `- **Total Cost:** $${s.totalCostUsd.toFixed(6)}`,
-    `- **Total Tokens:** ${s.totalTokens.toLocaleString()}`,
+    `- **Total Tokens:** ${formatCount(s.totalTokens)}`,
     '',
     '## Results',
     '',

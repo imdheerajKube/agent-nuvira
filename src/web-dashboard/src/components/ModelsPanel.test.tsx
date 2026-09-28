@@ -245,12 +245,11 @@ describe('ContextWindowChip', () => {
   it('renders a compact 128K for a 131,072-token window with the exact tokens in the tooltip', () => {
     render(<ContextWindowChip tokens={131072} />);
     expect(screen.getByText('⏳ 128K')).toBeTruthy();
-    // The tooltip prints the count with `toLocaleString()`, so its grouping follows
-    // the machine's locale (en-IN: 1,31,072 where en-US: 131,072). Comparing against
-    // the same formatting keeps this assertion about the TOKEN COUNT rather than
-    // about which locale the suite happens to run under.
+    // The tooltip prints the count through the shared `formatCount`, which PINS the
+    // locale to en-US — so this asserts the literal, which is what fails if the
+    // formatter stops being used or its locale changes.
     const title = screen.getByTitle(/context window/).getAttribute('title') ?? '';
-    expect(title).toContain(`⏳ context window ${(131072).toLocaleString()} tokens`);
+    expect(title).toContain('⏳ context window 131,072 tokens');
     expect(title).toContain("feeds the router's context preflight");
   });
 

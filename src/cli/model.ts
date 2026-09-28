@@ -19,6 +19,7 @@
  */
 
 import { Command } from 'commander';
+import { formatCount } from '../utils/format.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -976,7 +977,7 @@ export class ModelCommand extends BaseCommand {
       // signal is on (⏳ % of the provider's nominal input window).
       const ctxTag =
         r.contextFit !== undefined && r.contextWindowTokens !== undefined
-          ? ` ⏳ ctx ${Math.round((r.contextUtilization ?? 0) * 100)}% (${r.contextWindowTokens.toLocaleString()} tok)`
+          ? ` ⏳ ctx ${Math.round((r.contextUtilization ?? 0) * 100)}% (${formatCount(r.contextWindowTokens)} tok)`
           : '';
       // P4 M4.4: mid-stream flakiness chip — the reliability penalty applied
       // to providers that keep starting streams that die before completion.
@@ -1010,7 +1011,7 @@ export class ModelCommand extends BaseCommand {
     if (pre) {
       console.log('');
       logger.highlight('  ── Context preflight (M2.5, estimation only) ──');
-      console.log(`   Estimated prompt: ${pre.estimatedPromptTokens.toLocaleString()} tokens (basis: ${pre.basis === 'hint' ? 'caller-provided payload' : 'task text'})`);
+      console.log(`   Estimated prompt: ${formatCount(pre.estimatedPromptTokens)} tokens (basis: ${pre.basis === 'hint' ? 'caller-provided payload' : 'task text'})`);
       for (const p of pre.providers) {
         // n/a when no context data was computed for a candidate (e.g. quota-
         // parked — its scored entry omits the context fields by design); a
@@ -1021,7 +1022,7 @@ export class ModelCommand extends BaseCommand {
         // resolves one even for parked candidates, but renderers must never
         // crash a CLI command).
         const windowTag = p.contextWindowTokens !== undefined
-          ? p.contextWindowTokens.toLocaleString()
+          ? formatCount(p.contextWindowTokens)
           : 'unknown';
         console.log(`   ${p.provider.padEnd(12)} window ${windowTag} tok · utilization ${utilTag}${fit}`);
       }
@@ -1246,9 +1247,9 @@ export class ModelCommand extends BaseCommand {
       this.configManager.save(patch);
       console.log('');
       logger.success(`✅ Budget set for ${provider}:`);
-      console.log(`     tokens/window: ${tokens !== undefined ? tokens.toLocaleString() : (quota[provider]?.tokensPerWindow ?? 'unset')}`);
-      console.log(`     requests/window: ${requests !== undefined ? requests.toLocaleString() : (quota[provider]?.requestsPerWindow ?? 'unset')}`);
-      console.log(`     window ms: ${windowMs !== undefined ? windowMs.toLocaleString() : (quota[provider]?.windowMs ?? '24h default')}`);
+      console.log(`     tokens/window: ${tokens !== undefined ? formatCount(tokens) : (quota[provider]?.tokensPerWindow ?? 'unset')}`);
+      console.log(`     requests/window: ${requests !== undefined ? formatCount(requests) : (quota[provider]?.requestsPerWindow ?? 'unset')}`);
+      console.log(`     window ms: ${windowMs !== undefined ? formatCount(windowMs) : (quota[provider]?.windowMs ?? '24h default')}`);
       console.log(`     max cost/call: $${costUsd !== undefined ? costUsd : (this.configManager.getAll().routing?.governance?.maxCostUsd ?? 'unset')}`);
       console.log('');
       logger.info('The quota ledger + auto-router enforce this before requests go out; the dashboard');
@@ -1308,8 +1309,8 @@ export class ModelCommand extends BaseCommand {
     console.log('');
     logger.highlight('  ── Cost Summary (free/local-first) ──');
     console.log('');
-    console.log(`   🆓 Free tokens:  ${summary.freeTokens.toLocaleString()}  (${summary.freeRequests.toLocaleString()} req)`);
-    console.log(`   💳 Paid tokens:  ${summary.paidTokens.toLocaleString()}  (${summary.paidRequests.toLocaleString()} req)`);
+    console.log(`   🆓 Free tokens:  ${formatCount(summary.freeTokens)}  (${formatCount(summary.freeRequests)} req)`);
+    console.log(`   💳 Paid tokens:  ${formatCount(summary.paidTokens)}  (${formatCount(summary.paidRequests)} req)`);
     if (summary.estimatedSavedUsd > 0) {
       console.log(`   💰 Estimated saved: $${summary.estimatedSavedUsd.toFixed(4)}  (free-tier usage at a typical paid rate)`);
     }

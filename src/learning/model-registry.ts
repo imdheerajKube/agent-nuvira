@@ -37,6 +37,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import {envBuff, resolveNuviraHome} from '../config/paths';
+import { formatCount } from '../utils/format.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -1846,7 +1847,7 @@ export class ModelRegistry {
         // Unified-store quota telemetry: remaining tokens + time-to-wait (resets
         // in) come from the same sub-ms FAISS/JSON snapshot routing reads.
         const tokens = m.remainingTokens !== undefined && m.remainingTokens >= 0
-          ? ` · ${m.remainingTokens.toLocaleString()} tokens left`
+          ? ` · ${formatCount(m.remainingTokens)} tokens left`
           : '';
         const resets = m.resetsInMs !== undefined && m.resetsInMs > 0
           ? ` · resets in ${this.formatMs(m.resetsInMs)}`

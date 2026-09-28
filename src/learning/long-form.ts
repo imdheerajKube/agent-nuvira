@@ -35,6 +35,7 @@
  */
 
 import { envBuff, resolveNuviraHome } from '../config/paths.js';
+import { formatCount } from '../utils/format.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 
@@ -555,7 +556,7 @@ export function jobProgress(job: LongFormJob): LongFormProgress {
 export function formatProgress(job: LongFormJob): string {
   const p = jobProgress(job);
   const noun = job.deliverableClass === 'creative' ? 'chapter' : 'section';
-  return `📖 ${noun} ${p.done}/${p.total} complete · ${p.words.toLocaleString()}/${p.wordsTarget.toLocaleString()} words (${p.pages} of ~${p.pagesTarget} pages, ${p.percent}%)`;
+  return `📖 ${noun} ${p.done}/${p.total} complete · ${formatCount(p.words)}/${formatCount(p.wordsTarget)} words (${p.pages} of ~${p.pagesTarget} pages, ${p.percent}%)`;
 }
 
 /** The next `limit` units as a plan the writer can execute one at a time. */

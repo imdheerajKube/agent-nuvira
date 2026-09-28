@@ -228,11 +228,9 @@ describe('progress reporting', () => {
     recordSectionOutcome(job, 1, { ok: true, words: 900 });
     const line = formatProgress(job);
     expect(line).toMatch(/chapter 1\/\d+/);
-    // The line groups counts with toLocaleString(), so the separators follow the
-    // machine's locale (35,000 under en-US, 35.000 under de-DE, narrow spaces under
-    // fr-FR). Compare against the same formatting so this asserts the WORDS rather
-    // than where the locale puts the separator.
-    expect(line).toContain(`900/${job.target.wordsTarget.toLocaleString()} words`);
+    // The line groups counts through the shared `formatCount` (pinned to en-US), so
+    // the separator is a literal on every machine.
+    expect(line).toContain('900/35,000 words');
     expect(line).toMatch(/pages/);
   });
 

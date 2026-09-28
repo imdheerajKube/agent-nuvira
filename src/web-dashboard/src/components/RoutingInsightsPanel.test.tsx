@@ -130,21 +130,17 @@ describe('PromotionGateSection (via RoutingInsightsPanel)', () => {
 // ─── v1.58.0 M2.x chips on the preference table ─────────────────────────────
 
 /**
- * Format a token count the way the chip does.
+ * The chips print counts through the shared `formatCount`, which PINS the locale
+ * to en-US — so the expected strings below are literals, and asserting the literal
+ * is the point: it fails if the formatter stops being used, or if its locale
+ * changes, on ANY machine. (While the chips used a bare `toLocaleString()` these
+ * had to be computed from the ambient locale, because en-IN rendered 1048576 as
+ * `10,48,576` and fr-FR used narrow no-break spaces.)
  *
- * The chips print counts with `toLocaleString()`, so the GROUPING follows the
- * machine's locale: 1048576 is `1,048,576` under en-US, `10,48,576` under en-IN,
- * and `1 048 576` (narrow no-break spaces) under fr-FR. Assertions build the
- * expected string through this helper instead of hardcoding one locale's
- * separators — the test is about which number and unit a chip shows, not about
- * where the machine's locale puts the separators.
- *
- * The chips are then read off `textContent` with `toContain` rather than matched
- * with `getByText`: the library's default normalizer collapses `\s` (which
- * includes fr-FR's U+202F) to a plain space, so a formatted string never compares
- * equal to the rendered text under locales whose separator is whitespace.
+ * The chips are read off `textContent` with `toContain` rather than matched with
+ * `getByText`: the library's default normalizer collapses `\s`, so a text matcher
+ * cannot be trusted with a separator that is whitespace under some locale.
  */
-const localized = (n: number): string => n.toLocaleString();
 
 describe('PreferenceSection M2.x chips (v1.58.0)', () => {
   it('renders 🎯 fit / 📏 measured / ⏳ ctx chips on provider rows when data is present', () => {
@@ -161,11 +157,9 @@ describe('PreferenceSection M2.x chips (v1.58.0)', () => {
 
     expect(screen.getByText('Auto Router — What the agent would pick')).toBeTruthy();
     expect(screen.getByText('🎯 fit 85%')).toBeTruthy();
-    // `toContain` on textContent rather than getByText: see the note on `localized`.
-    expect(screen.getByText(/📏 measured/).textContent)
-      .toContain(`${localized(12480)}→${localized(3110)} tok`);
-    expect(screen.getByText(/⏳ ctx/).textContent)
-      .toContain(`3% (${localized(1048576)} tok)`);
+    // `toContain` on textContent rather than getByText: see the note above.
+    expect(screen.getByText(/📏 measured/).textContent).toContain('12,480→3,110 tok');
+    expect(screen.getByText(/⏳ ctx/).textContent).toContain('3% (1,048,576 tok)');
   });
 
   it('shows 📐 estimated when no measured wire usage exists and omits 🎯/⏳ chips when their fields are absent (gates OFF)', () => {

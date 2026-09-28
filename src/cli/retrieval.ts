@@ -15,6 +15,7 @@
 
 import { readdirSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { formatCount } from '../utils/format.js';
 import { Command } from 'commander';
 
 import { BaseCommand } from './commands.js';
@@ -79,15 +80,15 @@ export class RetrievalCommand extends BaseCommand {
         const opts = retrievalOptionsFromConfig(this.configManager);
         const stats = readRetrievalAggregateStats();
         logger.highlight('\n🧠 Vector Retrieval — token-savings transparency');
-        logger.info(`   Enabled: ${opts.enabled ? 'yes' : 'no'} (contexts > ${(opts.thresholdTokens ?? 12000).toLocaleString()} tokens are vectorized)`);
+        logger.info(`   Enabled: ${opts.enabled ? 'yes' : 'no'} (contexts > ${formatCount(opts.thresholdTokens ?? 12000)} tokens are vectorized)`);
         logger.info(`   Model: ${opts.model} · topK: ${opts.topK} · chunkTokens: ${opts.chunkTokens}`);
         console.log('');
         console.log(`   Calls:                  ${stats.totalCalls}`);
         console.log(`   Retrievals used:        ${stats.totalRetrievals}`);
         console.log(`   Failovers (fell back):  ${stats.totalFailovers}`);
-        console.log(`   Tokens before retrieval:${stats.totalOriginalTokens.toLocaleString().padStart(11)}`);
-        console.log(`   Tokens after retrieval: ${stats.totalReducedTokens.toLocaleString().padStart(11)}`);
-        console.log(`   TOKENS SAVED:           ${stats.totalSavedTokens.toLocaleString().padStart(11)}`);
+        console.log(`   Tokens before retrieval:${formatCount(stats.totalOriginalTokens).padStart(11)}`);
+        console.log(`   Tokens after retrieval: ${formatCount(stats.totalReducedTokens).padStart(11)}`);
+        console.log(`   TOKENS SAVED:           ${formatCount(stats.totalSavedTokens).padStart(11)}`);
         console.log(`   Avg reduction:          ${stats.avgPctReduced.toFixed(1)}%`);
         const idx = getVectorStore(REPO_NAMESPACE).stats();
         console.log(`   Repo index:             ${idx.totalEntries} chunk(s) · ${idx.dimensions}-dim`);

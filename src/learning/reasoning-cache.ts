@@ -14,6 +14,7 @@
 
 import { join } from 'node:path';
 import {envBuff, resolveNuviraHome} from '../config/paths';
+import { formatCount } from '../utils/format.js';
 import { homedir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -106,7 +107,7 @@ export function cacheReasoning(
     // Cap a single reasoning chain so the cache file stays small (head+tail
     // kept — the beginning frames the chain, the end is the most recent step).
     reasoningContent: entry.reasoningContent.length > MAX_REASONING_CHARS
-      ? `${entry.reasoningContent.slice(0, Math.floor(MAX_REASONING_CHARS * 0.3))}\n…[${entry.reasoningContent.length.toLocaleString()} chars truncated]…\n${entry.reasoningContent.slice(-Math.floor(MAX_REASONING_CHARS * 0.7))}`
+      ? `${entry.reasoningContent.slice(0, Math.floor(MAX_REASONING_CHARS * 0.3))}\n…[${formatCount(entry.reasoningContent.length)} chars truncated]…\n${entry.reasoningContent.slice(-Math.floor(MAX_REASONING_CHARS * 0.7))}`
       : entry.reasoningContent,
     timestamp: Date.now(),
   });

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { parseJsonOrNull } from '../jsonOrNull';
 import type { ModelsHealthData, ProviderHealth, ModelStatus, TestedModel, ModelRegistryInsights, RegistryModelEntry, ActionTelemetryInsights } from '../types';
+import { formatCount } from '../format';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -419,7 +420,7 @@ export function ContextWindowChip({ tokens }: { tokens: number }) {
       : `${tokens}`;
   return (
     <span
-      title={`⏳ context window ${tokens.toLocaleString()} tokens — live from the provider's model list (v1.60.x); feeds the router's context preflight`}
+      title={`⏳ context window ${formatCount(tokens)} tokens — live from the provider's model list (v1.60.x); feeds the router's context preflight`}
       style={{
         marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
         background: '#0a1e2e', border: '1px solid #58a6ff', color: '#58a6ff',
@@ -479,7 +480,7 @@ export function FlakinessSparkline({ history }: { history?: Array<{ t: number; r
 function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
   const style = registryStatusStyle(entry.status);
   const tokens = entry.remainingTokens >= 0
-    ? `${entry.remainingTokens.toLocaleString()} left`
+    ? `${formatCount(entry.remainingTokens)} left`
     : 'unlimited';
   return (
     <tr style={{ borderBottom: '1px solid #21262d' }}>

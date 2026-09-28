@@ -24,6 +24,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import {envBuff, resolveNuviraHome} from '../config/paths';
+import { formatCount } from '../utils/format.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -413,7 +414,7 @@ export async function assembleContext(
 
     logger.info(
       `🧠 Retrieved ${hits.length} chunk${hits.length === 1 ? '' : 's'} from repo — ` +
-      `reduced context ${originalTokens.toLocaleString()} → ${reducedTokens.toLocaleString()} tokens ` +
+      `reduced context ${formatCount(originalTokens)} → ${formatCount(reducedTokens)} tokens ` +
       `(${pctReduced.toFixed(0)}% saved)`,
     );
 

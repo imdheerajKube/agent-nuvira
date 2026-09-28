@@ -28,6 +28,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { formatCount } from '../utils/format.js';
 import { join } from 'node:path';
 import { resolveNuviraConfigDir, resolveNuviraDataPath } from '../config/paths.js';
 import { getAutoRouter, type AutoRouteResult, type ScoredProvider } from './auto-router.js';
@@ -1500,7 +1501,7 @@ export function renderModelBreadthReport(
   if (poolMeasured && !emptyPool) {
     lines.push('');
     lines.push(
-      `Pool at the time: ${poolSize.toLocaleString()} eligible model${poolSize === 1 ? '' : 's'} across ${poolProviders} provider${poolProviders === 1 ? '' : 's'}.`,
+      `Pool at the time: ${formatCount(poolSize)} eligible model${poolSize === 1 ? '' : 's'} across ${poolProviders} provider${poolProviders === 1 ? '' : 's'}.`,
     );
   }
 

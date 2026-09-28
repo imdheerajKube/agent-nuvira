@@ -19,6 +19,8 @@
 
 // ─── Constants / defaults ───────────────────────────────────────────────────
 
+import { formatCount } from '../utils/format.js';
+
 /** Default token budget for a continuation note (the partial-output relay). */
 export const DEFAULT_CONTINUATION_MAX_TOKENS = 2048;
 
@@ -69,7 +71,7 @@ export function trimPartialOutput(partial: string, maxChars: number): string {
   if (partial.length <= maxChars) return partial;
   const head = partial.slice(0, Math.floor(maxChars * 0.3));
   const tail = partial.slice(-Math.floor(maxChars * 0.7));
-  return `${head}\n…[${partial.length.toLocaleString()} chars truncated]…\n${tail}`;
+  return `${head}\n…[${formatCount(partial.length)} chars truncated]…\n${tail}`;
 }
 
 /**

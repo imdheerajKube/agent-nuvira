@@ -32,6 +32,7 @@
 
 import { existsSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
+import { formatCount } from '../utils/format.js';
 import type { TaskStep } from './agent.js';
 import {
   classifyDeliverable,
@@ -362,7 +363,7 @@ export function buildLongFormPlan(input: {
 export function longFormContinuationNote(job: LongFormJob, projectPath: string): string {
   const p = jobProgress(job);
   if (p.complete) {
-    return `✅ All ${p.total} units written — ${p.words.toLocaleString()} words (~${p.pagesTarget} pages).`;
+    return `✅ All ${p.total} units written — ${formatCount(p.words)} words (~${p.pagesTarget} pages).`;
   }
   const remaining = p.total - p.done;
   return (

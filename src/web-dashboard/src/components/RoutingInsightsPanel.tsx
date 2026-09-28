@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import RoutingWalkthroughSection from './RoutingWalkthrough';
 import type { BanditInsights, DashboardData, GovernanceInsights, MlInsights, PromotionInsights, QuotaInsights, RbacInsights, RetrievalInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
+import { formatCount } from '../format';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -316,14 +317,14 @@ function PreferenceSection({ routing }: { routing: RoutingInsights }) {
                           )}
                           {prov.costSource === 'measured' && prov.costBasis ? (
                             <span style={chipStyle('#12291a', '#3fb950', '#3fb950')}>
-                              📏 measured {prov.costBasis.inputTokens.toLocaleString()}→{prov.costBasis.outputTokens.toLocaleString()} tok
+                              📏 measured {formatCount(prov.costBasis.inputTokens)}→{formatCount(prov.costBasis.outputTokens)} tok
                             </span>
                           ) : (
                             <span style={chipStyle('#1c2128', '#8b949e')}>📐 estimated</span>
                           )}
                           {prov.contextUtilization !== undefined && prov.contextWindowTokens !== undefined && (
                             <span style={chipStyle('#1c2128', '#58a6ff', '#58a6ff')}>
-                              ⏳ ctx {prov.contextUtilization}% ({prov.contextWindowTokens.toLocaleString()} tok)
+                              ⏳ ctx {prov.contextUtilization}% ({formatCount(prov.contextWindowTokens)} tok)
                             </span>
                           )}
                         </div>
@@ -610,7 +611,7 @@ function MlSection({ ml }: { ml: MlInsights }) {
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 14 }}>
         <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
           <div style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
-            {ml.recordCount.toLocaleString()}
+            {formatCount(ml.recordCount)}
           </div>
           <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>learned tasks</div>
         </div>
@@ -748,7 +749,7 @@ function RetrievalSection({ retrieval }: { retrieval: RetrievalInsights }) {
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 14 }}>
         <div style={{ background: '#0d1117', border: '1px solid #238636', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
           <div style={{ fontSize: 22, fontWeight: 700, color: '#3fb950', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
-            {saved.toLocaleString()}
+            {formatCount(saved)}
           </div>
           <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>tokens saved</div>
         </div>
@@ -760,7 +761,7 @@ function RetrievalSection({ retrieval }: { retrieval: RetrievalInsights }) {
         </div>
         <div style={{ background: '#0d1117', border: '1px solid #d29922', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
           <div style={{ fontSize: 22, fontWeight: 700, color: '#d29922', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
-            {retrieval.repoChunks.toLocaleString()}
+            {formatCount(retrieval.repoChunks)}
           </div>
           <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>repo chunks indexed</div>
         </div>
@@ -774,7 +775,7 @@ function RetrievalSection({ retrieval }: { retrieval: RetrievalInsights }) {
       {lastCall && lastCall.used !== false && lastCall.hits?.length > 0 && (
         <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '12px 16px', marginBottom: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: '#e6edf3', marginBottom: 8 }}>
-            Latest retrieval — {lastCall.originalTokens.toLocaleString()} → {lastCall.reducedTokens.toLocaleString()} tokens
+            Latest retrieval — {formatCount(lastCall.originalTokens)} → {formatCount(lastCall.reducedTokens)} tokens
             <span style={{ color: '#3fb950', fontFamily: "'SFMono-Regular', Consolas, monospace" }}> (−{lastCall.pctReduced?.toFixed(0)}%)</span>
           </div>
           <div style={{ fontSize: 11, color: '#8b949e' }}>
@@ -822,7 +823,7 @@ function QuotaSection({ quota }: { quota: QuotaInsights }) {
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 14 }}>
         <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '12px 18px', textAlign: 'center' }}>
           <div style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
-            {totalTokens.toLocaleString()}
+            {formatCount(totalTokens)}
           </div>
           <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>tokens tracked</div>
         </div>
@@ -843,7 +844,7 @@ function QuotaSection({ quota }: { quota: QuotaInsights }) {
           border: '1px solid #238636',
         }}>
           <div style={{ fontSize: 20, fontWeight: 700, color: '#3fb950', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
-            {freeTokens.toLocaleString()}
+            {formatCount(freeTokens)}
           </div>
           <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>
             tokens on free/local · {freePct.toFixed(0)}% of usage
@@ -857,7 +858,7 @@ function QuotaSection({ quota }: { quota: QuotaInsights }) {
           border: '1px solid #d29922',
         }}>
           <div style={{ fontSize: 20, fontWeight: 700, color: paidTokens > 0 ? '#d29922' : '#8b949e', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
-            {paidTokens.toLocaleString()}
+            {formatCount(paidTokens)}
           </div>
           <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>
             tokens on paid providers (spend triggered)
@@ -889,7 +890,7 @@ function QuotaSection({ quota }: { quota: QuotaInsights }) {
                   </span>
                 </td>
                 <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", color: '#8b949e' }}>
-                  {e.tokensConsumed.toLocaleString()}
+                  {formatCount(e.tokensConsumed)}
                 </td>
                 <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", color: '#8b949e' }}>
                   {e.requests}

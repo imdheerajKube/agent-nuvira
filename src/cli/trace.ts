@@ -18,6 +18,7 @@
  */
 
 import { Command } from 'commander';
+import { formatCount } from '../utils/format.js';
 import {
   getTrace,
   listTraces,
@@ -65,7 +66,7 @@ export class TraceCommand {
     const stats = getTraceStats();
 
     console.log(`🔍 Reasoning Traces — ${stats.total} trace(s), ${stats.totalSteps} LLM call(s) recorded\n`);
-    console.log(`   Total estimated tokens: ${stats.totalTokens.toLocaleString()}`);
+    console.log(`   Total estimated tokens: ${formatCount(stats.totalTokens)}`);
     console.log(`   Avg per-call latency:   ${stats.avgLatencyMs}ms`);
     // G18 — the non-LLM half: what the loops actually DID (tool calls, gate
     // decisions) and what they DECLINED. Reported at the top level because

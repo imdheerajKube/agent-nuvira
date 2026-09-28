@@ -29,6 +29,7 @@
 
 import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
 import {envBuff, resolveNuviraHome} from '../config/paths';
+import { formatCount } from '../utils/format.js';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { execSync } from 'node:child_process';
@@ -1611,7 +1612,7 @@ export async function runEvalSuite(
     // cost until it runs, so a single oversized task may still cross the cap
     // (same limitation as the --budget cost gate) — that's inherent, not a bug.
     if (options.paceTokens !== undefined && (options.paceUsedBefore ?? 0) + totalTokens >= options.paceTokens) {
-      logger.warn(`Daily token budget of ${options.paceTokens.toLocaleString()} reached (${((options.paceUsedBefore ?? 0) + totalTokens).toLocaleString()} tokens today). Stopping evaluation — raise it with \`nuvira model quota set ${providerName} --tokens N\` or resume after the window rolls.`);
+      logger.warn(`Daily token budget of ${formatCount(options.paceTokens)} reached (${formatCount((options.paceUsedBefore ?? 0) + totalTokens)} tokens today). Stopping evaluation — raise it with \`nuvira model quota set ${providerName} --tokens N\` or resume after the window rolls.`);
       break;
     }
     options.onProgress?.(i + 1, tasks.length, task);

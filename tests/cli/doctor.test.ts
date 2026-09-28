@@ -420,10 +420,9 @@ describe('doctor --enterprise telemetry flags (P7 M7.4, opt-in, off by default)'
     const check = checkGatewayTelemetry(cfg, usage);
     expect(check.status).toBe('pass');
     expect(check.message).toContain('16 call(s)');
-    // The diagnostic prints tokens with `toLocaleString()`, so its separators follow
-    // the machine's locale (4300 is 4,300 under en-US but 4.300 under de-DE). Compare
-    // against the same formatting so the assertion is about the COUNT, not the locale.
-    expect(check.message).toContain(`${usage.totalTokens.toLocaleString()} token(s)`);
+    // The diagnostic prints tokens through the shared `formatCount` (pinned to
+    // en-US), so the separator is a literal on every machine.
+    expect(check.message).toContain('4,300 token(s)');
     // Aggregate privacy default: no per-provider flags unless healthFlags is on
     expect(check.detail).not.toContain('groq:');
   });

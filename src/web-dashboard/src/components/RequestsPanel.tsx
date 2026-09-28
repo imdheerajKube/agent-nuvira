@@ -9,6 +9,7 @@
  */
 import { useMemo, useState } from 'react';
 import type { DashboardData, RequestsInsights } from '../types';
+import { formatCount } from '../format';
 
 interface RequestsPanelProps {
   data: DashboardData | null;
@@ -50,7 +51,7 @@ function RequestsStats({ data }: { data: RequestsInsights }) {
       <div className="stat-card">
         <span className="stat-icon">📨</span>
         <div className="stat-body">
-          <div className="stat-value">{totalRequests.toLocaleString()}</div>
+          <div className="stat-value">{formatCount(totalRequests)}</div>
           <div className="stat-label">Requests</div>
         </div>
       </div>
@@ -76,7 +77,7 @@ function RequestsStats({ data }: { data: RequestsInsights }) {
           <div className="stat-value" style={{ color: errorColor(totalRequests > 0 ? totalFailures / totalRequests : 0) }}>
             {totalRequests > 0 ? `${((totalFailures / totalRequests) * 100).toFixed(1)}%` : '—'}
           </div>
-          <div className="stat-label">Overall error rate ({totalFailures.toLocaleString()} failures)</div>
+          <div className="stat-label">Overall error rate ({formatCount(totalFailures)} failures)</div>
         </div>
       </div>
       <div className="stat-card">

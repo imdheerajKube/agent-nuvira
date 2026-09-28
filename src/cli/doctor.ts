@@ -21,6 +21,7 @@
 
 import { Command } from 'commander';
 import { execSync } from 'node:child_process';
+import { formatCount } from '../utils/format.js';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -434,13 +435,13 @@ export function checkGatewayTelemetry(
   }
   const showFlags = telemetry?.healthFlags === true;
   const totalLines = [
-    `${usage.totalRequests} call(s) · ${usage.totalTokens.toLocaleString()} token(s) · $${usage.totalCostUsd.toFixed(4)} est. cost`,
+    `${usage.totalRequests} call(s) · ${formatCount(usage.totalTokens)} token(s) · $${usage.totalCostUsd.toFixed(4)} est. cost`,
     'Aggregates only — no prompts, no payloads stored by this check (privacy-safe).',
   ];
   if (showFlags) {
     for (const p of usage.providers) {
       totalLines.push(
-        `  ${p.provider}: ${p.requests} call(s) · ${p.tokens.toLocaleString()} tok · $${p.costUsd.toFixed(4)}${p.parked ? ' · ⛔ parked' : ''}${p.parked ? ` · resets in ${Math.ceil(p.resetsInMs / 60000)}m` : ''}`,
+        `  ${p.provider}: ${p.requests} call(s) · ${formatCount(p.tokens)} tok · $${p.costUsd.toFixed(4)}${p.parked ? ' · ⛔ parked' : ''}${p.parked ? ` · resets in ${Math.ceil(p.resetsInMs / 60000)}m` : ''}`,
       );
     }
   }
