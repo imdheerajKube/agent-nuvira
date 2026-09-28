@@ -39,6 +39,10 @@ import {
   PARITY_DRIVER_SURFACES,
   type ParityHarness,
 } from './drivers.js';
+// The scenarios `nuvira parity run` drives, imported rather than re-typed: the
+// CLI and this suite must prove the SAME cases, and a copy here is how the two
+// would drift into covering different things while both staying green.
+import { PARITY_SCENARIOS } from '../../src/cli/parity.js';
 
 // ─── 1. The runner's rules ─────────────────────────────────────────────────
 
@@ -290,6 +294,41 @@ describe('WS0 parity — every surface, real provider, transport-depth stub', ()
       // Exactly two model calls: one to ask for the tool, one to close the turn.
       // A cache replay is 0, and a loop that skipped the second call is 1 — both
       // of which would otherwise hide behind a matching answer.
+      expect(observation.modelCalls, `${observation.surface} model calls`).toBe(2);
+    }
+  }, 90_000);
+
+  it('reports a tool call that FAILED as failed, on every surface', async () => {
+    // A failing call is where the surfaces are most likely to disagree — one can
+    // carry the outcome and another can carry only the fact that the tool ran.
+    const scenario = PARITY_SCENARIOS.find((s) => s.id === 'failing-tool-call');
+    expect(scenario, 'the CLI no longer drives a failing-tool-call scenario').toBeDefined();
+
+    const run = await runParityScenario(scenario!, harness.drivers);
+    expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
+    expect(run.observations.map((o) => o.surface)).toEqual([
+      'cli-chat',
+      'dashboard-chat',
+      'gateway-chat',
+      'cli-execute',
+      'subagent',
+    ]);
+
+    for (const observation of run.observations) {
+      // THE ASSERTION THAT MATTERS, and the reason `toEqual` is used rather than a
+      // name comparison: `compare` treats an ABSENT outcome as equal to an absent
+      // outcome, so five surfaces that all reported the call without saying
+      // whether it worked would read as 'at-par' too. Demanding `false` — not
+      // merely agreement — is what makes this evidence that the failure survived
+      // the trip from the tool loop to the surface's own report.
+      expect(
+        observation.toolCalls,
+        `${observation.surface} did not report the failed call as failed`,
+      ).toEqual([{ tool: 'run_terminal', ok: false }]);
+      // The turn itself still completes: a failed tool is not a failed turn, and
+      // conflating the two is the other way this case could be reported wrongly.
+      expect(observation.status).toBe('completed');
+      expect(observation.answer).toBe('Command failed.');
       expect(observation.modelCalls, `${observation.surface} model calls`).toBe(2);
     }
   }, 90_000);

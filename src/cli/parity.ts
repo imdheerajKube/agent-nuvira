@@ -187,8 +187,15 @@ export function capabilityMatrixCheck(): ParityCheck {
 
 /**
  * The scenarios `nuvira parity run` drives on every surface. Kept small and
- * deterministic: a plain completion (does the turn and its attribution agree)
- * and a tool call (is the call AND its outcome reported the same way).
+ * deterministic: a plain completion (does the turn and its attribution agree),
+ * a tool call that WORKS, and a tool call that FAILS.
+ *
+ * The failing case is not a corner. Two surfaces can agree that a tool ran and
+ * disagree about whether it worked, and an outcome that is merely ABSENT is not
+ * a failure either — `compare` (`src/parity/observation.ts`) treats "no outcome"
+ * as equal to "no outcome", so five surfaces that all stopped reporting `ok`
+ * would still read as at-par. The test suite pins these three scenarios by id so
+ * the CLI and the suite prove the same thing.
  */
 export const PARITY_SCENARIOS: readonly ParityScenario[] = [
   {
@@ -201,6 +208,22 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
     message: 'list the working directory, then answer',
     toolCall: { tool: 'list_dir', args: { path: '.' } },
     answer: 'Listed.',
+  },
+  {
+    id: 'failing-tool-call',
+    message: 'run a command that fails, then answer',
+    // Deterministic by construction, not by luck. The loop's own rule is that a
+    // tool result starting with `Error:` is a failure (`tools/tool-loop.ts:1526`,
+    // and the child's copy at `tools/child-agent-runtime.ts:405`), and
+    // `run_terminal` prefixes exactly that on a non-zero exit
+    // (`tools/run-terminal.ts:457`). `node --check` on a missing file is a
+    // VERIFY-class command (`tools/run-terminal.ts:95`), so it runs without a
+    // confirmation prompt and exits non-zero.
+    toolCall: {
+      tool: 'run_terminal',
+      args: { command: 'node --check no-such-file-parity-probe.js' },
+    },
+    answer: 'Command failed.',
   },
 ];
 

@@ -1198,8 +1198,12 @@ nuvira models excluded         # show what routing is skipping, and WHY
   script or CI. `run` is the real thing: it drives each surface's own turn code (the
   real chat engine, dashboard console, gateway handler, execute command and a forked
   child) against a loopback stub provider in an isolated profile — no network, no real
-  API key, no effect on a running dashboard or gateway. The same drivers back the
-  parity test suite, so the CLI verdict and CI cannot disagree.
+  API key, no effect on a running dashboard or gateway. It drives three scenarios: a
+  plain turn, a tool call that works, and a tool call that FAILS — the last one because
+  a surface can agree that a tool ran while disagreeing about whether it worked, and an
+  outcome that is merely absent would otherwise read as agreement too. The same drivers
+  and the same scenario list back the parity test suite, so the CLI verdict and CI
+  cannot disagree.
 
 ---
 
