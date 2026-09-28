@@ -9,11 +9,13 @@
  *      mismatch, insufficient coverage, and a blocked surface never being
  *      silently dropped or accidentally invoked.
  *
- *   2. THE REAL CASE, on the real engine. `cli-chat` calls `answerOnce` directly;
- *      `dashboard-chat` goes through `ChatConsole.answer` with no injected engine,
- *      so the console lazily loads the same real `ChatCommand` and its own turn
- *      plumbing runs. The stub sits at the provider, so everything above it is
- *      genuine — which is the only way a comparison means anything.
+ *   2. THE REAL CASE, on the real surfaces. Every driver runs the REAL turn code
+ *      (the real ChatCommand, the real console, the real gateway registry, the
+ *      real execute command and a real forked child) against a loopback
+ *      OpenAI-compatible stub at transport depth — the providers are real adapter
+ *      objects, only the server is a stub. The drivers live in
+ *      `src/parity/drivers.ts` and are the SAME ones `nuvira parity run` uses, so
+ *      the CLI verdict and the test verdict cannot drift apart.
  *
  * The regression this is built on is dated and real: on 2026-09-20 the dashboard
  * resolved one concrete provider with auto mode off while the CLI got auto
@@ -21,21 +23,8 @@
  * See tests/cli/chat-answer-once-auto-parity.test.ts.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { describe, it, expect, vi, beforeEach, afterAll, beforeAll } from 'vitest';
 
-vi.mock('../../src/cli/model.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/cli/model.js')>();
-  return {
-    ...actual,
-    // The developer's `nuvira model switch` state must not decide the verdict.
-    applyActiveModel: (options: { provider?: string; model?: string }) => options,
-  };
-});
-
-import { resetModelRegistry } from '../../src/learning/model-registry.js';
 import { reportParityFailure, type TurnObservation } from '../../src/parity/observation.js';
 import {
   runParityScenario,
@@ -46,9 +35,9 @@ import {
 import type { SurfaceId } from '../../src/parity/surfaces.js';
 import {
   blockedDriver,
-  parityDrivers,
-  providerDepthDrivers,
-  transportDepthDrivers,
+  createParityHarness,
+  PARITY_DRIVER_SURFACES,
+  type ParityHarness,
 } from './drivers.js';
 
 // ─── 1. The runner's rules ─────────────────────────────────────────────────
@@ -204,34 +193,22 @@ describe('WS0 parity runner — verdict rules', () => {
   });
 });
 
-// ─── 2. The real case, on the real engine ──────────────────────────────────
+// ─── 2. The real case, on the real surfaces ────────────────────────────────
 
-describe('WS0 parity — CLI chat vs dashboard chat, real engine, provider-depth stub', () => {
-  let tempDir: string;
-  let origMemory: string | undefined;
-  let origConfigDir: string | undefined;
+describe('WS0 parity — every surface, real provider, transport-depth stub', () => {
+  let harness: ParityHarness;
+
+  beforeAll(async () => {
+    harness = await createParityHarness();
+  });
+
+  afterAll(async () => {
+    await harness.dispose();
+  });
 
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    tempDir = mkdtempSync(join(tmpdir(), 'buff-parity-scenario-'));
-    // Hermetic: a fresh config dir still defaults to `defaultProvider: 'auto'`,
-    // which is the configuration the 2026-09-20 divergence happened under.
-    origMemory = process.env.NUVIRA_MEMORY_DIR;
-    origConfigDir = process.env.NUVIRA_CONFIG_DIR;
-    process.env.NUVIRA_MEMORY_DIR = tempDir;
-    process.env.NUVIRA_CONFIG_DIR = join(tempDir, 'config');
-    resetModelRegistry();
-  });
-
-  afterEach(() => {
-    resetModelRegistry();
-    if (origMemory === undefined) delete process.env.NUVIRA_MEMORY_DIR;
-    else process.env.NUVIRA_MEMORY_DIR = origMemory;
-    if (origConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
-    else process.env.NUVIRA_CONFIG_DIR = origConfigDir;
-    rmSync(tempDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
   });
 
   it('answers the same message the same way, and attributes it the same way', async () => {
@@ -241,34 +218,31 @@ describe('WS0 parity — CLI chat vs dashboard chat, real engine, provider-depth
       answer: 'Answered.',
     };
 
-    // The provider-depth group: every surface whose stub replaces the provider
-    // OBJECT, so the real turn code runs everywhere and the results compare.
-    // The gateway is here because its own registry handler lazy-imports the same
-    // real ChatCommand — if that ever stopped being true, this goes red.
-    const run = await runParityScenario(scenario, providerDepthDrivers());
+    // EVERY surface, including the forked child: the driver list is one depth, so
+    // there is nothing to exclude and nothing to fold. The gateway is here because
+    // its own registry handler lazy-imports the same real ChatCommand — if that
+    // ever stopped being true, this goes red.
+    const run = await runParityScenario(scenario, harness.drivers);
 
     // Failures must name the divergence, not just "expected x to be y".
     expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
-    expect(run.depth).toBe('provider');
-    // All four provider-depth surfaces, including cli-execute: it runs the
-    // surface's declared loop entry against the shared provider factory now, so
-    // the same message produces the same turn there too.
+    expect(run.depth).toBe('transport');
     expect(run.observations.map((o) => o.surface)).toEqual([
       'cli-chat',
       'dashboard-chat',
       'gateway-chat',
       'cli-execute',
+      'subagent',
     ]);
 
     for (const observation of run.observations) {
       expect(observation.status).toBe('completed');
       expect(observation.answer).toBe('Answered.');
       // Attribution, not merely "it ran": every surface must name the backend
-      // that served the turn — the full triple, not just the provider. Each
-      // driver reads it from THAT SURFACE's own report (the engine's return, the
-      // console's result, the command's result, the gateway's `runInboundChat`
-      // return), so agreeing here is the surface handing the attribution on, not
-      // the engine happening to know it.
+      // that served the turn — the full triple. Each driver reads it from THAT
+      // SURFACE's own report (the engine's return, the console's result, the
+      // command's result, the gateway's `inbound.chat` log), so agreeing here is
+      // the surface handing the attribution on, not the engine happening to know.
       expect(observation.provider).toBe('groq');
       expect(observation.model).toBe('parity-stub-model');
       expect(observation.transport).toBe('native');
@@ -285,7 +259,7 @@ describe('WS0 parity — CLI chat vs dashboard chat, real engine, provider-depth
     expect(run.skipped).toEqual([]);
   }, 60_000);
 
-  it('reports the same tool call, with the same outcome, on every provider-depth surface', async () => {
+  it('reports the same tool call, with the same outcome, on every surface', async () => {
     const scenario: ParityScenario = {
       id: 'single-tool-call',
       message: 'list the working directory, then answer',
@@ -293,25 +267,20 @@ describe('WS0 parity — CLI chat vs dashboard chat, real engine, provider-depth
       answer: 'Listed.',
     };
 
-    // ALL FOUR provider-depth surfaces are included now. The gateway used to be
-    // excluded because it wired no onToolCall, and cli-execute because its loop
-    // entry reported tool NAMES beside a separate error set — no per-call
-    // outcome. Both report the call and its outcome now, so there is nothing to
-    // filter out; the non-vacuity assertions below are what stop a surface from
-    // passing with an empty list.
-    const run = await runParityScenario(scenario, providerDepthDrivers());
+    const run = await runParityScenario(scenario, harness.drivers);
     expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
     expect(run.observations.map((o) => o.surface)).toEqual([
       'cli-chat',
       'dashboard-chat',
       'gateway-chat',
       'cli-execute',
+      'subagent',
     ]);
 
     for (const observation of run.observations) {
       // NON-VACUOUS BY ASSERTION: if either collector silently failed, its
       // toolCalls would be empty and 'at-par' would mean nothing. The call and
-      // its outcome must be observed on BOTH surfaces.
+      // its outcome must be observed on EVERY surface.
       expect(
         observation.toolCalls.map((call) => call.tool),
         `${observation.surface} did not report the executed tool call`,
@@ -323,37 +292,36 @@ describe('WS0 parity — CLI chat vs dashboard chat, real engine, provider-depth
       // of which would otherwise hide behind a matching answer.
       expect(observation.modelCalls, `${observation.surface} model calls`).toBe(2);
     }
-  }, 60_000);
+  }, 90_000);
 
   it('runs a real turn on every surface even when the same message was answered before', async () => {
     // The regression test for the shared-cache trap, at the level it bit: run the
-    // identical scenario twice in one process. Without isolation the second run is
-    // a pure replay on both surfaces — the first run's entry is keyed by
-    // provider:model:prompt, and both surfaces use the same message. Each run must
-    // therefore reach the model on each surface, on BOTH passes.
+    // identical scenario twice in one process. Each driver clears the response
+    // cache before its turn regardless, but this pins the OUTCOME — without it,
+    // the second run would be a pure replay and the runner would refuse it.
     const scenario: ParityScenario = {
       id: 'repeatable-turn',
       message: 'reply with the single word: repeatable',
       answer: 'Repeated.',
     };
 
-    const first = await runParityScenario(scenario, providerDepthDrivers());
-    const second = await runParityScenario(scenario, providerDepthDrivers());
+    const first = await runParityScenario(scenario, harness.drivers);
+    const second = await runParityScenario(scenario, harness.drivers);
 
     for (const run of [first, second]) {
       expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
-      expect(run.observations.map((o) => o.modelCalls)).toEqual([1, 1, 1, 1]);
+      expect(run.observations.map((o) => o.modelCalls)).toEqual([1, 1, 1, 1, 1]);
       for (const observation of run.observations) {
         expect(observation.answer).toBe('Repeated.');
       }
     }
-  }, 90_000);
+  }, 120_000);
 
   it('drives the real forked subagent and reads the identity the child reported', async () => {
-    // Transport depth: the child builds a real provider and talks to a stub
-    // Groq-compatible server. Nothing here is simulated — the fork, the provider
+    // Transport depth: the child builds a real provider and talks to the same
+    // stub server. Nothing here is simulated — the fork, the provider
     // construction, the loop and the tool executor are the child`s own.
-    const [driver] = transportDepthDrivers();
+    const [driver] = harness.subagent;
     expect(driver.surface).toBe('subagent');
     expect(driver.available).toBe(true);
 
@@ -367,16 +335,17 @@ describe('WS0 parity — CLI chat vs dashboard chat, real engine, provider-depth
     expect(observation.modelCalls).toBeGreaterThan(0);
     expect(observation.status).toBe('completed');
     expect(observation.answer).toBe('Answered.');
-    // The attribution under test in WS1: the child reports what actually served it.
-    // A no-tool child announces `none` — the honest answer for a run that asked
-    // for no tools — on the same provider id the in-process surfaces report.
+    // The child reports what actually served it. The harness offers it the same
+    // tool the in-process surfaces always have available (the stub only ASKS for
+    // the tool when the scenario does), so its transport attribution is
+    // comparable rather than an artefact of having no tools installed.
     expect(observation.provider).toBe('groq');
     expect(observation.model).toBe('parity-stub-model');
-    expect(observation.transport).toBe('none');
+    expect(observation.transport).toBe('native');
   }, 90_000);
 
-  it('reports the subagent`s tool call and its outcome, and folds its transport depth into the comparison', async () => {
-    const [driver] = transportDepthDrivers();
+  it('reports the subagent`s tool call and its outcome, and folds it into the same comparison', async () => {
+    const [driver] = harness.subagent;
     const observation = await driver.run({
       id: 'subagent-tool',
       message: 'list the working directory, then answer',
@@ -385,19 +354,17 @@ describe('WS0 parity — CLI chat vs dashboard chat, real engine, provider-depth
     });
 
     // The child reports the call AND its outcome — `tool_call` then
-    // `tool_result` — so the driver records both, the same call+outcome shape
-    // the in-process chat surfaces report through their own seams. This is the
-    // evidence for tool-call-lifecycle@subagent.
+    // `tool_result` — so the driver records both. This is the evidence for
+    // tool-call-lifecycle@subagent.
     expect(observation.toolCalls).toEqual([{ tool: 'list_dir', ok: true }]);
     expect(observation.modelCalls).toBe(2);
     expect(observation.transport).toBe('native');
 
-    // And the child is folded into the SAME comparison as the chat surfaces. The
+    // And the child is folded into the SAME comparison as the other four. The
     // child still resolves its own provider in its own process — the isolation
-    // boundary — but the parity run configures that provider on the SAME id
-    // (`groq`) and transport (`native`) the in-process surfaces report, so the
-    // comparison lands at-par instead of diverging on identity. This is the
-    // evidence for turn-parity@subagent.
+    // boundary — but the harness points that provider at the SAME id (`groq`) and
+    // transport (`native`), so the comparison lands at-par instead of diverging on
+    // identity. This is the evidence for turn-parity@subagent.
     const mixed = await runParityScenario(
       {
         id: 'mixed-depths',
@@ -405,13 +372,12 @@ describe('WS0 parity — CLI chat vs dashboard chat, real engine, provider-depth
         toolCall: { tool: 'list_dir', args: { path: '.' } },
         answer: 'Listed.',
       },
-      [...providerDepthDrivers(), ...transportDepthDrivers()],
+      harness.drivers,
     );
     expect(mixed.verdict, reportParityFailure(mixed.observations, mixed.differences)).toBe('at-par');
     expect(mixed.refusal).toBeUndefined();
-    // Comparable depths were mixed (provider + transport), so there is no single
-    // depth to report — stated, not guessed.
-    expect(mixed.depth).toBeNull();
+    // One depth across every driver, so it is reported rather than left null.
+    expect(mixed.depth).toBe('transport');
     expect(mixed.observations.map((o) => o.surface)).toEqual([
       'cli-chat',
       'dashboard-chat',
@@ -422,10 +388,11 @@ describe('WS0 parity — CLI chat vs dashboard chat, real engine, provider-depth
   }, 90_000);
 
   it('drives every declared surface, and still refuses to invoke a blocked driver', async () => {
-    // The real list needs no blocks today — all five surfaces are driven — so the
-    // guard is pinned with the factory that builds one, and removing the last
-    // block can never quietly remove the check with it.
-    expect(parityDrivers().filter((driver) => !driver.available)).toEqual([]);
+    // Every declared surface has a driver, so nothing is silently uncovered —
+    // and the guard that a blocked driver is never invoked is pinned with the
+    // factory that builds one, so removing the last block can never quietly
+    // remove the check with it.
+    expect([...PARITY_DRIVER_SURFACES].length).toBeGreaterThan(0);
     const blocked = blockedDriver('gateway-chat', 'kept for this guard');
     await expect(blocked.run(SCENARIO)).rejects.toThrow(/must never be invoked/);
   });

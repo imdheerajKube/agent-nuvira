@@ -10,8 +10,9 @@
  * terminal to scroll afterwards.
  *
  * This is the direct unit test for that: the log record and the sender's view are
- * both asserted. `tests/parity/drivers.ts` proves the return value against the
- * other surfaces.
+ * both asserted. The parity harness (`src/parity/drivers.ts`, run by the parity
+ * suite and by `nuvira parity run`) proves the same facts against the other
+ * surfaces.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

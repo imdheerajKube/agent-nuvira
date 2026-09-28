@@ -1178,6 +1178,29 @@ nuvira models excluded         # show what routing is skipping, and WHY
   changing routing rules — a phrase that used to resolve can regress silently
   otherwise, and this is the only thing that catches it.
 
+### 12.12 Surface parity — prove every surface behaves the same
+
+- **Objective:** Check that the same request produces the same experience on **chat,
+  execute, dashboard chat, the gateway and subagents** — and that the code still agrees
+  with the architecture the project claims. The requirement is only real if a capability
+  cannot land on one surface and quietly miss the other four.
+- **Command:** `nuvira parity` · `nuvira parity surfaces` · `nuvira parity debt` · `nuvira parity matrix` · `nuvira parity run`
+- **Examples:**
+  ```bash
+  nuvira parity                 # summary of the subcommands
+  nuvira parity surfaces        # the registry vs the real import graph
+  nuvira parity debt            # the anti-silo ratchet (exit 1 on drift)
+  nuvira parity matrix          # every capability × surface, and any unproven claim
+  nuvira parity run             # drive ALL five surfaces and report the verdict
+  ```
+- **First-timer detail:** `surfaces`, `debt` and `matrix` read the repository's own
+  `src/` import graph and exit non-zero when it drifts, so they work as a gate in a
+  script or CI. `run` is the real thing: it drives each surface's own turn code (the
+  real chat engine, dashboard console, gateway handler, execute command and a forked
+  child) against a loopback stub provider in an isolated profile — no network, no real
+  API key, no effect on a running dashboard or gateway. The same drivers back the
+  parity test suite, so the CLI verdict and CI cannot disagree.
+
 ---
 
 ## 13. Cache & sandbox
@@ -1248,6 +1271,7 @@ nuvira intent        plain-English → CLI routing (resolve an ask into the comm
 nuvira nlu           NLU intent debugging
 nuvira code-map      project symbol map
 nuvira tools         tool registry + toolsets
+nuvira parity        surface-parity harness (surfaces/debt/matrix/run)
 nuvira session       project-scoped session continuity
 nuvira marketplace   community plugins & workflow templates
 nuvira mcp           MCP server management (list/connect/call/install/serve)

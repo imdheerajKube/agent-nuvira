@@ -34,9 +34,11 @@
  *      would be one edit away from being removed).
  *      A zero is refused as `unreached-model` rather than compared.
  *
- * Pure by construction: no `fs`, no `vi`, no process env. The drivers that
- * actually drive a turn live in `tests/parity/drivers.ts`, because they need the
- * test runner's mocking to sit at the same depth on every surface.
+ * Pure by construction: no `fs`, no `vi`, no process env — which is what lets
+ * both the test suite and `nuvira parity run` import it. The drivers that
+ * actually drive a turn live in `./drivers.ts` (transport depth, a loopback stub
+ * server), so the CLI and CI run the SAME mechanism instead of two copies that
+ * could disagree.
  */
 
 import { compare, type TurnObservation } from './observation.js';

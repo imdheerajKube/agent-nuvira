@@ -74,6 +74,7 @@ import { NluCommand } from './nlu.js';
 import { IntentCommand } from './intent.js';
 import { CodeMapCommand } from './code-map.js';
 import { ToolsCommand } from './tools.js';
+import { ParityCommand } from './parity.js';
 
 /** Read version from package.json at build time */
 const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf-8'));
@@ -239,6 +240,11 @@ export function createCLI(): Command {
   program.addCommand(new IntentCommand().create());
   program.addCommand(new CodeMapCommand().create());
   program.addCommand(new ToolsCommand().create());
+
+  // Register the WS0 (#22) surface-parity harness as a real command, so the
+  // registry/matrix checks and the driven comparison run from the CLI and CI,
+  // not only from the test suite.
+  program.addCommand(new ParityCommand().create());
 
   // Register G1 session command (D1 debug surface)
   program.addCommand(new SessionCommand().create());

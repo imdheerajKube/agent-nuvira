@@ -34,7 +34,7 @@ import {
   type Workstream,
 } from '../../src/parity/matrix.js';
 import { SURFACES } from '../../src/parity/surfaces.js';
-import { VERIFIED_CELLS, parityDrivers } from './drivers.js';
+import { PARITY_DRIVER_SURFACES, VERIFIED_CELLS } from './drivers.js';
 
 describe('WS0 capability matrix — completeness', () => {
   it('gives every capability a cell on every surface', () => {
@@ -66,16 +66,12 @@ describe('WS0 capability matrix — completeness', () => {
     }
   });
 
-  it('has a driver entry for every surface, drivable or explicitly blocked', () => {
+  it('has a driver for every declared surface', () => {
     // A surface missing from the driver list would be counted as neither
-    // covered nor blocked — the silent hole this harness exists to prevent.
-    expect(parityDrivers().map((d) => d.surface).sort()).toEqual(
-      [...SURFACES.map((s) => s.id)].sort(),
-    );
-    for (const driver of parityDrivers()) {
-      if (driver.available) continue;
-      expect(driver.blockedBy?.trim(), `${driver.surface} is blocked with no reason`).toBeTruthy();
-    }
+    // covered nor blocked — the silent hole this harness exists to prevent. The
+    // list is data (`PARITY_DRIVER_SURFACES`), so asserting it needs no live
+    // harness; the drivers themselves are exercised in scenario-parity.test.ts.
+    expect([...PARITY_DRIVER_SURFACES].sort()).toEqual([...SURFACES.map((s) => s.id)].sort());
   });
 });
 

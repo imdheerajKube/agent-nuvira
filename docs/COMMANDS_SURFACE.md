@@ -1101,6 +1101,26 @@ Show a tool's description and input schema
 List toolset groups (capability gating) with enabled state; enable/disable a group
 
    - flags: `--disable <disable>, --enable <enable>`
+### `nuvira parity`
+
+Surface-parity harness — prove the same experience on chat, execute, dashboard, gateway and subagents
+
+### `nuvira parity surfaces`
+
+Compare the surface registry against the real import graph
+
+### `nuvira parity debt`
+
+Check the anti-silo debt ratchet (observed surface debt must equal the frozen list)
+
+### `nuvira parity matrix`
+
+Show every capability × surface and any unproven `supported` claim
+
+### `nuvira parity run`
+
+Drive all five surfaces through the real harness and report the verdict
+
 ### `nuvira session`
 
 Project-scoped session continuity (debug surface — `continue` is the primary path)
@@ -1323,4 +1343,4 @@ Delete all stored traces
 
 ---
 
-*429 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*434 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
