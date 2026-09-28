@@ -17,7 +17,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolveNuviraEnvFile } from '../config/paths.js';
 import { join } from 'node:path';
 
-import { PLATFORM_ENV_VARS, PLATFORM_LABELS, type Platform } from './channel-directory.js';
+import {
+  PLATFORM_ENV_VARS,
+  PLATFORM_LABELS,
+  PLATFORM_TRANSPORT_ENV_VARS,
+  platformConfigVars,
+  type Platform,
+} from './channel-directory.js';
 
 /** Per-var metadata for guided setup (prompt + whether the value is a secret). */
 export interface PlatformEnvVarMeta {
@@ -26,6 +32,12 @@ export interface PlatformEnvVarMeta {
   prompt: string;
   /** Secrets (tokens, passwords, keys) are prompted masked + displayed redacted. */
   secret: boolean;
+  /**
+   * True for an ADDITIONAL transport mode (see PLATFORM_TRANSPORT_ENV_VARS) —
+   * not needed to use the platform, so the prompt says so and `--set` mode does
+   * not demand it.
+   */
+  optional: boolean;
 }
 
 const SECRET_HINT = /TOKEN|PASSWORD|PASS|SECRET|KEY|AUTH|CRED/i;
@@ -34,6 +46,10 @@ const PROMPTS: Record<string, string> = {
   NUVIRA_TELEGRAM_TOKEN: 'Telegram bot token (from @BotFather)',
   NUVIRA_DISCORD_BOT_TOKEN: 'Discord bot token',
   NUVIRA_SLACK_BOT_TOKEN: 'Slack bot token',
+  NUVIRA_SLACK_APP_TOKEN: 'Slack app-level token (xapp-…, Socket Mode inbound)',
+  NUVIRA_SLACK_WEBHOOK_URL: 'Slack incoming-webhook URL (outbound without a bot token)',
+  NUVIRA_SLACK_SIGNING_SECRET: 'Slack signing secret (Events API signature verification)',
+  NUVIRA_DISCORD_WEBHOOK_URL: 'Discord incoming-webhook URL (instead of / alongside a bot token)',
   NUVIRA_WHATSAPP_SESSION_DIR: 'WhatsApp session dir (leave default unless moved)',
   NUVIRA_WHATSAPP_TOKEN: 'Meta Cloud API token',
   NUVIRA_DINGTALK_WEBHOOK_URL: 'DingTalk robot webhook URL',
@@ -61,11 +77,20 @@ const PROMPTS: Record<string, string> = {
 };
 
 export function platformEnvVarMeta(platform: Platform): PlatformEnvVarMeta[] {
-  return PLATFORM_ENV_VARS[platform].map((varName) => ({
-    varName,
-    prompt: PROMPTS[varName] ?? varName,
-    secret: SECRET_HINT.test(varName),
-  }));
+  const required = new Set(PLATFORM_ENV_VARS[platform]);
+  return platformConfigVars(platform).map((varName) => {
+    const optional = !required.has(varName);
+    return {
+      varName,
+      // The marker lives in the prompt rather than in each renderer: this string
+      // is what the CLI wizard, `config gateway list` and the dashboard form all
+      // label the field with, so one place keeps them from disagreeing about
+      // which keys are required.
+      prompt: `${PROMPTS[varName] ?? varName}${optional ? ' (optional)' : ''}`,
+      secret: SECRET_HINT.test(varName),
+      optional,
+    };
+  });
 }
 
 /** Platforms manageable through the config surface (excludes whatsapp/mock). */
@@ -105,20 +130,33 @@ export function envVarState(varName: string): EnvVarState {
 export interface PlatformConfigStatus {
   platform: Platform;
   label: string;
+  /** Every REQUIRED var is set — the platform is usable (see platformConfigVars). */
   configured: boolean;
   envVars: EnvVarState[];
+  /**
+   * Vars in {@link envVars} that are additional transport modes rather than
+   * requirements — an unset one here means "that way of talking to the platform
+   * is off", NOT "the platform is unusable". Surfaced so the CLI/dashboard can
+   * say which is which instead of leaving the operator to guess.
+   */
+  extraVars: string[];
 }
 
 export function platformConfigStatus(platform: Platform): PlatformConfigStatus {
-  const envVars = PLATFORM_ENV_VARS[platform].map(envVarState);
+  // Every managed var is LISTED (so the key Socket Mode needs is visible and
+  // writable), but `configured` is judged on the required ones only — an
+  // outbound-only Slack app is configured, it just cannot receive yet.
+  const required = new Set(PLATFORM_ENV_VARS[platform]);
+  const envVars = platformConfigVars(platform).map(envVarState);
   return {
     platform,
     label: PLATFORM_LABELS[platform],
     // The env FILE counts as effective too (loadEnv() merges it at startup) —
     // so a token written to ~/.nuvira/.env shows as configured even before the
     // next process restart.
-    configured: envVars.every((v) => v.set),
+    configured: envVars.filter((v) => required.has(v.varName)).every((v) => v.set),
     envVars,
+    extraVars: PLATFORM_TRANSPORT_ENV_VARS[platform] ?? [],
   };
 }
 

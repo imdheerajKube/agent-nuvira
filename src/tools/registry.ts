@@ -1817,10 +1817,16 @@ registerTool({
   description:
     'Spawn a real subagent in its own process: it resolves your configured provider, makes its own LLM '
     + 'calls, runs the tools you allow, and returns its actual output. Pass tools:[...] to let it use '
-    + 'tools (requires a tool-calling provider); omit them for a plain completion. It REFUSES with a '
-    + 'typed code when no provider is configured, the backend is unreachable, or tools were asked for '
-    + 'on a provider that cannot call them — it never reports work it did not do. Use `delegate` for a '
-    + 'sub-agent inside the current tool loop instead of a separate process.',
+    + 'tools (requires a tool-calling provider); omit them for a plain completion. Pass provider and/or '
+    + 'model to PIN which backend it runs on — provider is one of your configured provider ids (groq, '
+    + 'gemini, openrouter, local, …; see `provider list`) and model is a model id that provider itself '
+    + 'serves. Without them auto routing chooses, and it can choose a model your account cannot serve, '
+    + 'which fails the whole run. It REFUSES with a typed code when no provider is configured, the '
+    + 'backend is unreachable, or tools were asked for on a provider that cannot call them — it never '
+    + 'reports work it did not do. Every run records the provider, model and tool transport that '
+    + 'actually served it, on success and on failure, and `status`/`wait` return them, so you can check '
+    + 'which backend ran instead of assuming. Use `delegate` for a sub-agent inside the current tool '
+    + 'loop instead of a separate process.',
   category: 'workflow',
   inputSchema: z.object({
     action: z.enum(['spawn', 'status', 'wait', 'kill', 'log']).describe('Action'),
@@ -1828,14 +1834,38 @@ registerTool({
     id: z.string().optional().describe('Subagent ID'),
     timeout: z.number().optional().describe('Timeout'),
     tools: z.array(z.string()).optional().describe('Tool names the subagent may use (default: none)'),
+    // Exposed because auto-routing can resolve a model the account cannot serve
+    // (a stale Model Availability Registry entry is the observed cause) — and the
+    // run then fails on a model the caller never chose, with no way to say which
+    // to use instead. Naming a provider/model pins the run. The child records the
+    // pair it actually used on the run either way.
+    provider: z
+      .string()
+      .optional()
+      .describe(
+        'Provider id to pin the run to — one of your configured providers, e.g. groq, gemini, '
+        + 'openrouter, local (`provider list` shows them). Default: auto-routed.',
+      ),
+    model: z
+      .string()
+      .optional()
+      .describe(
+        'Model id to pin, exactly as the provider names it. Only meaningful with provider; '
+        + 'default is that provider default model.',
+      ),
   }),
   endsAgentStep: false,
   run: (args) => import('./subagent-spawner.js').then((m) => {
-    const { action, goal, id, timeout, tools } = args as any;
+    const { action, goal, id, timeout, tools, provider, model } = args as any;
     const mgr = m.getSubagentManager();
     switch (action) {
       case 'spawn': return goal
-        ? mgr.spawn({ goal, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }).then((s: any) => JSON.stringify(s))
+        ? mgr.spawn({
+            goal,
+            ...(Array.isArray(tools) && tools.length ? { tools } : {}),
+            ...(typeof provider === 'string' && provider ? { provider } : {}),
+            ...(typeof model === 'string' && model ? { model } : {}),
+          }).then((s: any) => JSON.stringify(s))
         : 'goal required';
       case 'status': return id ? JSON.stringify(mgr.getState(id)) : 'id required';
       // `waitForCompletion` REJECTS when a subagent failed (the child's own exit

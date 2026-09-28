@@ -166,6 +166,48 @@ export const PLATFORM_ENV_VARS: Record<Platform, string[]> = {
   mock: [],
 };
 
+/**
+ * Extra transport vars the CONFIG SURFACE offers on top of
+ * {@link PLATFORM_ENV_VARS} — each one turns on an ADDITIONAL way to talk to the
+ * platform, not a prerequisite for using it at all.
+ *
+ * WHY THIS IS SEPARATE, and why it is not just merged into PLATFORM_ENV_VARS:
+ * that map answers "is this platform configured?" with `every(var is set)`, and
+ * it also gates alias registration. Slack with ONLY a bot token genuinely works —
+ * it replies and downloads files — it simply cannot RECEIVE. Folding the inbound
+ * token into the required list would have flipped a working transport to "not
+ * configured" and blocked registering an alias to a channel it can already post
+ * to. So the required list stays the required list, and this map is what the
+ * wizard, `config gateway list` and the dashboard form ALSO display.
+ *
+ * MEASURED, and the reason it exists: `config gateway set slack` used to offer
+ * only the bot token, so the app-level token Slack's Socket Mode REQUIRES could
+ * not be set from the product's own config surface at all — the gateway then
+ * logged "Slack: real-time Socket Mode inbound skipped — no app-level token" and
+ * the operator had no CLI that mentioned the key. GATEWAY.md already documented
+ * `config gateway set slack` as needing both; the surface is what was missing.
+ */
+export const PLATFORM_TRANSPORT_ENV_VARS: Partial<Record<Platform, string[]>> = {
+  // inbound over the Discord Gateway WebSocket (bot token) OR inbound through
+  // the shared webhook receiver — either one, so both are offered.
+  discord: ['NUVIRA_DISCORD_WEBHOOK_URL'],
+  // Socket Mode inbound (xapp-…), outgoing webhook, and Events-API signature
+  // verification respectively.
+  slack: ['NUVIRA_SLACK_APP_TOKEN', 'NUVIRA_SLACK_WEBHOOK_URL', 'NUVIRA_SLACK_SIGNING_SECRET'],
+};
+
+/**
+ * Every env var the config surface manages for a platform: the required
+ * transport vars first (what {@link isPlatformConfigured} checks), then the
+ * additional transport modes. This is the list the wizard prompts for, that
+ * `config gateway list` and the dashboard form display, and that the dashboard's
+ * write/remove endpoints validate against — so a key can never be offered
+ * without being writable.
+ */
+export function platformConfigVars(platform: Platform): string[] {
+  return [...PLATFORM_ENV_VARS[platform], ...(PLATFORM_TRANSPORT_ENV_VARS[platform] ?? [])];
+}
+
 /** Human-readable platform names (for CLI + status output). */
 export const PLATFORM_LABELS: Record<Platform, string> = {
   telegram: 'Telegram',

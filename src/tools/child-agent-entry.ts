@@ -50,7 +50,21 @@ function readConfig(): SubagentRuntimeConfig {
   };
 }
 
+/**
+ * The run's identity, as the runtime announced it: which provider, which model it
+ * pinned, and which transport carries tool calls.
+ *
+ * Remembered on the way OUT so the failure frame can carry it too. A child that
+ * died before producing a result used to reach the parent as a bare message, so a
+ * failed subagent could not be attributed to a backend — the one moment you most
+ * want to know which provider/model was serving the run.
+ */
+const identity: { provider?: string; model?: string; transport?: string } = {};
+
 function send(msg: Record<string, unknown>): void {
+  if (typeof msg.provider === 'string') identity.provider = msg.provider;
+  if (typeof msg.model === 'string') identity.model = msg.model;
+  if (typeof msg.transport === 'string') identity.transport = msg.transport;
   try {
     process.send?.(msg);
   } catch {
@@ -84,12 +98,14 @@ async function main(): Promise<void> {
     process.exit(0);
   } catch (err) {
     // The refusal's code crosses the boundary with the message: the parent logs
-    // WHY, instead of inferring it from an exit code.
+    // WHY, instead of inferring it from an exit code. The identity rides along so
+    // the parent can record which provider/model/transport failed.
     const code = err instanceof SubagentRefusalError ? err.code : 'unavailable';
     send({
       type: 'error',
       code,
       error: err instanceof Error ? err.message : String(err),
+      ...identity,
     });
     process.exit(1);
   }

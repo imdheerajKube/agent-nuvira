@@ -204,12 +204,13 @@ practice on both platforms. Decision: **dial out.**
 
 ```bash
 npx tsc --noEmit                                        # must be clean (src only)
-npx vitest run tests/tools                              # 627 passed (40 files)
+cd src/web-dashboard && npx tsc --noEmit -p tsconfig.json # the dashboard tree
+npx vitest run tests/tools                              # 628 passed (40 files)
 npx vitest run tests/tools/tool-truthfulness.test.ts     # the P0/P1 assertions
 npx vitest run tests/tools/subagent-end-to-end.test.ts   # real fork + real HTTP
-npx vitest run tests/gateway                            # 440 passed (23 files)
-npx vitest run tests/web-dashboard                      # 295 passed (16 files)
-cd src/web-dashboard && npx vitest run                  # 307 passed (28 files)
+npx vitest run tests/gateway                            # 445 passed (23 files)
+npx vitest run tests/web-dashboard                      # 296 passed (16 files)
+npm run test:dashboard                                  # dashboard typecheck + 307 passed (28 files)
 node scripts/check-doc-citations.mjs --check            # cited docs exist + are tracked
 ```
 
@@ -217,14 +218,15 @@ node scripts/check-doc-citations.mjs --check            # cited docs exist + are
 `npm run docs:citations:check`, and `tests/docs/doc-citations.test.ts` asserts the
 same invariant, so the guard runs wherever the suite does.)
 
-Last verified: **2026-09-28** — typecheck clean; `tests/tools` 627 passed (40 files,
-incl. the 8-test `subagent-end-to-end.test.ts`); `tests/gateway` 440 passed (23 files,
-incl. `realtime.test.ts`); `tests/docs` 13 passed (3 files, incl. the 8 doc-citation
-guards); `tests/web-dashboard` 295 passed (16 files) and the front-end suite
+Last verified: **2026-09-28** — both typechecks clean (root `src` and
+`src/web-dashboard`); `tests/tools` 628 passed (40 files, incl. the now 9-test
+`subagent-end-to-end.test.ts`); `tests/gateway` 445 passed (23 files, incl.
+`realtime.test.ts`); `tests/docs` 13 passed (3 files, incl. the 8 doc-citation
+guards); `tests/web-dashboard` 296 passed (16 files) and the front-end suite
 **307 passed (28 files)** — both including the new Subagents-tab coverage (and the
-root suite as a whole: **7022 passed, 360 files**).
+root suite as a whole: **7029 passed, 360 files**).
 
-### The chip suites no longer depend on the machine's number locale
+### Counts are formatted by one pinned formatter, not by the machine's locale
 
 `ModelsPanel.test.tsx` and `RoutingInsightsPanel.test.tsx` asserted one locale's
 digit grouping — `1,048,576` and `131,072`. That only holds where `toLocaleString()`
@@ -233,25 +235,123 @@ groups like en-US: on an **en-IN** machine the same values render as `10,48,576`
 spaces. The suites therefore passed in CI and failed on the developer's own
 machine, which is the worst version of this bug.
 
-Fixed by building the expected string through the same `toLocaleString()` call the
-renderer makes, so the assertion is about the number and its unit rather than about
-the separators. Where a locale's separator is whitespace, `getByText` cannot work at
-all — the library's default normalizer collapses `\s` (including fr-FR's U+202F) to a
-plain space, so a formatted string never compares equal to the rendered text; those
-chips are read off `textContent` with `toContain` instead. The same trap is fixed in
-`ChatPage.test.tsx` (pasted-length prompt), `tests/cli/doctor.test.ts` (telemetry
-headline) and the two long-form progress assertions.
+The first fix made the *assertions* locale-aware (build the expected string with the
+same `toLocaleString()` the renderer calls). That stopped the suite from being wrong
+but left the product wrong: the same count read `35,000` here and `35.000` there, so
+a word count could be read as a decimal, and a factual number could not be quoted in
+a bug report and reproduced. **Counts now go through one formatter** —
+`formatCount()` in `src/utils/format.ts`, on a module-level
+`Intl.NumberFormat('en-US')` — and the dashboard consumes it through
+`src/web-dashboard/src/format.ts` (a re-export shim, the same pattern as `mask.ts`).
+55 call sites across 25 files were converted; the assertions are now the plain
+literals they always wanted to be (`'131,072'`, `'2,500 characters'`).
+
+Scope is deliberately **numbers only**: the ~30 remaining bare `toLocaleString()`
+calls in `src/` are all `new Date(...)` and dates are still locale-formatted on
+purpose. One conversion was reverted on the evidence — `cli/admin.ts` passed a `Date`
+to what it assumed was a number formatter, and the root typecheck caught it.
 
 **Verified:** the front-end suite (307) passes under **en-US, en-IN, de-DE, fr-FR and
-ja-JP**; the root suite (7022) passes under the machine default, **de-DE** and
-**fr-FR**. (Only the *assertions* were made locale-aware. The renderers still format
-with the machine's locale, so a German user still sees `35.000` — for a word count
-glossed as a decimal that may be worth revisiting, but it is a product decision, not
-a test one.)
+ja-JP**; the root suite (7029) passes under the machine default, **de-DE** and
+**fr-FR** — the assertions no longer depend on the ambient locale at all, so passing
+everywhere is the expected result rather than a coincidence.
 
 Note: the root `tsconfig.json` includes only `src/**/*`, so `tsc --noEmit` does
 **not** typecheck `tests/` — a test-only type error surfaces in vitest, not in the
 typecheck step.
+
+## Status — the live subagent run and the gateway credentials check (2026-09-28, second pass)
+
+Three things came out of running the real path instead of the suite. All three were
+invisible to tests, because all three are about what the *shipped artifact* and the
+*operator's own surface* say.
+
+### 1. The Subagents tab existed in the source and not in the product
+
+`readSubagentsData()` and the tab's rendering were correct and covered — and the
+committed dashboard bundle did not contain them. `grep -c Subagents` on the shipped
+`public/assets/index-*.js` returned **0**: the bundle had been built before the tab
+landed, and the dashboard server serves `src/web-dashboard/public` directly, so the
+served page was the old one. Nothing in the suite can catch this — vitest runs the
+source, not the artifact. Rebuilding (`cd src/web-dashboard && npm run build`) makes
+the shipped bundle contain the tab, and the asset hash changes with it, so the
+staleness is visible in a diff next time.
+
+**Guarded now** by `scripts/check-dashboard-bundle.mjs` (`npm run
+dashboard:bundle:check`), so the next silent drift is a failing check instead of a
+missing feature. It has two modes because the two halves of the problem need
+different evidence. The default reads GIT HISTORY — the newest commit touching the
+bundle's inputs must not be newer than the newest commit touching its outputs —
+which is cheap, needs no build, and catches exactly the case above (on this repo it
+blames `2bf0db2 Give the Subagents tab live state while a child process runs`).
+`--rebuild` builds with the dashboard's own toolchain and compares byte for byte,
+which also catches a stale bundle committed in the SAME commit as its source, where
+history cannot order the two. Both are in CI, and `--rebuild` is step 5/5 of
+`scripts/ci/regression-gate.sh`.
+
+Three things were measured while writing it, and each one changed the design:
+
+- **Directory pathspecs re-imported the test files.** `git rev-list --
+  src/web-dashboard/src` sweeps everything beneath it, `*.test.tsx` included, so it
+  blamed the locale-assertion commit — which touched nothing in the dashboard but
+  tests. The input set is an enumerated list of files, never a directory.
+- **The sourcemap is relative to the OUTPUT directory.** A build into `/tmp`
+  produced a byte-different map, so the comparison builds into a scratch dir at the
+  SAME DEPTH as `public/` (`src/web-dashboard/.bundle-check`), removed afterwards.
+  Nothing is written to `public/`, so the check cannot clobber uncommitted work.
+- **A build is not environment-independent.** Vite bakes `NODE_ENV` into the bundle:
+  with `NODE_ENV=test` this tree emits `index-BEXqDnGR.js` where the committed
+  artifact is `index-DxxxI4lk.js`. The check pins `NODE_ENV=production`, or it would
+  report a good bundle as wrong every time it ran under a test runner.
+
+### 2. A subagent run reported WHO served it only if it succeeded
+
+The child process announced its provider on a `progress` frame and then reported
+`provider`/`model`/`transport` on the `result` frame. The parent recorded those from
+`result` only — so a run that **failed** (the case you actually need to debug)
+reached the dashboard as a bare error string with no provider, model or transport at
+all. MEASURED on the first real run: `refusalCode: "unavailable"` and a 404 message,
+and the dashboard row could not say which backend produced it.
+
+Fixed on both sides of the boundary:
+
+- the child computes the model it is about to send with `resolveAdapterDefault` — the
+  same resolver every adapter calls for itself — and passes it **explicitly** to each
+  model call, so "it reported model X" cannot disagree with "it sent X"; and it sends
+  provider/model/transport on its FIRST frame, before anything can fail, and repeats
+  them on the error frame;
+- the parent records the identity from **every** frame (`recordIdentity`), so a child
+  that is killed mid-call still attributes the run from the first frame it sent.
+
+`subagent` also now accepts `provider`/`model`, because auto-routing can resolve a
+model the account cannot serve and the caller had no way to say which to use instead.
+Covered by three assertions in `subagent-end-to-end.test.ts`: success, refusal, and a
+run killed while the model call is still open (the last one verified non-vacuous by
+deleting the progress-frame recording and watching it fail).
+
+### 3. The key Slack's Socket Mode needs was not in the config surface
+
+`docs/GATEWAY.md` documents `config gateway set slack` as needing
+`BUFF_SLACK_APP_TOKEN` (Socket Mode) alongside the bot token. The CLI never offered
+it: `PLATFORM_ENV_VARS.slack` held only the bot token, so the wizard did not ask for
+it, `config gateway list` did not show it, and the dashboard form did not render it.
+Live evidence — `gateway start` printed
+`Slack: real-time Socket Mode inbound skipped — no app-level token`, while
+`config gateway list` reported `✅ Slack`. The operator was told the transport was
+connected and given no surface that named the missing key.
+
+Fixed by splitting "required" from "additional": `PLATFORM_TRANSPORT_ENV_VARS` +
+`platformConfigVars()` feed the wizard, `config gateway list` and the dashboard form,
+while `isPlatformConfigured` keeps judging only the required vars — an outbound-only
+Slack app with a bot token IS configured (it replies and downloads files), and
+folding the inbound token into the required list would have flipped it to
+"not configured" and blocked alias registration for a channel it can already post to.
+Discord gets the same treatment for its webhook URL.
+
+**Still blocked, and not claimable:** the GATEWAY.md §13 pass itself. There is no
+Discord bot token on this machine and no Slack app-level token, so neither real-time
+inbound can be exercised end to end. The checklist is documented and the surface now
+names what is missing; the handshake against a real app has NOT been performed here.
 
 ## Protecting this document from being lost again
 

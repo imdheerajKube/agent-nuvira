@@ -131,6 +131,31 @@ describe('/api/config/platforms', () => {
     expect(tg.envVars[0].value).not.toContain('123:ABC-secret'); // redacted for viewers
   });
 
+  it('accepts, reports and removes the additional transport vars the form renders', async () => {
+    // Slack Socket Mode's app-level token is rendered by the Channels form, so the
+    // write endpoint must accept it — it used to 400 as an "unknown env var",
+    // which made the one key that enables real-time inbound unwritable.
+    const res = await authedFetch('/api/config/platforms/slack', 'POST', {
+      values: { NUVIRA_SLACK_BOT_TOKEN: 'xoxb-app-test', NUVIRA_SLACK_APP_TOKEN: 'xapp-app-test' },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      wrote: string[];
+      status: { configured: boolean; envVars: Array<{ varName: string; set: boolean }> };
+    };
+    expect(body.ok).toBe(true);
+    expect([...body.wrote].sort()).toEqual(['NUVIRA_SLACK_APP_TOKEN', 'NUVIRA_SLACK_BOT_TOKEN']);
+    expect(body.status.configured).toBe(true);
+    expect(body.status.envVars.find((v) => v.varName === 'NUVIRA_SLACK_APP_TOKEN')?.set).toBe(true);
+
+    const del = await authedFetch('/api/config/platforms/slack', 'DELETE');
+    expect(del.status).toBe(200);
+    const delBody = (await del.json()) as { removed: string[] };
+    expect(delBody.removed).toContain('NUVIRA_SLACK_APP_TOKEN');
+    expect(readFileSync(envFile, 'utf-8')).not.toContain('NUVIRA_SLACK_APP_TOKEN');
+  });
+
   it('rejects unknown env vars and unknown platforms (400)', async () => {
     const badVar = await authedFetch('/api/config/platforms/slack', 'POST', { values: { NOT_A_REAL_VAR: 'x' } });
     expect(badVar.status).toBe(400);

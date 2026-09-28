@@ -1078,6 +1078,9 @@ export class ConfigCommand extends BaseCommand {
         return {
           type: m.secret ? 'password' : 'input',
           name: m.varName,
+          // An additional transport mode (Slack Socket Mode's app token, a
+          // webhook URL) is asked for with `m.prompt` already saying "(optional)":
+          // leaving it blank is a valid choice, and blank means "skip" below.
           message: `${m.prompt}${cur?.set ? ' (enter = keep current)' : ''}:`,
           ...(cur?.set ? { default: cur.value } : {}),
         };
@@ -1094,6 +1097,10 @@ export class ConfigCommand extends BaseCommand {
         const cur = current.envVars.find((v) => v.varName === m.varName);
         if (provided[m.varName]) values[m.varName] = provided[m.varName];
         else if (cur?.set) values[m.varName] = cur.value;
+        // Optional transport vars are not demanded: `--set <bot token>` alone must
+        // keep working for an outbound-only setup (it did before these were
+        // offered here, and failing it now would be a regression in the surface).
+        else if (m.optional) continue;
         else {
           logger.error(`Missing --set ${m.varName}=<value> (non-interactive mode).`);
           return;
@@ -1108,7 +1115,7 @@ export class ConfigCommand extends BaseCommand {
     const { wrote } = writeEnvFile(values);
     applyEnvToProcess(values);
     logger.success(`Saved ${wrote.join(', ')} → ${envFilePath()}`);
-    logger.info('Restart the gateway/dashboard (or run `${getCliName()} gateway start`) to use the new transport.');
+    logger.info(`Restart the gateway/dashboard (or run \`${getCliName()} gateway start\`) to use the new transport.`);
   }
 
   private async removePlatform(platform: string, opts: { yes?: boolean }): Promise<void> {

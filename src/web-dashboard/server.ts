@@ -69,7 +69,7 @@ import { setSkillEnabled } from '../learning/hub-skill-catalog.js';
 // mock node:fs before importing the server (router's package.json read would
 // hit the mocked readFileSync).
 import { createConfiguredAdapters } from '../gateway/adapters.js';
-import { ChannelDirectory, PLATFORM_ENV_VARS } from '../gateway/channel-directory.js';
+import { ChannelDirectory, PLATFORM_ENV_VARS, platformConfigVars } from '../gateway/channel-directory.js';
 import type { GatewayContact } from '../gateway/contacts.js';
 import {
   applyEnvToProcess,
@@ -5280,6 +5280,9 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
             varName: v.varName,
             set: v.set,
             value: canWrite ? v.value : v.set ? redactValue(v.value) : '',
+            // `prompt` carries the "(optional)" marker for additive transport
+            // modes (platformEnvVarMeta), so the form labels them without the UI
+            // having to know which vars are required.
             prompt: m?.prompt ?? v.varName,
             secret: m?.secret ?? false,
           };
@@ -5315,7 +5318,10 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       }
       const body = await readJsonBody(req);
       const values = (body?.values ?? {}) as Record<string, string>;
-      const allowed = new Set(PLATFORM_ENV_VARS[platform as keyof typeof PLATFORM_ENV_VARS]);
+      // platformConfigVars, not PLATFORM_ENV_VARS: the form renders every managed
+      // var (including the additional transport modes), so a key it displays must
+      // be writable here — otherwise a value the UI offers is rejected as unknown.
+      const allowed = new Set(platformConfigVars(platform as keyof typeof PLATFORM_ENV_VARS));
       const clean: Record<string, string> = {};
       for (const [key, value] of Object.entries(values)) {
         if (!allowed.has(key)) {
@@ -5354,7 +5360,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       writeJson(res, 400, { ok: false, error: `Platform '${platform}' is not env-configurable.` });
       return;
     }
-    const keys = PLATFORM_ENV_VARS[platform as keyof typeof PLATFORM_ENV_VARS];
+    const keys = platformConfigVars(platform as keyof typeof PLATFORM_ENV_VARS);
     writeEnvFile({}, keys);
     applyEnvToProcess({}, keys);
     writeJson(res, 200, { ok: true, removed: keys, status: platformConfigStatus(platform as never) });

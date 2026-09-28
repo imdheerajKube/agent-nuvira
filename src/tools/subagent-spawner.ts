@@ -404,6 +404,7 @@ export class SubagentManager extends EventEmitter {
         state.llmCalls = msg.llmCalls || state.llmCalls;
         state.tokensUsed = msg.tokensUsed || state.tokensUsed;
         state.toolCalls = msg.toolCalls || state.toolCalls;
+        this.recordIdentity(state, msg);
         this.saveState(state);
         this.emit('progress', id, msg);
         break;
@@ -412,13 +413,7 @@ export class SubagentManager extends EventEmitter {
         state.llmCalls = msg.llmCalls || state.llmCalls;
         state.tokensUsed = msg.tokensUsed || state.tokensUsed;
         state.toolCalls = msg.toolCalls || state.toolCalls;
-        // WHO served the run and HOW tool calls travelled. Recorded because a
-        // finished subagent is otherwise only inspectable by guessing from its
-        // output — the provider and transport are what tell you whether it ran
-        // the way you configured it.
-        if (msg.provider) state.provider = String(msg.provider);
-        if (msg.model) state.model = String(msg.model);
-        if (msg.transport) state.transport = String(msg.transport);
+        this.recordIdentity(state, msg);
         this.saveState(state);
         break;
       case 'error':
@@ -426,9 +421,26 @@ export class SubagentManager extends EventEmitter {
         // parent could only report "Exit code 1".
         state.error = msg.error || 'Subagent reported an error';
         if (msg.code) state.refusalCode = msg.code;
+        this.recordIdentity(state, msg);
         this.saveState(state);
         break;
     }
+  }
+
+  /**
+   * Record which provider/model/transport the child is serving this run with.
+   *
+   * The child announces them on its FIRST frame — before it can fail — and repeats
+   * them on the result and error frames. Recording from every frame (not just the
+   * result) is what makes a FAILED run attributable: a subagent that its provider
+   * rejected used to land as a bare error with no provider, model or transport, so
+   * the dashboard showed a failure with nothing to debug it by — exactly backwards,
+   * since a run that produced no output is the one that needs the attribution.
+   */
+  private recordIdentity(state: SubagentState, msg: any): void {
+    if (msg.provider) state.provider = String(msg.provider);
+    if (msg.model) state.model = String(msg.model);
+    if (msg.transport) state.transport = String(msg.transport);
   }
 
   private handleExit(id: string, code: number | null, signal: NodeJS.Signals | null): void {

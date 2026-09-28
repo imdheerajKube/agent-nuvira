@@ -18,6 +18,7 @@ import {
   redactValue,
   writeEnvFile,
 } from '../../src/gateway/platform-config.js';
+import { PLATFORM_ENV_VARS, isPlatformConfigured, platformConfigVars } from '../../src/gateway/channel-directory.js';
 
 let envDir = '';
 let envFile = '';
@@ -134,6 +135,69 @@ describe('platformConfigStatus + metadata', () => {
     expect(list).toContain('telegram');
     expect(list).not.toContain('whatsapp');
     expect(list).not.toContain('mock');
+  });
+});
+
+/**
+ * Additive transport modes (Slack Socket Mode, webhook URLs).
+ *
+ * MEASURED defect this pins: `config gateway set slack` offered ONLY the bot
+ * token, so the app-level token Slack's Socket Mode requires could not be set
+ * from the product's own config surface — the gateway then logged "Socket Mode
+ * inbound skipped — no app-level token" while `config gateway list` claimed a
+ * complete Slack setup. Offering the key must not make it mandatory, though: a
+ * bot-token-only Slack app is configured (it replies and downloads files).
+ */
+describe('additional transport vars are offered without becoming required', () => {
+  it('lists the Socket Mode app token for slack', () => {
+    expect(platformConfigVars('slack')).toEqual([
+      'NUVIRA_SLACK_BOT_TOKEN',
+      'NUVIRA_SLACK_APP_TOKEN',
+      'NUVIRA_SLACK_WEBHOOK_URL',
+      'NUVIRA_SLACK_SIGNING_SECRET',
+    ]);
+    // The required list is untouched — isPlatformConfigured still judges slack on
+    // the bot token, so alias registration for an outbound-only app keeps working.
+    expect(PLATFORM_ENV_VARS.slack).toEqual(['NUVIRA_SLACK_BOT_TOKEN']);
+    expect(isPlatformConfigured('slack')).toBe(false);
+  });
+
+  it('is configured with only the bot token, and says which extras are unset', () => {
+    writeFileSync(envFile, 'NUVIRA_SLACK_BOT_TOKEN=xoxb-tok\n', 'utf-8');
+    const st = platformConfigStatus('slack');
+    expect(st.configured).toBe(true);
+    expect(st.envVars.map((v) => v.varName)).toContain('NUVIRA_SLACK_APP_TOKEN');
+    expect(st.envVars.find((v) => v.varName === 'NUVIRA_SLACK_APP_TOKEN')?.set).toBe(false);
+    expect(st.extraVars).toEqual([
+      'NUVIRA_SLACK_APP_TOKEN',
+      'NUVIRA_SLACK_WEBHOOK_URL',
+      'NUVIRA_SLACK_SIGNING_SECRET',
+    ]);
+  });
+
+  it('marks the extra vars optional in the wizard metadata, and labels them so', () => {
+    const meta = platformEnvVarMeta('slack');
+    const bot = meta.find((m) => m.varName === 'NUVIRA_SLACK_BOT_TOKEN')!;
+    const app = meta.find((m) => m.varName === 'NUVIRA_SLACK_APP_TOKEN')!;
+    expect(bot.optional).toBe(false);
+    expect(bot.prompt).not.toContain('(optional)');
+    expect(app.optional).toBe(true);
+    expect(app.prompt).toContain('(optional)');
+    // Still masked like the other tokens.
+    expect(app.secret).toBe(true);
+  });
+
+  it('offers Discord the webhook URL alongside the bot token', () => {
+    expect(platformConfigVars('discord')).toEqual([
+      'NUVIRA_DISCORD_BOT_TOKEN',
+      'NUVIRA_DISCORD_WEBHOOK_URL',
+    ]);
+    expect(PLATFORM_ENV_VARS.discord).toEqual(['NUVIRA_DISCORD_BOT_TOKEN']);
+  });
+
+  it('adds nothing for a platform with no extra transport modes', () => {
+    expect(platformConfigVars('telegram')).toEqual(['NUVIRA_TELEGRAM_TOKEN']);
+    expect(platformEnvVarMeta('telegram').every((m) => !m.optional)).toBe(true);
   });
 });
 

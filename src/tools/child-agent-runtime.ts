@@ -28,6 +28,7 @@
 import { ConfigManager } from '../config/manager.js';
 import { ProviderFactory } from '../inference/factory.js';
 import type { InferenceProvider, ToolCallResponse, ToolMessage, ToolSchema } from '../inference/interface.js';
+import { resolveAdapterDefault } from '../learning/model-selection.js';
 import { SubagentRefusalError } from './subagent-refusal.js';
 import { getTool, toolJsonSchemas, TOOL_CONTRACT_JSON, type ToolContext } from './registry.js';
 
@@ -69,7 +70,11 @@ export interface SubagentRuntimeResult {
   toolCalls: number;
   /** Provider that actually served the calls. */
   provider: string;
-  /** Model that actually served the calls, when one was named. */
+  /**
+   * The model sent on the wire, when one could be resolved. Reported because a
+   * run is otherwise only attributable to a provider — "groq failed" does not
+   * say WHICH model the account rejected (see {@link effectiveModel}).
+   */
   model?: string;
   /**
    * How tool calls were carried. `native` = the provider's own tool protocol;
@@ -170,7 +175,23 @@ export async function runSubagent(
     );
   }
 
-  const { provider, type } = await createProvider(hooks, config);
+  const { provider, type, model } = await createProvider(hooks, config);
+
+  // Which provider/model/transport is about to serve this run, announced BEFORE
+  // anything can fail. The parent records these on the run, so a subagent that
+  // dies on its very first model call is still attributable — "groq rejected
+  // gemma-4-26b-a4b-it over the native tool protocol" — instead of leaving a
+  // bare error string and no way to tell which backend produced it.
+  const hasTools = allowed.length > 0;
+  const transport: 'native' | 'json' = transportFor(provider);
+  send({
+    type: 'progress',
+    phase: 'starting',
+    provider: type,
+    ...(model ? { model } : {}),
+    tools: allowed,
+    transport: hasTools ? transport : 'none',
+  });
 
   // A backend that cannot be reached is a refusal, not an empty result.
   const available = await provider.isAvailable().catch(() => false);
@@ -181,16 +202,14 @@ export async function runSubagent(
     );
   }
 
-  const transport = transportFor(provider);
-  send({ type: 'progress', phase: 'starting', provider: type, tools: allowed, transport });
-
   // ── Tool loop (native protocol, or the shared JSON fallback) ──────────────
-  if (allowed.length > 0) {
+  if (hasTools) {
     return runToolLoop(config, allowed, provider, type, transport, {
       send,
       runTool: hooks.runTool,
       maxLlmCalls,
       maxIterations,
+      model,
     });
   }
 
@@ -200,13 +219,13 @@ export async function runSubagent(
     '',
     `Task: ${config.goal}`,
   ].join('\n');
-  const text = await provider.generate(prompt, modelOption(config));
+  const text = await provider.generate(prompt, modelOption(model));
   return {
     result: text.trim(),
     llmCalls: 1,
     toolCalls: 0,
     provider: type,
-    ...(config.model && config.model !== 'auto' ? { model: config.model } : {}),
+    ...(model ? { model } : {}),
     transport: 'none',
     truncated: false,
   };
@@ -226,14 +245,14 @@ async function callModel(
   transport: 'native' | 'json',
   messages: ToolMessage[],
   schemas: ToolSchema[],
-  config: SubagentRuntimeConfig,
+  model: string | undefined,
 ): Promise<ToolCallResponse> {
   if (transport === 'native') {
-    return provider.generateTools!(messages, schemas, modelOption(config));
+    return provider.generateTools!(messages, schemas, modelOption(model));
   }
   const { buildJsonFallbackPrompt } = await import('../inference/tool-call-utils.js');
   const { extractFallbackToolCalls } = await import('./tool-loop.js');
-  const raw = await provider.generate(buildJsonFallbackPrompt(messages as never, schemas as never), modelOption(config));
+  const raw = await provider.generate(buildJsonFallbackPrompt(messages as never, schemas as never), modelOption(model));
   const { text, calls } = extractFallbackToolCalls(raw);
   return {
     content: text,
@@ -241,16 +260,40 @@ async function callModel(
   };
 }
 
-/** Only pass a model when one was actually requested — 'auto' is not a model id. */
-function modelOption(config: SubagentRuntimeConfig): { model?: string } {
-  return config.model && config.model !== 'auto' ? { model: config.model } : {};
+/** Only pass a model when one was actually resolved — 'auto' is not a model id. */
+function modelOption(model: string | undefined): { model: string } | undefined {
+  return model ? { model } : undefined;
+}
+
+/**
+ * The model id the adapter will put on the wire for this subagent.
+ *
+ * Resolved with `resolveAdapterDefault` — the SAME function every adapter calls
+ * for itself when the caller passes no model — so the name recorded on a run
+ * cannot disagree with the name actually sent. It is then passed EXPLICITLY to
+ * every model call, which makes that guarantee structural rather than a promise:
+ * `options.model` wins over the adapter's own fallback, so a run that reports
+ * `model: X` really was sent X.
+ *
+ * Returns undefined when nothing can be resolved; the adapter then raises its own
+ * clear "no model resolved — run `nuvira models refresh`" error, which is the
+ * failure a run should carry rather than an invented name.
+ */
+function effectiveModel(providerType: string, configuredModel?: string): string | undefined {
+  return resolveAdapterDefault(providerType, configuredModel === 'auto' ? undefined : configuredModel);
 }
 
 async function createProvider(
   hooks: SubagentRuntimeHooks,
   config: SubagentRuntimeConfig,
-): Promise<{ provider: InferenceProvider; type: string }> {
-  if (hooks.createProvider) return hooks.createProvider(config.provider, config.model);
+): Promise<{ provider: InferenceProvider; type: string; model?: string }> {
+  if (hooks.createProvider) {
+    const { provider, type } = await hooks.createProvider(config.provider, config.model);
+    // An injected factory names its own model; there is no adapter registry to
+    // consult, so a caller-named model is reported as-is and nothing is invented.
+    const named = config.model && config.model !== 'auto' ? config.model : undefined;
+    return { provider, type, ...(named ? { model: named } : {}) };
+  }
 
   const configManager = new ConfigManager();
   const requested = config.provider && config.provider !== 'auto' ? config.provider : 'auto';
@@ -265,7 +308,8 @@ async function createProvider(
   // A model named for the subagent wins over the provider's default; the adapter
   // still receives a real id because 'auto' is filtered out above.
   const merged = config.model && config.model !== 'auto' ? { ...providerConfig, model: config.model } : providerConfig;
-  return { provider: ProviderFactory.createProvider(type, merged), type };
+  const model = effectiveModel(type, merged.model);
+  return { provider: ProviderFactory.createProvider(type, merged), type, ...(model ? { model } : {}) };
 }
 
 interface LoopHooks {
@@ -273,6 +317,8 @@ interface LoopHooks {
   runTool?: (name: string, args: Record<string, unknown>) => Promise<string>;
   maxLlmCalls: number;
   maxIterations: number;
+  /** The model every call in this loop is pinned to (see {@link effectiveModel}). */
+  model?: string;
 }
 
 async function runToolLoop(
@@ -294,7 +340,7 @@ async function runToolLoop(
     { role: 'user', content: config.goal },
   ];
 
-  const model = config.model && config.model !== 'auto' ? config.model : undefined;
+  const model = loop.model;
   const base = { provider: type, ...(model ? { model } : {}), transport } as const;
 
   let llmCalls = 0;
@@ -312,7 +358,7 @@ async function runToolLoop(
     }
 
     loop.send({ type: 'progress', phase: 'thinking', iteration: iteration + 1, llmCalls, toolCalls });
-    const response = await callModel(provider, transport, messages, schemas, config);
+    const response = await callModel(provider, transport, messages, schemas, model);
     llmCalls += 1;
 
     if (response.toolCalls.length === 0) {

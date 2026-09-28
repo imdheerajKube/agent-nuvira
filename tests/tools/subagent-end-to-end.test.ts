@@ -53,6 +53,23 @@ let server: Server;
 let baseUrl = '';
 const seen: string[] = [];
 
+/**
+ * Hold the generation open, so a test can kill the child WHILE it is mid-call —
+ * after it announced its identity and before it could report an outcome. The
+ * only surviving trace of the run at that point is the first frame it sent.
+ */
+let generateDelayMs = 0;
+
+/** Poll until `pred()` holds, so a test can synchronise with a forked child. */
+async function waitFor(pred: () => boolean, timeoutMs = 20_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (pred()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('waitFor timed out');
+}
+
 beforeAll(async () => {
   server = createServer((req, res) => {
     seen.push(`${req.method} ${req.url}`);
@@ -63,7 +80,11 @@ beforeAll(async () => {
         res.end(JSON.stringify(body));
       };
       if (req.url === '/api/tags') return json({ models: [{ name: 'test-model' }] });
-      if (req.url === '/api/generate') return json({ response: 'REAL-SUBAGENT-ANSWER', done: true });
+      if (req.url === '/api/generate') {
+        const reply = () => json({ response: 'REAL-SUBAGENT-ANSWER', done: true });
+        if (generateDelayMs > 0) return void setTimeout(reply, generateDelayMs);
+        return reply();
+      }
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end('{}');
     });
@@ -103,6 +124,16 @@ describe('subagent — a forked child makes a real LLM call', () => {
     // The child talked to the stub over real HTTP — the provider was constructed
     // and used, not simulated.
     expect(seen).toContain('POST /api/generate');
+
+    // WHO served the run and HOW, recorded on the run itself: this is what the
+    // dashboard's Subagents tab reads back (provider, model and transport), so a
+    // finished run is attributable instead of only inspectable by re-reading its
+    // output. `transport: none` because no tools were requested.
+    expect(mgr.getState(state.id)).toMatchObject({
+      provider: 'local',
+      model: 'test-model',
+      transport: 'none',
+    });
   }, 90_000);
 
   it('refuses (rather than answering) when the backend is unreachable', async () => {
@@ -129,6 +160,48 @@ describe('subagent — a forked child makes a real LLM call', () => {
     expect(failure!.code).toBe('not_configured');
     // No plausible answer was produced for work that did not happen.
     expect(mgr.getState(state.id)?.result).toBeUndefined();
+
+    // A run that produced NOTHING is still attributable. The child announces the
+    // provider/model/transport on its first frame, before it can fail, and the
+    // parent records them from every frame — without this a failed subagent landed
+    // as a bare error, and the one moment you need to know which backend was
+    // serving the run was the one moment the answer was missing.
+    expect(mgr.getState(state.id)).toMatchObject({
+      provider: 'local',
+      model: 'test-model',
+      transport: 'none',
+    });
+  }, 90_000);
+});
+
+// ─── 1b. A run killed before it could report is still attributable ───────────
+
+describe('subagent — a killed run keeps the identity it announced', () => {
+  it('records provider/model/transport from the first frame when no result ever arrives', async () => {
+    const configDir = mkdtempSync(join(testHome.value, 'config-'));
+    const mgr = getSubagentManager();
+
+    generateDelayMs = 30_000;
+    const state = await mgr.spawn({
+      goal: 'report the answer',
+      provider: 'local',
+      model: 'test-model',
+      env: { OLLAMA_HOST: baseUrl, NUVIRA_CONFIG_DIR: configDir },
+    });
+
+    try {
+      // The child announced who was serving the run, then sat in the model call.
+      await waitFor(() => mgr.getState(state.id)?.provider === 'local');
+      mgr.kill(state.id, 'test');
+      await waitFor(() => mgr.getState(state.id)?.status === 'killed');
+
+      const killed = mgr.getState(state.id)!;
+      // Nothing was produced — and it still says WHICH backend was producing it.
+      expect(killed.result).toBeUndefined();
+      expect(killed).toMatchObject({ provider: 'local', model: 'test-model', transport: 'none' });
+    } finally {
+      generateDelayMs = 0;
+    }
   }, 90_000);
 });
 
