@@ -38,6 +38,16 @@ const TABS: Array<{ id: HubTab; label: string; icon: string }> = [
 
 const STATUS_LABEL: Record<string, string> = { pending: '⏳ pending', sent: '✅ sent', failed: '❌ failed' };
 
+/**
+ * P4.1 — how often to re-read the hub while a subagent run is in flight.
+ *
+ * The poll exists ONLY while `subagents.running > 0`. A run is the one thing on
+ * this panel that changes without a user action — it reports `running` and only
+ * later `completed`/`failed` — so re-reading on a timer while nothing is running
+ * would be a request per tick to learn nothing.
+ */
+const SUBAGENT_POLL_MS = 5000;
+
 /** Child-process status → label. A refused run lands on `failed` (with a code). */
 const SUBAGENT_STATUS_LABEL: Record<string, string> = {
   spawning: '⏳ spawning',
@@ -395,17 +405,26 @@ ${messages.map((m) => {
     return { name: phone || showId(c.channelId), phone: '' };
   };
 
-  const refresh = useCallback(async () => {
-    setRefreshing(true);
-    setError(null);
-    const d = await dashboardAPI.fetchHub();
+  /**
+   * Store a hub payload in the panel state.
+   *
+   * Shared by the manual refresh and the subagent poll so the two cannot drift —
+   * a field one of them stores is stored by both.
+   */
+  const applyHubData = useCallback((d: HubData | null) => {
     setData(d);
     if (d?.channels?.statusRecipients) setStatusRecipients(d.channels.statusRecipients);
     if (d?.channels?.contacts) setContacts(d.channels.contacts);
     if (!d) setError('Could not reach the dashboard server, or the server is older than this panel. Run `buff dashboard` to start it.');
     setLoading(false);
-    setRefreshing(false);
   }, []);
+
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    setError(null);
+    applyHubData(await dashboardAPI.fetchHub());
+    setRefreshing(false);
+  }, [applyHubData]);
 
   useEffect(() => {
     void refresh();
@@ -417,6 +436,26 @@ ${messages.map((m) => {
       setUserName(s.user ?? null);
     });
   }, [refresh]);
+
+  /**
+   * P4.1 — keep the Subagents tab live while a run is in flight.
+   *
+   * A child process reports `running` and only later `completed` or `failed`, so
+   * without this the row and the tab badge would keep saying "running now" until
+   * the user pressed Refresh — the state a run is MOST useful in was the one that
+   * never updated. The poll is silent (it does not flip the Refresh button to
+   * "Refreshing…" on every tick) and a failed read keeps the last good payload on
+   * screen rather than blanking the panel. The dependency on the count is also the
+   * stop condition: the moment nothing is running, the interval is torn down.
+   */
+  const subagentsRunning = data?.subagents?.running ?? 0;
+  useEffect(() => {
+    if (subagentsRunning === 0) return;
+    const id = setInterval(() => {
+      void dashboardAPI.fetchHub().then((d) => { if (d) applyHubData(d); });
+    }, SUBAGENT_POLL_MS);
+    return () => clearInterval(id);
+  }, [subagentsRunning, applyHubData]);
 
   /** routing.operate — admin or operator may toggle capabilities. */
   const canWrite = authed && (role === 'admin' || role === 'operator');

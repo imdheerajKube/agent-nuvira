@@ -8,10 +8,12 @@
  * - An unauthenticated user is routed through the login gate, then the queued
  *   toggle is applied.
  * - Reads degrade to a friendly error, never a crash.
+ * - The Subagents tab re-reads the hub while a run is in flight, updates the row
+ *   in place, and stops polling once nothing is running.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, cleanup, waitFor, within, act } from '@testing-library/react';
 import AgentHub from './AgentHub';
 import { dashboardAPI, setAdminToken } from '../api';
 import type { HubData } from '../types';
@@ -115,9 +117,13 @@ const HUB: HubData = {
   serverTime: 123,
 };
 
-/** The panel's mount-time fetches (hub + auth status). */
+/**
+ * The panel's mount-time fetches (hub + auth status). Returns the hub spy so a
+ * test can change what the server serves mid-flight — the Subagents poll test
+ * lets a run finish between two ticks that way.
+ */
 function mockReads(payload: HubData | null = HUB, auth: { configured: boolean; authenticated: boolean; role?: string } = { configured: true, authenticated: true, role: 'admin' }) {
-  vi.spyOn(dashboardAPI, 'fetchHub').mockResolvedValue(payload);
+  const fetchHub = vi.spyOn(dashboardAPI, 'fetchHub').mockResolvedValue(payload);
   vi.spyOn(dashboardAPI, 'fetchAdminAuthStatus').mockResolvedValue({
     configured: auth.configured,
     authenticated: auth.authenticated,
@@ -143,6 +149,7 @@ function mockReads(payload: HubData | null = HUB, auth: { configured: boolean; a
     },
     contacts: {},
   });
+  return { fetchHub };
 }
 
 afterEach(() => {
@@ -467,5 +474,86 @@ describe('AgentHub', () => {
     fireEvent.click(screen.getByText('🗑 Uninstall'));
     await waitFor(() => expect(uninstallSpy).toHaveBeenCalledWith('demo-fix'));
     await waitFor(() => expect(screen.getByText(/Uninstalled demo-fix/)).toBeTruthy());
+  });
+});
+
+// ─── P4.1 — the Subagents tab is live while a run is in flight ────────────────
+// A subagent reports `running` over IPC and only later `completed`/`failed`, so
+// the panel re-reads the hub while something is running. Without that the row and
+// the tab badge kept saying "running now" until the user pressed Refresh — the
+// state a run is most useful in was the one that never updated.
+
+describe('AgentHub — Subagents live refresh', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A hub whose single run is still in flight. */
+  const inFlight = (): HubData => ({
+    ...HUB,
+    subagents: {
+      total: 1,
+      running: 1,
+      failed: 0,
+      recent: [{
+        id: 'cccccccc-3333-4333-8333-cccccccccccc',
+        goal: 'summarise the deploy diff',
+        status: 'running',
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        transport: 'native',
+        llmCalls: 1,
+        toolCalls: 0,
+        startedAt: Date.now(),
+      }],
+    },
+  });
+
+  /** The same hub, after the child reported its result. */
+  const finished = (): HubData => ({
+    ...HUB,
+    subagents: {
+      total: 1,
+      running: 0,
+      failed: 0,
+      recent: [{
+        ...inFlight().subagents.recent[0],
+        status: 'completed',
+        llmCalls: 2,
+        toolCalls: 1,
+        durationMs: 4000,
+        resultPreview: 'The deploy adds two files.',
+      }],
+    },
+  });
+
+  it('re-reads while a run is in flight, shows the finished row, then stops polling', async () => {
+    const { fetchHub } = mockReads(inFlight());
+    render(<AgentHub />);
+    // Let the mount fetch settle (the mock resolves on the microtask queue).
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    // The tab badge counts runs, so it reports the live state without a click.
+    expect(fetchHub).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('1/1')).toBeTruthy();
+
+    // The child finishes between two ticks.
+    fetchHub.mockResolvedValue(finished());
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000 + 50); });
+
+    expect(fetchHub).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('0/1')).toBeTruthy();
+
+    // The row itself is updated in place — the point of the poll.
+    fireEvent.click(screen.getByRole('tab', { name: /Subagents/ }));
+    expect(screen.getByText('✅ completed')).toBeTruthy();
+    expect(screen.getByText('The deploy adds two files.')).toBeTruthy();
+
+    // Nothing is running, so the interval is torn down rather than left ticking.
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(fetchHub).toHaveBeenCalledTimes(2);
   });
 });
