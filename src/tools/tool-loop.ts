@@ -220,6 +220,24 @@ export interface StepResponse {
     /** Provider-owned opaque data echoed back on replay (Gemini thoughtSignature). */
     providerMeta?: Record<string, unknown>;
   }>;
+  /**
+   * Which transport ACTUALLY carried this step's tool calls, in the same
+   * vocabulary the subagent child announces
+   * (`src/tools/child-agent-runtime.ts`):
+   *
+   *   - `native` — the provider's own tool-calling API served the step.
+   *   - `json`   — the shared JSON-fallback transport served it (the provider
+   *                could not do native tool calling, or is known not to).
+   *   - `none`   — no tool schema was offered, so no tool transport was
+   *                involved at all.
+   *
+   * The CALLER sets it, because only the caller knows which branch of its own
+   * model-call seam ran (the loop above it just relays). Absent means "this
+   * caller does not report a transport" — deliberately not the same fact as
+   * `none`, and the reason a comparison treats a missing value as a missing
+   * value rather than as silence that equals agreement.
+   */
+  transport?: 'native' | 'json' | 'none';
 }
 
 /** What the caller injects — chat.ts wires providers/failover, tests use mocks. */
@@ -236,6 +254,12 @@ export interface ToolLoopDeps {
    * support simply ignores it and returns the whole step at once.
    * Optional `signal`: forwarded from ToolLoopOptions so an in-flight
    * provider request can abort (the dashboard Cancel button).
+   *
+   * R2 — the caller should set {@link StepResponse.transport} on every step it
+   * returns: it is the only party that knows whether its own seam spoke the
+   * provider's native tool protocol or the shared JSON fallback. The loop
+   * relays the last value it saw to `ToolLoopResult.transport`, which is how a
+   * surface that is NOT the subagent child can still be attributed a transport.
    */
   callModel(
     messages: ToolMessage[],
@@ -471,6 +495,17 @@ export interface ToolLoopResult {
    * trace flags it.
    */
   unverifiedEditClaim?: boolean;
+  /**
+   * R2 — which transport carried this turn's tool calls (`native` / `json` /
+   * `none`), as reported by the caller's own model-call seam. Absent when the
+   * caller reports none (an in-process mock, or a surface that has not been
+   * taught yet), which is why absence is not compared as equal to `none`.
+   *
+   * Recorded on EVERY exit path via the shared progress object, so a bounded
+   * turn, a cancelled one and a clean end all say the same thing about how the
+   * work travelled — the fact a run-attribution claim is made of.
+   */
+  transport?: 'native' | 'json' | 'none';
 }
 
 /** An orphan reasoning block or bare <think> is a think-only response. */
@@ -730,6 +765,13 @@ export interface ToolLoopProgress {
    * dashboard) reads the same counting instead of re-deriving it.
    */
   runTrace?: RunTrace;
+  /**
+   * R2 — the tool transport that served this turn, as reported by the caller's
+   * `callModel` on each step. Last write wins, deliberately: a turn that began
+   * on native tool calling and finished over the JSON fallback IS a JSON turn,
+   * because that is how its answer was finally produced.
+   */
+  transport?: 'native' | 'json' | 'none';
 }
 
 /**
@@ -996,6 +1038,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       if (!response || typeof response.content !== 'string' || !Array.isArray(response.toolCalls)) {
         throw new Error('model returned a malformed step response (no content/toolCalls)');
       }
+      // R2 — the transport the caller reported for THIS step. Recorded before
+      // anything can return, so a turn that dies mid-way still attributes the
+      // transport that served the steps it did complete.
+      if (response.transport) progress.transport = response.transport;
     } catch (err) {
       // P4 — an abort (the dashboard Cancel button) is a clean stop, NOT a
       // generation failure: the caller discards the turn. No error text, no
@@ -2015,6 +2061,10 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     verificationEvidence: [],
   };
   const result = await runToolLoopInner(opts, progress);
+  // R2 — relay the transport the caller's seam reported. Attached on EVERY
+  // exit path, including a cancelled/failed turn: if a model call happened over
+  // the JSON fallback before the turn died, that is a fact about the run.
+  if (progress.transport) result.transport = progress.transport;
   if (!result.cancelled && !result.generationFailed) {
     result.successfulToolCalls = [...progress.successfulToolCalls];
     result.deliveryConfirmed = progress.deliveryConfirmed;

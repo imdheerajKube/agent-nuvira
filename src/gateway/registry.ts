@@ -1689,7 +1689,31 @@ export class GatewayRegistry {
     }
   }
 
-  private async runInboundChat(msg: InboundMessage): Promise<{ content: string; generationFailed?: boolean }> {
+  /**
+   * One inbound chat turn, and the backend it was served by.
+   *
+   * The result carries `provider`/`model`/`transport` because this method is the
+   * surface's boundary: the shared engine resolves all three, and keeping only
+   * `content` + `generationFailed` is what made `run-attribution@gateway-chat`
+   * the one capability cell the gateway could not prove. A messaging run is
+   * also the hardest to inspect after the fact — there is no terminal to scroll
+   * — so the same triple goes to the gateway log.
+   *
+   * It also carries the turn's per-call tool lifecycles (`toolCalls`), read from
+   * the engine's `onToolCall` seam. Those are recorded, never sent to the
+   * sender: a chat turn's `started`/`called` events are internal, exactly like
+   * `onProgress`, but the OUTCOME of each call is a fact the surface should be
+   * able to report — otherwise a gateway turn's tool work is unattributable
+   * (`tool-call-lifecycle@gateway-chat`).
+   */
+  private async runInboundChat(msg: InboundMessage): Promise<{
+    content: string;
+    generationFailed?: boolean;
+    provider?: string;
+    model?: string;
+    transport?: 'native' | 'json' | 'none';
+    toolCalls?: Array<{ tool: string; ok?: boolean }>;
+  }> {
     try {
       // Broadcast typing indicator start.
       this.onTypingCallback?.({ platform: msg.platform, channelId: msg.channelId, typing: true });
@@ -1764,10 +1788,20 @@ export class GatewayRegistry {
       const useAuto = !routingDefault || routingDefault === 'auto';
       const { type: providerType, config: providerConfig } =
         this.configManager.getProviderConfig();
+      // The turn's tool-call lifecycle. Collected from the SHARED engine seam
+      // (the same `called` phase the CLI and dashboard read) so the gateway
+      // reports what the turn DID, not what the answer text claims. Outcome is
+      // optional: a call whose outcome never arrived is recorded as absent, the
+      // same honest reading the other surfaces use, never up-graded to success.
+      const toolCalls: Array<{ tool: string; ok?: boolean }> = [];
       const answer = await engine.answerOnce(prompt, {
         provider: useAuto ? 'auto' : providerType,
         model: useAuto ? 'auto' : providerConfig.model,
         history,
+        onToolCall: (phase, info) => {
+          if (phase !== 'called') return;
+          toolCalls.push({ tool: info.tool, ...(typeof info.ok === 'boolean' ? { ok: info.ok } : {}) });
+        },
         // Session 3 — the channel rules go in the STABLE layer, not the ask.
         systemPolicy: CHANNEL_POLICY,
         // P5 — a replied followup carries the continuation marker into the
@@ -1821,7 +1855,9 @@ export class GatewayRegistry {
         // P3 note: the engine's onProgress is intentionally NOT wired here —
         // internal progress lines (routed-to, raw tool calls) must never leak
         // to the channel. Progress stays in the audit logs; the single
-        // "working" line + final answer is the whole conversation.
+        // "working" line + final answer is the whole conversation. The
+        // structured onToolCall lifecycle above is wired, but only for the log
+        // and this method's return — it is never rendered to the sender.
       });
       // Only the FINAL answer reaches the sender, in natural language — plus
       // the model's suggested followups rendered as a readable numbered list
@@ -1912,7 +1948,25 @@ export class GatewayRegistry {
       this.chatStore.append(historyKey, null, content);
       this.onTypingCallback?.({ platform: msg.platform, channelId: msg.channelId, typing: false });
       this.writeTypingFile({ platform: msg.platform, channelId: msg.channelId, typing: false });
-      return { content, generationFailed: answer.generationFailed };
+      // The run's own record, with the backend that served it. Best-effort by
+      // the logger's own contract — an unwritable log must never lose a reply.
+      logGatewayEvent('inbound.chat', {
+        platform: msg.platform,
+        channelId: msg.channelId,
+        ...(answer.provider ? { provider: answer.provider } : {}),
+        ...(answer.model ? { model: answer.model } : {}),
+        ...(answer.transport ? { transport: answer.transport } : {}),
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        generationFailed: answer.generationFailed === true,
+      });
+      return {
+        content,
+        generationFailed: answer.generationFailed,
+        ...(answer.provider ? { provider: answer.provider } : {}),
+        ...(answer.model ? { model: answer.model } : {}),
+        ...(answer.transport ? { transport: answer.transport } : {}),
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error(`gateway: inbound chat failed: ${message}`);

@@ -8,7 +8,14 @@ import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
 
-const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
+/**
+ * Default Groq endpoint. `providers.groq.baseUrl` overrides it — the same
+ * override NIM, Anthropic and the generic OpenAI-compatible adapter honor, and
+ * the field the dashboard already exposes for Groq. It is what lets a
+ * Groq-compatible gateway (or a test's stub server) stand in without a code
+ * change.
+ */
+const GROQ_DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1';
 
 /**
  * Per-model max output tokens (max_tokens).
@@ -76,9 +83,12 @@ interface GroqResponse {
 export class GroqAdapter implements InferenceProvider {
   readonly name = 'Groq';
   private config: ProviderConfig;
+  /** Resolved endpoint (config.baseUrl → Groq default). */
+  private baseUrl: string;
 
   constructor(config: ProviderConfig) {
     this.config = config;
+    this.baseUrl = (config.baseUrl || GROQ_DEFAULT_BASE_URL).replace(/\/+$/, '');
   }
 
   async generate(prompt: string, options?: InferenceOptions): Promise<string> {
@@ -97,7 +107,7 @@ export class GroqAdapter implements InferenceProvider {
 
     logger.debug(`Groq: Generating with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
 
-    const response = await fetch(`${GROQ_BASE_URL}/chat/completions`, {
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -148,7 +158,7 @@ export class GroqAdapter implements InferenceProvider {
     if (!apiKey) throw new Error('Groq API key is not configured. Set GROQ_API_KEY env var.');
     const model = options?.model || requireAdapterModel('groq', this.config.model);
     return chatCompletionsWithTools({
-      baseUrl: GROQ_BASE_URL,
+      baseUrl: this.baseUrl,
       headers: { 'Authorization': `Bearer ${apiKey}` },
       model,
       messages,
@@ -184,7 +194,7 @@ export class GroqAdapter implements InferenceProvider {
 
     return chatCompletionsWithToolsStream(
       {
-        baseUrl: GROQ_BASE_URL,
+        baseUrl: this.baseUrl,
         headers: { 'Authorization': `Bearer ${apiKey}` },
         model,
         messages,
@@ -231,7 +241,7 @@ export class GroqAdapter implements InferenceProvider {
     // (OpenAI stream_options.include_usage convention) for measured cost.
     let streamUsage: { promptTokens?: number; completionTokens?: number } | undefined;
     const fullContent = await streamCompletion(
-      `${GROQ_BASE_URL}/chat/completions`,
+      `${this.baseUrl}/chat/completions`,
       { 'Authorization': `Bearer ${apiKey}` },
       { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens },
       onToken,
@@ -268,7 +278,7 @@ export class GroqAdapter implements InferenceProvider {
     if (!apiKey) return [];
 
     try {
-      const response = await fetch(`${GROQ_BASE_URL}/models`, {
+      const response = await fetch(`${this.baseUrl}/models`, {
         headers: { 'Authorization': `Bearer ${apiKey}` },
       });
       if (!response.ok) return [];

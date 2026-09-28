@@ -45,6 +45,11 @@ export type GatewayLogEvent =
   | 'delivery.dispatched'
   | 'inbound.refused'
   | 'inbound.failed'
+  // An inbound message that was ANSWERED — recorded with the provider/model/
+  // transport that produced the reply. A messaging surface's run is the one no
+  // operator can inspect after the fact (there is no terminal to scroll), so
+  // the log is where its attribution has to live.
+  | 'inbound.chat'
   | 'chat.failed'
   | 'pipeline.completed'
   | 'adapter.error'

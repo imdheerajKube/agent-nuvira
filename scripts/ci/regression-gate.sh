@@ -8,13 +8,17 @@
 # Runs, in order:
 #   1. Routing guard  — bandit / promotion / auto-router / tier0 / hybrid /
 #                       model-registry / provider-fallback (fast, fails fast)
-#   2. Failover E2E   — tests/e2e/failover-learning.test.ts (the hermetic
+#   2. Surface parity — tests/parity: the surface registry still matches the
+#                       real import graph, no new silo bypasses the shared turn
+#                       entry, and the capability matrix still separates a
+#                       claim from a proof (fast; #22)
+#   3. Failover E2E   — tests/e2e/failover-learning.test.ts (the hermetic
 #                       mock-429 -> learn -> skip -> recover loop; the single
 #                       most important regression test for Nuvira-Router)
-#   3. Full root suite — every root test (default; skipped with --fast)
-#   4. Dashboard suite — src/web-dashboard typecheck + component tests
+#   4. Full root suite — every root test (default; skipped with --fast)
+#   5. Dashboard suite — src/web-dashboard typecheck + component tests
 #                       (default; --fast)
-#   5. Dashboard bundle — the COMMITTED artifact must be the one the source
+#   6. Dashboard bundle — the COMMITTED artifact must be the one the source
 #                       builds (default; --fast). A committed build artifact
 #                       drifts silently: the component suite runs the source, so
 #                       it passes whether or not the bundle was rebuilt.
@@ -41,7 +45,7 @@ export CI=1
 export NODE_OPTIONS=--no-warnings
 
 # ── 1. Routing guard ────────────────────────────────────────────────────────
-step "1/5 Routing guard (bandit / promotion / auto-router / tier0 / hybrid / registry / fallback)"
+step "1/6 Routing guard (bandit / promotion / auto-router / tier0 / hybrid / registry / fallback)"
 if npx vitest run \
     tests/learning/router-bandit.test.ts \
     tests/learning/router-promotion.test.ts \
@@ -55,8 +59,21 @@ else
   bad "routing guard FAILED — a routing/learning regression"
 fi
 
-# ── 2. Failover E2E (canonical no-regression guard) ─────────────────────────
-step "2/5 Failover-learning E2E"
+# ── 2. Surface parity (the contract that keeps WS1-WS7 honest) ─────────────
+# Cheap, and it fails for three different reasons that all matter: a surface
+# stopped reaching the shared turn entry, a new bypass appeared, or a capability
+# claims `supported` on a surface nothing can prove (the frozen debt list can
+# only shrink). Runs before the E2E guard because a drift here invalidates the
+# parity claims every other step is measured against.
+step "2/6 Surface parity (registry / anti-silo / capability matrix / scenario parity)"
+if npx vitest run tests/parity; then
+  ok "surface parity passed"
+else
+  bad "surface parity FAILED — a surface, a silo rule or a capability claim drifted (#22)"
+fi
+
+# ── 3. Failover E2E (canonical no-regression guard) ────────────────────────
+step "3/6 Failover-learning E2E"
 if npx vitest run tests/e2e/failover-learning.test.ts; then
   ok "failover-learning E2E passed"
 else
@@ -66,30 +83,30 @@ fi
 if [ "$FAST" = 1 ]; then
   step "(--fast: skipping full root + dashboard suites)"
 else
-  # ── 3. Full root suite ───────────────────────────────────────────────────
-  step "3/5 Full root suite"
+  # ── 4. Full root suite ─────────────────────────────────────────────────────
+  step "4/6 Full root suite"
   if npx vitest run; then
     ok "full root suite passed"
   else
     bad "full root suite FAILED"
   fi
 
-  # ── 4. Dashboard component suite (typecheck + jsdom tests) ───────────────
+  # ── 5. Dashboard component suite (typecheck + jsdom tests) ───────────────
   # `npm test` runs the tree's tsc --noEmit first: the dashboard bundle is built
   # by vite, which strips types without checking them, so this is the only gate
   # that can see a type error there.
-  step "4/5 Dashboard typecheck + component suite"
+  step "5/6 Dashboard typecheck + component suite"
   if (cd src/web-dashboard && npm test); then
     ok "dashboard typecheck + component suite passed"
   else
     bad "dashboard typecheck + component suite FAILED"
   fi
 
-  # ── 5. Committed dashboard bundle vs its source ──────────────────────────
+  # ── 6. Committed dashboard bundle vs its source ──────────────────────────
   # The dashboard the operator sees is src/web-dashboard/public, served straight
   # from the repo — so a bundle that was not rebuilt after a source change is a
   # shipped bug that no other step in this gate can see.
-  step "5/5 Dashboard bundle matches its source"
+  step "6/6 Dashboard bundle matches its source"
   if npm run dashboard:bundle:check -- --rebuild; then
     ok "dashboard bundle matches its source"
   else

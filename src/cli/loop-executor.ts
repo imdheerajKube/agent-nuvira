@@ -114,6 +114,17 @@ export interface LoopExecutorResult {
   toolCalls: string[];
   /** Tool names that returned an error result (captured from tool:called). */
   erroredTools: string[];
+  /**
+   * Per-call tool outcomes, in call order — WHICH call succeeded or failed, not
+   * a name list beside a separate error set.
+   *
+   * Captured from the loop's own `tool`/`refusal` trace events (the ones that
+   * carry `ok`), so pairing is unambiguous even when a tool runs more than once
+   * — a call that failed and later succeeded used to be indistinguishable from
+   * one that failed once. This is the `execute` arm's answer to the chat
+   * surfaces' `onToolCall` lifecycle (`tool-call-lifecycle@cli-execute`).
+   */
+  toolOutcomes: Array<{ tool: string; ok: boolean }>;
   /** Wall-clock duration (ms). */
   durationMs: number;
   /** The provider id used (telemetry echo). */
@@ -138,6 +149,12 @@ export interface LoopExecutorResult {
   runTrace?: import('../learning/run-trace.js').RunTraceSnapshot;
   /** G18 — gate decisions recorded this turn (nudges spent, bounds reached). */
   gateDecisions?: number;
+  /**
+   * R2 — the tool transport that served the run (`native` / `json` / `none`),
+   * reported by the loop's own model-call seam. Absent when no model call was
+   * made at all (a routing failure), which is the honest answer there.
+   */
+  transport?: 'native' | 'json' | 'none';
 }
 
 /** Options for runLoopExecutor — mirrors the pipeline arm's surface. */
@@ -211,6 +228,8 @@ export async function runLoopExecutor(
   const traceId = beginTrace({ goal, source: 'loop' });
   /** Refusals/gates recorded this turn — reported in the CLI summary. */
   const recorded = { refusals: 0, gateDecisions: 0 };
+  /** Per-call tool outcomes, in call order (see LoopExecutorResult.toolOutcomes). */
+  const toolOutcomes: Array<{ tool: string; ok: boolean }> = [];
   /**
    * G18 — one sink for the loop's non-LLM facts: persisted to the trace store,
    * and (only under `-v`) echoed to the console so a live run is readable
@@ -220,6 +239,12 @@ export async function runLoopExecutor(
     recordTraceEvent(traceId, event);
     if (event.kind === 'refusal') recorded.refusals += 1;
     if (event.kind === 'gate') recorded.gateDecisions += 1;
+    // One event per executed call, so this is the call-ordered per-call outcome
+    // (a refusal event is a call that ran and did not succeed). `ok` is set on
+    // both; fall back to the kind only if a future emitter omits it.
+    if ((event.kind === 'tool' || event.kind === 'refusal') && event.tool) {
+      toolOutcomes.push({ tool: event.tool, ok: event.ok ?? event.kind === 'tool' });
+    }
     if (!opts.quiet && opts.verbose && (event.kind === 'tool' || event.kind === 'refusal')) {
       logger.info(`   ${event.ok ? '↳' : '⛔'} ${event.tool}: ${previewLine(event.result ?? event.summary)}`);
     }
@@ -526,10 +551,14 @@ export async function runLoopExecutor(
     abort: AbortSignal | undefined,
   ) => {
     if (typeof prov.generateTools === 'function' && schemas.length > 0) {
+      // R2 — tag the transport on the way out, the same vocabulary chat and the
+      // subagent child report, so an `execute` run can be attributed too.
       if (typeof prov.generateToolsStream === 'function' && opts.onToken) {
-        return prov.generateToolsStream(messages, schemas, { model: mdl, signal: abort }, opts.onToken);
+        const streamed = await prov.generateToolsStream(messages, schemas, { model: mdl, signal: abort }, opts.onToken);
+        return { ...streamed, transport: 'native' as const };
       }
-      return prov.generateTools(messages, schemas, { model: mdl, signal: abort });
+      const native = await prov.generateTools(messages, schemas, { model: mdl, signal: abort });
+      return { ...native, transport: 'native' as const };
     }
     // JSON fallback transport — the shared helper the chat engine uses.
     const { buildJsonFallbackPrompt } = await import('../inference/tool-call-utils.js');
@@ -547,7 +576,8 @@ export async function runLoopExecutor(
       raw = await prov.generate(prompt, { model: mdl, signal: abort });
     }
     const { text, calls } = extractFallbackToolCalls(raw);
-    return { content: text, toolCalls: calls };
+    // R2 — the shared JSON fallback, named as such.
+    return { content: text, toolCalls: calls, transport: 'json' as const };
   };
 
   const callModel = async (
@@ -894,6 +924,7 @@ export async function runLoopExecutor(
       bounded: result.bounded,
       toolCalls: result.toolCalls,
       erroredTools,
+      toolOutcomes,
       durationMs: Date.now() - startedAt,
       provider: providerType,
       model,
@@ -901,6 +932,7 @@ export async function runLoopExecutor(
       traceId,
       refusals: recorded.refusals,
       gateDecisions: recorded.gateDecisions,
+      ...(result.transport ? { transport: result.transport } : {}),
       ...(result.runTrace ? { runTrace: result.runTrace } : {}),
     };
   } catch (err) {
@@ -923,6 +955,7 @@ function failureResult(message: string, startedAt: number, provider: string, mod
     bounded: false,
     toolCalls: [],
     erroredTools: [],
+    toolOutcomes: [],
     durationMs: Date.now() - startedAt,
     provider,
     model,

@@ -28,10 +28,8 @@ import { BaseCommand } from './commands.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { ProviderType } from '../config/types.js';
 import type { InferenceProvider } from '../inference/interface.js';
-import { ProviderFactory } from '../inference/factory.js';
 import { resolveDefaultModel } from '../inference/default-model-resolver.js';
-import { Orchestrator } from '../agents/orchestrator.js';
-import type { OrchestrationResult } from '../agents/orchestrator.js';
+import { runPipelineTool, type PipelineToolResult } from '../tools/pipeline-tool.js';
 import { applyActiveModel } from './model.js';
 import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
@@ -75,6 +73,20 @@ import { costSince } from '../learning/cost-tracker.js';
  * is a runaway guard, not the working limit.
  */
 const MAX_UNATTENDED_BATCHES_CLI = 200;
+
+/**
+ * The pipeline's result, read through the SHARED wrapper's contract instead of
+ * by importing the engine's own module.
+ *
+ * This command used to import `OrchestrationResult` straight from
+ * `agents/orchestrator.ts`. That is how a bypass starts — a surface that names
+ * the engine's internals is already coupled to the engine — and the architecture
+ * ratchet read it exactly that way, which is why `cli/execute.ts` was the ONE
+ * entry on `SURFACE_DEBT['pipeline-wrapper-bypass']`. Now the command drives the
+ * pipeline through `runPipelineTool`, so the wrapper's public shape is what it
+ * speaks, and the import graph agrees with the behaviour.
+ */
+type OrchestrationResult = NonNullable<PipelineToolResult['result']>;
 
 // ─── Shared Options Type ────────────────────────────────────────────────────
 
@@ -170,6 +182,40 @@ interface SingleGoalResult {
   success: boolean;
   /** The full orchestration result, available when execution completes */
   orchestrationResult?: OrchestrationResult;
+  /**
+   * R1 — the backend that actually SERVED this run: the provider and model the
+   * turn was answered with, and the tool transport it travelled on
+   * (`native` / `json` / `none`).
+   *
+   * Reported to the CALLER rather than kept inside the run, which is the whole
+   * difference between "the engine knows" and "the surface records it". Before
+   * this, `nuvira execute` returned only `{ success }`, so the one fact a
+   * post-mortem needs — which model produced this output — existed during the
+   * turn and was dropped at the boundary. Both engine arms report it: the loop
+   * arm from `runLoopExecutor`, the pipeline arm from the wrapper it drives.
+   */
+  provider?: string;
+  model?: string;
+  transport?: 'native' | 'json' | 'none';
+  /** Tool names the run executed, in order — the run's own report of what it did. */
+  toolCalls?: string[];
+  /**
+   * Per-call tool outcomes, in call order, as `{ tool, ok }` — with `ok` ABSENT
+   * for a call whose outcome the surface could not observe (never guessed).
+   *
+   * The command's `toolCalls` names alone could not say WHICH call failed (a
+   * separate errored set is ambiguous once a tool runs twice), which is why
+   * `tool-call-lifecycle@cli-execute` could not be proven. Both paths report it
+   * now: the loop arm from the loop's own `tool`/`refusal` events, and the
+   * direct-answer path from the chat engine's `onToolCall` seam.
+   */
+  toolOutcomes?: Array<{ tool: string; ok?: boolean }>;
+  /**
+   * The answer this run produced. Returned as DATA, not only printed, so a
+   * caller (and the parity harness) can read the turn the surface reports
+   * rather than scrape a console.
+   */
+  content?: string;
 }
 
 /** A suggested follow-up action after goal execution */
@@ -1338,16 +1384,18 @@ export class ExecuteCommand extends BaseCommand {
       const config = this.configManager.getAll();
       const type = (activeProvider ||
         config.defaultProvider || 'auto') as ProviderType;
-      // getProviderConfig resolves the 'auto' directive to the best available
-      // provider, so the adapter factory never sees a literal 'auto'.
-      const { type: resolvedType, config: providerConfig } = this.configManager.getProviderConfig(type);
-
-      const provider: InferenceProvider = ProviderFactory.createProvider(resolvedType, providerConfig);
+      // The SHARED provider service (`cli/router.ts`) — the same one every other
+      // command resolves through — instead of building the adapter here. It
+      // handles the built-in ids, the plugin registry, the 'auto' directive and
+      // the catalog providers, so this call site cannot be the one that forgets
+      // one (SURFACE_DEBT['provider-factory'] used to record exactly that).
+      const resolved = resolveProvider(this.configManager, type);
+      const provider: InferenceProvider = resolved.provider;
 
       // Resolve 'default' to a real model via the provider's live catalog
       let model = activeModel || 'default';
       if (!model || model === 'default') {
-        try { model = await resolveDefaultModel(provider, resolvedType, model); } catch { /* best-effort */ }
+        try { model = await resolveDefaultModel(provider, resolved.type, model); } catch { /* best-effort */ }
       }
 
       // E3b parity: the suggest_followups contract (one vocabulary
@@ -1632,9 +1680,21 @@ export class ExecuteCommand extends BaseCommand {
       // printOrchestrationResult from execute.ts); the chat engine IS the
       // direct-answer path (tool loop + ask_user + followups).
       const { ChatCommand } = await import('./chat.js');
+      // The direct-answer path IS a chat turn, so it reports a chat turn's tool
+      // lifecycle: each executed call and its outcome, from the shared engine's
+      // own onToolCall seam. Without this the command could answer by running
+      // tools ("list the working directory…") and report no tool work at all —
+      // the gap `tool-call-lifecycle@cli-execute` recorded.
+      const toolCalls: string[] = [];
+      const toolOutcomes: Array<{ tool: string; ok?: boolean }> = [];
       const answer = await new ChatCommand().answerOnce(goal, {
         ...(provider ? { provider } : {}),
         ...(model ? { model } : {}),
+        onToolCall: (phase, info) => {
+          if (phase !== 'called') return;
+          toolCalls.push(info.tool);
+          toolOutcomes.push({ tool: info.tool, ...(typeof info.ok === 'boolean' ? { ok: info.ok } : {}) });
+        },
       });
       // Parity with the dashboard/gateway: never print a raw suggest_followups
       // payload (or the empty fence it leaves behind) as if it were the answer,
@@ -1658,7 +1718,17 @@ export class ExecuteCommand extends BaseCommand {
       } else if (content) {
         console.log('\n' + content + '\n');
       }
-      return { success: true };
+      // R1 — hand the caller the backend that produced this answer. The chat
+      // engine has always known it; this command used to drop it here.
+      return {
+        success: true,
+        ...(typeof answer.content === 'string' ? { content: answer.content } : {}),
+        ...(answer.provider ? { provider: answer.provider } : {}),
+        ...(answer.model ? { model: answer.model } : {}),
+        ...(answer.transport ? { transport: answer.transport } : {}),
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(toolOutcomes.length > 0 ? { toolOutcomes } : {}),
+      };
     } catch (err) {
       logger.error(err instanceof Error ? err.message : String(err));
       return { success: false };
@@ -1724,7 +1794,14 @@ export class ExecuteCommand extends BaseCommand {
           error: success ? '' : content,
           engine: 'loop',
           engineExplanation: result.engineExplanation,
+          // R1 — the same attribution the human path now returns, on the
+          // machine-readable stream: which provider/model served the run, and
+          // which tool transport carried it.
+          provider: result.provider,
+          model: result.model,
+          transport: result.transport,
           toolCalls: result.toolCalls,
+          toolOutcomes: result.toolOutcomes,
           erroredTools: result.erroredTools,
           // G18 — the evidence pointer: a machine consumer can follow up with
           // `nuvira trace show <id>` (or `/api/traces/<id>`) instead of taking
@@ -1749,7 +1826,20 @@ export class ExecuteCommand extends BaseCommand {
           );
         }
       }
-      return { success };
+      // R1 — the run's own attribution, back to the caller. `success` alone was
+      // the whole result before this: a reader could not say which model
+      // produced the output they were reading.
+      return {
+        success,
+        ...(result.content ? { content: result.content } : {}),
+        ...(result.provider ? { provider: result.provider } : {}),
+        ...(result.model ? { model: result.model } : {}),
+        ...(result.transport ? { transport: result.transport } : {}),
+        ...(result.toolCalls.length > 0 ? { toolCalls: result.toolCalls } : {}),
+        ...(result.toolOutcomes && result.toolOutcomes.length > 0
+          ? { toolOutcomes: result.toolOutcomes }
+          : {}),
+      };
     } catch (err) {
       logger.error(err instanceof Error ? err.message : String(err));
       return { success: false };
@@ -1890,10 +1980,10 @@ export class ExecuteCommand extends BaseCommand {
         } catch { /* recall must never break execution */ }
       }
 
-      const orchestrator = new Orchestrator(this.configManager);
+      // The options THIS command owns. Provider/model are deliberately ABSENT:
+      // they ride on the wrapper's own options, where 'auto' is resolved once,
+      // the same way for every caller (the gateway included).
       const execOptions = {
-        provider,
-        model,
         taskIntentHint: dispatch.taskIntentHint,
         recallContext,
         acceptanceCriteria: contract.acceptanceCriteria,
@@ -1917,7 +2007,41 @@ export class ExecuteCommand extends BaseCommand {
         ...checkpointOptions(options.checkpoint, options.resume),
         spinner: board,
       };
-      const result = await orchestrator.execute(goal, execOptions);
+      // The SHARED turn entry. One place owns the pipeline's provider
+      // resolution, understand-card, recall wiring and checkpoint default, so
+      // this command, the gateway and the model's build/resume tools cannot
+      // drift apart — which is what SURFACE_DEBT['pipeline-wrapper-bypass'] was
+      // recording while this command built its own Orchestrator.
+      const pipeline = await runPipelineTool(goal, this.configManager, {
+        provider,
+        model,
+        // The board is OURS: the wrapper must not mount a second one behind it.
+        board: false,
+        // …and the 🧠 card is ours too — ours states the real resumability, which
+        // the wrapper cannot know.
+        announce: false,
+        taskIntentHint: dispatch.taskIntentHint,
+        recallContext,
+        execOptions,
+      });
+      const result = pipeline.result;
+      if (!result) {
+        // The wrapper never throws, so a run that could not even resolve a
+        // working provider arrives here as a null result with the reason in
+        // `error` — reported as the failure it is rather than swallowed.
+        board.finish(false);
+        if (options.jsonEvents) {
+          process.stdout.write(JSON.stringify({
+            type: 'result',
+            success: false,
+            error: pipeline.error ?? pipeline.summary,
+            ts: Date.now(),
+          }) + '\n');
+        } else {
+          logger.error(pipeline.error ?? pipeline.summary);
+        }
+        return { success: false };
+      }
 
       // ── G11: finish the job, do NOT ask for a "continue" ──────────────────
       // A 100-page book is ~39 units; the ledger already made that possible, but
@@ -1948,13 +2072,27 @@ export class ExecuteCommand extends BaseCommand {
                 // loop too, so a session counter would report zero for every
                 // batch after the first.
                 const startedAt = Date.now();
-                // A FRESH orchestrator per batch: each batch is its own run, and
-                // reusing the instance would carry the previous run's counters
-                // and trace id into the next one.
-                const batchResult = await new Orchestrator(this.configManager).execute(
-                  batchJob.continuationPrompt,
-                  { ...execOptions, spinner: undefined },
-                );
+                // A FRESH wrapper run per batch: each batch is its own run, and
+                // reusing anything from the previous one would carry its
+                // counters and trace id into the next.
+                const batch = await runPipelineTool(batchJob.continuationPrompt, this.configManager, {
+                  provider,
+                  model,
+                  board: false,
+                  announce: false,
+                  taskIntentHint: dispatch.taskIntentHint,
+                  recallContext,
+                  execOptions: { ...execOptions, spinner: undefined },
+                });
+                const batchResult = batch.result;
+                if (!batchResult) {
+                  // Nothing ran at all, so there is no progress to measure and
+                  // the failure counts against the runner's own caps.
+                  return {
+                    ...measureUnattendedProgress(batchJob),
+                    error: batch.error ?? batch.summary ?? 'batch failed',
+                  };
+                }
                 const economy = costSince(startedAt);
                 const envelope = {
                   durationMs: Date.now() - startedAt,
@@ -2009,13 +2147,26 @@ export class ExecuteCommand extends BaseCommand {
           engine: 'pipeline',
           trajectoryId: result.trajectoryId,
           reviewId: result.reviewId,
+          // R1 — the run's attribution, so a machine consumer reading the
+          // NDJSON stream can tell WHICH backend produced this output without
+          // joining against a trace. `transport` is deliberately absent for
+          // this arm: a multi-agent pipeline resolves a model per agent, and
+          // the wrapper does not track a single tool transport for the run.
+          provider: pipeline.provider,
+          model: pipeline.model,
           ts: Date.now(),
         }) + '\n');
       } else {
         console.log('');
         printOrchestrationResult(result);
       }
-      return { success: result.success, orchestrationResult: result };
+      return {
+        success: result.success,
+        orchestrationResult: result,
+        content: result.summary,
+        ...(pipeline.provider ? { provider: pipeline.provider } : {}),
+        ...(pipeline.model ? { model: pipeline.model } : {}),
+      };
     } catch (err) {
       board.finish(false);
       if (options.jsonEvents) {
@@ -2186,7 +2337,7 @@ function suppressReasoningLeak(text: string): boolean {
 /**
  * Pretty-print the orchestration result to the console.
  */
-export function printOrchestrationResult(result: import('../agents/orchestrator.js').OrchestrationResult): void {
+export function printOrchestrationResult(result: OrchestrationResult): void {
   const statusIcon = result.success ? '✅' : '❌';
   logger.highlight(`${'═'.repeat(60)}`);
   logger.highlight(`  ${statusIcon}  Execution Result`);

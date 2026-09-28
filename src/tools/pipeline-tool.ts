@@ -19,7 +19,7 @@
 import { resolveProvider } from '../cli/router.js';
 import { resolveRoute } from '../inference/route-resolver.js';
 import { getAutoRouter, isAutoProvider, isAutoModel } from '../learning/auto-router.js';
-import { Orchestrator, type OrchestrationResult } from '../agents/orchestrator.js';
+import { Orchestrator, type OrchestrationResult, type OrchestratorOptions } from '../agents/orchestrator.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { parseRequestSync } from '../nlu/parser.js';
 import { resolveDispatch } from '../nlu/actions.js';
@@ -55,6 +55,34 @@ export interface PipelineToolOptions {
    * talking to and where replies/forwarding should go.
    */
   origin?: string;
+  /**
+   * Whether the wrapper announces the run itself — its 🧠 understand-card and
+   * its inspection event. Default true, which is right for a TOOL call (the
+   * model's screen has to show what it understood) and for the gateway (the
+   * dispatcher does not render a card of its own).
+   *
+   * `nuvira execute` sets it FALSE and prints its own card, because its card
+   * carries one detail the wrapper's cannot know: whether checkpointing is
+   * actually enabled for this run. Two cards would mean one of them lies.
+   */
+  announce?: boolean;
+  /**
+   * The CALLER's orchestrator options, spread OVER the wrapper's defaults.
+   *
+   * The wrapper's defaults are exactly right for a tool call (verbose off, the
+   * contract's acceptance criteria, checkpoints on so the card's resumability
+   * claim is true). A COMMAND that owns a run has more to say — `nuvira execute`
+   * carries ~15 flags into the orchestrator (--dry-run, --review, --sandbox,
+   * --skip-tests, --max-repairs, --repair-mode, --context-limit, per-agent
+   * models, …) — and before this passthrough existed it had to construct its own
+   * `Orchestrator` to pass them, which is precisely the silo the surface-parity
+   * ratchet forbids. The caller's values win on a key-by-key basis; the caller's
+   * own `spinner` rides here too.
+   *
+   * Deliberately does NOT carry provider/model: those belong in the wrapper's
+   * own options, where 'auto' is resolved once, the same way for every caller.
+   */
+  execOptions?: Partial<OrchestratorOptions>;
 }
 
 /** The tool-callable pipeline result. */
@@ -67,6 +95,20 @@ export interface PipelineToolResult {
   /** The raw orchestration result (for callers that print it). */
   result: OrchestrationResult | null;
   error?: string;
+  /**
+   * The provider/model the wrapper resolved for this run — concrete, never the
+   * `'auto'` directive — and the tool transport, when there is one.
+   *
+   * Reported so a CALLER can attribute the run it just drove. `nuvira execute`
+   * needs exactly this: it hands the run to the wrapper now, so the resolved
+   * route has to come back out or the command would have to re-derive it (and
+   * get it wrong the moment auto-routing moves). The pipeline's own tool
+   * transport is NOT reported: a multi-agent run resolves a model per agent,
+   * and a single transport would be an invention — that is what the loop arm
+   * reports instead.
+   */
+  provider?: string;
+  model?: string;
 }
 
 /**
@@ -161,10 +203,12 @@ export async function runPipelineTool(
     } catch { /* recall must never break dispatch */ }
   }
 
+  const announce = opts.announce !== false;
+
   // Session 20: the 🧠 Understood card is printed BEFORE the pipeline runs
   // (fast-accept by default — display-only, never a blocking wizard). The
   // user always sees what the agent understood, then execution starts.
-  console.log('\n' + renderContractCard(contract) + '\n');
+  if (announce) console.log('\n' + renderContractCard(contract) + '\n');
 
   // Live pipeline board (the E2 ink TUI) — visible steps, lanes, retries.
   let liveBoard: PipelineBoard | null = null;
@@ -172,7 +216,10 @@ export async function runPipelineTool(
     liveBoard = new PipelineBoard();
     liveBoard.start(goal);
   }
-  getEventBus().emit(EventNames.ORCHESTRATOR_INSPECTION, { lines: notes }, 'chat');
+  // Part of the announcement, and gated with it: the inspection note is how the
+  // card's lines reach a board, so a caller that prints its own card must not
+  // have the wrapper's lines pushed into ITS board behind its back.
+  if (announce) getEventBus().emit(EventNames.ORCHESTRATOR_INSPECTION, { lines: notes }, 'chat');
 
   try {
     const orchestrator = new Orchestrator(configManager);
@@ -189,6 +236,9 @@ export async function runPipelineTool(
       // run (cheap per-batch JSON checkpoints; a Ctrl+C / quota kill can then
       // `nuvira execute --resume` instead of restarting).
       checkpoint: true,
+      // LAST, so a caller that owns the run wins on every key it names — the
+      // flag it passed, the spinner it built, the checkpoint policy it decided.
+      ...opts.execOptions,
     });
 
     liveBoard?.finish(result.success);
@@ -197,6 +247,8 @@ export async function runPipelineTool(
       summary: result.summary,
       details: buildResultDetails(result),
       result,
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
     };
   } catch (err) {
     liveBoard?.finish(false);

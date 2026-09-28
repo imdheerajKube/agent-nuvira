@@ -388,9 +388,24 @@ async function runToolLoop(
         });
         continue;
       }
+      // Two frames, mirroring the main loop's `tool:started` → `tool:called`
+      // pair: the CALL, then its OUTCOME. The parent used to hear the name and
+      // nothing else, so a run's tool calls were unattributable — a call that
+      // FAILED looked exactly like one that worked (recorded on #22 as
+      // tool-call-lifecycle@subagent).
       loop.send({ type: 'progress', phase: 'tool_call', tool: call.name });
       const output = await executeTool(config, call.name, call.arguments, loop.runTool);
       toolCalls += 1;
+      loop.send({
+        type: 'progress',
+        phase: 'tool_result',
+        tool: call.name,
+        // The same convention the main loop and the tool registry use: a tool
+        // signals failure by returning text that starts with `Error:`.
+        ok: !output.startsWith('Error:'),
+        llmCalls,
+        toolCalls,
+      });
       messages.push({ role: 'tool', content: output, toolCallId: call.id });
     }
   }

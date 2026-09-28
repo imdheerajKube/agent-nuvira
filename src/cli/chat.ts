@@ -612,6 +612,16 @@ export class ChatCommand extends BaseCommand {
   undeliveredArtifact?: boolean;
   provider?: string;
   model?: string;
+  /**
+   * R2 — which tool transport served the turn: `native` (the provider's own
+   * tool-calling API), `json` (the shared JSON fallback) or `none` (no tool
+   * transport was involved). Reported here so every caller of the shared
+   * engine — the CLI, the dashboard console, the gateway, `nuvira execute` —
+   * attributes a turn with the SAME triple the subagent child announces, which
+   * is what makes the surfaces comparable at all. Absent only when no loop ran
+   * (the no-model pipeline fallback reports `none`).
+   */
+  transport?: 'native' | 'json' | 'none';
 }> {
     // `'default'` is the config SENTINEL for "use the provider's default
     // model", never a real model id. Left in place it (a) disables auto routing
@@ -705,9 +715,12 @@ export class ChatCommand extends BaseCommand {
       // `error` alone returned a failed run's summary with NO failure flag —
       // i.e. reported it as a successful turn on every surface.
       if (!r.success) {
-        return { content: '', followups: [], generationFailed: true, provider: type, model };
+        return { content: '', followups: [], generationFailed: true, provider: type, model, transport: 'none' as const };
       }
-      return { content: r.result?.summary ?? '', followups: [], provider: type, model };
+      // A pipeline turn carries no tool transport at all — reported as `none`
+      // rather than left silent, so a caller can tell "no transport" apart from
+      // "this surface never said".
+      return { content: r.result?.summary ?? '', followups: [], provider: type, model, transport: 'none' as const };
     }
 
     // E3b: strip raw suggest_followups JSON embedded in content by the model
@@ -724,6 +737,8 @@ export class ChatCommand extends BaseCommand {
       undeliveredArtifact: answer.undeliveredArtifact,
       provider: type,
       model,
+      // R2 — the transport the loop's model-call seam reported for this turn.
+      transport: answer.transport,
     };
   }
 
@@ -1232,6 +1247,12 @@ export class ChatCommand extends BaseCommand {
     unfulfilledPromise?: boolean;
     /** G13b — asked for an authored file and wrote none (see the gate). */
     undeliveredArtifact?: boolean;
+    /**
+     * R2 — the tool transport this turn travelled on (`native` / `json` /
+     * `none`), as the loop reported it. Absent only when no loop ran (a cache
+     * replay, or a turn that died before a model call).
+     */
+    transport?: 'native' | 'json' | 'none';
   }> {
     // Cache check first (same as the legacy path).
     const cache = getCache();
@@ -1731,6 +1752,8 @@ export class ChatCommand extends BaseCommand {
       unverifiedActionClaim: result.unverifiedActionClaim,
       unfulfilledPromise: result.unfulfilledPromise,
       undeliveredArtifact: result.undeliveredArtifact,
+      // R2 — the transport this turn travelled on (interactive REPL path).
+      transport: result.transport,
     };
   }
 
@@ -1901,12 +1924,12 @@ export class ChatCommand extends BaseCommand {
             if (sink && typeof prov.generateToolsStream === 'function') {
               const result = await prov.generateToolsStream(messages, schemas, { ...options, model: effectiveModel, signal: abort }, sink);
               confuseCheck(result.content, result.toolCalls.length > 0);
-              return answered(result);
+              return answered({ ...result, transport: 'native' as const });
             }
             const result = await prov.generateTools(messages, schemas, { ...options, model: effectiveModel, signal: abort });
             confuseCheck(result.content, result.toolCalls.length > 0);
             if (sink && result.content) sink(result.content);
-            return answered(result);
+            return answered({ ...result, transport: 'native' as const });
           } catch (err) {
             // S3: a tool-call 400 often carries the model's COMPLETE answer in
             // `failed_generation` (the API rejected only the CALL). Salvage it
@@ -1924,7 +1947,9 @@ export class ChatCommand extends BaseCommand {
               const toolCalls = salvaged.followups?.length
                 ? [{ id: 'call_salvage_1', name: 'suggest_followups', arguments: { followups: salvaged.followups } }]
                 : [];
-              return answered({ content: salvaged.content, toolCalls });
+              // R2 — the answer was excavated from a NATIVE tool-call attempt's
+              // 400 payload, so it is still the native transport's output.
+              return answered({ content: salvaged.content, toolCalls, transport: 'native' as const });
             }
             // The MODEL itself cannot do native tool calling — Groq answers
             // 400 "`tool calling` is not supported with this model". That is
@@ -1958,7 +1983,9 @@ export class ChatCommand extends BaseCommand {
         }
         const { text, calls } = extractFallbackToolCalls(raw);
         confuseCheck(text, calls.length > 0);
-        return answered({ content: text, toolCalls: calls });
+        // R2 — this IS the fallback transport, so say so: the same fact the
+        // subagent child announces, and what makes a chat turn comparable with it.
+        return answered({ content: text, toolCalls: calls, transport: 'json' as const });
       };
 
       try {

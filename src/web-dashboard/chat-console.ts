@@ -114,6 +114,12 @@ export interface ChatEngine {
     unfulfilledPromise?: boolean;
     provider?: string;
     model?: string;
+    /**
+     * R2 — the tool transport the engine reported for this turn (`native` /
+     * `json` / `none`). Passed through so a caller of the console gets the same
+     * attribution triple the CLI and the subagent child report.
+     */
+    transport?: 'native' | 'json' | 'none';
   }>;
 }
 
@@ -143,6 +149,13 @@ export interface ChatAnswerResult {
   followups?: FollowupSuggestion[];
   provider?: string | null;
   model?: string | null;
+  /**
+   * R2 — the tool transport that served this turn, as the shared engine
+   * reported it (`native` / `json` / `none`), or null when no transport was
+   * reported at all. Null here means "not said" — deliberately different from
+   * the `none` the engine returns for a turn that carried no tool call.
+   */
+  transport?: 'native' | 'json' | 'none' | null;
   generationFailed?: boolean;
   /** Phase 4 — true when the loop hit its step bound before an end turn. */
   bounded?: boolean;
@@ -808,6 +821,9 @@ export class ChatConsole {
         followups: nextFollowups,
         provider: answer.provider ?? null,
         model: answer.model ?? null,
+        // A wire value, not a guess: the engine reports `native`/`json`/`none`,
+        // and only a surface that never said gets null.
+        transport: answer.transport ?? null,
         generationFailed: answer.generationFailed === true,
         bounded: answer.bounded === true,
       };

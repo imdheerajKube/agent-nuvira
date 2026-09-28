@@ -202,7 +202,33 @@ describe('loop engine — a DEV ask is never answered with the model\'s thinking
 
     expect(result.generationFailed).toBe(false);
     expect(result.toolCalls).toEqual(['list_dir']);
+    // The per-call outcome, hand-off to `nuvira execute`'s caller: the executed
+    // call AND what happened, in call order. This is what lets a surface say
+    // WHICH call failed instead of pairing a name list with a separate error set
+    // (tool-call-lifecycle@cli-execute).
+    expect(result.toolOutcomes).toEqual([{ tool: 'list_dir', ok: true }]);
     expect(result.content).toBe('The project has src/ and tests/.');
+  });
+
+  it('records the outcome of a call that did NOT succeed, per call', async () => {
+    // A refused call is the other half of the lifecycle: `ok: false`, named —
+    // not just absent from the success list. An unknown tool is the cleanest
+    // refusal to script (the loop feeds `Error: unknown tool …` back).
+    const provider = scriptedProvider({
+      native: true,
+      responses: [
+        { content: '', toolCalls: [{ id: 'c1', name: 'definitely_not_a_tool', arguments: {} }] },
+        { content: 'Done.', toolCalls: [] },
+      ],
+    });
+    const { result } = await run('do the thing', provider);
+
+    expect(result.toolOutcomes).toEqual([{ tool: 'definitely_not_a_tool', ok: false }]);
+    // `erroredTools` stays empty here on purpose: it is populated in the
+    // executor's tool-running seam, and an UNKNOWN tool is refused by the loop
+    // before it ever runs. The per-call outcome still names it — which is the
+    // point: the separate error set cannot report a call that never executed.
+    expect(result.erroredTools).toEqual([]);
   });
 
   it('accepts a genuine development answer (the guard must not burn real work)', async () => {
