@@ -71,11 +71,13 @@ const HUB: HubData = {
   },
   skills: {
     compiled: [
-      { id: 'skill-fix-lint', name: 'Fix lint', description: 'Fixes lint errors', version: '1.0.0', origin: 'compiled', usageCount: 3, bundled: true },
-      { id: 'skill-custom-x', name: 'Custom X', description: 'A user-added skill', version: '1.0.0', origin: 'compiled', usageCount: 0, bundled: false },
+      { id: 'skill-fix-lint', name: 'Fix lint', description: 'Fixes lint errors', version: '1.0.0', origin: 'compiled', usageCount: 3, enabled: true, bundled: true },
+      { id: 'skill-custom-x', name: 'Custom X', description: 'A user-added skill', version: '1.0.0', origin: 'compiled', usageCount: 0, enabled: false, bundled: false },
     ],
-    hub: [{ id: 'demo-fix', name: 'demo-fix', description: 'Fix a demo issue', origin: 'hub' }],
+    hub: [{ id: 'demo-fix', name: 'demo-fix', description: 'Fix a demo issue', origin: 'hub', enabled: true }],
     total: 3,
+    enabled: 2,
+    disabled: 1,
   },
   // P4.1 — two runs: one that finished on a native-tool provider, one that
   // REFUSED (the local model was unreachable), so a row must show both the
@@ -112,6 +114,22 @@ const HUB: HubData = {
         durationMs: 120,
       },
     ],
+  },
+  conversations: {
+    total: 0,
+    recent: [],
+    analytics: {
+      totalMessages: 0,
+      totalConversations: 0,
+      avgMessagesPerConversation: 0,
+      topContacts: [],
+      hourlyDistribution: [],
+      dailyDistribution: [],
+      platformBreakdown: [],
+      dailyVolume: [],
+      avgUserMessageLength: 0,
+      avgAssistantMessageLength: 0,
+    },
   },
   adminConfigured: true,
   serverTime: 123,

@@ -1,15 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardAPI } from '../api';
+import type { BedrockStatus } from '../types';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-
-interface BedrockStatus {
-  configured: boolean;
-  region: string;
-  authMethod: 'bearer' | 'iam' | 'none';
-  apiKeySet: boolean;
-  iamKeySet: boolean;
-}
 
 interface BedrockProbeResult {
   modelId: string;

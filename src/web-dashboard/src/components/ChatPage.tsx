@@ -30,6 +30,7 @@ import Markdown from './Markdown';
 import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
 import { stripAnsi } from '../ansi';
 import type { TaskLogLine, TaskStatus } from '../types';
+import { formatCount } from '../format';
 
 interface AuthState {
   configured: boolean;
@@ -148,11 +149,40 @@ function classifyAttachment(
   };
 }
 
+/** P0.7 — plan-step status as the checklist renders it. */
+type PlanStepStatus = 'pending' | 'running' | 'done' | 'blocked';
+
 /** P0.7 — the plan checklist as rendered (goal + steps with statuses). */
 interface PlanView {
   goal: string;
-  steps: Array<{ id: string; description: string; status: 'pending' | 'running' | 'done' | 'blocked' }>;
+  steps: Array<{ id: string; description: string; status: PlanStepStatus }>;
   revision: number;
+}
+
+/**
+ * Normalise a streamed plan step into the view model.
+ *
+ * The step arrives as untrusted JSON (see `onPlan` in api.ts), so an unrecognised
+ * status must not reach the status map as an arbitrary string — it would render as
+ * a blank badge. Anything unknown is treated as `pending`, which is what the
+ * server means by a step that has not started.
+ */
+function toPlanStep(s: { id: string; description: string; status: string }): PlanView['steps'][number] {
+  const known = (['pending', 'running', 'done', 'blocked'] as readonly string[]).includes(s.status);
+  return { id: s.id, description: s.description, status: known ? (s.status as PlanStepStatus) : 'pending' };
+}
+
+/** One sidebar session row (the `/api/chat/sessions` shape). */
+interface ChatSessionSummary {
+  id: string;
+  title: string;
+  turnCount: number;
+  createdAt: number;
+  updatedAt: number;
+  preview: string;
+  firstUser: string;
+  /** The project folder this session is attached to, when it is attached. */
+  projectPath?: string;
 }
 
 /** P3b — a git diff payload as rendered (per-file +/− sections). */
@@ -706,9 +736,9 @@ function newSessionId(): string {
 /** P8 — group sessions by recency (Today / Yesterday / This week / Older)
  *  and filter by the sidebar search box (title / preview / first message). */
 function groupSessions(
-  sessions: Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string }>,
+  sessions: ChatSessionSummary[],
   query: string,
-): Array<{ label: string; items: Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string }> }> {
+): Array<{ label: string; items: ChatSessionSummary[] }> {
   const q = query.trim().toLowerCase();
   const filtered = q
     ? sessions.filter((s) => `${s.title} ${s.preview} ${s.firstUser}`.toLowerCase().includes(q))
@@ -776,7 +806,7 @@ export default function ChatPage() {
   // Phase 6 — the last sent message (↑ recalls it into the box).
   const lastSentRef = useRef<string>('');
   // P4 — the session sidebar: past conversations, click to resume.
-  const [sessions, setSessions] = useState<Array<{ id: string; title: string; turnCount: number; createdAt: number; updatedAt: number; preview: string; firstUser: string; projectPath?: string }>>([]);
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   // P8 — smart rail: the sidebar collapses to a rail while the agent works and
   // returns when the turn finishes (results own the full window mid-task).
   const [railOpen, setRailOpen] = useState(true);
@@ -825,7 +855,7 @@ export default function ChatPage() {
     void dashboardAPI.fetchAdminAuthStatus().then((s) => {
       setAuth(
         s
-          ? { configured: s.configured, authenticated: s.authenticated, role: s.role }
+          ? { configured: s.configured, authenticated: s.authenticated, role: s.role ?? null }
           : { configured: false, authenticated: false, role: null },
       );
     });
@@ -1259,7 +1289,7 @@ export default function ChatPage() {
         // P0.7 — live checklist: each plan_todo mutation replaces the card
         // (revision-ordered, in place). Snapshot into the final message.
         onPlan: (p) => {
-          const view: PlanView = { goal: p.goal, steps: p.steps, revision: p.revision };
+          const view: PlanView = { goal: p.goal, steps: p.steps.map(toPlanStep), revision: p.revision };
           livePlanRef.current = view;
           setLivePlan(view);
         },
@@ -1886,7 +1916,7 @@ export default function ChatPage() {
                       </summary>
                       {m.attachments.map((a, ai) => (
                         <div key={ai} className="chat-attach-content">
-                          <div className="admin-hint">{a.name} — {a.content.length.toLocaleString()} chars</div>
+                          <div className="admin-hint">{a.name} — {formatCount(a.content.length)} chars</div>
                           <pre>{a.content}</pre>
                         </div>
                       ))}
@@ -2105,7 +2135,7 @@ export default function ChatPage() {
             {pasteOffer ? (
               <div className="chat-paste-offer">
                 <span className="admin-hint">
-                  📄 You pasted {pasteOffer.text.length.toLocaleString()} characters. Attach it as a file instead?
+                  📄 You pasted {formatCount(pasteOffer.text.length)} characters. Attach it as a file instead?
                 </span>
                 <button type="button" className="chat-chip" onClick={acceptPasteOffer}>Attach as text</button>
                 <button type="button" className="chat-mini-action" onClick={() => { setPasteOffer(null); pastePosRef.current = null; }}>Keep inline</button>
@@ -2118,14 +2148,14 @@ export default function ChatPage() {
                     key={`${a.name}-${i}`}
                     className="chat-attach-chip"
                     title={a.encoding === 'base64'
-                      ? `${a.name} (${a.content.length.toLocaleString()} base64 chars — read on the server)`
-                      : `${a.name} (${a.content.length.toLocaleString()} chars)`}
+                      ? `${a.name} (${formatCount(a.content.length)} base64 chars — read on the server)`
+                      : `${a.name} (${formatCount(a.content.length)} chars)`}
                   >
                     📎 {a.name}
                     <span className="admin-hint">
                       {a.encoding === 'base64'
                         ? `${Math.round((a.content.length * 3) / 4096)} KB`
-                        : `${a.content.length.toLocaleString()}c`}
+                        : `${formatCount(a.content.length)}c`}
                     </span>
                     <button type="button" className="chat-mini-action" onClick={() => removeAttachment(i)}>✕</button>
                   </span>

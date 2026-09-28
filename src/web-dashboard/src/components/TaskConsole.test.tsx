@@ -11,7 +11,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import TaskConsole, { type TaskPreset } from './TaskConsole';
 import { dashboardAPI, setAdminToken } from '../api';
-import type { TaskRecord } from '../types';
+import type { TaskLogLine, TaskRecord, TaskStatus } from '../types';
 
 const PRESETS: TaskPreset[] = [
   { label: '🌐 Gateway status', args: ['gateway', 'status'] },
@@ -91,8 +91,10 @@ describe('TaskConsole', () => {
   it('streams the live console, offers cancel, and stops on completion', async () => {
     mockAuthed();
     mockRunApi();
-    let onLog: ((l: { stream: string; text: string }) => void) | null = null;
-    let onStatus: ((s: string) => void) | null = null;
+    // The REAL subscriber shapes (types.ts), not a locally reinvented one — the
+    // streamed line carries its timestamp, and a status is the real union.
+    let onLog: ((line: TaskLogLine) => void) | undefined;
+    let onStatus: ((status: TaskStatus) => void) | undefined;
     vi.spyOn(dashboardAPI, 'subscribeTask').mockImplementation((_id, handlers) => {
       onLog = handlers.onLog;
       onStatus = handlers.onStatus;
@@ -109,7 +111,7 @@ describe('TaskConsole', () => {
     await waitFor(() => expect(screen.getByText('gateway: channels loaded')).toBeTruthy());
 
     // Live line streams in while running.
-    onLog!({ stream: 'stdout', text: 'telegram: connected' });
+    onLog!({ stream: 'stdout', text: 'telegram: connected', at: Date.now() });
     await waitFor(() => expect(screen.getByText('telegram: connected')).toBeTruthy());
     expect(screen.getByRole('button', { name: /Cancel/ })).toBeTruthy();
 

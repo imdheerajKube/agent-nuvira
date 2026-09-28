@@ -168,10 +168,12 @@ describe('ChatPage', () => {
     // user-initiated cancel via the controller's signal.
     vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
       (_sid, _msg, _opts, sig?: AbortSignal) =>
-        new Promise((resolve) => {
+        // Typed as the real result, not cast to the OK fixture: an aborted turn is
+        // a FAILED result, which is the whole point of this test.
+        new Promise<ChatSendResult>((resolve) => {
           signal = sig ?? null;
-          sig?.addEventListener('abort', () => resolve({ ok: false as const, error: 'Could not reach the dashboard server.' }));
-        }) as Promise<typeof OK_RESPONSE>,
+          sig?.addEventListener('abort', () => resolve({ ok: false, error: 'Could not reach the dashboard server.' }));
+        }),
     );
     render(<ChatPage />);
     await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
@@ -646,12 +648,10 @@ describe('ChatPage', () => {
       clipboardData: { getData: () => longText },
     } as unknown as React.ClipboardEvent<HTMLTextAreaElement>);
 
-    // The prompt prints the length with `toLocaleString()`, so its separators follow
-    // the machine's locale (2500 is 2,500 under en-US but 2.500 under de-DE). Reading
-    // textContent and comparing against the same formatting keeps this assertion
-    // about the LENGTH rather than about where the locale puts the separator.
+    // The prompt prints the length through the shared `formatCount` (pinned to
+    // en-US), so the separator is a literal on every machine.
     const offer = await screen.findByText(/You pasted/);
-    expect(offer.textContent).toContain(`${longText.length.toLocaleString()} characters`);
+    expect(offer.textContent).toContain('2,500 characters');
     fireEvent.click(screen.getByText(/Attach as text/));
     await waitFor(() => expect(screen.getByText(/pasted-text.txt/)).toBeTruthy());
   });

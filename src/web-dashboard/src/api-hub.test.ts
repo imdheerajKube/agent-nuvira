@@ -51,6 +51,22 @@ const HUB_PAYLOAD: HubData = {
   artifacts: { totalSessions: 0, totalArtifacts: 0, sessions: [] },
   skills: { compiled: [], hub: [], total: 0, enabled: 0, disabled: 0 },
   subagents: { total: 0, running: 0, failed: 0, recent: [] },
+  conversations: {
+    total: 0,
+    recent: [],
+    analytics: {
+      totalMessages: 0,
+      totalConversations: 0,
+      avgMessagesPerConversation: 0,
+      topContacts: [],
+      hourlyDistribution: [],
+      dailyDistribution: [],
+      platformBreakdown: [],
+      dailyVolume: [],
+      avgUserMessageLength: 0,
+      avgAssistantMessageLength: 0,
+    },
+  },
   adminConfigured: false,
   serverTime: 123,
 };

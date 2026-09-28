@@ -103,7 +103,7 @@ export default function TasksPage() {
     void dashboardAPI.fetchAdminAuthStatus().then((s) => {
       setAuth(
         s
-          ? { configured: s.configured, authenticated: s.authenticated, role: s.role }
+          ? { configured: s.configured, authenticated: s.authenticated, role: s.role ?? null }
           : { configured: false, authenticated: false, role: null },
       );
       if (s?.authenticated) void refreshHistory();

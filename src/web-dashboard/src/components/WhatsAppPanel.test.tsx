@@ -34,7 +34,7 @@ const PAIRING_QR: WhatsAppPairStatus = {
   startedAt: Date.now(),
 };
 
-function mockStatus(status: WhatsAppPairStatus | null, contacts: Record<string, string> = {}) {
+function mockStatus(status: WhatsAppPairStatus, contacts: Record<string, string> = {}) {
   vi.spyOn(dashboardAPI, 'getWhatsAppStatus').mockResolvedValue({ status, contacts });
   vi.spyOn(dashboardAPI, 'subscribeWhatsApp').mockReturnValue(() => {});
 }

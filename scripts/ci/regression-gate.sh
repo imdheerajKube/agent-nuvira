@@ -12,7 +12,12 @@
 #                       mock-429 -> learn -> skip -> recover loop; the single
 #                       most important regression test for Nuvira-Router)
 #   3. Full root suite — every root test (default; skipped with --fast)
-#   4. Dashboard suite — src/web-dashboard component tests (default; --fast)
+#   4. Dashboard suite — src/web-dashboard typecheck + component tests
+#                       (default; --fast)
+#   5. Dashboard bundle — the COMMITTED artifact must be the one the source
+#                       builds (default; --fast). A committed build artifact
+#                       drifts silently: the component suite runs the source, so
+#                       it passes whether or not the bundle was rebuilt.
 #
 # Usage:
 #   bash scripts/ci/regression-gate.sh          # full gate (CI, ~4 min)
@@ -36,7 +41,7 @@ export CI=1
 export NODE_OPTIONS=--no-warnings
 
 # ── 1. Routing guard ────────────────────────────────────────────────────────
-step "1/4 Routing guard (bandit / promotion / auto-router / tier0 / hybrid / registry / fallback)"
+step "1/5 Routing guard (bandit / promotion / auto-router / tier0 / hybrid / registry / fallback)"
 if npx vitest run \
     tests/learning/router-bandit.test.ts \
     tests/learning/router-promotion.test.ts \
@@ -51,7 +56,7 @@ else
 fi
 
 # ── 2. Failover E2E (canonical no-regression guard) ─────────────────────────
-step "2/4 Failover-learning E2E"
+step "2/5 Failover-learning E2E"
 if npx vitest run tests/e2e/failover-learning.test.ts; then
   ok "failover-learning E2E passed"
 else
@@ -62,19 +67,33 @@ if [ "$FAST" = 1 ]; then
   step "(--fast: skipping full root + dashboard suites)"
 else
   # ── 3. Full root suite ───────────────────────────────────────────────────
-  step "3/4 Full root suite"
+  step "3/5 Full root suite"
   if npx vitest run; then
     ok "full root suite passed"
   else
     bad "full root suite FAILED"
   fi
 
-  # ── 4. Dashboard component suite ─────────────────────────────────────────
-  step "4/4 Dashboard component suite"
-  if (cd src/web-dashboard && npx vitest run); then
-    ok "dashboard component suite passed"
+  # ── 4. Dashboard component suite (typecheck + jsdom tests) ───────────────
+  # `npm test` runs the tree's tsc --noEmit first: the dashboard bundle is built
+  # by vite, which strips types without checking them, so this is the only gate
+  # that can see a type error there.
+  step "4/5 Dashboard typecheck + component suite"
+  if (cd src/web-dashboard && npm test); then
+    ok "dashboard typecheck + component suite passed"
   else
-    bad "dashboard component suite FAILED"
+    bad "dashboard typecheck + component suite FAILED"
+  fi
+
+  # ── 5. Committed dashboard bundle vs its source ──────────────────────────
+  # The dashboard the operator sees is src/web-dashboard/public, served straight
+  # from the repo — so a bundle that was not rebuilt after a source change is a
+  # shipped bug that no other step in this gate can see.
+  step "5/5 Dashboard bundle matches its source"
+  if npm run dashboard:bundle:check -- --rebuild; then
+    ok "dashboard bundle matches its source"
+  else
+    bad "dashboard bundle is STALE — rebuild it: npm run build:dashboard"
   fi
 fi
 

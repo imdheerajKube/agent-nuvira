@@ -11,9 +11,11 @@ import type {
   AdminTestResult,
   AdminUsersResult,
   AdminWriteResult,
+  BedrockStatus,
   DashboardData,
   DAGData,
   HubChannelPolicy,
+  HubConversationSummary,
   HubContact,
   HubData,
   PlatformConfigEntry,
@@ -239,7 +241,9 @@ export class DashboardAPI {
             ...this.lastData,
             conversations: {
               total: payload.total ?? payload.conversations.length,
-              recent: payload.conversations as DashboardData['conversations']['recent'],
+              // The event payload is untyped JSON, so this is a cast of last resort;
+              // the shape is asserted by the hub reader on the server side.
+              recent: payload.conversations as unknown as HubConversationSummary[],
             },
             serverTime: payload.serverTime || this.lastData.serverTime,
           };
@@ -750,7 +754,7 @@ export class DashboardAPI {
   }
 
   /** Fetch paginated gateway conversations with optional search. */
-  async fetchGatewayConversations(opts: { offset?: number; limit?: number; q?: string } = {}): Promise<{ ok: boolean; conversations?: Array<{ key: string; platform: string; channelId: string; contactName?: string; messageCount: number; lastActiveAt: number; lastUserMessage: string; lastAssistantMessage: string; messages?: Array<{ role: 'user' | 'assistant'; content: string; ts: number }> }>; total?: number; hasMore?: boolean; error?: string }> {
+  async fetchGatewayConversations(opts: { offset?: number; limit?: number; q?: string } = {}): Promise<AdminWriteResult & { conversations?: HubConversationSummary[]; total?: number; hasMore?: boolean }> {
     const params = new URLSearchParams();
     if (opts.offset) params.set('offset', String(opts.offset));
     if (opts.limit) params.set('limit', String(opts.limit));
@@ -764,7 +768,7 @@ export class DashboardAPI {
   }
 
   /** Clear a single gateway conversation by its key (e.g. "whatsapp:918800663237"). */
-  async clearGatewayConversation(key: string): Promise<{ ok: boolean; error?: string }> {
+  async clearGatewayConversation(key: string): Promise<AdminWriteResult> {
     const r = await this.sendAdminRequest('/api/admin/gateway/conversations', 'DELETE', { key });
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
     const d = (r.data ?? {}) as { ok?: boolean; error?: string };
@@ -773,7 +777,7 @@ export class DashboardAPI {
   }
 
   /** Add a tag to a conversation. */
-  async addConversationTag(key: string, tag: string): Promise<{ ok: boolean; error?: string }> {
+  async addConversationTag(key: string, tag: string): Promise<AdminWriteResult> {
     const r = await this.sendAdminRequest('/api/admin/gateway/conversations/tags', 'PUT', { action: 'add', key, tag });
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
     const d = (r.data ?? {}) as { ok?: boolean; error?: string };
@@ -782,7 +786,7 @@ export class DashboardAPI {
   }
 
   /** Remove a tag from a conversation. */
-  async removeConversationTag(key: string, tag: string): Promise<{ ok: boolean; error?: string }> {
+  async removeConversationTag(key: string, tag: string): Promise<AdminWriteResult> {
     const r = await this.sendAdminRequest('/api/admin/gateway/conversations/tags', 'PUT', { action: 'remove', key, tag });
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
     const d = (r.data ?? {}) as { ok?: boolean; error?: string };
@@ -791,7 +795,7 @@ export class DashboardAPI {
   }
 
   /** Get all unique tags across all conversations. */
-  async getAllConversationTags(): Promise<{ ok: boolean; tags?: string[]; error?: string }> {
+  async getAllConversationTags(): Promise<AdminWriteResult & { tags?: string[] }> {
     const r = await this.sendAdminRequest('/api/admin/gateway/conversations/tags', 'PUT', { action: 'getAllTags' });
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
     const d = (r.data ?? {}) as { ok?: boolean; tags?: string[]; error?: string };
@@ -934,12 +938,12 @@ export class DashboardAPI {
   // ─── Bedrock onboarding ───────────────────────────────────────────────────
 
   /** Get current Bedrock configuration status. */
-  async getBedrockStatus(): Promise<{ configured: boolean; region: string; authMethod: string; apiKeySet: boolean; iamKeySet: boolean }> {
+  async getBedrockStatus(): Promise<BedrockStatus> {
     const r = await this.sendAdminRequest('/api/bedrock/status', 'GET');
     if (!r || r.status !== 200) {
       return { configured: false, region: 'us-east-1', authMethod: 'none', apiKeySet: false, iamKeySet: false };
     }
-    return (r.data ?? {}) as { configured: boolean; region: string; authMethod: string; apiKeySet: boolean; iamKeySet: boolean };
+    return (r.data ?? {}) as BedrockStatus;
   }
 
   /** Save Bedrock env vars (credentials + region) to ~/.nuvira/.env. */

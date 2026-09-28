@@ -96,7 +96,9 @@ export default function AgentHub() {
   const [permissionsExpanded, setPermissionsExpanded] = useState(false);
   const [policyDraft, setPolicyDraft] = useState<Record<string, HubChannelPolicy>>({});
   const [policyBusy, setPolicyBusy] = useState(false);
-  const [policyMsg, setPolicyMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  // `warn` exists because a save can SUCCEED while rejecting some contacts —
+  // reporting that as an error would be wrong, and as a clean success a lie.
+  const [policyMsg, setPolicyMsg] = useState<{ kind: 'ok' | 'warn' | 'err'; text: string } | null>(null);
   const [policyUserInput, setPolicyUserInput] = useState<Record<string, string>>({});
   const [policyGroupInput, setPolicyGroupInput] = useState<Record<string, string>>({});
   const [policySendInput, setPolicySendInput] = useState<Record<string, string>>({});
@@ -631,7 +633,7 @@ ${messages.map((m) => {
     setSendMsg(null);
     const r = await dashboardAPI.sendChannelMessage(sendTarget.trim(), sendText);
     if (r.ok) {
-      setSendMsg({ kind: 'ok', text: `✅ Sent to ${sendTarget.trim()} (${r.platform}:${showId(r.channelId)})` });
+      setSendMsg({ kind: 'ok', text: `✅ Sent to ${sendTarget.trim()} (${r.platform}:${showId(r.channelId ?? '')})` });
       setSendText('');
     } else if (r.unauthorized) {
       sessionExpired();
@@ -1381,7 +1383,7 @@ ${messages.map((m) => {
             ) : null}
           </div>
           {policyMsg ? (
-            <div className={`admin-row-msg${policyMsg.kind === 'ok' ? '' : ' admin-row-msg-err'}`}>{policyMsg.text}</div>
+            <div className={`admin-row-msg${policyMsg.kind === 'err' ? ' admin-row-msg-err' : ''}`}>{policyMsg.text}</div>
           ) : null}
 
           <h3 className="section-subtitle">📤 Test a channel (buff gateway send)</h3>

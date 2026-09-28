@@ -126,9 +126,26 @@ jobs:
       # separate package trees. The tests are pure jsdom and platform-agnostic,
       # so this step runs on ONE matrix combo instead of all four to avoid 3
       # redundant npm ci runs.
+      #
+      # `npm test` (not `npx vitest run`): the dashboard bundle is built by vite,
+      # which strips types without checking them, so nothing else would ever
+      # notice a type error in that tree. The test script typechecks first.
       - name: Dashboard component tests (PromotionGateSection)
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
-        run: cd src/web-dashboard && npm ci --no-audit --no-fund --foreground-scripts && npx vitest run
+        run: cd src/web-dashboard && npm ci --no-audit --no-fund --foreground-scripts && npm test
+        env:
+          CI: true
+
+      # The dashboard bundle is a COMMITTED build artifact (the server serves
+      # src/web-dashboard/public straight from the repo), so nothing else here
+      # notices when it is not the bundle the source builds — the component tests
+      # run the source, so they pass either way. This caught a real case: the
+      # Subagents tab was written, reviewed and committed while the shipped
+      # bundle did not contain it. --rebuild is the complete check (a byte
+      # comparison against a fresh build); it needs the tree installed above.
+      - name: Dashboard bundle matches its source
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
+        run: npm run dashboard:bundle:check -- --rebuild
         env:
           CI: true
 

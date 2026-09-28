@@ -925,6 +925,8 @@ export interface AdminWriteResult {
   /** The env var the key comes from (only meaningful when envSourced). */
   envVar?: string;
   provider?: AdminProviderSummary;
+  /** 403 — the session is valid but this role may not perform the action. */
+  forbidden?: boolean;
   unauthorized?: boolean;
   /** Validation errors for contacts that were rejected (e.g. phone number for Telegram). */
   contactErrors?: string[];
@@ -1009,6 +1011,12 @@ export interface DashboardData {
    * won't send these, so the Run Timeline renders without it.
    */
   unattendedJobs?: { total: number; jobs: UnattendedJobView[] };
+  /**
+   * Gateway conversations, merged in from the conversation SSE event so the
+   * Conversations tab updates live. Optional: the field exists only once such an
+   * event has arrived, and an older server never sends one.
+   */
+  conversations?: { total: number; recent: HubConversationSummary[] };
   serverTime: number;
 }
 
@@ -1168,6 +1176,7 @@ export interface HubPlatformEnvVar {
   varName: string;
   set: boolean;
   value: string;
+  /** Field label; additive transport modes end with "(optional)". */
   prompt: string;
   secret: boolean;
 }
@@ -1297,6 +1306,49 @@ export interface HubSubagentRun {
   resultPreview?: string;
 }
 
+/** Bedrock credential shape (mirrors the `/api/bedrock/status` answer). */
+export type BedrockAuthMethod = 'bearer' | 'iam' | 'none';
+
+/** Bedrock credential state for this machine (the onboarding panel reads it). */
+export interface BedrockStatus {
+  configured: boolean;
+  region: string;
+  authMethod: BedrockAuthMethod;
+  apiKeySet: boolean;
+  iamKeySet: boolean;
+}
+
+/** One gateway conversation row (per-contact history). */
+export interface HubConversationSummary {
+  key: string;
+  platform: string;
+  channelId: string;
+  contactName?: string;
+  messageCount: number;
+  lastActiveAt: number;
+  lastUserMessage: string;
+  lastAssistantMessage: string;
+  messages?: Array<{ role: 'user' | 'assistant'; content: string; ts: number }>;
+  tags?: string[];
+}
+
+/**
+ * Conversation aggregates behind the Conversations tab charts. Required on the hub
+ * payload; the streamed merge carries only totals and rows.
+ */
+export interface HubConversationAnalytics {
+  totalMessages: number;
+  totalConversations: number;
+  avgMessagesPerConversation: number;
+  topContacts: Array<{ name: string; platform: string; messageCount: number; lastActiveAt: number }>;
+  hourlyDistribution: Array<{ hour: number; count: number }>;
+  dailyDistribution: Array<{ day: number; count: number }>;
+  platformBreakdown: Array<{ platform: string; conversations: number; messages: number }>;
+  dailyVolume: Array<{ date: string; count: number }>;
+  avgUserMessageLength: number;
+  avgAssistantMessageLength: number;
+}
+
 export interface HubData {
   toolsets: {
     toolsets: HubToolset[];
@@ -1358,30 +1410,8 @@ export interface HubData {
   /** Gateway chat conversations (per-contact history). */
   conversations: {
     total: number;
-    recent: Array<{
-      key: string;
-      platform: string;
-      channelId: string;
-      contactName?: string;
-      messageCount: number;
-      lastActiveAt: number;
-      lastUserMessage: string;
-      lastAssistantMessage: string;
-      messages?: Array<{ role: 'user' | 'assistant'; content: string; ts: number }>;
-      tags?: string[];
-    }>;
-    analytics: {
-      totalMessages: number;
-      totalConversations: number;
-      avgMessagesPerConversation: number;
-      topContacts: Array<{ name: string; platform: string; messageCount: number; lastActiveAt: number }>;
-      hourlyDistribution: Array<{ hour: number; count: number }>;
-      dailyDistribution: Array<{ day: number; count: number }>;
-      platformBreakdown: Array<{ platform: string; conversations: number; messages: number }>;
-      dailyVolume: Array<{ date: string; count: number }>;
-      avgUserMessageLength: number;
-      avgAssistantMessageLength: number;
-    };
+    recent: HubConversationSummary[];
+    analytics: HubConversationAnalytics;
   };
   adminConfigured: boolean;
   serverTime: number;

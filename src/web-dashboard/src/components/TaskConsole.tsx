@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { dashboardAPI } from '../api';
 import type { TaskRecord, TaskStatus } from '../types';
 
@@ -37,8 +38,11 @@ interface Props {
   customPlaceholder: string;
   /** Timeout for started tasks (ms). */
   timeoutMs?: number;
-  /** Optional hint shown under the buttons. */
-  hint?: string;
+  /**
+   * Optional hint shown under the buttons. Rich text: both callers explain what
+   * the console really runs, with code spans and emphasis.
+   */
+  hint?: ReactNode;
 }
 
 export default function TaskConsole({ presets, customPlaceholder, timeoutMs = 300_000, hint }: Props) {
@@ -53,7 +57,7 @@ export default function TaskConsole({ presets, customPlaceholder, timeoutMs = 30
 
   useEffect(() => {
     void dashboardAPI.fetchAdminAuthStatus().then((s) => {
-      setAuth(s ? { authenticated: s.authenticated, role: s.role } : { authenticated: false, role: null });
+      setAuth(s ? { authenticated: s.authenticated, role: s.role ?? null } : { authenticated: false, role: null });
     });
   }, []);
 
