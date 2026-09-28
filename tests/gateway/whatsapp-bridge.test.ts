@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 
 import { normalizeWhatsAppJid, type WhatsAppBridge } from '../../src/gateway/whatsapp/bridge.js';
 import { WhatsAppBridgeAdapter } from '../../src/gateway/adapters.js';
+import type { InboundMedia } from '../../src/gateway/inbound-media.js';
 import {
   BaileysBridge,
   BACKFILL_MAX_AGE_MS,
@@ -98,6 +99,9 @@ vi.mock('baileys', () => {
       fakeBaileys.sockets.push(sock);
       return sock;
     },
+    // Media downloader (Baileys `downloadMediaMessage`) — a fixed payload so
+    // the bridge's inbound-document path is asserted without real media.
+    downloadMediaMessage: async () => Buffer.from('PDF-BYTES', 'utf-8'),
     useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined }),
   };
 });
@@ -168,7 +172,7 @@ class FakeBridge implements WhatsAppBridge {
   failSend = false;
   inbound: Array<{ from: string; text: string }> = [];
   onMessage:
-    | ((from: string, text: string, participant?: string, messageId?: string) => void)
+    | ((from: string, text: string, participant?: string, messageId?: string, media?: InboundMedia) => void)
     | null = null;
 
   constructor(paired = true) {
@@ -180,7 +184,7 @@ class FakeBridge implements WhatsAppBridge {
   }
 
   async connect(
-    onMessage: (from: string, text: string, participant?: string, messageId?: string) => void,
+    onMessage: (from: string, text: string, participant?: string, messageId?: string, media?: InboundMedia) => void,
   ): Promise<void> {
     this.onMessage = onMessage;
     this.connected = true;
@@ -196,8 +200,8 @@ class FakeBridge implements WhatsAppBridge {
     return true;
   }
 
-  emit(from: string, text: string, participant?: string, messageId?: string): void {
-    this.onMessage?.(from, text, participant, messageId);
+  emit(from: string, text: string, participant?: string, messageId?: string, media?: InboundMedia): void {
+    this.onMessage?.(from, text, participant, messageId, media);
   }
 }
 
@@ -242,6 +246,22 @@ describe('WhatsAppBridgeAdapter', () => {
     fake.emit('15551234567@s.whatsapp.net', 'hi there', undefined, 'WA-MSG-ID-1');
     await adapter.stop();
     expect(received[0].messageId).toBe('WA-MSG-ID-1');
+  });
+
+  it('carries a downloaded document through to InboundMessage.media', async () => {
+    const fake = new FakeBridge(true);
+    const adapter = new WhatsAppBridgeAdapter(fake);
+    const received: Array<{ text: string; media?: InboundMedia }> = [];
+    await adapter.start((m) => received.push(m));
+    fake.emit('15551234567@s.whatsapp.net', 'summarise this', undefined, 'WA-DOC-1', {
+      type: 'document',
+      filename: 'report.pdf',
+      data: new Uint8Array([1, 2, 3]),
+    });
+    await adapter.stop();
+    expect(received[0].text).toBe('summarise this');
+    expect(received[0].media?.type).toBe('document');
+    expect(received[0].media?.filename).toBe('report.pdf');
   });
 
   it('an EMPTY-string participant never blanks the sender id (Baileys 7 DM quirk)', async () => {
@@ -795,6 +815,41 @@ describe('BaileysBridge I8b — echo filter / self-chat / contacts (fake baileys
 
     expect(received.map((r) => r.text)).toEqual(['sent while offline', 'live ask']);
     expect(received.map((r) => r.messageId)).toEqual(['FRESH-1', 'LIVE-1']);
+    await bridge.disconnect();
+  }, 10_000);
+
+  it('downloads an inbound document and forwards it with its caption as text', async () => {
+    // Previously a document message had no `conversation`/`extendedTextMessage`,
+    // so it was dropped at `if (!text) continue` — the sender's own file
+    // vanished. The bridge now downloads the bytes and forwards the caption.
+    const received: Array<{ text: string; media?: InboundMedia }> = [];
+    const bridge = new BaileysBridge(sessionDir);
+    const p = bridge.connect((_from, text, _participant, _messageId, media) => received.push({ text, media }));
+    await waitFor(() => fakeBaileys.sockets.length >= 1);
+    emit(0, 'connection.update', { connection: 'open' });
+    await p;
+
+    emit(0, 'messages.upsert', {
+      type: 'notify',
+      messages: [{
+        key: { id: 'DOC-1', remoteJid: '12025550123@s.whatsapp.net', fromMe: false },
+        message: {
+          documentMessage: {
+            mimetype: 'application/pdf',
+            fileName: 'report.pdf',
+            caption: 'summarise this',
+            fileLength: 1234,
+          },
+        },
+        pushName: 'Sara',
+      }],
+    });
+    await waitFor(() => received.length === 1);
+    expect(received[0].text).toBe('summarise this');
+    expect(received[0].media?.type).toBe('document');
+    expect(received[0].media?.filename).toBe('report.pdf');
+    expect(received[0].media?.mimetype).toBe('application/pdf');
+    expect(Buffer.from(received[0].media!.data).toString('utf-8')).toBe('PDF-BYTES');
     await bridge.disconnect();
   }, 10_000);
 

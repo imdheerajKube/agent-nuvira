@@ -514,6 +514,17 @@ export interface BuffConfig {
     askUserWait?: boolean;
     /** Reply window for `askUserWait`, in ms (default 120000; clamped 5s–10min). */
     askUserTimeoutMs?: number;
+    /**
+     * Inbound attachment handling (documents + voice notes).
+     *
+     * - `enabled` (default true): when false the gateway still ACCEPTS a
+     *   message with an attachment, but never downloads or extracts it — the
+     *   model just sees a note that an attachment was dropped by policy. Use
+     *   this on a locked-down or metered deployment.
+     * - `maxBytes` (default 20 MB): per-attachment cap; anything larger is not
+     *   downloaded/extracted.
+     */
+    inboundAttachments?: { enabled?: boolean; maxBytes?: number };
   };
 }
 

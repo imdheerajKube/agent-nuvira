@@ -46,7 +46,7 @@ const HUB_PAYLOAD: HubData = {
     contacts: [],
     statusRecipients: [],
     statusRecipientDisplay: {},
-    inbox: { total: 0, pipeline: 0, chat: 0, help: 0, refused: 0, recent: [] },
+    inbox: { total: 0, pipeline: 0, chat: 0, help: 0, refused: 0, duplicate: 0, attachmentFailed: 0, recent: [] },
   },
   artifacts: { totalSessions: 0, totalArtifacts: 0, sessions: [] },
   skills: { compiled: [], hub: [], total: 0 },

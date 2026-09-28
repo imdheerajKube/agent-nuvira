@@ -15,8 +15,23 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 
-import { TelegramAdapter, DiscordAdapter, SlackAdapter, WhatsAppCloudAdapter, WebhookReceiver, MatrixAdapter } from '../../src/gateway/adapters.js';
+import { TelegramAdapter, DiscordAdapter, SlackAdapter, WhatsAppCloudAdapter, WebhookReceiver, MatrixAdapter, parseWebhookPayload } from '../../src/gateway/adapters.js';
 import type { InboundMessage } from '../../src/gateway/adapters.js';
+import { logger } from '../../src/utils/logger.js';
+
+// The transports dial out for real; a test that start()s an adapter with a token
+// must not open an outbound WebSocket. The skip-path assertions below only need
+// `start()` not to explode.
+vi.mock('../../src/gateway/realtime.js', () => ({
+  DiscordGatewaySource: class {
+    async start(): Promise<void> {}
+    async stop(): Promise<void> {}
+  },
+  SlackSocketModeSource: class {
+    async start(): Promise<void> {}
+    async stop(): Promise<void> {}
+  },
+}));
 
 // ─── Telegram (Bot API long-poll) ───────────────────────────────────────────
 
@@ -69,6 +84,49 @@ describe('TelegramAdapter (Bot API long-poll)', () => {
     expect(offsets[0]).toBe(0);
     expect(offsets[1]).toBe(8);
     expect(String(calls[0].url)).toBe('https://api.telegram.org/bottest-token/getUpdates');
+  });
+
+  it('downloads an inbound document and forwards it as InboundMessage.media', async () => {
+    // A document message has no `text` — only a caption. It must still be
+    // dispatched (with its bytes downloaded) so the registry can extract it.
+    let delivered = false;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: unknown) => {
+      const u = String(url);
+      if (u.includes('/getUpdates')) {
+        const result = delivered
+          ? []
+          : [{
+            update_id: 9,
+            message: {
+              chat: { id: 42, type: 'private' },
+              caption: 'summarise this',
+              from: { id: 7, first_name: 'Bob' },
+              document: { file_id: 'F1', file_name: 'report.pdf', mime_type: 'application/pdf', file_size: 5 },
+            },
+          }];
+        delivered = true;
+        return { ok: true, json: async () => ({ result }) } as Response;
+      }
+      if (u.includes('/getFile')) {
+        return { ok: true, json: async () => ({ ok: true, result: { file_path: 'documents/file_1.pdf', file_size: 5 } }) } as Response;
+      }
+      return { ok: true, arrayBuffer: async () => new TextEncoder().encode('%PDF-').buffer } as Response;
+    });
+
+    const adapter = new TelegramAdapter('test-token', 10);
+    const received: InboundMessage[] = [];
+    await adapter.start((m) => received.push(m));
+    await new Promise((r) => setTimeout(r, 50));
+    await adapter.stop();
+
+    expect(received).toHaveLength(1);
+    expect(received[0].text).toBe('summarise this');
+    expect(received[0].media?.type).toBe('document');
+    expect(received[0].media?.filename).toBe('report.pdf');
+    expect(received[0].media?.mimetype).toBe('application/pdf');
+    expect(Buffer.from(received[0].media!.data).toString('utf-8')).toBe('%PDF-');
+    // The bytes came from the Bot API file endpoint, after resolving the path.
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/file/bottest-token/documents/file_1.pdf'))).toBe(true);
   });
 
   it('returns false without a network call when unconfigured, and start() throws', async () => {
@@ -357,6 +415,120 @@ describe('WebhookReceiver WhatsApp inbound (X-Hub-Signature-256)', () => {
   });
 });
 
+// ─── Webhook inbound attachments (Discord CDN / Slack files) ─────────────────
+
+describe('parseWebhookPayload — inbound attachments', () => {
+  it('extracts a media-only Discord message (empty content, one attachment)', () => {
+    const parsed = parseWebhookPayload('discord', {
+      channel_id: 'c1',
+      content: '',
+      author: { id: 'u1', username: 'alice' },
+      attachments: [{ url: 'https://cdn.discordapp.com/a/report.pdf', filename: 'report.pdf', content_type: 'application/pdf', size: 10 }],
+    });
+    expect(parsed?.text).toBe('');
+    expect(parsed?.media?.type).toBe('document');
+    expect(parsed?.media?.attachment).toMatchObject({
+      url: 'https://cdn.discordapp.com/a/report.pdf',
+      filename: 'report.pdf',
+      size: 10,
+    });
+  });
+
+  it('extracts a Slack file and marks its URL as token-authenticated', () => {
+    const parsed = parseWebhookPayload('slack', {
+      event: {
+        type: 'message',
+        channel: 'C1',
+        user: 'U1',
+        files: [{
+          url_private_download: 'https://files.slack.com/x',
+          name: 'notes.docx',
+          mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          size: 5,
+        }],
+      },
+    });
+    expect(parsed?.media?.type).toBe('document');
+    expect(parsed?.media?.attachment.authenticated).toBe(true);
+    expect(parsed?.media?.attachment.filename).toBe('notes.docx');
+  });
+
+  it('classifies an image attachment and keeps the caption', () => {
+    const parsed = parseWebhookPayload('discord', {
+      channel_id: 'c1',
+      content: 'look at this',
+      attachments: [{ url: 'https://cdn.discordapp.com/a/pic.png', filename: 'pic.png', content_type: 'image/png' }],
+    });
+    expect(parsed?.media?.type).toBe('image');
+    expect(parsed?.media?.caption).toBe('look at this');
+  });
+});
+
+describe('WebhookReceiver — Slack attachment download', () => {
+  let port = 19_500;
+  let receiver: WebhookReceiver | null = null;
+  const oldToken = process.env.NUVIRA_SLACK_BOT_TOKEN;
+
+  beforeEach(() => {
+    process.env.NUVIRA_SLACK_BOT_TOKEN = 'xoxb-test';
+  });
+
+  afterEach(async () => {
+    await receiver?.stop();
+    receiver = null;
+    vi.restoreAllMocks();
+    if (oldToken === undefined) delete process.env.NUVIRA_SLACK_BOT_TOKEN;
+    else process.env.NUVIRA_SLACK_BOT_TOKEN = oldToken;
+  });
+
+  function post(path: string, body: string, p: number): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(
+        { host: '127.0.0.1', port: p, path, method: 'POST' },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode ?? 500));
+        },
+      );
+      req.on('error', reject);
+      req.end(body);
+    });
+  }
+
+  it('downloads a Slack file with the bot token and forwards it as media', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: unknown) => {
+      if (String(url) === 'https://files.slack.com/x') {
+        return { ok: true, arrayBuffer: async () => new TextEncoder().encode('hello doc').buffer } as Response;
+      }
+      return { ok: false } as Response;
+    });
+
+    const received: InboundMessage[] = [];
+    receiver = new WebhookReceiver();
+    const p = port++;
+    await receiver.start((m) => received.push(m), p, '127.0.0.1');
+
+    const raw = JSON.stringify({
+      event: {
+        type: 'message',
+        channel: 'D1',
+        user: 'U1',
+        files: [{ url_private_download: 'https://files.slack.com/x', name: 'notes.md', mimetype: 'text/markdown', size: 5 }],
+      },
+    });
+    expect(await post('/slack', raw, p)).toBe(200);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(received).toHaveLength(1);
+    expect(received[0].media?.type).toBe('document');
+    expect(received[0].media?.filename).toBe('notes.md');
+    expect(Buffer.from(received[0].media!.data).toString('utf-8')).toBe('hello doc');
+    // The Slack download carried the bot token.
+    const call = fetchMock.mock.calls.find((c) => String(c[0]) === 'https://files.slack.com/x');
+    expect((call?.[1] as { headers?: Record<string, string> } | undefined)?.headers?.authorization).toBe('Bearer xoxb-test');
+  });
+});
+
 // ─── Matrix inbound (/sync long-poll, P3) ───────────────────────────────────
 
 describe('MatrixAdapter inbound (P3)', () => {
@@ -432,5 +604,73 @@ describe('MatrixAdapter inbound (P3)', () => {
     delete process.env.NUVIRA_MATRIX_HOMESERVER;
     const adapter = new MatrixAdapter();
     await expect(adapter.start(() => {})).rejects.toThrow('not configured');
+  });
+});
+
+// ─── real-time transports: a skipped one is announced, not silent ───────────
+//
+// Discord (Gateway WebSocket) and Slack (Socket Mode) inbound only start when
+// their token is present. Nothing observable happened when it was absent, so a
+// gateway that answered outbound but never received looked exactly like one whose
+// inbound was broken. Both paths now say which key is missing.
+
+describe('real-time inbound announces a skipped transport', () => {
+  const KEYS = [
+    'BUFF_DISCORD_BOT_TOKEN',
+    'NUVIRA_DISCORD_BOT_TOKEN',
+    'BUFF_SLACK_APP_TOKEN',
+    'NUVIRA_SLACK_APP_TOKEN',
+  ] as const;
+
+  const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+
+  beforeEach(() => {
+    for (const k of KEYS) delete process.env[k];
+  });
+
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    vi.restoreAllMocks();
+  });
+
+  it('Discord: names the bot token and what still works', async () => {
+    // Install the spy before start() runs; collect afterwards.
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    await new DiscordAdapter().start(() => {});
+
+    const lines = info.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(lines).toContain('Discord');
+    expect(lines).toContain('skipped');
+    expect(lines).toContain('BUFF_DISCORD_BOT_TOKEN');
+    // Says the alternative, so the operator is not left guessing.
+    expect(lines).toContain('outbound');
+  });
+
+  it('Slack: names the app-level token and what still works', async () => {
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    await new SlackAdapter().start(() => {});
+
+    const lines = info.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(lines).toContain('Slack');
+    expect(lines).toContain('skipped');
+    expect(lines).toContain('BUFF_SLACK_APP_TOKEN');
+    expect(lines).toContain('outbound');
+  });
+
+  it('says nothing when the token IS present', async () => {
+    process.env.BUFF_DISCORD_BOT_TOKEN = 'test-bot-token';
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+
+    const adapter = new DiscordAdapter();
+    // Start dials out for real, so stop it immediately; the assertion is only
+    // that no "skipped" line was emitted.
+    await adapter.start(() => {});
+    await adapter.stop();
+
+    const lines = info.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(lines).not.toContain('skipped');
   });
 });

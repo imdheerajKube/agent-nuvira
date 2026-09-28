@@ -33,7 +33,14 @@ export type InboundDisposition =
    * starting a turn. Recorded so the reply is visible in the ledger instead of
    * looking like a message that vanished.
    */
-  | 'clarified';
+  | 'clarified'
+  /**
+   * A document attachment arrived but could not be turned into text (unsupported
+   * format, a scanned PDF with no text layer, the reader package missing). The
+   * sender was answered directly with the reason instead of the message being
+   * routed to a model that never saw the file.
+   */
+  | 'attachment_failed';
 
 /** One inbound message recorded by the gateway. */
 export interface InboxEntry {

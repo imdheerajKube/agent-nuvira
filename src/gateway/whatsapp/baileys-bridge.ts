@@ -33,6 +33,7 @@ import {
 } from './bridge.js';
 import { whatsappSessionDir } from './session.js';
 import { readContactsFile, writeContactsFile } from './contacts.js';
+import { MAX_INBOUND_MEDIA_BYTES, type InboundMedia } from '../inbound-media.js';
 import { envBuff } from '../../config/paths.js';
 
 /**
@@ -208,6 +209,17 @@ interface ConnectionUpdateLike {
 interface BaileysApi {
   makeWASocket: (opts: Record<string, unknown>) => WASocketLike;
   useMultiFileAuthState: (dir: string) => Promise<{ state: unknown; saveCreds: () => Promise<void> }>;
+  /**
+   * Module-level media downloader (Baileys `downloadMediaMessage`). Optional —
+   * an older/partial baileys without it leaves inbound media undownloadable,
+   * which the bridge reports by forwarding the caption-only text.
+   */
+  downloadMediaMessage?: (
+    message: unknown,
+    type: 'buffer',
+    options?: unknown,
+    ctx?: { logger?: unknown },
+  ) => Promise<Buffer>;
 }
 
 function sessionHasCreds(dir: string): boolean {
@@ -359,11 +371,93 @@ async function loadBaileys(): Promise<BaileysApi | null> {
   }
 }
 
+/** An inbound media attachment's descriptors (before the bytes are fetched). */
+interface MediaDescriptor {
+  type: InboundMedia['type'];
+  mimetype?: string;
+  filename?: string;
+  caption?: string;
+  /** Declared size in bytes, when the transport provides it (pre-download gate). */
+  size?: number;
+}
+
 /** Best-effort text extraction from a Baileys message event. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function messageText(message: any): string {
   const c = message?.message;
-  return c?.conversation ?? c?.extendedTextMessage?.text ?? '';
+  // A document/image/video carries its instruction in the CAPTION; reading only
+  // `conversation`/`extendedTextMessage` made those messages look textless.
+  return (
+    c?.conversation
+    ?? c?.extendedTextMessage?.text
+    ?? c?.imageMessage?.caption
+    ?? c?.videoMessage?.caption
+    ?? c?.documentMessage?.caption
+    ?? c?.documentWithCaptionMessage?.message?.documentMessage?.caption
+    ?? ''
+  );
+}
+
+/** Best-effort number from a Baileys field (Long / number / numeric string). */
+function numOrUndef(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+  if (v && typeof v === 'object') {
+    const o = v as { toNumber?: () => unknown; low?: unknown };
+    if (typeof o.toNumber === 'function') {
+      const n = Number(o.toNumber());
+      if (Number.isFinite(n)) return n;
+    }
+    if (Number.isFinite(Number(o.low))) return Number(o.low) >>> 0;
+  }
+  return undefined;
+}
+
+/**
+ * Media descriptor for an inbound message, or null for a plain text message.
+ * Handles the wrapped `documentWithCaptionMessage` shape some clients send for
+ * a document that carries a caption.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mediaDescriptor(message: any): MediaDescriptor | null {
+  const c = message?.message;
+  const doc = c?.documentMessage ?? c?.documentWithCaptionMessage?.message?.documentMessage;
+  if (doc) {
+    return {
+      type: 'document',
+      mimetype: typeof doc.mimetype === 'string' ? doc.mimetype : undefined,
+      filename: typeof doc.fileName === 'string' ? doc.fileName : (typeof doc.title === 'string' ? doc.title : undefined),
+      caption: typeof doc.caption === 'string' ? doc.caption : undefined,
+      size: numOrUndef(doc.fileLength),
+    };
+  }
+  const img = c?.imageMessage;
+  if (img) {
+    return {
+      type: 'image',
+      mimetype: typeof img.mimetype === 'string' ? img.mimetype : undefined,
+      caption: typeof img.caption === 'string' ? img.caption : undefined,
+      size: numOrUndef(img.fileLength),
+    };
+  }
+  const vid = c?.videoMessage;
+  if (vid) {
+    return {
+      type: 'video',
+      mimetype: typeof vid.mimetype === 'string' ? vid.mimetype : undefined,
+      caption: typeof vid.caption === 'string' ? vid.caption : undefined,
+      size: numOrUndef(vid.fileLength),
+    };
+  }
+  const aud = c?.audioMessage;
+  if (aud) {
+    return {
+      type: 'audio',
+      mimetype: typeof aud.mimetype === 'string' ? aud.mimetype : undefined,
+      size: numOrUndef(aud.fileLength),
+    };
+  }
+  return null;
 }
 
 /**
@@ -393,7 +487,7 @@ function messageTimestampMs(message: any): number | null {
 export class BaileysBridge implements WhatsAppBridge {
   private sock: WASocketLike | null = null;
   private onMessage:
-    | ((fromJid: string, text: string, participant?: string, messageId?: string) => void)
+    | ((fromJid: string, text: string, participant?: string, messageId?: string, media?: InboundMedia) => void)
     | null = null;
   /** Auto-reconnect watcher: while true (connected), a dead socket is recreated. */
   private keepAlive = false;
@@ -553,7 +647,7 @@ export class BaileysBridge implements WhatsAppBridge {
   }
 
   async connect(
-    onMessage: (fromJid: string, text: string, participant?: string, messageId?: string) => void,
+    onMessage: (fromJid: string, text: string, participant?: string, messageId?: string, media?: InboundMedia) => void,
   ): Promise<void> {
     this.onMessage = onMessage;
     this.keepAlive = true;
@@ -576,6 +670,36 @@ export class BaileysBridge implements WhatsAppBridge {
     this.sock = null;
     this.onMessage = null;
     this.loggedOut = false;
+  }
+
+  /**
+   * Download an inbound media message's bytes. Never throws — returns null on
+   * any failure (a missing downloader, an expired/undownloadable attachment)
+   * so the turn still runs with whatever caption text it had.
+   *
+   * The declared size is checked BEFORE the download: a large video must not be
+   * pulled into memory only to be discarded by the extraction cap.
+   */
+  private async downloadInboundMedia(
+    raw: unknown,
+    desc: MediaDescriptor,
+  ): Promise<InboundMedia | null> {
+    if (desc.size !== undefined && desc.size > MAX_INBOUND_MEDIA_BYTES) return null;
+    try {
+      const baileys = await loadBaileys();
+      if (!baileys?.downloadMediaMessage) return null;
+      const buf = await baileys.downloadMediaMessage(raw, 'buffer', {}, { logger: QUIET_LOGGER });
+      if (!buf || buf.length === 0) return null;
+      return {
+        type: desc.type,
+        data: new Uint8Array(buf),
+        filename: desc.filename,
+        mimetype: desc.mimetype,
+        caption: desc.caption,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1106,9 +1230,14 @@ export class BaileysBridge implements WhatsAppBridge {
             // the failure this gate exists to stop.
             if (sentAt === null || Date.now() - sentAt > BACKFILL_MAX_AGE_MS) continue;
           }
-          const text = messageText(m);
           const rawFromJid = m?.key?.remoteJid as string | undefined;
-          if (!text || !rawFromJid) continue;
+          if (!rawFromJid) continue;
+          const text = messageText(m);
+          const media = mediaDescriptor(m);
+          // A document/image has no `conversation`/`extendedTextMessage` — its
+          // instruction is the caption. `if (!text)` used to drop every such
+          // message silently, so the sender's own file vanished with no reply.
+          if (!text && !media) continue;
           // Privacy-rollout: a DM's remoteJid may be the sender's random LID
           // ("123456789012345@lid") — translate it to the phone-number jid so
           // the policy gate's allow-list (digits) matches and replies route to
@@ -1140,7 +1269,16 @@ export class BaileysBridge implements WhatsAppBridge {
             typeof m?.key?.participant === 'string' && m.key.participant.length > 0 ? m.key.participant : undefined;
           const participant = this.lidMapper.resolveOr(rawParticipant);
           const messageId = typeof m?.key?.id === 'string' && m.key.id ? m.key.id : undefined;
-          this.onMessage?.(fromJid, text, participant, messageId);
+          if (media) {
+            // Forward AFTER the bytes are in hand, so the turn always sees a
+            // fully-hydrated attachment (never a dangling promise/partial file).
+            // A failed download still forwards the caption-only text.
+            void this.downloadInboundMedia(m, media)
+              .then((downloaded) => this.onMessage?.(fromJid, text, participant, messageId, downloaded ?? undefined))
+              .catch(() => this.onMessage?.(fromJid, text, participant, messageId));
+          } else {
+            this.onMessage?.(fromJid, text, participant, messageId);
+          }
         }
       });
       this.sock = sock;

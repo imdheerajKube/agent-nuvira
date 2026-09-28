@@ -194,6 +194,8 @@ export interface HubData {
       refused: number;
       /** Re-deliveries recognised by the dedup ledger and not re-run. */
       duplicate: number;
+      /** Attachments received but not readable (the reason is on the entry). */
+      attachmentFailed: number;
       recent: HubInboxEntry[];
     };
   };
@@ -354,6 +356,9 @@ function readChannelsData(): HubData['channels'] {
       refused: inboxEntries.filter((e) => e.handled === 'refused').length,
       // Re-deliveries the gateway recognised and deliberately did NOT re-run.
       duplicate: inboxEntries.filter((e) => e.handled === 'duplicate').length,
+      // Attachments that arrived but could not be read; the entry's `reply`
+      // carries the reason the sender was given.
+      attachmentFailed: inboxEntries.filter((e) => e.handled === 'attachment_failed').length,
       recent: inboxRecent,
     },
   };

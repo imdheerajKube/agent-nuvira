@@ -1026,7 +1026,11 @@ ${messages.map((m) => {
                         <span className={`admin-check-badge admin-check-${e.handled === 'pipeline' ? 'pass' : e.handled === 'refused' ? 'fail' : 'warn'}`}>
                           {e.handled}
                         </span>
-                        {e.reply ? <div className="admin-hint">{e.reply.slice(0, 40)}</div> : null}
+                        {e.reply ? (
+                          <div className="admin-hint">
+                            {e.reply.slice(0, e.handled === 'attachment_failed' ? 160 : 40)}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="admin-hint">{new Date(e.at).toLocaleString()}</td>
                     </tr>
@@ -1040,7 +1044,8 @@ ${messages.map((m) => {
           <p className="admin-hint">
             {data.channels.inbox.total} received · {data.channels.inbox.pipeline} triggered the pipeline ·{' '}
             {data.channels.inbox.help} got the help line · {data.channels.inbox.refused} refused by policy ·{' '}
-            {data.channels.inbox.duplicate ?? 0} duplicate re-deliveries ignored.
+            {data.channels.inbox.duplicate ?? 0} duplicate re-deliveries ignored ·{' '}
+            {data.channels.inbox.attachmentFailed ?? 0} attachment(s) could not be read.
           </p>
 
           <h3 className="section-subtitle">🔌 Platform transports</h3>

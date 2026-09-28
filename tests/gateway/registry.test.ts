@@ -4,12 +4,31 @@
  * real emitted event.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GatewayRegistry, eventToStatusLine, isBotAddressed, hasDeliveryAsk, normalizeSenderId } from '../../src/gateway/registry.js';
 import type { ChannelAdapter, InboundMessage, MessageHandler } from '../../src/gateway/adapters.js';
+import { ConfigManager } from '../../src/config/manager.js';
+import { isTtsAvailable } from '../../src/tools/modality/voice.js';
+
+// The voice pack needs real binaries (edge-tts / whisper). Mock the module so
+// the reply-in-kind and voice-note transcription seams are exercised without
+// either installed. `speak` writes a real file because the registry reads it.
+vi.mock('../../src/tools/modality/voice.js', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { join: joinPath } = await import('node:path');
+  const { tmpdir: tmp } = await import('node:os');
+  const file = joinPath(mkdtempSync(joinPath(tmp(), 'buff-voice-mock-')), 'reply.mp3');
+  writeFileSync(file, 'AUDIO');
+  return {
+    isTtsAvailable: vi.fn(() => true),
+    speak: vi.fn(async () => ({ ok: true, file })),
+    isTranscribeAvailable: vi.fn(() => true),
+    transcribe: vi.fn(async () => ({ ok: true, text: 'what is the weather' })),
+  };
+});
 
 // The registry lazy-imports ../cli/chat.js when NO chatEngine is injected (the
 // real gateway path). Mock the module to return a ChatCommand CLASS and assert
@@ -114,6 +133,28 @@ class MockAdapter implements ChannelAdapter {
 
 }
 
+/**
+ * The REAL ConfigManager with only `gateway.inboundAttachments` overridden —
+ * every other method behaves as in production, so the registry's normal flow
+ * (policies, providers, …) is unchanged.
+ */
+function configWithInboundAttachments(policy: { enabled?: boolean; maxBytes?: number }): ConfigManager {
+  const real = new ConfigManager();
+  return new Proxy(real, {
+    get(target, prop, receiver) {
+      if (prop === 'getAll') {
+        return () => {
+          const all = (target as ConfigManager).getAll() as Record<string, unknown>;
+          const gateway = (all.gateway as Record<string, unknown> | undefined) ?? {};
+          return { ...all, gateway: { ...gateway, inboundAttachments: policy } };
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as ConfigManager;
+}
+
 /** A registry with the mock adapter (pipeline runs fail fast via the config). */
 function mockRegistry(
   options?: ConstructorParameters<typeof GatewayRegistry>[0],
@@ -203,6 +244,192 @@ describe('eventToStatusLine', () => {
 
   it('returns null for non-board events', () => {
     expect(eventToStatusLine(EventNames.SYSTEM_WARN, {})).toBeNull();
+  });
+});
+
+describe('GatewayRegistry.handleInbound — inbound documents', () => {
+  it('extracts an inbound document and hands the model its text', async () => {
+    // The bridge delivers bytes; handleInbound must turn them into text with the
+    // SAME read_extract the agent uses, or a document message is unanswerable.
+    const seen: string[] = [];
+    const engine = {
+      answerOnce: async (message: string) => {
+        seen.push(message);
+        return { content: 'The document says deployment is on Friday.', followups: [] };
+      },
+    };
+    const prev = process.env.NUVIRA_ARTIFACTS_DIR;
+    process.env.NUVIRA_ARTIFACTS_DIR = join(cfgDir, 'inbound-artifacts');
+    try {
+      const { registry } = mockRegistry({ streamEvents: false, chatEngine: engine });
+      const reply = await registry.handleInbound({
+        platform: 'mock',
+        channelId: 'doc-1',
+        text: 'summarise this',
+        media: {
+          type: 'document',
+          filename: 'notes.md',
+          data: new TextEncoder().encode('# Title\n\nDeployment is on Friday.\n'),
+        },
+      });
+      expect(reply).toContain('The document says deployment is on Friday.');
+      const prompt = seen.join('\n');
+      expect(prompt).toContain('summarise this');
+      expect(prompt).toContain('Deployment is on Friday.');
+    } finally {
+      if (prev === undefined) delete process.env.NUVIRA_ARTIFACTS_DIR;
+      else process.env.NUVIRA_ARTIFACTS_DIR = prev;
+    }
+  });
+
+  it('auto-replies naming the reason when a document cannot be extracted', async () => {
+    let engineRan = false;
+    const engine = {
+      answerOnce: async () => {
+        engineRan = true;
+        return { content: 'should not run', followups: [] };
+      },
+    };
+    const prev = process.env.NUVIRA_ARTIFACTS_DIR;
+    process.env.NUVIRA_ARTIFACTS_DIR = join(cfgDir, 'inbound-artifacts-fail');
+    try {
+      const { registry } = mockRegistry({ streamEvents: false, chatEngine: engine });
+      // A legacy .doc is a deterministic refusal (no parser), so the sender must
+      // hear WHY instead of the message being routed to a model that never saw it.
+      const reply = await registry.handleInbound({
+        platform: 'mock',
+        channelId: 'doc-bad',
+        text: 'summarise this',
+        media: { type: 'document', filename: 'legacy.doc', data: new TextEncoder().encode('binary-ish') },
+      });
+      expect(reply).toContain('legacy.doc');
+      expect(reply).toMatch(/couldn't read/i);
+      expect(reply).toContain('re-send it as PDF');
+      // No model turn: an unreadable file cannot be answered, only explained.
+      expect(engineRan).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.NUVIRA_ARTIFACTS_DIR;
+      else process.env.NUVIRA_ARTIFACTS_DIR = prev;
+    }
+  });
+});
+
+describe('GatewayRegistry.handleInbound — voice replies', () => {
+  // The hydrated voice note is written to the artifact sandbox — keep it in a
+  // tmp dir, never the repo tree.
+  let prevArtifacts: string | undefined;
+  beforeEach(() => {
+    prevArtifacts = process.env.NUVIRA_ARTIFACTS_DIR;
+    process.env.NUVIRA_ARTIFACTS_DIR = join(cfgDir, 'voice-artifacts');
+  });
+  afterEach(() => {
+    vi.mocked(isTtsAvailable).mockReturnValue(true);
+    if (prevArtifacts === undefined) delete process.env.NUVIRA_ARTIFACTS_DIR;
+    else process.env.NUVIRA_ARTIFACTS_DIR = prevArtifacts;
+  });
+
+  it('answers a voice note with a VOICE NOTE when TTS is available', async () => {
+    const engine = { answerOnce: async () => ({ content: 'It is sunny today.', followups: [] }) };
+    const { registry, adapter } = mockRegistry({ streamEvents: false, chatEngine: engine });
+    const reply = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'voice-1',
+      text: '',
+      media: { type: 'audio', filename: 'note.ogg', data: new Uint8Array([1, 2, 3]) },
+    });
+    expect(reply).toContain('It is sunny today.');
+    // MockAdapter records a media send as `[audio …]` — the answer rode out
+    // as audio, not text.
+    expect(adapter.sent.some((s) => s.text.startsWith('[audio'))).toBe(true);
+  });
+
+  it('answers a TEXT message with text (never a voice note)', async () => {
+    const engine = { answerOnce: async () => ({ content: 'Plain answer.', followups: [] }) };
+    const { registry, adapter } = mockRegistry({ streamEvents: false, chatEngine: engine });
+    await registry.handleInbound({ platform: 'mock', channelId: 'voice-2', text: 'hello' });
+    expect(adapter.sent.some((s) => s.text.startsWith('[audio'))).toBe(false);
+    expect(adapter.sent.some((s) => s.text.includes('Plain answer.'))).toBe(true);
+  });
+
+  it('falls back to text when the answer is too long to speak', async () => {
+    const engine = { answerOnce: async () => ({ content: 'x'.repeat(900), followups: [] }) };
+    const { registry, adapter } = mockRegistry({ streamEvents: false, chatEngine: engine });
+    await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'voice-3',
+      text: '',
+      media: { type: 'audio', filename: 'note.ogg', data: new Uint8Array([1]) },
+    });
+    expect(adapter.sent.some((s) => s.text.startsWith('[audio'))).toBe(false);
+    expect(adapter.sent.some((s) => s.text.includes('xxxxx'))).toBe(true);
+  });
+
+  it('falls back to text when no TTS backend is installed', async () => {
+    vi.mocked(isTtsAvailable).mockReturnValue(false);
+    const engine = { answerOnce: async () => ({ content: 'Spoken answer.', followups: [] }) };
+    const { registry, adapter } = mockRegistry({ streamEvents: false, chatEngine: engine });
+    await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'voice-4',
+      text: '',
+      media: { type: 'audio', filename: 'note.ogg', data: new Uint8Array([1]) },
+    });
+    expect(adapter.sent.some((s) => s.text.startsWith('[audio'))).toBe(false);
+    expect(adapter.sent.some((s) => s.text.includes('Spoken answer.'))).toBe(true);
+  });
+});
+
+describe('GatewayRegistry.handleInbound — inbound attachment policy', () => {
+  let prevArtifacts: string | undefined;
+  beforeEach(() => {
+    prevArtifacts = process.env.NUVIRA_ARTIFACTS_DIR;
+    process.env.NUVIRA_ARTIFACTS_DIR = join(cfgDir, 'policy-artifacts');
+  });
+  afterEach(() => {
+    if (prevArtifacts === undefined) delete process.env.NUVIRA_ARTIFACTS_DIR;
+    else process.env.NUVIRA_ARTIFACTS_DIR = prevArtifacts;
+  });
+
+  it('honors gateway.inboundAttachments.enabled=false — a note, never extraction', async () => {
+    const seen: string[] = [];
+    const engine = {
+      answerOnce: async (message: string) => {
+        seen.push(message);
+        return { content: 'understood', followups: [] };
+      },
+    };
+    const { registry } = mockRegistry(
+      { streamEvents: false, chatEngine: engine },
+      configWithInboundAttachments({ enabled: false }),
+    );
+    const reply = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'doc-off',
+      text: 'summarise this',
+      media: { type: 'document', filename: 'notes.md', data: new TextEncoder().encode('SECRET DOC TEXT') },
+    });
+    expect(reply).toContain('understood');
+    const prompt = seen.join('\n');
+    expect(prompt).toContain('disabled by configuration');
+    expect(prompt).not.toContain('SECRET DOC TEXT');
+  });
+
+  it('honors a configured maxBytes cap — an oversized attachment is refused', async () => {
+    let engineRan = false;
+    const engine = { answerOnce: async () => { engineRan = true; return { content: 'ok', followups: [] }; } };
+    const { registry } = mockRegistry(
+      { streamEvents: false, chatEngine: engine },
+      configWithInboundAttachments({ maxBytes: 4 }),
+    );
+    const reply = await registry.handleInbound({
+      platform: 'mock',
+      channelId: 'doc-cap',
+      text: 'read this',
+      media: { type: 'document', filename: 'notes.md', data: new TextEncoder().encode('MUCH TOO LONG') },
+    });
+    expect(reply).toContain('larger than');
+    expect(reply).not.toContain('MUCH TOO LONG');
+    expect(engineRan).toBe(false);
   });
 });
 

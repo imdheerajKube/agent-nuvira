@@ -12,6 +12,8 @@
  * the SAME multi-file creds.json format, then send/receive by WhatsApp JID.
  */
 
+import type { InboundMedia } from '../inbound-media.js';
+
 /**
  * Outcome of a VERIFIED send — how far the delivery was actually confirmed.
  *
@@ -51,10 +53,13 @@ export interface WhatsAppBridge {
    * `participant` is the real sender inside a group (`key.participant`),
    * undefined for DMs (the sender IS the fromJid). `messageId` is WhatsApp's
    * `key.id` — the gateway dedups on it so the bridge's offline-backfill
-   * replay is handled once instead of once per reconnect.
+   * replay is handled once instead of once per reconnect. `media` carries a
+   * downloaded document/image attachment when the message has one (with the
+   * caption folded into `text`), so a document message is never dropped for
+   * having empty text.
    */
   connect(
-    onMessage: (fromJid: string, text: string, participant?: string, messageId?: string) => void,
+    onMessage: (fromJid: string, text: string, participant?: string, messageId?: string, media?: InboundMedia) => void,
   ): Promise<void>;
   /** Stop listening + disconnect (idempotent). */
   disconnect(): Promise<void>;

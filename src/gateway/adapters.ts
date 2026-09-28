@@ -15,6 +15,7 @@
 
 import { createServer, type Server } from 'node:http';
 import { envBuff } from '../config/paths';
+import { logger } from '../utils/logger.js';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { connect as netConnect, type Socket } from 'node:net';
 import { connect as tlsConnect, type TLSSocket } from 'node:tls';
@@ -23,6 +24,11 @@ import { isPlatformConfigured } from './channel-directory.js';
 import type { WhatsAppBridge } from './whatsapp/bridge.js';
 import { BaileysBridge, isSelfChatEnabled } from './whatsapp/baileys-bridge.js';
 import { hasWhatsAppSession } from './whatsapp/session.js';
+import {
+  downloadInboundAttachment,
+  MAX_INBOUND_MEDIA_BYTES,
+  type InboundMedia,
+} from './inbound-media.js';
 
 // ─── Inbound message shape ──────────────────────────────────────────────────
 
@@ -50,6 +56,13 @@ export interface InboundMessage {
    * every delivery is treated as new (content dedup is opt-in — see dedup.ts).
    */
   messageId?: string;
+  /**
+   * A document/image attachment that rode in on this message, already
+   * downloaded by the transport. `handleInbound` hydrates it through the same
+   * `read_extract` the agent uses, so a document is TEXT by the time routing
+   * happens instead of a message with empty text that gets dropped.
+   */
+  media?: InboundMedia;
 }
 
 /** The handler an adapter calls for every inbound message. */
@@ -142,6 +155,19 @@ function telegramMediaField(type: MediaPayload['type']): string {
   }
 }
 
+/** A Telegram `getUpdates` message — only the fields the adapter reads. */
+interface TelegramMessage {
+  chat?: { id: number; type?: string };
+  text?: string;
+  caption?: string;
+  from?: { id?: number; first_name?: string };
+  document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
+  video?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
+  audio?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
+  /** Telegram sends several sizes; the LAST is the largest. */
+  photo?: Array<{ file_id: string; file_size?: number; width?: number; height?: number }>;
+}
+
 // ─── Telegram (long-poll) ───────────────────────────────────────────────────
 
 /**
@@ -190,28 +216,29 @@ export class TelegramAdapter implements ChannelAdapter {
         });
         if (res.ok) {
           const data = (await res.json()) as {
-            result?: Array<{
-              update_id: number;
-              message?: {
-                chat?: { id: number; type?: string };
-                text?: string;
-                from?: { id?: number; first_name?: string };
-              };
-            }>;
+            result?: Array<{ update_id: number; message?: TelegramMessage }>;
           };
           for (const u of data.result ?? []) {
             this.offset = u.update_id + 1;
-            const text = u.message?.text;
-            if (!text || !u.message?.chat) continue;
-            const chat = u.message.chat;
+            const m = u.message;
+            if (!m?.chat) continue;
+            // A document/photo carries its instruction in the CAPTION; reading
+            // only `text` made those messages look empty and they were dropped.
+            const text = m.text ?? m.caption ?? '';
+            const media = await this.inboundMedia(m);
+            if (!text && !media) continue;
+            const chat = m.chat;
             await this.handler?.({
               platform: 'telegram',
               channelId: String(chat.id),
               text,
-              from: u.message.from?.first_name ?? 'telegram-user',
+              from: m.from?.first_name ?? 'telegram-user',
               // P1: real sender id + group detection (chat.type).
-              senderId: u.message.from?.id !== undefined ? String(u.message.from.id) : undefined,
+              senderId: m.from?.id !== undefined ? String(m.from.id) : undefined,
               isGroup: chat.type !== undefined && chat.type !== 'private',
+              // The downloaded attachment rides through the SAME hydration path
+              // the WhatsApp bridge uses (registry → read_extract).
+              ...(media ? { media } : {}),
             });
           }
         }
@@ -219,6 +246,70 @@ export class TelegramAdapter implements ChannelAdapter {
       this.timer = setTimeout(loop, this.pollIntervalMs);
     };
     void loop();
+  }
+
+  /**
+   * Download an inbound attachment's bytes via `getFile` + the file endpoint.
+   * Never throws — returns null on any failure (or when the file is larger than
+   * the extraction cap), so the turn still runs with its caption text.
+   */
+  private async downloadFile(fileId: string, declaredSize?: number): Promise<Uint8Array | null> {
+    if (declaredSize !== undefined && declaredSize > MAX_INBOUND_MEDIA_BYTES) return null;
+    try {
+      const res = await this.api('getFile', { file_id: fileId });
+      if (!res.ok) return null;
+      const data = (await res.json()) as {
+        ok?: boolean;
+        result?: { file_path?: string; file_size?: number };
+      };
+      const filePath = data.result?.file_path;
+      if (!filePath) return null;
+      // Telegram caps bot downloads at 20 MB; the declared size is checked
+      // BEFORE the body is fetched where it is known.
+      const size = data.result?.file_size;
+      if (size !== undefined && size > MAX_INBOUND_MEDIA_BYTES) return null;
+      const fileRes = await fetch(`https://api.telegram.org/file/bot${this.token}/${filePath}`);
+      if (!fileRes.ok) return null;
+      const buf = new Uint8Array(await fileRes.arrayBuffer());
+      if (buf.byteLength === 0 || buf.byteLength > MAX_INBOUND_MEDIA_BYTES) return null;
+      return buf;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Build the inbound media payload from a Telegram message, or null when it
+   * carries none. Photos arrive as several sizes — the largest is used.
+   */
+  private async inboundMedia(m: TelegramMessage): Promise<InboundMedia | null> {
+    if (m.document) {
+      const data = await this.downloadFile(m.document.file_id, m.document.file_size);
+      return data
+        ? { type: 'document', data, filename: m.document.file_name, mimetype: m.document.mime_type, caption: m.caption }
+        : null;
+    }
+    if (m.video) {
+      const data = await this.downloadFile(m.video.file_id, m.video.file_size);
+      return data
+        ? { type: 'video', data, filename: m.video.file_name, mimetype: m.video.mime_type, caption: m.caption }
+        : null;
+    }
+    if (m.audio) {
+      const data = await this.downloadFile(m.audio.file_id, m.audio.file_size);
+      return data
+        ? { type: 'audio', data, filename: m.audio.file_name, mimetype: m.audio.mime_type, caption: m.caption }
+        : null;
+    }
+    const photo = Array.isArray(m.photo) && m.photo.length > 0 ? m.photo[m.photo.length - 1] : undefined;
+    if (photo) {
+      const data = await this.downloadFile(photo.file_id, photo.file_size);
+      // Telegram photos carry no filename; supply the MIME type so the sandbox
+      // name keeps an image extension (which routes to the describe_image hint
+      // rather than an extractor refusal).
+      return data ? { type: 'image', data, filename: 'photo.jpg', mimetype: 'image/jpeg', caption: m.caption } : null;
+    }
+    return null;
   }
 
   async stop(): Promise<void> {
@@ -321,8 +412,40 @@ export class DiscordAdapter extends WebhookChannelAdapter {
     this.configured = Boolean(this.webhookUrl || this.token);
   }
 
+  /** The real-time Gateway connection, when a bot token is configured. */
+  private gateway: { stop(): Promise<void> } | null = null;
+
   describe(): string {
     return this.configured ? 'Discord (webhook)' : 'Discord (not configured)';
+  }
+
+  /**
+   * Inbound Discord messages arrive over the Gateway WebSocket (a bot cannot
+   * own the Discord webhook), so a bot token starts the real-time source. The
+   * shared webhook receiver still serves outbound-only webhook setups.
+   */
+  async start(onMessage: MessageHandler): Promise<void> {
+    if (!this.token) {
+      // Said out loud: without a bot token there is no socket, and a gateway that
+      // answers outbound but never receives is otherwise indistinguishable from
+      // one whose inbound is broken. Names the key and what still works.
+      logger.info(
+        'Discord: real-time Gateway inbound skipped — no bot token (BUFF_DISCORD_BOT_TOKEN). ' +
+          'Webhook inbound (public URL required) and outbound both still work.',
+      );
+      return;
+    }
+    const { DiscordGatewaySource } = await import('./realtime.js');
+    const source = new DiscordGatewaySource({ token: this.token });
+    this.gateway = source;
+    void source.start(onMessage).catch(() => {
+      // start() only rejects on a programming error; handshakes retry internally.
+    });
+  }
+
+  async stop(): Promise<void> {
+    await this.gateway?.stop();
+    this.gateway = null;
   }
 
   protected sendUrl(channelId: string): string {
@@ -376,8 +499,41 @@ export class SlackAdapter extends WebhookChannelAdapter {
     this.configured = Boolean(this.webhookUrl || this.token);
   }
 
+  /** The Socket Mode connection, when an app-level token is configured. */
+  private socketMode: { stop(): Promise<void> } | null = null;
+
   describe(): string {
     return this.configured ? 'Slack (webhook)' : 'Slack (not configured)';
+  }
+
+  /**
+   * Slack Events API inbound needs a public HTTPS endpoint; apps that cannot
+   * expose one use Socket Mode, which carries the same `event_callback`
+   * envelopes. Enabled by an app-level token (`SLACK_APP_TOKEN`, `xapp-…`).
+   */
+  async start(onMessage: MessageHandler): Promise<void> {
+    const appToken = envBuff('SLACK_APP_TOKEN') ?? '';
+    if (!appToken) {
+      logger.info(
+        'Slack: real-time Socket Mode inbound skipped — no app-level token (BUFF_SLACK_APP_TOKEN). ' +
+          'The Events API path (public Request URL) and outbound both still work.',
+      );
+      return;
+    }
+    const { SlackSocketModeSource } = await import('./realtime.js');
+    const source = new SlackSocketModeSource({
+      appToken,
+      botToken: this.token || undefined,
+    });
+    this.socketMode = source;
+    void source.start(onMessage).catch(() => {
+      // Handshake failures retry with backoff inside the source.
+    });
+  }
+
+  async stop(): Promise<void> {
+    await this.socketMode?.stop();
+    this.socketMode = null;
   }
 
   protected sendUrl(channelId: string): string {
@@ -455,7 +611,7 @@ export class WhatsAppBridgeAdapter implements ChannelAdapter {
 
   async start(onMessage: MessageHandler): Promise<void> {
     this.handler = onMessage;
-    await this.bridge.connect((fromJid, text, participant, messageId) => {
+    await this.bridge.connect((fromJid, text, participant, messageId, media) => {
       // `||` (not `??`): Baileys 7 can deliver participant as an EMPTY string
       // for DMs — an empty string is not nullish, so `??` would blank the
       // sender id and the policy gate would refuse every sender.
@@ -471,6 +627,8 @@ export class WhatsAppBridgeAdapter implements ChannelAdapter {
         // Idempotency: WhatsApp's `key.id` is stable across re-deliveries, so
         // the gateway collapses the bridge's offline backfill into one turn.
         messageId,
+        // A downloaded document/image (the caption already folded into `text`).
+        ...(media ? { media } : {}),
       });
     });
   }
@@ -2132,6 +2290,16 @@ export class HomeAssistantAdapter implements ChannelAdapter {
 
 // ─── Webhook inbound receiver (Discord/Slack/WhatsApp) ──────────────────────
 
+/** An inbound webhook attachment that must be downloaded before extraction. */
+export interface WebhookAttachment {
+  url: string;
+  filename?: string;
+  mimetype?: string;
+  size?: number;
+  /** True when fetching the URL needs the platform bot token (Slack files). */
+  authenticated?: boolean;
+}
+
 /** Payload parsers: extract {channelId, text, from} from each platform's webhook body. */
 export interface WebhookPayload {
   channelId: string;
@@ -2143,6 +2311,26 @@ export interface WebhookPayload {
   isGroup?: boolean;
   /** The platform's message id, when the webhook body carries one (dedup). */
   messageId?: string;
+  /** An attachment that rode in on the message (Discord CDN / Slack file). */
+  media?: { type: InboundMedia['type']; attachment: WebhookAttachment; caption?: string };
+}
+
+/**
+ * Classify an attachment by MIME type, falling back to its filename extension.
+ * Exported for the real-time transports (`realtime.ts`), which receive Discord
+ * `content_type` / Slack `mimetype` on a live gateway event rather than a
+ * webhook body.
+ */
+export function mediaKindFromMime(mimetype?: string, filename?: string): InboundMedia['type'] {
+  const mt = (mimetype ?? '').toLowerCase();
+  if (mt.startsWith('image/')) return 'image';
+  if (mt.startsWith('audio/')) return 'audio';
+  if (mt.startsWith('video/')) return 'video';
+  const ext = (filename ?? '').toLowerCase().split('.').pop() ?? '';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff'].includes(ext)) return 'image';
+  if (['mp3', 'm4a', 'ogg', 'oga', 'opus', 'wav', 'flac'].includes(ext)) return 'audio';
+  if (['mp4', 'mov', 'mkv', 'webm'].includes(ext)) return 'video';
+  return 'document';
 }
 
 /**
@@ -2154,13 +2342,28 @@ export function parseWebhookPayload(platform: Platform, body: any): WebhookPaylo
     if (platform === 'discord') {
       const content = body?.content;
       const channelId = body?.channel_id;
-      if (typeof content === 'string' && channelId) {
+      const first = (Array.isArray(body?.attachments) ? body.attachments[0] : undefined) as
+        | { url?: string; filename?: string; content_type?: string; size?: number }
+        | undefined;
+      const hasMedia = Boolean(first?.url);
+      // A media-only message has an EMPTY `content` — it must still dispatch so
+      // the attachment is downloaded and extracted, not dropped for lacking text.
+      if ((typeof content === 'string' || hasMedia) && channelId) {
         return {
           channelId,
-          text: content,
+          text: typeof content === 'string' ? content : '',
           from: body?.author?.username ?? 'discord-user',
           // P1: author id (webhooks can't tell DM vs guild channel).
           senderId: body?.author?.id !== undefined ? String(body.author.id) : undefined,
+          ...(hasMedia && first?.url
+            ? {
+              media: {
+                type: mediaKindFromMime(first.content_type, first.filename),
+                attachment: { url: first.url, filename: first.filename, mimetype: first.content_type, size: first.size },
+                caption: typeof content === 'string' ? content : undefined,
+              },
+            }
+            : {}),
         };
       }
       return null;
@@ -2170,14 +2373,29 @@ export function parseWebhookPayload(platform: Platform, body: any): WebhookPaylo
       // by the receiver; real messages arrive via the `event` envelope.
       if (body?.challenge) return null;
       const event = body?.event;
-      if (event?.type === 'message' && typeof event.text === 'string' && event.channel) {
+      const file = (Array.isArray(event?.files) ? event.files[0] : undefined) as
+        | { url_private_download?: string; url_private?: string; name?: string; mimetype?: string; size?: number }
+        | undefined;
+      const fileUrl = file?.url_private_download ?? file?.url_private;
+      const hasMedia = Boolean(fileUrl);
+      if (event?.type === 'message' && event.channel && (typeof event.text === 'string' || hasMedia)) {
         return {
           channelId: event.channel,
-          text: event.text,
+          text: typeof event.text === 'string' ? event.text : '',
           from: event.user ?? 'slack-user',
           // P1: event.user IS the Slack user id; D-channels are DMs.
           senderId: event.user ?? undefined,
           isGroup: typeof event.channel === 'string' && !event.channel.startsWith('D'),
+          ...(hasMedia && fileUrl
+            ? {
+              media: {
+                type: mediaKindFromMime(file!.mimetype, file!.name),
+                // Slack files require the bot token on the download URL.
+                attachment: { url: fileUrl, filename: file!.name, mimetype: file!.mimetype, size: file!.size, authenticated: true },
+                caption: typeof event.text === 'string' ? event.text : undefined,
+              },
+            }
+            : {}),
         };
       }
       return null;
@@ -2257,6 +2475,9 @@ export class WebhookReceiver {
       const parsed = parseWebhookPayload(platform, body);
       res.writeHead(200); res.end('ok');
       if (parsed) {
+        // Download the attachment BEFORE dispatch, so the turn always sees a
+        // fully-hydrated document (the registry extracts it like any other).
+        const media = parsed.media ? await this.downloadWebhookMedia(parsed.media) : null;
         await this.handler?.({
           platform,
           channelId: parsed.channelId,
@@ -2265,10 +2486,33 @@ export class WebhookReceiver {
           // P1: real sender id + DM/group detection ride through the payload.
           senderId: parsed.senderId,
           isGroup: parsed.isGroup,
+          ...(media ? { media } : {}),
         });
       }
     });
     await new Promise<void>((resolve) => this.server!.listen(port, host, resolve));
+  }
+
+  /**
+   * Download a webhook attachment's bytes. Never throws — returns null on any
+   * failure, so the text turn still runs. Slack's `url_private*` endpoints need
+   * the bot token; Discord's CDN URL is public.
+   */
+  private async downloadWebhookMedia(
+    media: NonNullable<WebhookPayload['media']>,
+  ): Promise<InboundMedia | null> {
+    const att = media.attachment;
+    const downloaded = await downloadInboundAttachment({
+      type: media.type,
+      url: att.url,
+      filename: att.filename,
+      mimetype: att.mimetype,
+      size: att.size,
+      authenticated: att.authenticated,
+      // Slack's url_private* endpoints need the bot token.
+      token: att.authenticated ? (envBuff('SLACK_BOT_TOKEN') ?? '') : undefined,
+    });
+    return downloaded ? { ...downloaded, caption: media.caption } : null;
   }
 
   /**

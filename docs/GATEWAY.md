@@ -46,6 +46,7 @@ full control over all 22 platforms by the end.
 10. [Security](#10-security)
 11. [Troubleshooting & FAQ](#11-troubleshooting--faq)
 12. [All configuration keys at a glance](#12-configuration-reference)
+13. [Verifying real-time inbound (Discord gateway / Slack Socket Mode)](#13-verifying-real-time-inbound)
 
 ---
 
@@ -250,7 +251,7 @@ agent-nuvira config gateway set discord
 agent-nuvira gateway start --port 8787
 ```
 
-**Bot token (full two-way with commands):**
+**Bot token (full two-way with commands, no public URL):**
 
 ```bash
 agent-nuvira config gateway set discord
@@ -258,11 +259,16 @@ agent-nuvira config gateway set discord
 agent-nuvira gateway start --port 8787
 ```
 
-For **inbound** Discord messages, the built-in webhook receiver listens on
-`127.0.0.1:8787` at `POST /discord`. To receive messages from Discord you must
-point Discord's "Interactions Endpoint URL" at a **publicly reachable** URL
-(e.g. an `ngrok http 8787` tunnel or your own domain). Outbound (sending to a
-Discord channel) needs no public URL.
+With a bot token, inbound messages arrive over the **Discord Gateway
+(WebSocket)** — the bot dials out, so no public URL or tunnel is needed. Enable
+the **Message Content** intent in the Developer Portal, otherwise message text
+and attachments are not delivered. Attachments are downloaded and extracted
+like any other inbound document.
+
+**Webhook inbound** uses the built-in receiver on `127.0.0.1:8787` at
+`POST /discord`, which requires a **publicly reachable** URL (e.g. an
+`ngrok http 8787` tunnel or your own domain). Outbound (sending to a Discord
+channel) needs no public URL either way.
 
 ### 4.4 Slack ✅ two-way (webhook receiver or bot)
 
@@ -270,12 +276,20 @@ Discord channel) needs no public URL.
 agent-nuvira config gateway set slack
 # needs: BUFF_SLACK_BOT_TOKEN and/or BUFF_SLACK_WEBHOOK_URL
 # inbound signature verification: BUFF_SLACK_SIGNING_SECRET
+# Socket Mode (no public URL): BUFF_SLACK_APP_TOKEN (xapp-…)
 agent-nuvira gateway start --port 8787
 ```
 
-Inbound: webhook receiver at `POST /slack`. Set your Slack app's "Request URL"
-to your public URL. **Strongly recommended:** set `BUFF_SLACK_SIGNING_SECRET`
-so inbound requests are signature-verified.
+Inbound has two options:
+
+- **Socket Mode (no public URL):** enable Socket Mode in your Slack app, create
+  an app-level token with the `connections:write` scope, and set
+  `BUFF_SLACK_APP_TOKEN`. The gateway opens a WebSocket and receives the same
+  `event_callback` events the Events API posts — attachments included. Slack
+  files are downloaded with the bot token.
+- **Events API:** point the app's "Request URL" at `POST /slack` on a public
+  URL. **Strongly recommended:** set `BUFF_SLACK_SIGNING_SECRET` so inbound
+  requests are signature-verified.
 
 ### 4.5 Email ✅ two-way (SMTP relay)
 
@@ -715,6 +729,113 @@ agent-nuvira gateway start [--port N] [--host IP] [--no-events]  # run the gatew
 agent-nuvira whatsapp pair|status               # personal WhatsApp bridge
 agent-nuvira dashboard                          # GUI for all of the above
 ```
+
+---
+
+## 13. Verifying real-time inbound
+
+### What this pass is for
+
+Discord (Gateway WebSocket) and Slack (Socket Mode) inbound is covered by
+`tests/gateway/realtime.test.ts`, which drives the real handshake and event frames
+against a **scripted socket**. That proves the protocol handling, not your app
+setup: a token whose intents or scopes are wrong fails the same way an empty inbox
+does. These steps are the manual complement — about 10 minutes per platform.
+
+Set the token the way every other gateway key is set (`agent-nuvira config gateway
+set discord` writes it to the config env file; `NUVIRA_*` is accepted as well as
+`BUFF_*`), then run `agent-nuvira gateway start` in a terminal you can watch.
+
+### Where to watch, for both platforms
+
+| Signal | Where |
+|---|---|
+| Transport connected / socket dropped | the `gateway start` terminal (`Discord gateway: connected — waiting for HELLO`, `Slack Socket Mode: connected`; a drop logs `socket closed — reconnecting with backoff`) |
+| Attachment bytes landed | `.nuvira/artifacts/inbound/` (override with `NUVIRA_ARTIFACTS_DIR`) — files are swept after 7 days, or sooner past 200 MB |
+| The model actually saw the file | the reply answers the document's content, not its caption |
+| A file that could not be read | the sender gets a reply naming the reason, and the dashboard → **Channels** inbox shows an `attachment_failed` row with that reason |
+
+Attachments above **20 MB** are skipped without a download attempt, so the turn runs
+with the caption only.
+
+### Discord checklist
+
+1. **Enable the Message Content intent** — Developer Portal → your app → *Bot* →
+   *Privileged Gateway Intents* → **Message Content**. Without it Discord sends
+   `content: ""` and no `attachments`, so inbound messages are dropped as empty.
+   This is the single most common cause of "the bot is online but never answers".
+2. **Copy the bot token** (Bot → *Reset Token*) and set it:
+   ```bash
+   agent-nuvira config gateway set discord
+   # needs: BUFF_DISCORD_BOT_TOKEN
+   ```
+3. **Invite the bot** with the `bot` scope plus *View Channels*, *Send Messages*,
+   *Read Message History* (Discord no longer grants these by default).
+4. **Start it:** `agent-nuvira gateway start`. No public URL, no tunnel, no
+   `--port` forwarding is needed — the bot dials out.
+5. **Expect** `Discord gateway: connected — waiting for HELLO` in the terminal.
+   The socket URL is resolved via `GET /gateway/bot` with the token; if that call
+   fails the source falls back to the public gateway and then keeps
+   reconnecting — repeated `socket closed — reconnecting with backoff` lines mean
+   the token is wrong, not that the network is down.
+6. **Text:** send a plain message in a channel the bot can read → expect a reply in
+   that channel.
+7. **Document:** send a PDF, DOCX, XLSX or PPTX with a question about it → a file
+   appears in `.nuvira/artifacts/inbound/` and the reply reflects the document's
+   contents.
+8. **Retry-bait:** send a legacy `.doc` (or an empty/corrupt PDF) → the sender gets
+   a reply naming the reason and the formats that work, and a Channels inbox row
+   labelled `attachment_failed`. The model must **not** answer as if it read it.
+9. **Voice note:** send an audio attachment → the reply is grounded in the
+   transcript. If the whisper backend is not installed the sender is told so,
+   rather than being answered with silence.
+10. **Image:** send a screenshot with a question → an artifact is saved and the
+    turn carries a `[Image: …]` reference for `describe_image`.
+
+### Slack checklist
+
+1. **Enable Socket Mode** — api.slack.com/apps → your app → *Socket Mode* → on.
+2. **Create an app-level token** with the `connections:write` scope → `xapp-…`:
+   ```bash
+   agent-nuvira config gateway set slack
+   # needs: BUFF_SLACK_APP_TOKEN   (xapp-…, Socket Mode)
+   #        BUFF_SLACK_BOT_TOKEN   (xoxb-…, replies + file downloads)
+   ```
+   Without `connections:write`, `apps.connections.open` fails and the terminal
+   shows the source retrying — it will not look like a message problem.
+3. **Bot scopes** — OAuth & Permissions: `chat:write`, `im:history`,
+   `app_mentions:read`, and **`files:read`**. `files:read` is what makes
+   `url_private*` downloads work; without it the attachment is dropped and the
+   turn runs on the caption alone (no error reaches the sender).
+4. **Subscribe to events** — Event Subscriptions → *Subscribe to bot events*:
+   `message.im` and/or `app_mention`. Event Subscriptions does **not** need a
+   Request URL in Socket Mode.
+5. **Reinstall the app** (tokens are issued per install; scopes added later are
+   inert until you reinstall).
+6. **Start it:** `agent-nuvira gateway start` → expect
+   `Slack Socket Mode: connected`.
+7. **Expect** a DM to the bot to be answered. `Slack Socket Mode: server asked us
+   to reconnect` is Slack rotating the connection — normal, not a failure.
+8. **Document:** DM a PDF → a file appears in `.nuvira/artifacts/inbound/`, the
+   reply reflects its contents, and an unreadable file triggers the same naming
+   auto-reply as Discord.
+9. **Threads/DMs:** confirm a `D…` channel is treated as a DM and a `C…` channel
+   as a group (per-sender allow-lists in §10 depend on that distinction).
+
+### What a pass looks like
+
+| Layer | Passing evidence |
+|---|---|
+| Transport | `connected` in the terminal, with no repeating reconnect lines |
+| Hydration | a new file under `.nuvira/artifacts/inbound/` matching the sent file |
+| Turn | the reply's content could only come from inside the document |
+| Failure path | unreadable → a reason-naming auto-reply + an `attachment_failed` inbox row |
+| Cleanup | `.nuvira/artifacts/inbound/` does not grow without bound (hourly sweep) |
+
+If everything above passes for text but a document never produces a row in
+`.nuvira/artifacts/inbound/`, the transport is fine and the download is not —
+check the Discord *Message Content* intent or Slack's `files:read` before looking
+at extraction.
 
 ---
 

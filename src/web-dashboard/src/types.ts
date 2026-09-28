@@ -1227,8 +1227,12 @@ export interface HubInboxEntry {
   from?: string;
   senderId?: string;
   isGroup: boolean;
-  /** `clarified` = the message answered a question the agent was WAITING on. */
-  handled: 'pipeline' | 'chat' | 'help' | 'refused' | 'error' | 'duplicate' | 'clarified';
+  /**
+   * `clarified` = the message answered a question the agent was WAITING on.
+   * `attachment_failed` = a document arrived but could not be extracted; the
+   * sender was answered with the reason instead of routing it to a model.
+   */
+  handled: 'pipeline' | 'chat' | 'help' | 'refused' | 'error' | 'duplicate' | 'clarified' | 'attachment_failed';
   reply?: string;
   at: number;
   /** Present on a `duplicate` entry — the id/fingerprint it collided with. */
@@ -1303,6 +1307,8 @@ export interface HubData {
       refused: number;
       /** Re-deliveries recognised and deliberately not re-run (dedup). */
       duplicate: number;
+      /** Documents/voice notes that arrived but could not be read (see reply). */
+      attachmentFailed: number;
       recent: HubInboxEntry[];
     };
   };

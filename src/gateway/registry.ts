@@ -36,6 +36,7 @@ import {
 import type { ChannelAdapter, InboundMessage, MediaPayload } from './adapters.js';
 import { DeliveryLedger, type DeliveryEntry } from './delivery.js';
 import { InboxLedger, type InboundDisposition } from './inbox.js';
+import { inboundAttachmentPolicy } from './inbound-media.js';
 import { InboundDedupLedger } from './dedup.js';
 import { GatewayHeartbeat, HEARTBEAT_INTERVAL_MS, type AdapterHealth } from './heartbeat.js';
 import { logGatewayEvent, previewText } from './gateway-log.js';
@@ -111,6 +112,19 @@ const RETRY_DRAIN_INTERVAL_MS = 15_000;
 
 /** Cap the per-target send-failure map (diagnostics only — never grows). */
 const MAX_TRACKED_SEND_ERRORS = 200;
+
+/**
+ * How often the inbound artifact sandbox is swept (ms). Hourly: the sweep
+ * removes attachments past their TTL / over the size cap, and the 15s liveness
+ * tick that triggers it must not do directory work it does not need to.
+ */
+const INBOUND_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * Longest answer spoken as a voice note (chars). A voice-note question expects a
+ * spoken reply, not a synthesized essay — past this the answer goes out as text.
+ */
+const VOICE_REPLY_MAX_CHARS = 700;
 
 // ─── Response cleanup ──────────────────────────────────────────────────────
 
@@ -664,6 +678,8 @@ export class GatewayRegistry {
   private adapterHealth = new Map<Platform, AdapterHealth>();
   /** Earliest epoch-ms at which a not-yet-started adapter may be retried. */
   private adapterRetryAt = new Map<Platform, number>();
+  /** Epoch ms of the last inbound-sandbox sweep (throttles the hourly prune). */
+  private lastInboundPruneAt = 0;
   /** The heartbeat + watchdog tick. */
   private livenessTimer: NodeJS.Timeout | null = null;
   private chatEngine: GatewayRegistryOptions['chatEngine'] | null;
@@ -787,6 +803,37 @@ export class GatewayRegistry {
       return false;
     }
     return this.sendToRef(ref, text, target);
+  }
+
+  /**
+   * Deliver an ANSWER, using a VOICE NOTE when the sender's own message was a
+   * voice note and a TTS backend is installed.
+   *
+   * Falls back to text whenever anything is missing — no TTS backend, an answer
+   * too long to speak sanely, or a platform that cannot send audio — so a voice
+   * reply is a courtesy and never a way for the answer to get lost. Returns true
+   * when a voice note was delivered, false when text was sent instead.
+   */
+  async replyInKind(ref: ChannelRef, text: string, opts: { voice?: boolean } = {}): Promise<boolean> {
+    if (opts.voice && text.length > 0 && text.length <= VOICE_REPLY_MAX_CHARS) {
+      try {
+        const voice = await import('../tools/modality/voice.js');
+        if (voice.isTtsAvailable()) {
+          const spoken = await voice.speak(text);
+          if (spoken.ok && spoken.file) {
+            const { readFileSync } = await import('node:fs');
+            const data = new Uint8Array(readFileSync(spoken.file));
+            const ext = spoken.file.toLowerCase().endsWith('.wav') ? 'wav' : 'mp3';
+            const ok = await this.sendMediaToRef(ref, { type: 'audio', data, filename: `reply.${ext}` });
+            if (ok) return true;
+          }
+        }
+      } catch {
+        /* fall back to text */
+      }
+    }
+    await this.sendToRef(ref, text);
+    return false;
   }
 
   /**
@@ -1069,6 +1116,52 @@ export class GatewayRegistry {
       return refuse('This channel is not authorized to trigger the agent. Add it to BUFF_GATEWAY_ALLOW_IDS (platform:channelId).');
     }
 
+    // ── INBOUND DOCUMENT HYDRATION ── A document/image arrives as BYTES, not
+    // text. Turn it into text BEFORE routing, because every downstream reader
+    // (the dedup ledger, the chat store, and finally the model) reads
+    // `msg.text`: this runs the SAME `read_extract` the agent uses for a file in
+    // the project folder and prepends the extracted section to the caption.
+    // Without it a document message had empty text and was dropped by the
+    // bridge — the sender's own file vanished with no reply.
+    //
+    // Placed AFTER the authorization gates on purpose: an unapproved sender must
+    // leave no trace, so their bytes are never written to the artifact sandbox
+    // or extracted. `parsed` above already ran on the CAPTION only, so a long
+    // document never pollutes the NLU route; the extracted text joins the turn
+    // for the model.
+    //
+    // Consumed ONCE (media is cleared) so a retry or an audit re-route of the
+    // same message never re-downloads or duplicates the section.
+    let mediaFailureReply: string | null = null;
+    // A voice note gets a voice reply when one was sent (see replyInKind).
+    let voiceReplyWanted = false;
+    if (msg.media) {
+      const media = msg.media;
+      msg.media = undefined;
+      const attachmentPolicy = inboundAttachmentPolicy(this.configManager);
+      if (!attachmentPolicy.enabled) {
+        // Policy lets the MESSAGE through but not the attachment. Say so to the
+        // model rather than silently dropping it — or extracting it.
+        const label = media.filename?.trim() || media.type;
+        msg.text = [msg.text, `[Attachment: ${label} — inbound attachment handling is disabled by configuration]`]
+          .filter(Boolean)
+          .join('\n\n');
+      } else {
+        voiceReplyWanted = media.type === 'audio';
+        try {
+          const { hydrateInboundMedia, formatMediaFailureReply } = await import('./inbound-media.js');
+          const hydration = await hydrateInboundMedia(media, { maxBytes: attachmentPolicy.maxBytes });
+          if (hydration.section) msg.text = [msg.text, hydration.section].filter(Boolean).join('\n\n');
+          if (hydration.failure) mediaFailureReply = formatMediaFailureReply(hydration.failure);
+          logger.info(
+            `gateway: hydrated inbound ${media.type} (${media.data.byteLength} bytes) for ${msg.platform}:${msg.channelId}`,
+          );
+        } catch {
+          /* Never break handling on a media failure — the text turn still runs. */
+        }
+      }
+    }
+
     // ── IDEMPOTENCY ── A messaging transport is at-least-once: the bridge
     // reconnects and replays its offline backfill, a webhook retries, a device
     // re-syncs. Observed live: ONE WhatsApp ask arrived 20+ times and was
@@ -1097,6 +1190,16 @@ export class GatewayRegistry {
       );
       record('duplicate', undefined, { key: dedupVerdict.key, count: dedupVerdict.count });
       return 'duplicate';
+    }
+
+    // A document that produced NO text cannot be answered by routing it to the
+    // model — the model would only invent an answer about a file it never read.
+    // Answer the sender directly, naming why, and stop. Placed AFTER dedup so a
+    // re-delivered message (bridge backfill / webhook retry) never re-sends it.
+    if (mediaFailureReply) {
+      await replyTo(mediaFailureReply);
+      record('attachment_failed', mediaFailureReply);
+      return mediaFailureReply;
     }
 
     // 7-DAY PER-CONTACT CONVERSATION MEMORY — record every AUTHORIZED inbound
@@ -1208,7 +1311,9 @@ export class GatewayRegistry {
       const attemptMark = markFailoverAttempts();
       const answer = await this.runInboundChat(msg);
       if (answer && answer.content.trim() && !answer.generationFailed) {
-        await replyTo(answer.content);
+        // Reply IN KIND: a spoken question gets a spoken answer when TTS is
+        // available (falls back to text — see replyInKind).
+        await this.replyInKind(ref, answer.content, { voice: voiceReplyWanted });
         record('chat', answer.content);
         // A retry that produced a real answer is DONE — the queue entry must go,
         // or the drain would keep re-running a fulfilled ask.
@@ -1277,7 +1382,8 @@ export class GatewayRegistry {
       const answer = await this.runInboundChat(msg);
       const answered = !!answer && answer.content.trim().length > 0 && !answer.generationFailed;
       const line = answered ? answer!.content : this.generationFailureLine();
-      await replyTo(line);
+      if (answered) await this.replyInKind(ref, line, { voice: voiceReplyWanted });
+      else await replyTo(line);
       record('pipeline', line);
       if (answered && opts.retryOf) removeDeferredTask(opts.retryOf);
       // Status recipients: a pipeline task (even one routed through the loop
@@ -2008,6 +2114,25 @@ export class GatewayRegistry {
         supervisorPid: process.ppid || undefined,
         adapters: [...this.adapterHealth.values()],
       });
+
+      // Scheduled sandbox cleanup: extracted inbound attachments are kept for
+      // their TTL, then swept — throttled to hourly so the 15s liveness tick
+      // never walks the directory unnecessarily.
+      const now = Date.now();
+      if (now - this.lastInboundPruneAt >= INBOUND_PRUNE_INTERVAL_MS) {
+        this.lastInboundPruneAt = now;
+        try {
+          const { pruneInboundMedia } = await import('./inbound-media.js');
+          const pruned = pruneInboundMedia({ now });
+          if (pruned.removed > 0) {
+            logger.info(
+              `gateway: pruned ${pruned.removed} inbound attachment(s) — ${Math.round(pruned.bytesFreed / 1024)} KB freed`,
+            );
+          }
+        } catch {
+          /* best-effort sweep — never take the gateway down over cleanup */
+        }
+      }
     };
     // First beat immediately, so `gateway status` is honest within a second of
     // startup instead of reporting the previous run's stale beat.

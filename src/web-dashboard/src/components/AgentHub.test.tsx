@@ -54,6 +54,8 @@ const HUB: HubData = {
       chat: 0,
       help: 0,
       refused: 0,
+      duplicate: 0,
+      attachmentFailed: 0,
       recent: [],
     },
   },
