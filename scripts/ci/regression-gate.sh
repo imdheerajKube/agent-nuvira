@@ -12,20 +12,26 @@
 #                       real import graph, no new silo bypasses the shared turn
 #                       entry, and the capability matrix still separates a
 #                       claim from a proof (fast; #22)
-#   3. Failover E2E   — tests/e2e/failover-learning.test.ts (the hermetic
+#   3. Parity CLI     — the same parity checks through the BUILT binary rather
+#                       than through `src/`: `nuvira parity surfaces|debt|matrix|
+#                       run`. Builds the CLI first (which also typechecks the
+#                       tree — no other step here does), because `dist/` is
+#                       gitignored and the artifact is the only thing a user
+#                       ever runs.
+#   4. Failover E2E   — tests/e2e/failover-learning.test.ts (the hermetic
 #                       mock-429 -> learn -> skip -> recover loop; the single
 #                       most important regression test for Nuvira-Router)
-#   4. Full root suite — every root test (default; skipped with --fast)
-#   5. Dashboard suite — src/web-dashboard typecheck + component tests
+#   5. Full root suite — every root test (default; skipped with --fast)
+#   6. Dashboard suite — src/web-dashboard typecheck + component tests
 #                       (default; --fast)
-#   6. Dashboard bundle — the COMMITTED artifact must be the one the source
+#   7. Dashboard bundle — the COMMITTED artifact must be the one the source
 #                       builds (default; --fast). A committed build artifact
 #                       drifts silently: the component suite runs the source, so
 #                       it passes whether or not the bundle was rebuilt.
 #
 # Usage:
 #   bash scripts/ci/regression-gate.sh          # full gate (CI, ~4 min)
-#   bash scripts/ci/regression-gate.sh --fast   # guard + E2E only (~1 min)
+#   bash scripts/ci/regression-gate.sh --fast   # guard + parity CLI + E2E (~1.5 min)
 #
 # Exit code 0 = baseline locked. Anything else = regression, fix before merge.
 # ═══════════════════════════════════════════════════════════════════════════
@@ -72,8 +78,48 @@ else
   bad "surface parity FAILED — a surface, a silo rule or a capability claim drifted (#22)"
 fi
 
-# ── 3. Failover E2E (canonical no-regression guard) ────────────────────────
-step "3/6 Failover-learning E2E"
+# ── 3. Surface parity, from the built CLI ──────────────────────────────────
+# Step 2 proves the harness works as SOURCE: vitest imports `src/`, so it never
+# loads `dist/`. That leaves the shipped artifact unchecked — a command that is
+# registered in `src/cli/cli-program.ts` but does not survive the build, or one
+# whose import throws only when loaded through it, passes every source-level
+# check and fails for the first user who types it. Same blind spot step 7
+# guards for the committed dashboard bundle, and worse: `dist/` is gitignored,
+# so nothing else in this gate would ever notice.
+#
+# `build:cli`, NOT `build` — the full build also rewrites the COMMITTED
+# dashboard bundle, which would make step 7 pass by construction and leave the
+# working tree dirty. It costs a few seconds and buys the only root typecheck
+# in the gate.
+step "3/7 Surface parity from the built CLI (nuvira parity …)"
+
+# Each subcommand sets exit code 1 on a real drift, so this is a gate rather
+# than a smoke test. `parity run` is the one that matters most: it drives all
+# five real surfaces (chat, execute, dashboard, gateway, subagent) against a
+# loopback stub provider, from the binary an install would ship.
+parity_cli() {
+  local name="$1"
+  shift
+  local out
+  if out=$(node dist/index.js parity "$name" "$@" 2>&1); then
+    ok "nuvira parity $name"
+  else
+    bad "nuvira parity $name FAILED — the built CLI disagrees with the harness"
+    printf '%s\n' "$out" | sed 's/^/    /'
+  fi
+}
+
+if npm run build:cli; then
+  ok "built dist/cli"
+  for sub in surfaces debt matrix run; do
+    parity_cli "$sub"
+  done
+else
+  bad "npm run build:cli FAILED — the parity CLI cannot be checked at all"
+fi
+
+# ── 4. Failover E2E (canonical no-regression guard) ────────────────────────
+step "4/7 Failover-learning E2E"
 if npx vitest run tests/e2e/failover-learning.test.ts; then
   ok "failover-learning E2E passed"
 else
@@ -81,32 +127,32 @@ else
 fi
 
 if [ "$FAST" = 1 ]; then
-  step "(--fast: skipping full root + dashboard suites)"
+  step "(--fast: skipping steps 5-7 — full root + dashboard suites)"
 else
-  # ── 4. Full root suite ─────────────────────────────────────────────────────
-  step "4/6 Full root suite"
+  # ── 5. Full root suite ─────────────────────────────────────────────────────
+  step "5/7 Full root suite"
   if npx vitest run; then
     ok "full root suite passed"
   else
     bad "full root suite FAILED"
   fi
 
-  # ── 5. Dashboard component suite (typecheck + jsdom tests) ───────────────
+  # ── 6. Dashboard component suite (typecheck + jsdom tests) ───────────────
   # `npm test` runs the tree's tsc --noEmit first: the dashboard bundle is built
   # by vite, which strips types without checking them, so this is the only gate
   # that can see a type error there.
-  step "5/6 Dashboard typecheck + component suite"
+  step "6/7 Dashboard typecheck + component suite"
   if (cd src/web-dashboard && npm test); then
     ok "dashboard typecheck + component suite passed"
   else
     bad "dashboard typecheck + component suite FAILED"
   fi
 
-  # ── 6. Committed dashboard bundle vs its source ──────────────────────────
+  # ── 7. Committed dashboard bundle vs its source ──────────────────────────
   # The dashboard the operator sees is src/web-dashboard/public, served straight
   # from the repo — so a bundle that was not rebuilt after a source change is a
   # shipped bug that no other step in this gate can see.
-  step "6/6 Dashboard bundle matches its source"
+  step "7/7 Dashboard bundle matches its source"
   if npm run dashboard:bundle:check -- --rebuild; then
     ok "dashboard bundle matches its source"
   else
