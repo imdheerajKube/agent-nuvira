@@ -827,7 +827,7 @@ Stop a running dashboard gracefully (SIGTERM — from any terminal)
    - flags: `--port <port>`
 ### `nuvira agent`
 
-Scaffold and manage custom agent-baba-d agents
+Scaffold and manage custom agent-nuvira agents
 
 ### `nuvira agent create`
 

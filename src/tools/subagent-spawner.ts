@@ -15,7 +15,7 @@
  */
 
 import { fork, type ChildProcess } from 'node:child_process';
-import { resolveNuviraHome } from '../config/paths';
+import { resolveNuviraDataPath } from '../config/paths';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream, existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -70,6 +70,12 @@ export interface SubagentState {
    * across the process boundary so the caller sees WHY, not just an exit code.
    */
   refusalCode?: string;
+  /** Provider that actually served the run (reported by the child). */
+  provider?: string;
+  /** Model that actually served the run, when the child named one. */
+  model?: string;
+  /** How tool calls travelled: `native`, `json` (fallback) or `none`. */
+  transport?: string;
   /** LLM calls made */
   llmCalls: number;
   /** Tokens used */
@@ -116,6 +122,12 @@ export interface SubagentResult {
   error?: string;
   /** Typed refusal code when the child refused, when it reported one. */
   refusalCode?: string;
+  /** Provider that served the run. */
+  provider?: string;
+  /** Model that served the run, when the child reported one. */
+  model?: string;
+  /** Tool transport the run used: `native`, `json` or `none`. */
+  transport?: string;
   /** LLM calls made */
   llmCalls: number;
   /** Tokens used */
@@ -130,7 +142,11 @@ export interface SubagentResult {
 
 // ─── Subagent Manager ─────────────────────────────────────────────────────
 
-const SUBAGENT_DIR = join(resolveNuviraHome(), 'cache', 'subagents');
+// `resolveNuviraDataPath` (not `resolveNuviraHome`) so a process pointed at an
+// isolated config dir writes its subagent state there too — every other state file
+// the agent persists resolves through it, and a test can then inspect a run without
+// touching the developer's real ~/.nuvira.
+const SUBAGENT_DIR = resolveNuviraDataPath('cache', 'subagents');
 const STATE_DIR = join(SUBAGENT_DIR, 'state');
 const LOG_DIR = join(SUBAGENT_DIR, 'logs');
 const RESULT_DIR = join(SUBAGENT_DIR, 'results');
@@ -396,6 +412,14 @@ export class SubagentManager extends EventEmitter {
         state.llmCalls = msg.llmCalls || state.llmCalls;
         state.tokensUsed = msg.tokensUsed || state.tokensUsed;
         state.toolCalls = msg.toolCalls || state.toolCalls;
+        // WHO served the run and HOW tool calls travelled. Recorded because a
+        // finished subagent is otherwise only inspectable by guessing from its
+        // output — the provider and transport are what tell you whether it ran
+        // the way you configured it.
+        if (msg.provider) state.provider = String(msg.provider);
+        if (msg.model) state.model = String(msg.model);
+        if (msg.transport) state.transport = String(msg.transport);
+        this.saveState(state);
         break;
       case 'error':
         // The child's OWN reason. Without this the message was dropped and the
@@ -451,6 +475,9 @@ export class SubagentManager extends EventEmitter {
       result: state.result || '',
       error: state.error,
       ...(state.refusalCode ? { refusalCode: state.refusalCode } : {}),
+      ...(state.provider ? { provider: state.provider } : {}),
+      ...(state.model ? { model: state.model } : {}),
+      ...(state.transport ? { transport: state.transport } : {}),
       llmCalls: state.llmCalls,
       tokensUsed: state.tokensUsed,
       toolCalls: state.toolCalls,

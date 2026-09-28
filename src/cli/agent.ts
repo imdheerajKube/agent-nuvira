@@ -1,12 +1,12 @@
 /**
- * Agent command — Scaffold and manage custom agents for the agent-baba-d platform.
+ * Agent command — Scaffold and manage custom agents for the agent-nuvira platform.
  *
  * Usage:
  *   nuvira agent create <name>    — Create a new custom agent project from a template
  *   nuvira agent list             — List all discovered custom agent plugins
  *   nuvira agent info <name>      — Show details about a discovered agent plugin
  *
- * The `nuvira agent create` command scaffolds a new project using the @agent-baba-d/sdk
+ * The `nuvira agent create` command scaffolds a new project using the @agent-nuvira/sdk
  * package, providing a ready-to-develop custom agent with:
  * - package.json with SDK dependency
  * - TypeScript configuration
@@ -37,7 +37,7 @@ function generateAgentProject(name: string, agentName: string, description: stri
     'package.json': JSON.stringify({
       name: name.toLowerCase().replace(/\s+/g, '-'),
       version: '1.0.0',
-      description: `Custom agent-baba-d agent: ${description}`,
+      description: `Custom agent-nuvira agent: ${description}`,
       type: 'module',
       main: './dist/agent.js',
       scripts: {
@@ -47,7 +47,7 @@ function generateAgentProject(name: string, agentName: string, description: stri
         dev: 'tsc --watch',
       },
       dependencies: {
-        '@agent-baba-d/sdk': '^1.0.0',
+        '@agent-nuvira/sdk': '^1.0.1',
       },
       devDependencies: {
         typescript: '^5.3.0',
@@ -69,7 +69,7 @@ function generateAgentProject(name: string, agentName: string, description: stri
       },
       include: ['src'],
     }, null, 2),
-    'src/agent.ts': `import { Agent, type AgentContext, type AgentResult, type LLMCallFn } from '@agent-baba-d/sdk';
+    'src/agent.ts': `import { Agent, type AgentContext, type AgentResult, type LLMCallFn } from '@agent-nuvira/sdk';
 
 /**
  * ${className} — ${description}
@@ -119,7 +119,7 @@ import {
   createTestContext,
   createMockCallLLM,
   assertAgentResult,
-} from '@agent-baba-d/sdk/testing';
+} from '@agent-nuvira/sdk/testing';
 import { ${className} } from '../src/agent.js';
 
 describe('${className}', () => {
@@ -200,7 +200,7 @@ npm run build
 npm test
 \`\`\`
 
-## Usage in agent-baba-d
+## Usage in agent-nuvira
 
 Place the compiled agent in \`~/.nuvira/agents/\`:
 
@@ -232,7 +232,7 @@ function toPascalCase(str: string): string {
 export class AgentCommand extends BaseCommand {
   create(): Command {
     const command = new Command('agent')
-      .description('Scaffold and manage custom agent-baba-d agents');
+      .description('Scaffold and manage custom agent-nuvira agents');
 
     // ── create ─────────────────────────────────────────────────────────────
     command
@@ -240,7 +240,7 @@ export class AgentCommand extends BaseCommand {
       .description('Create a new custom agent project from a template')
       .argument('[name]', 'Agent project name (e.g., "my-code-reviewer")')
       .option('-n, --agent-name <name>', 'Agent class name (defaults to project name in PascalCase)')
-      .option('-d, --description <desc>', 'Agent description', 'A custom agent-baba-d agent')
+      .option('-d, --description <desc>', 'Agent description', 'A custom agent-nuvira agent')
       .option('--dir <path>', 'Output directory (defaults to ./<name>)')
       .action(async (name?: string, options?: {
         agentName?: string;
@@ -297,7 +297,7 @@ export class AgentCommand extends BaseCommand {
     }
 
     const agentName = options?.agentName || projectName;
-    const description = options?.description || 'A custom agent-baba-d agent';
+    const description = options?.description || 'A custom agent-nuvira agent';
     const projectDir = options?.dir || join(process.cwd(), projectName);
 
     if (existsSync(projectDir)) {

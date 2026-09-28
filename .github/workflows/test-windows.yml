@@ -120,6 +120,25 @@ jobs:
         env:
           NO_COLOR: '1'
 
+      # A source file that cites a design/tracker doc by name must cite one that
+      # exists AND is tracked (`*.md` is gitignored unless whitelisted — that is
+      # how TOOL_TRUTHFULNESS_TRACKER.md was lost with eight modules citing it).
+      # Also asserted in tests/docs/doc-citations.test.ts.
+      - name: Doc citations resolve (cited *.md exists and is tracked)
+        run: npm run docs:citations:check
+        shell: bash
+        env:
+          NO_COLOR: '1'
+
       - name: Run all tests
         run: npx vitest run --reporter=verbose
         shell: bash
+
+      # The SDK example is a real consumer of the published package surface.
+      # Windows matters here: path handling in the example's configs is exactly
+      # where a Linux-only setup breaks.
+      - name: SDK example (typecheck + tests)
+        run: npm run examples:verify
+        shell: bash
+        env:
+          CI: true

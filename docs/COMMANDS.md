@@ -957,7 +957,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
 
 ### 10.5 Custom agents (SDK + scaffold)
 
-- **Objective:** Scaffold and register custom agent-baba-d agents.
+- **Objective:** Scaffold and register custom agent-nuvira agents.
 - **Command:** `nuvira agent create [-n <name>] [-d <desc>] [--dir <dir>]` · `nuvira agent list` · `nuvira agent info <name>` · `nuvira sdk scaffold [-t <template>] [--agent-type <type>]` · `nuvira sdk templates` · `nuvira sdk register <path> [-i <icon>]` · `nuvira sdk unregister <name>`
 - **Examples:**
   ```bash

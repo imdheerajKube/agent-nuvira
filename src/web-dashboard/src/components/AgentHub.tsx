@@ -9,6 +9,9 @@
  *   entries) and the channel directory aliases.
  * - **Artifacts** — I3 per-session artifact store (sessions + recent items).
  * - **Skills** — compiled SkillStore skills + hub-installed SKILL.md skills.
+ * - **Subagents** — child-process runs (P4.1) with the provider, model and tool
+ *   transport each child reported about itself, so a finished run is explainable
+ *   after the fact instead of guessed at from its output.
  *
  * Reads are open; the toggle surface follows the AdminPanel auth pattern:
  * unconfigured → setup form, configured → login form, authed → role-gated
@@ -22,7 +25,7 @@ import WhatsAppPanel from './WhatsAppPanel';
 import { PlatformConfigSection } from './PlatformConfigSection';
 import { maskSenderId } from '../mask';
 
-type HubTab = 'tools' | 'channels' | 'artifacts' | 'skills' | 'conversations';
+type HubTab = 'tools' | 'channels' | 'artifacts' | 'skills' | 'conversations' | 'subagents';
 
 const TABS: Array<{ id: HubTab; label: string; icon: string }> = [
   { id: 'tools', label: 'Tools', icon: '🧰' },
@@ -30,9 +33,20 @@ const TABS: Array<{ id: HubTab; label: string; icon: string }> = [
   { id: 'conversations', label: 'Conversations', icon: '💬' },
   { id: 'artifacts', label: 'Artifacts', icon: '📦' },
   { id: 'skills', label: 'Skills', icon: '🧠' },
+  { id: 'subagents', label: 'Subagents', icon: '🤖' },
 ];
 
 const STATUS_LABEL: Record<string, string> = { pending: '⏳ pending', sent: '✅ sent', failed: '❌ failed' };
+
+/** Child-process status → label. A refused run lands on `failed` (with a code). */
+const SUBAGENT_STATUS_LABEL: Record<string, string> = {
+  spawning: '⏳ spawning',
+  running: '▶ running',
+  completed: '✅ completed',
+  failed: '❌ failed',
+  timeout: '⏰ timed out',
+  killed: '⛔ killed',
+};
 
 /** A pending toggle the user triggered before logging in. */
 interface PendingToggle {
@@ -855,6 +869,7 @@ ${messages.map((m) => {
             : t.id === 'channels' ? (data ? String(data.channels.delivery.total) : '')
             : t.id === 'conversations' ? (data ? String(data.conversations?.total ?? 0) : '')
             : t.id === 'artifacts' ? (data ? String(data.artifacts.totalSessions) : '')
+            : t.id === 'subagents' ? (data ? `${data.subagents?.running ?? 0}/${data.subagents?.total ?? 0}` : '')
             : (data ? `${data.skills.enabled}/${data.skills.total}` : '');
           return (
             <button
@@ -1985,6 +2000,80 @@ ${messages.map((m) => {
               </div>
             )
           ) : null}
+        </div>
+      ) : null}
+
+      {/* ── Subagents tab (P4.1) ─────────────────────────────────────────── */}
+      {/* One row per forked child. Provider / model / transport are what the
+          child reported about ITSELF over IPC, so a run that answered badly on
+          a local model through the JSON fallback is distinguishable from one
+          that ran on the configured provider. */}
+      {tab === 'subagents' && data ? (
+        <div role="tabpanel">
+          <div className="admin-summary-grid">
+            <div className="admin-summary-card">
+              <div className="admin-summary-value">{data.subagents?.total ?? 0}</div>
+              <div className="admin-summary-label">Runs recorded</div>
+            </div>
+            <div className="admin-summary-card">
+              <div className="admin-summary-value">{data.subagents?.running ?? 0}</div>
+              <div className="admin-summary-label">Running now</div>
+            </div>
+            <div className="admin-summary-card">
+              <div className="admin-summary-value">{data.subagents?.failed ?? 0}</div>
+              <div className="admin-summary-label">Failed</div>
+            </div>
+          </div>
+          <p className="admin-hint">
+            Each run is a separate child process. A transport of <code>json</code> means the provider has no
+            native tool protocol and the shared JSON fallback carried the tool calls; a refusal code means the run
+            stopped deliberately instead of returning an answer.
+          </p>
+          {(data.subagents?.recent ?? []).length > 0 ? (
+            <div className="hub-session-list">
+              {(data.subagents?.recent ?? []).map((r) => (
+                <div className="hub-card" key={r.id}>
+                  <div className="hub-card-top">
+                    <div className="hub-card-title">
+                      <span className="hub-card-name">{r.goal || '(no goal recorded)'}</span>
+                      <span className="hub-card-id">
+                        {r.id.slice(0, 8)}
+                        {r.startedAt ? ` · ${new Date(r.startedAt).toLocaleString()}` : ''}
+                      </span>
+                    </div>
+                    <div className="hub-card-actions">
+                      <span className="hub-chip">{SUBAGENT_STATUS_LABEL[r.status] ?? r.status}</span>
+                    </div>
+                  </div>
+                  <div className="hub-card-tools">
+                    <span className="hub-chip">
+                      🔌 {r.provider ?? 'provider unknown'}{r.model ? ` · ${r.model}` : ''}
+                    </span>
+                    <span className="hub-chip">🛠 {r.transport ?? 'transport unknown'} transport</span>
+                    <span className="hub-chip">{r.llmCalls} model call{r.llmCalls === 1 ? '' : 's'}</span>
+                    <span className="hub-chip">{r.toolCalls} tool call{r.toolCalls === 1 ? '' : 's'}</span>
+                    {typeof r.durationMs === 'number' ? (
+                      <span className="hub-chip">{(r.durationMs / 1000).toFixed(1)}s</span>
+                    ) : null}
+                  </div>
+                  {/* The refusal is the headline, not a footnote: a typed code
+                      says WHY nothing was produced. */}
+                  {r.refusalCode ? (
+                    <div className="hub-card-note">
+                      ⛔ Refused before answering — code <code>{r.refusalCode}</code>
+                    </div>
+                  ) : null}
+                  {r.error ? <div className="admin-row-msg admin-row-msg-err">{r.error}</div> : null}
+                  {r.resultPreview ? <div className="hub-artifact-preview">{r.resultPreview}</div> : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state">
+              No subagent runs recorded yet — a run shows up here once the agent spawns one
+              (the <code>subagent</code> tool), and only if it actually started.
+            </div>
+          )}
         </div>
       ) : null}
     </>

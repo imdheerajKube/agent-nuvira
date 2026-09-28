@@ -74,7 +74,7 @@ the findings that still have a witness in the tree.
 | **P0.1, P0.2** | read_extract truthfulness: an unimplemented format refuses with `unsupported_format` + alternatives (legacy `.doc`/`.xls`/`.ppt`, `.rtf`, `.odt` → `PENDING_FORMATS`) and never leaks raw bytes as `text`. | `tests/tools/tool-truthfulness.test.ts:98–221` | ✅ Closed |
 | **P1 — reachability** | The tool-truthfulness fixes were barely reachable: `read_extract` was tier-2, so the default tiered tool loop could not call it, and `read_file`'s binary refusal did not name it. | `src/tools/toolsets.ts` (`read_extract` in `CORE_TOOL_NAMES`), `src/tools/coding-tools.ts` (extension-aware refusal) | ✅ Closed |
 | **P2 — gateway inbound** | The WhatsApp bridge only extracted `conversation`/`extendedTextMessage`, so a document message arrived with empty `text` and was dropped at `if (!text) continue` — the sender's own file vanished with no reply and no record. | `src/gateway/inbound-media.ts` + bridge/adapter/registry wiring | ✅ Closed |
-| **P4.1** | `subagent` — child-process spawning. Was dead in every layout and its worker simulated both the model and the tools. Restated, then **implemented for real**: the child forks, resolves a provider from your config, calls the model, runs real tools, and refuses instead of faking output. | `src/tools/child-agent-entry.ts`, `child-agent-runtime.ts`, `subagent-spawner.ts`, `registry.ts` | ✅ Closed (capability delivered) |
+| **P4.1** | `subagent` — child-process spawning. Was dead in every layout and its worker simulated both the model and the tools. Restated, then **implemented for real**: the child forks, resolves a provider from your config, calls the model, runs real tools (native protocol, or the shared JSON fallback where the provider has none), records what served the run, and refuses instead of faking output. | `src/tools/child-agent-entry.ts`, `child-agent-runtime.ts`, `subagent-spawner.ts`, `registry.ts`, `src/web-dashboard/hub-data.ts` | ✅ Closed (capability delivered) |
 
 ### P4.1 — what was wrong, and what `subagent` does now (2026-09-28)
 
@@ -109,11 +109,24 @@ done nothing at all.
   makes real model calls. Tools the caller allows are offered as real schemas
   (`toolJsonSchemas`) and executed through the **real registry**; the assistant turn
   is replayed with its tool-call ids and `providerMeta` intact.
+- **Tools work even where the provider has no tool protocol.** `transportFor()`
+  chooses `native` when the provider implements `generateTools`, and otherwise the
+  **shared JSON fallback** — the same `buildJsonFallbackPrompt` +
+  `extractFallbackToolCalls` pair the chat and execute loops already use, so a
+  subagent speaks the dialect the rest of the system parses rather than a private
+  one. This replaces an earlier refusal: a local Ollama setup had no way to spawn a
+  subagent *with* tools, because `local` cannot do native tool-calling. The chosen
+  transport is reported as `native | json | none`.
 - It **refuses instead of fabricating**: no constructible provider, an unreachable
-  backend, tools requested on a provider that cannot call them, or an unknown tool
-  name all raise a typed `SubagentRefusalError` whose `code` crosses the IPC
-  boundary. There is no code path that returns a plausible answer for work that did
-  not happen.
+  backend, or an unknown tool name raise a typed `SubagentRefusalError` whose `code`
+  crosses the IPC boundary. There is no code path that returns a plausible answer
+  for work that did not happen.
+- **A finished run is inspectable after the fact.** The child reports the provider,
+  model and transport it actually used; the spawner persists them (with the refusal
+  `code`, when there is one) beside the run's state, and the dashboard's
+  **Subagents** tab lists the most recent runs with each one. "It answered nothing
+  useful" reads very differently when the row says `local · json` than when it says
+  the provider you configured.
 - `classifyChildExit()` — exported and tested — encodes "no result ⇒ failure".
 - `subagent wait` now converts the rejection into the standard refusal shape
   (`{success:false, code, error}`) instead of letting a raw throw reach the model,
@@ -121,11 +134,15 @@ done nothing at all.
 - `delegate_system`'s refusal offers `subagent` again — the rule is that every
   alternative named must be a path that executes, and now this one does.
 
-**Verified two ways** (`tests/tools/subagent-end-to-end.test.ts`, 7 tests):
+**Verified three ways** (`tests/tools/subagent-end-to-end.test.ts`, 8 tests):
 
 - *Source layout*: a real fork, a real provider (`local`), and a real HTTP request
   to a server started in the test — asserting the model's own answer comes back over
   IPC, plus the unreachable-backend refusal carrying `code: 'not_configured'`.
+- *Fallback transport*: a provider with **no** `generateTools` still runs the tool
+  loop — the tool call travels as `{"tool":…}` text, the shared extractor parses it,
+  the tool really runs, and its output is replayed on the next turn
+  (`transport === 'json'`, and no raw tool block survives into the answer).
 - *Compiled layout*, run by hand: `node dist/tools/child-agent-entry.js` forked with
   an IPC channel returned
   `{"type":"result","result":"FROM-THE-COMPILED-ENTRY","llmCalls":1,…}` and exit 0.
@@ -182,10 +199,12 @@ practice on both platforms. Decision: **dial out.**
 
 ```bash
 npx tsc --noEmit                                        # must be clean (src only)
-npx vitest run tests/tools                              # 626 passed (40 files)
+npx vitest run tests/tools                              # 627 passed (40 files)
 npx vitest run tests/tools/tool-truthfulness.test.ts     # the P0/P1 assertions
 npx vitest run tests/tools/subagent-end-to-end.test.ts   # real fork + real HTTP
 npx vitest run tests/gateway                            # 440 passed (23 files)
+npx vitest run tests/web-dashboard                      # 295 passed (16 files)
+cd src/web-dashboard && npx vitest run                  # 306 passed (28 files)
 node scripts/check-doc-citations.mjs --check            # cited docs exist + are tracked
 ```
 
@@ -193,11 +212,17 @@ node scripts/check-doc-citations.mjs --check            # cited docs exist + are
 `npm run docs:citations:check`, and `tests/docs/doc-citations.test.ts` asserts the
 same invariant, so the guard runs wherever the suite does.)
 
-Last verified: **2026-09-28** — typecheck clean; `tests/tools` 626 passed (40
-files); `tests/gateway` 440 passed (23 files, incl. `realtime.test.ts`); `tests/docs`
-13 passed (3 files, incl. the 8 doc-citation guards); and the six suites most
-likely to be affected by these changes (`tools` + `docs` + `gateway` + `agents` +
-`cli` + `commands`) **3011 passed, 170 files**.
+Last verified: **2026-09-28** — typecheck clean; `tests/tools` 627 passed (40 files,
+incl. the 8-test `subagent-end-to-end.test.ts`); `tests/gateway` 440 passed (23 files,
+incl. `realtime.test.ts`); `tests/docs` 13 passed (3 files, incl. the 8 doc-citation
+guards); `tests/web-dashboard` 295 passed (16 files) and the front-end suite
+**306 passed (28 files)** — both including the new Subagents-tab coverage.
+
+**Two front-end failures are pre-existing and locale-bound, not caused by this
+work**: `ModelsPanel.test.tsx` and `RoutingInsightsPanel.test.tsx` assert
+`(1048576).toLocaleString() === '1,048,576'`, which only holds under an
+`en-US`-style grouping; on this machine (locale `en-IN`) the same expression is
+`'10,48,576'`. Neither the components nor their tests are modified here.
 
 Note: the root `tsconfig.json` includes only `src/**/*`, so `tsc --noEmit` does
 **not** typecheck `tests/` — a test-only type error surfaces in vitest, not in the
@@ -228,7 +253,8 @@ no exemption for them and the acknowledgement list is empty.
 
 1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost
    original.
-2. `subagent` on a **non-tool-calling provider** (e.g. `local`/Ollama) refuses when
-   asked for tools. That is deliberate — running the task without its tools would
-   answer a question the model was never equipped to answer — but it does mean a
-   local-only setup must spawn subagents without `tools`.
+2. ~~`subagent` on a non-tool-calling provider (`local`/Ollama) refuses when asked
+   for tools.~~ **Closed** by the JSON fallback above: the subagent now offers the
+   tools in the prompt and parses the `{"tool":…}` reply, so a local-only setup can
+   spawn a subagent *with* tools. The run's `transport` says which path it took, so
+   the fallback is visible rather than silent.

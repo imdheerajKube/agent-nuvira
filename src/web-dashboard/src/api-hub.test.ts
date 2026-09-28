@@ -1,7 +1,7 @@
 /**
  * Agent Hub API client tests (I4 + I5).
  *
- * fetchHub() — the aggregated read the 4-tab panel polls. setToolsetEnabled()
+ * fetchHub() — the aggregated read the hub panel polls. setToolsetEnabled()
  * — the admin-gated write (PUT /api/admin/hub/toolsets/<name>) that persists
  * the toggle to buffconfig. Both follow the same stale-server contract as the
  * other dashboard fetches: HTML-200 / malformed / network failure degrade to
@@ -49,7 +49,8 @@ const HUB_PAYLOAD: HubData = {
     inbox: { total: 0, pipeline: 0, chat: 0, help: 0, refused: 0, duplicate: 0, attachmentFailed: 0, recent: [] },
   },
   artifacts: { totalSessions: 0, totalArtifacts: 0, sessions: [] },
-  skills: { compiled: [], hub: [], total: 0 },
+  skills: { compiled: [], hub: [], total: 0, enabled: 0, disabled: 0 },
+  subagents: { total: 0, running: 0, failed: 0, recent: [] },
   adminConfigured: false,
   serverTime: 123,
 };

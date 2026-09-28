@@ -17,6 +17,7 @@ import { join, resolve } from 'node:path';
 import * as vscode from 'vscode';
 
 import type { ActiveModelInfo, CLIResult, ExtensionConfig, ProviderInfo, ProviderModelInfo, QuotaEventInfo, QuotaLedgerEntry, QuotaStatusInfo } from './types.js';
+import { t } from './l10n.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -497,11 +498,12 @@ export class CLIManager {
       // Handle errors
       this.process.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'ENOENT') {
-          reject(new Error(
-            `CLI '${cliCmd}' not found. Install agent-nuvira or configure 'agent-nuvira.cliPath'.\n` +
-            `  Run: npm install -g agent-nuvira\n` +
-            `  Or set path in VS Code settings.`
-          ));
+          reject(new Error(t(
+            "CLI '{0}' not found. Install agent-nuvira or configure 'agent-nuvira.cliPath'.\n" +
+            '  Run: npm install -g agent-nuvira\n' +
+            '  Or set path in VS Code settings.',
+            cliCmd,
+          )));
         } else if (err.name === 'AbortError') {
           reject(new Error('Task was cancelled.'));
         } else {

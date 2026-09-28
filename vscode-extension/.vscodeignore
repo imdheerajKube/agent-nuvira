@@ -6,22 +6,41 @@
 .github/**
 .vscodeignore
 
-# Source files (compiled output is in out/)
-# Keep chatPanel.html — the chat webview template is read from src/ at runtime
+# Everything the VSIX needs.
+#
+# There is deliberately NO `!out/**` here. vsce treats a negation as a
+# wholesale re-include: with `!out/**` present, no later exclude can remove
+# anything under out/ (which is why `out/test/**` and `*.map` were silently
+# shipped even though both are listed below). Nothing ignores out/ anyway.
+!l10n/**
+!resources/**
+!package.nls.json
+!LICENSE
+!README.md
+!CHANGELOG.md
+!icon.png
+
+# Source files (compiled output is in out/). The chat webview template is
+# copied into out/ at build time (scripts/copy-assets.mjs), so src/ can be
+# excluded wholesale and never ships.
 src/**
-!src/chatPanel.html
+scripts/**
 tsconfig.json
-*.map
+tsconfig.e2e.json
+vitest.config.ts
+generate-icon.py
+
+# The e2e harness is compiled into out/test for `npm run test:e2e`; it is not
+# runtime code and must not ship in the VSIX.
+out/test/**
+
+# Source maps are development aids. The pattern needs the explicit `**/`
+# prefix: vsce matches without gitignore's "no slash means any depth" rule, so
+# a bare `*.map` only ever matched files at the package root.
+**/*.map
 
 # Dependencies
 node_modules/**
 
 # Dev artifacts
 package-lock.json
-
-# Keep only these for the VSIX
-!out/**
-!LICENSE
-!README.md
-!CHANGELOG.md
-!icon.png

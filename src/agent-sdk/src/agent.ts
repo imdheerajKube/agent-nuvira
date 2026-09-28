@@ -129,4 +129,6 @@ export interface AgentDescriptor {
   tags?: string;
   /** Agent type identifier used in task plans (defaults to kebab-case of name) */
   agentType?: string;
+  /** Optional emoji/icon used by the CLI and progress UI (e.g. "🧩") */
+  icon?: string;
 }

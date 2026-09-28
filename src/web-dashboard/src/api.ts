@@ -1292,7 +1292,17 @@ export class DashboardAPI {
   async chatSend(
     sessionId: string,
     message: string,
-    opts?: { provider?: string; model?: string; projectPath?: string; attachments?: Array<{ name: string; content: string; kind?: string }> },
+    opts?: {
+      provider?: string;
+      model?: string;
+      projectPath?: string;
+      /**
+       * P8 + P2 — composer attachments. `encoding: 'base64'` means `content` is the
+       * file's BYTES and the server extracts them with `read_extract`; 'text' (or
+       * absent) means the content is the text to inject inline.
+       */
+      attachments?: Array<{ name: string; content: string; kind?: string; encoding?: 'text' | 'base64' }>;
+    },
     signal?: AbortSignal,
   ): Promise<
     | { ok: true; content: string; followups: Array<{ prompt: string; label?: string }>; provider: string | null; model: string | null; generationFailed: boolean; retryQueued?: boolean }

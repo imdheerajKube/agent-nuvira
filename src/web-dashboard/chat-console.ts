@@ -193,7 +193,15 @@ export interface ChatSessionSummary {
 export interface ChatAttachment {
   /** Display name, e.g. `requirements.md` or `pasted-text.txt`. */
   name: string;
-  /** The raw content (text only — binary files are rejected client-side). */
+  /**
+   * The content the model sees.
+   *
+   * Inline TEXT for what the composer could decode, or — for binary documents — the
+   * result of server-side extraction through `read_extract`, which is either the
+   * extracted text or an explicit `[could NOT be read]` block. It is never the file's
+   * raw bytes: `/api/chat` hydrates binary attachments before calling this method
+   * (`attachment-extract.ts`), so a PDF cannot arrive here as mojibake.
+   */
   content: string;
   /** Source for the chip: 'file' | 'paste' | 'drop'. */
   kind?: 'file' | 'paste' | 'drop';

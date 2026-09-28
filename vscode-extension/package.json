@@ -1,11 +1,12 @@
 {
   "name": "agent-nuvira-vscode",
-  "displayName": "Agent-Nuvira",
-  "description": "Multi-agent AI coding assistant — plan, write, review, test, and publish code with local or cloud AI models",
+  "displayName": "%nuvira.displayName%",
+  "description": "%nuvira.description%",
   "version": "1.56.1",
   "publisher": "dheerajsharma",
   "license": "MIT",
   "icon": "icon.png",
+  "l10n": "./l10n",
   "repository": {
     "type": "git",
     "url": "https://github.com/imdheerajKube/agent-nuvira-documentation.git"
@@ -16,6 +17,16 @@
   "homepage": "https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/user-manual.md",
   "engines": {
     "vscode": "^1.85.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "%nuvira.capabilities.untrustedWorkspaces%"
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "%nuvira.capabilities.virtualWorkspaces%"
+    }
   },
   "categories": [
     "Programming Languages",
@@ -53,11 +64,13 @@
   "main": "./out/extension.js",
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./tsconfig.json",
+    "compile": "tsc -p ./tsconfig.json && node ./scripts/copy-assets.mjs",
     "watch": "tsc -watch -p ./tsconfig.json",
     "lint": "tsc --noEmit -p ./tsconfig.json",
+    "l10n:check": "node ./scripts/l10n-check.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "npm run compile && tsc -p tsconfig.e2e.json && node ./out/test/e2e/runTest.js",
     "package": "npx @vscode/vsce package --out agent-nuvira-vscode.vsix",
     "publish": "npx @vscode/vsce publish",
     "publish:openvsx": "npx ovsx publish agent-nuvira-vscode.vsix"
@@ -66,81 +79,81 @@
     "commands": [
       {
         "command": "agent-nuvira.executeGoal",
-        "title": "Agent-Nuvira: Execute Goal...",
-        "shortTitle": "Execute Goal",
-        "description": "Run a multi-agent pipeline to accomplish a task"
+        "title": "%nuvira.cmd.executeGoal.title%",
+        "shortTitle": "%nuvira.cmd.executeGoal.shortTitle%",
+        "description": "%nuvira.cmd.executeGoal.description%"
       },
       {
         "command": "agent-nuvira.quickFix",
-        "title": "Agent-Nuvira: Quick Fix",
-        "shortTitle": "Quick Fix",
-        "description": "Apply a quick agent fix to the current file"
+        "title": "%nuvira.cmd.quickFix.title%",
+        "shortTitle": "%nuvira.cmd.quickFix.shortTitle%",
+        "description": "%nuvira.cmd.quickFix.description%"
       },
       {
         "command": "agent-nuvira.reviewFile",
-        "title": "Agent-Nuvira: Review File",
-        "shortTitle": "Review File",
-        "description": "Review the current file for bugs and improvements"
+        "title": "%nuvira.cmd.reviewFile.title%",
+        "shortTitle": "%nuvira.cmd.reviewFile.shortTitle%",
+        "description": "%nuvira.cmd.reviewFile.description%"
       },
       {
         "command": "agent-nuvira.explainCode",
-        "title": "Agent-Nuvira: Explain Code",
-        "shortTitle": "Explain Code",
-        "description": "Explain the selected code in detail"
+        "title": "%nuvira.cmd.explainCode.title%",
+        "shortTitle": "%nuvira.cmd.explainCode.shortTitle%",
+        "description": "%nuvira.cmd.explainCode.description%"
       },
       {
         "command": "agent-nuvira.generateTest",
-        "title": "Agent-Nuvira: Generate Test",
-        "shortTitle": "Generate Test",
-        "description": "Generate unit tests for the current file or selection"
+        "title": "%nuvira.cmd.generateTest.title%",
+        "shortTitle": "%nuvira.cmd.generateTest.shortTitle%",
+        "description": "%nuvira.cmd.generateTest.description%"
       },
       {
         "command": "agent-nuvira.openChat",
-        "title": "Agent-Nuvira: Open Chat",
-        "shortTitle": "Chat",
-        "description": "Open the AI chat panel with multi-turn conversation"
+        "title": "%nuvira.cmd.openChat.title%",
+        "shortTitle": "%nuvira.cmd.openChat.shortTitle%",
+        "description": "%nuvira.cmd.openChat.description%"
       },
       {
         "command": "agent-nuvira.showPanel",
-        "title": "Agent-Nuvira: Show Agent Panel",
-        "shortTitle": "Agent Panel",
-        "description": "Open the agent progress panel"
+        "title": "%nuvira.cmd.showPanel.title%",
+        "shortTitle": "%nuvira.cmd.showPanel.shortTitle%",
+        "description": "%nuvira.cmd.showPanel.description%"
       },
       {
         "command": "agent-nuvira.runWorkflow",
-        "title": "Agent-Nuvira: Run Workflow...",
-        "shortTitle": "Run Workflow",
-        "description": "Run a workflow template"
+        "title": "%nuvira.cmd.runWorkflow.title%",
+        "shortTitle": "%nuvira.cmd.runWorkflow.shortTitle%",
+        "description": "%nuvira.cmd.runWorkflow.description%"
       },
       {
         "command": "agent-nuvira.acceptChanges",
-        "title": "Agent-Nuvira: Accept All Changes",
-        "shortTitle": "Accept Changes",
-        "description": "Accept all proposed agent changes"
+        "title": "%nuvira.cmd.acceptChanges.title%",
+        "shortTitle": "%nuvira.cmd.acceptChanges.shortTitle%",
+        "description": "%nuvira.cmd.acceptChanges.description%"
       },
       {
         "command": "agent-nuvira.rejectChanges",
-        "title": "Agent-Nuvira: Reject All Changes",
-        "shortTitle": "Reject Changes",
-        "description": "Reject all proposed agent changes"
+        "title": "%nuvira.cmd.rejectChanges.title%",
+        "shortTitle": "%nuvira.cmd.rejectChanges.shortTitle%",
+        "description": "%nuvira.cmd.rejectChanges.description%"
       },
       {
         "command": "agent-nuvira.switchModel",
-        "title": "Agent-Nuvira: Switch Model / Provider...",
-        "shortTitle": "Switch Model",
-        "description": "Switch the active provider/model or enable Auto routing"
+        "title": "%nuvira.cmd.switchModel.title%",
+        "shortTitle": "%nuvira.cmd.switchModel.shortTitle%",
+        "description": "%nuvira.cmd.switchModel.description%"
       },
       {
         "command": "agent-nuvira.modelHealth",
-        "title": "Agent-Nuvira: Check Model Health",
-        "shortTitle": "Model Health",
-        "description": "Run a health check on the active provider"
+        "title": "%nuvira.cmd.modelHealth.title%",
+        "shortTitle": "%nuvira.cmd.modelHealth.shortTitle%",
+        "description": "%nuvira.cmd.modelHealth.description%"
       },
       {
         "command": "agent-nuvira.showQuota",
-        "title": "Agent-Nuvira: Show Quota Ledger",
-        "shortTitle": "Quotas",
-        "description": "View the quota ledger, parked providers, and failover timeline"
+        "title": "%nuvira.cmd.showQuota.title%",
+        "shortTitle": "%nuvira.cmd.showQuota.shortTitle%",
+        "description": "%nuvira.cmd.showQuota.description%"
       }
     ],
     "keybindings": [
@@ -182,8 +195,8 @@
       },
       {
         "command": "agent-nuvira.rejectChanges",
-        "key": "ctrl+shift+a r",
-        "mac": "cmd+shift+a r",
+        "key": "ctrl+shift+a x",
+        "mac": "cmd+shift+a x",
         "when": "agent-nuvira.hasChanges"
       }
     ],
@@ -234,8 +247,8 @@
       "activitybar": [
         {
           "id": "agent-nuvira",
-          "title": "Agent-Nuvira",
-          "icon": "$(robot)"
+          "title": "%nuvira.container.title%",
+          "icon": "resources/agent-nuvira.svg"
         }
       ]
     },
@@ -244,52 +257,157 @@
         {
           "type": "webview",
           "id": "agent-nuvira.agentProgress",
-          "name": "Agent Progress"
+          "name": "%nuvira.view.agentProgress%"
         },
         {
           "type": "webview",
           "id": "agent-nuvira.chatPanel",
-          "name": "Chat"
+          "name": "%nuvira.view.chatPanel%"
         }
       ]
     },
+    "walkthroughs": [
+      {
+        "id": "agentNuviraGetStarted",
+        "title": "%nuvira.walkthrough.title%",
+        "description": "%nuvira.walkthrough.description%",
+        "steps": [
+          {
+            "id": "installCli",
+            "title": "%nuvira.walkthrough.installCli.title%",
+            "description": "%nuvira.walkthrough.installCli.description%",
+            "completionEvents": [
+              "onCommand:agent-nuvira.modelHealth"
+            ]
+          },
+          {
+            "id": "configureProvider",
+            "title": "%nuvira.walkthrough.configureProvider.title%",
+            "description": "%nuvira.walkthrough.configureProvider.description%",
+            "completionEvents": [
+              "onCommand:agent-nuvira.switchModel"
+            ]
+          },
+          {
+            "id": "runGoal",
+            "title": "%nuvira.walkthrough.runGoal.title%",
+            "description": "%nuvira.walkthrough.runGoal.description%",
+            "completionEvents": [
+              "onCommand:agent-nuvira.executeGoal"
+            ]
+          },
+          {
+            "id": "openChat",
+            "title": "%nuvira.walkthrough.openChat.title%",
+            "description": "%nuvira.walkthrough.openChat.description%",
+            "completionEvents": [
+              "onCommand:agent-nuvira.openChat"
+            ]
+          }
+        ]
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "agent-nuvira_reviewFile",
+        "displayName": "%nuvira.tool.reviewFile.displayName%",
+        "toolReferenceName": "reviewFileWithAgentNuvira",
+        "userDescription": "%nuvira.tool.reviewFile.userDescription%",
+        "modelDescription": "Review a source file for bugs, security issues, and best-practice violations using Agent-Nuvira's specialized reviewer agent. Use when the user asks for a review of a specific file or the active file.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "Absolute path of the file to review. Defaults to the active editor's file."
+            }
+          },
+          "required": []
+        },
+        "tags": [
+          "agent-nuvira"
+        ]
+      },
+      {
+        "name": "agent-nuvira_explainSelection",
+        "displayName": "%nuvira.tool.explain.displayName%",
+        "toolReferenceName": "explainWithAgentNuvira",
+        "userDescription": "%nuvira.tool.explain.userDescription%",
+        "modelDescription": "Produce a detailed explanation of a code snippet using Agent-Nuvira. Use when the user asks what a piece of code does or how it works. Defaults to the current editor selection.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "The code to explain. Defaults to the active editor's current selection."
+            }
+          },
+          "required": []
+        },
+        "tags": [
+          "agent-nuvira"
+        ]
+      },
+      {
+        "name": "agent-nuvira_executeGoal",
+        "displayName": "%nuvira.tool.execute.displayName%",
+        "toolReferenceName": "executeGoalWithAgentNuvira",
+        "userDescription": "%nuvira.tool.execute.userDescription%",
+        "modelDescription": "Run Agent-Nuvira's multi-agent pipeline to accomplish a coding goal (plan, write, review, test). Use for substantial tasks that require editing multiple files or running commands.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "string",
+              "description": "The goal to accomplish, in plain language."
+            }
+          },
+          "required": [
+            "goal"
+          ]
+        },
+        "tags": [
+          "agent-nuvira"
+        ]
+      }
+    ],
     "configuration": {
-      "title": "Agent-Nuvira",
+      "title": "%nuvira.config.title%",
       "properties": {
         "agent-nuvira.cliPath": {
           "type": "string",
           "default": "agent-nuvira",
-          "description": "Path to the 'agent-nuvira' CLI executable. Use 'npx agent-nuvira' or a full path if not globally installed."
+          "description": "%nuvira.config.cliPath%"
         },
         "agent-nuvira.defaultProvider": {
           "type": "string",
           "default": "",
-          "description": "Default AI provider to use (overrides config file). Leave empty to use the configured default."
+          "description": "%nuvira.config.defaultProvider%"
         },
         "agent-nuvira.defaultModel": {
           "type": "string",
           "default": "",
-          "description": "Default model to use (overrides config file). Leave empty to use the configured default."
+          "description": "%nuvira.config.defaultModel%"
         },
         "agent-nuvira.autoApplyChanges": {
           "type": "boolean",
           "default": false,
-          "description": "Automatically apply changes suggested by agents without previewing diffs."
+          "description": "%nuvira.config.autoApplyChanges%"
         },
         "agent-nuvira.maxTokens": {
           "type": "integer",
           "default": 4096,
-          "description": "Maximum tokens for agent responses."
+          "description": "%nuvira.config.maxTokens%"
         },
         "agent-nuvira.showProgressPanel": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically show the agent progress panel when an agent task starts."
+          "description": "%nuvira.config.showProgressPanel%"
         },
         "agent-nuvira.useAutoRouting": {
           "type": "boolean",
           "default": false,
-          "description": "Let the agent pick the best provider/model for each task (Auto model routing). Overrides defaultProvider/defaultModel for chat and execute."
+          "description": "%nuvira.config.useAutoRouting%"
         }
       }
     }
@@ -297,6 +415,7 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.9.2",
     "ovsx": "^1.0.2",
     "typescript": "^7.0.2",

@@ -78,6 +78,17 @@ jobs:
         env:
           NO_COLOR: '1'
 
+      # A source file that cites a design/tracker doc by name must cite one that
+      # exists AND is tracked. `*.md` is gitignored unless whitelisted, which is
+      # how TOOL_TRUTHFULNESS_TRACKER.md was lost while eight modules still
+      # referenced it — silently, until a human noticed. The same invariant is
+      # asserted by tests/docs/doc-citations.test.ts; this step names it in the
+      # log instead of surfacing it as one more failed test.
+      - name: Doc citations resolve (cited *.md exists and is tracked)
+        run: npm run docs:citations:check
+        env:
+          NO_COLOR: '1'
+
       # Nuvira-Router M0.1 regression gate (baseline lock). Runs BEFORE the
       # full suite so a routing/learning regression fails fast with a clearly
       # labeled step. Covers: bandit / promotion / auto-router / tier0 /
@@ -96,6 +107,16 @@ jobs:
         env:
           CI: true
           NODE_OPTIONS: --no-warnings
+
+      # The SDK example is a real consumer of the published package surface:
+      # it type-checks against the local SDK source and runs its own suite, so
+      # an export the example needs but the SDK stopped shipping fails here.
+      # Runs on ONE matrix combo (platform-agnostic) to avoid redundant runs.
+      - name: SDK example (typecheck + tests)
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
+        run: npm run examples:verify
+        env:
+          CI: true
 
       # Frontend component tests — the dashboard has its own package (react +
       # vite) with a committed lockfile; npm ci keeps the install hermetic and

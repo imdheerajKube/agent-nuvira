@@ -5952,15 +5952,17 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           : newChatSessionId();
       const provider = typeof body?.provider === 'string' ? body.provider : undefined;
       const model = typeof body?.model === 'string' ? body.model : undefined;
-      // P8 — turn attachments (file picker / paste-as-attachment / drag-drop).
-      // The GUI reads files client-side and sends the text inline; the server
-      // injects them into the SAME answerOnce context as [Attachment: name].
-      const rawAttachments = Array.isArray(body?.attachments) ? body.attachments : [];
-      const attachments = rawAttachments
-        .filter((a): a is { name: string; content: string } =>
-          !!a && typeof a.name === 'string' && typeof a.content === 'string' && a.name.trim().length > 0)
-        .map((a) => ({ name: a.name.trim().slice(0, 120), content: a.content.slice(0, 300_000) }))
-        .slice(0, 10);
+      // P8 + P2 — turn attachments (file picker / paste-as-attachment / drag-drop).
+      //
+      // The GUI sends TEXT inline. For anything it cannot decode as text (PDF, DOCX,
+      // XLSX, PPTX, images) it sends the BYTES as base64 and the extraction happens
+      // here, through the same `read_extract` the agent uses for a file in the project
+      // folder — so a refusal reaches the turn as a refusal instead of as mojibake.
+      // Previously every file was read with `File.text()` client-side, which is how a
+      // PDF arrived as `%PDF-1.4 …` with nothing indicating extraction had failed
+      // (TOOL_TRUTHFULNESS_TRACKER.md findings #1/#7 and P2).
+      const { hydrateAttachments } = await import('./attachment-extract.js');
+      const attachments = await hydrateAttachments(body?.attachments);
       // P3 — an attached project's bounded snapshot rides into the turn as
       // `[Project context]`, so "assess THIS project" works without the user
       // describing the codebase. Cache misses rebuild automatically.

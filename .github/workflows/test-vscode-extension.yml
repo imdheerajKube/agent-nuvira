@@ -1,0 +1,112 @@
+# VS Code extension CI — type-check, unit tests, localization check, and the
+# end-to-end suite in a real VS Code instance.
+#
+# Why a separate workflow: the extension has its own package tree (its own
+# lockfile and vitest version), and the e2e job downloads a ~300 MB VS Code
+# build. Running that on every matrix combo of the root workflows would be
+# wasteful, so it is scoped here and only triggers when the extension or this
+# workflow changes.
+
+name: test-vscode-extension
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'vscode-extension/**'
+      - '.github/workflows/test-vscode-extension.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'vscode-extension/**'
+      - '.github/workflows/test-vscode-extension.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VSCODE_EXTENSION_DIR: vscode-extension
+
+jobs:
+  unit:
+    name: Type-check, unit tests, localization
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: npm ci
+
+      - name: Type-check extension
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Type-check e2e harness
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: npx tsc --noEmit -p tsconfig.e2e.json
+
+      # Every `%key%` in package.json must resolve from package.nls.json, and
+      # every key in the bundle must still be referenced. A leftover placeholder
+      # or a dead translation ships silently otherwise.
+      - name: Localization check
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: npm run l10n:check
+
+      - name: Unit tests
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: npm test
+
+  e2e:
+    name: End-to-end (real VS Code)
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: npm ci
+
+      # A headless runner has no display, and VS Code refuses to start without
+      # one; xvfb provides a virtual framebuffer for the test run.
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      # The downloaded editor is ~300 MB and changes only when VS Code ships a
+      # new stable, so cache it against the resolved version directory.
+      - name: Cache VS Code test build
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VSCODE_EXTENSION_DIR }}/.vscode-test
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('vscode-extension/package-lock.json') }}
+
+      # The suite downloads VS Code (once, then cached), activates the
+      # extension in it, and asserts every contributed command is registered and
+      # every `%placeholder%` in the manifest resolves. It needs a display, hence
+      # xvfb-run.
+      - name: Run e2e suite
+        working-directory: ${{ env.VSCODE_EXTENSION_DIR }}
+        run: xvfb-run -a npm run test:e2e

@@ -46,6 +46,8 @@ Agent-Nuvira orchestrates 17 AI agents that collaborate to accomplish complex co
 - **Code Review** — Full file review with actionable suggestions
 - **Explain Code** — Get detailed explanations of selected code
 - **Generate Tests** — Automatically create unit tests for files or selections
+- **Use it from AI chat** — three Language Model tools (`reviewFileWithAgentNuvira`, `explainWithAgentNuvira`, `executeGoalWithAgentNuvira`) let VS Code's chat and models invoke Agent-Nuvira's reviewer, explainer, and goal runner directly. They appear only on VS Code versions that expose the language-model tool API — older versions simply don't show them
+- **Guided setup** — the Welcome tab's *Get started with Agent-Nuvira* walkthrough covers installing the CLI, configuring a provider, running a goal, and opening the chat
 
 ### 🔌 17+ Multiple AI Providers
 Supports 17+ providers (5 built-in + 12 configurable via env vars) plus custom plugins:
@@ -151,7 +153,8 @@ Click the model indicator in the status bar (e.g. `chip Groq/llama-3.3-70b`) or 
 | `Ctrl+Shift+A R` | Review current file |
 | `Ctrl+Shift+A P` | Show Agent Panel |
 | `Ctrl+Shift+A A` | Accept all changes |
-| `Ctrl+Shift+A R` | Reject all changes |
+| `Ctrl+Shift+A C` | Open Chat |
+| `Ctrl+Shift+A X` | Reject all changes |
 
 ### 5. Right-Click in Explorer
 

@@ -30,7 +30,58 @@ import { DiagnosticFixProvider } from './diagnosticFixer.js';
 import { DiffViewer } from './diffViewer.js';
 import { CommandRegistrar } from './commands.js';
 import { InlineSuggestProvider } from './inlineSuggest.js';
-import type { ExtensionConfig } from './types.js';
+import { registerLanguageModelTools } from './lmTools.js';
+import { log, logError, disposeOutputChannel } from './output.js';
+import { t } from './l10n.js';
+import type {
+  ActiveModelInfo,
+  CLIResult,
+  ExtensionConfig,
+  QuotaStatusInfo,
+} from './types.js';
+
+// ─── Public API ─────────────────────────────────────────────────────────────
+
+/**
+ * Every command this extension contributes, in the order `package.json`
+ * declares them. Canonical list — the e2e suite asserts each id is both
+ * announced here and actually registered in a real editor.
+ */
+export const EXTENSION_COMMAND_IDS = [
+  'agent-nuvira.executeGoal',
+  'agent-nuvira.quickFix',
+  'agent-nuvira.reviewFile',
+  'agent-nuvira.explainCode',
+  'agent-nuvira.generateTest',
+  'agent-nuvira.openChat',
+  'agent-nuvira.showPanel',
+  'agent-nuvira.runWorkflow',
+  'agent-nuvira.acceptChanges',
+  'agent-nuvira.rejectChanges',
+  'agent-nuvira.switchModel',
+  'agent-nuvira.modelHealth',
+  'agent-nuvira.showQuota',
+] as const;
+
+/**
+ * Programmatic surface returned from `activate()` and available to other
+ * extensions as `vscode.extensions.getExtension(id)!.exports`. Kept small and
+ * explicit: anything exported here is a compatibility promise.
+ */
+export interface AgentNuviraApi {
+  /** Version of the running extension, from the manifest. */
+  readonly version: string;
+  /** Command ids the extension registers (see {@link EXTENSION_COMMAND_IDS}). */
+  readonly commands: readonly string[];
+  /** Open (or focus) the Agent-Nuvira chat panel. */
+  openChat(): void;
+  /** Run a goal through the CLI-backed multi-agent pipeline. */
+  executeGoal(goal: string): Promise<CLIResult>;
+  /** The active provider/model, or null when none has been chosen. */
+  getActiveModel(): Promise<ActiveModelInfo | null>;
+  /** Snapshot of the quota ledger and failover timeline. */
+  getQuotaStatus(): Promise<QuotaStatusInfo>;
+}
 
 // ─── Module State ───────────────────────────────────────────────────────────
 
@@ -52,8 +103,12 @@ let quotaStatusBarItem: vscode.StatusBarItem | null = null;
 
 /**
  * Called when the extension is activated (first command is run).
+ *
+ * Returns the {@link AgentNuviraApi} so the extension is usable
+ * programmatically (and verifiable end-to-end) without going through the
+ * command palette.
  */
-export function activate(context: vscode.ExtensionContext): void {
+export function activate(context: vscode.ExtensionContext): AgentNuviraApi {
   const config = loadConfig();
 
   // Initialize core components
@@ -123,7 +178,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // Register the quota panel command
   context.subscriptions.push(
     vscode.commands.registerCommand('agent-nuvira.showQuota', () => {
-      quotaPanel?.createOrShow(context.extensionUri);
+      try {
+        quotaPanel?.createOrShow(context.extensionUri);
+      } catch (err) {
+        logError(t('Could not open the quota ledger: {0}', err instanceof Error ? err.message : String(err)));
+      }
     }),
   );
 
@@ -167,6 +226,13 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
   );
 
+  // Register Language Model tools — lets VS Code's model / Copilot Chat invoke
+  // Agent-Nuvira's reviewer, explainer, and goal runner. No-op on VS Code
+  // versions that don't expose the `vscode.lm` tool API.
+  for (const disposable of registerLanguageModelTools(cliManager)) {
+    context.subscriptions.push(disposable);
+  }
+
   // Register configuration change handler
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -196,12 +262,33 @@ export function activate(context: vscode.ExtensionContext): void {
   // Update status bar
   updateStatusBar('$(robot) Agent-Nuvira Ready');
 
-  // Output activation info
-  console.log('[agent-nuvira] Extension activated');
-  console.log(`[agent-nuvira] CLI path: ${config.cliPath}`);
-  console.log(`[agent-nuvira] Default provider: ${config.defaultProvider || '(from config)'}`);
-  console.log(`[agent-nuvira] Auto-apply: ${config.autoApplyChanges}`);
-  console.log('[agent-nuvira] Chat panel registered (Ctrl+Shift+A C)');
+  // Output activation info to the Agent-Nuvira output channel (View → Output).
+  log('Extension activated');
+  log(`CLI path: ${config.cliPath}`);
+  log(`Default provider: ${config.defaultProvider || '(from config)'}`);
+  log(`Auto-apply: ${config.autoApplyChanges}`);
+  log('Chat panel registered (Ctrl+Shift+A C)');
+
+  return {
+    version: (context.extension?.packageJSON?.version as string | undefined) ?? '0.0.0',
+    commands: EXTENSION_COMMAND_IDS,
+    openChat: () => {
+      chatPanel?.createOrShow(context.extensionUri);
+    },
+    executeGoal: (goal: string) => {
+      if (!cliManager) {
+        return Promise.reject(new Error('Agent-Nuvira is not active'));
+      }
+      return cliManager.executeGoal(goal);
+    },
+    getActiveModel: () => (cliManager ? cliManager.getActiveModel() : Promise.resolve(null)),
+    getQuotaStatus: () => {
+      if (!cliManager) {
+        return Promise.reject(new Error('Agent-Nuvira is not active'));
+      }
+      return cliManager.getQuotaStatus();
+    },
+  };
 }
 
 // ─── Deactivate ─────────────────────────────────────────────────────────────
@@ -211,7 +298,7 @@ export function activate(context: vscode.ExtensionContext): void {
  * Clean up all resources.
  */
 export function deactivate(): void {
-  console.log('[agent-nuvira] Extension deactivating...');
+  log('Extension deactivating...');
 
   // Clean up CLI manager
   if (cliManager) {
@@ -257,7 +344,8 @@ export function deactivate(): void {
   diagnosticFixer = null;
   agentPanel = null;
 
-  console.log('[agent-nuvira] Extension deactivated');
+  log('Extension deactivated');
+  disposeOutputChannel();
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -390,13 +478,18 @@ function updateStatusBar(text: string): void {
  * Exported for unit testing.
  */
 export async function refreshModelStatusBar(): Promise<void> {
-  if (!modelStatusBarItem || !cliManager) return;
+  // Capture the item and manager up front: `deactivate()` nulls the module-level
+  // variables, and reading them again after the await below would throw on a
+  // refresh that straddles shutdown.
+  const item = modelStatusBarItem;
+  const manager = cliManager;
+  if (!item || !manager) return;
 
   let label = 'model';
   let tooltip = 'Agent-Nuvira — click to switch provider/model';
 
   try {
-    const active = await cliManager.getActiveModel();
+    const active = await manager.getActiveModel();
     if (active) {
       if (active.provider === 'auto' || active.model === 'auto') {
         label = 'auto';
@@ -411,9 +504,9 @@ export async function refreshModelStatusBar(): Promise<void> {
     // Keep the default label if the state can't be read
   }
 
-  modelStatusBarItem.text = `$(chip) ${label}`;
-  modelStatusBarItem.tooltip = tooltip;
-  modelStatusBarItem.show();
+  item.text = `$(chip) ${label}`;
+  item.tooltip = tooltip;
+  item.show();
 }
 
 /**
@@ -424,13 +517,15 @@ export async function refreshModelStatusBar(): Promise<void> {
  * Exported for unit testing.
  */
 export async function refreshQuotaStatusBar(): Promise<void> {
-  if (!quotaStatusBarItem || !cliManager) return;
+  const item = quotaStatusBarItem;
+  const manager = cliManager;
+  if (!item || !manager) return;
 
   let label = '$(dashboard) quota';
   let tooltip = 'Agent-Nuvira — click to view quota ledger & failover timeline';
 
   try {
-    const status = await cliManager.getQuotaStatus();
+    const status = await manager.getQuotaStatus();
     if (status.enabled) {
       const parked = status.entries.filter((e) => e.parked).length;
       if (parked > 0) {
@@ -445,7 +540,7 @@ export async function refreshQuotaStatusBar(): Promise<void> {
     // Keep the default label if the state can't be read
   }
 
-  quotaStatusBarItem.text = label;
-  quotaStatusBarItem.tooltip = tooltip;
-  quotaStatusBarItem.show();
+  item.text = label;
+  item.tooltip = tooltip;
+  item.show();
 }

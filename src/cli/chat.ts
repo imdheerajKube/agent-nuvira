@@ -789,7 +789,7 @@ export class ChatCommand extends BaseCommand {
     const available = await provider.isAvailable();
     if (!available) {
       logger.error(`${provider.name} is not available. Check your configuration.`);
-      logger.info(`Run: agent-baba-d config --help`);
+      logger.info(`Run: agent-nuvira config --help`);
       return;
     }
 

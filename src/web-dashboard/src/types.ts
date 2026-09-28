@@ -1274,6 +1274,29 @@ export interface HubSkill {
   bundled?: boolean;
 }
 
+/**
+ * One subagent child-process run as the dashboard shows it. Provider, model and
+ * transport explain a run after the fact; `refusalCode` says why one refused
+ * (the run reported a typed code instead of an exit status).
+ */
+export interface HubSubagentRun {
+  id: string;
+  goal: string;
+  /** spawning | running | completed | failed | timeout | killed */
+  status: string;
+  provider?: string;
+  model?: string;
+  /** native | json | none — how tool calls travelled. */
+  transport?: string;
+  refusalCode?: string;
+  error?: string;
+  llmCalls: number;
+  toolCalls: number;
+  startedAt: number;
+  durationMs?: number;
+  resultPreview?: string;
+}
+
 export interface HubData {
   toolsets: {
     toolsets: HubToolset[];
@@ -1324,6 +1347,13 @@ export interface HubData {
     /** P3 — enabled/disabled counts (mirror the toolsets summary cards). */
     enabled: number;
     disabled: number;
+  };
+  /** Subagent child-process runs (most recent first) — inspectable after the fact. */
+  subagents: {
+    total: number;
+    running: number;
+    failed: number;
+    recent: HubSubagentRun[];
   };
   /** Gateway chat conversations (per-contact history). */
   conversations: {

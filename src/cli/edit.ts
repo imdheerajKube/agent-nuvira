@@ -155,7 +155,7 @@ export class EditCommand extends BaseCommand {
           {
             provider: type,
             model: options.model,
-            author: process.env.USER || 'agent-baba-d',
+            author: process.env.USER || 'agent-nuvira',
           },
         );
 
@@ -304,7 +304,7 @@ export class EditCommand extends BaseCommand {
           {
             provider: winner.provider,
             model: winner.model,
-            author: process.env.USER || 'agent-baba-d',
+            author: process.env.USER || 'agent-nuvira',
           },
         );
 

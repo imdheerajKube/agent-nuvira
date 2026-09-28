@@ -276,6 +276,15 @@ export function __setShowWarningMessageResult(value: unknown): void {
   showWarningMessageResult = value;
 }
 
+/** Lines written to the mock Agent-Nuvira output channel (asserted by output.test.ts). */
+export const outputChannelLines: string[] = [];
+
+/**
+ * Runtime l10n namespace. `t` is undefined by default so `src/l10n.ts` exercises
+ * its substitution fallback; l10n.test.ts assigns a function to test delegation.
+ */
+export const l10n: { t?: (message: string, ...args: unknown[]) => string } = {};
+
 export const window = {
   activeTextEditor: null as MockTextEditor | null,
   visibleTextEditors: [] as MockTextEditor[],
@@ -326,6 +335,16 @@ export const window = {
   createStatusBarItem: (alignment?: StatusBarAlignment, priority?: number): MockStatusBarItem => {
     return new MockStatusBarItem();
   },
+
+  createOutputChannel: vi.fn((name: string) => ({
+    name,
+    appendLine: (line: string) => { outputChannelLines.push(line); },
+    append: (text: string) => { outputChannelLines.push(text); },
+    clear: () => { outputChannelLines.length = 0; },
+    show: () => { /* noop */ },
+    hide: () => { /* noop */ },
+    dispose: () => { /* noop */ },
+  })),
 
   showTextDocument: (document: MockTextDocument, options?: { preview?: boolean; viewColumn?: ViewColumn }): Thenable<MockTextEditor> => {
     return Promise.resolve(new MockTextEditor(document));

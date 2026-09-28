@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Language Model tools** — three `contributes.languageModelTools` entries
+  (`reviewFileWithAgentNuvira`, `explainWithAgentNuvira`,
+  `executeGoalWithAgentNuvira`) let VS Code's chat/models invoke the reviewer,
+  explainer, and goal runner directly. Feature-detected against `vscode.lm`, so
+  older VS Code versions simply don't see them
+- **Public extension API** — `activate()` now returns
+  `{ version, commands, openChat, executeGoal, getActiveModel, getQuotaStatus }`
+  via `extension.exports`, so the extension can be driven programmatically
+- **Localization** — the manifest and runtime strings now go through
+  `package.nls.json` (70 keys) and a new `l10n/` bundle, with a `npm run
+  l10n:check` guard that fails on an unresolved placeholder or a dead key
+- **Getting-started walkthrough** — a 4-step walkthrough (install CLI,
+  configure provider, run a goal, open chat) in the Welcome tab
+- **Untrusted/virtual workspace declarations** — `limited` support declared
+  explicitly instead of leaving the default undefined
+- **Output channel** — activation and error logging moved from `console.log` to
+  a dedicated "Agent-Nuvira" channel (View → Output)
+
+### Fixed
+- **Activity-bar icon** — `viewsContainers.activitybar[].icon` must be a file
+  path, not a codicon reference; it was `"$(robot)"`, so the container rendered
+  with no icon. Now ships `resources/agent-nuvira.svg`
+- **Packaged webview template** — `chatPanel.html` is compiled into `out/` by
+  `scripts/copy-assets.mjs` and resolved from there, so the packaged VSIX loads
+  the real chat UI instead of falling back to "template not found"
+- **Status-bar refresh race** — the model/quota indicators captured the module
+  state before awaiting and then wrote to a disposed item; they now hold their
+  own item reference across the await
+- **`.vscodeignore` ordering** — an `!out/**` negation was re-including the e2e
+  harness and source maps that earlier lines had excluded; the VSIX dropped
+  from 103 to 47 files with no runtime change
+- **Keybinding collision** — `rejectChanges` moved from `Ctrl+Shift+A R`
+  (which duplicated `reviewFile`) to `Ctrl+Shift+A X`
+- Removed committed `.vsix` binaries and the stale committed `out/` build output
+
+### Tests
+- End-to-end suite (`npm run test:e2e`) that downloads a real VS Code build,
+  activates the extension, and asserts every manifest-contributed command is
+  registered, every `package.nls.json` placeholder resolves, and the
+  activity-bar icon exists on disk
+- 31 new unit tests across `output`, `l10n`, `lmTools`, the extension API, and
+  chat-panel template resolution
+
 ## [1.56.1] — 2026-08-05
 
 > Version aligned with the CLI release cycle — this extension release ships

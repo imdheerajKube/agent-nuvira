@@ -1,0 +1,21 @@
+{
+  "name": "@agent-nuvira-examples/conventional-commit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Example Agent-Nuvira SDK agent — drafts a Conventional Commits message from a diff.",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@agent-nuvira/sdk": "^1.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.1.10"
+  }
+}

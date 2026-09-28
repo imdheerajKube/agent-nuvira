@@ -231,7 +231,7 @@ export class WorkflowCommand extends BaseCommand {
 
       if (results.length === 0) {
         logger.info(`No templates found matching "${query}".`);
-        console.log('  The registry is at: https://github.com/agent-baba-d/workflows');
+        console.log('  The registry is at: https://github.com/imdheerajKube/agent-nuvira-documentation');
         console.log('  You can submit your own templates there!');
         return;
       }
@@ -331,7 +331,7 @@ export class WorkflowCommand extends BaseCommand {
     console.log('    3. The template will be reviewed and added to the registry');
     console.log('');
     console.log('  Or visit the registry repo:');
-    console.log('    https://github.com/agent-baba-d/workflows');
+    console.log('    https://github.com/imdheerajKube/agent-nuvira-documentation');
     console.log('');
   }
 

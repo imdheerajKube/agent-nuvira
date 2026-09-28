@@ -22,6 +22,7 @@ import { ChatHistoryProvider, type ChatMessage, type ChatSession } from './chatP
 import { CLIManager } from './cliManager.js';
 import type { ExtensionConfig, ProviderInfo } from './types.js';
 import { renderDAG, renderEmptyDAG, buildPipelineState, type PipelineState, type PipelineNode } from './dagRenderer.js';
+import { t } from './l10n.js';
 
 // ─── Pipeline Agent Event Patterns ─────────────────────────────────────────
 
@@ -51,6 +52,28 @@ const AGENT_PATTERNS: Array<{ pattern: RegExp; agentType: string; stage: 'start'
   { pattern: /^📄\s+.+\(created|new\)/, agentType: 'writer', stage: 'complete' },
   { pattern: /^✏️\s+.+\(modified|updated\)/, agentType: 'writer', stage: 'complete' },
 ];
+
+// ─── Template Resolution ────────────────────────────────────────────────────
+
+/**
+ * Resolve the chat webview template from the first candidate that exists.
+ *
+ * Extracted from the panel so it can be unit-tested without a webview, and so
+ * the resolution order is explicit: the template is copied next to the compiled
+ * JS at build time (`scripts/copy-assets.mjs`), which is what a packaged VSIX
+ * contains. The `src/` candidate only exists in a source checkout, for
+ * `npm run dev` and the test runner — `src/**` is excluded from the VSIX.
+ */
+export function resolveHtmlTemplate(candidates: string[]): string | null {
+  for (const candidate of candidates) {
+    try {
+      return readFileSync(candidate, 'utf-8');
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
 
 // ─── ChatPanel ──────────────────────────────────────────────────────────────
 
@@ -98,20 +121,12 @@ export class ChatPanel {
    * Pre-load the HTML template from the extension directory.
    */
   private loadHtml(): void {
-    try {
-      // Try loading from src/ (development) or extension root (VSIX)
-      const htmlUri = vscode.Uri.joinPath(this.extensionUri, 'src', 'chatPanel.html');
-      const bytes = readFileSync(htmlUri.fsPath, 'utf-8');
-      this.loadedHtml = bytes;
-    } catch {
-      try {
-        // Fallback: try alongside the compiled JS
-        const htmlPath = join(__dirname, 'chatPanel.html');
-        this.loadedHtml = readFileSync(htmlPath, 'utf-8');
-      } catch {
-        this.loadedHtml = null;
-      }
-    }
+    this.loadedHtml = resolveHtmlTemplate([
+      // Packaged extension: the template sits next to the compiled JS.
+      join(__dirname, 'chatPanel.html'),
+      // Source checkout only (dev / tests): out/../src/chatPanel.html.
+      join(__dirname, '..', 'src', 'chatPanel.html'),
+    ]);
   }
 
   /**
@@ -130,7 +145,7 @@ export class ChatPanel {
 
     this.panel = vscode.window.createWebviewPanel(
       ChatPanel.viewType,
-      'Agent-Nuvira Chat',
+      t('Agent-Nuvira Chat'),
       column || vscode.ViewColumn.Beside,
       {
         enableScripts: true,
@@ -454,13 +469,13 @@ export class ChatPanel {
       if (result.success) {
         this.onModelChanged?.();
         vscode.window.showInformationMessage(
-          value === 'auto' ? '🤖 Auto routing enabled' : `✅ Switched to ${value}`,
+          value === 'auto' ? t('🤖 Auto routing enabled') : t('✅ Switched to {0}', value),
         );
       } else {
-        vscode.window.showErrorMessage(`Switch failed: ${result.stderr || 'Unknown error'}`);
+        vscode.window.showErrorMessage(t('Switch failed: {0}', result.stderr || 'Unknown error'));
       }
     } catch (err: any) {
-      vscode.window.showErrorMessage(`Switch failed: ${err.message || 'Unknown error'}`);
+      vscode.window.showErrorMessage(t('Switch failed: {0}', err.message || 'Unknown error'));
     } finally {
       // Re-fetch so the dropdown reflects the (possibly unchanged) state
       await this.refreshModelState();
@@ -1093,6 +1108,8 @@ export class ChatPanel {
   // ── Webview HTML ──────────────────────────────────────────────────────────
 
   private getWebviewContent(): string {
-    return this.loadedHtml || '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><style>body{background:#1e1e1e;color:#ccc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;padding:40px;text-align:center;line-height:1.6}</style></head><body><p>Chat panel template not found.<br>Try rebuilding the extension with <code>npm run compile</code>.</p></body></html>';
+    if (this.loadedHtml) return this.loadedHtml;
+    const message = t('The chat panel template could not be loaded. Rebuild the extension with `npm run compile`, then reopen the panel.');
+    return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><style>body{background:#1e1e1e;color:#ccc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;padding:40px;text-align:center;line-height:1.6}</style></head><body><p>' + message + '</p></body></html>';
   }
 }

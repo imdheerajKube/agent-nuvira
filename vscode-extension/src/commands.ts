@@ -18,6 +18,7 @@ import { CLIManager } from './cliManager.js';
 import { AgentPanel } from './agentPanel.js';
 import { DiffViewer } from './diffViewer.js';
 import { parseCLIOutput } from './outputParser.js';
+import { t } from './l10n.js';
 import type { ExtensionConfig, FileChange, ProviderInfo, ProviderModelInfo } from './types.js';
 
 // ─── CommandRegistrar ───────────────────────────────────────────────────────
@@ -381,16 +382,16 @@ export class CommandRegistrar {
         ? await this.cliManager.switchModel(selected.value, modelId)
         : await this.cliManager.switchModel(selected.value);
       if (result.success) {
-        this.agentPanel.updateStatus(selected.value === 'auto' ? '🤖 Auto routing enabled' : `✅ Switched to ${display}`);
+        this.agentPanel.updateStatus(selected.value === 'auto' ? t('🤖 Auto routing enabled') : t('✅ Switched to {0}', display));
         this.onModelChanged?.();
         vscode.window.showInformationMessage(
-          selected.value === 'auto' ? '🤖 Auto routing enabled' : `✅ Switched to ${display}`,
+          selected.value === 'auto' ? t('🤖 Auto routing enabled') : t('✅ Switched to {0}', display),
         );
       } else {
-        vscode.window.showErrorMessage(`Switch failed: ${result.stderr || 'Unknown error'}`);
+        vscode.window.showErrorMessage(t('Switch failed: {0}', result.stderr || 'Unknown error'));
       }
     } catch (err: any) {
-      vscode.window.showErrorMessage(`Switch failed: ${err.message || 'Unknown error'}`);
+      vscode.window.showErrorMessage(t('Switch failed: {0}', err.message || 'Unknown error'));
     }
   }
 
@@ -514,7 +515,7 @@ export class CommandRegistrar {
       });
       await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
     } catch (err: any) {
-      vscode.window.showErrorMessage(`Health check failed: ${err.message || 'Unknown error'}`);
+      vscode.window.showErrorMessage(t('Health check failed: {0}', err.message || 'Unknown error'));
     }
   }
 

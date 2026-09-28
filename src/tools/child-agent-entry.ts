@@ -74,6 +74,11 @@ async function main(): Promise<void> {
       llmCalls: outcome.llmCalls,
       toolCalls: outcome.toolCalls,
       provider: outcome.provider,
+      // Which model and which tool transport actually served the run — recorded
+      // so a finished subagent can be inspected after the fact rather than guessed
+      // at from its output.
+      ...(outcome.model ? { model: outcome.model } : {}),
+      transport: outcome.transport,
       truncated: outcome.truncated,
     });
     process.exit(0);

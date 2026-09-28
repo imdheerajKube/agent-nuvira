@@ -22,6 +22,7 @@ vi.mock('vscode', () => {
 const holders = vi.hoisted(() => ({
   cliManager: null as any,
   commandRegistrar: null as any,
+  chatPanel: null as any,
 }));
 
 vi.mock('../cliManager.js', () => ({
@@ -62,12 +63,15 @@ vi.mock('../agentPanel.js', () => ({
 }));
 
 vi.mock('../chatPanel.js', () => ({
-  ChatPanel: vi.fn().mockImplementation(() => ({
-    updateConfig: vi.fn(),
-    updateCliManager: vi.fn(),
-    setOnModelChanged: vi.fn(),
-    createOrShow: vi.fn(),
-  })),
+  ChatPanel: vi.fn().mockImplementation(() => {
+    holders.chatPanel = {
+      updateConfig: vi.fn(),
+      updateCliManager: vi.fn(),
+      setOnModelChanged: vi.fn(),
+      createOrShow: vi.fn(),
+    };
+    return holders.chatPanel;
+  }),
 }));
 
 vi.mock('../chatProvider.js', () => ({
@@ -121,7 +125,13 @@ vi.mock('../inlineSuggest.js', () => ({
 }));
 
 import * as vscode from 'vscode';
-import { activate, deactivate, refreshModelStatusBar, refreshQuotaStatusBar } from '../extension.js';
+import {
+  EXTENSION_COMMAND_IDS,
+  activate,
+  deactivate,
+  refreshModelStatusBar,
+  refreshQuotaStatusBar,
+} from '../extension.js';
 
 describe('extension status bar', () => {
   let context: any;
@@ -331,5 +341,67 @@ describe('extension status bar', () => {
     await refreshModelStatusBar();
 
     expect(statusBarItems[1].text).toBe('$(chip) auto');
+  });
+});
+
+describe('extension public API', () => {
+  let context: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (vscode as any).__resetAllMocks();
+    deactivate();
+    context = new (vscode as any).MockExtensionContext();
+  });
+
+  it('activate() returns the API surface rather than void', () => {
+    // VS Code ignores the return value, but `extension.exports` users and the
+    // e2e suite depend on it existing.
+    const api = activate(context);
+
+    expect(api).toBeDefined();
+    expect(typeof api.version).toBe('string');
+    expect(api.commands).toEqual(EXTENSION_COMMAND_IDS);
+    for (const method of ['openChat', 'executeGoal', 'getActiveModel', 'getQuotaStatus'] as const) {
+      expect(typeof api[method]).toBe('function');
+    }
+  });
+
+  it('advertises every command the manifest contributes', () => {
+    // The e2e suite cross-checks this against package.json; here we pin that the
+    // list stays complete as commands are added.
+    expect(EXTENSION_COMMAND_IDS).toHaveLength(13);
+    expect(new Set(EXTENSION_COMMAND_IDS).size).toBe(EXTENSION_COMMAND_IDS.length);
+  });
+
+  it('delegates executeGoal and getActiveModel to the CLI manager', async () => {
+    const api = activate(context);
+    const result = { stdout: 'ok', stderr: '', exitCode: 0, success: true, durationMs: 1 };
+    (holders.cliManager.executeGoal as any).mockResolvedValue(result);
+
+    await expect(api.executeGoal('add tests')).resolves.toBe(result);
+    expect(holders.cliManager.executeGoal).toHaveBeenCalledWith('add tests');
+
+    await expect(api.getActiveModel()).resolves.toBeNull();
+    expect(holders.cliManager.getActiveModel).toHaveBeenCalled();
+  });
+
+  it('openChat() opens the chat panel', () => {
+    const api = activate(context);
+
+    api.openChat();
+
+    expect(holders.chatPanel.createOrShow).toHaveBeenCalledWith(context.extensionUri);
+  });
+
+  it('rejects API calls that need the CLI once the extension is deactivated', async () => {
+    const api = activate(context);
+    deactivate();
+
+    await expect(api.executeGoal('anything')).rejects.toThrow('not active');
+    await expect(api.getQuotaStatus()).rejects.toThrow('not active');
+    // getActiveModel degrades to null instead of throwing — a status read is
+    // expected to be safe after shutdown.
+    await expect(api.getActiveModel()).resolves.toBeNull();
   });
 });

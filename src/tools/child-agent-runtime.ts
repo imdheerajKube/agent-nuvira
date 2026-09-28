@@ -27,9 +27,9 @@
 
 import { ConfigManager } from '../config/manager.js';
 import { ProviderFactory } from '../inference/factory.js';
-import type { InferenceProvider, ToolMessage, ToolSchema } from '../inference/interface.js';
+import type { InferenceProvider, ToolCallResponse, ToolMessage, ToolSchema } from '../inference/interface.js';
 import { SubagentRefusalError } from './subagent-refusal.js';
-import { getTool, toolJsonSchemas, type ToolContext } from './registry.js';
+import { getTool, toolJsonSchemas, TOOL_CONTRACT_JSON, type ToolContext } from './registry.js';
 
 export interface SubagentRuntimeConfig {
   /** The task the subagent must complete. */
@@ -69,8 +69,30 @@ export interface SubagentRuntimeResult {
   toolCalls: number;
   /** Provider that actually served the calls. */
   provider: string;
+  /** Model that actually served the calls, when one was named. */
+  model?: string;
+  /**
+   * How tool calls were carried. `native` = the provider's own tool protocol;
+   * `json` = the shared JSON-fallback transport (the same prompt builder and
+   * parser the chat and execute loops use). `none` = no tools were requested.
+   */
+  transport: 'native' | 'json' | 'none';
   /** True when the run hit an iteration/call ceiling before the model stopped. */
   truncated: boolean;
+}
+
+/**
+ * Which transport carries tool calls for this provider.
+ *
+ * Most hosted providers speak the OpenAI `tools` protocol. A local Ollama model
+ * (the `local` adapter) does not, and that used to make the subagent REFUSE when
+ * tools were asked for — honest, but it meant a local-only setup could not use
+ * tools at all. The fallback closes that: the tool names, argument shapes and a
+ * `{"tool":…,"arguments":…}` contract ride in the prompt, and the reply is parsed
+ * with the same `extractFallbackToolCalls` the chat loop uses for exactly this.
+ */
+function transportFor(provider: InferenceProvider): 'native' | 'json' {
+  return typeof provider.generateTools === 'function' ? 'native' : 'json';
 }
 
 const DEFAULT_MAX_LLM_CALLS = 25;
@@ -79,17 +101,29 @@ const DEFAULT_MAX_ITERATIONS = 12;
 /** Tools a subagent must never call, whatever the caller asks for. */
 const ALWAYS_BLOCKED = new Set(['ask_user', 'respond']);
 
-function buildSystemPrompt(config: SubagentRuntimeConfig, tools: string[]): string {
-  return [
+function buildSystemPrompt(
+  config: SubagentRuntimeConfig,
+  tools: string[],
+  transport: 'native' | 'json' | 'none' = 'none',
+): string {
+  const lines = [
     `You are a subagent. Your task: ${config.goal}`,
     '',
     tools.length
       ? `You have these tools: ${tools.join(', ')}. Use them to gather what you need, then answer.`
       : 'You have no tools. Answer from what you already know and say so if you cannot.',
+  ];
+  if (transport === 'json') {
+    // No tool protocol on this provider, so the contract is stated in the prompt
+    // — the same text the chat and execute loops use, never a private re-wording.
+    lines.push('', TOOL_CONTRACT_JSON);
+  }
+  lines.push(
     '',
     'Work in steps. When the task is done, reply with the final answer as plain text —',
     'no preamble, no instructions to the user.',
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 
 /**
@@ -147,21 +181,17 @@ export async function runSubagent(
     );
   }
 
-  send({ type: 'progress', phase: 'starting', provider: type, tools: allowed });
+  const transport = transportFor(provider);
+  send({ type: 'progress', phase: 'starting', provider: type, tools: allowed, transport });
 
-  // ── Native tool-calling loop ──────────────────────────────────────────────
+  // ── Tool loop (native protocol, or the shared JSON fallback) ──────────────
   if (allowed.length > 0) {
-    if (typeof provider.generateTools !== 'function') {
-      // Running the task without its tools would answer a question the model was
-      // never equipped to answer, which is the fabrication this workstream is
-      // about. Refuse and name a provider that can.
-      throw new SubagentRefusalError(
-        'unavailable',
-        `Provider '${type}' does not support tool-calling, so a subagent was asked for tools it cannot use. ` +
-          `Use a tool-calling provider (openai, anthropic, gemini, nim, openrouter) or request no tools.`,
-      );
-    }
-    return runToolLoop(config, allowed, provider, type, { send, runTool: hooks.runTool, maxLlmCalls, maxIterations });
+    return runToolLoop(config, allowed, provider, type, transport, {
+      send,
+      runTool: hooks.runTool,
+      maxLlmCalls,
+      maxIterations,
+    });
   }
 
   // ── Plain completion (no tools) ───────────────────────────────────────────
@@ -176,7 +206,38 @@ export async function runSubagent(
     llmCalls: 1,
     toolCalls: 0,
     provider: type,
+    ...(config.model && config.model !== 'auto' ? { model: config.model } : {}),
+    transport: 'none',
     truncated: false,
+  };
+}
+
+/**
+ * One model call, on whichever transport this provider speaks.
+ *
+ * The fallback path reuses `buildJsonFallbackPrompt` and
+ * `extractFallbackToolCalls` — the same pair the chat loop and the execute loop
+ * use — so a subagent speaks the dialect the rest of the system already parses.
+ * They are imported lazily because `tool-loop.ts` pulls in the registry and the
+ * event bus, which a plain completion should not pay for.
+ */
+async function callModel(
+  provider: InferenceProvider,
+  transport: 'native' | 'json',
+  messages: ToolMessage[],
+  schemas: ToolSchema[],
+  config: SubagentRuntimeConfig,
+): Promise<ToolCallResponse> {
+  if (transport === 'native') {
+    return provider.generateTools!(messages, schemas, modelOption(config));
+  }
+  const { buildJsonFallbackPrompt } = await import('../inference/tool-call-utils.js');
+  const { extractFallbackToolCalls } = await import('./tool-loop.js');
+  const raw = await provider.generate(buildJsonFallbackPrompt(messages as never, schemas as never), modelOption(config));
+  const { text, calls } = extractFallbackToolCalls(raw);
+  return {
+    content: text,
+    toolCalls: calls.map((c) => ({ id: c.id, name: c.name, arguments: c.arguments })),
   };
 }
 
@@ -219,6 +280,7 @@ async function runToolLoop(
   allowed: string[],
   provider: InferenceProvider,
   type: string,
+  transport: 'native' | 'json',
   loop: LoopHooks,
 ): Promise<SubagentRuntimeResult> {
   const schemas: ToolSchema[] = toolJsonSchemas(allowed).map((t) => ({
@@ -228,9 +290,12 @@ async function runToolLoop(
   }));
 
   const messages: ToolMessage[] = [
-    { role: 'system', content: buildSystemPrompt(config, allowed) },
+    { role: 'system', content: buildSystemPrompt(config, allowed, transport) },
     { role: 'user', content: config.goal },
   ];
+
+  const model = config.model && config.model !== 'auto' ? config.model : undefined;
+  const base = { provider: type, ...(model ? { model } : {}), transport } as const;
 
   let llmCalls = 0;
   let toolCalls = 0;
@@ -241,17 +306,17 @@ async function runToolLoop(
         result: 'Subagent stopped: reached its model-call ceiling before finishing.',
         llmCalls,
         toolCalls,
-        provider: type,
+        ...base,
         truncated: true,
       };
     }
 
     loop.send({ type: 'progress', phase: 'thinking', iteration: iteration + 1, llmCalls, toolCalls });
-    const response = await provider.generateTools!(messages, schemas, modelOption(config));
+    const response = await callModel(provider, transport, messages, schemas, config);
     llmCalls += 1;
 
     if (response.toolCalls.length === 0) {
-      return { result: response.content.trim(), llmCalls, toolCalls, provider: type, truncated: false };
+      return { result: response.content.trim(), llmCalls, toolCalls, ...base, truncated: false };
     }
 
     // Replay the assistant turn exactly as the provider asked for it — the
@@ -288,7 +353,7 @@ async function runToolLoop(
     result: 'Subagent stopped: reached its iteration ceiling before finishing.',
     llmCalls,
     toolCalls,
-    provider: type,
+    ...base,
     truncated: true,
   };
 }

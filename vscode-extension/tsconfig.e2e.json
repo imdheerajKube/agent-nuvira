@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "out",
+    "rootDir": "src",
+    "types": ["node", "vscode"]
+  },
+  "include": ["src/test/e2e"],
+  "exclude": ["node_modules"]
+}

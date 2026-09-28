@@ -14,7 +14,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths';
+import { resolveNuviraDataPath, resolveNuviraHome } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getToolsetStatus } from '../tools/toolsets.js';
@@ -146,6 +146,35 @@ export interface HubSkill {
   enabled: boolean;
 }
 
+/**
+ * One subagent child-process run, as the dashboard shows it.
+ *
+ * A subagent runs in its own process and reports over IPC; without this the only
+ * trace of a finished run was a JSON file on disk. Provider, model and transport
+ * are what make a run explainable after the fact — "it answered nothing useful"
+ * reads very differently when it ran on a local model through the JSON fallback
+ * than when it ran on the provider you configured.
+ */
+export interface HubSubagentRun {
+  id: string;
+  goal: string;
+  /** spawning | running | completed | failed | timeout | killed */
+  status: string;
+  provider?: string;
+  model?: string;
+  /** native | json | none — how tool calls travelled. */
+  transport?: string;
+  /** Typed refusal code when the run refused (see tools/tool-refusal.ts). */
+  refusalCode?: string;
+  error?: string;
+  llmCalls: number;
+  toolCalls: number;
+  startedAt: number;
+  durationMs?: number;
+  /** First line of the result, so a row is recognisable without the whole text. */
+  resultPreview?: string;
+}
+
 export interface HubSkillsData {
   compiled: HubSkill[];
   hub: HubSkill[];
@@ -205,6 +234,13 @@ export interface HubData {
     sessions: HubArtifactSummary[];
   };
   skills: HubSkillsData;
+  /** Subagent child-process runs (P4.1) — the most recent first. */
+  subagents: {
+    total: number;
+    running: number;
+    failed: number;
+    recent: HubSubagentRun[];
+  };
   /** Gateway chat conversations (per-contact history). */
   conversations: {
     total: number;
@@ -518,6 +554,59 @@ function readConversationAnalytics(): HubConversationAnalytics {
 
 // ─── Artifacts (I3 store) ───────────────────────────────────────────────────
 
+/**
+ * Read the subagent run records the child processes left behind.
+ *
+ * Reads the state files directly rather than constructing a SubagentManager: the
+ * dashboard must never spawn, reap or recover anything by looking at it, and the
+ * hub has a never-throw contract.
+ */
+function readSubagentsData(): HubData['subagents'] {
+  const empty: HubData['subagents'] = { total: 0, running: 0, failed: 0, recent: [] };
+  try {
+    const dir = resolveNuviraDataPath('cache', 'subagents', 'state');
+    if (!existsSync(dir)) return empty;
+    const runs: Array<Record<string, unknown>> = [];
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith('.json')) continue;
+      try {
+        runs.push(JSON.parse(readFileSync(join(dir, file), 'utf8')) as Record<string, unknown>);
+      } catch {
+        // A half-written state file is not a reason to fail the whole hub.
+      }
+    }
+    const asString = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
+    const asNumber = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+    const recent: HubSubagentRun[] = runs
+      .map((r) => ({
+        id: String(r.id ?? ''),
+        goal: String(r.goal ?? ''),
+        status: String(r.status ?? 'unknown'),
+        ...(asString(r.provider) ? { provider: asString(r.provider) } : {}),
+        ...(asString(r.model) ? { model: asString(r.model) } : {}),
+        ...(asString(r.transport) ? { transport: asString(r.transport) } : {}),
+        ...(asString(r.refusalCode) ? { refusalCode: asString(r.refusalCode) } : {}),
+        ...(asString(r.error) ? { error: asString(r.error) } : {}),
+        llmCalls: asNumber(r.llmCalls),
+        toolCalls: asNumber(r.toolCalls),
+        startedAt: asNumber(r.startedAt),
+        ...(typeof r.durationMs === 'number' ? { durationMs: r.durationMs } : {}),
+        ...(asString(r.result)
+          ? { resultPreview: (r.result as string).split('\n')[0].slice(0, 160) }
+          : {}),
+      }))
+      .sort((a, b) => b.startedAt - a.startedAt);
+    return {
+      total: recent.length,
+      running: recent.filter((r) => r.status === 'running' || r.status === 'spawning').length,
+      failed: recent.filter((r) => r.status === 'failed').length,
+      recent: recent.slice(0, 20),
+    };
+  } catch {
+    return empty;
+  }
+}
+
 function readArtifactsData(): HubData['artifacts'] {
   const store = new ArtifactStore();
   const sessions = store.listSessions().map((s) => ({
@@ -641,6 +730,7 @@ export function readHubData(): HubData {
     channels: readChannelsData(),
     artifacts: readArtifactsData(),
     skills: readSkillsData(),
+    subagents: readSubagentsData(),
     conversations: { ...readConversationsData(), analytics: readConversationAnalytics() },
     adminConfigured: isAdminConfigured(),
     serverTime: Date.now(),

@@ -1,0 +1,17 @@
+{
+  "//": "In-repo verification config: resolves `@agent-nuvira/sdk` from the local source tree so the example can be type-checked without installing the published package. The shipped `tsconfig.json` is the standalone config a user would use.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "rootDir": "../..",
+    "baseUrl": ".",
+    "paths": {
+      "@agent-nuvira/sdk": ["../../src/agent-sdk/src/index.ts"],
+      "@agent-nuvira/sdk/agent": ["../../src/agent-sdk/src/agent.ts"],
+      "@agent-nuvira/sdk/types": ["../../src/agent-sdk/src/types.ts"],
+      "@agent-nuvira/sdk/testing": ["../../src/agent-sdk/src/testing.ts"],
+      "@agent-nuvira/sdk/define": ["../../src/agent-sdk/src/define.ts"]
+    }
+  }
+}

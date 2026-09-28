@@ -14,7 +14,7 @@ import { governanceVerdict } from '../learning/auto-router.js';
 
 /**
  * Models command — list available models from providers
- * agent-baba-d models [--provider nim]
+ * agent-nuvira models [--provider nim]
  *
  * Subcommands:
  *   nuvira models refresh [provider]  — probe + spot-check, update the registry
@@ -637,7 +637,7 @@ export class ModelsCommand extends BaseCommand {
       if (options?.search) {
         logger.info(`No models found matching "${options.search}"`);
       } else {
-        logger.info('No models found. Configure a provider first with: agent-baba-d config set');
+        logger.info('No models found. Configure a provider first with: agent-nuvira config set');
       }
       return;
     }
@@ -669,8 +669,8 @@ export class ModelsCommand extends BaseCommand {
 
     if (allResults.length > 0) {
       logger.info('\nUse a model by specifying it with --model:');
-      console.log('  agent-baba-d chat --provider nim --model <model-id>');
-      console.log('  agent-baba-d edit file.js --provider openrouter --model <model-id>');
+      console.log('  agent-nuvira chat --provider nim --model <model-id>');
+      console.log('  agent-nuvira edit file.js --provider openrouter --model <model-id>');
     }
   }
 }

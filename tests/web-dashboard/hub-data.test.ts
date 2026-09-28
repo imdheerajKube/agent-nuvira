@@ -2,9 +2,9 @@
  * I4 — Agent Hub read aggregation tests (`tests/web-dashboard/hub-data.test.ts`).
  *
  * Covers the pure module that backs the dashboard's Skills/Tools/Channels/
- * Artifacts tabs: frontmatter parsing, hub-skill scanning, and the aggregate
- * `readHubData()` payload — hermetic via BUFF_CONFIG_DIR / BUFF_MEMORY_DIR
- * temp dirs + a temp cwd for `.agents/skills` scanning.
+ * Artifacts/Subagents tabs: frontmatter parsing, hub-skill scanning, and the
+ * aggregate `readHubData()` payload — hermetic via BUFF_CONFIG_DIR /
+ * BUFF_MEMORY_DIR temp dirs + a temp cwd for `.agents/skills` scanning.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -314,6 +314,53 @@ describe('readHubData', () => {
     const hub = readHubData();
     const demo = hub.skills.hub.find((s) => s.id === 'demo-fix');
     expect(demo).toMatchObject({ id: 'demo-fix', origin: 'hub' });
+  });
+
+  it('lists subagent runs with the provider, model, transport and refusal code each child reported', () => {
+    // What SubagentManager.saveState() writes to <dataPath>/cache/subagents/state.
+    const stateDir = join(cfgDir, 'cache', 'subagents', 'state');
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, 'run-a.json'), JSON.stringify({
+      id: 'run-a', status: 'completed', goal: 'summarise the diff',
+      provider: 'openai', model: 'gpt-4o-mini', transport: 'native',
+      llmCalls: 3, toolCalls: 2, startedAt: 2000, durationMs: 1500,
+      result: 'first line\nsecond line',
+    }));
+    writeFileSync(join(stateDir, 'run-b.json'), JSON.stringify({
+      id: 'run-b', status: 'failed', goal: 'count the failures',
+      provider: 'local', transport: 'json', refusalCode: 'not_configured',
+      error: "Provider 'local' is not reachable.",
+      llmCalls: 0, toolCalls: 0, startedAt: 1000,
+    }));
+    writeFileSync(join(stateDir, 'run-c.json'), JSON.stringify({
+      id: 'run-c', status: 'spawning', goal: 'grep for TODO',
+      llmCalls: 0, toolCalls: 0, startedAt: 3000,
+    }));
+    // A half-written state file must be skipped, not fail the whole read.
+    writeFileSync(join(stateDir, 'broken.json'), '{not json');
+
+    const hub = readHubData();
+    expect(hub.subagents.total).toBe(3);
+    expect(hub.subagents.failed).toBe(1);
+    expect(hub.subagents.running).toBe(1);
+    // Newest first — the ordering is what makes the panel readable.
+    expect(hub.subagents.recent.map((r) => r.id)).toEqual(['run-c', 'run-a', 'run-b']);
+    const done = hub.subagents.recent[1];
+    expect(done).toMatchObject({
+      provider: 'openai', model: 'gpt-4o-mini', transport: 'native',
+      llmCalls: 3, toolCalls: 2, durationMs: 1500,
+    });
+    // Only the FIRST line, truncated — a row must not carry a whole report.
+    expect(done.resultPreview).toBe('first line');
+    // A refused run keeps its TYPED code, plus the transport it would have used.
+    expect(hub.subagents.recent[2].refusalCode).toBe('not_configured');
+    expect(hub.subagents.recent[2].transport).toBe('json');
+    // A run that never reported a provider says so rather than inventing one.
+    expect(hub.subagents.recent[0].provider).toBeUndefined();
+  });
+
+  it('reports an empty subagent list when no run has ever been recorded', () => {
+    expect(readHubData().subagents).toEqual({ total: 0, running: 0, failed: 0, recent: [] });
   });
 
   it('never throws even when the config file is corrupt', () => {

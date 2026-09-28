@@ -1,7 +1,8 @@
 /**
  * Agent Hub panel tests (I4 + I5).
  *
- * - 4 tabs render from the /api/hub payload (Tools/Channels/Artifacts/Skills).
+ * - Every tab renders from the /api/hub payload
+ *   (Tools/Channels/Conversations/Artifacts/Skills/Subagents).
  * - An authenticated admin/operator can toggle a toolset — the switch calls
  *   setToolsetEnabled and the panel re-reads.
  * - An unauthenticated user is routed through the login gate, then the queued
@@ -74,6 +75,42 @@ const HUB: HubData = {
     hub: [{ id: 'demo-fix', name: 'demo-fix', description: 'Fix a demo issue', origin: 'hub' }],
     total: 3,
   },
+  // P4.1 — two runs: one that finished on a native-tool provider, one that
+  // REFUSED (the local model was unreachable), so a row must show both the
+  // transport it used and the typed code it stopped with.
+  subagents: {
+    total: 2,
+    running: 0,
+    failed: 1,
+    recent: [
+      {
+        id: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa',
+        goal: 'summarise the deploy diff',
+        status: 'completed',
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        transport: 'native',
+        llmCalls: 2,
+        toolCalls: 1,
+        startedAt: Date.now() - 4000,
+        durationMs: 3200,
+        resultPreview: 'The deploy adds two files.',
+      },
+      {
+        id: 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb',
+        goal: 'count the failing tests',
+        status: 'failed',
+        provider: 'local',
+        transport: 'json',
+        refusalCode: 'not_configured',
+        error: "Provider 'local' is not reachable.",
+        llmCalls: 0,
+        toolCalls: 0,
+        startedAt: Date.now() - 9000,
+        durationMs: 120,
+      },
+    ],
+  },
   adminConfigured: true,
   serverTime: 123,
 };
@@ -115,13 +152,14 @@ afterEach(() => {
 });
 
 describe('AgentHub', () => {
-  it('renders the 4 tabs with counts from the hub payload', async () => {
+  it('renders every tab with counts from the hub payload', async () => {
     mockReads();
     render(<AgentHub />);
     await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
     expect(screen.getByRole('tab', { name: /Channels/ })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /Artifacts/ })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /Skills/ })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /Subagents/ })).toBeTruthy();
     // Tab badges carry counts (2/2 toolsets, 1 channel, 1 session, 2 skills).
     expect(screen.getByText('2/2')).toBeTruthy();
   });
@@ -363,6 +401,25 @@ describe('AgentHub', () => {
     await waitFor(() => expect(screen.getByText('Fix lint')).toBeTruthy());
     // 'demo-fix' renders twice (skill name + id) — assert both are present.
     expect(screen.getAllByText('demo-fix')).toHaveLength(2);
+  });
+
+  it('Subagents: shows the provider, transport and refusal code each child reported', async () => {
+    // P4.1 — a finished run is only explainable if the panel reports WHO served
+    // it and HOW tool calls travelled; a refusal must show its typed code.
+    mockReads();
+    render(<AgentHub />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Subagents/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('tab', { name: /Subagents/ }));
+
+    await waitFor(() => expect(screen.getByText('summarise the deploy diff')).toBeTruthy());
+    expect(screen.getByText(/openai · gpt-4o-mini/)).toBeTruthy();
+    expect(screen.getByText('🛠 native transport')).toBeTruthy();
+    expect(screen.getByText('The deploy adds two files.')).toBeTruthy();
+
+    expect(screen.getByText('count the failing tests')).toBeTruthy();
+    expect(screen.getByText('🛠 json transport')).toBeTruthy();
+    expect(screen.getByText('not_configured')).toBeTruthy();
+    expect(screen.getByText(/Refused before answering/)).toBeTruthy();
   });
 
   it('P6e — provenance badges: bundled skills get 🧠, user-added get community', async () => {

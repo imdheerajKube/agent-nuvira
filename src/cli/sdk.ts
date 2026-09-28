@@ -170,7 +170,7 @@ export class SDKCommand extends BaseCommand {
   }
 
   private handleInfo(): void {
-    logger.highlight('@agent-baba-d/sdk');
+    logger.highlight('@agent-nuvira/sdk');
     console.log('');
     console.log('   Build custom agents for the Agent-Nuvira multi-agent system.');
     console.log('');
@@ -180,10 +180,10 @@ export class SDKCommand extends BaseCommand {
     console.log('     info        Show this information');
     console.log('');
     console.log('   Entry points:');
-    console.log('     @agent-baba-d/sdk              Base Agent class + core types');
-    console.log('     @agent-baba-d/sdk/testing      Testing utilities');
+    console.log('     @agent-nuvira/sdk              Base Agent class + core types');
+    console.log('     @agent-nuvira/sdk/testing      Testing utilities');
     console.log('');
-    console.log('   API Docs: https://github.com/imdheerajKube/agent-baba-d');
+    console.log('   API Docs: https://github.com/imdheerajKube/agent-nuvira-documentation');
   }
 
   private async handleRegister(

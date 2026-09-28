@@ -179,6 +179,7 @@ describe('subagent — the tool loop runs real tools', () => {
     expect(outcome.llmCalls).toBe(2);
     expect(outcome.toolCalls).toBe(1);
     expect(outcome.truncated).toBe(false);
+    expect(outcome.transport).toBe('native');
 
     // The model was offered the real schema for the tool it was allowed.
     expect(calls[0].tools.map((t) => t.name)).toEqual(['read_file']);
@@ -208,23 +209,60 @@ describe('subagent — the tool loop runs real tools', () => {
     rmSync(workDir, { recursive: true, force: true });
   });
 
-  it('refuses tools the provider cannot call instead of answering without them', async () => {
-    const noTools: InferenceProvider = {
-      name: 'no-tools',
+  it('falls back to the shared JSON transport when the provider cannot call tools', async () => {
+    // The `local`/Ollama case: no `generateTools`, so the tool call has to travel
+    // as text. This used to REFUSE (honest, but it meant a local-only setup could
+    // not use tools at all).
+    const prompts: string[] = [];
+    let turns = 0;
+    const jsonOnly: InferenceProvider = {
+      name: 'json-only',
       async isAvailable() {
         return true;
       },
-      async generate() {
-        return 'plain answer';
+      async generate(prompt: string) {
+        prompts.push(prompt);
+        turns += 1;
+        if (turns === 1) {
+          // The fallback shape the shared parser understands.
+          return 'Let me look that up.\n{"tool":"read_file","arguments":{"path":"note.txt"}}';
+        }
+        return 'ANSWER-AFTER-FALLBACK';
       },
+      // Deliberately NO generateTools.
     };
 
-    await expect(
-      runSubagent(
-        { goal: 'read the note', tools: ['read_file'] },
-        { createProvider: async () => ({ provider: noTools, type: 'no-tools' }) },
-      ),
-    ).rejects.toThrow(SubagentRefusalError);
+    const ran: string[] = [];
+    const outcome = await runSubagent(
+      { goal: 'read the note', tools: ['read_file'] },
+      {
+        createProvider: async () => ({ provider: jsonOnly, type: 'json-only' }),
+        runTool: async (name) => {
+          ran.push(name);
+          return 'FALLBACK-NOTE';
+        },
+      },
+    );
+
+    expect(outcome.transport).toBe('json');
+    expect(outcome.result).toBe('ANSWER-AFTER-FALLBACK');
+    expect(ran).toEqual(['read_file']);
+    // The shared fallback prompt carried the tool names and the argument shapes,
+    // and the tool result was fed back on the next turn.
+    expect(prompts[0]).toContain('read_file');
+    expect(prompts[0]).toContain('TOOL ARGUMENT SHAPES');
+    expect(prompts[1]).toContain('FALLBACK-NOTE');
+    // A raw tool block must never reach the answer.
+    expect(outcome.result).not.toContain('"tool"');
+  });
+
+  it('reports the native transport when the provider speaks the tool protocol', async () => {
+    const outcome = await runSubagent(
+      { goal: 'read the note', tools: ['read_file'] },
+      { createProvider: async () => ({ provider: scriptedProvider(), type: 'scripted' }) },
+    );
+    expect(outcome.transport).toBe('native');
+    expect(outcome.result).toBe('ANSWER-AFTER-TOOL');
   });
 
   it('drops blocked and unknown tools rather than offering them', () => {
@@ -238,8 +276,15 @@ describe('subagent — the tool loop runs real tools', () => {
   });
 
   it('refuses an unknown tool by name instead of quietly ignoring it', async () => {
-    await expect(
-      runSubagent({ goal: 'x', tools: ['no_such_tool'] }, { createProvider: async () => ({ provider: scriptedProvider(), type: 's' }) }),
-    ).rejects.toThrow(/Unknown tool/);
+    // The refusal is a TYPED error, which is what lets the child entry map it to
+    // a `code` over IPC instead of the parent having to read the message text.
+    const failure = await runSubagent(
+      { goal: 'x', tools: ['no_such_tool'] },
+      { createProvider: async () => ({ provider: scriptedProvider(), type: 's' }) },
+    ).then(() => null, (err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(SubagentRefusalError);
+    expect((failure as SubagentRefusalError).code).toBe('unsupported_format');
+    expect((failure as Error).message).toMatch(/Unknown tool/);
   });
 });

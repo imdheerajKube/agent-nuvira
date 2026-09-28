@@ -41,11 +41,36 @@ vi.mock('../chatProvider.js', () => ({
   })),
 }));
 
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import * as vscode from 'vscode';
-import { ChatPanel } from '../chatPanel.js';
+import { ChatPanel, resolveHtmlTemplate } from '../chatPanel.js';
 import { CLIManager } from '../cliManager.js';
 import { ChatHistoryProvider } from '../chatProvider.js';
 import type { ExtensionConfig } from '../types.js';
+
+describe('chat webview template resolution', () => {
+  it('returns the first candidate that exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nuvira-html-'));
+    try {
+      const a = join(dir, 'a.html');
+      const b = join(dir, 'b.html');
+      writeFileSync(a, '<p>A</p>');
+      writeFileSync(b, '<p>B</p>');
+
+      // The missing candidate is skipped; the packaged path wins over later ones.
+      expect(resolveHtmlTemplate([join(dir, 'missing.html'), a, b])).toBe('<p>A</p>');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null (never throws) when no candidate exists', () => {
+    expect(resolveHtmlTemplate(['/definitely/not/here.html'])).toBeNull();
+  });
+});
 
 describe('ChatPanel model switcher', () => {
   const defaultConfig: ExtensionConfig = {

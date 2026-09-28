@@ -1,0 +1,129 @@
+# Publish SDK — builds, tests, and publishes `@agent-nuvira/sdk` to npm.
+#
+# WHY A SEPARATE WORKFLOW: the SDK is versioned independently of the CLI and the
+# extension, and until now nothing published it at all — it had been pushed to
+# npm by hand, so the published version could silently drift from the repo. Each
+# artifact now has its own trigger: the CLI on `v*` (publish.yml), the extension
+# on `vscode-v*`, and the SDK on `sdk-v*`.
+#
+# Triggered when:
+#   - A tag matching "sdk-v*" is pushed (e.g., sdk-v1.0.2)
+#   - Manually via workflow_dispatch
+#
+# Prerequisites:
+#   - NPM_TOKEN secret with publish rights to the @agent-nuvira scope
+
+name: publish-sdk
+
+on:
+  push:
+    tags:
+      - 'sdk-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (build + test + pack only, no publish)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SDK_DIR: src/agent-sdk
+
+jobs:
+  verify:
+    name: Build and test SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build SDK
+        working-directory: ${{ env.SDK_DIR }}
+        run: npm run build
+
+      - name: Test SDK
+        run: npx vitest run tests/agent-sdk
+
+      # A published package whose declared entry points are missing is worse than
+      # no release: `import ... from '@agent-nuvira/sdk/register'` fails at the
+      # consumer. Assert every declared export resolves to a built file.
+      - name: Verify declared exports resolve
+        run: |
+          node -e '
+            const pkg = require("./src/agent-sdk/package.json");
+            const fs = require("fs");
+            const path = require("path");
+            let bad = 0;
+            for (const [key, val] of Object.entries(pkg.exports)) {
+              for (const [cond, rel] of Object.entries(val)) {
+                const file = path.join("src/agent-sdk", rel);
+                if (!fs.existsSync(file)) { console.error(`missing ${key} (${cond}): ${rel}`); bad++; }
+              }
+            }
+            if (bad) process.exit(1);
+            console.log("all declared exports present");
+          '
+
+  publish:
+    name: Publish to npm
+    needs: verify
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build SDK
+        working-directory: ${{ env.SDK_DIR }}
+        run: npm run build
+
+      # Idempotency guard: re-running a release (or re-tagging) must not fail
+      # because the version already exists on the registry.
+      - name: Check if version already published
+        id: npm-version-check
+        run: |
+          VERSION=$(node -p "require('./src/agent-sdk/package.json').version")
+          if npm view "@agent-nuvira/sdk@${VERSION}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "@agent-nuvira/sdk@${VERSION} already published — skipping publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish SDK to npm
+        if: steps.npm-version-check.outputs.exists != 'true'
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > .npmrc
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

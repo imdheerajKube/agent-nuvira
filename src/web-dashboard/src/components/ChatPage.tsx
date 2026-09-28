@@ -79,6 +79,73 @@ interface AttachmentChip {
   name: string;
   content: string;
   kind: 'file' | 'paste' | 'drop';
+  /**
+   * P2 — how `content` is encoded.
+   *
+   * 'text' (or absent): decodable text, sent inline as before.
+   * 'base64': the file's BYTES. The server extracts them with `read_extract` — the
+   * same reader the agent uses for a file in the project folder — so a PDF becomes
+   * its text (or an explicit refusal), never mojibake.
+   */
+  encoding?: 'text' | 'base64';
+}
+
+/**
+ * P2 — binary document types the server can extract. These are sent as bytes; they are
+ * never decoded as text here.
+ */
+const BINARY_DOC_PATTERN = /\.(pdf|docx|xlsx|pptx)$/i;
+/** Image types: readable in a project folder (describe_image), not through this composer. */
+const IMAGE_PATTERN = /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i;
+/** Extensions that are text even if the head sniffs oddly (e.g. a UTF-16 BOM). */
+const TEXT_PATTERN = /\.(txt|md|markdown|text|log|csv|tsv|json|xml|yaml|yml|html?|htaccess|css|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|java|kt|c|h|cpp|cs|php|sh|bash|zsh|sql|ini|toml|cfg|conf|env)$/i;
+
+/** Base64 for bytes — chunked so a 300 KB file cannot blow the argument stack. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/**
+ * P2 — decide how to send a file, and refuse the ones that cannot be read at all.
+ *
+ * A NUL byte in the first 8 KB means the file is not text, whatever its name claims.
+ * Decoding such a file as UTF-8 is exactly how a PDF reached the model as mojibake,
+ * so this returns a decision rather than a guess. Mirrors `looksBinary` in the
+ * server's `coding-tools.ts`, and the same probe the extractor uses.
+ */
+function classifyAttachment(
+  name: string,
+  head: Uint8Array,
+): { how: 'text' | 'binary' } | { how: 'unsupported'; reason: string } {
+  const hasNul = head.includes(0);
+  const printableFraction = head.length === 0
+    ? 1
+    : head.reduce((n, b) => (b === 9 || b === 10 || b === 13 || (b >= 32 && b < 127) || b >= 128 ? n + 1 : n), 0) / head.length;
+
+  if (!hasNul && printableFraction > 0.9) return { how: 'text' };
+  if (BINARY_DOC_PATTERN.test(name)) return { how: 'binary' };
+  if (TEXT_PATTERN.test(name)) return { how: 'text' };
+
+  if (IMAGE_PATTERN.test(name)) {
+    return {
+      how: 'unsupported',
+      reason:
+        `"${name}" is an image, and this composer only sends text and documents. ` +
+        'Save it into the project folder and ask me to describe it — I can read images from there.',
+    };
+  }
+
+  return {
+    how: 'unsupported',
+    reason:
+      `"${name}" is not a text file and not a document type I can read. ` +
+      'Attach a PDF, DOCX, XLSX, PPTX, or a text/CSV/JSON/Markdown file — or put the file in the project folder and ask me to read it.',
+  };
 }
 
 /** P0.7 — the plan checklist as rendered (goal + steps with statuses). */
@@ -865,15 +932,37 @@ export default function ChatPage() {
     setAttachments((a) => a.filter((_, i) => i !== index));
   }, []);
 
-  /** P8 — file picker: read the file as text and chip it. */
+  /**
+   * P8 + P2 — file picker: send text inline, or send BYTES for server-side extraction.
+   *
+   * This used to be `await file.text()` for every file, which produced mojibake for a
+   * PDF (the 2026-09-27 incident). Binary documents now ride as base64 and are
+   * extracted by the server; anything unreadable is refused HERE, with a message that
+   * names a path that works, instead of being silently turned into noise.
+   */
   const pickFile = useCallback(async (file: File) => {
     if (!file) return;
     if (file.size > MAX_ATTACHMENT_BYTES) {
       setError(`Attachment "${file.name}" is too large (max ${Math.round(MAX_ATTACHMENT_BYTES / 1024)} KB).`);
       return;
     }
+
+    const head = new Uint8Array(await file.slice(0, 8192).arrayBuffer());
+    const decision = classifyAttachment(file.name, head);
+
+    if (decision.how === 'unsupported') {
+      setError(decision.reason);
+      return;
+    }
+
+    if (decision.how === 'binary') {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      addAttachment({ name: file.name, content: bytesToBase64(bytes), kind: 'file', encoding: 'base64' });
+      return;
+    }
+
     const text = await file.text();
-    addAttachment({ name: file.name, content: text, kind: 'file' });
+    addAttachment({ name: file.name, content: text, kind: 'file', encoding: 'text' });
   }, [addAttachment]);
 
   /** P8 — the textarea's paste handler: remember the cursor so the offer can
@@ -897,7 +986,7 @@ export default function ChatPage() {
       if (!pos) return prev;
       return prev.slice(0, pos.start) + prev.slice(pos.end);
     });
-    addAttachment({ name: `pasted-text.txt`, content: offer.text, kind: 'paste' });
+    addAttachment({ name: `pasted-text.txt`, content: offer.text, kind: 'paste', encoding: 'text' });
     setPasteOffer(null);
     pastePosRef.current = null;
   }, [pasteOffer, addAttachment]);
@@ -1210,7 +1299,14 @@ export default function ChatPage() {
         clean || `(see ${chipList.length} attachment${chipList.length === 1 ? '' : 's'})`,
         {
           projectPath: attachedProject?.path,
-          attachments: chipList.map((c) => ({ name: c.name, content: c.content, kind: c.kind })),
+          // `encoding` rides along so the server knows whether to read the content as
+          // text or to decode base64 and extract it (P2).
+          attachments: chipList.map((c) => ({
+            name: c.name,
+            content: c.content,
+            kind: c.kind,
+            encoding: c.encoding ?? 'text',
+          })),
         },
         controller.signal,
       );
@@ -1999,6 +2095,9 @@ export default function ChatPage() {
             onDrop={(e) => {
               e.preventDefault();
               setDragOver(false);
+              // P2 — a dropped file goes through the SAME classifier as the picker,
+              // so a dragged PDF is extracted (not mangled) and an unsupported file is
+              // refused with the same message rather than being silently accepted.
               const files = Array.from(e.dataTransfer?.files ?? []);
               for (const f of files.slice(0, 10)) void pickFile(f);
             }}
@@ -2015,9 +2114,19 @@ export default function ChatPage() {
             {attachments.length > 0 ? (
               <div className="chat-attach-row">
                 {attachments.map((a, i) => (
-                  <span key={`${a.name}-${i}`} className="chat-attach-chip" title={`${a.name} (${a.content.length.toLocaleString()} chars)`}>
+                  <span
+                    key={`${a.name}-${i}`}
+                    className="chat-attach-chip"
+                    title={a.encoding === 'base64'
+                      ? `${a.name} (${a.content.length.toLocaleString()} base64 chars — read on the server)`
+                      : `${a.name} (${a.content.length.toLocaleString()} chars)`}
+                  >
                     📎 {a.name}
-                    <span className="admin-hint"> {a.content.length.toLocaleString()}c</span>
+                    <span className="admin-hint">
+                      {a.encoding === 'base64'
+                        ? `${Math.round((a.content.length * 3) / 4096)} KB`
+                        : `${a.content.length.toLocaleString()}c`}
+                    </span>
                     <button type="button" className="chat-mini-action" onClick={() => removeAttachment(i)}>✕</button>
                   </span>
                 ))}
@@ -2027,6 +2136,10 @@ export default function ChatPage() {
               <input
                 ref={fileInputRef}
                 type="file"
+                // P2 — the picker offers what the pipeline can actually read: text and
+                // the four OOXML/PDF containers. Images and anything else are refused
+                // with guidance rather than silently mangled.
+                accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,.markdown,.text,.log,.csv,.tsv,.json,.xml,.yaml,.yml,.html,.htm,text/*"
                 style={{ display: 'none' }}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -2037,7 +2150,7 @@ export default function ChatPage() {
               <button
                 type="button"
                 className="chat-attach-btn"
-                title="Attach a file (up to 300 KB, text only)"
+                title="Attach a file (up to 300 KB): PDF, DOCX, XLSX, PPTX or text — documents are read on the server"
                 disabled={busy || attachments.length >= 10}
                 onClick={() => fileInputRef.current?.click()}
               >
