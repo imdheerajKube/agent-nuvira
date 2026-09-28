@@ -133,6 +133,63 @@ describe('confirmRoutedIntent', () => {
     expect(listLearnings()).toHaveLength(0);
   });
 
+  it('ACT on a correction the model did not justify, but never TEACH it', async () => {
+    // WS1 (#23) — the gate, at the place it matters. `learnings.ts` promises a
+    // learning is written only when a misreading was CONFIRMED; before this, a
+    // correction with no reason counted as confirmed, so a rule nobody could
+    // justify was persisted and silently re-routed every later ask that matched.
+    const result = await confirmRoutedIntent({
+      ask: ASK,
+      routed: 'chat',
+      callLLM: async () => '{"intent":"coding-task"}',
+    });
+
+    // The turn still takes the better route — a PLAUSIBLE reading is useful.
+    expect(result.kind).toBe('pipeline');
+    expect(result.agreed).toBe(false);
+    // ...and it is not written down as a permanent change to the router.
+    expect(result.finding.verdict).toBe('PLAUSIBLE');
+    expect(result.finding.evidence).toEqual([]);
+    expect(result.learning).toBeUndefined();
+    expect(listLearnings()).toHaveLength(0);
+  });
+
+  it('promotes the correction and records it once the model justifies it', async () => {
+    const result = await confirmRoutedIntent({
+      ask: ASK,
+      routed: 'chat',
+      callLLM: async () => '{"intent":"coding-task","reason":"wants it built"}',
+    });
+
+    expect(result.finding.verdict).toBe('CONFIRMED');
+    expect(result.finding.evidence).toEqual([
+      {
+        kind: 'observation',
+        ref: 'wants it built',
+        detail: 'stated reason from the probe model',
+      },
+    ]);
+    expect(result.finding.outcome).toContain('corrected from chat to pipeline');
+    expect(result.learning).toBeDefined();
+    expect(listLearnings()).toHaveLength(1);
+  });
+
+  it('carries a finding even when the probe could not run', async () => {
+    // "We could not establish a reading" is itself a fact about the turn, and a
+    // report must be able to print it rather than infer it from a missing field.
+    const result = await confirmRoutedIntent({
+      ask: ASK,
+      routed: 'chat',
+      callLLM: async () => {
+        throw new Error('429 rate limited');
+      },
+    });
+
+    expect(result.finding.verdict).toBe('PLAUSIBLE');
+    expect(result.finding.outcome).toContain('the probe could not run');
+    expect(result.finding.claim).toContain('is best served by');
+  });
+
   it('does not record when recording is switched off', async () => {
     const result = await confirmRoutedIntent({
       ask: ASK,

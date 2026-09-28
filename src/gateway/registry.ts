@@ -64,6 +64,11 @@ import {
   intentConfirmedNote,
   intentCorrectedNote,
 } from '../nlu/intent-confirm.js';
+// The audit's verdict goes into the gateway's own durable record, in the SAME
+// wire shape every other surface reports (WS1, `findings/verdicts.ts`): a
+// messaging surface has no terminal to scroll, so "what we decided, and what it
+// was checked against" has to be in the log or it does not exist.
+import { toWire } from '../findings/verdicts.js';
 import type { AskKind } from '../nlu/conversation-gate.js';
 // The retry queue behind the "Reply *yes* and I will keep trying" offer. LEAF
 // import: a plain store + matcher, so the gateway does not pull routing in for it.
@@ -1562,6 +1567,10 @@ export class GatewayRegistry {
         routed,
         probed: !verdict.failed,
         reason: verdict.reason,
+        // The verdict for THIS decision, with its evidence. A confirmed reading
+        // now means the model justified it, so the log says which of the two it
+        // was instead of leaving "probed: true" to imply it was checked.
+        finding: toWire(verdict.finding),
       }, 'info');
       // The audit ran and confirmed the reading: say so, because "it failed" and
       // "it failed and I checked that I understood you" are different promises.
@@ -1578,6 +1587,11 @@ export class GatewayRegistry {
       to: verdict.kind,
       reason: verdict.reason,
       learningId: verdict.learning?.id,
+      // Logged even when `learningId` is absent, and that is the case worth
+      // recording: a correction the model could not justify is acted on but NOT
+      // taught, so the log states the verdict (PLAUSIBLE) and its own outcome
+      // rather than looking like a correction that simply failed to save.
+      finding: toWire(verdict.finding),
     }, 'warn');
 
     const corrected = verdict.kind;

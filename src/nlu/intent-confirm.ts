@@ -24,8 +24,20 @@
  *     the NLU from a failed probe would encode an outage as a rule, which is the
  *     worst possible outcome: the router would get worse exactly when the pool
  *     is down.
+ *
+ * AND IT NOW CARRIES A VERDICT, because restraint 3 was only half the promise.
+ * `learnings.ts` says a learning is written only when a misreading has been
+ * CONFIRMED — but "confirmed" meant the model said so, with nothing recorded that
+ * a second party could check, so a correction nobody could justify was persisted
+ * and silently re-routed every later ask that matched. The decision is now a
+ * `Finding` (`src/findings/verdicts.ts`): the model's stated reason is the
+ * evidence, and only a CONFIRMED verdict is TAUGHT. A correction with no reason
+ * is still ACTED ON — the turn takes the better route — it is just not written
+ * down as a rule, which is the difference between a decision and a permanent
+ * change to the router.
  */
 
+import { confirmFinding, plausibleFinding, type Evidence, type Finding } from '../findings/verdicts.js';
 import { recordLearning, type NluLearning } from './learnings.js';
 import type { AskKind } from './conversation-gate.js';
 
@@ -37,10 +49,67 @@ export interface IntentConfirmResult {
   agreed: boolean;
   /** The model's one-line reason, when it gave one. */
   reason?: string;
-  /** The learning written, when the reading was corrected. */
+  /** The learning written, when the reading was corrected AND confirmed. */
   learning?: NluLearning;
   /** True when the probe could not run (no model / unreadable answer). */
   failed?: boolean;
+  /**
+   * The verdict this decision carries, with its evidence.
+   *
+   * Always present, including when the probe failed: "we could not establish a
+   * reading" is itself a fact about the turn, and a caller composing a report
+   * (`src/findings/verdicts.ts` `describeFinding`) should be able to print the
+   * decision and see that it was a guess rather than infer it from a missing
+   * field.
+   */
+  finding: Finding;
+}
+
+/** The claim a confirmation asserts: which kind serves the ask. */
+function claimFor(ask: string, reading: AskKind): string {
+  const shown = ask.length > 120 ? `${ask.slice(0, 120)}…` : ask;
+  const as = reading === 'pipeline' ? 'the coding pipeline' : 'a direct written answer';
+  return `the ask "${shown}" is best served by ${as}`;
+}
+
+/**
+ * The model's stated reason, as evidence.
+ *
+ * This is the whole bar, and it is a deliberately modest one: a routing probe
+ * cannot run a test or read a file, so the only check available to it is that the
+ * model can say WHY. A correction the model could not justify is not promoted,
+ * and therefore is not persisted into a rule that outlives the conversation.
+ */
+function reasonEvidence(reason: string | undefined): Evidence[] {
+  const ref = String(reason ?? '').trim();
+  return ref ? [{ kind: 'observation', ref, detail: 'stated reason from the probe model' }] : [];
+}
+
+/**
+ * The finding for one decision: PLAUSIBLE unless the probe justified it.
+ *
+ * `outcome` is required and always says what BECAME of the finding, because an
+ * outcome is what separates a finding from a status line — "the route was
+ * corrected" and "no verdict: the answer did not state a reading" are different
+ * facts and must not both render as silence.
+ */
+function decisionFinding(input: {
+  ask: string;
+  reading: AskKind;
+  outcome: string;
+  reason?: string;
+  now?: number;
+}): Finding {
+  return confirmFinding(
+    plausibleFinding({
+      claim: claimFor(input.ask, input.reading),
+      outcome: input.outcome,
+      source: 'intent-confirm',
+      ...(input.now !== undefined ? { at: input.now } : {}),
+    }),
+    reasonEvidence(input.reason),
+    { outcome: input.outcome },
+  ).finding;
 }
 
 /**
@@ -126,7 +195,17 @@ export async function confirmRoutedIntent(input: {
     raw = await input.callLLM(buildIntentConfirmPrompt(input.ask, input.routed));
   } catch {
     // The probe is best-effort by contract: a failure means "no verdict".
-    return { kind: input.routed, agreed: true, failed: true };
+    return {
+      kind: input.routed,
+      agreed: true,
+      failed: true,
+      finding: decisionFinding({
+        ask: input.ask,
+        reading: input.routed,
+        outcome: 'no verdict — the probe could not run, so the reading stands unexamined',
+        ...(input.now !== undefined ? { now: input.now } : {}),
+      }),
+    };
   }
 
   const parsed = parseIntentConfirmReply(raw);
@@ -136,15 +215,37 @@ export async function confirmRoutedIntent(input: {
       agreed: true,
       ...(parsed.reason ? { reason: parsed.reason } : {}),
       ...(parsed.understood ? {} : { failed: true }),
+      finding: decisionFinding({
+        ask: input.ask,
+        reading: input.routed,
+        outcome: parsed.understood
+          ? 'the reading was not changed'
+          : 'no verdict — the answer did not state a reading',
+        ...(parsed.reason ? { reason: parsed.reason } : {}),
+        ...(input.now !== undefined ? { now: input.now } : {}),
+      }),
     };
   }
+
+  // The corrected reading — the one that can turn into a rule. It is ACTED ON
+  // whatever its verdict (the turn takes the better route), and TAUGHT only when
+  // the model justified it, which is the gate: see the header.
+  const finding = decisionFinding({
+    ask: input.ask,
+    reading: parsed.kind,
+    outcome: `the route was corrected from ${input.routed} to ${parsed.kind}`,
+    ...(parsed.reason ? { reason: parsed.reason } : {}),
+    ...(input.now !== undefined ? { now: input.now } : {}),
+  });
 
   const result: IntentConfirmResult = {
     kind: parsed.kind,
     agreed: false,
+    finding,
     ...(parsed.reason ? { reason: parsed.reason } : {}),
   };
-  if (input.record !== false) {
+  const confirmed = finding.verdict === 'CONFIRMED' && finding.evidence.length > 0;
+  if (confirmed && input.record !== false) {
     const learning = recordLearning({
       text: input.ask,
       from: input.routed,
@@ -153,6 +254,12 @@ export async function confirmRoutedIntent(input: {
       ...(input.now !== undefined ? { now: input.now } : {}),
     });
     if (learning) result.learning = learning;
+  }
+  if (!confirmed) {
+    result.finding = {
+      ...finding,
+      outcome: `${finding.outcome} — not learned: nothing the model could be checked against`,
+    };
   }
   return result;
 }

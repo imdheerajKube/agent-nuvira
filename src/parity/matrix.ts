@@ -142,7 +142,20 @@ export const CAPABILITIES: readonly Capability[] = [
     id: 'findings-verdicts',
     label: 'A finding carries CONFIRMED/PLAUSIBLE and an outcome, and cannot be promoted without evidence',
     workstream: 'WS1',
-    cells: everywhere('planned'),
+    // GROUNDWORK ONLY, and deliberately still `planned` on every surface.
+    // WS1 has started: the model and its evidence gate are real
+    // (`src/findings/verdicts.ts`), and the intent audit the gateway runs on a
+    // repeated failure now carries a verdict and reports it in the gateway log
+    // (`gateway/registry.ts`, `intent.confirmed` / `intent.corrected`). What has
+    // NOT landed is the CAPABILITY this row describes — a finding on an ordinary
+    // turn OF THIS SURFACE, carrying a verdict — and no parity case proves one.
+    // Marking it `supported` now would be the exact claim-without-a-proof the
+    // matrix exists to catch, so the note records the progress and the status
+    // stays honest until a harness case can flip a cell at a time.
+    cells: everywhere(
+      'planned',
+      'Groundwork only: the model and its evidence gate exist (`src/findings/verdicts.ts`) and the intent audit reports a verdict, but nothing on this surface produces findings on an ordinary turn and no parity case proves one yet.',
+    ),
   },
   {
     id: 'debug-log',

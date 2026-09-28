@@ -16,6 +16,13 @@
  * the store stays inspectable — a human can read exactly which asks were
  * misread and how.
  *
+ * CONFIRMED NOW MEANS SOMETHING CHECKABLE (`src/findings/verdicts.ts`). It used
+ * to mean "the model said so": a correction it could not justify was persisted
+ * anyway, and a rule outlives the conversation — it re-routes every later ask
+ * that matches, with nothing on file to review. The probe's stated reason is
+ * recorded as the evidence, and a correction without one stays PLAUSIBLE: acted
+ * on for this turn, never taught as a rule.
+ *
  * MATCHING IS DELIBERATELY NARROW. A learning applies to the same ask, not to a
  * similar-looking one: word order and repeated words are ignored (token set), but
  * nothing else is. A loose match would be worse than no learning at all — the

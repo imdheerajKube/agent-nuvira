@@ -23,7 +23,22 @@ const audit = vi.hoisted(() => ({ verdict: null as null | Record<string, unknown
 vi.mock('../../src/nlu/intent-confirm.js', () => ({
   confirmRoutedIntent: vi.fn(async () => {
     audit.calls += 1;
-    return audit.verdict ?? { kind: 'chat', agreed: true };
+    const verdict = (audit.verdict ?? { kind: 'chat', agreed: true }) as Record<string, unknown>;
+    // WS1 — a confirmation ALWAYS carries a finding (`findings/verdicts.ts`),
+    // because the registry logs the verdict and its evidence. Built here rather
+    // than inline at each call site so the mocked probe cannot drift from the
+    // real one's contract; a verdict without a finding would fail inside the
+    // registry's logging path and look like a re-route bug.
+    return {
+      ...verdict,
+      finding: verdict.finding ?? {
+        claim: 'mocked routing decision',
+        verdict: 'PLAUSIBLE',
+        outcome: 'no verdict — mocked probe',
+        evidence: [],
+        source: 'intent-confirm',
+      },
+    };
   }),
   intentConfirmedNote: () => '🧭 confirmed-note',
   intentCorrectedNote: (to: string) => `🧭 corrected-note:${to}`,
