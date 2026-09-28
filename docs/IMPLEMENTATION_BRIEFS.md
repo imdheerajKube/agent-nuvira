@@ -14,6 +14,13 @@ title line. If any capability from `ASSESSMENT_CAPABILITY_GAPS.md`
 (rows 1–33) is relevant to the item, it is cross-referenced in the chunk —
 implement the chunk's intent, then tick its matrix rows.
 
+**Recovered (2026-09-28):** `docs/TOOL_TRUTHFULNESS_TRACKER.md` was restored as a
+**tracked** doc (whitelisted in `.gitignore` — `*.md` is ignored, which is how the
+original was lost). The eight source files that cite it by name now point at a file
+that exists. Its P-list and status are reconstructed from those citations plus
+`tests/tools/tool-truthfulness.test.ts`; see the doc's own provenance note for what
+could **not** be recovered (findings #2/#8, and P4.1).
+
 **Completed anchor (for continuity):** P0.1 ask_user round-trip (chat-console
 `askQuestion`/`respond` + server `/api/chat/:sessionId/respond` + ChatPage
 question card + 2 tests), P0.2 read/list/glob (`src/tools/coding-tools.ts`),

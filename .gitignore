@@ -3,6 +3,16 @@ dist/
 *.log
 .env
 *.db
+# @vscode/test-electron downloads a VS Code build here (extension e2e tests).
+.vscode-test/
+# The extension's compiled output (tsc + scripts/copy-assets.mjs). It was being
+# committed as stale build output; `npm run compile` (run by vscode:prepublish
+# and the publish workflow) regenerates it.
+vscode-extension/out/
+# Packaged extension binaries are build output, not source. Two were committed
+# under vscode-extension/ and drifted from the code they were built from; the
+# publish workflow builds a fresh .vsix on every release.
+*.vsix
 # SQLite sidecars + journal are NOT matched by `*.db`, and that gap is exactly
 # how two of these got committed: `.freebuff/desktop-v2.db-wal` / `-shm` matched
 # no rule at all while the `.db` itself was ignored.
@@ -96,9 +106,28 @@ docs/demos/nuvira-commands-all.cast
 # scripts/sync-hub-skills.mjs so the configured default registry resolves.
 !.agents/skills/**/SKILL.md
 !.agents/skills/**/references/*.md
-!packages/sdk/README.md
+!src/agent-sdk/README.md
 !vscode-extension/README.md
 !vscode-extension/CHANGELOG.md
+# The SDK example's README is the only place a consumer learns to copy the
+# example out of the repo and run it — a packaging-required doc, not prose.
+!examples/sdk/README.md
+# Eight source files (read-extract, tool-refusal, messaging-tools, vision-tools,
+# neutts-synth, delegation-system, registry, web-dashboard/server) cite this
+# tracker by name as the record of the 2026-09-27 false-success incident. It was
+# ignored by `*.md` and lost ONCE already; untracked, the next session has to
+# re-derive the whole P-list from inline comments. Tracked, every claim in it is
+# checkable against its pinned test.
+!docs/TOOL_TRUTHFULNESS_TRACKER.md
+# These three were cited from CODE (`@see …` / "see the G18 entry in …") while
+# being ignored by `*.md`, so on a fresh clone those citations pointed at nothing
+# — the same failure that lost the tracker above. `scripts/check-doc-citations.mjs`
+# now fails on any such citation, and these are published instead of
+# acknowledged so the guard needs no exemption for them. Home paths inside were
+# scrubbed to `~` (the SECRET_PATTERNS convention in scripts/generate-cli-demo.mjs).
+!AGENT_NUVIRA_MAJOR_REVAMP_PLAN.md
+!ENTERPRISE_GRADE_TRACKER.md
+!NUVIRA_ROUTER_ROADMAP.md
 
 # Book (internal document — not published)
 book/
@@ -119,3 +148,8 @@ src/b.ts
 
 # Live A/B probe results (tests/live/followup-live.test.ts) — local evidence, not source
 tests/live/out-*.json
+
+# The agent's default artifact sandbox (`<cwd>/.nuvira/artifacts`, see
+# src/tools/modality/shared.ts). Test code that doesn't override
+# NUVIRA_ARTIFACTS_DIR writes here, and a release's `git add -A` would sweep it in.
+.nuvira/
