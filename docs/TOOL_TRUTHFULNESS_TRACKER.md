@@ -74,42 +74,64 @@ the findings that still have a witness in the tree.
 | **P0.1, P0.2** | read_extract truthfulness: an unimplemented format refuses with `unsupported_format` + alternatives (legacy `.doc`/`.xls`/`.ppt`, `.rtf`, `.odt` → `PENDING_FORMATS`) and never leaks raw bytes as `text`. | `tests/tools/tool-truthfulness.test.ts:98–221` | ✅ Closed |
 | **P1 — reachability** | The tool-truthfulness fixes were barely reachable: `read_extract` was tier-2, so the default tiered tool loop could not call it, and `read_file`'s binary refusal did not name it. | `src/tools/toolsets.ts` (`read_extract` in `CORE_TOOL_NAMES`), `src/tools/coding-tools.ts` (extension-aware refusal) | ✅ Closed |
 | **P2 — gateway inbound** | The WhatsApp bridge only extracted `conversation`/`extendedTextMessage`, so a document message arrived with empty `text` and was dropped at `if (!text) continue` — the sender's own file vanished with no reply and no record. | `src/gateway/inbound-media.ts` + bridge/adapter/registry wiring | ✅ Closed |
-| **P4.1** | `subagent` — child-process spawning. Cited as the alternative in `delegate_system`'s refusal with "see P4.1 for its current state"; that state is now restated in full below. | `src/tools/delegation-system.ts`, `src/tools/subagent-spawner.ts`, `src/tools/registry.ts` | ✅ Closed (as a truthfulness fix — the path itself is still dead, see below) |
+| **P4.1** | `subagent` — child-process spawning. Was dead in every layout and its worker simulated both the model and the tools. Restated, then **implemented for real**: the child forks, resolves a provider from your config, calls the model, runs real tools, and refuses instead of faking output. | `src/tools/child-agent-entry.ts`, `child-agent-runtime.ts`, `subagent-spawner.ts`, `registry.ts` | ✅ Closed (capability delivered) |
 
-### P4.1 — what `subagent` actually does (restated 2026-09-28)
+### P4.1 — what was wrong, and what `subagent` does now (2026-09-28)
 
-**It cannot run. In any layout.** Three independent, individually verifiable facts:
+**What was wrong.** Four defects, each independently verifiable:
 
-1. `spawn()` calls `require('node:fs')` from an **ESM** module → `ReferenceError:
-   require is not defined`. It throws immediately after `fork()`, before the child
-   is even tracked, in dev and in a compiled build alike. (`node --input-type=module
-   -e "require('node:fs')"` reproduces the error.)
-2. Its fork target, `src/tools/child-agent-entry.js`, is written in **CommonJS**
-   (`require`, `__dirname`) under this package's `"type": "module"`, so even a
-   fork that resolved would have the child die on `require is not defined`.
-3. The build (`tsc` + a copy of `src/resources`) never emits that entry —
-   `allowJs` is `false`, and `dist/tools/` contains `child-agent-worker.js` but **no**
-   `child-agent-entry.js`. So a compiled build forks a path that does not exist.
+1. `spawn()` called `require('node:fs')` from an **ESM** module → `ReferenceError:
+   require is not defined`, thrown immediately after `fork()`, before the child was
+   tracked. (`node --input-type=module -e "require('node:fs')"` reproduces it.)
+2. Its fork target, `src/tools/child-agent-entry.js`, was written in **CommonJS**
+   (`require`, `__dirname`, a `parentPort` import from worker_threads no forked
+   process has) under this package's `"type": "module"` — so a fork that resolved
+   died on `require is not defined`.
+3. The build never emitted that entry (`allowJs` is `false`; `tsc` produces `.js`
+   only from TypeScript), so a compiled install forked a path that did not exist
+   (`dist/tools/` had `child-agent-worker.js` and no entry).
+4. `handleExit` **fabricated success**: a child that exited 0 with no `result`
+   message became `completed` + `result: 'Task completed successfully'`.
 
-On top of that, `handleExit` **fabricated success**: a child that exited 0 having
-sent no `result` message was marked `completed` with
-`result: 'Task completed successfully'`, so `subagent wait` returned success for a
-run whose output never existed — the finding-#4 defect, still present here.
+And beneath all four, the worker was a **simulation**: `LLMClient.call()` switched
+on keywords in the goal and returned canned strings, while `ToolExecutor.execute()`
+answered `Executed <tool>` without running anything. A "completed" subagent had
+done nothing at all.
 
-**Fixed (truthfulness only, not the capability):**
+**What it does now** (`child-agent-entry.ts` + `child-agent-runtime.ts`):
 
-- `classifyChildExit()` in `subagent-spawner.ts` — exported and tested — encodes
-  "no result ⇒ failure, never success".
-- `delegate_system`'s refusal no longer offers `subagent` as an alternative. A
-  refusal that sends the caller to a path performing no work is the same defect the
-  refusal exists to report.
-- The `subagent` tool description is marked **NOT CONNECTED** and points at
-  `delegate`.
+- The entry is **TypeScript**, so `tsc` emits `dist/tools/child-agent-entry.js` and
+  the compiled layout forks a file that exists. A source run (tsx/vitest) forks the
+  `.ts` through the tsx loader — `resolveChildEntry()` picks the layout that is
+  actually present instead of assuming one.
+- It resolves a **real provider** from your configuration
+  (`ConfigManager.getProviderConfig` → `ProviderFactory`), checks `isAvailable()`, and
+  makes real model calls. Tools the caller allows are offered as real schemas
+  (`toolJsonSchemas`) and executed through the **real registry**; the assistant turn
+  is replayed with its tool-call ids and `providerMeta` intact.
+- It **refuses instead of fabricating**: no constructible provider, an unreachable
+  backend, tools requested on a provider that cannot call them, or an unknown tool
+  name all raise a typed `SubagentRefusalError` whose `code` crosses the IPC
+  boundary. There is no code path that returns a plausible answer for work that did
+  not happen.
+- `classifyChildExit()` — exported and tested — encodes "no result ⇒ failure".
+- `subagent wait` now converts the rejection into the standard refusal shape
+  (`{success:false, code, error}`) instead of letting a raw throw reach the model,
+  and `subagent spawn` exposes the `tools` allow-list it always advertised.
+- `delegate_system`'s refusal offers `subagent` again — the rule is that every
+  alternative named must be a path that executes, and now this one does.
 
-**Making `subagent` work is net-new work and has NOT been done** — it needs the
-entry ported to ESM, shipped to `dist/`, the `require` removed, and a real
-end-to-end test (fork → LLM call → result). It is listed under [Open](#open)
-because nothing about the capability was delivered.
+**Verified two ways** (`tests/tools/subagent-end-to-end.test.ts`, 7 tests):
+
+- *Source layout*: a real fork, a real provider (`local`), and a real HTTP request
+  to a server started in the test — asserting the model's own answer comes back over
+  IPC, plus the unreachable-backend refusal carrying `code: 'not_configured'`.
+- *Compiled layout*, run by hand: `node dist/tools/child-agent-entry.js` forked with
+  an IPC channel returned
+  `{"type":"result","result":"FROM-THE-COMPILED-ENTRY","llmCalls":1,…}` and exit 0.
+  (A full `npm run build` is required — `tsc` alone leaves extensionless imports
+  that Node's ESM resolver rejects; `scripts/fix-esm-extensions.mjs` is what makes
+  `dist/` runnable.)
 
 ## Status — gateway inbound attachments (P2 follow-on)
 
@@ -160,9 +182,10 @@ practice on both platforms. Decision: **dial out.**
 
 ```bash
 npx tsc --noEmit                                        # must be clean (src only)
-npx vitest run tests/tools                              # 619 passed (39 files)
-npx vitest run tests/tools/tool-truthfulness.test.ts
-npx vitest run tests/gateway                            # 437 passed (23 files)
+npx vitest run tests/tools                              # 626 passed (40 files)
+npx vitest run tests/tools/tool-truthfulness.test.ts     # the P0/P1 assertions
+npx vitest run tests/tools/subagent-end-to-end.test.ts   # real fork + real HTTP
+npx vitest run tests/gateway                            # 440 passed (23 files)
 node scripts/check-doc-citations.mjs --check            # cited docs exist + are tracked
 ```
 
@@ -170,10 +193,11 @@ node scripts/check-doc-citations.mjs --check            # cited docs exist + are
 `npm run docs:citations:check`, and `tests/docs/doc-citations.test.ts` asserts the
 same invariant, so the guard runs wherever the suite does.)
 
-Last verified: **2026-09-28** — typecheck clean; `tests/tools` 619 passed;
-`tests/gateway` 437 passed (includes `realtime.test.ts`, 8 tests);
-`tests/docs` 13 passed (3 files, incl. the 8 doc-citation guards); the four suites
-together (`tools` + `docs` + `gateway` + `agents`) 2305 passed.
+Last verified: **2026-09-28** — typecheck clean; `tests/tools` 626 passed (40
+files); `tests/gateway` 440 passed (23 files, incl. `realtime.test.ts`); `tests/docs`
+13 passed (3 files, incl. the 8 doc-citation guards); and the six suites most
+likely to be affected by these changes (`tools` + `docs` + `gateway` + `agents` +
+`cli` + `commands`) **3011 passed, 170 files**.
 
 Note: the root `tsconfig.json` includes only `src/**/*`, so `tsc --noEmit` does
 **not** typecheck `tests/` — a test-only type error surfaces in vitest, not in the
@@ -202,8 +226,9 @@ no exemption for them and the acknowledgement list is empty.
 
 ## Open
 
-1. **Make `subagent` real** (P4.1 capability) — port the entry to ESM, ship it to
-   `dist/`, drop the ESM `require`, and cover fork → LLM call → result end-to-end.
-   Nothing about the capability exists today; only its refusal is honest.
-2. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost
+1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost
    original.
+2. `subagent` on a **non-tool-calling provider** (e.g. `local`/Ollama) refuses when
+   asked for tools. That is deliberate — running the task without its tools would
+   answer a question the model was never equipped to answer — but it does mean a
+   local-only setup must spawn subagents without `tools`.

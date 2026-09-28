@@ -1,60 +1,78 @@
 /**
- * Vision Tools — Image analysis, OCR, and visual understanding.
+ * Vision Tools — image analysis backed by a REAL engine, or a typed refusal.
  *
- * Hermes equivalent: vision_tools.py
+ * What is real here, and what is not:
  *
- * Provides:
- * - Image analysis and description
- * - OCR (Optical Character Recognition)
- * - UI element detection
- * - Screenshot analysis
+ * - `analyze` reports the image's actual format and pixel dimensions (parsed from
+ *   the PNG/JPEG/GIF/BMP headers) and, when a vision backend is configured,
+ *   a genuine description from it.
+ * - `ocr` transcribes an image through the configured vision model
+ *   (`./modality/vision.js` — a local Ollama vision model such as llava /
+ *   llama3.2-vision, or Gemini when a key is set). A vision-model transcription
+ *   is not a confidence-scored OCR engine, so the result says which engine ran
+ *   and never invents a `confidence` number.
+ * - `detect-elements`, `find-element` and `compare` have **no backend** and refuse
+ *   with `not_configured`. They previously returned `[]` / `{similarity: 0}` —
+ *   empty-but-valid payloads that read as "ran, found nothing", which is the same
+ *   class of defect as the `read_extract` PDF stub.
+ *
+ * The registry's `vision` tool ("analyze images, extract text via OCR, detect UI
+ * elements") pointed at this file while `describe_image` pointed at the real
+ * engine — two tools for one capability, one of them a stub. See
+ * TOOL_TRUTHFULNESS_TRACKER.md finding #6.
  */
 
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
-import { logger } from '../utils/logger.js';
+import { describeImage, isVisionAvailable, type VisionOptions } from './modality/vision.js';
+import { refuse, type ToolRefusal, type ToolRefusalCode } from './tool-refusal.js';
 
-// ─── Types ────────────────────────────────────────────────────────────────
+/**
+ * Render a `ToolRefusal` into this module's result shape — the message field here
+ * is named `error` rather than `reason`, so the mapping is explicit instead of
+ * spreading `refuse()` output and ending up with an undeclared `reason` key.
+ */
+function asVisionRefusal(r: ToolRefusal): { ok: false; code: ToolRefusalCode; error: string; alternatives?: string[] } {
+  return {
+    ok: false,
+    code: r.code,
+    error: r.reason,
+    ...(r.alternatives ? { alternatives: r.alternatives } : {}),
+  };
+}
+
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface ImageAnalysis {
   /** Image path */
   path: string;
-  /** Image dimensions */
+  /** Real pixel dimensions, or {0,0} when the header could not be parsed */
   dimensions: { width: number; height: number };
   /** Image format */
   format: string;
-  /** Detected elements */
-  elements: DetectedElement[];
-  /** OCR text */
-  ocrText?: string;
-  /** Description */
+  /** Description text — from the vision backend when one is configured, else the metadata line */
   description: string;
   /** Tags */
   tags: string[];
-}
-
-export interface DetectedElement {
-  /** Element type */
-  type: 'button' | 'text' | 'image' | 'link' | 'input' | 'icon' | 'container';
-  /** Bounding box */
-  bounds: { x: number; y: number; width: number; height: number };
-  /** Element text */
-  text?: string;
-  /** Confidence score */
-  confidence: number;
+  /** Whether the analysis ran (a failed read is `ok: false`, never an empty success) */
+  ok: boolean;
+  /** Which engine produced `description` */
+  via?: 'vision-model' | 'metadata';
+  /** Explains what was NOT done, when a capability is missing */
+  note?: string;
+  code?: ToolRefusalCode;
+  alternatives?: string[];
+  error?: string;
 }
 
 export interface OCRResult {
-  /** Extracted text */
   text: string;
-  /** Confidence score */
-  confidence: number;
-  /** Text regions */
-  regions: Array<{
-    text: string;
-    bounds: { x: number; y: number; width: number; height: number };
-    confidence: number;
-  }>;
+  ok: boolean;
+  /** The engine that produced the text — absent when nothing ran */
+  via?: 'vision-model';
+  code?: ToolRefusalCode;
+  alternatives?: string[];
+  error?: string;
 }
 
 export interface UIElement {
@@ -70,13 +88,42 @@ export interface UIElement {
   interactive: boolean;
 }
 
+export interface DetectElementsResult {
+  ok: boolean;
+  elements: UIElement[];
+  code?: ToolRefusalCode;
+  alternatives?: string[];
+  error?: string;
+}
+
+export interface CompareResult {
+  ok: boolean;
+  similarity?: number;
+  differences?: Array<{ x: number; y: number; width: number; height: number }>;
+  code?: ToolRefusalCode;
+  alternatives?: string[];
+  error?: string;
+}
+
+/** Prompt used for OCR-via-vision-model. Asks for the text ONLY, no commentary. */
+const OCR_PROMPT =
+  'Transcribe ALL visible text in this image exactly as it appears, preserving line breaks and any table '
+  + 'rows/columns. Output only the transcription, with no preamble and no commentary.';
+
+/** What a user can do when no vision backend is configured. */
+const VISION_SETUP_ALTERNATIVES = [
+  'Configure a vision backend: a local Ollama vision model (llava / llama3.2-vision) or a Gemini API key',
+  'Ask the user to paste the text instead',
+];
+
 // ─── Vision Analyzer ──────────────────────────────────────────────────────
 
 export class VisionAnalyzer {
   /**
-   * Analyze an image.
+   * Analyze an image: real format + dimensions always, plus a real description
+   * when a vision backend is available.
    */
-  async analyze(imagePath: string): Promise<ImageAnalysis> {
+  async analyze(imagePath: string, opts: VisionOptions = {}): Promise<ImageAnalysis> {
     const ext = extname(imagePath).toLowerCase();
     const content = await readFile(imagePath).catch(() => null);
 
@@ -85,76 +132,156 @@ export class VisionAnalyzer {
         path: imagePath,
         dimensions: { width: 0, height: 0 },
         format: ext.slice(1) || 'unknown',
-        elements: [],
-        description: 'Failed to read image',
+        description: `Could not read the image at ${imagePath}.`,
         tags: [],
+        ok: false,
+        code: 'no_data',
+        error: `Could not read image: ${imagePath}`,
+        alternatives: ['Check the path and that the file is a readable image'],
       };
     }
 
-    // Basic image info
     const format = ext.slice(1) || 'unknown';
     const dimensions = this.getImageDimensions(content, format);
+    const metadataLine = `Image: ${format.toUpperCase()} (${dimensions.width}x${dimensions.height})`;
+
+    // Prefer a real description when a backend exists; otherwise report honestly
+    // that only the metadata was read.
+    if (await isVisionAvailable(opts)) {
+      const described = await describeImage(imagePath, undefined, opts);
+      if (described.ok && described.description) {
+        return {
+          path: imagePath,
+          dimensions,
+          format,
+          description: described.description,
+          tags: [format],
+          ok: true,
+          via: 'vision-model',
+        };
+      }
+      return {
+        path: imagePath,
+        dimensions,
+        format,
+        description: metadataLine,
+        tags: [format],
+        ok: true,
+        via: 'metadata',
+        note: `The vision backend was configured but failed (${described.error ?? 'unknown error'}), so only image metadata was read.`,
+      };
+    }
 
     return {
       path: imagePath,
       dimensions,
       format,
-      elements: [],
-      description: `Image: ${format.toUpperCase()} (${dimensions.width}x${dimensions.height})`,
+      description: metadataLine,
       tags: [format],
+      ok: true,
+      via: 'metadata',
+      note: 'No vision backend is configured, so only image metadata was read — no description of the contents.',
+      alternatives: VISION_SETUP_ALTERNATIVES,
     };
   }
 
   /**
-   * Perform OCR on an image.
+   * Transcribe the text in an image through the configured vision model.
+   *
+   * Refuses when no backend is configured — it never returns an empty string as
+   * if the image simply contained no text.
    */
-  async ocr(imagePath: string): Promise<OCRResult> {
-    // In a real implementation, this would call an OCR service
-    return {
-      text: '',
-      confidence: 0,
-      regions: [],
-    };
+  async ocr(imagePath: string, opts: VisionOptions = {}): Promise<OCRResult> {
+    if (!(await isVisionAvailable(opts))) {
+      return {
+        text: '',
+        ...asVisionRefusal(refuse(
+          'not_configured',
+          'No vision backend is configured (a local Ollama vision model such as llava/llama3.2-vision, or a Gemini API key), so no text could be read from the image.',
+          VISION_SETUP_ALTERNATIVES,
+        )),
+      };
+    }
+
+    const described = await describeImage(imagePath, OCR_PROMPT, opts);
+    if (!described.ok || described.description === undefined) {
+      return {
+        text: '',
+        ...asVisionRefusal(refuse(
+          'unavailable',
+          `The vision backend could not read ${imagePath}: ${described.error ?? 'no output'}`,
+          ['Retry once — a local vision model can time out on a large image'],
+        )),
+      };
+    }
+
+    return { text: described.description.trim(), ok: true, via: 'vision-model' };
   }
 
   /**
    * Detect UI elements in a screenshot.
+   *
+   * There is no detector backend (no ML model, no DOM access from a raster image),
+   * so this refuses rather than returning an empty element list.
    */
-  async detectUIElements(imagePath: string): Promise<UIElement[]> {
-    // In a real implementation, this would use ML model
-    return [];
+  async detectUIElements(imagePath: string): Promise<DetectElementsResult> {
+    return {
+      elements: [],
+      ...asVisionRefusal(refuse(
+        'not_configured',
+        `UI-element detection has no backend — it needs a DOM or an ML detector, and neither is wired up, so no elements were detected in ${imagePath}.`,
+        [
+          'Use the browser tools (browser / browser_supervisor) to query the live DOM instead of a screenshot',
+          'Use describe_image to get a prose description of the screenshot',
+        ],
+      )),
+    };
   }
 
   /**
    * Compare two images.
+   *
+   * No pixel-diff or embedding backend is wired up, so this refuses. It used to
+   * return `{ similarity: 0, differences: [] }`, which reads as "identical images
+   * with no differences" — the opposite of what it knew.
    */
-  async compare(imagePath1: string, imagePath2: string): Promise<{
-    similarity: number;
-    differences: Array<{ x: number; y: number; width: number; height: number }>;
-  }> {
-    return { similarity: 0, differences: [] };
+  async compare(imagePath1: string, imagePath2: string): Promise<CompareResult> {
+    return asVisionRefusal(refuse(
+      'not_configured',
+      `Image comparison has no backend, so ${imagePath1} and ${imagePath2} were NOT compared.`,
+      [
+        'Describe both images with describe_image and compare the descriptions',
+        'Compare the files byte-wise if you only need to know whether they differ',
+      ],
+    ));
   }
 
   /**
-   * Extract text from a screenshot.
+   * Extract text from a screenshot (thin alias over `ocr`, kept for callers that
+   * expect a bare string). A refusal yields an empty string — prefer `ocr` when
+   * you need to tell "no text in the image" apart from "no backend configured".
    */
-  async extractText(imagePath: string): Promise<string> {
-    const result = await this.ocr(imagePath);
+  async extractText(imagePath: string, opts: VisionOptions = {}): Promise<string> {
+    const result = await this.ocr(imagePath, opts);
     return result.text;
   }
 
   /**
-   * Find element by text in screenshot.
+   * Find an element whose text matches. Refuses for the same reason as
+   * `detectUIElements` — there is no detector to search.
    */
   async findElementByText(imagePath: string, text: string): Promise<UIElement | null> {
-    const elements = await this.detectUIElements(imagePath);
-    return elements.find((e) => e.text?.toLowerCase().includes(text.toLowerCase())) || null;
+    const result = await this.detectUIElements(imagePath);
+    if (!result.ok) return null;
+    return result.elements.find((e) => e.text?.toLowerCase().includes(text.toLowerCase())) || null;
   }
 
   /**
-   * Get image dimensions (basic detection for common formats).
+   * Get image dimensions from the format header (PNG / JPEG / GIF / BMP).
+   * Returns {0,0} when the header is not one of those — an unknown size, never a
+   * guessed one.
    */
-  private getImageDimensions(buffer: Buffer, format: string): { width: number; height: number } {
+  getImageDimensions(buffer: Buffer, format: string): { width: number; height: number } {
     // PNG header
     if (format === 'png' && buffer.length > 24) {
       const width = buffer.readUInt32BE(16);
@@ -162,7 +289,7 @@ export class VisionAnalyzer {
       return { width, height };
     }
 
-    // JPEG header (simplified)
+    // JPEG header (search the SOF marker)
     if (format === 'jpeg' || format === 'jpg') {
       let offset = 2;
       while (offset < buffer.length - 1) {
@@ -199,96 +326,11 @@ export class VisionAnalyzer {
   }
 }
 
-// ─── Screenshot Analyzer ──────────────────────────────────────────────────
-
-export class ScreenshotAnalyzer {
-  private analyzer: VisionAnalyzer;
-
-  constructor() {
-    this.analyzer = new VisionAnalyzer();
-  }
-
-  /**
-   * Analyze a browser screenshot.
-   */
-  async analyzeBrowserScreenshot(screenshotPath: string): Promise<{
-    elements: UIElement[];
-    text: string;
-    layout: string;
-  }> {
-    const elements = await this.analyzer.detectUIElements(screenshotPath);
-    const text = await this.analyzer.extractText(screenshotPath);
-
-    return {
-      elements,
-      text,
-      layout: this.inferLayout(elements),
-    };
-  }
-
-  /**
-   * Find clickable elements.
-   */
-  async findClickableElements(screenshotPath: string): Promise<UIElement[]> {
-    const elements = await this.analyzer.detectUIElements(screenshotPath);
-    return elements.filter((e) => e.interactive);
-  }
-
-  /**
-   * Generate automation instructions.
-   */
-  async generateAutomationInstructions(
-    screenshotPath: string,
-    goal: string,
-  ): Promise<string[]> {
-    const elements = await this.analyzer.detectUIElements(screenshotPath);
-    const instructions: string[] = [];
-
-    // Simple heuristic-based instruction generation
-    const buttons = elements.filter((e) => e.type === 'button');
-    const inputs = elements.filter((e) => e.type === 'input');
-    const links = elements.filter((e) => e.type === 'link');
-
-    if (goal.toLowerCase().includes('click')) {
-      for (const btn of buttons) {
-        if (btn.text) instructions.push(`Click button "${btn.text}"`);
-      }
-    }
-
-    if (goal.toLowerCase().includes('type') || goal.toLowerCase().includes('enter')) {
-      for (const input of inputs) {
-        instructions.push(`Type in ${input.text || 'input field'}`);
-      }
-    }
-
-    if (goal.toLowerCase().includes('navigate')) {
-      for (const link of links) {
-        if (link.text) instructions.push(`Click link "${link.text}"`);
-      }
-    }
-
-    return instructions;
-  }
-
-  private inferLayout(elements: UIElement[]): string {
-    if (elements.length === 0) return 'empty';
-    if (elements.length > 20) return 'dense';
-    if (elements.some((e) => e.type === 'container')) return 'structured';
-    return 'simple';
-  }
-}
-
 // ─── Singletons ───────────────────────────────────────────────────────────
 
 let _visionAnalyzer: VisionAnalyzer | null = null;
-let _screenshotAnalyzer: ScreenshotAnalyzer | null = null;
 
 export function getVisionAnalyzer(): VisionAnalyzer {
   if (!_visionAnalyzer) _visionAnalyzer = new VisionAnalyzer();
   return _visionAnalyzer;
-}
-
-export function getScreenshotAnalyzer(): ScreenshotAnalyzer {
-  if (!_screenshotAnalyzer) _screenshotAnalyzer = new ScreenshotAnalyzer();
-  return _screenshotAnalyzer;
 }

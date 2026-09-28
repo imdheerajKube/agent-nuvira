@@ -308,6 +308,14 @@ export function effectiveToolJsonSchemas(cm?: ConfigManagerLike): ToolJsonSchema
  * (guarded at module load by `validateCoreToolCoverage`). This is the whole
  * loop harness: files, terminal, code execution, web, clarification,
  * plan/todo, skills, delegation, and the discovery tool itself.
+ *
+ * `read_extract` is core (not tier-2) on purpose. A document — a PDF, a DOCX,
+ * a spreadsheet — is first-class user input, and `read_file` refuses a binary
+ * file by NAMING `read_extract` as the alternative (coding-tools.ts). If that
+ * alternative were hidden behind `tool_search`, the refusal would send the model
+ * to a tool it cannot call, and the user's own document would be unreadable in
+ * the default tiered loop — the exact "barely reachable by default" gap. One
+ * extra schema is a rounding error against a dead end.
  */
 export const CORE_TOOL_NAMES: readonly string[] = [
   'read_file',
@@ -320,6 +328,7 @@ export const CORE_TOOL_NAMES: readonly string[] = [
   'code_execution',
   'web_search',
   'read_page',
+  'read_extract',
   'ask_user',
   'suggest_followups',
   'plan_todo',

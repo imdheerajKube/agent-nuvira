@@ -86,6 +86,18 @@ describe('read_file — the agent opens a file', () => {
     const out = await runReadFile({ path: 'blob.bin' }, ctx);
     expect(out).toContain('looks binary');
   });
+
+  it('names read_extract as the alternative for a document read_file cannot open', async () => {
+    // `read_extract` is CORE (toolsets.ts) so the refusal always points at a
+    // callable tool — the fix for "the extractor is barely reachable".
+    const { dir, ctx } = makeWorkspace();
+    // A PDF signature with NUL bytes: `looksBinary` fires, the extension is one
+    // read_extract actually reads, so the refusal names the tool for THIS path.
+    writeFileSync(join(dir, 'report.pdf'), Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0x01]));
+    const out = await runReadFile({ path: 'report.pdf' }, ctx);
+    expect(out).toContain('looks binary');
+    expect(out).toContain("read_extract with filePath 'report.pdf'");
+  });
 });
 
 describe('read_file — deny-first workspace gate', () => {

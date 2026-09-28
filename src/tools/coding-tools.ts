@@ -111,6 +111,30 @@ function looksBinary(buf: Buffer): boolean {
   return probe.includes(0);
 }
 
+/**
+ * Extensions `read_extract` turns into text (mirrors read-extract.ts
+ * IMPLEMENTED_FORMATS). Used only to phrase the binary refusal: a PDF/DOCX a
+ * user asks about must hear the reader that CAN open it, by name.
+ */
+const READ_EXTRACT_EXTS = new Set([
+  '.pdf', '.docx', '.xlsx', '.pptx', '.html', '.htm', '.csv', '.tsv',
+  '.json', '.xml', '.yaml', '.yml', '.txt', '.md', '.markdown', '.text', '.log',
+]);
+
+/**
+ * The alternative to name in a binary `read_file` refusal. `read_extract` is a
+ * CORE tool (toolsets.ts), so this refusal never points at a tool the model
+ * cannot call.
+ */
+function binaryReadAlternative(rel: string): string {
+  const dot = rel.lastIndexOf('.');
+  const ext = dot >= 0 ? rel.slice(dot).toLowerCase() : '';
+  if (READ_EXTRACT_EXTS.has(ext)) {
+    return `call read_extract with filePath '${rel}' to extract its text.`;
+  }
+  return 'for a document (PDF/DOCX/XLSX/PPTX), call read_extract to extract its text.';
+}
+
 /** ─── read_file ──────────────────────────────────────────────────────────── */
 
 export interface ReadFileArgs {
@@ -174,7 +198,12 @@ async function readOneFile(
     return { rel: gated.rel, error: `cannot read '${gated.rel}': ${(err as Error).message}` };
   }
   if (looksBinary(data)) {
-    return { rel: gated.rel, error: `'${gated.rel}' looks binary (${info.size} bytes) — reading it into context is not useful.` };
+    return {
+      rel: gated.rel,
+      error:
+        `'${gated.rel}' looks binary (${info.size} bytes) — its bytes are not text, so reading it `
+        + `into context is not useful; ${binaryReadAlternative(gated.rel)}`,
+    };
   }
 
   // A trailing newline must not count as an extra empty line.

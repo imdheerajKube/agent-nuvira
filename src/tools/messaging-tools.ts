@@ -4,13 +4,26 @@
  * Hermes equivalent: send_message_tool.py + react_to_message_tool.py + feishu_doc_tool.py + feishu_drive_tool.py
  *
  * Provides:
- * - Send messages to various platforms
- * - React to messages
+ * - Message history bookkeeping for outbound sends
  * - Feishu document integration
  * - Feishu drive integration
+ *
+ * DOES NOT PROVIDE: delivery to Discord / Slack / Telegram / WhatsApp / Feishu /
+ * webhooks. Every one of those senders used to answer
+ * `{ success: true, messageId: '<platform>_<timestamp>' }` without contacting
+ * anything, and `reactToMessage` answered `{ success: true }` unconditionally —
+ * so an agent could tell the user, honestly from its own point of view, that a
+ * message had been delivered to a third party when nothing left the machine.
+ * The real, authorization-gated sender is `gateway_send`
+ * (`src/tools/gateway-send.ts`); it is the tool whose result the honesty guard in
+ * `tool-loop.ts` trusts. These senders now refuse with `not_configured` and name
+ * it, so the model is steered to the path that can actually deliver.
+ *
+ * See TOOL_TRUTHFULNESS_TRACKER.md (findings #3 and #9).
  */
 
 import { logger } from '../utils/logger.js';
+import { refusalFields, type ToolRefusalCode } from './tool-refusal.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -80,6 +93,21 @@ export interface FeishuDriveFile {
   updatedAt: number;
 }
 
+// ─── Types (results) ──────────────────────────────────────────────────────
+
+/**
+ * The result of an outbound send. `success: false` carries a typed `code` and the
+ * alternatives a caller can take instead — never a synthetic `messageId`.
+ */
+export interface SendResult {
+  success: boolean;
+  /** Present ONLY when a platform adapter actually delivered the message. */
+  messageId?: string;
+  code?: ToolRefusalCode;
+  alternatives?: string[];
+  error?: string;
+}
+
 // ─── Messaging Manager ────────────────────────────────────────────────────
 
 export class MessagingManager {
@@ -92,55 +120,95 @@ export class MessagingManager {
   }> = [];
 
   /**
+   * The one refusal every platform sender returns: this manager has no adapter.
+   * Kept in a single place so a future reader cannot re-introduce a per-platform
+   * fake success without deleting the shared reason that explains why.
+   */
+  private notConfigured(platform: string, channelId: string): SendResult {
+    return {
+      success: false,
+      error:
+        `No messaging adapter is configured for ${platform} (channel ${channelId}), so nothing was sent. ` +
+        'Use gateway_send — it delivers through the configured gateway and returns an explicit sent/refused result.',
+      ...refusalFields('not_configured', [
+        'gateway_send — sends via the configured gateway (WhatsApp / Telegram / Slack / Discord by name or number)',
+        'nuvira gateway send <platform:channel> <message> — the CLI equivalent',
+      ]),
+    };
+  }
+
+  /**
    * Send a message to a platform.
+   *
+   * Records the attempt in history ONLY when a platform adapter reported success,
+   * so `getHistory()` can never list a message that was never delivered.
    */
   async sendMessage(
     target: MessageTarget,
     options: SendMessageOptions,
-  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    const historyEntry = {
-      platform: target.platform,
-      channelId: target.channelId,
-      content: options.content,
-      timestamp: Date.now(),
-    };
-
-    try {
-      // Route to platform-specific handler
-      switch (target.platform) {
-        case 'discord':
-          return await this.sendDiscord(target, options);
-        case 'slack':
-          return await this.sendSlack(target, options);
-        case 'telegram':
-          return await this.sendTelegram(target, options);
-        case 'whatsapp':
-          return await this.sendWhatsApp(target, options);
-        case 'feishu':
-          return await this.sendFeishu(target, options);
-        case 'webhook':
-          return await this.sendWebhook(target, options);
-        default:
-          return { success: false, error: `Unsupported platform: ${target.platform}` };
-      }
-    } finally {
-      this.messageHistory.push(historyEntry);
+  ): Promise<SendResult> {
+    let result: SendResult;
+    switch (target.platform) {
+      case 'discord':
+        result = await this.sendDiscord(target, options);
+        break;
+      case 'slack':
+        result = await this.sendSlack(target, options);
+        break;
+      case 'telegram':
+        result = await this.sendTelegram(target, options);
+        break;
+      case 'whatsapp':
+        result = await this.sendWhatsApp(target, options);
+        break;
+      case 'feishu':
+        result = await this.sendFeishu(target, options);
+        break;
+      case 'webhook':
+        result = await this.sendWebhook(target, options);
+        break;
+      default:
+        result = {
+          success: false,
+          error: `Unsupported platform: ${target.platform}`,
+          ...refusalFields('unsupported_format'),
+        };
     }
+
+    if (result.success) {
+      this.messageHistory.push({
+        platform: target.platform,
+        channelId: target.channelId,
+        content: options.content,
+        timestamp: Date.now(),
+        messageId: result.messageId,
+      });
+    } else {
+      logger.warn(`Messaging: refused ${target.platform} send to ${target.channelId} — ${result.error}`);
+    }
+    return result;
   }
 
   /**
    * React to a message.
+   *
+   * No adapter exists for reactions, so this refuses. It used to return
+   * `{ success: true }` and the registry turned that into the string 'Reacted'.
    */
   async reactToMessage(
     platform: string,
     channelId: string,
     messageId: string,
     emoji: string,
-  ): Promise<{ success: boolean; error?: string }> {
-    logger.info(`Messaging: Reacting with ${emoji} to message ${messageId} on ${platform}`);
-
-    // In a real implementation, this would call the platform API
-    return { success: true };
+  ): Promise<SendResult> {
+    logger.warn(`Messaging: reaction not sent (no adapter) — ${emoji} on ${messageId} in ${platform}/${channelId}`);
+    return {
+      success: false,
+      error: `No messaging adapter is configured for ${platform}, so the reaction was NOT applied to ${messageId}.`,
+      ...refusalFields('not_configured', [
+        'Report the reaction as not sent, or send the message text instead via gateway_send',
+      ]),
+    };
   }
 
   /**
@@ -160,36 +228,33 @@ export class MessagingManager {
   }
 
   // ─── Platform Handlers ─────────────────────────────────────────────
+  //
+  // Each returns `notConfigured(...)`. The per-platform shape is kept so a real
+  // adapter can be dropped in per platform without touching the dispatcher; until
+  // one exists, the honest answer is the same for all six.
 
-  private async sendDiscord(target: MessageTarget, options: SendMessageOptions): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    logger.info(`Discord: Sending message to channel ${target.channelId}`);
-    // In production, this would call Discord API
-    return { success: true, messageId: `discord_${Date.now()}` };
+  private async sendDiscord(target: MessageTarget, _options: SendMessageOptions): Promise<SendResult> {
+    return this.notConfigured('discord', target.channelId);
   }
 
-  private async sendSlack(target: MessageTarget, options: SendMessageOptions): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    logger.info(`Slack: Sending message to channel ${target.channelId}`);
-    return { success: true, messageId: `slack_${Date.now()}` };
+  private async sendSlack(target: MessageTarget, _options: SendMessageOptions): Promise<SendResult> {
+    return this.notConfigured('slack', target.channelId);
   }
 
-  private async sendTelegram(target: MessageTarget, options: SendMessageOptions): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    logger.info(`Telegram: Sending message to chat ${target.channelId}`);
-    return { success: true, messageId: `telegram_${Date.now()}` };
+  private async sendTelegram(target: MessageTarget, _options: SendMessageOptions): Promise<SendResult> {
+    return this.notConfigured('telegram', target.channelId);
   }
 
-  private async sendWhatsApp(target: MessageTarget, options: SendMessageOptions): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    logger.info(`WhatsApp: Sending message to chat ${target.channelId}`);
-    return { success: true, messageId: `whatsapp_${Date.now()}` };
+  private async sendWhatsApp(target: MessageTarget, _options: SendMessageOptions): Promise<SendResult> {
+    return this.notConfigured('whatsapp', target.channelId);
   }
 
-  private async sendFeishu(target: MessageTarget, options: SendMessageOptions): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    logger.info(`Feishu: Sending message to chat ${target.channelId}`);
-    return { success: true, messageId: `feishu_${Date.now()}` };
+  private async sendFeishu(target: MessageTarget, _options: SendMessageOptions): Promise<SendResult> {
+    return this.notConfigured('feishu', target.channelId);
   }
 
-  private async sendWebhook(target: MessageTarget, options: SendMessageOptions): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    logger.info(`Webhook: Sending message to ${target.channelId}`);
-    return { success: true, messageId: `webhook_${Date.now()}` };
+  private async sendWebhook(target: MessageTarget, _options: SendMessageOptions): Promise<SendResult> {
+    return this.notConfigured('webhook', target.channelId);
   }
 }
 

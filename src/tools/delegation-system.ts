@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { logger } from '../utils/logger.js';
+import { refusalFields, type ToolRefusalCode } from './tool-refusal.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,10 @@ export interface DelegationTask {
   durationMs?: number;
   retryCount: number;
   maxRetries: number;
+  /** Typed reason the task could not run (see tool-refusal.ts). */
+  code?: ToolRefusalCode;
+  /** What to do instead when the task could not run. */
+  alternatives?: string[];
 }
 
 export interface DelegationContext {
@@ -65,6 +70,9 @@ export interface DelegationResult {
   durationMs: number;
   toolCalls: number;
   summary: string;
+  /** Typed reason when `success` is false (see tool-refusal.ts). */
+  code?: ToolRefusalCode;
+  alternatives?: string[];
 }
 
 export interface LogEntry {
@@ -123,12 +131,47 @@ export class DelegationManager extends EventEmitter {
   private activeChildren: Set<string> = new Set();
   private stallTimers: Map<string, NodeJS.Timeout> = new Map();
 
+  /**
+   * The real child-task executor — an LLM-backed child agent that takes a task and
+   * returns its result text.
+   *
+   * Deliberately has NO built-in fallback. `executeTask` used to settle every task
+   * as `completed` with `result = 'Task completed: <goal>'` and never call a model,
+   * so a parent agent summarised a child's "result" that was only its own
+   * instructions echoed back — success reported for work that never ran. Without an
+   * executor wired in, delegation now refuses with `not_configured` and names the
+   * working path (`delegate`, which requires a resolved LLM in the loop).
+   *
+   * See TOOL_TRUTHFULNESS_TRACKER.md finding #4.
+   */
+  private executor: ((task: DelegationTask) => Promise<string>) | null = null;
+
   constructor() {
     super();
     this.ensureDirectories();
     this.loadPendingTasks();
     this.startStallMonitor();
     this.recoverCompletionQueue();
+  }
+
+  // ─── Executor wiring ────────────────────────────────────────────
+
+  /**
+   * Wire a real child executor. Until one is set, every task fails fast with a
+   * typed `not_configured` result instead of a fabricated completion.
+   */
+  setExecutor(fn: (task: DelegationTask) => Promise<string>): void {
+    this.executor = fn;
+  }
+
+  /** Whether a real child executor is wired (surfaced in the tool description). */
+  hasExecutor(): boolean {
+    return this.executor !== null;
+  }
+
+  /** Clear the executor — delegation goes back to refusing rather than simulating. */
+  clearExecutor(): void {
+    this.executor = null;
   }
 
   // ─── Configuration ──────────────────────────────────────────────
@@ -312,12 +355,15 @@ export class DelegationManager extends EventEmitter {
 
     this.logEntry(taskId, 'lifecycle', `Task created: ${goal}`);
 
-    if (task.mode === 'async') {
-      // Background execution
-      this.executeTask(taskId).catch((err) => {
-        logger.error(`Delegation: Background task ${taskId} failed: ${err}`);
-      });
-    }
+    // Start execution for EVERY mode. `async` returns immediately (the caller polls
+    // or drains); sync/batch callers await the result through waitForCompletion().
+    //
+    // Only `async` used to start the task, so `delegate_system` action:"delegate"
+    // returned a task stuck at `pending` that never ran — an agent reading that JSON
+    // saw a delegation that had been accepted, while nothing was ever executed.
+    this.executeTask(taskId).catch((err) => {
+      logger.error(`Delegation: Task ${taskId} failed: ${err}`);
+    });
 
     return task;
   }
@@ -575,9 +621,34 @@ export class DelegationManager extends EventEmitter {
     this.activeChildren.add(taskId);
     this.logEntry(taskId, 'lifecycle', 'Task started');
 
+    // No executor → refuse before spending the retry budget. A retry cannot fix a
+    // missing executor, and reporting `completed` for it is the defect being fixed.
+    if (!this.executor) {
+      task.status = 'failed';
+      task.error =
+        'No child executor is wired into DelegationManager, so this task did NOT run. ' +
+        'Use the `delegate` tool — it spawns a real sub-agent through the resolved LLM in the loop.';
+      // Both alternatives RUN; that is the only reason either is named. `subagent`
+      // was removed here when P4.1 showed its spawn path could not execute at all
+      // (a refusal pointing at a path that performs no work is the defect this
+      // whole method exists to report) and is back now that it forks a real
+      // process, resolves a real provider and refuses instead of faking output.
+      Object.assign(task, refusalFields('not_configured', [
+        'delegate — spawns a real sub-agent (requires a resolved LLM in the tool loop)',
+        'subagent — spawns a real child process that resolves its own provider (requires a configured provider)',
+      ]));
+      task.completedAt = Date.now();
+      task.durationMs = task.completedAt - (task.startedAt || task.createdAt);
+      this.activeChildren.delete(taskId);
+      this.logEntry(taskId, 'error', `Task refused: ${task.error}`);
+      this.emit(`completed:${taskId}`, this.buildResult(task));
+      return;
+    }
+
     try {
       // Build system prompt
       const systemPrompt = this.buildSystemPrompt(task);
+      void systemPrompt;
 
       // Execute with retry
       let lastError: string | undefined;
@@ -593,12 +664,14 @@ export class DelegationManager extends EventEmitter {
           return;
         }
         try {
-          // Simulate task execution (in real implementation, this would call the LLM)
           this.logEntry(taskId, 'thinking', `Executing goal: ${task.goal}`);
 
-          // For now, mark as completed
+          // Real execution: the injected executor owns the LLM call. Its own output
+          // is the result — never a string we synthesise from the goal.
+          const output = await this.executor(task);
+
           task.status = 'completed';
-          task.result = `Task completed: ${task.goal}`;
+          task.result = output;
           task.completedAt = Date.now();
           task.durationMs = task.completedAt - (task.startedAt || task.createdAt);
           this.activeChildren.delete(taskId);
@@ -662,6 +735,8 @@ export class DelegationManager extends EventEmitter {
       durationMs: task.durationMs || 0,
       toolCalls: 0,
       summary: task.result || task.error || 'No result',
+      ...(task.code ? { code: task.code } : {}),
+      ...(task.alternatives ? { alternatives: task.alternatives } : {}),
     };
   }
 

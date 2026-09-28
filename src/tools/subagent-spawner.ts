@@ -17,7 +17,7 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { resolveNuviraHome } from '../config/paths';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync, unlinkSync } from 'node:fs';
+import { createWriteStream, existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
@@ -65,6 +65,11 @@ export interface SubagentState {
   result?: string;
   /** Error */
   error?: string;
+  /**
+   * Typed refusal code when the child refused (see `tool-refusal.ts`), carried
+   * across the process boundary so the caller sees WHY, not just an exit code.
+   */
+  refusalCode?: string;
   /** LLM calls made */
   llmCalls: number;
   /** Tokens used */
@@ -79,6 +84,27 @@ export interface SubagentState {
   durationMs?: number;
 }
 
+/**
+ * Decide a child's terminal state from what it actually reported.
+ *
+ * `handleExit` used to synthesise a success here — a child that exited 0 having
+ * sent no `result` message was marked `completed` with
+ * `result: 'Task completed successfully'`, so `subagent wait` returned success
+ * for a run whose output never existed. That is the fabricated-success defect of
+ * TOOL_TRUTHFULNESS_TRACKER finding #4, and it is the reason this decision is a
+ * separate, exported, tested function rather than three inline branches: no
+ * result means the child reported nothing, which is a failure, never a success.
+ */
+export function classifyChildExit(
+  result: string | undefined,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+): { status: SubagentStatus; error?: string } {
+  if (result) return { status: 'completed' };
+  if (code === 0) return { status: 'failed', error: 'Subagent exited without reporting a result' };
+  return { status: 'failed', error: signal ? `Killed by ${signal}` : `Exit code ${code}` };
+}
+
 export interface SubagentResult {
   /** Subagent ID */
   id: string;
@@ -88,6 +114,8 @@ export interface SubagentResult {
   result: string;
   /** Error if failed */
   error?: string;
+  /** Typed refusal code when the child refused, when it reported one. */
+  refusalCode?: string;
   /** LLM calls made */
   llmCalls: number;
   /** Tokens used */
@@ -106,6 +134,28 @@ const SUBAGENT_DIR = join(resolveNuviraHome(), 'cache', 'subagents');
 const STATE_DIR = join(SUBAGENT_DIR, 'state');
 const LOG_DIR = join(SUBAGENT_DIR, 'logs');
 const RESULT_DIR = join(SUBAGENT_DIR, 'results');
+
+/**
+ * The file to fork.
+ *
+ * A compiled build has `dist/tools/child-agent-entry.js` beside this module and
+ * plain `node` runs it. A source run (tsx/vitest) has the TypeScript original
+ * instead, which node cannot parse — it is forked through the tsx loader. The two
+ * layouts used to be handled by one hardcoded `.js` path, which failed BOTH ways:
+ * compiled, the build never emitted that file (allowJs is false, so `fork()` threw
+ * ENOENT); from source, it was a CommonJS file inside a `"type": "module"`
+ * package and died on `require is not defined`. That is why no subagent ever ran.
+ */
+function resolveChildEntry(): { entry: string; execArgv?: string[] } {
+  const dir = import.meta.dirname;
+  const compiled = join(dir, 'child-agent-entry.js');
+  if (existsSync(compiled)) return { entry: compiled };
+  const source = join(dir, 'child-agent-entry.ts');
+  if (existsSync(source)) return { entry: source, execArgv: ['--import', 'tsx'] };
+  throw new Error(
+    `subagent entry not found beside ${dir} (expected child-agent-entry.js or .ts) — the build is incomplete`,
+  );
+}
 
 export class SubagentManager extends EventEmitter {
   private subagents: Map<string, SubagentState> = new Map();
@@ -159,8 +209,10 @@ export class SubagentManager extends EventEmitter {
 
     try {
       // Spawn child process
-      const child = fork(join(import.meta.dirname, 'child-agent-entry.js'), [], {
+      const { entry, execArgv } = resolveChildEntry();
+      const child = fork(entry, [], {
         cwd: config.cwd || process.cwd(),
+        ...(execArgv ? { execArgv } : {}),
         env: {
           ...process.env,
           ...config.env,
@@ -175,14 +227,17 @@ export class SubagentManager extends EventEmitter {
         },
         stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       });
+      logger.info(`Subagent: forked ${entry}${execArgv ? ` (via ${execArgv.join(' ')})` : ''}`);
 
       state.pid = child.pid;
       state.status = 'running';
       this.processes.set(id, child);
 
-      // Set up log file
+      // Set up log file. This used to be `require('node:fs')` INSIDE an ESM
+      // module, so it threw `require is not defined` immediately after the fork
+      // and `spawn()` rejected before the child was ever tracked.
       const logFile = join(LOG_DIR, `${id}.log`);
-      const logStream = require('node:fs').createWriteStream(logFile, { flags: 'a' });
+      const logStream = createWriteStream(logFile, { flags: 'a' });
 
       // Pipe stdout/stderr to log file
       child.stdout?.pipe(logStream);
@@ -342,6 +397,13 @@ export class SubagentManager extends EventEmitter {
         state.tokensUsed = msg.tokensUsed || state.tokensUsed;
         state.toolCalls = msg.toolCalls || state.toolCalls;
         break;
+      case 'error':
+        // The child's OWN reason. Without this the message was dropped and the
+        // parent could only report "Exit code 1".
+        state.error = msg.error || 'Subagent reported an error';
+        if (msg.code) state.refusalCode = msg.code;
+        this.saveState(state);
+        break;
     }
   }
 
@@ -352,14 +414,15 @@ export class SubagentManager extends EventEmitter {
     state.endedAt = Date.now();
     state.durationMs = state.endedAt - state.startedAt;
 
-    if (state.result) {
-      state.status = 'completed';
-    } else if (code === 0) {
-      state.status = 'completed';
-      state.result = 'Task completed successfully';
-    } else {
+    if (state.status === 'killed' || state.status === 'timeout') {
+      // The killer already recorded why; do not overwrite it with an exit code.
+    } else if (state.error) {
+      // The child said why it failed — that reason outranks its exit code.
       state.status = 'failed';
-      state.error = signal ? `Killed by ${signal}` : `Exit code ${code}`;
+    } else {
+      const outcome = classifyChildExit(state.result, code, signal);
+      state.status = outcome.status;
+      if (outcome.error) state.error = outcome.error;
     }
 
     this.saveState(state);
@@ -372,8 +435,12 @@ export class SubagentManager extends EventEmitter {
       this.emit('completed', id, result);
       this.emit(`completed:${id}`, result);
     } else {
-      this.emit('failed', id, new Error(state.error));
-      this.emit(`failed:${id}`, new Error(state.error));
+      // The child's typed refusal (when it reported one) rides on the error, so
+      // `waitForCompletion`'s rejection is actionable instead of a bare message.
+      const failure = new Error(state.error);
+      if (state.refusalCode) (failure as Error & { code?: string }).code = state.refusalCode;
+      this.emit('failed', id, failure);
+      this.emit(`failed:${id}`, failure);
     }
   }
 
@@ -383,6 +450,7 @@ export class SubagentManager extends EventEmitter {
       success: state.status === 'completed',
       result: state.result || '',
       error: state.error,
+      ...(state.refusalCode ? { refusalCode: state.refusalCode } : {}),
       llmCalls: state.llmCalls,
       tokensUsed: state.tokensUsed,
       toolCalls: state.toolCalls,

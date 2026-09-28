@@ -1769,7 +1769,11 @@ registerTool({
 // Delegate system tool
 registerTool({
   name: 'delegate_system',
-  description: 'Full delegation: spawn subagents, batch execute.',
+  description:
+    'Full delegation: spawn subagents, batch execute. REQUIRES a child executor to be wired in — without one '
+    + 'every task fails with code "not_configured" and NOTHING runs (it previously reported each task '
+    + 'completed with its own goal echoed back as the result). For real delegation use `delegate`, which '
+    + 'spawns a sub-agent through the resolved LLM in the loop.',
   category: 'workflow',
   inputSchema: z.object({
     action: z.enum(['delegate', 'batch', 'status', 'cancel']).describe('Action'),
@@ -1782,34 +1786,71 @@ registerTool({
     const { action, goal, id, goals } = args as any;
     const mgr = m.getDelegationManager();
     switch (action) {
-      case 'delegate': return goal ? mgr.delegate(goal).then((r: any) => JSON.stringify(r)) : 'goal required';
-      case 'batch': return goals ? mgr.delegateBatch(goals).then((r: any) => JSON.stringify(r)) : 'goals required';
-      case 'status': return id ? JSON.stringify(mgr.getTask(id)) : 'id required';
-      case 'cancel': return id ? (mgr.cancel(id) ? 'Cancelled' : 'Not found') : 'id required';
+      // Await the RESULT, not the pending task: returning a task that had not run told
+      // the model a delegation had been accepted when nothing was ever executed.
+      case 'delegate': return goal
+        ? mgr.delegate(goal).then((t: any) => mgr.waitForCompletion(t.id)).then((r: any) => JSON.stringify(r))
+        : JSON.stringify({ success: false, code: 'unsupported_format', error: 'goal required' });
+      case 'batch': return goals
+        ? mgr.delegateBatch(goals).then((r: any) => JSON.stringify(r))
+        : JSON.stringify({ success: false, code: 'unsupported_format', error: 'goals required' });
+      case 'status': return id ? JSON.stringify(mgr.getTask(id)) : JSON.stringify({ success: false, code: 'unsupported_format', error: 'id required' });
+      case 'cancel': return id ? (mgr.cancel(id) ? 'Cancelled' : 'Not found') : JSON.stringify({ success: false, code: 'unsupported_format', error: 'id required' });
       default: return 'Unknown action';
     }
   }),
 });
 
-// Subagent tool
+// Subagent tool — connected (P4.1, 2026-09-28).
+//
+// The child is a real forked process running `child-agent-entry.ts`, which the
+// build emits to `dist/tools/`. It resolves a provider from YOUR configuration,
+// makes real LLM calls, runs any allowed tool through the real registry, and
+// reports its own output over IPC. What it will NOT do is answer for work that
+// did not happen: with no constructible provider, an unreachable backend, or
+// tools requested on a provider that cannot call them, it refuses with a typed
+// code (see child-agent-runtime.ts). Before this it was marked NOT CONNECTED —
+// the fork target was never shipped and the worker it wrapped simulated both the
+// model and the tools, so a "completed" subagent had done nothing at all.
 registerTool({
   name: 'subagent',
-  description: 'Spawn real subagents that make their own LLM calls and use tools.',
+  description:
+    'Spawn a real subagent in its own process: it resolves your configured provider, makes its own LLM '
+    + 'calls, runs the tools you allow, and returns its actual output. Pass tools:[...] to let it use '
+    + 'tools (requires a tool-calling provider); omit them for a plain completion. It REFUSES with a '
+    + 'typed code when no provider is configured, the backend is unreachable, or tools were asked for '
+    + 'on a provider that cannot call them — it never reports work it did not do. Use `delegate` for a '
+    + 'sub-agent inside the current tool loop instead of a separate process.',
   category: 'workflow',
   inputSchema: z.object({
     action: z.enum(['spawn', 'status', 'wait', 'kill', 'log']).describe('Action'),
     goal: z.string().optional().describe('Task goal'),
     id: z.string().optional().describe('Subagent ID'),
     timeout: z.number().optional().describe('Timeout'),
+    tools: z.array(z.string()).optional().describe('Tool names the subagent may use (default: none)'),
   }),
   endsAgentStep: false,
   run: (args) => import('./subagent-spawner.js').then((m) => {
-    const { action, goal, id, timeout } = args as any;
+    const { action, goal, id, timeout, tools } = args as any;
     const mgr = m.getSubagentManager();
     switch (action) {
-      case 'spawn': return goal ? mgr.spawn({ goal }).then((s: any) => JSON.stringify(s)) : 'goal required';
+      case 'spawn': return goal
+        ? mgr.spawn({ goal, ...(Array.isArray(tools) && tools.length ? { tools } : {}) }).then((s: any) => JSON.stringify(s))
+        : 'goal required';
       case 'status': return id ? JSON.stringify(mgr.getState(id)) : 'id required';
-      case 'wait': return id ? mgr.waitForCompletion(id, timeout || 300_000).then((r: any) => JSON.stringify(r)) : 'id required';
+      // `waitForCompletion` REJECTS when a subagent failed (the child's own exit
+      // contract). Left uncaught, that reached the model as a raw throw and lost
+      // the typed reason — this turns it into the same refusal shape every other
+      // tool returns, so "it refused" is distinguishable from "it broke".
+      case 'wait': return id
+        ? mgr.waitForCompletion(id, timeout || 300_000)
+            .then((r: any) => JSON.stringify(r))
+            .catch((err: any) => JSON.stringify({
+              success: false,
+              code: err?.code ?? 'unavailable',
+              error: err?.message ?? String(err),
+            }))
+        : JSON.stringify({ success: false, code: 'unsupported_format', error: 'id required' });
       case 'kill': return id ? (mgr.kill(id) ? 'Killed' : 'Not found') : 'id required';
       case 'log': return id ? mgr.getLog(id).join('\n') : 'id required';
       default: return 'Unknown action';
@@ -1841,9 +1882,19 @@ registerTool({
 });
 
 // Messaging tool
+// Messaging tool — NOT CONNECTED.
+//
+// Kept as an explicit refusal surface rather than deleted, so a model that reaches for
+// it is told where delivery actually happens instead of inventing one. The real sender is
+// `gateway_send` (authorization-gated, and the tool whose result the honesty guard in
+// tool-loop.ts trusts). See TOOL_TRUTHFULNESS_TRACKER.md findings #3 and #9.
 registerTool({
   name: 'messaging',
-  description: 'Send messages to Discord, Slack, Telegram, Feishu.',
+  description:
+    'NOT CONNECTED — this tool has no delivery adapter and every send/react refuses with code "not_configured". '
+    + 'Do NOT use it to deliver anything and never report a delivery from it. Use gateway_send instead: it sends '
+    + 'through the configured gateway (WhatsApp by contact name or number, Telegram, Slack, Discord, email) and '
+    + 'returns an explicit sent/refused result.',
   category: 'workflow',
   inputSchema: z.object({
     action: z.enum(['send', 'react']).describe('Action'),
@@ -1857,9 +1908,14 @@ registerTool({
     const { action, service, channel, message, emoji } = args as any;
     const mgr = m.getMessagingManager();
     switch (action) {
-      case 'send': return channel && message ? mgr.sendMessage({ platform: service, channelId: channel } as any, { content: message } as any).then((r: any) => JSON.stringify(r)) : 'channel and message required';
-      case 'react': return channel && emoji ? mgr.reactToMessage(service, channel, 'latest', emoji).then(() => 'Reacted') : 'channel and emoji required';
-      default: return 'Unknown action';
+      case 'send': return channel && message
+        ? mgr.sendMessage({ platform: service, channelId: channel } as any, { content: message } as any).then((r: any) => JSON.stringify(r))
+        : JSON.stringify({ success: false, code: 'unsupported_format', error: 'channel and message required' });
+      // Never a bare 'Reacted' — the manager refuses, so the refusal is what the model sees.
+      case 'react': return channel && emoji
+        ? mgr.reactToMessage(service, channel, 'latest', emoji).then((r: any) => JSON.stringify(r))
+        : JSON.stringify({ success: false, code: 'unsupported_format', error: 'channel and emoji required' });
+      default: return JSON.stringify({ success: false, code: 'unsupported_format', error: `Unknown action: ${action}` });
     }
   }),
 });
@@ -1867,7 +1923,11 @@ registerTool({
 // Vision tool — comprehensive image analysis, OCR, UI element detection
 registerTool({
   name: 'vision',
-  description: 'Vision tools: analyze images, extract text via OCR, detect UI elements, compare screenshots. Use when the user provides an image or asks about visual content.',
+  description:
+    'Analyze an image and transcribe its text (OCR) through the configured vision backend (a local Ollama '
+    + 'vision model or a Gemini key); `analyze` also reports real pixel dimensions. detect-elements, '
+    + 'find-element and compare have NO backend and return ok:false with code "not_configured" — an empty '
+    + 'element list is a refusal, never "found nothing". For a plain description prefer describe_image.',
   category: 'workflow',
   inputSchema: z.object({
     action: z.enum(['analyze', 'ocr', 'detect-elements', 'compare', 'find-element', 'extract-text']).describe('Vision action'),
@@ -1885,8 +1945,10 @@ registerTool({
       case 'ocr': return analyzer.ocr(imagePath).then((r: any) => JSON.stringify(r));
       case 'detect-elements': return analyzer.detectUIElements(imagePath).then((r: any) => JSON.stringify(r));
       case 'compare': return imagePath2 ? analyzer.compare(imagePath, imagePath2).then((r: any) => JSON.stringify(r)) : 'imagePath2 required for comparison';
-      case 'find-element': return searchText ? analyzer.findElementByText(imagePath, searchText).then((r: any) => JSON.stringify(r)) : 'searchText required';
-      case 'extract-text': return analyzer.extractText(imagePath).then((r: any) => JSON.stringify({ text: r }));
+      // null means "refused or not found" — surfaced as `ok` so the two are distinguishable.
+      case 'find-element': return searchText ? analyzer.findElementByText(imagePath, searchText).then((r: any) => JSON.stringify({ ok: r !== null, element: r })) : 'searchText required';
+      // Same result shape as `ocr`: a refusal must not be flattened into an empty string.
+      case 'extract-text': return analyzer.ocr(imagePath).then((r: any) => JSON.stringify(r));
       default: return 'Unknown action';
     }
   }),
@@ -3124,18 +3186,35 @@ registerTool({
 });
 
 // Read Extract — Document-to-text extraction
+//
+// The description advertises ONLY what is implemented (see read-extract.ts). It used
+// to list PDF/DOCX/XLSX/PPTX while reading PDF/DOCX as raw bytes — which is how a
+// model concluded an unreadable PDF had been read (TOOL_TRUTHFULNESS_TRACKER.md #1).
+// It now names the formats that genuinely work, and the refusal codes for the ones
+// that cannot, so the model can distinguish "read it" from "could not read it".
 registerTool({
   name: 'read_extract',
-  description: 'Extract text from documents — PDF, DOCX, XLSX, PPTX, HTML, CSV, JSON.',
+  description:
+    'Extract text from a document. WORKS for PDF, DOCX, XLSX, PPTX, HTML, CSV/TSV, JSON, XML, YAML and '
+    + 'plain text/Markdown; PDF and spreadsheet table rows are preserved so values stay paired with their '
+    + 'columns. Returns success:false with a typed code when it cannot read the file — "no_data" means a '
+    + 'scanned PDF with no text layer (use describe_image on a screenshot instead), "unsupported_format" '
+    + 'means a legacy .doc/.xls/.ppt/.rtf/.odt, "not_configured" means a reader package is missing. '
+    + 'NEVER report a document as read when this tool returned success:false.',
   category: 'workflow',
   inputSchema: z.object({
     filePath: z.string().describe('File path to extract text from'),
+    ocr: z.boolean().optional().describe(
+      'Set true ONLY to recover text from a scanned PDF that has no text layer. Renders the pages and '
+      + 'transcribes them with the vision model — slower, and the text is a transcription rather than a '
+      + 'parsed layer, so digits should be verified. Leave unset for all normal documents.',
+    ),
   }),
   endsAgentStep: false,
   run: (args) => import('./read-extract.js').then((m) => {
     const mgr = m.getReadExtractManager();
-    const { filePath } = args as any;
-    return mgr.extract(filePath).then((r: any) => JSON.stringify(r));
+    const { filePath, ocr } = args as any;
+    return mgr.extract(filePath, { ocr: Boolean(ocr) }).then((r: any) => JSON.stringify(r));
   }),
 });
 

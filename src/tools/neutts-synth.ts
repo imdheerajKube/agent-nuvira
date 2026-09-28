@@ -1,13 +1,21 @@
 /**
- * NeuTTS Synthesis — High-quality text-to-speech.
+ * NeuTTS Synthesis — text-to-speech.
  *
  * Hermes equivalent: neutts_synth.py (110 lines)
  *
  * Provides:
- * - High-quality TTS synthesis
+ * - API-backed synthesis when NEUTTS_API_KEY (or an injected key) is set
  * - Multiple voice options
- * - SSML support
  * - Audio file output
+ *
+ * WHEN NO BACKEND IS CONFIGURED it does NOT fall back to writing audio: the old
+ * fallback wrote a valid, silent WAV (44-byte header + a zeroed sample buffer) and
+ * returned it as a successful synthesis with duration/voice/text metadata. Anything
+ * downstream — a gateway that sends the file, an agent that reports "the audio is
+ * ready" — then acted on silence that looked like speech. Silence is now an
+ * explicit opt-in (BUFF_NEUTTS_ALLOW_SILENT) and never the default.
+ *
+ * See TOOL_TRUTHFULNESS_TRACKER.md finding #5.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -15,6 +23,18 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { logger } from '../utils/logger.js';
+import { envBuff } from '../config/paths.js';
+import { refusalFields, type ToolRefusal } from './tool-refusal.js';
+
+/**
+ * Whether a silent placeholder WAV may stand in for speech. Opt-in only
+ * (`BUFF_NEUTTS_ALLOW_SILENT=1`) — the point of the refusal is that silence must
+ * never be mistaken for synthesis. Exported for tests.
+ */
+export function allowSilentFallback(): boolean {
+  const v = envBuff('NEUTTS_ALLOW_SILENT');
+  return v === '1' || v === 'true' || v === 'yes';
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -33,6 +53,15 @@ export interface SynthesisResult {
   durationMs: number;
   voice: string;
   text: string;
+  ok: boolean;
+  /**
+   * True when the audio is a silent placeholder rather than synthesised speech.
+   * Only ever set behind the BUFF_NEUTTS_ALLOW_SILENT opt-in.
+   */
+  silent?: boolean;
+  code?: ToolRefusal['code'];
+  alternatives?: string[];
+  error?: string;
 }
 
 // ─── NeuTTS Synthesizer ──────────────────────────────────────────────────
@@ -61,17 +90,41 @@ export class NeuTTSSynthesizer {
     const format = options.format || 'wav';
     const audioPath = join(this.outputDir, `${id}.${format}`);
 
-    // Try to use external TTS API if configured
+    // 1. The real backend, when one is configured.
+    let failureReason = 'No NeuTTS API key is configured (NEUTTS_API_KEY).';
     if (this.config.apiKey) {
       try {
         return await this.synthesizeViaAPI(text, voice, audioPath, options);
       } catch (err) {
-        logger.warn(`[neutts] API synthesis failed, falling back to local: ${err}`);
+        failureReason = `NeuTTS API synthesis failed: ${err instanceof Error ? err.message : String(err)}`;
+        logger.warn(`[neutts] ${failureReason}`);
       }
     }
 
-    // Fallback: generate placeholder audio
-    return this.synthesizeLocal(text, voice, audioPath, options);
+    // 2. No real audio. Write a silent placeholder ONLY when the operator asked for
+    //    it — a silent WAV reported as a successful synthesis is a lie the caller
+    //    cannot detect, so it is never the default.
+    if (allowSilentFallback()) {
+      logger.warn(`[neutts] writing SILENT placeholder audio (BUFF_NEUTTS_ALLOW_SILENT is set) — ${failureReason}`);
+      return this.synthesizeLocal(text, voice, audioPath, options);
+    }
+
+    // 3. Refuse: say what is missing and what to use instead.
+    const reason = `No speech was synthesised. ${failureReason}`;
+    logger.warn(`[neutts] synthesis refused — ${failureReason}`);
+    return {
+      id,
+      audioPath: '',
+      durationMs: 0,
+      voice,
+      text,
+      ok: false,
+      error: reason,
+      ...refusalFields('not_configured', [
+        'Set NEUTTS_API_KEY to enable API-backed synthesis',
+        'Use the `speak` tool — it uses the configured local TTS backend (piper) when available',
+      ]),
+    };
   }
 
   /**
@@ -111,6 +164,7 @@ export class NeuTTSSynthesizer {
       durationMs: Math.round((buffer.byteLength / (16000 * 2)) * 1000),
       voice,
       text,
+      ok: true,
     };
   }
 
@@ -152,6 +206,9 @@ export class NeuTTSSynthesizer {
       durationMs: Math.round(durationSec * 1000),
       voice,
       text,
+      ok: true,
+      // Flagged so a caller (or the user) can see the file is silence, not speech.
+      silent: true,
     };
   }
 
@@ -172,12 +229,10 @@ export class NeuTTSSynthesizer {
       }
     }
 
-    // Default voices
-    return [
-      { id: 'default', name: 'Default', language: 'en-US' },
-      { id: 'female-1', name: 'Female 1', language: 'en-US' },
-      { id: 'male-1', name: 'Male 1', language: 'en-US' },
-    ];
+    // No backend → no voices. This used to return three invented voice ids
+    // ('default', 'female-1', 'male-1') that no configured backend could honour, so
+    // a caller could pick one and only discover it was fictitious after synthesis.
+    return [];
   }
 }
 
