@@ -245,8 +245,13 @@ describe('ContextWindowChip', () => {
   it('renders a compact 128K for a 131,072-token window with the exact tokens in the tooltip', () => {
     render(<ContextWindowChip tokens={131072} />);
     expect(screen.getByText('⏳ 128K')).toBeTruthy();
-    expect(screen.getByTitle(/131,072 tokens/)).toBeTruthy();
-    expect(screen.getByTitle(/feeds the router's context preflight/)).toBeTruthy();
+    // The tooltip prints the count with `toLocaleString()`, so its grouping follows
+    // the machine's locale (en-IN: 1,31,072 where en-US: 131,072). Comparing against
+    // the same formatting keeps this assertion about the TOKEN COUNT rather than
+    // about which locale the suite happens to run under.
+    const title = screen.getByTitle(/context window/).getAttribute('title') ?? '';
+    expect(title).toContain(`⏳ context window ${(131072).toLocaleString()} tokens`);
+    expect(title).toContain("feeds the router's context preflight");
   });
 
   it('renders 1M for a 1,048,576-token window (Gemini 2.5 class)', () => {

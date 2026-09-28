@@ -168,7 +168,10 @@ describe('E2E — the 100-page story ask on the hardened agent', () => {
     // ── And the pipeline SAYS SO, instead of reporting a bare failure ──
     expect(result.summary).toMatch(/chapter 4\/39/);
     expect(result.summary).toMatch(/words/);
-    expect(result.summary).toMatch(/\d{1,2},\d{3}\/35,000 words/);
+    // The summary groups counts with toLocaleString(), so the separators follow the
+    // machine's locale (35,000 under en-US, 35.000 under de-DE). Assert the target it
+    // is progressing toward via the same formatting instead of one locale's grouping.
+    expect(result.summary).toContain(`/${job.target.wordsTarget.toLocaleString()} words`);
     // G11 — it does NOT ask the user to say "continue": the remaining work is
     // handed to the calling surface as `pendingWork`, which keeps it going
     // unattended. Reporting progress while demanding a reply is the manual

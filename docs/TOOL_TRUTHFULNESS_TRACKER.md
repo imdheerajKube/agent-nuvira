@@ -127,6 +127,11 @@ done nothing at all.
   **Subagents** tab lists the most recent runs with each one. "It answered nothing
   useful" reads very differently when the row says `local · json` than when it says
   the provider you configured.
+- **And a run in flight is watched, not guessed at.** A child reports `running` and
+  only later `completed` or `failed`, so the tab re-reads the hub on a short timer
+  **while something is running** and tears the timer down the moment nothing is —
+  the row and the tab badge move without a manual Refresh, and an idle panel never
+  polls.
 - `classifyChildExit()` — exported and tested — encodes "no result ⇒ failure".
 - `subagent wait` now converts the rejection into the standard refusal shape
   (`{success:false, code, error}`) instead of letting a raw throw reach the model,
@@ -204,7 +209,7 @@ npx vitest run tests/tools/tool-truthfulness.test.ts     # the P0/P1 assertions
 npx vitest run tests/tools/subagent-end-to-end.test.ts   # real fork + real HTTP
 npx vitest run tests/gateway                            # 440 passed (23 files)
 npx vitest run tests/web-dashboard                      # 295 passed (16 files)
-cd src/web-dashboard && npx vitest run                  # 306 passed (28 files)
+cd src/web-dashboard && npx vitest run                  # 307 passed (28 files)
 node scripts/check-doc-citations.mjs --check            # cited docs exist + are tracked
 ```
 
@@ -216,13 +221,33 @@ Last verified: **2026-09-28** — typecheck clean; `tests/tools` 627 passed (40 
 incl. the 8-test `subagent-end-to-end.test.ts`); `tests/gateway` 440 passed (23 files,
 incl. `realtime.test.ts`); `tests/docs` 13 passed (3 files, incl. the 8 doc-citation
 guards); `tests/web-dashboard` 295 passed (16 files) and the front-end suite
-**306 passed (28 files)** — both including the new Subagents-tab coverage.
+**307 passed (28 files)** — both including the new Subagents-tab coverage (and the
+root suite as a whole: **7022 passed, 360 files**).
 
-**Two front-end failures are pre-existing and locale-bound, not caused by this
-work**: `ModelsPanel.test.tsx` and `RoutingInsightsPanel.test.tsx` assert
-`(1048576).toLocaleString() === '1,048,576'`, which only holds under an
-`en-US`-style grouping; on this machine (locale `en-IN`) the same expression is
-`'10,48,576'`. Neither the components nor their tests are modified here.
+### The chip suites no longer depend on the machine's number locale
+
+`ModelsPanel.test.tsx` and `RoutingInsightsPanel.test.tsx` asserted one locale's
+digit grouping — `1,048,576` and `131,072`. That only holds where `toLocaleString()`
+groups like en-US: on an **en-IN** machine the same values render as `10,48,576` and
+`1,31,072`, on **de-DE** as `1.048.576`, and on **fr-FR** with narrow no-break
+spaces. The suites therefore passed in CI and failed on the developer's own
+machine, which is the worst version of this bug.
+
+Fixed by building the expected string through the same `toLocaleString()` call the
+renderer makes, so the assertion is about the number and its unit rather than about
+the separators. Where a locale's separator is whitespace, `getByText` cannot work at
+all — the library's default normalizer collapses `\s` (including fr-FR's U+202F) to a
+plain space, so a formatted string never compares equal to the rendered text; those
+chips are read off `textContent` with `toContain` instead. The same trap is fixed in
+`ChatPage.test.tsx` (pasted-length prompt), `tests/cli/doctor.test.ts` (telemetry
+headline) and the two long-form progress assertions.
+
+**Verified:** the front-end suite (307) passes under **en-US, en-IN, de-DE, fr-FR and
+ja-JP**; the root suite (7022) passes under the machine default, **de-DE** and
+**fr-FR**. (Only the *assertions* were made locale-aware. The renderers still format
+with the machine's locale, so a German user still sees `35.000` — for a word count
+glossed as a decimal that may be worth revisiting, but it is a product decision, not
+a test one.)
 
 Note: the root `tsconfig.json` includes only `src/**/*`, so `tsc --noEmit` does
 **not** typecheck `tests/` — a test-only type error surfaces in vitest, not in the

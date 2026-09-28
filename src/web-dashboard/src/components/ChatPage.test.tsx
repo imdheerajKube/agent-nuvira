@@ -646,7 +646,12 @@ describe('ChatPage', () => {
       clipboardData: { getData: () => longText },
     } as unknown as React.ClipboardEvent<HTMLTextAreaElement>);
 
-    await waitFor(() => expect(screen.getByText(/2,500 characters/)).toBeTruthy());
+    // The prompt prints the length with `toLocaleString()`, so its separators follow
+    // the machine's locale (2500 is 2,500 under en-US but 2.500 under de-DE). Reading
+    // textContent and comparing against the same formatting keeps this assertion
+    // about the LENGTH rather than about where the locale puts the separator.
+    const offer = await screen.findByText(/You pasted/);
+    expect(offer.textContent).toContain(`${longText.length.toLocaleString()} characters`);
     fireEvent.click(screen.getByText(/Attach as text/));
     await waitFor(() => expect(screen.getByText(/pasted-text.txt/)).toBeTruthy());
   });
