@@ -20,11 +20,14 @@
  *               test, and it catches the drift above (source in commit N,
  *               bundle last built at N-3).
  *
- *   --rebuild   Builds with the dashboard's own toolchain and compares BYTE FOR
- *               BYTE against the committed files. This is the complete check: it
- *               also catches a stale bundle committed alongside a source change
- *               in the SAME commit, which history cannot order. Needs the
- *               dashboard tree installed.
+ *   --rebuild   Builds with the dashboard's own toolchain and compares the output
+ *               against the committed files, byte for byte — except that a
+ *               sourcemap's dependency PATHS are excluded, because those record
+ *               where the package manager put them rather than what was built (see
+ *               normaliseOutput). This is the complete check: it also catches a
+ *               stale bundle committed alongside a source change in the SAME
+ *               commit, which history cannot order. Needs the dashboard tree
+ *               installed.
  *
  *               The build goes to a SCRATCH dir beside `public/` rather than the
  *               configured outDir, so it cannot clobber uncommitted bundle work;
@@ -395,6 +398,35 @@ export function checkHistory(root = DEFAULT_ROOT) {
 }
 
 /**
+ * Normalise a built file for comparison.
+ *
+ * A sourcemap carries a `sources` array that vite records as paths relative to
+ * the OUTPUT directory, resolved through each module's real path. MEASURED, that
+ * makes the map depend on where the package manager put the dependencies rather
+ * than on the source: built here, every dependency reads `../../node_modules/…`,
+ * but built with `node_modules` as a SYMLINK (pnpm, npm link) the same source
+ * emits `../../../../../../../Users/…/node_modules/…` for each of them. Those
+ * entries say where react sat on the building machine, so comparing them would
+ * fail a perfectly current bundle for a package manager the repo does not
+ * forbid. Paths are dropped; `sourcesContent` and `mappings` are still compared,
+ * so a module whose code changed, or a changed order/layout, still differs — and
+ * the module count is kept explicitly, since a map that gained or lost a module
+ * is a real difference even if every remaining module holds the same code.
+ */
+export function normaliseOutput(file, contents) {
+  if (!file.endsWith('.map')) return contents;
+  let parsed;
+  try {
+    parsed = JSON.parse(contents.toString('utf-8'));
+  } catch {
+    return contents;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return contents;
+  const { sources, ...rest } = parsed;
+  return Buffer.from(JSON.stringify({ ...rest, moduleCount: Array.isArray(sources) ? sources.length : 0 }));
+}
+
+/**
  * Read every file under `dir` into a map of path → contents, keyed RELATIVE TO
  * `dir`. Both sides of the comparison are keyed the same way, so a build written
  * outside the repo (the temp outDir) compares cleanly against `public/`.
@@ -474,7 +506,7 @@ export function checkRebuild(root = DEFAULT_ROOT) {
         problems.push(`not in the repo: ${BUNDLE_OUTPUT_DIR}/${file}`);
         continue;
       }
-      if (!committedContents.equals(contents)) {
+      if (!normaliseOutput(file, committedContents).equals(normaliseOutput(file, contents))) {
         problems.push(`differs from a fresh build: ${BUNDLE_OUTPUT_DIR}/${file}`);
       }
     }

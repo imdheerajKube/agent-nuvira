@@ -29,6 +29,7 @@ import {
   bundleOutputPaths,
   compareFreshness,
   isTestFile,
+  normaliseOutput,
   readBundledRepoSources,
 } from '../../scripts/check-dashboard-bundle.mjs';
 
@@ -128,7 +129,37 @@ describe('dashboard bundle freshness — the input set', () => {
   });
 });
 
-// ─── 3. The guard end to end, against a throwaway repo ──────────────────────
+// ─── 3. How the output side is compared ────────────────────────────────────
+
+describe('dashboard bundle freshness — comparing the build', () => {
+  it('compares a sourcemap on its contents, not on where the packages sat', () => {
+    // MEASURED against a real second checkout: with node_modules as a symlink
+    // (pnpm, npm link) vite writes every dependency as an escape to the store —
+    // `../../../../../../../Users/…/node_modules/react/index.js` — where a real
+    // directory gives `../../node_modules/react/index.js`. Same source, same
+    // bytes of JS, different map. A check that compared those paths would fail a
+    // current bundle for a package manager this repo never forbids.
+    const map = (sources: string[], content: string) =>
+      Buffer.from(JSON.stringify({ version: 3, sources, sourcesContent: [content], mappings: 'AAAA' }));
+
+    const committed = map(['../../node_modules/react/index.js', '../src/main.tsx'], 'CODE');
+    const symlinked = map(['../../../../../home/dev/store/react/index.js', '../src/main.tsx'], 'CODE');
+    const normalise = (contents: Buffer) => normaliseOutput('assets/app.js.map', contents);
+    expect(normalise(committed).equals(normalise(symlinked))).toBe(true);
+
+    // The content and the mapping are NOT excused: a changed module, or a module
+    // that went missing, still fails.
+    expect(normalise(committed).equals(normalise(map(['../../node_modules/react/index.js', '../src/main.tsx'], 'OTHER CODE')))).toBe(false);
+    expect(normalise(committed).equals(normalise(map(['../src/main.tsx'], 'CODE')))).toBe(false);
+
+    // Only sourcemaps are normalised — a JS bundle is compared as bytes.
+    const js = Buffer.from('bundle');
+    expect(normaliseOutput('assets/app.js', js).equals(js)).toBe(true);
+    expect(normaliseOutput('assets/app.js', js).equals(Buffer.from('BUNDLE'))).toBe(false);
+  });
+});
+
+// ─── 4. The guard end to end, against a throwaway repo ──────────────────────
 
 /** Build a minimal checkout with a dashboard tree, and run the real script. */
 function fixtureRepo() {
@@ -226,7 +257,7 @@ describe('dashboard bundle freshness — the guard itself', () => {
   });
 });
 
-// ─── 4. The byte comparison against the real artifact ───────────────────────
+// ─── 5. The byte comparison against the real artifact ───────────────────────
 
 describe('dashboard bundle freshness — committed bytes', () => {
   // Needs the dashboard tree installed, which the root suite does not require
