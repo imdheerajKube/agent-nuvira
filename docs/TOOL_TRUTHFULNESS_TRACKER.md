@@ -556,6 +556,49 @@ compares `status` and the fault's own `asked`/`site`/`kind`/`took`, where `took`
 reads `took: false` against every other surface's `true`, and a swallowed fault leaves
 no other trace. Nothing is widened for the scenarios that declare no fault.
 
+## WS7 (#29) — the seeded-bug benchmark (2026-09-29)
+
+**What it is.** Test infrastructure, not a capability a surface can have (same scope
+note as WS6). It measures whether the agent can FIND and FIX a defect it was not told
+about — the thing a coding agent is for, and the thing M2b could only approximate:
+M2b tasks are graded by hidden tests, but nothing proved a task was BROKEN before the
+agent ran, so a task that already passed measured nothing and nobody could tell.
+
+**The property that makes it a benchmark rather than a task list.** Each of the seven
+seeds is declared twice — the broken workspace the agent receives, and the same
+workspace after a reference fix — and verification runs the checks against both. A
+seed is genuinely broken only when its check exits non-zero AND prints its own `FAIL`
+marker, which is what separates "the assertion failed" from "the script crashed": a
+syntax error also exits non-zero, and a seed verified by that standard would prove
+nothing. The fix half proves the check is well-formed.
+
+**It refuses to score an unverified seed.** `runSeededSuite` verifies every task
+before it makes a single model call and aborts the whole run if one does not verify,
+so a number can never be reported over a task that was not actually broken.
+`nuvira eval verify-seeds` runs the same check with no provider and no tokens, and
+exits non-zero on a bad seed — usable as a gate.
+
+**Three things scored apart, because they fail apart** (`src/learning/seeded-benchmark.ts`):
+
+| | Read from | Why it is not the same as the others |
+|---|---|---|
+| **Found** (40%) | what the run REPORTED, matched against the defect's diagnostic vocabulary | an agent can fix a defect it never explained, and explain one it never fixed |
+| **Fixed** (40%) | the checks, re-run in the workspace the agent actually edited | ground truth, and the only measure that is not a reading of the model's own prose |
+| **Nothing else touched** (20%) | every seeded file diffed against its original, plus any file the seed never had | "the tests pass" cannot tell a one-line fix from one that rewrote three unrelated files |
+
+Deleting a file counts as a change, so removing the failing check is visible rather
+than merely suspicious. The seeds are plain CommonJS `.js` with a `.js` check script
+and no dependencies, which keeps verification deterministic, offline and fast (~0.5s
+for the whole suite) — a Python seed would have to be gated on an interpreter
+actually being present rather than assumed.
+
+**What is NOT claimed:** no live provider run of the seeded suite is recorded here
+(the reports table in `docs/benchmarks/INDEX.md` says so explicitly rather than
+carrying a placeholder). The suite, its verification and its scoring are proven by
+`tests/learning/seeded-bugs.test.ts`, which drives the scorer with fake agents — one
+that applies the reference fix, one that changes nothing, and one that fixes the
+right file while rewriting an unrelated one.
+
 ## Open
 
 1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost

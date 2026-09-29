@@ -683,6 +683,11 @@ Run the Agent-Nuvira evaluation framework — measures if the agent is actually 
 Run the evaluation suite
 
    - flags: `--budget <budget>, --engine <engine>, --format <format>, --keep-workspaces, --model <model>, --pace, --provider <provider>, --routing, --suite <suite>, --tasks <tasks>`
+### `nuvira eval verify-seeds`
+
+Prove every seeded bug is genuinely broken (and genuinely fixable) — no provider needed
+
+   - flags: `--tasks <tasks>`
 ### `nuvira eval list`
 
 List available eval tasks
@@ -1347,4 +1352,4 @@ Delete all stored traces
 
 ---
 
-*435 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*437 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

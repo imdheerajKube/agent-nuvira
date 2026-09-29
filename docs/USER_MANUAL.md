@@ -807,6 +807,39 @@ surfaces are judged on whether the failure was REPORTED, not on identical wordin
 a GUI bubble, a CLI line, a messaging reply and a forked child legitimately differ in
 copy, but none of them may call a failed turn a success.
 
+### Seeded-bug benchmark — can it find a defect it was not told about?
+
+```bash
+nuvira eval verify-seeds          # offline gate: every seed is broken, and fixable
+nuvira eval run --suite seeded-bugs -p groq -m llama-3.3-70b-versatile
+```
+
+A deliberate defect is planted in a small project, and the run is asked to make the
+failing check pass **without editing the check**. Three things are scored apart,
+because they fail apart:
+
+| Metric | Weight | Read from |
+|---|---|---|
+| **Found** | 40% | what the run reported, matched against the defect's diagnostic vocabulary |
+| **Fixed** | 40% | the same checks, re-run in the workspace it edited — ground truth |
+| **Nothing else touched** | 20% (only on a fix) | every seeded file diffed against its original, plus any file it created |
+
+The last component is a modifier on a FIX, not credit of its own: a run that changes
+nothing satisfies "changed nothing it should not have" trivially, so it scores 0
+instead of 20%. Diagnosing without fixing scores 0.4; a clean fix scores 0.6, and 1.0
+when the run also named the defect.
+
+Why the number can be trusted: every seed is declared **twice** — the broken workspace
+and the same workspace after a reference fix — and `nuvira eval verify-seeds` proves
+the checks FAIL on the one and PASS on the other. A seed whose check merely crashed
+does not count (the check must fail by printing its own `FAIL` marker), and a run
+REFUSES to score a seed that does not verify, so a task that already passed can never
+contribute a number. Verification needs no provider and no tokens, and a live run
+verifies every seed before it spends one.
+
+Reports land in `docs/benchmarks/seeded-bugs-<provider>-<model>.md`, beside the M2b
+benchmark reports.
+
 ### Collaboration and extension
 
 ```bash

@@ -84,7 +84,17 @@ describe('nuvira parity', () => {
     expect(text).toContain('at-par');
     expect(text).toContain('✓ every surface is at par.');
     expect(process.exitCode).not.toBe(1);
-  }, 90_000);
+    // BUDGET, MEASURED. This drives every declared scenario on all five surfaces
+    // (including a real forked child), and three of them are WS6 fault rows whose
+    // `times: all` deliberately makes EVERY retry fail — a provider that fails on
+    // the first call is one a surface may legitimately recover from, so the row
+    // would otherwise compare retry policies instead of failure reporting. That
+    // costs ~24s on its own, and the file measured ~82s solo against the previous
+    // 90s budget; under the full parallel suite it exceeded it and failed with a
+    // timeout rather than a divergence (verified: the same 48 files run together
+    // pass, and this file passes solo). The budget is headroom for contention, not
+    // a longer leash on a wrong verdict.
+  }, 240_000);
 
   it('fails honestly when the repository sources are absent', async () => {
     // The graph checks read `src/` directly. Run against a directory that is not

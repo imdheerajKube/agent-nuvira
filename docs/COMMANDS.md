@@ -803,13 +803,26 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ### 8.1 Evaluation framework
 
 - **Objective:** Measure whether the agent is actually improving.
-- **Command:** `nuvira eval run [-p <provider>] [-m <model>] [--tasks <t>] [--suite <s>] [--budget <$>] [--pace <n>] [--format <fmt>] [--routing]` · `nuvira eval list` · `nuvira eval results [--last] [--compare <id>]` · `nuvira eval score` · `nuvira eval clear`
+- **Command:** `nuvira eval run [-p <provider>] [-m <model>] [--tasks <t>] [--suite <s>] [--budget <$>] [--pace <n>] [--format <fmt>] [--routing]` · `nuvira eval verify-seeds` · `nuvira eval list` · `nuvira eval results [--last] [--compare <id>]` · `nuvira eval score` · `nuvira eval clear`
 - **Examples:**
   ```bash
   nuvira eval run --tasks quick --format text
   nuvira eval run --suite full --provider groq
+  nuvira eval verify-seeds                  # every seeded bug is broken, and fixable
+  nuvira eval run --suite seeded-bugs -p groq -m llama-3.3-70b-versatile
   nuvira eval results --last
   ```
+- **Seeded bugs (`--suite seeded-bugs`):** a separate benchmark with its own scoring — a
+  deliberate defect is planted in a small project, the run is asked to make the failing
+  check pass without editing it, and three things are scored apart: **found** (read from
+  what the run reported), **fixed** (the check passes now — ground truth), and **nothing
+  else touched** (every seeded file diffed against its original, plus any new file).
+  `nuvira eval verify-seeds` proves each seed FAILS its checks and PASSES them once the
+  reference fix is applied, with no provider and no tokens — a task that already passed
+  would measure nothing, so the suite refuses to score one and aborts instead. That same
+  verification runs before every scored run, which is why an aborted run costs nothing.
+  The "nothing else touched" component only counts on a task that was actually fixed: a run
+  that changes nothing scores 0 rather than 20% for leaving the workspace as it found it.
 
 ### 8.2 Benchmarks
 

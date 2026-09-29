@@ -45,6 +45,16 @@ import {
   clearEvals,
 } from '../learning/eval-framework.js';
 import type { EvalRun, EvalTask } from '../learning/eval-framework.js';
+// WS7 (#29) — the seeded-bug benchmark: its own suite, its own verification, its
+// own scoring (found / fixed / nothing else touched).
+import { formatSeedVerification } from '../learning/seeded-bugs.js';
+import {
+  formatSeededReport,
+  runSeededSuite,
+  seededReportPath,
+  verifySeeds as verifySeedSuite,
+  writeSeededReport,
+} from '../learning/seeded-benchmark.js';
 import type { InferenceProvider } from '../inference/interface.js';
 import { resolveDefaultModel } from '../inference/default-model-resolver.js';
 import { ProviderFactory } from '../inference/factory.js';
@@ -61,7 +71,7 @@ export class EvalCommand extends BaseCommand {
       .option('-p, --provider <provider>', 'Provider to evaluate')
       .option('-m, --model <model>', 'Model to evaluate')
       .option('--tasks <filter>', 'Task filter: task ID, or "quick"/"medium"/"slow" by time estimate')
-      .option('--suite <suite>', 'Curated task suite: "m2b" (experience-parity benchmark) or "full" (all tasks)', 'full')
+      .option('--suite <suite>', 'Curated task suite: "m2b" (experience-parity benchmark), "seeded-bugs" (find and fix a deliberately seeded defect) or "full" (all tasks)', 'full')
       .option('--budget <amount>', 'Maximum cost in USD before stopping', parseFloat)
       .option('--pace', 'Stop when the provider\'s declared DAILY token budget (routing.quota.<provider>.tokensPerWindow) is reached — the Decision 21 gate guard', false)
       .option('--format <format>', 'Output format: text (default), json, markdown', 'text')
@@ -85,6 +95,15 @@ export class EvalCommand extends BaseCommand {
         } else {
           await this.runEval(options || {});
         }
+      });
+
+    // ── verify-seeds ──────────────────────────────────────────────────────
+    command
+      .command('verify-seeds')
+      .description('Prove every seeded bug is genuinely broken (and genuinely fixable) — no provider needed')
+      .option('--tasks <ids>', 'Only verify these task ids (comma-separated)')
+      .action((options?: { tasks?: string }) => {
+        this.verifySeeds(options?.tasks ? options.tasks.split(',').map((t) => t.trim()) : undefined);
       });
 
     // ── list ──────────────────────────────────────────────────────────────
@@ -366,6 +385,15 @@ export class EvalCommand extends BaseCommand {
       }
     }
 
+    // WS7 (#29) — the seeded-bug suite is its own benchmark with its own scoring
+    // (found / fixed / nothing else touched), so it is dispatched rather than
+    // filtered into the M2b metric set: those metrics grade a task against hidden
+    // tests, and they cannot express "did the run name the defect".
+    if (options.suite === 'seeded-bugs') {
+      await this.runSeededBenchmark({ provider: providerName, model, taskIds });
+      return;
+    }
+
     let tasks: EvalTask[];
     if (options.suite === 'm2b') {
       tasks = getM2bTasks();
@@ -478,6 +506,95 @@ export class EvalCommand extends BaseCommand {
     } catch (err) {
       board.finish(false);
       logger.error(String(err));
+    }
+  }
+
+  /**
+   * WS7 (#29) — prove every seeded bug is genuinely broken, and genuinely fixable.
+   *
+   * No provider, no tokens, no network: the checks are plain `node` scripts run in
+   * two throwaway workspaces per task. Exits non-zero when a seed does not verify,
+   * so this is usable as the gate that keeps the benchmark honest.
+   */
+  private verifySeeds(taskIds?: string[]): void {
+    const results = verifySeedSuite(taskIds);
+    console.log(`\n${formatSeedVerification(results)}\n`);
+    if (results.some((result) => !result.ok)) process.exitCode = 1;
+  }
+
+  /**
+   * WS7 (#29) — run the seeded-bug suite against a real model.
+   *
+   * The agent runs through the LOOP engine (`runLoopExecutor`) with the workspace
+   * as its cwd, which is the arm that actually edits files; a pipeline arm would
+   * grade the planner instead of the agent. The suite verifies every seed before it
+   * spends a token, so an aborted run costs nothing.
+   */
+  private async runSeededBenchmark(opts: {
+    provider: string;
+    model: string;
+    taskIds?: string[];
+  }): Promise<void> {
+    const board = new PipelineBoard();
+    board.start(`Seeded-bug benchmark: ${opts.provider}/${opts.model}`);
+    try {
+      const run = await runSeededSuite(opts.provider, opts.model, {
+        ...(opts.taskIds && opts.taskIds.length > 0 ? { taskIds: opts.taskIds } : {}),
+        onProgress: (current, total, bug) => {
+          getEventBus().emit(
+            EventNames.ORCHESTRATOR_AGENT_UPDATE,
+            {
+              agentType: 'eval',
+              stage: 'running',
+              message: `[${current}/${total}] ${bug.title} (${bug.difficulty})`,
+            },
+            'eval',
+          );
+        },
+        runAgent: async ({ goal, workspace }) => {
+          // The workspace IS the project: the engine resolves relative paths
+          // against the process cwd (the same convention the eval arms use).
+          const cwd = process.cwd();
+          process.chdir(workspace);
+          try {
+            const { runLoopExecutor } = await import('./loop-executor.js');
+            const result = await runLoopExecutor(goal, this.configManager, {
+              provider: opts.provider,
+              model: opts.model,
+              quiet: true,
+              skipProjectContext: true,
+            });
+            return { summary: result.content ?? '', success: !result.generationFailed };
+          } finally {
+            process.chdir(cwd);
+          }
+        },
+      });
+
+      board.finish(!run.aborted && run.summary.fixed === run.summary.tasks);
+      console.log('');
+      if (run.aborted && run.verification) {
+        console.log(formatSeedVerification(run.verification));
+        console.log('');
+      }
+      console.log(formatSeededReport(run));
+      console.log('');
+
+      try {
+        const { join } = await import('node:path');
+        const path = writeSeededReport(
+          run,
+          join(process.cwd(), seededReportPath(run.provider, run.model)),
+        );
+        logger.success(`📊 Seeded-bug report: ${path}`);
+      } catch {
+        // Non-critical — the terminal report is already printed.
+      }
+      if (run.aborted) process.exitCode = 1;
+    } catch (err) {
+      board.finish(false);
+      logger.error(String(err));
+      process.exitCode = 1;
     }
   }
 
