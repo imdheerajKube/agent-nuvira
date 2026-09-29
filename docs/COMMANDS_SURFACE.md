@@ -1117,6 +1117,10 @@ Check the anti-silo debt ratchet (observed surface debt must equal the frozen li
 
 Show every capability × surface and any unproven `supported` claim
 
+### `nuvira parity faults`
+
+List the declared faults the harness can inject, and what each one proves
+
 ### `nuvira parity run`
 
 Drive all five surfaces through the real harness and report the verdict
@@ -1343,4 +1347,4 @@ Delete all stored traces
 
 ---
 
-*434 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*435 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

@@ -760,6 +760,53 @@ nuvira history
 nuvira feedback record / list / stats
 ```
 
+### Fault injection — make a dependency fail on purpose
+
+```bash
+nuvira parity faults              # every fault the harness can declare, and what it proves
+```
+
+Fault injection makes one of the agent's own dependencies fail **on purpose**, so
+what it does when something breaks is a measured fact rather than a hope. It is off
+by default and costs nothing when off: with the variable unset, no provider or tool
+call is wrapped, and the objects handed out are the same ones as before.
+
+```bash
+# A provider that fails every model call (HTTP 500), for a live run or a demo:
+NUVIRA_INJECT_FAULT=provider:error:all nuvira chat "summarise this repo"
+
+# A response that arrives and says nothing (a truncated body):
+NUVIRA_INJECT_FAULT=provider:malformed nuvira execute "fix the failing test"
+
+# One tool, failing on every call — honoured across the fork too:
+NUVIRA_INJECT_FAULT=tool:error:read_file nuvira chat "what does the config do?"
+
+# The first two tool calls, whatever they are; and a forked child that dies:
+NUVIRA_INJECT_FAULT=tool:error:2 nuvira chat "…"
+NUVIRA_INJECT_FAULT=ipc:error   nuvira chat "…"
+```
+
+Declaration format: `<site>:<kind>[:<times|all>[:<tool name>]]`, where `site` is
+`provider`, `tool` or `ipc`, and `kind` is `error`, `malformed` or `unavailable`.
+`off` (or unsetting the variable) disables it.
+
+Two promises, and both matter:
+
+- **An injected fault never looks like a real one.** Every message it produces says
+  it was injected, and names the declaration, so neither you nor the model can
+  mistake it for an outage.
+- **A typo is not a silent no-op.** A declaration that cannot be parsed THROWS
+  rather than running unfaulted — a demo that "proves" failure handling while
+  nothing failed is worse than no demo.
+
+The parity harness uses the same protocol twice over: `provider` faults are served by
+its loopback stub (so the real adapter's error mapping runs), while `tool`/`ipc`
+faults are declared to the running agent. `nuvira parity run` drives both on all five
+surfaces; `tests/parity/fault-injection.test.ts` pins them. Under a fatal fault the
+surfaces are judged on whether the failure was REPORTED, not on identical wording —
+a GUI bubble, a CLI line, a messaging reply and a forked child legitimately differ in
+copy, but none of them may call a failed turn a success.
+
 ### Collaboration and extension
 
 ```bash

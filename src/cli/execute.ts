@@ -1765,28 +1765,45 @@ export class ExecuteCommand extends BaseCommand {
       // payload (or the empty fence it leaves behind) as if it were the answer,
       // and never print the model's own reasoning as one either.
       const content = displayTextOrLine(answer.content ?? '');
+      // HONESTY (WS6 #28): a turn whose generation FAILED is not a success, and
+      // this arm used to say it was. Found by the fault-injection row, which drives
+      // all five surfaces through a declared provider fault and compared what they
+      // claimed: the loop arm below computes `success = !result.generationFailed`,
+      // while this arm returned `success: true` unconditionally — so `nuvira
+      // execute` reported success for the SAME backend failure that `nuvira chat`
+      // reported as failed, publishing the provider's own error prose as the
+      // answer. An empty generation is the one outcome a caller must be able to
+      // tell apart from a real answer, and `--json-events` consumers were being
+      // told the opposite.
+      const generationFailed = answer.generationFailed === true;
       if (options.jsonEvents) {
         process.stdout.write(JSON.stringify({
           type: 'result',
-          success: true,
+          success: !generationFailed,
           goal,
           summary: content,
-          tasksCompleted: 1,
+          tasksCompleted: generationFailed ? 0 : 1,
           tasksTotal: 1,
           agentResults: [],
           fileChanges: '',
           runOutput: '',
-          error: '',
+          // The loop arm puts the failure text here too; the machine-readable
+          // stream must not need a second field to tell why nothing was answered.
+          error: generationFailed ? content : '',
           engine: 'direct',
           ts: Date.now(),
         }) + '\n');
       } else if (content) {
         console.log('\n' + content + '\n');
+        // The same visible failure signal the loop arm prints, so a person running
+        // `nuvira execute` is told the run produced no answer rather than left to
+        // read the provider's apology as one.
+        if (generationFailed) logger.error(content);
       }
       // R1 — hand the caller the backend that produced this answer. The chat
       // engine has always known it; this command used to drop it here.
       return {
-        success: true,
+        success: !generationFailed,
         ...(typeof answer.content === 'string' ? { content: answer.content } : {}),
         ...(answer.provider ? { provider: answer.provider } : {}),
         ...(answer.model ? { model: answer.model } : {}),

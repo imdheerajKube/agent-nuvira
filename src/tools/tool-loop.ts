@@ -31,6 +31,10 @@ import {
 // when the run is a resume; `stepDigest` is over the whole input, so a step whose
 // thread or tool schema changed MISSES and is paid for again (see the module).
 import { stepDigest, type StepReplay } from '../learning/step-checkpoint.js';
+// WS6 (#28) — the declared fault seam. `faultAt` is a null check when this
+// process declared no fault (`NUVIRA_INJECT_FAULT`), so an ordinary turn is
+// unaffected.
+import { faultAt } from '../runtime/fault-injection.js';
 import {
   detectPermissionSeeking,
   isAffirmativeReply,
@@ -1671,9 +1675,18 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // The span is ACTIVE for the whole execution: that is what lets a tool
         // which spawns a subagent propagate the trace instead of starting a
         // second, unrelated one in the child.
-        let resultText = await withSpanActive(toolSpan, () =>
-          deps.executeTool(call.name, call.arguments, ctx),
-        );
+        let resultText = await withSpanActive(toolSpan, async () => {
+          // WS6 (#28) — a DECLARED fault, injected at the one place this loop runs
+          // a tool, so every in-process surface (CLI chat, dashboard, gateway,
+          // execute) is affected by the same declaration and none of them needs to
+          // know the seam exists. The result is an `Error:` string rather than a
+          // throw, which is exactly what a tool that really failed returns — so the
+          // call is reported as FAILED, the `failed` hook fires, and the model is
+          // handed the fault's own words. With no declaration this is a null check.
+          const injected = faultAt('tool', call.name);
+          if (injected) return `Error: ${injected.message}`;
+          return deps.executeTool(call.name, call.arguments, ctx);
+        });
         // I3: a tool that returns {artifact, result} gets its deliverable
         // recorded on the session and only `result`
         // is fed back to the model — the JSON payload is runtime metadata.

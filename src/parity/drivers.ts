@@ -66,11 +66,14 @@ import {
 import { TOOL_HOOK_ENV, TOOL_HOOK_PHASES } from '../tools/tool-hooks.js';
 import {
   noDebugLog,
+  noFault,
   noIsolation,
   noOtelExport,
   noResume,
   noToolHooks,
+  turnStatus,
   type DebugLogObs,
+  type FaultObs,
   type IsolationObs,
   type OtelExportObs,
   type ResumeObs,
@@ -78,6 +81,10 @@ import {
   type ToolHooksObs,
   type TurnObservation,
 } from './observation.js';
+// WS6 (#28) — the fault protocol. The harness OWNS the provider faults (the stub
+// answers them) and DECLARES the seam faults (`tool`/`ipc`), so both halves of the
+// workstream are driven through the same run rather than two harnesses.
+import { FAULT_ENV, faultMessage, formatFaultPlan, resetFaultInjector } from '../runtime/fault-injection.js';
 // WS5 (#27) — the two env keys the harness declares these capabilities THROUGH,
 // imported from the modules that define them so a renamed variable cannot leave
 // the harness silently declaring nothing (which would read as "no surface
@@ -135,11 +142,24 @@ interface ParityStub {
   readonly baseUrl: string;
   /** Model completions the stub actually served — the non-vacuity count. */
   chatCalls(): number;
+  /**
+   * WS6 (#28) — how many completions this stub answered with a DECLARED fault.
+   *
+   * Kept separate from `chatCalls` on purpose: the model call happened (the
+   * harness's rule 4 requires it), and this count is what says the failure those
+   * calls met was the harness's own injection rather than the socket.
+   */
+  faultsServed(): number;
   close(): Promise<void>;
 }
 
 async function startStub(scenario: ParityScenario): Promise<ParityStub> {
   let chatCalls = 0;
+  let faultsServed = 0;
+  // Only a PROVIDER-site fault is the stub's to serve. A `tool`/`ipc` fault is
+  // declared to the running agent instead (`withTurnEnvelope`), which is what
+  // makes the seam, rather than this stub, the thing under test there.
+  const providerFault = scenario.fault?.site === 'provider' ? scenario.fault : null;
   const server: Server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -153,10 +173,35 @@ async function startStub(scenario: ParityScenario): Promise<ParityStub> {
         // OpenAI-compatible endpoint asks here. The stub serves the ONE model
         // the surfaces are pinned to, so `resolveWorkingModel` keeps the pin
         // instead of repairing it to some other provider's default.
+        // DELIBERATELY NOT FAULTED: a faulted probe would make the surfaces fail
+        // in their ROUTING rather than in their turn, which is a different row
+        // (and would let a surface pass without ever attempting the call).
         return json({ data: [{ id: PARITY_MODEL, object: 'model' }] });
       }
       if (req.url?.endsWith('/chat/completions')) {
         chatCalls += 1;
+        // WS6 (#28) — the DECLARED provider fault, served on the wire so the REAL
+        // adapter's error mapping is what runs. `faultMessage` is shared with the
+        // seam, so a fault reads the same words wherever it came from, and a body
+        // that cannot be parsed is a distinct kind rather than a second flavour of
+        // "error" — a response that arrives but says nothing is its own failure.
+        if (providerFault && faultsServed < providerFault.times) {
+          faultsServed += 1;
+          if (providerFault.kind === 'malformed') {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end('{"choices": [{"message": {"content": '); // truncated on purpose
+            return;
+          }
+          res.writeHead(providerFault.kind === 'unavailable' ? 503 : 500, {
+            'content-type': 'application/json',
+          });
+          res.end(
+            JSON.stringify({
+              error: { message: faultMessage(providerFault, 'the model call') },
+            }),
+          );
+          return;
+        }
         let body: { stream?: boolean; messages?: Array<{ role?: string }> } = {};
         try {
           body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
@@ -228,6 +273,7 @@ async function startStub(scenario: ParityScenario): Promise<ParityStub> {
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     chatCalls: () => chatCalls,
+    faultsServed: () => faultsServed,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
@@ -620,8 +666,15 @@ async function withTurnEnvelope(
 ): Promise<TurnObservation> {
   const askedIsolation = scenario.isolation === true;
   const askedResume = scenario.resume === true;
+  // WS6 (#28) — a `tool`/`ipc` fault is DECLARED to the running agent (the seam),
+  // while a `provider` fault is served by the stub (so the real adapter's error
+  // mapping runs and the model call still happens). Both are set explicitly,
+  // including the `undefined` case: a declaration inherited from the developer's
+  // shell would make the scenarios that DO NOT ask for a fault inject one anyway.
+  const seamFault = scenario.fault && scenario.fault.site !== 'provider' ? scenario.fault : null;
   const previousIsolation = process.env[WORKTREE_ENABLE_ENV];
   const previousResume = process.env[RESUME_ENABLE_ENV];
+  const previousFault = process.env[FAULT_ENV];
   const set = (name: string, value: string | undefined): void => {
     if (value === undefined) delete process.env[name];
     else process.env[name] = value;
@@ -645,6 +698,10 @@ async function withTurnEnvelope(
     // without a ledger would compare a resumed turn against an empty record —
     // replayed 0, model calls unchanged — and report that as the capability working.
     set(RESUME_ENABLE_ENV, askedResume ? resumeId : undefined);
+    set(FAULT_ENV, seamFault ? formatFaultPlan(seamFault) : undefined);
+    // The injector is cached per declaration, and this declaration is fresh for
+    // this surface — so it starts with a full allowance either way.
+    resetFaultInjector();
     await clearResponseCache();
     const first = await body();
     if (!askedResume) return first;
@@ -656,6 +713,8 @@ async function withTurnEnvelope(
   } finally {
     set(WORKTREE_ENABLE_ENV, previousIsolation);
     set(RESUME_ENABLE_ENV, previousResume);
+    set(FAULT_ENV, previousFault);
+    resetFaultInjector();
   }
 }
 
@@ -838,6 +897,35 @@ function debugLogOf(surface: string, dir: string = debugLogDir()): DebugLogObs {
  * rather than inventing a common one keeps that seam visible instead of hiding
  * it — which is what a parity harness is for.
  */
+/**
+ * WS6 (#28) — whether this surface's OWN turn shows the fault it was given.
+ *
+ * Derived rather than counted, because the counter cannot cross the fork (see
+ * `FaultObs`). The rule is the fault's own contract:
+ *
+ *   - `tool`     — the named call (or any call, when none is named) is reported
+ *                  FAILED. A surface that swallowed the injected `Error:` and
+ *                  reported the call as ok reads as `took: false`.
+ *   - `provider` / `ipc` — the turn did not COMPLETE. A surface that produced an
+ *                  answer anyway reads as `took: false`, which is precisely the
+ *                  false-success shape this workstream exists to catch.
+ */
+function faultObsOf(
+  scenario: ParityScenario,
+  toolCalls: readonly ToolCallObs[],
+  status: TurnObservation['status'],
+): FaultObs {
+  const plan = scenario.fault;
+  if (!plan) return noFault();
+  const took =
+    plan.site === 'tool'
+      ? toolCalls.some(
+          (call) => (plan.match === undefined || call.tool === plan.match) && call.ok === false,
+        )
+      : status !== 'completed';
+  return { asked: true, site: plan.site, kind: plan.kind, took };
+}
+
 function toObservation(
   surface: SurfaceId,
   scenario: ParityScenario,
@@ -845,12 +933,16 @@ function toObservation(
   toolCalls: ToolCallObs[],
   modelCalls: number,
 ): TurnObservation {
-  const succeeded =
-    typeof answer.ok === 'boolean' ? answer.ok : answer.generationFailed !== true;
+  // WS6 (#28) — `generationFailed` outranks `ok`, through the ONE helper every
+  // surface's read goes through (see `turnStatus`). A served-but-failed turn is a
+  // failure; reading the request-level `ok` first is what let the provider-fault
+  // row catch two surfaces calling an empty generation a completion.
+  const status = turnStatus(answer);
+  const succeeded = status === 'completed';
   return {
     surface,
     engine: 'loop',
-    status: succeeded ? 'completed' : 'failed',
+    status,
     // Recorded, never inferred: the runner refuses a zero (rule 4 in
     // ./scenarios.ts) instead of reading a cache replay as agreement.
     modelCalls,
@@ -877,6 +969,8 @@ function toObservation(
     // whose second turn is the one that can answer it.
     isolation: isolationObsOf(scenario.isolation === true, answer.worktree),
     resume: resumeObsOf(scenario.resume === true, answer.resume),
+    // WS6 (#28) — the declared fault, and whether THIS surface's turn shows it.
+    fault: faultObsOf(scenario, toolCalls, status),
     ...(typeof answer.content === 'string' ? { answer: answer.content } : {}),
     ...(succeeded
       ? {}
@@ -1271,20 +1365,62 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
       };
       const { value, otel } = await withOtlpCollector(async () => {
         const state = await manager.spawn(spawnConfig);
-        return { state, result: await manager.waitForCompletion(state.id, 60_000) };
+        try {
+          return { state, result: await manager.waitForCompletion(state.id, 60_000) };
+        } catch {
+          // A CHILD THAT FAILED IS AN OBSERVATION, NOT A HARNESS CRASH — found by
+          // the WS6 provider-fault row, which is the first scenario where the child
+          // legitimately ends in failure. `waitForCompletion` REJECTS on a failed
+          // run, so this throw used to escape the driver, abort `runParityScenario`
+          // and fail the harness with an exception instead of a verdict. A harness
+          // that cannot say "every surface failed honestly" cannot measure fault
+          // handling at all.
+          //
+          // The rejection is DISCARDED in favour of the manager's own recorded
+          // state: what is reported is the child's own report (its error, its
+          // attribution, its call counts), not the exception this driver happened
+          // to catch — the same "read the surface's own record" rule the gateway
+          // and debug-log drivers follow.
+          const failed = manager.getState(state.id) ?? state;
+          return {
+            state: failed,
+            result: {
+              id: failed.id,
+              success: false,
+              result: failed.result ?? '',
+              ...(failed.error ? { error: failed.error } : {}),
+              ...(failed.refusalCode ? { refusalCode: failed.refusalCode } : {}),
+              ...(failed.provider ? { provider: failed.provider } : {}),
+              ...(failed.model ? { model: failed.model } : {}),
+              ...(failed.transport ? { transport: failed.transport } : {}),
+              ...(failed.findings ? { findings: failed.findings } : {}),
+              ...(failed.resume ? { resume: failed.resume } : {}),
+              llmCalls: failed.llmCalls,
+              tokensUsed: failed.tokensUsed,
+              toolCalls: failed.toolCalls,
+              durationMs: failed.durationMs ?? 0,
+              log: manager.getLog(failed.id),
+            },
+          };
+        }
       });
       const { state, result } = value;
       const transport =
         result.transport === 'native' || result.transport === 'json' ? result.transport : 'none';
+      // The child's own verdict, through the shared helper (it reports success
+      // directly, so `ok` is the flag it has) — the same rule across the fork
+      // rather than a second one that could disagree.
+      const status = turnStatus({ ok: result.success });
+      const childCalls = callsByRun.get(state.id) ?? [];
       return {
         surface: 'subagent',
         engine: 'loop',
-        status: result.success ? 'completed' : 'failed',
+        status,
         modelCalls: result.llmCalls,
         ...(result.provider ? { provider: result.provider } : {}),
         ...(result.model ? { model: result.model } : {}),
         transport,
-        toolCalls: callsByRun.get(state.id) ?? [],
+        toolCalls: childCalls,
         // WS1 — the child's own findings, read from the frames it sent.
         findings: result.findings ?? [],
         // WS2 — the child's own debug log, read back from the file it wrote
@@ -1306,6 +1442,11 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
         // WS5 — the CHILD's own resume report, read from the frame it sent (the
         // child is a separate process; this is its only channel back).
         resume: resumeObsOf(scenario.resume === true, result.resume),
+        // WS6 (#28) — the declared fault, derived from what the CHILD's own frames
+        // and result say. This is the field that proves a declaration crosses the
+        // fork: a `tool` fault reaches this child through the environment the
+        // parent handed it, and the failed call is reported back on a frame.
+        fault: faultObsOf(scenario, childCalls, status),
         ...(result.result ? { answer: result.result } : {}),
         ...(result.success ? {} : { errorCode: result.refusalCode ?? 'turn_failed' }),
         noise: { at: Date.now() },
@@ -1382,6 +1523,9 @@ export async function createParityHarness(): Promise<ParityHarness> {
     // make the scenarios that do not ask for the capability measure it anyway.
     isolation: process.env[WORKTREE_ENABLE_ENV],
     resume: process.env[RESUME_ENABLE_ENV],
+    // WS6 (#28) — same rule: the harness DECLARES a fault per scenario, so a
+    // declaration inherited from the shell must not arm one for every scenario.
+    fault: process.env[FAULT_ENV],
   };
   process.env.NUVIRA_CONFIG_DIR = workspace.configDir;
   process.env.NUVIRA_MEMORY_DIR = workspace.memoryDir;
@@ -1396,6 +1540,9 @@ export async function createParityHarness(): Promise<ParityHarness> {
   // Only the GATE belongs here; the endpoint is set per driver
   // (`withOtlpCollector`), because each surface gets its own collector.
   process.env[otelEnableVarName] = '1';
+  // WS6 (#28) — and no fault, until a scenario declares one.
+  delete process.env[FAULT_ENV];
+  resetFaultInjector();
   // The legacy aliases would otherwise win on the modules that check them, and
   // point half the run back at the developer's real profile.
   delete process.env.BUFF_CONFIG_DIR;
@@ -1461,6 +1608,9 @@ export async function createParityHarness(): Promise<ParityHarness> {
       else process.env[WORKTREE_ENABLE_ENV] = previous.isolation;
       if (previous.resume === undefined) delete process.env[RESUME_ENABLE_ENV];
       else process.env[RESUME_ENABLE_ENV] = previous.resume;
+      if (previous.fault === undefined) delete process.env[FAULT_ENV];
+      else process.env[FAULT_ENV] = previous.fault;
+      resetFaultInjector();
       // Tear the LAST surface's provider down too: a test file that runs several
       // parity runs in a row would otherwise inherit the first one's provider,
       // still pointing at a collector that has been closed.

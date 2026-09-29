@@ -10,6 +10,7 @@ import { OpenAICompatAdapter } from './openai-compat-adapter.js';
 import { ProviderType, ProviderConfig } from '../config/types.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { getCatalogProvider } from './provider-catalog.js';
+import { withFaultInjection } from '../runtime/fault-injection.js';
 
 /**
  * Providers with a DEDICATED adapter in this factory. Kept as a set so
@@ -71,7 +72,24 @@ export class ProviderFactory {
     }
   }
 
+  /**
+   * The provider a caller gets: the adapter below, wrapped by the WS6 fault seam
+   * when this process has declared one (`NUVIRA_INJECT_FAULT`).
+   *
+   * MEASURED REASON FOR THE SEAM TO LIVE HERE. `createProvider` is the ONE place
+   * every surface obtains a provider — the four in-process surfaces through
+   * `resolveProvider`, and the forked child through its own call to this same
+   * static (`child-agent-runtime.ts:493`). Wrapping here therefore covers all five
+   * including the process boundary, without a second implementation that could
+   * disagree. With no declaration the adapter is returned unchanged (see
+   * `withFaultInjection`), so nothing about an ordinary run changes.
+   */
   static createProvider(type: ProviderType | string, config: ProviderConfig): InferenceProvider {
+    return withFaultInjection(ProviderFactory.construct(type, config));
+  }
+
+  /** The adapter itself, with no fault seam — what `createProvider` builds. */
+  private static construct(type: ProviderType | string, config: ProviderConfig): InferenceProvider {
     switch (type) {
       case 'nim':
         return new NIMAdapter(config);

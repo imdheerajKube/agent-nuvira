@@ -22,6 +22,9 @@
 
 import { runSubagent, type SubagentRuntimeConfig } from './child-agent-runtime.js';
 import { SubagentRefusalError } from './subagent-refusal.js';
+// WS6 (#28) — the declared fault seam, read in the CHILD's own process (the
+// declaration reaches it through the environment it inherited).
+import { faultAt } from '../runtime/fault-injection.js';
 
 function num(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
@@ -73,6 +76,13 @@ function send(msg: Record<string, unknown>): void {
 }
 
 async function main(): Promise<void> {
+  // WS6 (#28) — a DECLARED ipc fault: this process dies before it does any work,
+  // and deliberately WITHOUT a frame, because a crash is the failure the parent
+  // cannot observe from inside its own process. The assertion it exists for is
+  // that the parent reports the run as failed rather than hanging on a child that
+  // will never speak, or inventing a result for it.
+  if (faultAt('ipc', 'child')) process.exit(3);
+
   const config = readConfig();
   if (!config.goal) {
     send({ type: 'error', error: 'SUBAGENT_GOAL is empty — nothing to do.' });

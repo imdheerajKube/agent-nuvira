@@ -247,9 +247,21 @@ export async function chatCompletionsWithToolsStream(
   // (stream_options.include_usage convention) so onCost records MEASURED cost
   // instead of a length-based estimate — the generateStream parity pattern.
   let streamUsage: { promptTokens?: number; completionTokens?: number } | undefined;
+  /**
+   * True once the body has produced a server-sent-event line we understood.
+   *
+   * A STREAM THAT CARRIES NO `data:` LINE AT ALL IS AN UNPARSEABLE RESPONSE, not
+   * an empty answer — see the guard after the read loop. Tracked separately from
+   * "the content is empty" because an empty completion is legitimate (a model may
+   * return nothing with `finish_reason: stop`, and that arrives as a data line).
+   */
+  let sawSseLine = false;
+  /** The first bytes of the body, for a failure report (bounded, one line). */
+  let rawHead = '';
 
   /** Process one complete SSE line (content delta → onToken; tool_calls → accumulate). */
   const handleLine = (trimmed: string): void => {
+    if (trimmed.startsWith('data:')) sawSseLine = true;
     const token = parseSSELine(trimmed);
     if (token) {
       contentParts.push(token);
@@ -291,6 +303,7 @@ export async function chatCompletionsWithToolsStream(
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+      if (rawHead.length < 200) rawHead += buffer.slice(rawHead.length, 200);
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
       for (const line of lines) {
@@ -302,6 +315,23 @@ export async function chatCompletionsWithToolsStream(
     if (remaining) handleLine(remaining);
   } finally {
     reader.releaseLock();
+  }
+
+  // A 200 that carried no SSE at all is a response NOTHING COULD PARSE, and it
+  // used to be returned as `{ content: '', toolCalls: [] }` — an empty-but-valid
+  // answer. Measured cost of that: the dashboard's turn read it as "the model said
+  // nothing", retried until its step bound, and reported the turn as COMPLETED
+  // ("I reached my step limit") while every non-streaming surface reported the
+  // same backend response as a failure. That is the fabricated-success shape this
+  // repo's truthfulness workstream exists to remove, so it throws here instead —
+  // the caller's own failure handling then does the honest thing.
+  if (!sawSseLine) {
+    const head = rawHead.replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(
+      'Tool-calling streaming API error: the response carried no server-sent events ' +
+        '(no `data:` line), so nothing could be read from it' +
+        (head ? ` — body began: ${head}` : ' — body was empty'),
+    );
   }
 
   const parsedCalls: ToolCallResponse['toolCalls'] = [];

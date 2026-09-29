@@ -511,6 +511,51 @@ live run pins the rest: a dashboard turn with isolation on changed `dash-iso.txt
 the response carried `payload.files[0].body` = the unified diff, and the project tree
 stayed clean.
 
+## WS6 (#28) — fault injection (2026-09-29)
+
+**What it is.** Test infrastructure, not a capability a surface can have, which is
+why it has no row in the capability matrix (`src/parity/matrix.ts` says so in its
+scope note). It exists to make the honest answer to a dependency failure MEASURED
+instead of assumed — the whole reason this tracker is about false success, and the
+one shape nothing else in the suite could produce: every earlier parity row either
+succeeds or fails at the TOOL level, and a failed tool still leaves a completed turn.
+
+**Two halves.** A declared fault is served either by the harness's own loopback stub
+(a `provider` fault → HTTP 500 / a truncated body / 503, so the REAL adapter's error
+mapping runs and the model call still happens) or by the running agent itself
+(`tool`/`ipc`, through `NUVIRA_INJECT_FAULT`, which is what proves the seam is
+honoured on every surface including the forked child — it reads the declaration out
+of the environment it inherited). `nuvira parity faults` lists both; the rows live in
+`src/cli/parity.ts` and are driven on all five surfaces by `nuvira parity run` and by
+`tests/parity/fault-injection.test.ts`.
+
+**Four real defects, found by the rows on their first run.** Each was invisible to
+the rest of the suite:
+
+| # | Defect | Was | Now |
+|---|---|---|---|
+| 1 | `nuvira execute`'s direct-answer arm reported the failed turn as a success | `return { success: true }` unconditionally (the loop arm computes `!result.generationFailed`), so the SAME backend failure was "failed" on `chat` and "success" on `execute`, and the provider's apology was published as the answer — including on the `--json-events` stream (`success: true`, `tasksCompleted: 1`, `error: ''`) | `success: !answer.generationFailed`; the stream carries `tasksCompleted: 0` and the failure text in `error` |
+| 2 | The parity projection read the console's request-level `ok` as a TURN completion | the dashboard reported `ok: true` with `generationFailed: true`, and `toObservation` preferred `ok` — so 2 of 5 surfaces called a backend that failed every call a completion | one helper (`turnStatus`) reads `generationFailed` first, for every surface |
+| 3 | A streaming 200 that carried no SSE at all became an EMPTY ANSWER | `chatCompletionsWithToolsStream` returned `{content: '', toolCalls: []}` for a body with no `data:` line; the dashboard read that as "the model said nothing", retried to its step bound and reported **completed** ("I reached my step limit") while every non-streaming surface reported the same response as a failure | it throws when no SSE line was seen — an unparseable response is a failure, never empty-but-valid |
+| 4 | A child whose provider failed mid-call left NO evidence and reported 0 model calls | `llmCalls` was incremented only AFTER a successful call (so a run that reached a model and was refused reported 0 — the harness's "the turn must have reached a model" rule refused the whole row), and the log/span were written only on the paths that produced a result, so a crashed child had `written: false` and `exported: false` | the ATTEMPT is counted before it is made; a mid-call failure writes the child's debug log and ships a RED span before rethrowing |
+
+**A fifth finding, in the harness itself.** `subagent-spawner.waitForCompletion`
+REJECTS on a failed run, so the first fault row — the first scenario where the child
+legitimately ends in failure — threw out of the driver and aborted `runParityScenario`
+with an exception instead of a verdict. The harness could not say "every surface
+failed honestly" about the one surface most likely to fail. The driver now reads the
+manager's own recorded state on rejection, so a failed child is an observation.
+
+**How a fault row is judged.** Not by the full projection, and deliberately: under a
+fatal dependency failure the CLI, the GUI, a messaging bridge and a forked child
+legitimately differ in their user-facing copy, their error taxonomy, their
+last-attempt attribution and their retry counts. Comparing those would report four
+correct surfaces as divergent. `compareFaultHonesty` (`src/parity/scenarios.ts`)
+compares `status` and the fault's own `asked`/`site`/`kind`/`took`, where `took` means
+"this surface's own turn shows the consequence" — a surface that SWALLOWED the fault
+reads `took: false` against every other surface's `true`, and a swallowed fault leaves
+no other trace. Nothing is widened for the scenarios that declare no fault.
+
 ## Open
 
 1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost

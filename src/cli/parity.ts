@@ -45,6 +45,8 @@ import {
 } from '../parity/matrix.js';
 import { reportParityFailure } from '../parity/observation.js';
 import { runParityScenario, type ParityScenario } from '../parity/scenarios.js';
+// WS6 (#28) — the fault protocol, for the `faults` listing.
+import { describeFaultProtocol } from '../runtime/fault-injection.js';
 
 /**
  * The repository root, derived from this module's own location.
@@ -355,6 +357,49 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
     isolation: true,
   },
   {
+    id: 'fault-provider-error',
+    message: 'list the working directory, then answer',
+    // WS6 (#28) — a PROVIDER fault, served on the wire by the harness's own stub:
+    // every completion answers HTTP 500 for the whole turn. The real adapter's
+    // error mapping is therefore what runs, and the model call still happens (so
+    // the harness's "the turn must have reached a model" rule holds rather than
+    // refusing the row for a reason that hides what it was meant to measure).
+    //
+    // `times: all` rather than `1` on purpose: a single failure is one a surface
+    // may legitimately RETRY and recover from, and the row would then be comparing
+    // each surface's retry policy instead of what it reports when the backend is
+    // simply down. Every call failing is the unambiguous case — the turn cannot
+    // complete, so any surface that produces an answer is fabricating one.
+    toolCall: { tool: 'list_dir', args: { path: '.' } },
+    answer: 'Listed.',
+    fault: { site: 'provider', kind: 'error', times: Number.POSITIVE_INFINITY },
+  },
+  {
+    id: 'fault-provider-malformed',
+    message: 'list the working directory, then answer',
+    // WS6 (#28) — the other half of an honest provider failure: the response
+    // ARRIVES and says nothing (a truncated body). A surface that reads an
+    // unparseable reply as an empty-but-valid answer is the same false-success
+    // shape as a fabricated tool result, and this row is what makes it visible.
+    toolCall: { tool: 'list_dir', args: { path: '.' } },
+    answer: 'Listed.',
+    fault: { site: 'provider', kind: 'malformed', times: Number.POSITIVE_INFINITY },
+  },
+  {
+    id: 'fault-tool-error',
+    message: 'read the project readme, then answer',
+    // WS6 (#28) — a TOOL fault, injected by the RUNNING AGENT through the declared
+    // seam (`NUVIRA_INJECT_FAULT`) rather than by the stub, because that is the half
+    // of the workstream the stub cannot reach: the declaration has to be honoured by
+    // every surface, and the forked child in particular has to read it out of the
+    // environment it inherited. The named tool fails every time, the call is
+    // reported FAILED on every surface, and the fault's own words (which say it was
+    // injected) are what the model is handed.
+    toolCall: { tool: 'read_file', args: { path: 'README.md' } },
+    answer: 'Read failed.',
+    fault: { site: 'tool', kind: 'error', times: Number.POSITIVE_INFINITY, match: 'read_file' },
+  },
+  {
     id: 'partial-resume',
     message: 'list the working directory, then answer',
     // WS5 (#27) — a RESUMED run, on every surface: the harness runs this ask
@@ -441,6 +486,24 @@ export class ParityCommand extends BaseCommand {
       });
 
     cmd
+      .command('faults')
+      .description('List the declared faults the harness can inject, and what each one proves')
+      .action(() => {
+        const lines: string[] = ['Declared fault injection (WS6 #28):', ''];
+        lines.push(...describeFaultProtocol());
+        lines.push('', 'Scenarios that DECLARE a fault, and the path each takes:', '');
+        for (const scenario of PARITY_SCENARIOS) {
+          if (!scenario.fault) continue;
+          const plan = scenario.fault;
+          const where = plan.site === 'provider' ? 'the stub (the wire)' : 'the declared seam';
+          lines.push(`  ${scenario.id.padEnd(26)} ${plan.site}:${plan.kind} — injected by ${where}`);
+        }
+        lines.push('', '`nuvira parity run` drives every one of them on all five surfaces.');
+        lines.push('');
+        report({ ok: true, lines });
+      });
+
+    cmd
       .command('run')
       .description('Drive all five surfaces through the real harness and report the verdict')
       .action(async () => {
@@ -454,6 +517,7 @@ export class ParityCommand extends BaseCommand {
       console.log('  nuvira parity surfaces   registry vs the real import graph');
       console.log('  nuvira parity debt       the anti-silo debt ratchet');
       console.log('  nuvira parity matrix     capability × surface, and unproven claims');
+      console.log('  nuvira parity faults     the declared faults, and what each one proves');
       console.log('  nuvira parity run        drive every surface and report the verdict\n');
       console.log('  The first three read `src/` and need a source checkout; `run` drives the built surfaces.');
       console.log(`  Turn-parity entry points: ${Object.keys(TURN_ENTRIES).join(', ')}`);

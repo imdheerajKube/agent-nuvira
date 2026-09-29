@@ -105,6 +105,25 @@ describe('WS0 capability matrix — claim versus proof', () => {
     }
   });
 
+  it('keeps the test-infrastructure workstreams out of the capability matrix', () => {
+    // WS6 (#28, fault injection) and WS7 (#29, the seeded-bug benchmark) are TEST
+    // INFRASTRUCTURE, and `src/parity/matrix.ts` says so in its scope note: they are
+    // deliberately absent rather than marked "not applicable" five times. That makes
+    // them invisible to a guard that iterates capabilities, so the scope note is
+    // pinned here instead: neither workstream may own a capability row, because a
+    // capability has no single status on a surface for them to claim. Both LANDED as
+    // infrastructure on 2026-09-29 — recorded in `TOOL_TRUTHFULNESS_TRACKER.md` (WS6)
+    // and in the seeded-bug suite itself (WS7), which is where their evidence lives.
+    const infrastructure: Workstream[] = ['WS6', 'WS7'];
+    for (const capability of CAPABILITIES) {
+      expect(
+        infrastructure,
+        `${capability.id} is owned by ${capability.workstream}, which owns no surface behaviour — ` +
+          'test infrastructure cannot be a capability, see the matrix scope note',
+      ).not.toContain(capability.workstream);
+    }
+  });
+
   it('marks every unproven capability as planned rather than supported', () => {
     // The rows owned by a workstream that has not started must not claim
     // `supported` anywhere — that is the whole point of recording status
@@ -113,9 +132,11 @@ describe('WS0 capability matrix — claim versus proof', () => {
     // `debug-log`, `otel-export`, `tool-hooks`, `isolation-worktree` and
     // `partial-resume` rows are now proven per surface by the parity scenarios), so
     // they left this list deliberately — the same one-line edit the rule requires
-    // when a workstream starts shipping. WS6-WS7 have no `supported` cell: their
-    // capabilities are still `planned` everywhere.
-    const notStarted: Workstream[] = ['WS6', 'WS7'];
+    // when a workstream starts shipping. WS6 and WS7 own no row at all (see the
+    // guard above), so this list is empty and stays declared: deleting it would stop
+    // the rule being measured, and the next workstream to start would then ship a
+    // `supported` cell with nothing to catch it.
+    const notStarted: Workstream[] = [];
     for (const capability of CAPABILITIES) {
       if (!notStarted.includes(capability.workstream)) continue;
       for (const surface of SURFACES) {

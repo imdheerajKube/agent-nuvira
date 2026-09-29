@@ -1184,15 +1184,25 @@ nuvira models excluded         # show what routing is skipping, and WHY
   execute, dashboard chat, the gateway and subagents** — and that the code still agrees
   with the architecture the project claims. The requirement is only real if a capability
   cannot land on one surface and quietly miss the other four.
-- **Command:** `nuvira parity` · `nuvira parity surfaces` · `nuvira parity debt` · `nuvira parity matrix` · `nuvira parity run`
+- **Command:** `nuvira parity` · `nuvira parity surfaces` · `nuvira parity debt` · `nuvira parity matrix` · `nuvira parity faults` · `nuvira parity run`
 - **Examples:**
   ```bash
   nuvira parity                 # summary of the subcommands
   nuvira parity surfaces        # the registry vs the real import graph
   nuvira parity debt            # the anti-silo ratchet (exit 1 on drift)
   nuvira parity matrix          # every capability × surface, and any unproven claim
+  nuvira parity faults          # the declared faults, and what each one proves
   nuvira parity run             # drive ALL five surfaces and report the verdict
   ```
+- **Faults:** `nuvira parity faults` lists every fault the harness can inject — the
+  protocol is `NUVIRA_INJECT_FAULT=<site>:<kind>[:<times|all>[:<tool>]]`, e.g.
+  `provider:error:all` for a backend that fails every call, `tool:error:read_file` for
+  one tool, `ipc:error` for a forked child that dies. It is off by default (with the
+  variable unset nothing is wrapped), every message says the fault was injected, and a
+  declaration that cannot be parsed throws rather than running unfaulted. The same
+  declaration works outside the harness — `nuvira chat "…"` with it set runs a real
+  turn against a broken dependency on purpose. Under a fatal fault the surfaces are
+  judged on whether the failure was REPORTED, not on identical wording.
 - **First-timer detail:** `surfaces`, `debt` and `matrix` read the repository's own
   `src/` import graph and exit non-zero when it drifts, so they work as a gate in a
   script or CI. `run` is the real thing: it drives each surface's own turn code (the

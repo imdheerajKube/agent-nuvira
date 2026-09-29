@@ -43,6 +43,10 @@
 
 import { compare, type TurnObservation } from './observation.js';
 import type { SurfaceId } from './surfaces.js';
+// WS6 (#28) — the fault protocol itself lives in the runtime (that is where the
+// seam is), and a scenario only DECLARES which fault it wants. Type-only, so this
+// module stays the pure data-plus-rules module its header describes.
+import type { FaultPlan } from '../runtime/fault-injection.js';
 
 /** What one parity case asks every surface to do. */
 export interface ParityScenario {
@@ -103,6 +107,31 @@ export interface ParityScenario {
    * about a pair of runs and one turn cannot show it (see `ResumeObs`).
    */
   resume?: boolean;
+  /**
+   * WS6 (#28) — the fault this turn is run under.
+   *
+   * TWO PATHS, and which one is taken depends on the SITE, because each proves a
+   * different half of the claim:
+   *
+   *   - `provider` — the harness's own loopback stub answers 500 / malformed JSON
+   *     / 503. No production seam is involved, the REAL adapter's error mapping
+   *     runs, and the model call still happens (so the runner's "the turn must have
+   *     reached a model" rule holds and the refusal cannot hide a surface that was
+   *     never driven). This is where a provider fault is proven, because a real
+   *     outage reaches a surface through the adapter, not through this repo.
+   *   - `tool` / `ipc` — the DECLARED seam (`NUVIRA_INJECT_FAULT`, see
+   *     `src/runtime/fault-injection.ts`) is armed for the turn, so the fault is
+   *     injected by the running agent itself. That is the path that proves the seam
+   *     is honoured on EVERY surface, the forked child included — the child reads
+   *     the same declaration out of the environment it inherited.
+   *
+   * A scenario field rather than a harness-wide setting, for the same reason the
+   * hooks and isolation are: a fault changes what the turn does, so declaring one
+   * for every scenario would make the earlier cases measure a different system than
+   * the one they were written against. Absent means no fault is declared — the
+   * default every surface must also be correct under.
+   */
+  fault?: FaultPlan;
 }
 
 /**
@@ -266,7 +295,17 @@ export async function runParityScenario(
   }
 
   const [baseline, ...rest] = observations;
-  const differences = rest.flatMap((observation) => compare(baseline, observation));
+  // WS6 (#28) — a scenario that DECLARES a fault is compared on the FAULT-HONESTY
+  // projection instead of the full one, and the reason is measured rather than
+  // aesthetic: under a fatal dependency failure the surfaces legitimately differ in
+  // every other field. The CLI, the GUI, a messaging bridge and a forked child
+  // have different user-facing copy, different error taxonomies, different
+  // last-attempt attributions and different retry counts — comparing those would
+  // report four correct surfaces as divergent and bury the one fact the row is
+  // about. What must NOT differ is whether the failure was reported as a failure.
+  const differences = scenario.fault
+    ? rest.flatMap((observation) => compareFaultHonesty(baseline, observation))
+    : rest.flatMap((observation) => compare(baseline, observation));
 
   return {
     scenario: scenario.id,
@@ -276,4 +315,39 @@ export async function runParityScenario(
     skipped,
     verdict: differences.length === 0 ? 'at-par' : 'divergent',
   };
+}
+
+/**
+ * WS6 (#28) — the fields a FAULT row is compared on: what the turn was given, and
+ * whether it reported the consequence.
+ *
+ * `status` and the fault's own `asked`/`site`/`kind` say both surfaces were told
+ * the same thing and ended the same way; `took` is the load-bearing one, because a
+ * surface that SWALLOWED the fault — completed a turn the backend never served, or
+ * reported an injected tool failure as a success — reads `took: false` against
+ * every other surface's `true`. A swallowed fault leaves no other trace, which is
+ * why it is a compared field and not something a test reads off one surface.
+ *
+ * Deliberately absent: `answer`, `errorCode`, `provider`/`transport`/`model`,
+ * `debugLog`, `otel`, `modelCalls` and `toolCalls`. Each of those legitimately
+ * differs under a fatal fault (a messaging surface has no bubble to fill; a child
+ * announces its transport before it fails; the last attempt a debug header names
+ * is the fallback, not the provider that errored). They are still recorded on the
+ * observation for the failure report — only the comparison excludes them.
+ */
+export function compareFaultHonesty(a: TurnObservation, b: TurnObservation): string[] {
+  const differences: string[] = [];
+  const who = `${a.surface} vs ${b.surface}`;
+  if (a.status !== b.status) {
+    differences.push(`${who}: status differs — ${a.status} vs ${b.status}`);
+  }
+  const fields = ['asked', 'site', 'kind', 'took'] as const;
+  for (const field of fields) {
+    const l = a.fault[field];
+    const r = b.fault[field];
+    if (l !== r) {
+      differences.push(`${who}: fault.${field} differs — ${String(l)} vs ${String(r)}`);
+    }
+  }
+  return differences;
 }

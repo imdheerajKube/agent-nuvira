@@ -35,6 +35,29 @@ import type { SurfaceId } from './surfaces.js';
 /** How a turn ended, in the taxonomy every surface already reports. */
 export type TurnStatus = 'completed' | 'failed' | 'refused';
 
+/**
+ * The turn's status, read the same way for every surface. WS6 (#28).
+ *
+ * `generationFailed` OUTRANKS `ok` whenever both are present, and a declared
+ * provider fault is why this exists. The dashboard console and the command report
+ * `ok` for "the request was served" while carrying `generationFailed: true` for
+ * "the model produced no answer" — two different facts, and the first version of
+ * this projection read `ok` first, so a backend that failed every call was called
+ * a COMPLETION on two of the five surfaces while the CLI and the gateway called it
+ * a failure.
+ *
+ * That divergence was invisible until a fault row existed, because no earlier
+ * scenario ever produced a failed generation: every other row either succeeds or
+ * fails at the TOOL level, and a failed tool still leaves a completed turn. What
+ * the surfaces must agree on is the TURN's outcome, so that is what is read — and
+ * a surface that reports neither flag is read as completed, which is the honest
+ * default for a surface that produced an answer.
+ */
+export function turnStatus(answer: { ok?: boolean; generationFailed?: boolean }): TurnStatus {
+  if (typeof answer.generationFailed === 'boolean') return answer.generationFailed ? 'failed' : 'completed';
+  return answer.ok === false ? 'failed' : 'completed';
+}
+
 /** Volatile per-invocation values. Recorded for the failure report, never compared. */
 /**
  * One tool call, as an observer sees it.
@@ -264,6 +287,40 @@ export function noResume(): ResumeObs {
 }
 
 /**
+ * WS6 (#28) — a DECLARED fault, and whether its effect is visible in this
+ * surface's own turn.
+ *
+ * WHY `took` IS DERIVED FROM THE OBSERVATION rather than read from a counter. The
+ * fault is declared for the whole run, and the claim is not "the harness fired a
+ * fault" (that is the harness grading itself) but "this surface's turn shows the
+ * consequence". For a provider fault that means the turn did NOT complete; for a
+ * tool fault it means the named call is reported FAILED. A surface that swallowed
+ * the fault reads `took: false` against every other surface's `true`, which is a
+ * divergence — and one that could not be seen any other way, because a swallowed
+ * fault leaves no other trace.
+ *
+ * The counter the injector keeps is real (`FaultInjector.fired`) and used in the
+ * seam's own tests, but it cannot cross the fork: the child is a separate process,
+ * so the parent has no injector to read. Deriving the effect per surface is what
+ * lets ONE field be compared on all five, the forked child included.
+ */
+export interface FaultObs {
+  /** True when the scenario declared a fault for this turn. */
+  asked: boolean;
+  /** The declared site (`provider`/`tool`/`ipc`), or null. */
+  site: string | null;
+  /** The declared kind (`error`/`malformed`/`unavailable`), or null. */
+  kind: string | null;
+  /** True when this surface's own turn shows the declared fault's effect. */
+  took: boolean;
+}
+
+/** The honest "no fault was declared" value. Fresh each call. */
+export function noFault(): FaultObs {
+  return { asked: false, site: null, kind: null, took: false };
+}
+
+/**
  * One surface's view of one turn. Fields the surface does not report stay
  * `undefined` — and `compare` treats "absent on one surface, present on another"
  * as a difference, because a surface that cannot say which model served a turn
@@ -344,6 +401,16 @@ export interface TurnObservation {
    */
   resume: ResumeObs;
   /**
+   * WS6 (#28) — the fault this turn had declared for it, and whether the turn
+   * shows its effect.
+   *
+   * REQUIRED, for the reason `otel` and `hooks` are: the row is "an injected
+   * failure is reported honestly on every surface", and an optional field would
+   * let a surface that never saw the fault go on reading as at-par. A scenario
+   * that declares nothing carries the honest "not asked" value.
+   */
+  fault: FaultObs;
+  /**
    * WS1 — the findings the turn recorded, in call order, in the shared wire
    * form (`findings/verdicts.ts`).
    *
@@ -381,6 +448,7 @@ export interface ComparableObservation {
   hooks: ToolHooksObs;
   isolation: IsolationObs;
   resume: ResumeObs;
+  fault: FaultObs;
   answer: string | null;
   refusalCode: string | null;
   errorCode: string | null;
@@ -405,6 +473,7 @@ export function comparableOf(observation: TurnObservation): ComparableObservatio
     hooks: observation.hooks ?? noToolHooks(),
     isolation: observation.isolation ?? noIsolation(),
     resume: observation.resume ?? noResume(),
+    fault: observation.fault ?? noFault(),
     answer: observation.answer ?? null,
     refusalCode: observation.refusalCode ?? null,
     errorCode: observation.errorCode ?? null,
@@ -606,6 +675,21 @@ export function compare(a: TurnObservation, b: TurnObservation): string[] {
     if (l !== r) {
       differences.push(
         `${who}: resume.${field} differs — ${show(String(l))} vs ${show(String(r))}`,
+      );
+    }
+  }
+
+  // WS6 (#28) — the declared fault. `asked`/`site`/`kind` are the declaration
+  // (both sides must have been told the same thing for the comparison to mean
+  // anything), and `took` is what catches the failure mode the row exists for: a
+  // surface whose turn shows no sign of a fault it was definitely given.
+  const faultFields: Array<keyof FaultObs> = ['asked', 'site', 'kind', 'took'];
+  for (const field of faultFields) {
+    const l = left.fault[field];
+    const r = right.fault[field];
+    if (l !== r) {
+      differences.push(
+        `${who}: fault.${field} differs — ${show(l === null ? null : String(l))} vs ${show(r === null ? null : String(r))}`,
       );
     }
   }

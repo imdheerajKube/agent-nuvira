@@ -55,6 +55,9 @@ import {
   runToolOutcomeHooks,
   toolHookRefusalText,
 } from './tool-hooks.js';
+// WS6 (#28) — the declared fault seam, read in the child's own process (the
+// declaration arrives through the environment the parent handed it).
+import { faultAt } from '../runtime/fault-injection.js';
 // WS5 (#27) — the child's OWN partial resume. The model calls happen in THIS
 // process, so a resume that only the parent could do would replay nothing: the
 // child records its steps into its own store and replays the ones whose input is
@@ -308,8 +311,10 @@ export async function runSubagent(
    * so shutting it down here is what stops a lingering exporter socket or batch
    * timer from keeping the child alive after it has said what it did.
    */
+  let spansFinished = false;
   const finishSpans = async (outcome: { ok: boolean; message?: string }): Promise<void> => {
-    if (!otelSpan) return;
+    if (!otelSpan || spansFinished) return;
+    spansFinished = true;
     otelSpan.end(outcome);
     await flushSpans();
     await shutdownSpans();
@@ -323,8 +328,10 @@ export async function runSubagent(
    * an unattended fork's stdout is easy to lose, and a log nobody can find is
    * not an attachable artifact. The parent ignores phases it does not know.
    */
+  let debugLogFinished = false;
   const finishDebugLog = (detail: Record<string, unknown> = {}): void => {
-    if (!debugLog) return;
+    if (!debugLog || debugLogFinished) return;
+    debugLogFinished = true;
     debugLog.event('turn.end', detail);
     const path = debugLog.write();
     if (path) send({ type: 'progress', phase: 'debug_log', path });
@@ -364,6 +371,34 @@ export async function runSubagent(
   }
 
   // ── Tool loop (native protocol, or the shared JSON fallback) ──────────────
+  //
+  // WS6 (#28) — EVERYTHING below runs under one guard, because a call that throws
+  // mid-run used to leave NOTHING behind: the unreachable-provider refusal above
+  // writes its debug log and ships a red span before it throws, while a provider
+  // that failed INSIDE a call skipped both. Measured by the provider-fault parity
+  // row: the child reported `written: false` and `exported: false`, so a crashed
+  // subagent produced no attachable log and no trace at all — the two artifacts
+  // WS2 and WS3 exist to guarantee, missing on exactly the run an operator most
+  // needs them for.
+  /**
+   * Leave the same evidence a refusal leaves, then rethrow.
+   *
+   * WS6 (#28) — a provider that failed INSIDE a call used to leave NOTHING
+   * behind: the unreachable-provider refusal above writes its debug log and ships
+   * a red span before it throws, while a call that threw skipped both. Measured by
+   * the provider-fault parity row: the child reported `written: false` and
+   * `exported: false`, so a crashed subagent produced no attachable log and no
+   * trace at all — the two artifacts WS2 and WS3 exist to guarantee, missing on
+   * exactly the run an operator most needs them for. The error is rethrown
+   * unchanged, so the parent still receives the honest failure frame.
+   */
+  const failWithEvidence = async (err: unknown): Promise<never> => {
+    const message = err instanceof Error ? err.message : String(err);
+    finishDebugLog({ failed: message, provider: type });
+    await finishSpans({ ok: false, message });
+    throw err;
+  };
+
   if (hasTools) {
     const out = await runToolLoop(config, allowed, provider, type, transport, {
       send,
@@ -374,7 +409,7 @@ export async function runSubagent(
       debug: debugLog,
       otel: otelSpan,
       resume: resume?.ledger ?? null,
-    });
+    }).catch(failWithEvidence);
     finishDebugLog({
       llmCalls: out.llmCalls,
       toolCalls: out.toolCalls,
@@ -398,7 +433,7 @@ export async function runSubagent(
     '',
     `Task: ${config.goal}`,
   ].join('\n');
-  const text = await provider.generate(prompt, modelOption(model));
+  const text = await provider.generate(prompt, modelOption(model)).catch(failWithEvidence);
   finishDebugLog({ llmCalls: 1, toolCalls: 0, transport: 'none' });
   await finishSpans({ ok: true });
   return finishResume({
@@ -595,7 +630,6 @@ async function runToolLoop(
       return finish('Subagent stopped: reached its model-call ceiling before finishing.', true);
     }
 
-    loop.send({ type: 'progress', phase: 'thinking', iteration: iteration + 1, llmCalls, toolCalls });
     // WS5 (#27) — a resumed child replays this step when its input is unchanged.
     // The digest is over the WHOLE input (the thread AND the schema), so a step
     // whose tool result or tool list differs MISSES and is paid for again — the
@@ -611,9 +645,19 @@ async function runToolLoop(
       // the count the parent records and the debug log carry is the number of
       // calls this run actually made (see `ResumeOutcome.modelCalls`).
       loop.send({ type: 'progress', phase: 'resume_step', step: stepKey });
+      loop.send({ type: 'progress', phase: 'thinking', iteration: iteration + 1, llmCalls, toolCalls });
     } else {
-      response = await callModel(provider, transport, messages, schemas, model);
+      // WS6 (#28) — the ATTEMPT is counted BEFORE it is made, and that ordering is
+      // the fix for a measured dishonesty: a model call that THREW used to leave
+      // `llmCalls` unchanged, so a child whose provider failed every call reported
+      // ZERO model calls — as if it never reached a model at all. The in-process
+      // surfaces' counts come from the wire and already include failed attempts, so
+      // this is also what makes the child's count comparable across the fork; and
+      // the frame that announces the call now carries the incremented count, which
+      // is the only channel the parent has (the child dies before a result frame).
       llmCalls += 1;
+      loop.send({ type: 'progress', phase: 'thinking', iteration: iteration + 1, llmCalls, toolCalls });
+      response = await callModel(provider, transport, messages, schemas, model);
       loop.resume?.record(stepKey, stepHash, response);
     }
 
@@ -836,6 +880,13 @@ async function executeTool(
   override?: (name: string, args: Record<string, unknown>) => Promise<string>,
   emit?: (event: string, data: unknown) => void,
 ): Promise<string> {
+  // WS6 (#28) — a DECLARED fault, injected before every path (including an
+  // injected `runTool`), so a fault declared for a turn reaches a FORKED CHILD the
+  // same way it reaches the in-process loop. The child inherits the declaration
+  // through its environment, which is why one declaration covers all five
+  // surfaces and the parity row can assert it across the process boundary.
+  const injected = faultAt('tool', name);
+  if (injected) return `Error: ${injected.message}`;
   if (override) return override(name, args);
   const tool = getTool(name);
   if (!tool) return `Error: unknown tool '${name}'.`;
