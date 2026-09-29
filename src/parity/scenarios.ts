@@ -58,6 +58,27 @@ export interface ParityScenario {
   answer: string;
   /** Files the scenario expects to exist, as `path` → contents, for a deterministic tool result. */
   fixtures?: Record<string, string>;
+  /**
+   * WS4 (#26) — the operator's tool hooks this scenario asks the harness to
+   * DECLARE for its turn.
+   *
+   * A scenario field rather than a harness-wide setting, because a hook changes
+   * what the turn does: declaring one for every scenario would make the earlier
+   * cases measure a different system than the one they were written against, and
+   * the harness cannot tell a deliberate declaration from a leftover. Absent means
+   * no hook is declared, which is the default the surfaces must also be correct
+   * under.
+   *
+   * This is DATA, not a command: the harness writes the hook script itself (see
+   * `src/parity/drivers.ts`) and the surface runs it the way an operator's own
+   * hook would be run — a real process, a real pipe, the payload as JSON on stdin.
+   */
+  hooks?: {
+    /** The phases to declare a hook for. The harness declares one command per phase. */
+    phases: readonly ('before' | 'after' | 'failed')[];
+    /** Tool names a `before` hook VETOES. Absent or empty = the hook observes only. */
+    deny?: readonly string[];
+  };
 }
 
 /**

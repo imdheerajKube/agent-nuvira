@@ -46,6 +46,15 @@ import {
   withSpanActive,
   type SpanHandle,
 } from '../observability/otel.js';
+// WS4 (#26) — the SAME operator hooks, in the child's own process. The child
+// reads its own config and inherits the parent's environment, so a hook declared
+// either way applies here too; without this, a veto that holds on every
+// in-process surface would leak through a forked subagent.
+import {
+  runBeforeToolHooks,
+  runToolOutcomeHooks,
+  toolHookRefusalText,
+} from './tool-hooks.js';
 
 export interface SubagentRuntimeConfig {
   /** The task the subagent must complete. */
@@ -452,6 +461,10 @@ async function runToolLoop(
 
   let llmCalls = 0;
   let toolCalls = 0;
+  // One config read per loop rather than per call: the hooks are declared in the
+  // child's own configuration (this process's, not the parent's), and the
+  // declarations are resolved through the same manager the tools use.
+  const hookConfigManager = new ConfigManager();
 
   for (let iteration = 0; iteration < loop.maxIterations; iteration += 1) {
     if (llmCalls >= loop.maxLlmCalls) {
@@ -503,6 +516,41 @@ async function runToolLoop(
       // tool-call-lifecycle@subagent).
       loop.send({ type: 'progress', phase: 'tool_call', tool: call.name });
       loop.debug?.event('tool.start', { tool: call.name });
+      const toolStartedAt = Date.now();
+      // WS4 (#26) — the `before` hooks. A veto stops the call here, so a hook
+      // that holds on the CLI holds for a forked subagent too — the child is a
+      // separate PROCESS, and a policy that stopped at the process boundary would
+      // be worse than no policy, because it would look enforced.
+      const beforeHooks = await runBeforeToolHooks({
+        tool: call.name,
+        args: call.arguments,
+        callId: call.id,
+        surface: 'subagent',
+        ...(config.cwd ? { cwd: config.cwd } : {}),
+        configManager: hookConfigManager,
+      });
+      for (const problem of beforeHooks.problems) {
+        // A failed hook is reported to the parent on its own frame rather than
+        // swallowed: the seam fails open, so a broken policy would otherwise be
+        // indistinguishable from one that approved every call.
+        loop.send({ type: 'progress', phase: 'hook_problem', problem });
+      }
+      if (beforeHooks.denied) {
+        const refusal = toolHookRefusalText(beforeHooks);
+        loop.debug?.event('tool.refused', { tool: call.name, by: 'tool-hook' });
+        // The same pair of frames a call that ran and failed sends, so the parent
+        // records the attempt and its outcome exactly as it does everywhere else.
+        loop.send({
+          type: 'progress',
+          phase: 'tool_result',
+          tool: call.name,
+          ok: false,
+          llmCalls,
+          toolCalls,
+        });
+        messages.push({ role: 'tool', content: refusal, toolCallId: call.id });
+        continue;
+      }
       // WS3 (#25) — the call as a child span of the child's turn, created where
       // the call actually RUNS (the allow-list check above is a refusal, not a
       // call). Same name shape as every other surface's tool span, so the tree
@@ -539,7 +587,44 @@ async function runToolLoop(
         });
         toolSpan?.attr('nuvira.ok', ok);
         toolSpan?.end({ ok });
+        // WS4 (#26) — `after` for a call that succeeded, `failed` for one that
+        // did not. Exactly one of the two, because a hook that counts failures
+        // must not be told about a success.
+        const outcomeHooks = await runToolOutcomeHooks({
+          tool: call.name,
+          args: call.arguments,
+          callId: call.id,
+          surface: 'subagent',
+          ...(config.cwd ? { cwd: config.cwd } : {}),
+          configManager: hookConfigManager,
+          ok,
+          result: output,
+          durationMs: Date.now() - toolStartedAt,
+        });
+        for (const problem of outcomeHooks.problems) {
+          loop.send({ type: 'progress', phase: 'hook_problem', problem });
+        }
         messages.push({ role: 'tool', content: output, toolCallId: call.id });
+      } catch (err) {
+        // The injected `runTool` override can throw where the registry's own
+        // executor would have returned an `Error:` result — both are a failure
+        // the `failed` phase is owed.
+        const message = err instanceof Error ? err.message : String(err);
+        const outcomeHooks = await runToolOutcomeHooks({
+          tool: call.name,
+          args: call.arguments,
+          callId: call.id,
+          surface: 'subagent',
+          ...(config.cwd ? { cwd: config.cwd } : {}),
+          configManager: hookConfigManager,
+          ok: false,
+          error: message,
+          durationMs: Date.now() - toolStartedAt,
+        });
+        for (const problem of outcomeHooks.problems) {
+          loop.send({ type: 'progress', phase: 'hook_problem', problem });
+        }
+        throw err;
       } finally {
         // A safety net, not a second report: an injected `runTool` can throw,
         // and a span left open would hang off the turn span for ever.

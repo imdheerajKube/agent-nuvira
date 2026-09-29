@@ -6,7 +6,7 @@
  * network, no TTY.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import {
   runToolLoop,
   isThinkOnlyResponse,
@@ -1514,5 +1514,109 @@ describe('tool loop — trace events (G18)', () => {
     });
 
     expect(result.content).toBe('Read it.');
+  });
+});
+
+// ─── WS4 (#26): the operator's tool hooks, from the loop ────────────────────
+
+describe('WS4 tool hooks — the veto, and what it must NOT touch', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'loop-hooks-'));
+  const logPath = join(dir, 'hook-log.jsonl');
+  const scriptPath = join(dir, 'hook.mjs');
+
+  /** The hook the operator declares here: deny `read_file`, record everything. */
+  writeFileSync(
+    scriptPath,
+    [
+      "import { appendFileSync } from 'node:fs';",
+      "let raw = '';",
+      "process.stdin.setEncoding('utf8');",
+      'for await (const c of process.stdin) raw += c;',
+      'const p = JSON.parse(raw);',
+      'appendFileSync(process.env.WS4_LOG, JSON.stringify({ phase: p.phase, tool: p.tool }) + String.fromCharCode(10));',
+      "if (p.phase === 'before' && p.tool === 'read_file') process.stdout.write(JSON.stringify({ decision: 'deny', reason: 'reads are frozen' }));",
+    ].join('\n'),
+  );
+
+  // Declared in `beforeAll`, not at collection time: a hook left declared for the
+  // whole FILE would sit in front of every other test's tool calls, and a
+  // `read_file` those tests expect to succeed would come back refused.
+  let before: string | undefined;
+  let after: string | undefined;
+  let log: string | undefined;
+  beforeAll(() => {
+    before = process.env.NUVIRA_TOOL_HOOK_BEFORE;
+    after = process.env.NUVIRA_TOOL_HOOK_AFTER;
+    log = process.env.WS4_LOG;
+    process.env.NUVIRA_TOOL_HOOK_BEFORE = `node ${scriptPath}`;
+    process.env.NUVIRA_TOOL_HOOK_AFTER = `node ${scriptPath}`;
+    process.env.WS4_LOG = logPath;
+  });
+
+  /** Every hook invocation recorded so far, as `phase:tool`. */
+  const invocations = (): string[] =>
+    readFileSync(logPath, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => {
+        const entry = JSON.parse(line) as { phase: string; tool: string };
+        return `${entry.phase}:${entry.tool}`;
+      });
+
+  it('refuses the denied call and runs the NEXT one normally', async () => {
+    // The regression this pins: a decision must not outlive the call it was made
+    // for. A veto that leaked forward would refuse every later call in the turn,
+    // which looks like a working policy and is a broken agent.
+    const ran: string[] = [];
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'a.ts' } }] },
+        { content: '', toolCalls: [{ id: 'c2', name: 'list_dir', arguments: { path: '.' } }] },
+        { content: 'Done.', toolCalls: [] },
+      ],
+      async (name) => {
+        ran.push(name);
+        return 'ran';
+      },
+    );
+
+    const events: string[] = [];
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'read then list' }],
+      context: ctx,
+      deps: {
+        ...deps,
+        onEvent: (line: string) => {
+          events.push(line);
+        },
+      },
+      surface: 'cli-chat',
+    });
+
+    expect(result.content).toBe('Done.');
+    // The denied tool never ran; the next one did.
+    expect(ran).toEqual(['list_dir']);
+    expect(events.join('\n')).toContain('read_file — refused by a tool hook');
+    // And the model was told, in the shape every other failed call takes.
+    const calls = deps.callModel.mock.calls;
+    const second = calls[1][0] as Array<{ role: string; content: string }>;
+    expect(
+      second.some((m) => m.role === 'tool' && m.content.includes('refused by a tool hook')),
+    ).toBe(true);
+
+    // The hook saw the denied call (before only — a veto is not a call that ran)
+    // and the call that ran (before AND after). A leaked decision would show up
+    // here as a second before with no after.
+    expect(invocations()).toEqual(['before:read_file', 'before:list_dir', 'after:list_dir']);
+  });
+
+  afterAll(() => {
+    if (before === undefined) delete process.env.NUVIRA_TOOL_HOOK_BEFORE;
+    else process.env.NUVIRA_TOOL_HOOK_BEFORE = before;
+    if (after === undefined) delete process.env.NUVIRA_TOOL_HOOK_AFTER;
+    else process.env.NUVIRA_TOOL_HOOK_AFTER = after;
+    if (log === undefined) delete process.env.WS4_LOG;
+    else process.env.WS4_LOG = log;
+    rmSync(dir, { recursive: true, force: true });
   });
 });

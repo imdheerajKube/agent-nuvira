@@ -250,7 +250,28 @@ export const CAPABILITIES: readonly Capability[] = [
     id: 'tool-hooks',
     label: 'Tool lifecycle hooks (before/after/failed) an operator can subscribe to for instrumentation or veto',
     workstream: 'WS4',
-    cells: everywhere('planned'),
+    cells: {
+      'cli-chat': {
+        status: 'supported',
+        note: 'Proven: the shared engine hands the loop its surface label (`cli-chat`), and `src/tools/tool-loop.ts` runs the operator`s declared `before` hook before the call is announced — so a veto stops the call there and is fed back as a refused result rather than an unexplained gap. `after` fires once for a call that ran, `failed` for one that did not, never both. Proven by the `tool-hooks` and `tool-hook-veto` parity scenarios, whose hook is a real command the harness writes: the assertions are on what that command received (the call as JSON on stdin, the surface it came from) and on what the surface`s own tool lifecycle then did with the verdict.',
+      },
+      'cli-execute': {
+        status: 'supported',
+        note: 'Proven: `runLoopExecutor` passes `cli-execute` to the loop, and the command`s own per-call outcomes carry the vetoed call as FAILED — so a policy that stops a call is visible in the result the command returns, not only in the loop. The direct-answer arm is covered through the shared engine it hands `debugSurface` to. Proven by the `tool-hooks` and `tool-hook-veto` parity scenarios, which drive the command`s own `runSingleGoal`.',
+      },
+      'dashboard-chat': {
+        status: 'supported',
+        note: 'Proven: the console passes its surface (`dashboard-chat`) and its session down to the shared engine, and the vetoed call reaches the console`s own event stream as a failed tool call — which is the seam the GUI renders. The declarations are resolved per call, so hooking a long-running server neither caches a stale policy nor re-installs one it already has. Proven by the `tool-hooks` and `tool-hook-veto` parity scenarios.',
+      },
+      'gateway-chat': {
+        status: 'supported',
+        note: 'Proven: `runInboundChat` passes `gateway-chat` to the shared engine, and the vetoed call lands in the gateway`s own `inbound.chat` record as a failed call — the messaging surface has no terminal, so that durable record is where the operator`s decision has to be legible, and it is. Proven by the `tool-hooks` and `tool-hook-veto` parity scenarios, which drive the REAL registry handler with no engine injected.',
+      },
+      'subagent': {
+        status: 'supported',
+        note: 'Proven ACROSS the process boundary, which is where a policy is easiest to lose: the child reads its OWN config and inherits the parent`s environment, resolves the same declarations, and runs the operator`s hook in its own process — a veto that holds on the CLI holds for a forked subagent. It reports a hook that FAILED to run on its own `hook_problem` frame rather than swallowing it, and a vetoed call travels to the parent as a failed `tool_result`, exactly like a call that ran and failed. Proven by the `tool-hooks` and `tool-hook-veto` parity scenarios (the invocations are read back from the log file the CHILD`s hook process appended to) and by `tests/tools/subagent-end-to-end.test.ts`.',
+      },
+    },
   },
   {
     id: 'isolation-worktree',

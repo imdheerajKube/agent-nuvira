@@ -561,6 +561,37 @@ export interface SkillsConfig {
 export interface ToolsConfig {
   /** Toolset name → state. Absent entry = enabled (default). */
   toolsets?: Record<string, { enabled?: boolean }>;
+  /**
+   * WS4 (#26) — tool lifecycle hooks an operator subscribes to: a command per
+   * phase (`before` / `after` / `failed`) that receives the call as JSON on
+   * stdin, and may VETO a call from a `before` hook. See
+   * `src/tools/tool-hooks.ts` for the contract and the fail-open rule.
+   */
+  hooks?: ToolHookConfig[];
+}
+
+/**
+ * One declared tool hook, as it is written in `buffconfig.json`.
+ *
+ * The environment (`NUVIRA_TOOL_HOOK_BEFORE` / `_AFTER` / `_FAILED`) declares the
+ * same thing for a single run and WINS over the config for its phase, so a policy
+ * can be checked in and an experiment needs no edit to it.
+ */
+export interface ToolHookConfig {
+  /** Which moment of the call this hook sees. */
+  phase: 'before' | 'after' | 'failed';
+  /**
+   * The command to run. It is executed by the platform shell, and the CALL is
+   * written to its stdin as JSON — never interpolated into the command line, so
+   * a tool argument can never change what runs.
+   */
+  command: string;
+  /** Tool names this hook applies to. Absent or empty = every tool. */
+  tools?: string[];
+  /** Kill the hook after this many milliseconds (default 5000). */
+  timeoutMs?: number;
+  /** A name for this hook, used in the report when it vetoes or fails. */
+  label?: string;
 }
 
 /**

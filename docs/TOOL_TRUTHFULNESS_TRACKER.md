@@ -378,6 +378,9 @@ no exemption for them and the acknowledgement list is empty.
 
 1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost
    original.
+2. The forked child's loop has no verification gate (see the section above): a
+   delegated `write_file`/`edit_file` is never followed by a check, and the child's
+   result carries no `unverifiedEdit` flag.
 2. ~~`subagent` on a non-tool-calling provider (`local`/Ollama) refuses when asked
    for tools.~~ **Closed** by the JSON fallback above: the subagent now offers the
    tools in the prompt and parses the `{"tool":…}` reply, so a local-only setup can

@@ -23,7 +23,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // `SubagentManager` computes its state/log dirs from `resolveNuviraHome()` at
@@ -477,6 +477,101 @@ describe('subagent — the tool loop runs real tools', () => {
     });
     expect(allowed).toEqual(['read_file']);
     expect(unknown).toEqual(['no_such_tool']);
+  });
+
+  it('runs the operator`s declared hook, and a VETO holds inside the child', async () => {
+    // WS4 (#26) — the child is a separate PROCESS and reads its own config, so a
+    // policy that stopped at the process boundary would be worse than no policy:
+    // it would look enforced. The hook here is a real command, declared through
+    // the same environment a forked child inherits, and the assertions are on what
+    // that command received and on whether the TOOL RAN.
+    const hookDir = mkdtempSync(join(testHome.value, 'hooks-'));
+    const logPath = join(hookDir, 'invocations.jsonl');
+    const scriptPath = join(hookDir, 'hook.mjs');
+    writeFileSync(
+      scriptPath,
+      `import { appendFileSync } from 'node:fs';
+` +
+        `let raw = '';process.stdin.setEncoding('utf8');
+` +
+        `for await (const c of process.stdin) raw += c;
+` +
+        `const payload = JSON.parse(raw);
+` +
+        `appendFileSync(process.env.HOOK_LOG, JSON.stringify({ phase: payload.phase, tool: payload.tool, surface: payload.surface ?? null }) + String.fromCharCode(10));
+` +
+        `if (process.env.HOOK_DENY === payload.tool) process.stdout.write(JSON.stringify({ decision: 'deny', reason: 'not here' }));
+`,
+    );
+
+    const previous = {
+      before: process.env.NUVIRA_TOOL_HOOK_BEFORE,
+      after: process.env.NUVIRA_TOOL_HOOK_AFTER,
+      log: process.env.HOOK_LOG,
+      deny: process.env.HOOK_DENY,
+    };
+    process.env.NUVIRA_TOOL_HOOK_BEFORE = `node ${scriptPath}`;
+    process.env.NUVIRA_TOOL_HOOK_AFTER = `node ${scriptPath}`;
+    process.env.HOOK_LOG = logPath;
+    try {
+      const seen: Array<{ phase: string; tool: string; surface: string | null }> = [];
+
+      const allowed = await runSubagent(
+        { goal: 'read the note', tools: ['read_file'] },
+        {
+          createProvider: async () => ({ provider: scriptedProvider(), type: 'scripted' }),
+          runTool: async () => 'NOTE-CONTENTS',
+        },
+      );
+      expect(allowed.toolCalls, 'the hook must not stop a call it did not deny').toBe(1);
+
+      // Now the SAME call, with the operator denying it.
+      process.env.HOOK_DENY = 'read_file';
+      const ran: string[] = [];
+      const vetoed = await runSubagent(
+        { goal: 'read the note', tools: ['read_file'] },
+        {
+          createProvider: async () => ({ provider: scriptedProvider(), type: 'scripted' }),
+          runTool: async (name) => {
+            ran.push(name);
+            return 'NOTE-CONTENTS';
+          },
+        },
+      );
+
+      // The veto held inside the child: the tool never ran, and the child did not
+      // count a call it refused.
+      expect(ran, 'a vetoed tool ran anyway in the child').toEqual([]);
+      expect(vetoed.toolCalls).toBe(0);
+      // The turn still completes: the refusal is fed back to the model, which
+      // answers on its next call — a refused call is not a failed run.
+      expect(vetoed.llmCalls).toBe(2);
+      expect(vetoed.result).toBe('ANSWER-AFTER-TOOL');
+
+      for (const line of readFileSync(logPath, 'utf8').split('\n')) {
+        if (line.trim() === '') continue;
+        seen.push(JSON.parse(line) as { phase: string; tool: string; surface: string | null });
+      }
+      // The operator`s command was handed the call — and told WHICH surface it came
+      // from, which is the difference between a policy that can be written and one
+      // that has to be guessed at.
+      expect(seen.map((entry) => `${entry.phase}:${entry.tool}`)).toEqual([
+        'before:read_file',
+        'after:read_file',
+        'before:read_file',
+      ]);
+      expect(seen.every((entry) => entry.surface === 'subagent')).toBe(true);
+    } finally {
+      if (previous.before === undefined) delete process.env.NUVIRA_TOOL_HOOK_BEFORE;
+      else process.env.NUVIRA_TOOL_HOOK_BEFORE = previous.before;
+      if (previous.after === undefined) delete process.env.NUVIRA_TOOL_HOOK_AFTER;
+      else process.env.NUVIRA_TOOL_HOOK_AFTER = previous.after;
+      if (previous.log === undefined) delete process.env.HOOK_LOG;
+      else process.env.HOOK_LOG = previous.log;
+      if (previous.deny === undefined) delete process.env.HOOK_DENY;
+      else process.env.HOOK_DENY = previous.deny;
+      rmSync(hookDir, { recursive: true, force: true });
+    }
   });
 
   it('refuses an unknown tool by name instead of quietly ignoring it', async () => {

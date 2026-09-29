@@ -20,6 +20,13 @@ import { getTool, toolJsonSchemas, type ToolContext, type ToolJsonSchema } from 
 // WS3 (#25) — the turn's span tree. Null-safe throughout: with export off every
 // helper below is a no-op and no span object is ever built.
 import { TOOL_SPAN_PREFIX, withSpanActive, type SpanHandle } from '../observability/otel.js';
+// WS4 (#26) — the operator's tool lifecycle hooks. Never able to break a call:
+// `runBeforeToolHooks` always resolves, and a broken hook never vetoes.
+import {
+  runBeforeToolHooks,
+  runToolOutcomeHooks,
+  toolHookRefusalText,
+} from './tool-hooks.js';
 import {
   detectPermissionSeeking,
   isAffirmativeReply,
@@ -304,6 +311,17 @@ export interface ToolLoopOptions {
    * surfaces at all.
    */
   otel?: SpanHandle | null;
+  /**
+   * WS4 (#26) — the surface label this loop is running as (`cli-chat`,
+   * `cli-execute`, `dashboard-chat`, `gateway-chat`, `subagent`).
+   *
+   * Passed on to a tool hook, so an operator's hook can tell WHERE a call came
+   * from — which is the difference between a policy that can be written and one
+   * that has to be guessed at. It is the same label the debug log header and the
+   * turn span carry; the loop is the only place that knows it, so a surface that
+   * does not pass it simply reports its calls with no surface name.
+   */
+  surface?: string;
   /**
    * R1 — bound on concurrent read-only calls per step, from the model's harness
    * profile. Omit for the default (4); pass 1 for tiny models.
@@ -1517,12 +1535,81 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         followups.length = 0;
       }
       // I2: emit `tool:started` (before execution) + `tool:called` (after)
-      // on the observability bus — drives the hooks registry's
-      // the `post_tool_call` hook AND the dashboard's
+      // on the observability bus — drives the dashboard's
       // step cards (P0.6: the GUI renders each call as a live card —
       // running → ok/error with duration + collapsible result). Timing is
       // wall-clock; `ok` mirrors the tool-result convention (Error: prefix).
       const startedAt = Date.now();
+
+      // WS4 (#26) — the `before` hooks, and the ONE place an operator's veto can
+      // stop a call. It happens before `tool:started` is announced and before a
+      // span is created, so a vetoed call leaves no evidence of having run — and
+      // it is reported as a `called` call with an `Error:` result, so every
+      // surface's tool lifecycle shows the attempt and its outcome rather than an
+      // unexplained gap.
+      const beforeHooks = await runBeforeToolHooks({
+        tool: call.name,
+        args: call.arguments,
+        callId: call.id,
+        ...(opts.surface ? { surface: opts.surface } : {}),
+        ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+        ...(ctx.configManager ? { configManager: ctx.configManager } : {}),
+      });
+      for (const problem of beforeHooks.problems) {
+        // A hook that failed to run is REPORTED rather than swallowed: the seam
+        // fails open, so without this a broken policy looks exactly like one that
+        // allowed everything.
+        traceEvent({ kind: 'gate', gate: 'tool-hook', tool: call.name, ok: false, summary: problem });
+      }
+      if (beforeHooks.denied) {
+        const refusal = toolHookRefusalText(beforeHooks);
+        traceEvent({
+          kind: 'gate',
+          gate: 'tool-hook',
+          tool: call.name,
+          ok: false,
+          summary:
+            `${beforeHooks.by ?? 'a tool hook'} refused ${call.name}` +
+            (beforeHooks.reason ? `: ${beforeHooks.reason}` : ''),
+        });
+        deps.onEvent?.(`   ⛔ ${call.name} — refused by a tool hook`);
+        ctx.emit?.('tool:called', {
+          id: call.id,
+          tool: call.name,
+          ok: false,
+          result: refusal,
+          durationMs: Date.now() - startedAt,
+        });
+        return refusal;
+      }
+
+      /**
+       * Tell the `after` / `failed` hooks what happened to this call.
+       *
+       * Observe-only by construction: the outcome has already been decided and
+       * reported by the time this runs, so a hook here cannot rewrite history —
+       * the phase it is named for is the fact it receives.
+       */
+      const reportToolOutcome = async (outcome: {
+        ok: boolean;
+        result?: string;
+        error?: string;
+      }): Promise<void> => {
+        const report = await runToolOutcomeHooks({
+          tool: call.name,
+          args: call.arguments,
+          callId: call.id,
+          ...(opts.surface ? { surface: opts.surface } : {}),
+          ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+          ...(ctx.configManager ? { configManager: ctx.configManager } : {}),
+          durationMs: Date.now() - startedAt,
+          ...outcome,
+        });
+        for (const problem of report.problems) {
+          traceEvent({ kind: 'gate', gate: 'tool-hook', tool: call.name, ok: false, summary: problem });
+        }
+      };
+
       ctx.emit?.('tool:started', {
         id: call.id,
         tool: call.name,
@@ -1557,6 +1644,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         });
         toolSpan?.attr('nuvira.ok', toolOk);
         toolSpan?.end({ ok: toolOk });
+        await reportToolOutcome({ ok: toolOk, result: resultText });
         if (call.name === 'suggest_followups') endedAfterConcluding = true;
         return resultText;
       } catch (err) {
@@ -1569,6 +1657,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           durationMs: Date.now() - startedAt,
         });
         toolSpan?.end({ ok: false, message });
+        await reportToolOutcome({ ok: false, error: message });
         return `Error: ${message}`;
       } finally {
         toolDurations.set(call.id, Date.now() - startedAt);

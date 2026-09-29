@@ -832,6 +832,8 @@ export async function runLoopExecutor(
       maxParallelReads: harness.maxParallelReads,
       // WS3 (#25) — the turn span the loop hangs each tool call under.
       otel: otelSpan,
+      // WS4 (#26) — the label a tool hook reports this call under.
+      surface: 'cli-execute',
       onToken: opts.onToken,
       signal: opts.signal,
       context: {

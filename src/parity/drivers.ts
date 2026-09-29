@@ -41,7 +41,7 @@
 
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
@@ -59,12 +59,19 @@ import {
   TOOL_SPAN_PREFIX,
   TURN_SPAN_NAME,
 } from '../observability/otel.js';
+// WS4 (#26) — the hook ENV names the harness declares through, and the phases
+// they exist for. Imported from the module that defines them so a renamed
+// variable cannot leave the harness silently declaring nothing (which would read
+// as "no surface fired a hook", the failure this row is meant to catch).
+import { TOOL_HOOK_ENV, TOOL_HOOK_PHASES } from '../tools/tool-hooks.js';
 import {
   noDebugLog,
   noOtelExport,
+  noToolHooks,
   type DebugLogObs,
   type OtelExportObs,
   type ToolCallObs,
+  type ToolHooksObs,
   type TurnObservation,
 } from './observation.js';
 import type { ParityDriver, ParityScenario, StubDepth } from './scenarios.js';
@@ -389,6 +396,185 @@ async function withOtlpCollector<T>(body: () => Promise<T>): Promise<{ value: T;
   }
 }
 
+// ─── The operator's tool hooks ──────────────────────────────────────────────
+
+/** Where a declared hook appends the invocations it received (harness-owned). */
+export const TOOL_HOOK_LOG_VAR = 'NUVIRA_TOOL_HOOK_LOG';
+/** Which tools a declared `before` hook vetoes (harness-owned). */
+export const TOOL_HOOK_DENY_VAR = 'NUVIRA_TOOL_HOOK_DENY';
+
+/**
+ * WS4 (#26) — the hook script the harness DECLARES, exactly as written.
+ *
+ * It is a real operator hook: a command that reads the call as JSON on stdin and
+ * may veto it on stdout. It reads two variables the harness sets — where to
+ * append the invocation it received, and which tools this scenario's `before`
+ * hook denies — so ONE script serves every scenario and every phase, and the log
+ * it writes is the record this row is compared on.
+ *
+ * Why a script at all, rather than a spy on the hook seam: the claim is "an
+ * operator's declared command runs", and only a real process proves the path an
+ * operator would actually take — the spawn, the stdin pipe, the JSON contract, the
+ * exit code. A spy would only prove the surface called its own helper.
+ */
+const TOOL_HOOK_SCRIPT = `#!/usr/bin/env node
+// WS4 (#26) — the operator hook the parity harness declares. See
+// src/parity/drivers.ts for the contract and why it is a real process.
+import { appendFileSync } from 'node:fs';
+
+let raw = '';
+process.stdin.setEncoding('utf8');
+for await (const chunk of process.stdin) raw += chunk;
+
+let payload = {};
+try {
+  payload = JSON.parse(raw);
+} catch {
+  // Not JSON means this was never handed a real payload: exit non-zero so the
+  // surface reports a problem instead of reading silence as a decision.
+  process.stderr.write('parity hook: stdin was not the documented JSON payload');
+  process.exit(2);
+}
+
+const denyList = (process.env.${TOOL_HOOK_DENY_VAR} ?? '')
+  .split(',')
+  .map((name) => name.trim())
+  .filter(Boolean);
+const denied = payload.phase === 'before' && denyList.includes(payload.tool);
+
+const log = process.env.${TOOL_HOOK_LOG_VAR};
+if (log) {
+  appendFileSync(
+    log,
+    JSON.stringify({
+      phase: payload.phase,
+      tool: payload.tool,
+      surface: payload.surface ?? null,
+      ok: typeof payload.ok === 'boolean' ? payload.ok : null,
+      decision: denied ? 'deny' : null,
+      hook: payload.hook,
+    }) + '\\n',
+  );
+}
+
+if (denied) {
+  process.stdout.write(
+    JSON.stringify({ decision: 'deny', reason: 'parity: ' + payload.tool + ' is not allowed to run' }),
+  );
+}
+`;
+
+/** One line of the hook's own log: what it was handed, and what it decided. */
+interface HookInvocation {
+  phase?: unknown;
+  tool?: unknown;
+  surface?: unknown;
+  decision?: unknown;
+}
+
+/**
+ * Reduce the hook's log AND the surface's own tool lifecycle to the projection.
+ *
+ * Two witnesses, deliberately: the log says what the hook was asked and how it
+ * answered, and `observation.toolCalls` says what the SURFACE did with that
+ * answer. `vetoReported` needs both to agree; `vetoLeaked` needs only the surface
+ * to show a denied tool succeeding. See `ToolHooksObs` for why neither side alone
+ * is trusted.
+ */
+function toolHooksObsOf(logPath: string, observation: TurnObservation): ToolHooksObs {
+  let lines: string[];
+  try {
+    lines = readFileSync(logPath, 'utf8').split('\n').filter((line) => line.trim() !== '');
+  } catch {
+    // No log means the hook never ran (or never wrote) — the honest value, which
+    // a scenario that declared hooks reads as a failure rather than a neutral.
+    return noToolHooks();
+  }
+
+  const invocations = new Set<string>();
+  const denied = new Set<string>();
+  const surfacesSeen = new Set<string>();
+  for (const line of lines) {
+    let entry: HookInvocation;
+    try {
+      entry = JSON.parse(line) as HookInvocation;
+    } catch {
+      continue;
+    }
+    const phase = typeof entry.phase === 'string' ? entry.phase : 'unknown';
+    const tool = typeof entry.tool === 'string' ? entry.tool : 'unknown';
+    invocations.add(`${phase}:${tool}`);
+    if (typeof entry.surface === 'string' && entry.surface !== '') surfacesSeen.add(entry.surface);
+    if (phase === 'before' && entry.decision === 'deny') denied.add(tool);
+  }
+
+  const deniedTools = [...denied].sort();
+  // The surface's OWN outcomes for the denied tools: `true` = reported success
+  // (so the call ran — a leak), `false` = reported as a failed call.
+  const outcomes = deniedTools.map((tool) =>
+    observation.toolCalls.filter((call) => call.tool === tool).map((call) => call.ok === true),
+  );
+  return {
+    invocations: [...invocations].sort(),
+    denied: deniedTools,
+    vetoReported:
+      deniedTools.length > 0 && outcomes.every((perTool) => perTool.some((ok) => ok === false)),
+    vetoLeaked: outcomes.some((perTool) => perTool.some((ok) => ok === true)),
+    surfacesSeen: [...surfacesSeen].sort(),
+  };
+}
+
+/**
+ * Run one surface's turn with this scenario's hooks DECLARED, and read back what
+ * the hook received.
+ *
+ * The declarations are environment variables for the duration of the call and are
+ * restored afterwards, for the same reason the OTLP endpoint is: the surfaces
+ * read them at call time, so a scenario that declared a hook must not leave it
+ * declared for the next one — a veto that leaked into the next scenario would
+ * look like that scenario's own behaviour.
+ *
+ * The log file is per SURFACE as well as per scenario, so the child's invocations
+ * (written from its own process, which inherits the path) cannot be attributed to
+ * an in-process surface that ran before it.
+ */
+async function withToolHooks(
+  ws: ParityWorkspace,
+  surface: SurfaceId,
+  scenario: ParityScenario,
+  body: () => Promise<TurnObservation>,
+): Promise<TurnObservation> {
+  const declared = scenario.hooks;
+  const logPath = join(ws.root, `tool-hook-${scenario.id}-${surface}.jsonl`);
+  rmSync(logPath, { force: true });
+
+  const previous = new Map<string, string | undefined>();
+  const set = (name: string, value: string | undefined): void => {
+    previous.set(name, process.env[name]);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  };
+  const deny = declared?.deny?.filter((tool) => tool.trim() !== '') ?? [];
+  for (const phase of TOOL_HOOK_PHASES) {
+    set(
+      TOOL_HOOK_ENV[phase],
+      declared?.phases.includes(phase) ? `node ${ws.hookScript}` : undefined,
+    );
+  }
+  set(TOOL_HOOK_LOG_VAR, declared ? logPath : undefined);
+  set(TOOL_HOOK_DENY_VAR, deny.length > 0 ? deny.join(',') : undefined);
+
+  try {
+    const observation = await body();
+    return { ...observation, hooks: toolHooksObsOf(logPath, observation) };
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
 // ─── The workspace ──────────────────────────────────────────────────────────
 
 /** The throwaway profile a run points the surfaces at. */
@@ -396,6 +582,8 @@ interface ParityWorkspace {
   root: string;
   configDir: string;
   memoryDir: string;
+  /** The hook script every declared hook command runs (WS4). */
+  hookScript: string;
   /** Point the config at `baseUrl`'s stub — rewritten whenever a stub starts. */
   useStub(baseUrl: string): void;
 }
@@ -427,10 +615,16 @@ function createWorkspace(): ParityWorkspace {
   const memoryDir = join(root, 'memory');
   mkdirSync(configDir, { recursive: true });
   mkdirSync(memoryDir, { recursive: true });
+  // WS4 — the hook command the harness declares. Written once per run, so every
+  // scenario's hooks are the SAME program and a difference between scenarios can
+  // only come from the declaration, not from the script.
+  const hookScript = join(root, 'tool-hook.mjs');
+  writeFileSync(hookScript, TOOL_HOOK_SCRIPT);
   const workspace: ParityWorkspace = {
     root,
     configDir,
     memoryDir,
+    hookScript,
     useStub(baseUrl: string): void {
       // `buffconfig.json` is the file `ConfigManager` reads (`config/manager.ts`
       // -> `config/paths.ts`). The provider object the surfaces build from it is
@@ -511,6 +705,7 @@ function debugLogOf(surface: string, dir: string = debugLogDir()): DebugLogObs {
  */
 function toObservation(
   surface: SurfaceId,
+  scenario: ParityScenario,
   answer: SurfaceAnswer,
   toolCalls: ToolCallObs[],
   modelCalls: number,
@@ -536,6 +731,10 @@ function toObservation(
     // WS3 — the span tree the collector received. `exported: false` when nothing
     // arrived, which the harness (export ON) reads as a failure.
     otel: answer.otel ?? noOtelExport(),
+    // WS4 — replaced by the driver wrapper with what the operator's declared hook
+    // actually received (`withToolHooks`): the log is written by the HOOK, and
+    // only the wrapper knows which file this surface's run was pointed at.
+    hooks: noToolHooks(),
     ...(typeof answer.content === 'string' ? { answer: answer.content } : {}),
     ...(succeeded
       ? {}
@@ -578,6 +777,7 @@ async function runViaChatOnce(ws: ParityWorkspace, scenario: ParityScenario): Pr
     );
     return toObservation(
       'cli-chat',
+      scenario,
       { ...answer, debugLog: debugLogOf('cli-chat'), otel },
       toolCalls,
       stub.chatCalls(),
@@ -621,6 +821,7 @@ async function runViaConsole(ws: ParityWorkspace, scenario: ParityScenario): Pro
       );
       return toObservation(
         'dashboard-chat',
+        scenario,
         { ...result, debugLog: debugLogOf('dashboard-chat'), otel },
         toolCalls,
         stub.chatCalls(),
@@ -712,6 +913,7 @@ async function runViaGateway(ws: ParityWorkspace, scenario: ParityScenario): Pro
       : [];
     return toObservation(
       'gateway-chat',
+      scenario,
       {
         content: reply,
         findings,
@@ -779,6 +981,7 @@ async function runViaExecuteCommand(ws: ParityWorkspace, scenario: ParityScenari
     );
     return toObservation(
       'cli-execute',
+      scenario,
       {
         content: result.content,
         provider: result.provider,
@@ -906,6 +1109,10 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
         // WS3 — the span tree the CHILD exported, read back from the collector it
         // was pointed at through its inherited environment.
         otel,
+        // WS4 — replaced by the driver wrapper with what the operator's declared
+        // hook received: the child runs the hook in its OWN process and appends
+        // to the log file it inherited the path of (`withToolHooks`).
+        hooks: noToolHooks(),
         ...(result.result ? { answer: result.result } : {}),
         ...(result.success ? {} : { errorCode: result.refusalCode ?? 'turn_failed' }),
         noise: { at: Date.now() },
@@ -1009,7 +1216,13 @@ export async function createParityHarness(): Promise<ParityHarness> {
       // surface's collector, and every surface after that would read as having
       // exported nothing — a silent, permanent green on one surface only.
       await shutdownSpans();
-      return run(workspace, scenario);
+      // WS4 (#26) — the operator's hooks are DECLARED around the turn (and
+      // undeclared again after it), so "this surface ran the hook" is an
+      // assertion about a declaration the harness actually made rather than one
+      // it merely recorded. In this commit nothing wrapped the turn, so the
+      // `tool-hooks` row read `[]` invocations on every surface — the capability
+      // was implemented and unproven at the same time.
+      return withToolHooks(workspace, surface, scenario, () => run(workspace, scenario));
     },
   });
 

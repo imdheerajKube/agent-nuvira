@@ -1025,6 +1025,103 @@ NUVIRA_OTEL=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 nuvira gateway r
 NUVIRA_OTEL=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 nuvira execute "run the failing test"
 ```
 
+### Guarding tool calls with hooks (before / after / failed)
+
+Tracing tells you what happened. A hook is how you act on it: your own command,
+run on every tool call, which can **record** the call or **refuse** it. Declare
+it in `buffconfig.json`:
+
+```json
+{
+  "tools": {
+    "hooks": [
+      { "phase": "before", "command": "/usr/local/bin/policy-check", "tools": ["run_terminal", "edit_file"], "label": "no-writes-policy", "timeoutMs": 5000 },
+      { "phase": "after",  "command": "/usr/local/bin/audit-log" },
+      { "phase": "failed", "command": "/usr/local/bin/audit-log" }
+    ]
+  }
+}
+```
+
+For a single run, without editing config, set one command per phase —
+`NUVIRA_TOOL_HOOK_BEFORE`, `NUVIRA_TOOL_HOOK_AFTER`, `NUVIRA_TOOL_HOOK_FAILED`. The
+environment **replaces** the configured hooks for its phase (one list per phase,
+not a merge), and it is how a shell one-off stays a one-off:
+
+```bash
+cat > ~/deny-shell.mjs <<'JS'
+let raw = '';
+process.stdin.setEncoding('utf8');
+for await (const chunk of process.stdin) raw += chunk;
+const call = JSON.parse(raw);
+if (call.phase === 'before' && call.tool === 'run_terminal') {
+  console.log(JSON.stringify({ decision: 'deny', reason: `no shell in ${call.cwd ?? 'this repo'}` }));
+}
+JS
+
+NUVIRA_TOOL_HOOK_BEFORE='node ~/deny-shell.mjs' nuvira chat "run the test suite"
+```
+
+Your command receives the call as JSON on **stdin** and answers on **stdout**:
+
+```json
+{
+  "phase": "before",
+  "tool": "run_terminal",
+  "arguments": { "command": "npm test" },
+  "callId": "call_1",
+  "surface": "cli-chat",
+  "cwd": "/path/to/project",
+  "hook": "no-writes-policy"
+}
+```
+
+`after` and `failed` add what happened — `ok`, a bounded `result` preview (with
+`resultTruncated` when it was cut), `durationMs`, and for `failed` an `error`.
+`before` carries none of those, and that is the point: it runs before there is an
+outcome to report. On stdout, **silence means allow** — a hook that only records
+something has nothing to decide. To stop a call, say so:
+
+```json
+{ "decision": "deny", "reason": "no writes without review" }
+```
+
+What that buys and costs, in the order people ask:
+
+- **A veto is a failed call, not a hidden one.** The model is told
+  `Error: refused by a tool hook (no-writes-policy): no writes without review`,
+  so the turn continues with the refusal in context and every surface's tool
+  lifecycle shows the attempt and its outcome — in the debug log, in the
+  dashboard's step cards, and in the gateway's durable turn record. The tool
+  itself never runs, and no span is opened for it.
+- **Exactly one of `after` / `failed` fires.** `after` for a call that ran and
+  succeeded, `failed` for one that ran and did not (a thrown error, or a result
+  the loop's own `Error:` convention marks as a failure). A hook that counts
+  failures is never told about a success. A vetoed call fires neither: it never
+  ran.
+- **A broken hook never vetoes, and never hides.** A command that crashes, times
+  out (`timeoutMs`, 5s by default), exits non-zero, or prints something that is
+  not the JSON above is **reported** as a `tool-hook` gate decision — visible in
+  the debug log and the trace — and the call proceeds. The alternative is worse
+  than it looks: one bad hook would stop every tool call in the process, and it
+  would do so silently, because the hook meant to report problems is the broken
+  one. Only a well-formed `deny` stops work.
+- **It runs on every surface, including a forked subagent.** The child is a
+  separate process with its own config: it reads its own `tools.hooks` and
+  inherits your environment, so a policy that holds in `nuvira chat` holds inside
+  a delegated run too — anything else would be a policy that stops at the process
+  boundary and therefore only *looks* enforced. `surface` in the payload tells
+  the hook where the call came from (`cli-chat`, `cli-execute`, `dashboard-chat`,
+  `gateway-chat`, `subagent`).
+- **`tools` scopes a hook** (absent or empty = every tool), `label` names it in
+  the report when it vetoes or fails, and the command runs through the platform
+  shell with the call passed as data — a tool argument can never change which
+  program runs.
+- **This data is NOT redacted**, unlike the debug log and the trace, and that is
+  deliberate: those leave the machine, this is your own command on your own
+  machine. It is the one place a hook sees the real `arguments`, bounded only by
+  the result preview (`4000` characters).
+
 ---
 
 ## 15. Verification log

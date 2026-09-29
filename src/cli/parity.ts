@@ -226,6 +226,12 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
       args: { command: 'node --check no-such-file-parity-probe.js' },
     },
     answer: 'Command failed.',
+    // WS4 (#26) — a hook on the FAILING path, on every surface: the claim is a
+    // triple (before/after/failed) and exactly one of the last two fires, so a
+    // scenario that only ever succeeds could not tell `failed` from dead code.
+    // `after` is declared too, and asserting its ABSENCE is the other half: a
+    // hook that counts failures must not be told about a success, and vice versa.
+    hooks: { phases: ['before', 'after', 'failed'] },
   },
   {
     id: 'finding-confirmed',
@@ -289,6 +295,33 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
     // than on an exporter that was merely asked to send something.
     toolCall: { tool: 'list_dir', args: { path: '.' } },
     answer: 'Listed.',
+  },
+  {
+    id: 'tool-hooks',
+    message: 'list the working directory, then answer',
+    // WS4 (#26) — the operator's hooks, on every surface. The scenario is an
+    // ordinary successful tool call with a hook DECLARED for it, so what it
+    // measures is the hook plumbing rather than the call: the declared command is
+    // run with the call as JSON on stdin, once for `before` and once for `after`,
+    // and it is told WHICH surface called. The command is a real process (the
+    // harness writes it), so the assertion is on what an operator's own script
+    // received, not on a spy inside the loop.
+    toolCall: { tool: 'list_dir', args: { path: '.' } },
+    answer: 'Listed.',
+    hooks: { phases: ['before', 'after'] },
+  },
+  {
+    id: 'tool-hook-veto',
+    message: 'list the working directory, then answer',
+    // WS4 (#26) — the VETO, which is the half of the capability that changes what
+    // happens rather than recording it. The hook denies `list_dir`, a tool that
+    // otherwise SUCCEEDS here (`tool-hooks` above proves that), so a surface that
+    // ignored the decision cannot hide: the call would report success. Read
+    // together, the pair is the differential — same scenario, same tool, the
+    // only difference being what the operator declared.
+    toolCall: { tool: 'list_dir', args: { path: '.' } },
+    answer: 'Listed.',
+    hooks: { phases: ['before', 'failed'], deny: ['list_dir'] },
   },
 ];
 

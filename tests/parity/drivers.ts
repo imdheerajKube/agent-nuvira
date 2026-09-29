@@ -121,4 +121,22 @@ export const VERIFIED_CELLS: ReadonlySet<string> = new Set([
   'otel-export@gateway-chat',
   'otel-export@cli-execute',
   'otel-export@subagent',
+  // WS4 (#26). ALL FIVE surfaces run the operator`s declared tool hooks — a real
+  // command that receives the call as JSON on stdin — and HONOUR a veto, through
+  // their own seams: `src/tools/tool-loop.ts` for the four in-process surfaces
+  // (each handing the loop its own label) and `src/tools/child-agent-runtime.ts`
+  // for the forked child, which resolves the same declarations in its own process
+  // and reports a broken hook on its own progress frame. The harness declares the
+  // hooks per scenario (a real script it writes and points at a log), so "this
+  // surface ran the hook" is an assertion rather than a thing that happened to be
+  // true. Proven by the three WS4 scenarios in `scenario-parity.test.ts`:
+  // `tool-hooks` (before+after fire on a successful call), `tool-hook-veto` (the
+  // same call, with the hook denying it — the differential that shows a decision
+  // that was returned is a decision that was OBEYED) and `failing-tool-call`
+  // (before+failed fire, and `after` does not, for a call that ran and failed).
+  'tool-hooks@cli-chat',
+  'tool-hooks@dashboard-chat',
+  'tool-hooks@gateway-chat',
+  'tool-hooks@cli-execute',
+  'tool-hooks@subagent',
 ]);

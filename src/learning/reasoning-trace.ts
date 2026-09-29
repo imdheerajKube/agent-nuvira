@@ -165,7 +165,11 @@ export type TraceGateName =
   | 'workspace'
   | 'autonomy'
   | 'repeat'
-  | 'budget';
+  | 'budget'
+  // WS4 (#26) — an operator's tool hook decided (or failed to decide) about a
+  // call. A gate name rather than a new event kind: a hook veto IS a decision
+  // about a call, which is what this vocabulary is for.
+  | 'tool-hook';
 
 /**
  * A NON-LLM fact about a turn: a tool call, a gate decision, or a refusal.

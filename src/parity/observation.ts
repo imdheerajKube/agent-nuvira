@@ -153,6 +153,50 @@ export function noOtelExport(): OtelExportObs {
 }
 
 /**
+ * WS4 (#26) — the operator's tool hooks, as they were seen from OUTSIDE the
+ * surface: the hook the harness declared is a real command, and it recorded every
+ * payload it was handed.
+ *
+ * WHY THE HOOK DOES THE RECORDING. The claim is "every surface runs the
+ * operator's declared hook for a tool call, with the same payload, and honours a
+ * veto", and the only witness to that which is not the surface grading itself is
+ * the operator's own command. So the harness writes one hook script (see
+ * `src/parity/drivers.ts`), points it at a log file, and reads back the
+ * invocations it actually received — the same "read the artifact" rule the debug
+ * log and the OTLP collector follow.
+ *
+ * `vetoReported` and `vetoLeaked` ARE DERIVED FROM TWO INDEPENDENT WITNESSES, and
+ * that is why they are worth comparing: the hook says which tool it denied, and
+ * the SURFACE's own tool lifecycle says what happened to that call. A veto that
+ * reached the hook but not the loop reads as `vetoReported: false`; a verdict that
+ * was returned but ignored, so the tool ran anyway, reads as `vetoLeaked: true`.
+ * Either one alone would be a story told by one side.
+ *
+ * `surfacesSeen` is RECORDED, NEVER COMPARED, for the same reason `traceId` is:
+ * the label is the surface's own identity, so by construction it differs between
+ * the two observations being compared — and it is kept because "the hook was told
+ * WHICH surface called" is exactly the fact a per-turn policy needs, so the
+ * scenario asserts it per surface rather than comparing it across them.
+ */
+export interface ToolHooksObs {
+  /** Every hook invocation as `phase:tool`, sorted and deduplicated. */
+  invocations: readonly string[];
+  /** Tools a `before` hook VETOED, sorted. Empty when nothing was denied. */
+  denied: readonly string[];
+  /** Every denied call is reported by the surface as a FAILED call. */
+  vetoReported: boolean;
+  /** A denied tool ran anyway (its call reported success). Always false; a leak. */
+  vetoLeaked: boolean;
+  /** The surface labels the hook itself saw, sorted. RECORDED, never compared. */
+  surfacesSeen: readonly string[];
+}
+
+/** The honest "this surface ran no hook" value. Fresh each call. */
+export function noToolHooks(): ToolHooksObs {
+  return { invocations: [], denied: [], vetoReported: false, vetoLeaked: false, surfacesSeen: [] };
+}
+
+/**
  * One surface's view of one turn. Fields the surface does not report stay
  * `undefined` — and `compare` treats "absent on one surface, present on another"
  * as a difference, because a surface that cannot say which model served a turn
@@ -202,6 +246,17 @@ export interface TurnObservation {
    */
   otel: OtelExportObs;
   /**
+   * WS4 — the operator's tool hooks this surface ran for the turn.
+   *
+   * REQUIRED, for the reason `debugLog` and `otel` are: the row is "every surface
+   * runs the operator's declared hooks, and honours a veto", and an optional field
+   * would let a surface that fires nothing go on reading as at-par. The harness
+   * declares the hooks for the scenario and always hands the driver a log to
+   * read, so `invocations: []` on a scenario that declared hooks is a failure
+   * rather than a neutral value.
+   */
+  hooks: ToolHooksObs;
+  /**
    * WS1 — the findings the turn recorded, in call order, in the shared wire
    * form (`findings/verdicts.ts`).
    *
@@ -236,6 +291,7 @@ export interface ComparableObservation {
   findings: readonly WireFinding[];
   debugLog: DebugLogObs;
   otel: OtelExportObs;
+  hooks: ToolHooksObs;
   answer: string | null;
   refusalCode: string | null;
   errorCode: string | null;
@@ -257,6 +313,7 @@ export function comparableOf(observation: TurnObservation): ComparableObservatio
     findings: observation.findings ?? [],
     debugLog: observation.debugLog ?? noDebugLog(),
     otel: observation.otel ?? noOtelExport(),
+    hooks: observation.hooks ?? noToolHooks(),
     answer: observation.answer ?? null,
     refusalCode: observation.refusalCode ?? null,
     errorCode: observation.errorCode ?? null,
@@ -391,6 +448,29 @@ export function compare(a: TurnObservation, b: TurnObservation): string[] {
     const r = right.otel[field].join(', ');
     if (l !== r) {
       differences.push(`${who}: otel.${field} differs — [${l}] vs [${r}]`);
+    }
+  }
+
+  // WS4 — the operator's hooks. The scalars are separate so a failure says WHICH
+  // claim broke ("a surface never ran the hook" vs "a veto was ignored, so the
+  // tool ran anyway"), and the list-shaped fields are compared as sorted lists so
+  // a failure shows both sides. `surfacesSeen` is deliberately absent: it holds
+  // each surface's own label, which differs between the two observations by
+  // construction (see `ToolHooksObs`).
+  const hookScalars: Array<'vetoReported' | 'vetoLeaked'> = ['vetoReported', 'vetoLeaked'];
+  for (const field of hookScalars) {
+    const l = left.hooks[field];
+    const r = right.hooks[field];
+    if (l !== r) {
+      differences.push(`${who}: hooks.${field} differs — ${String(l)} vs ${String(r)}`);
+    }
+  }
+  const hookLists: Array<'invocations' | 'denied'> = ['invocations', 'denied'];
+  for (const field of hookLists) {
+    const l = left.hooks[field].join(', ');
+    const r = right.hooks[field].join(', ');
+    if (l !== r) {
+      differences.push(`${who}: hooks.${field} differs — [${l}] vs [${r}]`);
     }
   }
 

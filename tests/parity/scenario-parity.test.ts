@@ -87,6 +87,15 @@ function fakeObservation(over: Partial<TurnObservation> = {}): TurnObservation {
       traceId: 'a'.repeat(32),
       remoteParent: null,
     },
+    // WS4 — a hook ran here too, so the differential cases can vary it while
+    // still testing the runner rather than a surface.
+    hooks: {
+      invocations: ['before:list_dir'],
+      denied: [],
+      vetoReported: false,
+      vetoLeaked: false,
+      surfacesSeen: ['cli-chat'],
+    },
     answer: 'ok',
     ...over,
   };
@@ -590,6 +599,83 @@ describe('WS0 parity — every surface, real provider, transport-depth stub', ()
     // leave a process that never asked for them".
     expect(otelExportEnabled({})).toBe(false);
   }, 120_000);
+
+  it('runs the operator`s declared tool hooks on every surface, and honours a veto', async () => {
+    // WS4 (#26). The harness DECLARES the hooks — a real command, written by the
+    // harness, that receives the call as JSON on stdin and logs what it saw — and
+    // the assertions are on what that command received and on what the surface`s
+    // OWN tool lifecycle then did with it. Three cases, because the capability is
+    // a triple and a single scenario can only exercise one arm of it:
+    //
+    //   · `tool-hooks`        — an ordinary successful call with `before`+`after`
+    //                           declared: the phases fire, in order, on all five.
+    //   · `tool-hook-veto`    — the SAME scenario with the hook denying the SAME
+    //                           tool, which otherwise succeeds. The pair is the
+    //                           differential: if a surface ignored the decision, the
+    //                           call would report success and this goes red.
+    //   · `failing-tool-call` — a call that runs and fails: `failed` fires, and
+    //                           `after` does NOT. A hook that counts failures must
+    //                           not be told about a success, or the other way round.
+    const expected = [
+      {
+        id: 'tool-hooks',
+        invocations: ['after:list_dir', 'before:list_dir'],
+        denied: [] as string[],
+        ok: true,
+      },
+      {
+        id: 'tool-hook-veto',
+        invocations: ['before:list_dir'],
+        denied: ['list_dir'],
+        ok: false,
+      },
+      {
+        id: 'failing-tool-call',
+        invocations: ['before:run_terminal', 'failed:run_terminal'],
+        denied: [] as string[],
+        ok: false,
+      },
+    ];
+
+    for (const want of expected) {
+      const scenario = PARITY_SCENARIOS.find((s) => s.id === want.id);
+      expect(scenario, `the CLI no longer drives a ${want.id} scenario`).toBeDefined();
+      expect(scenario!.hooks, `${want.id} no longer declares hooks`).toBeDefined();
+
+      const run = await runParityScenario(scenario!, harness.drivers);
+      expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
+      expect(run.observations.map((o) => o.surface)).toEqual([
+        'cli-chat',
+        'dashboard-chat',
+        'gateway-chat',
+        'cli-execute',
+        'subagent',
+      ]);
+
+      for (const observation of run.observations) {
+        const where = `${want.id} on ${observation.surface}`;
+        expect(observation.hooks.invocations, `${where}: hook invocations`).toEqual(
+          want.invocations,
+        );
+        expect(observation.hooks.denied, `${where}: tools the hook vetoed`).toEqual(want.denied);
+        // The hook is told WHICH surface called — recorded per surface rather than
+        // compared across surfaces, because the label IS the surface's identity.
+        expect(observation.hooks.surfacesSeen, `${where}: surface label the hook saw`).toEqual([
+          observation.surface,
+        ]);
+        // A veto never leaks: the tool it denied did not run, and the refusal
+        // reached the surface's own tool lifecycle as a FAILED call (which is what
+        // makes the differential above meaningful).
+        expect(observation.hooks.vetoLeaked, `${where}: a vetoed tool ran anyway`).toBe(false);
+        expect(observation.hooks.vetoReported, `${where}: vetoReported`).toBe(want.denied.length > 0);
+        expect(observation.toolCalls[0]?.ok, `${where}: the call's outcome`).toBe(want.ok);
+        // The turn still completes either way: a veto is a refused call, not a
+        // failed turn, and every surface owes the model the same second round.
+        expect(observation.status, `${where}: turn status`).toBe('completed');
+        expect(observation.modelCalls, `${where}: model calls`).toBe(2);
+      }
+    }
+  }, 240_000);
 
   it('reports a FAILED READ as failed on every surface — the false-success regression', async () => {
     // MEASURED, before the fix: `read_file` on a missing path produced a message

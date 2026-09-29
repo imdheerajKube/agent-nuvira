@@ -112,9 +112,12 @@ describe('WS0 capability matrix — claim versus proof', () => {
     // WS1, WS2 and WS3 have landed (their `findings-verdicts`, `debug-log` and
     // `otel-export` rows are now proven per surface by the parity scenarios), so
     // they left this list deliberately — the same one-line edit the rule requires
-    // when a workstream starts shipping. WS4-WS7 have no `supported` cell: their
+    // when a workstream starts shipping. WS4 goes with them, for the same reason
+    // and in the SAME commit that flips its `tool-hooks` row to `supported`: a row
+    // that claims support while this list still names its workstream is the one
+    // thing this test exists to catch. WS5-WS7 have no `supported` cell yet: their
     // capabilities are still `planned` everywhere.
-    const notStarted: Workstream[] = ['WS4', 'WS5', 'WS6', 'WS7'];
+    const notStarted: Workstream[] = ['WS5', 'WS6', 'WS7'];
     for (const capability of CAPABILITIES) {
       if (!notStarted.includes(capability.workstream)) continue;
       for (const surface of SURFACES) {

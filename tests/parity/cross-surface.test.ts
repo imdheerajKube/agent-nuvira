@@ -48,6 +48,7 @@ import {
   compare,
   isAtPar,
   noDebugLog,
+  noToolHooks,
   reportParityFailure,
   type TurnObservation,
 } from '../../src/parity/observation.js';
@@ -186,6 +187,15 @@ const observation = (over: Partial<TurnObservation> = {}): TurnObservation => ({
     traceId: 'd'.repeat(32),
     remoteParent: null,
   },
+  // WS4 — the operator's hooks. The surface label the hook saw is recorded
+  // rather than compared (see `ToolHooksObs`), so a fixed pair here is honest.
+  hooks: {
+    invocations: ['after:read_file', 'before:read_file'],
+    denied: [],
+    vetoReported: false,
+    vetoLeaked: false,
+    surfacesSeen: ['cli-chat'],
+  },
   answer: 'done',
   ...over,
 });
@@ -245,6 +255,45 @@ describe('WS0 parity projection', () => {
     const differences = compare(logged, missing);
     expect(differences.join('\n')).toContain('debugLog.written');
     expect(differences.join('\n')).toContain('subagent');
+  });
+
+  it('treats a surface that never ran the operator`s hook as a difference', () => {
+    // WS4 — with a hook DECLARED, a surface that fires nothing has not delivered
+    // the capability. Compared on the invocation list rather than on a count, so a
+    // failure says WHICH phase and WHICH tool went missing.
+    const hooked = observation();
+    const silent = observation({ surface: 'subagent', hooks: noToolHooks() });
+    const differences = compare(hooked, silent);
+    expect(differences.join('\n')).toContain('hooks.invocations');
+    expect(differences.join('\n')).toContain('before:read_file');
+  });
+
+  it('treats a veto that was ignored as a difference, not as noise', () => {
+    // The load-bearing WS4 case: the same tool, denied on one surface and merely
+    // observed on the other. `vetoLeaked` is derived from the surface`s OWN tool
+    // lifecycle, so a hook that returned a verdict the loop then ignored cannot
+    // read as agreement with a hook that was obeyed.
+    const obeyed = observation();
+    const ignored = observation({
+      surface: 'gateway-chat',
+      hooks: { ...obeyed.hooks!, denied: ['read_file'], vetoLeaked: true },
+    });
+    const differences = compare(obeyed, ignored);
+    expect(differences.join('\n')).toContain('hooks.vetoLeaked');
+    expect(differences.join('\n')).toContain('gateway-chat');
+  });
+
+  it('does not compare the surface label a hook was told, only that it was told one', () => {
+    // Recorded, never compared: the label is the surface`s own identity, so two
+    // surfaces disagreeing about it is the CORRECT outcome — comparing it would
+    // report every cross-surface run as divergent. The scenario asserts the label
+    // per surface instead (`scenario-parity.test.ts`).
+    const a = observation({ hooks: { ...observation().hooks!, surfacesSeen: ['cli-chat'] } });
+    const b = observation({
+      surface: 'gateway-chat',
+      hooks: { ...observation().hooks!, surfacesSeen: ['gateway-chat'] },
+    });
+    expect(compare(a, b)).toEqual([]);
   });
 
   it('treats a missing attribution as a difference, not as noise', () => {

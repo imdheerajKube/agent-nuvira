@@ -1,19 +1,31 @@
 /**
  * I2 — Hook registry (`src/gateway/hooks.ts`).
  *
- * Lifecycle hooks the agent
- * runtime fires at well-defined moments. Two events today (extensible):
+ * Lifecycle hooks the agent runtime fires at well-defined moments. The tool
+ * phases are the WS4 (#26) triple, in the order a call goes through them:
  *
- * - `post_tool_call`  — after the tool loop executes a registry tool. Driven
- *   by the `tool:called` event-bus event emitted from `src/tools/tool-loop.ts`
- *   (the `post_tool_call` hook). Handlers receive the tool name,
- *   result, success flag and duration.
- * - `on_session_end`  — after a pipeline run finishes (execute:completed /
- *   execute:failed). Handlers receive the run's success + summary.
+ * - `before_tool_call` — BEFORE the call runs, and the ONLY phase that can stop
+ *   it: a handler returns a {@link HookDecision} and the call is not made.
+ * - `after_tool_call`  — the call ran and succeeded. Handlers receive the tool
+ *   name, the result, the success flag and the duration.
+ * - `failed_tool_call` — the call ran and did NOT succeed (a thrown error, or a
+ *   result the loop`s own convention marks as a failure).
+ * - `on_session_end`   — after a pipeline run finishes (execute:completed /
+ *   execute:failed). Handlers receive the run`s success + summary.
  *
- * Wiring is through the EXISTING observability event bus — hooks are typed
- * consumers, not a parallel system. `installHooks(bus)` subscribes and returns
- * an unsubscribe; the default built-in hook logs session summaries.
+ * `post_tool_call` was this event`s previous name. It is renamed rather than
+ * aliased so the three phases read exactly as the capability is stated
+ * (before/after/failed); nothing in production subscribed to it, and an alias
+ * would leave two names for one moment — the drift this repo removes elsewhere.
+ *
+ * THE TOOL PHASES ARE DRIVEN BY THE EXECUTION SEAM, not the event bus, and that
+ * is a deliberate reversal of the original wiring. A bus subscription is
+ * fire-and-forget: it cannot stop a call, it cannot tell the loop what a
+ * subscriber decided, and it only fires on a surface that happens to put
+ * `tool:called` on the bus — so a hook installed that way reached the gateway and
+ * nowhere else. `src/tools/tool-loop.ts` and `src/tools/child-agent-runtime.ts`
+ * call {@link HookRegistry.runBefore} / {@link HookRegistry.run} directly, which
+ * is what makes the hooks fire on all five surfaces and lets a veto be honoured.
  */
 
 import { logger } from '../utils/logger.js';
@@ -21,17 +33,63 @@ import { getEventBus, EventNames } from '../observability/event-bus.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type HookEvent = 'post_tool_call' | 'on_session_end';
+export type HookEvent =
+  | 'before_tool_call'
+  | 'after_tool_call'
+  | 'failed_tool_call'
+  | 'on_session_end';
 
-/** Context for `post_tool_call` handlers. */
-export interface ToolCallHookContext {
+/**
+ * What a `before_tool_call` handler may return to stop the call.
+ *
+ * A RETURN VALUE rather than a mutation, because the registry has to hand the
+ * decision back to the caller that is about to run the tool: a subscriber that
+ * could only observe could not veto.
+ */
+export interface HookDecision {
+  /** `true` stops the call. There is no "deny: false" — an absent decision allows. */
+  deny: true;
+  /** Why, in the operator's words. Flows to the model and to the turn's trace. */
+  reason?: string;
+  /** Which hook decided (a declaration label, or a subscriber's own name). */
+  by?: string;
+}
+
+/**
+ * The call itself, as every tool phase sees it.
+ *
+ * `report` is how a subscriber says something went wrong in its OWN handling.
+ * It exists because the seam FAILS OPEN: a broken hook must not block work, so if
+ * there were no way to report one, a hook that silently stopped working would be
+ * indistinguishable from a hook that allowed everything.
+ */
+export interface ToolCallRef {
   tool: string;
+  /** The call's arguments, as the model produced them. */
+  args?: Record<string, unknown>;
+  /** The provider's call id, when there is one. */
+  callId?: string;
+  /** The surface label the turn declared (`cli-chat`, `subagent`, …). */
+  surface?: string;
+  cwd?: string;
+  report?: (message: string) => void;
+}
+
+/** Context for `after_tool_call` handlers. */
+export interface ToolCallHookContext extends ToolCallRef {
   ok: boolean;
   /** The tool-result text fed back to the model (truncated for hooks). */
   result?: string;
-  /** Error text when the tool failed. */
-  error?: string;
   /** Execution duration in ms. */
+  durationMs?: number;
+}
+
+/** Context for `failed_tool_call` handlers. */
+export interface FailedToolCallHookContext extends ToolCallRef {
+  /** Why it failed — the thrown message, or the failing result's own text. */
+  error: string;
+  /** The result text, when the tool returned a failure rather than throwing. */
+  result?: string;
   durationMs?: number;
 }
 
@@ -43,8 +101,14 @@ export interface SessionEndHookContext {
   goal?: string;
 }
 
-/** A hook handler — sync or async; the registry runs them serially. */
-export type HookHandler<T> = (ctx: T) => void | Promise<void>;
+/**
+ * A hook handler — sync or async; the registry runs them serially.
+ *
+ * A returned {@link HookDecision} is honoured for `before_tool_call` (the only
+ * phase where stopping the call is possible) and ignored elsewhere, so one
+ * handler type serves the whole registry.
+ */
+export type HookHandler<T> = (ctx: T) => void | HookDecision | Promise<void | HookDecision>;
 
 // ─── Registry ───────────────────────────────────────────────────────────────
 
@@ -73,23 +137,61 @@ class HookRegistry {
       try {
         await handler(ctx);
       } catch (err) {
-        logger.debug(`hook '${event}' handler failed: ${err instanceof Error ? err.message : err}`);
+        const message = `hook '${event}' handler failed: ${err instanceof Error ? err.message : err}`;
+        // Told to the CALLER as well as the log, because a handler that throws is
+        // fail-open: without this, a broken subscriber is indistinguishable from
+        // one that approved.
+        (ctx as ToolCallRef).report?.(message);
+        logger.debug(message);
       }
     }
+  }
+
+  /**
+   * Run the `before_tool_call` handlers and return the FIRST decision.
+   *
+   * Serial by construction: two hooks must not race over whether a call happens,
+   * and the first denial is the answer — a later hook cannot un-deny a call that
+   * has already been stopped. A handler that throws is reported and skipped
+   * (FAIL OPEN), so one broken hook cannot stop every tool call in the process.
+   */
+  async runBefore(ctx: BeforeToolCallHookContext): Promise<HookDecision | null> {
+    for (const handler of this.handlers.get('before_tool_call') ?? []) {
+      let decision: void | HookDecision;
+      try {
+        decision = await handler(ctx);
+      } catch (err) {
+        const message = `hook 'before_tool_call' handler failed: ${err instanceof Error ? err.message : err}`;
+        ctx.report?.(message);
+        logger.debug(message);
+        continue;
+      }
+      if (decision && decision.deny) return decision;
+    }
+    return null;
   }
 
   /** Registered handler counts per event (CLI/tests introspection). */
   list(): Record<HookEvent, number> {
     return {
-      post_tool_call: this.handlers.get('post_tool_call')?.length ?? 0,
+      before_tool_call: this.handlers.get('before_tool_call')?.length ?? 0,
+      after_tool_call: this.handlers.get('after_tool_call')?.length ?? 0,
+      failed_tool_call: this.handlers.get('failed_tool_call')?.length ?? 0,
       on_session_end: this.handlers.get('on_session_end')?.length ?? 0,
     };
   }
 }
 
-type HookContextFor<T extends HookEvent> = T extends 'post_tool_call'
-  ? ToolCallHookContext
-  : SessionEndHookContext;
+/** Context for `before_tool_call` handlers: the call, before it happens. */
+export type BeforeToolCallHookContext = ToolCallRef;
+
+type HookContextFor<T extends HookEvent> = T extends 'before_tool_call'
+  ? BeforeToolCallHookContext
+  : T extends 'after_tool_call'
+    ? ToolCallHookContext
+    : T extends 'failed_tool_call'
+      ? FailedToolCallHookContext
+      : SessionEndHookContext;
 
 /** The singleton registry. */
 export const hooks = new HookRegistry();
@@ -100,18 +202,11 @@ export const hooks = new HookRegistry();
 export function installHooks(bus = getEventBus()): () => void {
   const unsubscribers: Array<() => void> = [];
 
-  unsubscribers.push(
-    bus.on(EventNames.TOOL_CALLED, (record) => {
-      const d = (record.data ?? {}) as Partial<ToolCallHookContext> & { error?: string };
-      void hooks.run('post_tool_call', {
-        tool: d.tool ?? 'unknown',
-        ok: d.ok !== false,
-        result: typeof d.result === 'string' ? d.result.slice(0, 500) : undefined,
-        error: d.error,
-        durationMs: d.durationMs,
-      });
-    }),
-  );
+  // NOTE: there is deliberately no `tool:called` subscription here any more. The
+  // tool phases are driven by the execution seam (see the module header), and a
+  // bus subscription would fire every tool hook a SECOND time on any surface
+  // that puts the event on the bus — which is the kind of double-fire nobody
+  // notices until a hook has an external side effect.
 
   unsubscribers.push(
     bus.on(EventNames.EXECUTE_COMPLETED, (record) => {

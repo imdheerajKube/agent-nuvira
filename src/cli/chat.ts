@@ -1699,6 +1699,8 @@ export class ChatCommand extends BaseCommand {
         maxParallelReads: harness.maxParallelReads,
         // WS3 — the turn span the loop hangs each tool call under.
         otel: otelSpan,
+        // WS4 — the label a tool hook reports this call under.
+        surface: ctxOverrides?.debugSurface ?? 'cli-chat',
         onToken: ctxOverrides?.onToken,
         signal: ctxOverrides?.signal,
         // G18 — the same sink the execute loop uses: tool calls, gate decisions

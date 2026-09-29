@@ -100,7 +100,10 @@ export const EventNames = {
   EXEC_SHELL_START: 'exec:shell-start',
   EXEC_SHELL_END: 'exec:shell-end',
 
-  // I2 — tool-loop execution (drives the hooks registry's post_tool_call hook)
+  // I2 — tool-loop execution. WS4 (#26) — consumed by the dashboard's step cards
+  // and the gateway's durable turn record; the operator's tool hooks are NOT
+  // driven from here (the execution seam calls them directly, so a veto can stop
+  // a call and no surface can double-fire one).
   TOOL_CALLED: 'tool:called',
 
   // Delegation events (H2 — sub-agent spawning, `spawn_agents` /
