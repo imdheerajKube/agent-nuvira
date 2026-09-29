@@ -220,7 +220,31 @@ export const CAPABILITIES: readonly Capability[] = [
     id: 'otel-export',
     label: 'A span tree exported over OTLP when configured, with trace context propagated to child processes',
     workstream: 'WS3',
-    cells: everywhere('planned'),
+    // `NUVIRA_OTEL=1` turns export on for every surface — the gate lives in ONE
+    // module (`observability/otel.ts`) and each surface only opens a turn span
+    // there. Off by default, and with it off the SDK is never imported.
+    cells: {
+      'cli-chat': {
+        status: 'supported',
+        note: 'Proven: `ChatCommand.runChatAnswer` opens the turn span beside the debug log (before the cache check and the provider walk, so a turn that dies in routing is still visible), passes it to `runToolLoop` so every executed call becomes a child span, records each finding as a span EVENT (a finding has no duration), and closes it with the turn`s own outcome before flushing. Proven by the `otel-export` parity scenario: a real collector receives `nuvira.turn` with a `nuvira.tool.list_dir` child, one trace, service `agent-nuvira`.',
+      },
+      'cli-execute': {
+        status: 'supported',
+        note: 'Proven: BOTH arms export. The loop arm opens the turn span in `runLoopExecutor` before routing and closes it on both the success and the THROW path (a crashed run is a red span rather than a missing one); the direct-answer arm reports `cli-execute` through the shared chat engine it passes `debugSurface` to. Proven by the `otel-export` parity scenario, which drives the command`s own `runSingleGoal`.',
+      },
+      'dashboard-chat': {
+        status: 'supported',
+        note: 'Proven: the console hands the shared engine its surface (`dashboard-chat`) and its session, so a dashboard turn`s span is attributed to the dashboard and to the conversation it belonged to — the same identity its session debug log carries. The engine flushes per turn, so the provider outlives the turn in a long-running server while each turn`s spans ship as it ends. Proven by the `otel-export` parity scenario.',
+      },
+      'gateway-chat': {
+        status: 'supported',
+        note: 'Proven: `runInboundChat` passes `debugSurface: "gateway-chat"` to the shared engine, so the messaging surface — the one with no terminal to scroll — exports the same turn tree as the CLI. Proven by the `otel-export` parity scenario, which drives the REAL registry handler with no engine injected.',
+      },
+      'subagent': {
+        status: 'supported',
+        note: 'Proven, INCLUDING the trace context across the fork: the child opens its OWN turn span in `runSubagent` (one-shot, so it flushes and shuts the provider down before it reports its result), and `subagent-spawner` injects the ambient W3C `traceparent` into the child`s environment — read from the ACTIVE span, so two turns interleaving in one server cannot hand each other`s trace ids to a child. The child resumes from that header, so its turn span hangs off the tool call that spawned it and the whole turn is ONE trace. Proven by the `otel-export` parity scenario (the child`s spans are read back from a real collector in its own process) and by the fork case in `tests/tools/subagent-end-to-end.test.ts`, which asserts the child`s remote parent IS the parent`s tool span and that both share one trace id.',
+      },
+    },
   },
   {
     id: 'tool-hooks',

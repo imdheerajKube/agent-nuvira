@@ -89,6 +89,70 @@ export function noDebugLog(): DebugLogObs {
 }
 
 /**
+ * WS3 — the span tree a surface exported, as its OTLP collector received it.
+ *
+ * WHY A COLLECTOR AND NOT A MOCK. The claim is "this surface ships its turn over
+ * OTLP", and only the wire can settle that: a mocked exporter proves the calls
+ * were made, not that a collector could read them. The driver boots a real
+ * loopback HTTP collector and reads the request bodies it received, so
+ * "exported" means spans that left the process and were parsed.
+ *
+ * WHY THE SPANS ARE SORTED. A collector receives spans in COMPLETION order
+ * (measured: a probe turn arrived model-less, tool, then turn), so comparing the
+ * arrival order would fail on a surface that merely closed its spans in a
+ * different sequence. The comparison is over the tree's SHAPE — the set of names
+ * and the parent→child edges — which is the part every surface must agree on.
+ *
+ * `traceId` and `remoteParent` are RECORDED, NOT COMPARED, and that is a stated
+ * decision rather than an oversight: they differ per run by construction, and a
+ * forked child legitimately continues a trace its parent began — where an
+ * in-process surface has no remote parent at all. Comparing them would report
+ * the child's correct behaviour as a divergence and force every other surface to
+ * invent a parent to match. They are kept for the failure report and for the
+ * scenario's own assertions (the child DOES join one trace), which is where a
+ * fact that is true of only one surface belongs.
+ */
+export interface OtelExportObs {
+  /** True when the collector received at least one span from this surface. */
+  exported: boolean;
+  /** Sorted span names received. The tree's vocabulary. */
+  spans: readonly string[];
+  /** Sorted `parent → child` name pairs. The tree's shape. */
+  edges: readonly string[];
+  /** How many `nuvira.turn` spans arrived (exactly one per turn, or the tree is wrong). */
+  turnSpans: number;
+  /** Sorted tool span names (`nuvira.tool.<name>`) — the calls that actually ran. */
+  toolSpans: readonly string[];
+  /** Every span received shares ONE trace id (the tree is one trace, not several). */
+  singleTrace: boolean;
+  /** The `service.name` the resource attributes carried (the SDK's own rendering). */
+  serviceName: string | null;
+  /** The trace id every span shares, or null. RECORDED, never compared. */
+  traceId: string | null;
+  /**
+   * The turn span's parent id when that parent is NOT in this collector — a
+   * genuine remote parent, i.e. this process continued another one's trace.
+   * RECORDED, never compared (see the interface note).
+   */
+  remoteParent: string | null;
+}
+
+/** The honest "this surface exported nothing" value. Fresh each call. */
+export function noOtelExport(): OtelExportObs {
+  return {
+    exported: false,
+    spans: [],
+    edges: [],
+    turnSpans: 0,
+    toolSpans: [],
+    singleTrace: false,
+    serviceName: null,
+    traceId: null,
+    remoteParent: null,
+  };
+}
+
+/**
  * One surface's view of one turn. Fields the surface does not report stay
  * `undefined` — and `compare` treats "absent on one surface, present on another"
  * as a difference, because a surface that cannot say which model served a turn
@@ -127,6 +191,17 @@ export interface TurnObservation {
    */
   debugLog: DebugLogObs;
   /**
+   * WS3 — the span tree this surface exported over OTLP, as a real collector
+   * received it.
+   *
+   * REQUIRED, for the same reason `debugLog` and `modelCalls` are: the row is
+   * "every surface ships the turn's spans", and an optional field would let a
+   * surface that exports nothing go on reading as at-par. The harness turns
+   * export ON for the run and hands every surface a collector, so `exported:
+   * false` there is a failure rather than a neutral value.
+   */
+  otel: OtelExportObs;
+  /**
    * WS1 — the findings the turn recorded, in call order, in the shared wire
    * form (`findings/verdicts.ts`).
    *
@@ -160,6 +235,7 @@ export interface ComparableObservation {
   toolCalls: readonly ToolCallObs[];
   findings: readonly WireFinding[];
   debugLog: DebugLogObs;
+  otel: OtelExportObs;
   answer: string | null;
   refusalCode: string | null;
   errorCode: string | null;
@@ -180,6 +256,7 @@ export function comparableOf(observation: TurnObservation): ComparableObservatio
     // should fail the typecheck, not silently diverge at runtime.
     findings: observation.findings ?? [],
     debugLog: observation.debugLog ?? noDebugLog(),
+    otel: observation.otel ?? noOtelExport(),
     answer: observation.answer ?? null,
     refusalCode: observation.refusalCode ?? null,
     errorCode: observation.errorCode ?? null,
@@ -285,6 +362,35 @@ export function compare(a: TurnObservation, b: TurnObservation): string[] {
       differences.push(
         `${who}: debugLog.${field} differs — ${show(l === null ? null : String(l))} vs ${show(r === null ? null : String(r))}`,
       );
+    }
+  }
+
+  // WS3 — the exported span tree. The scalars (`turnSpans`, `singleTrace`,
+  // `exported`, `serviceName`) are called out individually so a failure says
+  // WHICH claim broke ("no spans arrived" vs "two turn spans, not one" vs "the
+  // spans are not one trace"), and the two list-shaped fields are compared as
+  // sorted lists so a failure shows both sides rather than "they differ".
+  const otelScalars: Array<'exported' | 'turnSpans' | 'singleTrace' | 'serviceName'> = [
+    'exported',
+    'turnSpans',
+    'singleTrace',
+    'serviceName',
+  ];
+  for (const field of otelScalars) {
+    const l = left.otel[field];
+    const r = right.otel[field];
+    if (l !== r) {
+      differences.push(
+        `${who}: otel.${field} differs — ${show(l === null ? null : String(l))} vs ${show(r === null ? null : String(r))}`,
+      );
+    }
+  }
+  const otelLists: Array<'spans' | 'edges' | 'toolSpans'> = ['spans', 'edges', 'toolSpans'];
+  for (const field of otelLists) {
+    const l = left.otel[field].join(', ');
+    const r = right.otel[field].join(', ');
+    if (l !== r) {
+      differences.push(`${who}: otel.${field} differs — [${l}] vs [${r}]`);
     }
   }
 

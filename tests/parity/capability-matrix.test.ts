@@ -109,12 +109,12 @@ describe('WS0 capability matrix — claim versus proof', () => {
     // The rows owned by a workstream that has not started must not claim
     // `supported` anywhere — that is the whole point of recording status
     // separately from proof.
-    // WS1 and WS2 have landed (their `findings-verdicts` and `debug-log` rows are
-    // now proven per surface by the parity scenarios), so they left this list
-    // deliberately — the same one-line edit the rule requires when a workstream
-    // starts shipping. WS3-WS7 have no `supported` cell: their capabilities are
-    // still `planned` everywhere.
-    const notStarted: Workstream[] = ['WS3', 'WS4', 'WS5', 'WS6', 'WS7'];
+    // WS1, WS2 and WS3 have landed (their `findings-verdicts`, `debug-log` and
+    // `otel-export` rows are now proven per surface by the parity scenarios), so
+    // they left this list deliberately — the same one-line edit the rule requires
+    // when a workstream starts shipping. WS4-WS7 have no `supported` cell: their
+    // capabilities are still `planned` everywhere.
+    const notStarted: Workstream[] = ['WS4', 'WS5', 'WS6', 'WS7'];
     for (const capability of CAPABILITIES) {
       if (!notStarted.includes(capability.workstream)) continue;
       for (const surface of SURFACES) {

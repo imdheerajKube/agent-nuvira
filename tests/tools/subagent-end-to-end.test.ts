@@ -42,6 +42,12 @@ vi.mock('node:os', () => ({
   tmpdir: () => process.env.TMPDIR || process.env.TEMP || '/tmp',
 }));
 
+import {
+  flushSpans,
+  shutdownSpans,
+  startTurnSpan,
+  withSpanActive,
+} from '../../src/observability/otel.js';
 import { getSubagentManager, resetSubagentManager } from '../../src/tools/subagent-spawner.js';
 import { runSubagent, resolveToolAllowList } from '../../src/tools/child-agent-runtime.js';
 import { SubagentRefusalError } from '../../src/tools/subagent-refusal.js';
@@ -201,6 +207,131 @@ describe('subagent — a killed run keeps the identity it announced', () => {
       expect(killed).toMatchObject({ provider: 'local', model: 'test-model', transport: 'none' });
     } finally {
       generateDelayMs = 0;
+    }
+  }, 90_000);
+});
+
+// ─── 1c. WS3 — the child's spans join the PARENT's trace ────────────────────
+
+/**
+ * A message-oriented loopback collector, enough to read a span tree back.
+ *
+ * The claim here is about a FORKED process, so the far end has to be a real
+ * collector: the child builds its own provider in its own process, and the only
+ * way to see what it exported is to receive it. (The unit-level contract lives in
+ * `tests/observability/otel.test.ts`; the per-surface tree is asserted by the
+ * `otel-export` parity scenario.)
+ */
+async function startCollector(): Promise<{
+  url: string;
+  spans: Array<{ name: string; traceId: string; spanId: string; parentSpanId: string }>;
+  close(): Promise<void>;
+}> {
+  const spans: Array<{ name: string; traceId: string; spanId: string; parentSpanId: string }> = [];
+  const server: Server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as {
+          resourceSpans?: Array<{ scopeSpans?: Array<{ spans?: Array<Record<string, string>> }> }>;
+        };
+        for (const entry of payload.resourceSpans ?? []) {
+          for (const scope of entry.scopeSpans ?? []) {
+            for (const span of scope.spans ?? []) {
+              spans.push({
+                name: span.name,
+                traceId: span.traceId ?? '',
+                spanId: span.spanId ?? '',
+                parentSpanId: span.parentSpanId ?? '',
+              });
+            }
+          }
+        }
+      } catch {
+        /* a body we cannot parse is a span we report as missing */
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/traces`,
+    spans,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections?.();
+      }),
+  };
+}
+
+describe('WS3 otel — a forked subagent continues the parent`s trace', () => {
+  it('hands the child the ACTIVE span as a remote parent, and the child exports into the SAME trace', async () => {
+    const collector = await startCollector();
+    const previousOtel = process.env.NUVIRA_OTEL;
+    const previousEndpoint = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+    process.env.NUVIRA_OTEL = '1';
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = collector.url;
+
+    const configDir = mkdtempSync(join(testHome.value, 'config-'));
+    const mgr = getSubagentManager();
+    try {
+      const turn = await startTurnSpan({ surface: 'cli-chat', goal: 'delegate to a subagent' });
+      expect(turn, 'the parent turn span was not created').not.toBeNull();
+      const toolSpan = turn!.child('nuvira.tool.subagent');
+
+      // The loop makes the TOOL span active around the tool`s execution, so the
+      // spawner reads the right parent out of the context — never out of module
+      // state, which two interleaved turns in one server would share.
+      const state = await withSpanActive(toolSpan, () =>
+        mgr.spawn({
+          goal: 'report the answer',
+          provider: 'local',
+          model: 'test-model',
+          env: { OLLAMA_HOST: baseUrl, NUVIRA_CONFIG_DIR: configDir },
+        }),
+      );
+      const result = await mgr.waitForCompletion(state.id, 60_000);
+      expect(result.success, `expected success, got: ${result.error ?? ''}`).toBe(true);
+
+      toolSpan.end({ ok: true });
+      turn!.end({ ok: true });
+      await flushSpans();
+
+      // The child`s OWN export, from its own process: exactly one turn span, and
+      // it continues the trace the parent began rather than starting a second one.
+      // The child exported its OWN turn span, in its own process …
+      const childTurn = collector.spans.find(
+        (s) => s.name === 'nuvira.turn' && s.parentSpanId === toolSpan.spanId,
+      );
+      expect(
+        childTurn,
+        `no child turn span joined to the parent tool span (got ${JSON.stringify(collector.spans)})`,
+      ).toBeDefined();
+      // … hanging off the parent`s TOOL span (the one that was active at the
+      // fork), inside the parent`s trace. That is the whole claim: one trace
+      // across a process boundary, not two unrelated ones.
+      expect(childTurn!.traceId).toBe(turn!.traceId);
+      // The parent`s own two spans are there as well, so the tree is complete.
+      const parentTurn = collector.spans.find(
+        (s) => s.name === 'nuvira.turn' && s.parentSpanId === '',
+      );
+      expect(parentTurn?.spanId).toBe(turn!.spanId);
+      expect(collector.spans.map((s) => s.name).sort()).toEqual([
+        'nuvira.tool.subagent',
+        'nuvira.turn',
+        'nuvira.turn',
+      ]);
+      expect(new Set(collector.spans.map((s) => s.traceId))).toEqual(new Set([turn!.traceId]));
+    } finally {
+      if (previousOtel === undefined) delete process.env.NUVIRA_OTEL;
+      else process.env.NUVIRA_OTEL = previousOtel;
+      if (previousEndpoint === undefined) delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+      else process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = previousEndpoint;
+      await shutdownSpans();
+      await collector.close();
     }
   }, 90_000);
 });

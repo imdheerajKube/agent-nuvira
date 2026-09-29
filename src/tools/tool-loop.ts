@@ -17,6 +17,9 @@
  */
 
 import { getTool, toolJsonSchemas, type ToolContext, type ToolJsonSchema } from './registry.js';
+// WS3 (#25) — the turn's span tree. Null-safe throughout: with export off every
+// helper below is a no-op and no span object is ever built.
+import { TOOL_SPAN_PREFIX, withSpanActive, type SpanHandle } from '../observability/otel.js';
 import {
   detectPermissionSeeking,
   isAffirmativeReply,
@@ -289,6 +292,18 @@ export interface ToolLoopOptions {
    * callers opt in (chat reads `tools.loopExposure` from config).
    */
   toolExposure?: 'all' | 'tiered';
+  /**
+   * WS3 (#25) — the turn's span, when span export is on (else null/absent).
+   *
+   * Tool calls become child spans under it and each one is made ACTIVE while the
+   * tool runs, so a tool that forks a subagent can hand that child the right
+   * trace parent (`childTraceEnv` reads the active context, not module state).
+   *
+   * The name is built HERE rather than at each surface, so every surface's tree
+   * has the same shape — which is the only reason a tree can be compared across
+   * surfaces at all.
+   */
+  otel?: SpanHandle | null;
   /**
    * R1 — bound on concurrent read-only calls per step, from the model's harness
    * profile. Omit for the default (4); pass 1 for tiny models.
@@ -1513,20 +1528,35 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         tool: call.name,
         args: call.arguments,
       });
+      // WS3 (#25) — the call as a child span of the turn. Created where the call
+      // actually runs (not where it is announced), so a call that was REFUSED by
+      // a gate above never gets a span claiming it happened.
+      const toolSpan =
+        opts.otel?.child(`${TOOL_SPAN_PREFIX}${call.name}`, { 'nuvira.tool': call.name }) ?? null;
       try {
         deps.onEvent?.(`   ⚙ ${call.name}(${summarizeArgs(call.arguments)})`);
-        let resultText = await deps.executeTool(call.name, call.arguments, ctx);
+        // The span is ACTIVE for the whole execution: that is what lets a tool
+        // which spawns a subagent propagate the trace instead of starting a
+        // second, unrelated one in the child.
+        let resultText = await withSpanActive(toolSpan, () =>
+          deps.executeTool(call.name, call.arguments, ctx),
+        );
         // I3: a tool that returns {artifact, result} gets its deliverable
         // recorded on the session and only `result`
         // is fed back to the model — the JSON payload is runtime metadata.
         resultText = appendToolArtifact(resultText, ctx.artifacts);
+        // The SAME outcome convention the loop uses everywhere else (`Error:`
+        // prefix), so the span cannot report a success the result did not have.
+        const toolOk = !resultText.startsWith('Error:');
         ctx.emit?.('tool:called', {
           id: call.id,
           tool: call.name,
-          ok: !resultText.startsWith('Error:'),
+          ok: toolOk,
           result: resultText,
           durationMs: Date.now() - startedAt,
         });
+        toolSpan?.attr('nuvira.ok', toolOk);
+        toolSpan?.end({ ok: toolOk });
         if (call.name === 'suggest_followups') endedAfterConcluding = true;
         return resultText;
       } catch (err) {
@@ -1538,9 +1568,14 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           error: message,
           durationMs: Date.now() - startedAt,
         });
+        toolSpan?.end({ ok: false, message });
         return `Error: ${message}`;
       } finally {
         toolDurations.set(call.id, Date.now() - startedAt);
+        // A safety net, not a second report: `end()` is idempotent, so a call
+        // that already ended its span is untouched, and one that reached here
+        // without reporting says so rather than defaulting to success.
+        toolSpan?.end({ ok: false, message: 'tool outcome was never reported' });
       }
     };
 

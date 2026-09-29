@@ -44,13 +44,29 @@ import type { AddressInfo } from 'node:net';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 import { getCache } from '../context/cache.js';
 import type { WireFinding } from '../findings/verdicts.js';
 import { readGatewayLog } from '../gateway/gateway-log.js';
 import type { ChannelAdapter } from '../gateway/adapters.js';
 import { debugLogDir, readLatestDebugLog } from '../observability/debug-log.js';
-import { noDebugLog, type DebugLogObs, type ToolCallObs, type TurnObservation } from './observation.js';
+// WS3 (#25) — the far end of the export the surfaces run, and the two names that
+// define the portable span tree (`src/observability/otel.ts`).
+import {
+  otelEnableVarName,
+  shutdownSpans,
+  TOOL_SPAN_PREFIX,
+  TURN_SPAN_NAME,
+} from '../observability/otel.js';
+import {
+  noDebugLog,
+  noOtelExport,
+  type DebugLogObs,
+  type OtelExportObs,
+  type ToolCallObs,
+  type TurnObservation,
+} from './observation.js';
 import type { ParityDriver, ParityScenario, StubDepth } from './scenarios.js';
 import type { SurfaceId } from './surfaces.js';
 
@@ -199,6 +215,180 @@ async function startStub(scenario: ParityScenario): Promise<ParityStub> {
   };
 }
 
+// ─── The OTLP collector ─────────────────────────────────────────────────────
+
+/** One span the collector received, reduced to what the projection compares. */
+interface CollectedSpan {
+  traceId: string;
+  spanId: string;
+  parentSpanId: string;
+  name: string;
+}
+
+/**
+ * A real loopback OTLP/HTTP collector — the far end of the export path.
+ *
+ * WHY NOT A MOCKED EXPORTER. The claim the `otel-export` row makes is "a
+ * collector receives this surface's turn", and only the wire settles that. A spy
+ * on the exporter proves the SDK was asked to send something; parsing the request
+ * bodies a collector actually received proves an operator with a real endpoint
+ * would SEE the tree. It also keeps the SDK's own encoding under test: the JSON
+ * shape, the resource attributes and the string timestamps are exactly the parts
+ * a hand-rolled writer gets subtly wrong.
+ */
+interface OtlpCollector {
+  /** The `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` value the surface is pointed at. */
+  readonly endpoint: string;
+  /** Every span received so far, in arrival (completion) order. */
+  spans(): CollectedSpan[];
+  /** The `service.name` from the resource attributes, or null. */
+  serviceName(): string | null;
+  /** Requests received, so "nothing exported" is distinguishable from "nothing parsed". */
+  requests(): number;
+  close(): Promise<void>;
+}
+
+/** Pull the comparable facts out of one OTLP JSON payload, ignoring the rest. */
+function collectSpansInto(
+  payload: unknown,
+  into: CollectedSpan[],
+  onServiceName: (name: string) => void,
+): void {
+  const resourceSpans = (payload as { resourceSpans?: unknown })?.resourceSpans;
+  if (!Array.isArray(resourceSpans)) return;
+  for (const entry of resourceSpans) {
+    const attributes = (entry as { resource?: { attributes?: unknown } })?.resource?.attributes;
+    if (Array.isArray(attributes)) {
+      for (const attribute of attributes) {
+        const a = attribute as { key?: unknown; value?: { stringValue?: unknown } };
+        if (a?.key === 'service.name' && typeof a.value?.stringValue === 'string') {
+          onServiceName(a.value.stringValue);
+        }
+      }
+    }
+    const scopeSpans = (entry as { scopeSpans?: unknown })?.scopeSpans;
+    if (!Array.isArray(scopeSpans)) continue;
+    for (const scope of scopeSpans) {
+      const spans = (scope as { spans?: unknown })?.spans;
+      if (!Array.isArray(spans)) continue;
+      for (const span of spans) {
+        const s = span as Record<string, unknown>;
+        if (typeof s?.name !== 'string') continue;
+        into.push({
+          name: s.name,
+          traceId: typeof s.traceId === 'string' ? s.traceId : '',
+          spanId: typeof s.spanId === 'string' ? s.spanId : '',
+          parentSpanId: typeof s.parentSpanId === 'string' ? s.parentSpanId : '',
+        });
+      }
+    }
+  }
+}
+
+async function startOtlpCollector(): Promise<OtlpCollector> {
+  const received: CollectedSpan[] = [];
+  let service: string | null = null;
+  let requests = 0;
+  const server: Server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      requests += 1;
+      try {
+        const raw = Buffer.concat(chunks);
+        // The SDK gzips when it is told to; decoding it here means a run that
+        // enables compression is MEASURED rather than silently read as empty.
+        const body = req.headers['content-encoding'] === 'gzip' ? gunzipSync(raw) : raw;
+        collectSpansInto(JSON.parse(body.toString('utf8')), received, (name) => {
+          service ??= name;
+        });
+      } catch {
+        // A body we cannot parse is a span we report as MISSING — never a crash
+        // in the harness, and never a silent pass.
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    endpoint: `http://127.0.0.1:${port}/v1/traces`,
+    spans: () => [...received],
+    serviceName: () => service,
+    requests: () => requests,
+    close: () =>
+      new Promise<void>((resolve) => {
+        // The exporter holds keep-alive sockets and `close()` alone waits for
+        // them. Tearing them down explicitly is what stops a harness run from
+        // hanging on its own collector after the last span arrived.
+        server.close(() => resolve());
+        server.closeAllConnections?.();
+      }),
+  };
+}
+
+/**
+ * Reduce the spans a collector received to the compared projection.
+ *
+ * The collector hands spans over in COMPLETION order (measured), so the whole
+ * reduction is order-insensitive: sorted names, sorted edges. A `parentSpanId`
+ * matching no span in this collector is a REMOTE parent (a child process that
+ * continued a trace begun elsewhere) — it contributes no edge, because an edge to
+ * a name we never received cannot compare, and it is recorded on `remoteParent`
+ * for the scenario's own assertion instead.
+ */
+function otelObsOf(collector: OtlpCollector): OtelExportObs {
+  const received = collector.spans();
+  if (received.length === 0) return noOtelExport();
+  const nameById = new Map(received.filter((s) => s.spanId).map((s) => [s.spanId, s.name]));
+  const names = received.map((s) => s.name).sort();
+  const edges = new Set<string>();
+  for (const span of received) {
+    if (!span.parentSpanId) continue;
+    const parent = nameById.get(span.parentSpanId);
+    if (parent) edges.add(`${parent} → ${span.name}`);
+  }
+  const traceIds = [...new Set(received.map((s) => s.traceId).filter(Boolean))];
+  const turn = received.find((s) => s.name === TURN_SPAN_NAME) ?? null;
+  return {
+    exported: true,
+    spans: names,
+    edges: [...edges].sort(),
+    turnSpans: received.filter((s) => s.name === TURN_SPAN_NAME).length,
+    toolSpans: names.filter((name) => name.startsWith(TOOL_SPAN_PREFIX)),
+    singleTrace: traceIds.length === 1,
+    serviceName: collector.serviceName(),
+    traceId: traceIds.length === 1 ? traceIds[0]! : (turn?.traceId ?? null),
+    remoteParent:
+      turn && turn.parentSpanId && !nameById.has(turn.parentSpanId) ? turn.parentSpanId : null,
+  };
+}
+
+/**
+ * Run one surface's turn with a fresh collector in front of the export path.
+ *
+ * Returns the turn's own value AND the projection read from the collector after
+ * it finished, so a driver wraps exactly the call that talks to the model and
+ * nothing else. The endpoint is set for the duration of that call and restored
+ * after, because the SDK reads it when it BUILDS the provider — which is why the
+ * harness resets the provider before each surface (`shutdownSpans` in the driver
+ * wrapper) instead of trusting one endpoint to serve them all.
+ */
+async function withOtlpCollector<T>(body: () => Promise<T>): Promise<{ value: T; otel: OtelExportObs }> {
+  const collector = await startOtlpCollector();
+  const previousEndpoint = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+  process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = collector.endpoint;
+  try {
+    const value = await body();
+    return { value, otel: otelObsOf(collector) };
+  } finally {
+    if (previousEndpoint === undefined) delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+    else process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = previousEndpoint;
+    await collector.close();
+  }
+}
+
 // ─── The workspace ──────────────────────────────────────────────────────────
 
 /** The throwaway profile a run points the surfaces at. */
@@ -284,6 +474,8 @@ interface SurfaceAnswer {
   findings?: readonly WireFinding[];
   /** WS2 — the session debug log this surface wrote, reduced to its header. */
   debugLog?: DebugLogObs;
+  /** WS3 — the span tree this surface exported, as its collector received it. */
+  otel?: OtelExportObs;
 }
 
 /**
@@ -341,6 +533,9 @@ function toObservation(
     // WS2 — the session debug log's header. `written: false` when the surface
     // produced none, which the harness (logging ON) reads as a failure.
     debugLog: answer.debugLog ?? noDebugLog(),
+    // WS3 — the span tree the collector received. `exported: false` when nothing
+    // arrived, which the harness (export ON) reads as a failure.
+    otel: answer.otel ?? noOtelExport(),
     ...(typeof answer.content === 'string' ? { answer: answer.content } : {}),
     ...(succeeded
       ? {}
@@ -374,14 +569,16 @@ async function runViaChatOnce(ws: ParityWorkspace, scenario: ParityScenario): Pr
     const { ChatCommand } = await import('../cli/chat.js');
     const command = new ChatCommand();
     const toolCalls: ToolCallObs[] = [];
-    const answer = await command.answerOnce(scenario.message, {
-      provider: PARITY_PROVIDER_TYPE,
-      model: PARITY_MODEL,
-      onToolCall: (phase, info) => collectCalled(toolCalls, phase, info),
-    });
+    const { value: answer, otel } = await withOtlpCollector(() =>
+      command.answerOnce(scenario.message, {
+        provider: PARITY_PROVIDER_TYPE,
+        model: PARITY_MODEL,
+        onToolCall: (phase, info) => collectCalled(toolCalls, phase, info),
+      }),
+    );
     return toObservation(
       'cli-chat',
-      { ...answer, debugLog: debugLogOf('cli-chat') },
+      { ...answer, debugLog: debugLogOf('cli-chat'), otel },
       toolCalls,
       stub.chatCalls(),
     );
@@ -416,13 +613,15 @@ async function runViaConsole(ws: ParityWorkspace, scenario: ParityScenario): Pro
       });
     });
     try {
-      const result = await console_.answer(`parity-${scenario.id}`, scenario.message, {
-        provider: PARITY_PROVIDER_TYPE,
-        model: PARITY_MODEL,
-      });
+      const { value: result, otel } = await withOtlpCollector(() =>
+        console_.answer(`parity-${scenario.id}`, scenario.message, {
+          provider: PARITY_PROVIDER_TYPE,
+          model: PARITY_MODEL,
+        }),
+      );
       return toObservation(
         'dashboard-chat',
-        { ...result, debugLog: debugLogOf('dashboard-chat') },
+        { ...result, debugLog: debugLogOf('dashboard-chat'), otel },
         toolCalls,
         stub.chatCalls(),
       );
@@ -478,15 +677,17 @@ async function runViaGateway(ws: ParityWorkspace, scenario: ParityScenario): Pro
     registry.register(adapter);
     gatewayRun += 1;
     const channelId = `parity-${scenario.id}-${gatewayRun}`;
-    await registry.handleInbound(
-      {
-        platform: 'mock',
-        channelId,
-        text: scenario.message,
-        from: 'parity',
-        senderId: 'parity',
-      },
-      { forceKind: 'chat' },
+    const { otel } = await withOtlpCollector(() =>
+      registry.handleInbound(
+        {
+          platform: 'mock',
+          channelId,
+          text: scenario.message,
+          from: 'parity',
+          senderId: 'parity',
+        },
+        { forceKind: 'chat' },
+      ),
     );
     const record = readGatewayLog(50).find(
       (r) => r.event === 'inbound.chat' && r.channelId === channelId,
@@ -525,6 +726,8 @@ async function runViaGateway(ws: ParityWorkspace, scenario: ParityScenario): Pro
         generationFailed: record.generationFailed === true,
         // WS2 — read from the same isolated profile the gateway wrote into.
         debugLog: debugLogOf('gateway-chat'),
+        // WS3 — the span tree the collector received from this surface.
+        otel,
       },
       toolCalls,
       stub.chatCalls(),
@@ -569,9 +772,11 @@ async function runViaExecuteCommand(ws: ParityWorkspace, scenario: ParityScenari
         findings?: WireFinding[];
       }>;
     };
-    const result = await command.runSingleGoal(scenario.message, PARITY_PROVIDER_TYPE, PARITY_MODEL, {
-      engine: 'loop',
-    });
+    const { value: result, otel } = await withOtlpCollector(() =>
+      command.runSingleGoal(scenario.message, PARITY_PROVIDER_TYPE, PARITY_MODEL, {
+        engine: 'loop',
+      }),
+    );
     return toObservation(
       'cli-execute',
       {
@@ -582,6 +787,8 @@ async function runViaExecuteCommand(ws: ParityWorkspace, scenario: ParityScenari
         generationFailed: !result.success,
         ...(result.findings ? { findings: result.findings } : {}),
         debugLog: debugLogOf('cli-execute'),
+        // WS3 — the span tree this command's loop exported for the turn.
+        otel,
       },
       // The command's own per-call outcomes (captured from the loop's
       // `tool`/`refusal` events). The fallback keeps a name-only result honest:
@@ -652,7 +859,12 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
       // offering the child one keeps its transport attribution comparable. The
       // stub only asks for the tool when the scenario does.
       const availableTool = scenario.toolCall?.tool ?? 'list_dir';
-      const state = await manager.spawn({
+      // WS3 — one collector for this surface, held across the WHOLE child run:
+      // the fork inherits `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (and `NUVIRA_OTEL`)
+      // from this process's environment, and the child flushes into it before it
+      // reports its result — so what is read here is the child's OWN export,
+      // produced in its own process, rather than something reconstructed here.
+      const spawnConfig = {
         goal: scenario.message,
         provider: PARITY_PROVIDER_TYPE,
         model: PARITY_MODEL,
@@ -667,8 +879,12 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
           // private profile.
           NUVIRA_DEBUG_LOG_DIR: debugLogDir(),
         },
+      };
+      const { value, otel } = await withOtlpCollector(async () => {
+        const state = await manager.spawn(spawnConfig);
+        return { state, result: await manager.waitForCompletion(state.id, 60_000) };
       });
-      const result = await manager.waitForCompletion(state.id, 60_000);
+      const { state, result } = value;
       const transport =
         result.transport === 'native' || result.transport === 'json' ? result.transport : 'none';
       return {
@@ -687,6 +903,9 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
         // artifact — produced in its own process, with its own provider object —
         // and not something reconstructed here).
         debugLog: debugLogOf('subagent'),
+        // WS3 — the span tree the CHILD exported, read back from the collector it
+        // was pointed at through its inherited environment.
+        otel,
         ...(result.result ? { answer: result.result } : {}),
         ...(result.success ? {} : { errorCode: result.refusalCode ?? 'turn_failed' }),
         noise: { at: Date.now() },
@@ -754,6 +973,8 @@ export async function createParityHarness(): Promise<ParityHarness> {
     buffConfigDir: process.env.BUFF_CONFIG_DIR,
     buffMemoryDir: process.env.BUFF_MEMORY_DIR,
     debugLog: process.env.NUVIRA_DEBUG_LOG,
+    otel: process.env[otelEnableVarName],
+    otelEndpoint: process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
   };
   process.env.NUVIRA_CONFIG_DIR = workspace.configDir;
   process.env.NUVIRA_MEMORY_DIR = workspace.memoryDir;
@@ -763,6 +984,11 @@ export async function createParityHarness(): Promise<ParityHarness> {
   // above (a forked child into its own), so nothing reaches the developer's
   // real `~/.nuvira`.
   process.env.NUVIRA_DEBUG_LOG = '1';
+  // WS3 — span export is turned ON for the whole run, so "this surface exported
+  // its turn" is an ASSERTION rather than something the harness never asked for.
+  // Only the GATE belongs here; the endpoint is set per driver
+  // (`withOtlpCollector`), because each surface gets its own collector.
+  process.env[otelEnableVarName] = '1';
   // The legacy aliases would otherwise win on the modules that check them, and
   // point half the run back at the developer's real profile.
   delete process.env.BUFF_CONFIG_DIR;
@@ -775,7 +1001,16 @@ export async function createParityHarness(): Promise<ParityHarness> {
     surface,
     depth: DRIVER_DEPTH,
     available: true,
-    run: (scenario) => run(workspace, scenario),
+    run: async (scenario) => {
+      // WS3 — the SDK keeps ONE provider per process and reads the endpoint when
+      // it builds it, so the previous surface's provider (pointing at the
+      // previous collector, now closed) has to go before this surface starts.
+      // Without this reset the second surface would export into the first
+      // surface's collector, and every surface after that would read as having
+      // exported nothing — a silent, permanent green on one surface only.
+      await shutdownSpans();
+      return run(workspace, scenario);
+    },
   });
 
   const inProcess = [
@@ -801,6 +1036,14 @@ export async function createParityHarness(): Promise<ParityHarness> {
       else process.env.BUFF_MEMORY_DIR = previous.buffMemoryDir;
       if (previous.debugLog === undefined) delete process.env.NUVIRA_DEBUG_LOG;
       else process.env.NUVIRA_DEBUG_LOG = previous.debugLog;
+      if (previous.otel === undefined) delete process.env[otelEnableVarName];
+      else process.env[otelEnableVarName] = previous.otel;
+      if (previous.otelEndpoint === undefined) delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+      else process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = previous.otelEndpoint;
+      // Tear the LAST surface's provider down too: a test file that runs several
+      // parity runs in a row would otherwise inherit the first one's provider,
+      // still pointing at a collector that has been closed.
+      await shutdownSpans();
       rmSync(workspace.root, { recursive: true, force: true });
     },
   };

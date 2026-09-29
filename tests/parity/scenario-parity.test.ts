@@ -25,7 +25,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll, beforeAll } from 'vitest';
 
-import { compare, noDebugLog, reportParityFailure, type TurnObservation } from '../../src/parity/observation.js';
+import {
+  compare,
+  noDebugLog,
+  noOtelExport,
+  reportParityFailure,
+  type TurnObservation,
+} from '../../src/parity/observation.js';
 import {
   runParityScenario,
   type ParityDriver,
@@ -44,6 +50,7 @@ import {
 // would drift into covering different things while both staying green.
 import { PARITY_SCENARIOS } from '../../src/cli/parity.js';
 import { readLatestDebugLog } from '../../src/observability/debug-log.js';
+import { otelExportEnabled } from '../../src/observability/otel.js';
 
 // ─── 1. The runner's rules ─────────────────────────────────────────────────
 
@@ -67,6 +74,19 @@ function fakeObservation(over: Partial<TurnObservation> = {}): TurnObservation {
     // WS2 — a log DOES exist here, so the differential cases can vary it while
     // still testing the runner rather than a surface.
     debugLog: { written: true, provider: 'groq', model: 'stub', transport: 'native' },
+    // WS3 — a tree exists here too, so the differential cases can vary it while
+    // still testing the runner rather than a surface.
+    otel: {
+      exported: true,
+      spans: ['nuvira.tool.list_dir', 'nuvira.turn'],
+      edges: ['nuvira.turn → nuvira.tool.list_dir'],
+      turnSpans: 1,
+      toolSpans: ['nuvira.tool.list_dir'],
+      singleTrace: true,
+      serviceName: 'agent-nuvira',
+      traceId: 'a'.repeat(32),
+      remoteParent: null,
+    },
     answer: 'ok',
     ...over,
   };
@@ -224,6 +244,48 @@ describe('WS0 parity runner — verdict rules', () => {
     );
     expect(modelDiff.join('\n')).toContain('debugLog.model');
     expect(modelDiff.join('\n')).not.toContain('debugLog.written');
+  });
+
+  it('treats a surface that exported NO spans as divergent, and names the field', async () => {
+    // WS3 — the load-bearing half, and the same shape as the debug-log case
+    // above. With export ON, a surface that reaches no collector has not
+    // delivered the capability, and "neither surface exported" must never read as
+    // agreement either. A tree that is missing a tool span, or whose spans are
+    // not one trace, is a difference too — each named field by field, because
+    // "nothing arrived" and "the tool span is missing" are different bugs.
+    const none = compare(
+      fakeObservation(),
+      fakeObservation({ surface: 'dashboard-chat', otel: noOtelExport() }),
+    );
+    expect(none.join('\n')).toContain('otel.exported');
+    expect(none.join('\n')).toContain('dashboard-chat');
+
+    const noTool = compare(
+      fakeObservation(),
+      fakeObservation({ surface: 'gateway-chat', otel: { ...fakeObservation().otel, toolSpans: [] } }),
+    );
+    expect(noTool.join('\n')).toContain('otel.toolSpans');
+    expect(noTool.join('\n')).not.toContain('otel.exported');
+
+    // Two traces instead of one — the failure mode a driver that exported the
+    // child`s spans into a collector of its own would produce.
+    const split = compare(
+      fakeObservation(),
+      fakeObservation({ surface: 'subagent', otel: { ...fakeObservation().otel, singleTrace: false } }),
+    );
+    expect(split.join('\n')).toContain('otel.singleTrace');
+
+    // And the trace ID itself must NOT be compared: it differs per run by
+    // construction, so comparing it would fail two identical surfaces. The child
+    // is the case that matters — it legitimately continues its parent`s trace.
+    const differentIds = compare(
+      fakeObservation(),
+      fakeObservation({
+        surface: 'subagent',
+        otel: { ...fakeObservation().otel, traceId: 'b'.repeat(32), remoteParent: 'c'.repeat(16) },
+      }),
+    );
+    expect(differentIds).toEqual([]);
   });
 
   it('records a reason for every skipped surface, even when the driver forgot one', async () => {
@@ -479,6 +541,54 @@ describe('WS0 parity — every surface, real provider, transport-depth stub', ()
       expect(log!.text).toContain('nuvira session debug log');
       expect(log!.text).toContain('# backend.provider: groq');
     }
+  }, 120_000);
+
+  it('exports the turn`s span tree over OTLP, on every surface', async () => {
+    // WS3 (#25). The harness turns export ON for the run and hands each surface
+    // its OWN real loopback collector, so "this surface exported its turn" is an
+    // ASSERTION — and it is made on the values a collector received, not merely on
+    // the surfaces agreeing. Two surfaces both exporting nothing would agree and
+    // prove nothing, so the tree itself is what the case demands: exactly one
+    // `nuvira.turn` root, one `nuvira.tool.list_dir` child (the scenario`s call),
+    // one trace id across both, and the resource attribute the SDK rendered.
+    const scenario = PARITY_SCENARIOS.find((s) => s.id === 'otel-export');
+    expect(scenario, 'the CLI no longer drives an otel-export scenario').toBeDefined();
+
+    const run = await runParityScenario(scenario!, harness.drivers);
+    expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
+    expect(run.observations.map((o) => o.surface)).toEqual([
+      'cli-chat',
+      'dashboard-chat',
+      'gateway-chat',
+      'cli-execute',
+      'subagent',
+    ]);
+
+    for (const observation of run.observations) {
+      const otel = observation.otel;
+      const where = `${observation.surface} exported no spans`;
+      expect(otel.exported, where).toBe(true);
+      // The portable tree, on every surface: a turn root and the tool child that
+      // really ran. Asserted as a SET, because a collector receives spans in
+      // COMPLETION order and the order is not part of the claim.
+      expect(otel.spans, `${observation.surface} span names`).toEqual([
+        'nuvira.tool.list_dir',
+        'nuvira.turn',
+      ]);
+      expect(otel.toolSpans, `${observation.surface} tool spans`).toEqual(['nuvira.tool.list_dir']);
+      expect(otel.turnSpans, `${observation.surface} turn spans`).toBe(1);
+      expect(otel.edges, `${observation.surface} tree shape`).toEqual([
+        'nuvira.turn → nuvira.tool.list_dir',
+      ]);
+      expect(otel.singleTrace, `${observation.surface} spans are not one trace`).toBe(true);
+      expect(otel.serviceName, `${observation.surface} service.name`).toBe('agent-nuvira');
+      expect(otel.traceId, `${observation.surface} has no trace id`).toMatch(/^[0-9a-f]{32}$/);
+    }
+
+    // The gate is OFF by default: an ordinary run pays nothing and ships nothing.
+    // Asserted on the module's own predicate so the row cannot be read as "spans
+    // leave a process that never asked for them".
+    expect(otelExportEnabled({})).toBe(false);
   }, 120_000);
 
   it('reports a FAILED READ as failed on every surface — the false-success regression', async () => {

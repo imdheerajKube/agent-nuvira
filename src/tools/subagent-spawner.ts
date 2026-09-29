@@ -22,6 +22,9 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { logger } from '../utils/logger.js';
+// WS3 (#25) — the W3C parent this child should continue, read from the ACTIVE
+// span (the tool call that spawned it), plus the env key it travels in.
+import { childTraceEnv, TRACEPARENT_ENV } from '../observability/otel.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -237,21 +240,33 @@ export class SubagentManager extends EventEmitter {
     try {
       // Spawn child process
       const { entry, execArgv } = resolveChildEntry();
+      // WS3 (#25) — hand the child the trace it belongs to. The loop makes the
+      // tool span ACTIVE around this call, so `childTraceEnv()` reads the real
+      // parent out of the active context (never out of module state, which two
+      // interleaved turns in one server would share). It is set or DELETED
+      // explicitly rather than merged: a `TRACEPARENT` inherited from this
+      // process's own environment is not the child's parent, and a stale one
+      // would graft the child onto a trace nobody is running.
+      const traceEnv = childTraceEnv();
+      const childEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        ...config.env,
+        SUBAGENT_ID: id,
+        SUBAGENT_GOAL: config.goal,
+        SUBAGENT_PROVIDER: config.provider || 'auto',
+        SUBAGENT_MODEL: config.model || 'auto',
+        SUBAGENT_MAX_LLM_CALLS: String(config.maxLlmCalls || 50),
+        SUBAGENT_MAX_TOKENS: String(config.maxTokens || 100_000),
+        SUBAGENT_TOOLS: JSON.stringify(config.tools || []),
+        SUBAGENT_BLOCKED_TOOLS: JSON.stringify(config.blockedTools || []),
+      };
+      const traceparent = traceEnv[TRACEPARENT_ENV];
+      if (traceparent) childEnv[TRACEPARENT_ENV] = traceparent;
+      else delete childEnv[TRACEPARENT_ENV];
       const child = fork(entry, [], {
         cwd: config.cwd || process.cwd(),
         ...(execArgv ? { execArgv } : {}),
-        env: {
-          ...process.env,
-          ...config.env,
-          SUBAGENT_ID: id,
-          SUBAGENT_GOAL: config.goal,
-          SUBAGENT_PROVIDER: config.provider || 'auto',
-          SUBAGENT_MODEL: config.model || 'auto',
-          SUBAGENT_MAX_LLM_CALLS: String(config.maxLlmCalls || 50),
-          SUBAGENT_MAX_TOKENS: String(config.maxTokens || 100_000),
-          SUBAGENT_TOOLS: JSON.stringify(config.tools || []),
-          SUBAGENT_BLOCKED_TOOLS: JSON.stringify(config.blockedTools || []),
-        },
+        env: childEnv,
         stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       });
       logger.info(`Subagent: forked ${entry}${execArgv ? ` (via ${execArgv.join(' ')})` : ''}`);

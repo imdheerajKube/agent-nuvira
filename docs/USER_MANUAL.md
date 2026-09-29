@@ -952,6 +952,71 @@ handing over an archive that looks complete, and names the missing step: either
 logging is off in the server process (`NUVIRA_DEBUG_LOG=1`, then restart) or this
 conversation has not finished a turn since it was turned on.
 
+### Shipping a turn's spans to your own collector (OTLP)
+
+The debug log explains ONE run on ONE machine. When the question is instead "which
+step is slow, which tool is the one that fails, and is the subagent I spawned
+where the time went", the answer is a trace — and the format every tracing tool
+already speaks is OTLP. Point it at any collector that accepts OTLP/HTTP:
+
+```bash
+NUVIRA_OTEL=1 \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+  nuvira chat "list the working directory, then answer"
+# 🔭 cli-chat: OTLP spans → http://localhost:4318/v1/traces (unset NUVIRA_OTEL to stop)
+```
+
+Every surface exports, and every surface exports the SAME tree, so two surfaces
+can be read side by side:
+
+```text
+nuvira.turn                        (attributes: nuvira.surface, nuvira.session, nuvira.goal)
+└─ nuvira.tool.read_file           (one child per tool call that actually RAN)
+└─ nuvira.tool.edit_file           (nuvira.ok, and a red status + message when it failed)
+```
+
+A few decisions worth knowing, because they are the parts that surprise people:
+
+- **Off unless asked.** With `NUVIRA_OTEL` unset nothing is built, nothing is
+  imported and nothing leaves the machine — the SDK is loaded lazily, so an
+  ordinary run pays no startup cost.
+- **The turn is one span, and the work is the children.** A tool call that a gate
+  REFUSED gets no span (the span is created where the call actually runs), and a
+  finding is a span **event** rather than a span — a finding has no duration, so
+  a point in time is its honest shape. There is deliberately no model-call span:
+  the loop's event taxonomy has no model kind, so such a span could only exist on
+  some surfaces, and a tree that differs per surface is a tracing feature that
+  lies.
+- **It cannot break the run.** Provider setup, attribute rendering and the final
+  flush are each best-effort, and the flush is bounded (about three seconds): an
+  unreachable collector costs a turn a pause, once, and never an exception.
+- **Attribute values are previews, and redacted** with the same scrubber the
+  gateway log and the debug log use. A span is shipped to a third party by
+  definition, so the file-safe rule applies here too.
+- **A subagent joins its parent's trace.** A forked child is a separate process
+  with its own provider, so its spans would be a second, unrelated trace — the
+  spawner hands it the parent's W3C `traceparent` in its environment instead, and
+  the child's turn span hangs off the tool call that spawned it — so your
+  collector shows one trace crossing the process boundary, not two. The
+  header is read from the span that is ACTIVE at the moment of the fork, so two
+  turns interleaving in one server cannot hand each other's trace ids to a child
+  (a child started without one starts its own trace rather than being grafted
+  onto a trace nobody is running).
+- **`OTEL_SERVICE_NAME` names the service** (default `agent-nuvira`), and the
+  per-signal `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` overrides the generic endpoint,
+  exactly as the OTLP spec says. `NUVIRA_OTEL=1` with no endpoint at all is called
+  out in the notice rather than failing quietly — the spans are built and dropped
+  in that case, which otherwise looks exactly like a broken collector.
+
+The same switch works on every surface and in the forked child, so a gateway
+ turn, a dashboard turn and a subagent all land in the one collector:
+
+```bash
+NUVIRA_OTEL=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 nuvira dashboard
+NUVIRA_OTEL=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 nuvira gateway run
+NUVIRA_OTEL=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 nuvira execute "run the failing test"
+```
+
 ---
 
 ## 15. Verification log

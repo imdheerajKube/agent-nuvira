@@ -277,6 +277,19 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
     toolCall: { tool: 'read_file', args: { path: 'no-such-file-parity-probe.ts' } },
     answer: 'Read failed.',
   },
+  {
+    id: 'otel-export',
+    message: 'list the working directory, then answer',
+    // WS3 (#25) — the turn's span tree, on every surface. A TOOL call is part of
+    // the scenario on purpose: the claim is a tree (`nuvira.turn` with one
+    // `nuvira.tool.<name>` child per call that actually ran), so a scenario with
+    // no tool would prove the root and say nothing about the nesting. The case
+    // reads what a real loopback collector received, so the assertion is on the
+    // wire — the resource attributes, the trace id and the parent edges — rather
+    // than on an exporter that was merely asked to send something.
+    toolCall: { tool: 'list_dir', args: { path: '.' } },
+    answer: 'Listed.',
+  },
 ];
 
 /**

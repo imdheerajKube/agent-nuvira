@@ -173,6 +173,19 @@ const observation = (over: Partial<TurnObservation> = {}): TurnObservation => ({
   findings: [],
   // WS2 — the session debug log's header; the backend triple is compared.
   debugLog: { written: true, provider: 'groq', model: 'qwen/qwen3.8-27b', transport: 'native' },
+  // WS3 — the exported span tree. The trace ID and a remote parent are recorded
+  // rather than compared (see `OtelExportObs`), so a fixed pair here is honest.
+  otel: {
+    exported: true,
+    spans: ['nuvira.tool.read_file', 'nuvira.turn'],
+    edges: ['nuvira.turn → nuvira.tool.read_file'],
+    turnSpans: 1,
+    toolSpans: ['nuvira.tool.read_file'],
+    singleTrace: true,
+    serviceName: 'agent-nuvira',
+    traceId: 'd'.repeat(32),
+    remoteParent: null,
+  },
   answer: 'done',
   ...over,
 });

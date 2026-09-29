@@ -41,6 +41,8 @@ import type { ParsedRequest } from '../nlu/parser.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { hasCodingAction, resolveAskKind } from '../nlu/conversation-gate.js';
 import { runToolLoop, extractFallbackToolCalls } from '../tools/tool-loop.js';
+// WS3 (#25) — the turn as a span, when an operator has asked for OTLP export.
+import { flushSpans, otelNoticeOnce, startTurnSpan } from '../observability/otel.js';
 import {
   detectAnswerQualityFailure,
   answerQualityError,
@@ -1312,6 +1314,14 @@ export class ChatCommand extends BaseCommand {
     });
     debugLog?.event('turn.start', { provider: session.type });
 
+    // WS3 (#25) — the turn's span root, when span export is on (else null). Same
+    // identity as the log's: one surface, one conversation, one turn.
+    const otelSpan = await startTurnSpan({
+      surface: ctxOverrides?.debugSurface ?? 'cli-chat',
+      ...(ctxOverrides?.debugSession ? { session: ctxOverrides.debugSession } : {}),
+      goal: message,
+    });
+
     // Cache check first (same as the legacy path).
     const cache = getCache();
     const cacheModel = this.cacheModelFor(session);
@@ -1540,6 +1550,13 @@ export class ChatCommand extends BaseCommand {
           ctxOverrides?.onFinding?.(finding);
           // WS2 — a verdict is exactly the kind of fact a bug report is missing.
           debugLog?.event('finding', `${finding.verdict} ${finding.claim}`);
+          // WS3 — and a span EVENT rather than a span: a finding has no
+          // duration, so a point-in-time fact is the honest shape for it.
+          otelSpan?.event('nuvira.finding', {
+            'nuvira.verdict': finding.verdict,
+            'nuvira.claim': finding.claim,
+            'nuvira.outcome': finding.outcome,
+          });
         }
         // G18 — an autonomy gate DECIDING to proceed is a fact about the turn
         // ("this change was applied without asking, and here is why"), not just
@@ -1680,6 +1697,8 @@ export class ChatCommand extends BaseCommand {
         // and is now additionally gated on the model having the context for it.
         toolExposure: harness.exposure,
         maxParallelReads: harness.maxParallelReads,
+        // WS3 — the turn span the loop hangs each tool call under.
+        otel: otelSpan,
         onToken: ctxOverrides?.onToken,
         signal: ctxOverrides?.signal,
         // G18 — the same sink the execute loop uses: tool calls, gate decisions
@@ -1867,6 +1886,24 @@ export class ChatCommand extends BaseCommand {
       });
       const notice = debugLogNotice(ctxOverrides?.debugSurface ?? 'cli-chat', debugLog.write());
       if (notice) logger.info(notice);
+    }
+
+    // WS3 (#25) — close the turn span and ship it. The status is the turn's own
+    // outcome, so a failed turn is a RED span in the collector rather than an
+    // absent one — the same rule the debug log follows for a crash.
+    if (otelSpan) {
+      otelSpan.attr('nuvira.findings', findings.length);
+      otelSpan.end({
+        ok: result.generationFailed !== true && result.cancelled !== true,
+        ...(result.generationFailed === true
+          ? { message: 'the turn did not produce a usable answer' }
+          : result.cancelled === true
+            ? { message: 'the turn was cancelled' }
+            : {}),
+      });
+      const otelLine = otelNoticeOnce(ctxOverrides?.debugSurface ?? 'cli-chat');
+      if (otelLine) logger.info(otelLine);
+      await flushSpans();
     }
 
     return {

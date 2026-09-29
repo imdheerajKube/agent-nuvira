@@ -34,6 +34,18 @@ import { getTool, toolJsonSchemas, TOOL_CONTRACT_JSON, type ToolContext } from '
 // WS1 — the finding tool's bus event; forwarded to the parent as its own frame.
 import { FINDING_EVENT } from './finding-tool.js';
 import { sessionDebugLog, type SessionDebugLog } from '../observability/debug-log.js';
+// WS3 (#25) — the child's own span tree, exported over OTLP when the operator
+// asked for it. This is a SECOND process with its own provider, so its trace
+// only joins the parent's when the parent handed it a `traceparent`.
+import {
+  flushSpans,
+  parentContextFromEnv,
+  shutdownSpans,
+  startTurnSpan,
+  TOOL_SPAN_PREFIX,
+  withSpanActive,
+  type SpanHandle,
+} from '../observability/otel.js';
 
 export interface SubagentRuntimeConfig {
   /** The task the subagent must complete. */
@@ -212,6 +224,31 @@ export async function runSubagent(
   });
   debugLog?.event('turn.start', { tools: allowed.length, transport: hasTools ? transport : 'none' });
 
+  // WS3 (#25) — the child's turn span. Started from the `traceparent` the parent
+  // injected into this process's environment, so the child hangs off the tool
+  // call that spawned it and the whole turn is ONE trace. With no `traceparent`
+  // (a child started by hand, or the parent not tracing) this starts a trace of
+  // its own — which is the honest outcome, not a fabricated parent id.
+  const otelSpan = await startTurnSpan({
+    surface: 'subagent',
+    goal: config.goal,
+    parent: parentContextFromEnv(),
+  });
+  /**
+   * Finish the span tree and let the process go.
+   *
+   * The forked child is a ONE-SHOT process: unlike the dashboard or the
+   * gateway, nothing else will use this provider after the answer is reported,
+   * so shutting it down here is what stops a lingering exporter socket or batch
+   * timer from keeping the child alive after it has said what it did.
+   */
+  const finishSpans = async (outcome: { ok: boolean; message?: string }): Promise<void> => {
+    if (!otelSpan) return;
+    otelSpan.end(outcome);
+    await flushSpans();
+    await shutdownSpans();
+  };
+
   /**
    * Write the child's debug log and announce where it landed.
    *
@@ -233,6 +270,10 @@ export async function runSubagent(
     // WS2 — a REFUSAL is exactly the run a bug report is about, so the log is
     // still written (with the backend already in its header) before throwing.
     finishDebugLog({ refused: 'provider_not_reachable', provider: type });
+    // WS3 — and the span is shipped red. A child whose provider was unreachable
+    // is the shape an operator most needs to see in a trace, not an absence.
+    const refused = `Provider '${type}' is not reachable.`;
+    await finishSpans({ ok: false, message: refused });
     throw new SubagentRefusalError(
       'not_configured',
       `Provider '${type}' is not reachable. Configure it (or start its backend, e.g. \`ollama serve\`) and re-run.`,
@@ -248,12 +289,21 @@ export async function runSubagent(
       maxIterations,
       model,
       debug: debugLog,
+      otel: otelSpan,
     });
     finishDebugLog({
       llmCalls: out.llmCalls,
       toolCalls: out.toolCalls,
       truncated: out.truncated,
       transport: out.transport,
+    });
+    otelSpan?.attr('nuvira.llmCalls', out.llmCalls);
+    otelSpan?.attr('nuvira.toolCalls', out.toolCalls);
+    await finishSpans({
+      // A run that hit its ceiling before the model stopped is not a failure —
+      // it is a bounded run, and the loop reports that fact rather than an error.
+      ok: true,
+      ...(out.truncated ? { message: 'the subagent reached its ceiling' } : {}),
     });
     return out;
   }
@@ -266,6 +316,7 @@ export async function runSubagent(
   ].join('\n');
   const text = await provider.generate(prompt, modelOption(model));
   finishDebugLog({ llmCalls: 1, toolCalls: 0, transport: 'none' });
+  await finishSpans({ ok: true });
   return {
     result: text.trim(),
     llmCalls: 1,
@@ -367,6 +418,14 @@ interface LoopHooks {
   model?: string;
   /** WS2 — the child's session debug log, when logging is on (else null). */
   debug?: SessionDebugLog | null;
+  /**
+   * WS3 — the child's turn span, when span export is on (else null).
+   *
+   * Made ACTIVE around each tool's execution exactly as the in-process loop
+   * does, so a tool that in turn needs a trace parent (a nested fork) does not
+   * have to know how the context got there.
+   */
+  otel?: SpanHandle | null;
 }
 
 async function runToolLoop(
@@ -444,33 +503,48 @@ async function runToolLoop(
       // tool-call-lifecycle@subagent).
       loop.send({ type: 'progress', phase: 'tool_call', tool: call.name });
       loop.debug?.event('tool.start', { tool: call.name });
-      const output = await executeTool(config, call.name, call.arguments, loop.runTool, (event, data) => {
-        // WS1 — a finding the child recorded, shipped on its own frame (the
-        // same way its tool lifecycle crosses IPC). The parent records it, so a
-        // subagent run reports the verdicts it produced like every other
-        // surface instead of leaving them inside the child's process.
-        if (event === FINDING_EVENT) {
-          loop.send({ type: 'progress', phase: 'finding', finding: data, llmCalls, toolCalls });
-          // WS2 — and into the child's own debug log, so a bug report from a
-          // forked run carries the verdicts it recorded.
-          const finding = data as { verdict?: string; claim?: string };
-          loop.debug?.event('finding', `${finding?.verdict ?? '?'} ${finding?.claim ?? ''}`);
-        }
-      });
-      toolCalls += 1;
-      const ok = !output.startsWith('Error:');
-      // The same convention the main loop and the tool registry use: a tool
-      // signals failure by returning text that starts with `Error:`.
-      loop.debug?.event('tool.end', { tool: call.name, ok });
-      loop.send({
-        type: 'progress',
-        phase: 'tool_result',
-        tool: call.name,
-        ok,
-        llmCalls,
-        toolCalls,
-      });
-      messages.push({ role: 'tool', content: output, toolCallId: call.id });
+      // WS3 (#25) — the call as a child span of the child's turn, created where
+      // the call actually RUNS (the allow-list check above is a refusal, not a
+      // call). Same name shape as every other surface's tool span, so the tree
+      // an operator reads is the same tree wherever the tool ran.
+      const toolSpan = loop.otel?.child(`${TOOL_SPAN_PREFIX}${call.name}`, { 'nuvira.tool': call.name }) ?? null;
+      try {
+        const output = await withSpanActive(toolSpan, () =>
+          executeTool(config, call.name, call.arguments, loop.runTool, (event, data) => {
+            // WS1 — a finding the child recorded, shipped on its own frame (the
+            // same way its tool lifecycle crosses IPC). The parent records it, so a
+            // subagent run reports the verdicts it produced like every other
+            // surface instead of leaving them inside the child's process.
+            if (event === FINDING_EVENT) {
+              loop.send({ type: 'progress', phase: 'finding', finding: data, llmCalls, toolCalls });
+              // WS2 — and into the child's own debug log, so a bug report from a
+              // forked run carries the verdicts it recorded.
+              const finding = data as { verdict?: string; claim?: string };
+              loop.debug?.event('finding', `${finding?.verdict ?? '?'} ${finding?.claim ?? ''}`);
+            }
+          }),
+        );
+        toolCalls += 1;
+        const ok = !output.startsWith('Error:');
+        // The same convention the main loop and the tool registry use: a tool
+        // signals failure by returning text that starts with `Error:`.
+        loop.debug?.event('tool.end', { tool: call.name, ok });
+        loop.send({
+          type: 'progress',
+          phase: 'tool_result',
+          tool: call.name,
+          ok,
+          llmCalls,
+          toolCalls,
+        });
+        toolSpan?.attr('nuvira.ok', ok);
+        toolSpan?.end({ ok });
+        messages.push({ role: 'tool', content: output, toolCallId: call.id });
+      } finally {
+        // A safety net, not a second report: an injected `runTool` can throw,
+        // and a span left open would hang off the turn span for ever.
+        toolSpan?.end({ ok: false, message: 'tool outcome was never reported' });
+      }
     }
   }
 

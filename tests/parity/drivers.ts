@@ -104,4 +104,21 @@ export const VERIFIED_CELLS: ReadonlySet<string> = new Set([
   'debug-log@gateway-chat',
   'debug-log@cli-execute',
   'debug-log@subagent',
+  // WS3 (#25). ALL FIVE surfaces export a turn over OTLP when `NUVIRA_OTEL=1`,
+  // with the SAME tree: `nuvira.turn` with one `nuvira.tool.<name>` child per call
+  // that actually ran, one trace id, service `agent-nuvira`. Each driver boots a
+  // real loopback collector and reads the request bodies it received, so the claim
+  // is measured on the wire rather than on a mocked exporter; the harness turns
+  // export on for the run and resets the provider between surfaces, so "this
+  // surface exported" is an assertion rather than a thing that happened to be
+  // true. The forked child inherits the collector endpoint through its environment
+  // and exports its OWN spans from its OWN process. Proven by the `otel-export`
+  // scenario case in `scenario-parity.test.ts` (the tree on all five, at-par) and
+  // by the fork case that asserts the child`s remote parent is the parent`s tool
+  // span and that both share one trace id.
+  'otel-export@cli-chat',
+  'otel-export@dashboard-chat',
+  'otel-export@gateway-chat',
+  'otel-export@cli-execute',
+  'otel-export@subagent',
 ]);

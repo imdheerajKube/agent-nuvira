@@ -29,6 +29,8 @@ import { ConfigManager } from '../config/manager.js';
 import { resolveProvider } from './router.js';
 import { resolveRoute, servedRouteFrom, type ServedRoute } from '../inference/route-resolver.js';
 import { debugLogNotice, sessionDebugLog } from '../observability/debug-log.js';
+// WS3 (#25) — the turn as a span, when an operator has asked for OTLP export.
+import { flushSpans, otelNoticeOnce, startTurnSpan } from '../observability/otel.js';
 import { noteServedRoute } from '../tools/loop-route-feed.js';
 import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
 import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
@@ -251,6 +253,11 @@ export async function runLoopExecutor(
   // still leaves the evidence of what it tried. Null unless logging is on.
   const debugLog = sessionDebugLog({ surface: 'cli-execute', goal, backend: { engine: 'loop' } });
   debugLog?.event('turn.start');
+  // WS3 (#25) — the turn's span root, when span export is on (else null). Opened
+  // beside the debug log and before routing, for the same reason: a run that
+  // dies in the provider walk is exactly the run whose shape a reader needs, and
+  // a span that only exists for successful turns cannot explain a failure.
+  const otelSpan = await startTurnSpan({ surface: 'cli-execute', goal });
   /**
    * G18 — one sink for the loop's non-LLM facts: persisted to the trace store,
    * and (only under `-v`) echoed to the console so a live run is readable
@@ -823,6 +830,8 @@ export async function runLoopExecutor(
       threadBudgetChars: resolveThreadBudgetChars({ provider: providerType, model }),
       toolExposure: harness.exposure,
       maxParallelReads: harness.maxParallelReads,
+      // WS3 (#25) — the turn span the loop hangs each tool call under.
+      otel: otelSpan,
       onToken: opts.onToken,
       signal: opts.signal,
       context: {
@@ -983,6 +992,30 @@ export async function runLoopExecutor(
       if (notice) logger.info(notice);
     }
 
+    // WS3 (#25) — close the turn span and ship it. The status is the turn's own
+    // outcome, so a failed turn is a RED span in the collector rather than an
+    // absent one — the same rule the debug log follows for a crash. Flushed here
+    // rather than left to the batch scheduler's clock: a one-shot `nuvira
+    // execute` has to be gone before the next tick.
+    if (otelSpan) {
+      otelSpan.attr('nuvira.toolCalls', toolOutcomes.length);
+      otelSpan.attr('nuvira.findings', findings.length);
+      otelSpan.end({
+        ok: result.generationFailed !== true && result.cancelled !== true,
+        ...(result.generationFailed === true
+          ? { message: 'the turn did not produce a usable answer' }
+          : result.cancelled === true
+            ? { message: 'the turn was cancelled' }
+            : {}),
+      });
+      // A QUIET run (which is what `--json-events` sets) prints nothing extra:
+      // its stdout is the machine-readable event stream, and a notice inside it
+      // is a corrupt event. The span is still exported.
+      const otelLine = opts.quiet ? null : otelNoticeOnce('cli-execute');
+      if (otelLine) logger.info(otelLine);
+      await flushSpans();
+    }
+
     return {
       content: result.content,
       generationFailed: result.generationFailed ?? false,
@@ -1003,6 +1036,16 @@ export async function runLoopExecutor(
     };
   } catch (err) {
     endTrace(traceId, false, { kind: 'failed', tools: [] });
+    // WS3 (#25) — a run that THREW still ships its span, for the same reason it
+    // still writes its log: a crash is the single most useful thing to see in a
+    // trace, and a span that vanishes exactly when the run broke is worse than
+    // no tracing at all.
+    if (otelSpan) {
+      otelSpan.end({ ok: false, message: err instanceof Error ? err.message : String(err) });
+      const otelLine = opts.quiet ? null : otelNoticeOnce('cli-execute');
+      if (otelLine) logger.info(otelLine);
+      await flushSpans();
+    }
     // WS2 — a run that THREW still writes its log: a crash is the single most
     // useful bug report there is, and the backend fields stay `unknown` rather
     // than being invented.

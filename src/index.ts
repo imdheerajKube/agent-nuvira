@@ -660,6 +660,15 @@ async function main(): Promise<void> {
   startupSpinner?.stop();
 
   await program.parseAsync(process.argv);
+
+  // WS3 (#25) — the CLI has finished its one command, so it is the process
+  // boundary for OTLP: tear the span provider down here rather than per turn.
+  // The batch exporter holds a timer and a keep-alive socket, and a one-shot
+  // `nuvira execute` must EXIT when its answer is printed instead of being held
+  // open by its own telemetry. In-process callers (the eval framework, the
+  // parity harness) never go through here, so they keep the provider they reuse.
+  const { shutdownSpans } = await import('./observability/otel.js');
+  await shutdownSpans();
 }
 
 main().catch((err) => {
