@@ -46,6 +46,14 @@
  * engine), and the parity harness reads the file back and asserts every
  * surface's header names the SAME backend — the capability
  * `debug-log@<surface>` is proved against.
+ *
+ * A log that a surface wrote into a directory the user has to find is only half
+ * the artifact. So a surface that HAS a conversation identity records it
+ * (`session`), which turns the file from readable into FINDABLE: the dashboard
+ * server can answer "the bundle for this chat" by looking up the logs whose
+ * header names that conversation, instead of guessing from timestamps and
+ * handing over someone else's. A surface with no such identity (the CLI's
+ * one-shot path) records nothing rather than inventing an id.
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
@@ -63,6 +71,8 @@ export const DEBUG_LOG_MAX_BYTES = 512 * 1024;
 export const DEBUG_LOG_PREVIEW_CHARS = 300;
 /** Event cap. Beyond it the OLDEST events are dropped, and the count is stated. */
 export const DEBUG_LOG_MAX_EVENTS = 2_000;
+/** Cap on a session id as a FILENAME component, so a long id cannot fail a write. */
+export const DEBUG_LOG_SESSION_CHARS = 48;
 
 /** The backend that served a turn — the fact the header exists to carry. */
 export interface DebugLogBackend {
@@ -80,6 +90,15 @@ export interface DebugLogBackend {
  */
 export interface DebugLogHeader {
   surface: string | null;
+  /**
+   * The chat/thread this turn belonged to, when the surface has one.
+   *
+   * This is what makes a log findable rather than merely readable: the dashboard
+   * cannot serve "the log for the conversation I am looking at" unless the log
+   * says which conversation it was. Null for a surface with no such identity —
+   * an absent id is honest, a fabricated one is not.
+   */
+  session: string | null;
   engine: string | null;
   provider: string | null;
   model: string | null;
@@ -191,16 +210,22 @@ export class SessionDebugLog {
   private truncatedLines = 0;
   private readonly dir: string | null;
   private readonly now: () => number;
+  /** The conversation this turn belongs to, or null (see `DebugLogHeader.session`). */
+  readonly session: string | null;
   private writtenPath: string | null = null;
 
-  constructor(opts: { surface: string; goal?: string; backend?: DebugLogBackend; dir?: string | null; now?: () => number }) {
+  constructor(opts: { surface: string; goal?: string; session?: string; backend?: DebugLogBackend; dir?: string | null; now?: () => number }) {
     this.surface = safeLabel(opts.surface);
     this.goal = orNull(opts.goal) ? scrubSecrets(cap(String(opts.goal), DEBUG_LOG_PREVIEW_CHARS)) : null;
+    // A session id is a FILENAME component, so it is sanitised and length-capped
+    // here rather than trusted: an id long enough to exceed the filesystem's
+    // name limit would otherwise turn every turn into a failed write.
+    this.session = orNull(opts.session) ? cap(safeLabel(String(opts.session)), DEBUG_LOG_SESSION_CHARS) : null;
     this.backend = { ...(opts.backend ?? {}) };
     this.now = opts.now ?? (() => Date.now());
     this.startedAt = this.now();
     this.dir = opts.dir === undefined ? debugLogDir() : opts.dir;
-    this.id = `${this.surface}-${this.startedAt}`;
+    this.id = `${this.surface}-${this.session ? `${this.session}-` : ''}${this.startedAt}`;
   }
 
   /** The backend that served the turn. Set as it is learned; last call wins. */
@@ -253,6 +278,9 @@ export class SessionDebugLog {
       '# nuvira session debug log — safe to attach to a bug report',
       '# credentials are redacted; memory and prompts are previews, not payloads',
       `# surface: ${this.surface}`,
+      // Written only when the surface HAS a conversation identity: an absent key
+      // reads as "not reported", where `unknown` would read as the id "unknown".
+      ...(this.session ? [`# session: ${this.session}`] : []),
       `# engine: ${orNull(b.engine) ?? 'unknown'}`,
       `# backend.provider: ${orNull(b.provider) ?? 'unknown'}`,
       `# backend.model: ${orNull(b.model) ?? 'unknown'}`,
@@ -306,6 +334,8 @@ export class SessionDebugLog {
 export function sessionDebugLog(opts: {
   surface: string;
   goal?: string;
+  /** The chat/thread this turn belongs to, when the surface has one. */
+  session?: string;
   backend?: DebugLogBackend;
   /** Explicit directory (tests / a harness that isolates the profile). */
   dir?: string | null;
@@ -317,6 +347,7 @@ export function sessionDebugLog(opts: {
   return new SessionDebugLog({
     surface: opts.surface,
     ...(opts.goal !== undefined ? { goal: opts.goal } : {}),
+    ...(opts.session !== undefined ? { session: opts.session } : {}),
     ...(opts.backend !== undefined ? { backend: opts.backend } : {}),
     dir: opts.dir === undefined ? debugLogDir(env) : opts.dir,
     ...(opts.now ? { now: opts.now } : {}),
@@ -356,6 +387,7 @@ function replacerForPreview(_key: string, value: unknown): unknown {
 export function parseDebugLogHeader(text: string): DebugLogHeader | null {
   const header: DebugLogHeader = {
     surface: null,
+    session: null,
     engine: null,
     provider: null,
     model: null,
@@ -373,6 +405,7 @@ export function parseDebugLogHeader(text: string): DebugLogHeader | null {
     const trimmed = value.trim();
     switch (key.toLowerCase()) {
       case 'surface': header.surface = trimmed || null; break;
+      case 'session': header.session = namedOrNull(trimmed); break;
       case 'engine': header.engine = namedOrNull(trimmed); break;
       case 'provider': header.provider = namedOrNull(trimmed); break;
       case 'model': header.model = namedOrNull(trimmed); break;
@@ -441,6 +474,61 @@ export function readLatestDebugLog(
     if (text) return { path: file.path, header: file.header, text };
   }
   return null;
+}
+
+/** One log file with its parsed header and text — what a support bundle carries. */
+export interface DebugLogRecord {
+  path: string;
+  header: DebugLogHeader;
+  text: string;
+}
+
+/**
+ * Every log a given conversation wrote, OLDEST FIRST — the findable half.
+ *
+ * This is what lets the dashboard answer "the debug log for the chat I am
+ * looking at" without guessing. Two rules make it safe to expose:
+ *
+ *  1. SELECTED BY THE LOG'S OWN HEADER, never by recency. "The newest few logs"
+ *     would hand a user somebody else's conversation — with a concurrent turn in
+ *     another tab, that is the common case, not the edge case.
+ *
+ *  2. OLDEST FIRST, because a bundle is read top to bottom as the story of what
+ *     happened, and a single turn's log already reads that way internally. The
+ *     newest-first order `listDebugLogs` uses is right for "what just happened"
+ *     and wrong for this.
+ *
+ * A file that cannot be read or parsed is skipped rather than failing the whole
+ * bundle: one unreadable turn must not cost the user the other four.
+ */
+export function debugLogsForSession(
+  sessionId: string,
+  dir: string = debugLogDir(),
+): DebugLogRecord[] {
+  const want = cap(safeLabel(String(sessionId)), DEBUG_LOG_SESSION_CHARS);
+  if (!want) return [];
+  const out: DebugLogRecord[] = [];
+  try {
+    if (!existsSync(dir)) return [];
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith('.log')) continue;
+      const path = join(dir, name);
+      const text = readFileSafe(path);
+      if (!text) continue;
+      const header = parseDebugLogHeader(text);
+      if (!header || header.session !== want) continue;
+      out.push({ path, header, text });
+    }
+  } catch {
+    return out;
+  }
+  // The header's own `started`, not the file's mtime: a copy, a backup restore
+  // or a `touch` rewrites mtime and would silently reorder the story.
+  return out.sort(
+    (a, b) =>
+      (a.header.startedAt ?? Number.MAX_SAFE_INTEGER) -
+      (b.header.startedAt ?? Number.MAX_SAFE_INTEGER),
+  );
 }
 
 function readFileSafe(path: string): string | null {

@@ -17,6 +17,8 @@ import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path
 import { fileURLToPath } from 'node:url';import { homedir } from 'node:os';
 import { parseRbacUsers } from '../enterprise/rbac.js';
 import { registerDagHandlers } from '../observability/dag-bridge.js';
+import { debugLogDir, debugLoggingEnabled, debugLogsForSession, type DebugLogRecord } from '../observability/debug-log.js';
+import { scrubSecrets } from '../gateway/gateway-log.js';
 import { resolveBuffConfigDir, resolveBuffConfigPath, resolveNuviraHome } from '../config/paths.js';
 import { loadEnv } from '../utils/env.js';
 import { ConfigManager } from '../config/manager.js';
@@ -50,7 +52,7 @@ import {
 } from './src/admin-auth.js';
 import { TaskRunner } from './task-runner.js';
 import { WhatsAppPairingManager } from './whatsapp-pairing.js';
-import { ChatConsole, newChatSessionId } from './chat-console.js';
+import { ChatConsole, newChatSessionId, type ChatSessionRecord } from './chat-console.js';
 import { ChatRetryBroker, type ChatRetryEvent } from './chat-retry.js';
 import { markFailoverAttempts } from '../learning/resilient-call.js';
 import { buildProjectContext, formatProjectText, type ProjectContextBundle } from './project-context.js';
@@ -497,6 +499,104 @@ function generateZip(files: Array<{ name: string; content: string }>): Buffer {
   parts.push(new Uint8Array(eocd));
 
   return Buffer.concat(parts.map((p) => Buffer.from(p.buffer, p.byteOffset, p.byteLength)));
+}
+
+// ─── WS2 (#24) — the attachable support bundle ──────────────────────────────
+
+/** Cap on the transcript the bundle carries, so one long chat cannot make a 50 MB zip. */
+const MAX_SUPPORT_TRANSCRIPT_CHARS = 400_000;
+
+/**
+ * The front page of a support bundle: what is inside, and — just as important —
+ * what is deliberately NOT.
+ *
+ * Load-bearing rather than decorative. A bundle exists to be pasted into a bug
+ * report, often a public one, so it has to say plainly that credentials are
+ * redacted and that the logs carry previews instead of payloads. A user who
+ * cannot tell what they are about to attach either does not attach it or
+ * attaches it and regrets it, and both of those make the artifact useless.
+ */
+function renderSupportManifest(opts: {
+  sessionId: string;
+  logs: readonly DebugLogRecord[];
+  files: readonly string[];
+  turns: number | null;
+  generatedAt: Date;
+}): string {
+  const named = <T extends string | null>(values: T[]): string[] => [
+    ...new Set(values.filter((v): v is string & T => typeof v === 'string' && v.length > 0)),
+  ];
+  const surfaces = named(opts.logs.map((l) => l.header.surface));
+  const versions = named(opts.logs.map((l) => l.header.version));
+  const backends = [
+    ...new Set(
+      opts.logs
+        .map((l) => [l.header.provider, l.header.model, l.header.transport].filter(Boolean).join(' / '))
+        .filter((b) => b.length > 0),
+    ),
+  ];
+  return [
+    'nuvira support bundle',
+    `generated: ${opts.generatedAt.toISOString()}`,
+    `session: ${opts.sessionId}`,
+    `surface(s): ${surfaces.join(', ') || 'unknown'}`,
+    `version(s): ${versions.join(', ') || 'unknown'}`,
+    `debug logs: ${opts.logs.length} (oldest first)`,
+    ...(backends.length > 0 ? [`backend(s) seen: ${backends.join(' | ')}`] : []),
+    ...(opts.turns !== null ? [`conversation turns: ${opts.turns}`] : []),
+    '',
+    'contents:',
+    ...opts.files.map((f) => `  - ${f}`),
+    '',
+    'notes:',
+    '  - credentials are redacted, with the same scrubber the gateway log uses',
+    '  - a session debug log carries bounded previews and event lines, not full payloads',
+    '  - each log names the backend that ACTUALLY served its turn, after any failover',
+    ...(opts.turns !== null
+      ? ['  - conversation.txt is your own chat with the agent, included so the reading is unambiguous']
+      : []),
+    '',
+  ].join('\n');
+}
+
+/**
+ * The conversation as text — the other half of a bug report, and the reason the
+ * bundle is worth more than the log alone ("it did not answer" needs the ask).
+ *
+ * Redacted with the same `scrubSecrets` for the same reason as the logs: a user
+ * pasting this into a public issue must not leak a key they happened to type
+ * into a prompt three turns earlier. Bounded by characters, and it SAYS when it
+ * was cut, so a truncated bundle is never mistaken for the whole story.
+ */
+function renderSupportTranscript(
+  sessionId: string,
+  record: ChatSessionRecord,
+  generatedAt: Date,
+): string {
+  const lines = [
+    `Conversation with the dashboard agent (session ${sessionId})`,
+    `Exported: ${generatedAt.toISOString()}`,
+    `Turns: ${record.turns.length}`,
+    '─'.repeat(60),
+    '',
+  ];
+  let used = 0;
+  let truncated = false;
+  for (const turn of record.turns) {
+    const body = scrubSecrets(turn.content);
+    if (used + body.length > MAX_SUPPORT_TRANSCRIPT_CHARS) {
+      truncated = true;
+      break;
+    }
+    used += body.length;
+    lines.push(turn.role === 'user' ? 'You:' : 'Agent:');
+    lines.push(body);
+    lines.push('');
+  }
+  if (truncated) {
+    lines.push(`[truncated at ${MAX_SUPPORT_TRANSCRIPT_CHARS} characters — the full transcript is in the session store]`);
+  }
+  return lines.join('\n');
 }
 
 // ─── In-Memory DAG Store ────────────────────────────────────────────────────
@@ -6179,6 +6279,89 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         return;
       }
       writeJson(res, 200, { ok: true });
+    })();
+    return;
+  }
+
+  // GET /api/chat/:sessionId/support-bundle — the debug logs THIS conversation
+  // wrote, plus the conversation and a manifest, as one downloadable ZIP.
+  //
+  // WS2 (#24) taught every surface to write an attachable log; a log the user
+  // cannot FIND is only half an artifact, and `~/.nuvira/debug-logs/` is exactly
+  // the kind of path nobody goes and greps while filing a bug. So the chat the
+  // user is already looking at becomes the way in.
+  //
+  // Selected by the log's OWN `# session:` header — never by recency, which with
+  // a second tab open is somebody else's conversation. And when there is no log
+  // the endpoint REFUSES rather than handing over a bundle without the one thing
+  // a bug report needs, saying which step is missing instead.
+  const chatBundleMatch = /^\/api\/chat\/([^/]+)\/support-bundle$/.exec(pathname);
+  if (chatBundleMatch && req.method === 'GET') {
+    void (async () => {
+      // The `?token=` fallback as well as the header, for the same reason the
+      // events stream has one: this is a plain GET that a browser or curl can be
+      // handed, so it must not depend on a JS fetch that sets headers.
+      const token = bearerToken(req) ?? new URL(req.url ?? '/', 'http://localhost').searchParams.get('token');
+      const admin = adminSessions.validate(token);
+      if (!admin) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(admin.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${admin.role}' cannot read a chat session.` });
+        return;
+      }
+      const sessionId = decodeURIComponent(chatBundleMatch[1]);
+      try {
+        const logs = debugLogsForSession(sessionId);
+        if (logs.length === 0) {
+          // Two different nothings with two different fixes, so they are NOT
+          // collapsed into one message that fits neither.
+          const enabled = debugLoggingEnabled();
+          writeJson(res, 200, {
+            ok: false,
+            reason: enabled ? 'no_logs' : 'logging_disabled',
+            error: enabled
+              ? 'No debug log for this conversation yet. Logging is on, so the next turn here writes one — send a message (a log is written when the turn ENDS, not while it runs), then download again.'
+              : `Session debug logging is off in the dashboard process, so there is nothing to attach yet. Set NUVIRA_DEBUG_LOG=1, restart the dashboard, send a message, then download again. Logs land in ${debugLogDir()}.`,
+          });
+          return;
+        }
+        const now = new Date();
+        const record = chatConsole.get(sessionId);
+        const safeId = sessionId.replace(/[^\w.-]/g, '_').slice(0, 48) || 'session';
+        const files: Array<{ name: string; content: string }> = [];
+        for (const log of logs) {
+          // The log's own basename carries its surface and start time, so two
+          // turns of one conversation cannot collide inside the archive.
+          files.push({ name: basename(log.path).replace(/[^\w.-]/g, '_'), content: log.text });
+        }
+        if (record) {
+          files.push({ name: 'conversation.txt', content: renderSupportTranscript(sessionId, record, now) });
+        }
+        files.unshift({
+          name: 'manifest.txt',
+          content: renderSupportManifest({
+            sessionId,
+            logs,
+            files: ['manifest.txt', ...files.map((f) => f.name)],
+            turns: record ? record.turns.length : null,
+            generatedAt: now,
+          }),
+        });
+        const zip = generateZip(files);
+        res.writeHead(200, {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="nuvira-support-${safeId}.zip"`,
+          'Content-Length': zip.length,
+        });
+        res.end(zip);
+      } catch (err) {
+        writeJson(res, 500, {
+          ok: false,
+          error: `Support bundle failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
     })();
     return;
   }

@@ -40,6 +40,7 @@ const { createDashboardServer, setChatConsoleForTest, runChatRetryDrainForTest }
 const { ChatConsole } = await import('../../src/web-dashboard/chat-console.js');
 import type { ChatEngine } from '../../src/web-dashboard/chat-console.js';
 const { recordFailoverAttempt } = await import('../../src/learning/resilient-call.js');
+const { debugLogDir, sessionDebugLog } = await import('../../src/observability/debug-log.js');
 const { getPendingTask, listPendingTasks, removeDeferredTask, updateDeferredTask } = await import('../../src/learning/deferred-task.js');
 
 /** Fake engine: records calls, returns canned answers — no LLM, no tools. */
@@ -470,6 +471,107 @@ describe('/api/chat', () => {
   it('rejects the SSE events endpoint without a valid token', async () => {
     const res = await fetch(`${baseUrl}/api/chat/no-such-session/events?token=bad`, { method: 'GET' });
     expect(res.status).toBe(401);
+  });
+});
+
+// ─── WS2 (#24) — the support bundle, from the chat the user is looking at ───
+
+describe('/api/chat/:sessionId/support-bundle — WS2 session debug log', () => {
+  const SESSION = 'bundle-session';
+
+  /** Write one turn's debug log, the way the console would at turn end. */
+  function writeTurnLog(session: string, at: number): void {
+    const log = sessionDebugLog({
+      surface: 'dashboard-chat',
+      session,
+      goal: 'why is this not answering',
+      now: () => at,
+    });
+    expect(log, 'the case is meaningless with logging off').not.toBeNull();
+    log!.backendOf({ provider: 'groq', model: 'stub-model', transport: 'native' });
+    log!.event('turn.end', { ok: true });
+    expect(log!.write(), 'the log must actually land on disk').toBeTruthy();
+  }
+
+  /** Run a case with session debug logging ON, restoring the env afterwards. */
+  async function withLogging(fn: () => Promise<void>): Promise<void> {
+    const previous = process.env.NUVIRA_DEBUG_LOG;
+    process.env.NUVIRA_DEBUG_LOG = '1';
+    try {
+      await fn();
+    } finally {
+      if (previous === undefined) delete process.env.NUVIRA_DEBUG_LOG;
+      else process.env.NUVIRA_DEBUG_LOG = previous;
+    }
+  }
+
+  it('rejects unauthenticated and viewer requests', async () => {
+    const noAuth = await fetch(`${baseUrl}/api/chat/${SESSION}/support-bundle`);
+    expect(noAuth.status).toBe(401);
+    const viewer = await authedFetch(`/api/chat/${SESSION}/support-bundle`, 'GET', undefined, viewerToken);
+    expect(viewer.status).toBe(403);
+  });
+
+  it('REFUSES when logging is off, and says exactly what to set', async () => {
+    // A bundle without the log is missing the one thing a bug report needs, so
+    // the endpoint answers instead of handing over an artifact that would make
+    // the user think they had captured the failure.
+    delete process.env.NUVIRA_DEBUG_LOG;
+    const res = await authedFetch(`/api/chat/${SESSION}/support-bundle`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; reason: string; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.reason).toBe('logging_disabled');
+    // The sentence is the whole value of the refusal, so it has to be enough on
+    // its own: the variable, and where the logs will land.
+    expect(body.error).toContain('NUVIRA_DEBUG_LOG=1');
+    expect(body.error).toContain(debugLogDir());
+  });
+
+  it('distinguishes "logging is on but this chat has no log yet" from logging being off', async () => {
+    // Two different nothings with two different fixes. Collapsing them into one
+    // message would tell half the users the wrong thing.
+    await withLogging(async () => {
+      const res = await authedFetch('/api/chat/never-ran-a-turn/support-bundle');
+      const body = (await res.json()) as { ok: boolean; reason: string; error: string };
+      expect(body.ok).toBe(false);
+      expect(body.reason).toBe('no_logs');
+      expect(body.error).toMatch(/turn/i);
+    });
+  });
+
+  it('bundles the logs THIS conversation wrote — and nobody else`s', async () => {
+    await withLogging(async () => {
+      // A real turn first, so the session exists and has a transcript to carry.
+      const sent = await authedFetch('/api/chat', 'POST', { sessionId: SESSION, message: 'echo: support' });
+      expect(sent.status).toBe(200);
+      // Two turns of THIS chat, in order, plus one of another chat.
+      writeTurnLog(SESSION, 1_000);
+      writeTurnLog(SESSION, 2_000);
+      writeTurnLog('somebody-elses-chat', 3_000);
+
+      const res = await authedFetch(`/api/chat/${SESSION}/support-bundle`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('application/zip');
+      expect(res.headers.get('content-disposition')).toContain(SESSION);
+
+      // The archive is STORED (no compression), so its text is readable in the
+      // bytes — which lets this assert on CONTENT rather than on a byte count.
+      const zip = Buffer.from(await res.arrayBuffer()).toString('utf8');
+      expect(zip).toContain('manifest.txt');
+      expect(zip).toContain('nuvira support bundle');
+      expect(zip).toContain(`session: ${SESSION}`);
+      expect(zip).toContain('debug logs: 2 (oldest first)');
+      expect(zip).toContain('backend(s) seen: groq / stub-model / native');
+      // The log itself, named for the conversation it belongs to.
+      expect(zip).toContain(`# session: ${SESSION}`);
+      // The conversation, so "it did not answer" arrives with the ask.
+      expect(zip).toContain('conversation.txt');
+      expect(zip).toContain('echo: support');
+      // And selection is by the log`s OWN header, never by recency: a second tab
+      // running its own chat must not end up in this bundle.
+      expect(zip).not.toContain('somebody-elses-chat');
+    });
   });
 });
 

@@ -51,6 +51,39 @@ afterEach(() => {
 });
 
 describe('ChatPage', () => {
+  it('downloads the support bundle for THIS conversation, and says so', async () => {
+    // WS2 (#24) — the log is written per turn, so the page has to be able to hand
+    // the user the one for the chat they are looking at; that is the whole point
+    // of the action, and the SESSION id is the argument that makes it scoped.
+    mockAuthed('admin');
+    const bundle = vi.spyOn(dashboardAPI, 'chatSupportBundle').mockResolvedValue({ ok: true });
+    render(<ChatPage />);
+    const button = await screen.findByLabelText('Download support bundle');
+
+    fireEvent.click(button);
+
+    await waitFor(() => expect(bundle).toHaveBeenCalledTimes(1));
+    expect(typeof bundle.mock.calls[0][0]).toBe('string');
+    expect((bundle.mock.calls[0][0] as string).length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByText(/Support bundle downloaded/)).toBeTruthy());
+  });
+
+  it('shows the server`s refusal VERBATIM — "logging is off" is guidance, not a failed turn', async () => {
+    // The interesting answer is usually "the instrument is off, here is how to
+    // turn it on". Flattening it into "download failed" would throw away the only
+    // actionable part of the response, so the sentence is rendered as-is.
+    mockAuthed('admin');
+    const note =
+      'Session debug logging is off in the dashboard process, so there is nothing to attach yet. Set NUVIRA_DEBUG_LOG=1, restart the dashboard, send a message, then download again.';
+    vi.spyOn(dashboardAPI, 'chatSupportBundle').mockResolvedValue({ ok: false, error: note });
+    render(<ChatPage />);
+    const button = await screen.findByLabelText('Download support bundle');
+
+    fireEvent.click(button);
+
+    await waitFor(() => expect(screen.getByText(note)).toBeTruthy());
+  });
+
   it('shows the login gate when unauthenticated', async () => {
     mockAuthed('admin', false);
     render(<ChatPage />);

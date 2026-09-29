@@ -1374,6 +1374,45 @@ export class DashboardAPI {
   }
 
   /**
+   * Download the SUPPORT BUNDLE for a chat session — the session debug logs
+   * that conversation wrote, plus the conversation and a manifest, as a ZIP.
+   *
+   * WS2 (#24). The server ANSWERS rather than always handing over a file: when
+   * the session has no debug log it returns a JSON reason (logging is off, or no
+   * turn has ended since it was turned on) instead of a bundle missing the one
+   * thing a bug report needs, so that reason reaches the user as a message.
+   */
+  async chatSupportBundle(sessionId: string): Promise<{ ok: boolean; error?: string }> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/api/chat/${encodeURIComponent(sessionId)}/support-bundle`,
+        {
+          method: 'GET',
+          headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          signal: AbortSignal.timeout(30_000),
+        },
+      );
+      if (res.status === 200 && res.headers.get('content-type')?.includes('application/zip')) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = res.headers.get('content-disposition')?.match(/filename="(.+)"/)?.[1] || 'nuvira-support.zip';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return { ok: true };
+      }
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      return { ok: false, error: d.error || 'Could not build the support bundle.' };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Could not reach the dashboard server.' };
+    }
+  }
+
+  /**
    * Subscribe to a chat session's LIVE progress (agent working steps) and
    * status over SSE. Subscribe BEFORE sending a message so no step is missed.
    * Returns an unsubscribe function.

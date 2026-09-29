@@ -831,6 +831,15 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  /**
+   * WS2 (#24) — the outcome of the support-bundle download.
+   *
+   * Deliberately not `error`: the interesting answer is usually "logging is off
+   * in the server process, here is how to turn it on", which is guidance about
+   * the instrument rather than a failure of the turn, and must not render as
+   * one.
+   */
+  const [bundleNote, setBundleNote] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [meta, setMeta] = useState<string | null>(null);
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
   // P0.6 — live tool-call cards (upserted by id: started creates, called completes).
@@ -1491,6 +1500,27 @@ export default function ChatPage() {
   }, []);
 
   /**
+   * WS2 (#24) — download this conversation's support bundle: the debug log(s)
+   * the chat wrote (each naming the backend that served its turn), plus the
+   * conversation and a manifest.
+   *
+   * The log is opt-in and written once per turn, so the two common answers are
+   * NOT failures of the button — logging may be off in the server process, or
+   * this session may predate it — and the server's sentence says which and what
+   * to do. It is shown verbatim rather than flattened into "download failed",
+   * because that sentence is the whole value of the refusal.
+   */
+  const downloadSupportBundle = useCallback(async () => {
+    setBundleNote(null);
+    const r = await dashboardAPI.chatSupportBundle(sessionIdRef.current);
+    setBundleNote(
+      r.ok
+        ? { kind: 'ok', text: 'Support bundle downloaded — attach it to your bug report.' }
+        : { kind: 'err', text: r.error || 'Could not build the support bundle.' },
+    );
+  }, []);
+
+  /**
    * P6a — the preview card's actions:
    *   ✅ accept → POST /api/skills/drafts/<name>/accept (promotes to live).
    *   ↩ reject → DELETE the draft (discarded, nothing saved).
@@ -2123,6 +2153,12 @@ export default function ChatPage() {
 
           {error ? <div className="admin-row-msg admin-row-msg-err">{error}</div> : null}
 
+          {bundleNote ? (
+            <div className={`admin-row-msg${bundleNote.kind === 'err' ? ' admin-row-msg-err' : ''}`}>
+              {bundleNote.text}
+            </div>
+          ) : null}
+
           {retryAsk && !busy ? (
             <div className="chat-retry-row">
               <button className="admin-refresh-btn" type="button" onClick={() => void send(retryAsk)}>
@@ -2280,6 +2316,15 @@ export default function ChatPage() {
                 onClick={() => fileInputRef.current?.click()}
               >
                 📎
+              </button>
+              <button
+                type="button"
+                className="chat-attach-btn"
+                aria-label="Download support bundle"
+                title="Download a support bundle for this chat: the session debug log (which backend served each turn) plus the conversation. Needs NUVIRA_DEBUG_LOG=1 in the dashboard process."
+                onClick={() => void downloadSupportBundle()}
+              >
+                🐞
               </button>
               <textarea
                 className="chat-input-box"

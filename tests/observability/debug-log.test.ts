@@ -16,17 +16,19 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   DEBUG_LOG_MAX_EVENTS,
   DEBUG_LOG_PREVIEW_CHARS,
+  DEBUG_LOG_SESSION_CHARS,
   SessionDebugLog,
   debugLogDir,
   debugLogNotice,
   debugLoggingEnabled,
+  debugLogsForSession,
   listDebugLogs,
   parseDebugLogHeader,
   readLatestDebugLog,
@@ -228,5 +230,86 @@ describe('WS2 debug log — writing and reading back', () => {
   it('lists nothing for a directory that does not exist', () => {
     expect(listDebugLogs(join(tmpdir(), 'buff-debuglog-missing-dir'))).toEqual([]);
     expect(readdirSync(tmpdir()).length).toBeGreaterThan(0);
+  });
+});
+
+// ─── The findable half: which conversation a log belongs to ─────────────────
+
+/**
+ * `session` is what turns a log from readable into FINDABLE — it is how the
+ * dashboard serves "the bundle for the chat I am looking at". These cases pin
+ * the two ways that can quietly go wrong: a log that does not say which
+ * conversation it was, and a lookup that selects by recency instead.
+ */
+describe('WS2 debug log — session attribution', () => {
+  it('records the conversation in the filename AND the header', () => {
+    const dir = tempDir();
+    const log = new SessionDebugLog({
+      surface: 'dashboard-chat',
+      session: 'chat-abc123',
+      dir,
+      now: () => 1_700_000_000_000,
+    });
+    log.backendOf({ provider: 'groq' });
+    const path = log.write()!;
+
+    // The filename carries it, so a bare directory listing is already usable...
+    expect(path).toContain('chat-abc123');
+    // ...and the header carries it, which is what a bundle selects on.
+    const parsed = parseDebugLogHeader(log.render())!;
+    expect(parsed.session).toBe('chat-abc123');
+    expect(parsed.surface).toBe('dashboard-chat');
+    expect(readLatestDebugLog('dashboard-chat', dir)!.header.session).toBe('chat-abc123');
+  });
+
+  it('omits the line when the surface has no conversation, rather than writing `unknown`', () => {
+    // An absent key reads as "not reported"; the literal `unknown` would read as
+    // a conversation whose id is "unknown", which is a different, false claim.
+    const dir = tempDir();
+    const log = new SessionDebugLog({ surface: 'cli-chat', dir });
+    expect(log.render()).not.toContain('# session:');
+    expect(parseDebugLogHeader(log.render())!.session).toBeNull();
+  });
+
+  it('CUTS an over-long session id instead of failing every turn`s write', () => {
+    // A session id becomes a filename component, so one long enough to exceed the
+    // filesystem limit must be truncated rather than turning each turn into a
+    // failed write — the failure mode that would only appear in production, with
+    // a customer-chosen id.
+    const dir = tempDir();
+    const log = new SessionDebugLog({ surface: 'dashboard-chat', session: 'x'.repeat(500), dir });
+    const path = log.write();
+    expect(path).not.toBeNull();
+    expect(existsSync(path!)).toBe(true);
+    const parsed = parseDebugLogHeader(readFileSync(path!, 'utf-8'))!;
+    expect(parsed.session!.length).toBeLessThanOrEqual(DEBUG_LOG_SESSION_CHARS);
+    expect(parsed.session!.startsWith('x'.repeat(32))).toBe(true);
+  });
+
+  it('finds every log ONE conversation wrote, oldest first, and nobody else`s', () => {
+    const dir = tempDir();
+    const turn = (session: string, at: number): string => {
+      const log = new SessionDebugLog({ surface: 'dashboard-chat', session, dir, now: () => at });
+      log.backendOf({ provider: 'groq', model: 'm' });
+      log.event('turn.end');
+      return log.write()!;
+    };
+    // Written NEWEST-FIRST here, so an implementation that selects by recency
+    // (`listDebugLogs` order) returns them backwards and this case fails.
+    turn('chat-mine', 3_000);
+    turn('chat-mine', 2_000);
+    turn('chat-mine', 1_000);
+    turn('chat-other', 4_000);
+    turn('chat-mine', 5_000);
+
+    const mine = debugLogsForSession('chat-mine', dir);
+    expect(mine).toHaveLength(4);
+    expect(mine.map((l) => l.header.startedAt)).toEqual([1_000, 2_000, 3_000, 5_000]);
+    expect(mine.every((l) => l.header.session === 'chat-mine')).toBe(true);
+    // The other conversation is never in someone else's bundle...
+    expect(mine.map((l) => l.text).join('\n')).not.toContain('chat-other');
+    // ...and a session with no logs is an EMPTY list, never everything.
+    expect(debugLogsForSession('chat-nobody', dir)).toEqual([]);
+    expect(debugLogsForSession('', dir)).toEqual([]);
   });
 });

@@ -939,6 +939,19 @@ is what lets the header name the backend that actually answered. Logs live in
 writes its own, and a turn served from the response cache says so rather than
 borrowing an attribution from a turn that never ran.
 
+**From the dashboard the log comes to you.** A log nobody can find is only half
+an artifact, and `~/.nuvira/debug-logs/` is not a path anyone greps while filing
+a bug, so each chat is the way in: the 🐞 button beside the attachment button
+downloads a **support bundle** for the conversation you are looking at — the
+debug logs that conversation's turns wrote (each naming the backend that served
+it), the conversation itself, and a manifest saying what is inside and what is
+deliberately not. Selection is by each log's own `# session:` header rather than
+by recency, so a second tab running its own chat can never end up in your
+bundle. When there is nothing to attach the download *refuses* rather than
+handing over an archive that looks complete, and names the missing step: either
+logging is off in the server process (`NUVIRA_DEBUG_LOG=1`, then restart) or this
+conversation has not finished a turn since it was turned on.
+
 ---
 
 ## 15. Verification log

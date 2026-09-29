@@ -600,6 +600,16 @@ export class ChatCommand extends BaseCommand {
      * that does not say is labelled `cli-chat`.
      */
     debugSurface?: string;
+    /**
+     * WS2 — the chat/thread this turn belongs to, when the caller has one.
+     *
+     * Recorded in the debug log's header so the log is FINDABLE, not merely
+     * readable: the dashboard serves a support bundle per conversation, and it
+     * can only do that if the log says which conversation it was. A caller with
+     * no such identity (a one-shot `nuvira chat "..."`) omits it and the header
+     * omits the line, rather than inventing an id.
+     */
+    debugSession?: string;
   } = {},
 ): Promise<{
   content: string;
@@ -724,7 +734,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat' },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat', debugSession: opts.debugSession },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -1258,6 +1268,8 @@ export class ChatCommand extends BaseCommand {
       onFinding?: (finding: WireFinding) => void;
       /** WS2 — the surface label for the session debug log header. */
       debugSurface?: string;
+      /** WS2 — the conversation this turn belongs to (see `answerOnce`). */
+      debugSession?: string;
     },
   ): Promise<{
     content: string;
@@ -1295,6 +1307,7 @@ export class ChatCommand extends BaseCommand {
     const debugLog = sessionDebugLog({
       surface: ctxOverrides?.debugSurface ?? 'cli-chat',
       goal: message,
+      ...(ctxOverrides?.debugSession ? { session: ctxOverrides.debugSession } : {}),
       backend: { engine: 'loop', provider: session.type, ...(session.model ? { model: session.model } : {}) },
     });
     debugLog?.event('turn.start', { provider: session.type });

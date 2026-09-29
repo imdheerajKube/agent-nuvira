@@ -88,6 +88,13 @@ export interface ChatEngine {
        * arrive labelled `cli-chat`.
        */
       debugSurface?: string;
+      /**
+       * WS2 — the conversation this turn belongs to. Recorded in the debug log's
+       * header so the log is FINDABLE per chat: the server can serve the support
+       * bundle for the conversation the user is looking at, and it can only do
+       * that if the log names it.
+       */
+      debugSession?: string;
       /** PA4 — a skill loaded but needs env vars (non-blocking notification). */
       onSecretRequest?: (payload: { skillName: string; missing: string[]; persisted: Record<string, boolean> }) => void;
       /** P0.7 — the session's plan store (per-conversation, survives turns). */
@@ -691,6 +698,9 @@ export class ChatConsole {
         // WS2 (#24) — this turn is the DASHBOARD's, and the session debug log's
         // header must say so (the engine is shared with the CLI and gateway).
         debugSurface: 'dashboard-chat',
+        // ...and which CONVERSATION it belongs to, so the log it writes can be
+        // found again from the chat rather than only from a filesystem listing.
+        debugSession: sessionId,
         ...(opts.provider ? { provider: opts.provider } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         // P5 — a followup chip continues the previous execution.

@@ -204,7 +204,7 @@ export const CAPABILITIES: readonly Capability[] = [
       },
       'dashboard-chat': {
         status: 'supported',
-        note: 'Proven: the console passes `debugSurface: "dashboard-chat"` to the shared engine, so a dashboard turn\'s log names the dashboard rather than the CLI. Read back from the isolated profile the console wrote into.',
+        note: 'Proven: the console passes `debugSurface: "dashboard-chat"` to the shared engine, so a dashboard turn\'s log names the dashboard rather than the CLI. Read back from the isolated profile the console wrote into. The console also records WHICH conversation the turn belonged to (`debugSession`), so the log is findable rather than only readable: `GET /api/chat/:sessionId/support-bundle` hands back the logs that conversation wrote (selected by each log`s own header, never by recency), plus the conversation and a manifest — pinned by the support-bundle cases in `tests/web-dashboard/chat-api.test.ts`.',
       },
       'gateway-chat': {
         status: 'supported',
