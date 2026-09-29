@@ -48,6 +48,8 @@ import {
   compare,
   isAtPar,
   noDebugLog,
+  noIsolation,
+  noResume,
   noToolHooks,
   reportParityFailure,
   type TurnObservation,
@@ -196,6 +198,17 @@ const observation = (over: Partial<TurnObservation> = {}): TurnObservation => ({
     vetoLeaked: false,
     surfacesSeen: ['cli-chat'],
   },
+  // WS5 — the isolation a turn had, and what its resume replayed. The base commit
+  // is recorded rather than compared (see `IsolationObs`), so a fixed value here
+  // is honest.
+  isolation: {
+    asked: true,
+    isolated: true,
+    files: ['src/parity/drivers.ts'],
+    removed: true,
+    base: 'a'.repeat(40),
+  },
+  resume: { asked: true, resuming: true, replayed: 2, modelCalls: 0, saved: true },
   answer: 'done',
   ...over,
 });
@@ -281,6 +294,74 @@ describe('WS0 parity projection', () => {
     const differences = compare(obeyed, ignored);
     expect(differences.join('\n')).toContain('hooks.vetoLeaked');
     expect(differences.join('\n')).toContain('gateway-chat');
+  });
+
+  it('treats a surface that ignored the isolation request as a difference', () => {
+    // WS5 — the load-bearing case for isolation, and the reason `asked` is
+    // compared: the harness DECLARED isolation, so a surface that ran in the real
+    // tree reports `isolated: false` against the same `asked: true`, and that has
+    // to read as a divergence. Deriving both fields from the request alone would
+    // make this comparison impossible to fail.
+    const isolated = observation();
+    const ignored = observation({
+      surface: 'gateway-chat',
+      isolation: { ...noIsolation(), asked: true },
+    });
+    const differences = compare(isolated, ignored);
+    expect(differences.join('\n')).toContain('isolation.isolated');
+    expect(differences.join('\n')).toContain('gateway-chat');
+  });
+
+  it('treats a different diff as a difference, not as noise', () => {
+    // The diff IS the deliverable of an isolated run: two surfaces that both
+    // isolated their turn but changed different files have not agreed about what
+    // the investigation did. Compared as a set (sorted), because `git diff`
+    // order is the repository`s, not the surface`s.
+    const a = observation();
+    const b = observation({
+      surface: 'subagent',
+      isolation: { ...observation().isolation!, files: ['src/parity/observation.ts'] },
+    });
+    expect(compare(a, b).join('\n')).toContain('isolation.files');
+  });
+
+  it('does not compare the commit an isolated run diffed against', () => {
+    // Recorded, never compared: the base is a commit sha, so it differs between
+    // two runs of the same turn by construction (each worktree is made from HEAD
+    // at its own moment). Kept on the observation because "the diff is against a
+    // real commit" is the fact the row asserts, and a failure report showing both
+    // shas is what proves both runs were real.
+    const a = observation();
+    const b = observation({
+      surface: 'cli-execute',
+      isolation: { ...observation().isolation!, base: 'f'.repeat(40) },
+    });
+    expect(compare(a, b)).toEqual([]);
+  });
+
+  it('treats a surface that never opened a resume record as a difference', () => {
+    // WS5 — `asked` with `resuming: false` is exactly "the surface ignored the
+    // request": a harness comparing only a model-call count would read its
+    // re-payment as agreement, and the field exists so that it cannot.
+    const resumed = observation();
+    const ignored = observation({ surface: 'dashboard-chat', resume: { ...noResume(), asked: true } });
+    const differences = compare(resumed, ignored);
+    expect(differences.join('\n')).toContain('resume.resuming');
+    expect(differences.join('\n')).toContain('dashboard-chat');
+  });
+
+  it('treats a resumed turn that re-paid for every step as a difference', () => {
+    // The other half of the resume claim: the surface opened the record and
+    // replayed nothing, which is a surface whose steps are not actually being
+    // reused. Named field by field, because `resuming` alone would hide it.
+    const resumed = observation();
+    const repaid = observation({
+      surface: 'cli-execute',
+      resume: { asked: true, resuming: true, replayed: 0, modelCalls: 2, saved: true },
+    });
+    const differences = compare(resumed, repaid);
+    expect(differences.join('\n')).toContain('resume.replayed');
+    expect(differences.join('\n')).toContain('resume.modelCalls');
   });
 
   it('does not compare the surface label a hook was told, only that it was told one', () => {

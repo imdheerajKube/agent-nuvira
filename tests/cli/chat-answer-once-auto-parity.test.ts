@@ -32,9 +32,29 @@ vi.mock('../../src/cli/model.js', async (importOriginal) => {
   };
 });
 
+/**
+ * The no-model PIPELINE fallback, as a spy.
+ *
+ * Mocked so this file can WITNESS whether a refused turn was re-dispatched: the
+ * fallback keys on `generationFailed`, which an isolation refusal also sets, so
+ * before the `refused` guard the whole pipeline ran the ask — in the real tree —
+ * and the refusal was never mentioned to the operator. A spy on the import is not
+ * enough here (ESM bindings are read-only), hence a module mock.
+ */
+const mockRunPipelineTool = vi.hoisted(() => vi.fn(async () => ({ success: true, result: { summary: 'pipeline ran' } })));
+vi.mock('../../src/tools/pipeline-tool.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/tools/pipeline-tool.js')>();
+  return { ...actual, runPipelineTool: mockRunPipelineTool };
+});
+
 import { ChatCommand } from '../../src/cli/chat.js';
 import { resetModelRegistry } from '../../src/learning/model-registry.js';
 import type { InferenceProvider } from '../../src/inference/interface.js';
+
+/** A git-free directory (a fresh `mkdtemp` has no repository above it either). */
+function nonGitDir(): string {
+  return mkdtempSync(join(tmpdir(), 'buff-refusal-'));
+}
 
 describe('ChatCommand.answerOnce — no explicit provider/model honors defaultProvider', () => {
   let tempDir: string;
@@ -115,5 +135,41 @@ describe('ChatCommand.answerOnce — no explicit provider/model honors defaultPr
     expect(routeMessageAuto).not.toHaveBeenCalled();
     expect(out.content).toBe('Answered.');
     expect(out.provider).toBe('groq');
+  });
+
+  it('WS5 — REFUSES a turn it cannot isolate, and never re-dispatches it to the pipeline', async () => {
+    const provider = mockProvider();
+    vi.spyOn(ChatCommand.prototype as unknown as Proto, 'getProvider').mockResolvedValue({ type: 'groq', provider });
+    vi.spyOn(ChatCommand.prototype as unknown as Proto, 'routeMessageAuto').mockResolvedValue({
+      type: 'gemini',
+      provider,
+      model: 'mock-model',
+    });
+    mockRunPipelineTool.mockClear();
+    const dir = nonGitDir();
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(dir);
+      // A WRITE ask on purpose: those are the asks the rules dispatch to the
+      // pipeline, which is exactly the fallback that must not fire. A message the
+      // rules ignore would prove nothing.
+      const out = await (new ChatCommand() as unknown as { answerOnce: Function }).answerOnce(
+        'write a file called refusal-probe.txt saying hi',
+        { worktree: true },
+      );
+      // Failed, and failed by REFUSING — so no surface renders it as an answer.
+      expect(out.generationFailed).toBe(true);
+      expect(out.refused).toBe(true);
+      // The reason reaches the reader instead of being replaced by the fallback's
+      // outcome (the live run printed a three-task pipeline board and no reason).
+      expect(String(out.content)).toContain('Isolation was requested');
+      expect(String(out.content)).toContain('Nothing ran');
+      // THE WITNESS: the pipeline never ran, so nothing was written anywhere —
+      // least of all into the real tree the operator asked to protect.
+      expect(mockRunPipelineTool).not.toHaveBeenCalled();
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

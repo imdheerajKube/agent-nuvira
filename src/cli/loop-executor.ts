@@ -31,6 +31,24 @@ import { resolveRoute, servedRouteFrom, type ServedRoute } from '../inference/ro
 import { debugLogNotice, sessionDebugLog } from '../observability/debug-log.js';
 // WS3 (#25) — the turn as a span, when an operator has asked for OTLP export.
 import { flushSpans, otelNoticeOnce, startTurnSpan } from '../observability/otel.js';
+// WS5 (#27) — isolation (a git worktree around the whole run) and resume
+// (replaying recorded steps). Both are resolved from the CLI's flags AND the
+// environment, so `nuvira execute --worktree` and an isolated deployment take the
+// same path (see `resolveIsolationRequest`).
+import {
+  beginIsolation,
+  endIsolation,
+  resolveIsolationRequest,
+  worktreeNotice,
+  type IsolationOutcome,
+} from '../tools/worktree.js';
+import {
+  closeResume,
+  openResume,
+  resolveResumeRequest,
+  type OpenResume,
+  type ResumeOutcome,
+} from '../learning/step-checkpoint.js';
 import { noteServedRoute } from '../tools/loop-route-feed.js';
 import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
 import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
@@ -162,6 +180,14 @@ export interface LoopExecutorResult {
    */
   transport?: 'native' | 'json' | 'none';
   /**
+   * WS5 (#27) — the isolation this run had, and the diff against its base.
+   * Present only when isolation was asked for AND the run happened; a refused
+   * run reports the refusal as its content instead.
+   */
+  worktree?: IsolationOutcome;
+  /** WS5 (#27) — what this run's resume replayed, and what it saved. */
+  resume?: ResumeOutcome;
+  /**
    * WS1 — every finding this run recorded, in call order, already gated.
    *
    * Read from the `finding:recorded` event the tool emits on this loop's own
@@ -195,6 +221,21 @@ export interface LoopExecutorOptions {
   maxSteps?: number;
   /** Quiet mode: no progress logging (eval arms). */
   quiet?: boolean;
+  /**
+   * WS5 (#27) — run this turn in its own git worktree of the project and report
+   * the diff against the base commit. `undefined` defers to `NUVIRA_ISOLATE`,
+   * which is how a surface with no command line asks.
+   */
+  worktree?: boolean;
+  /** WS5 (#27) — keep the worktree after the run (its path is reported either way). */
+  keepWorktree?: boolean;
+  /**
+   * WS5 (#27) — replay this run's recorded steps whose input is unchanged instead
+   * of paying for them again. `--resume [id]` on `nuvira execute` carries it, and
+   * it means the SAME thing as the pipeline arm's `--resume`: the last run of this
+   * ask in this directory (both resolve their id through `checkpointIdFor`).
+   */
+  resume?: string | boolean;
   /**
    * G18 — echo each tool RESULT (first line, bounded) under the call line.
    * Previously even `-v` printed only the call (`⚙ edit_file({path: …})`) and
@@ -246,6 +287,71 @@ export async function runLoopExecutor(
   const recorded = { refusals: 0, gateDecisions: 0 };
   /** Per-call tool outcomes, in call order (see LoopExecutorResult.toolOutcomes). */
   const toolOutcomes: Array<{ tool: string; ok: boolean }> = [];
+  // ─── WS5 (#27) — ISOLATION AND RESUME, the run's envelope ───────────────
+  //
+  // Resolved BEFORE routing, so a run that cannot be isolated refuses without
+  // walking providers or spending a token: the request is the first thing it
+  // honours, and the refusal is a result the command reports as a failure rather
+  // than an answer (see `isolationRefusalText`).
+  const isolationRequest = resolveIsolationRequest({
+    worktree: opts.worktree,
+    keepWorktree: opts.keepWorktree,
+  });
+  const projectDir = process.cwd();
+  const isolation = beginIsolation({ request: isolationRequest, repoCwd: projectDir, label: goal });
+  if (isolation && !isolation.ok) {
+    if (!opts.quiet) logger.error(isolation.refusal);
+    return failureResult(
+      isolation.refusal,
+      startedAt,
+      opts.provider ?? 'auto',
+      opts.model ?? 'default',
+      'refused: the run could not be isolated in a git worktree',
+    );
+  }
+  const worktree = isolation?.ok ? isolation.worktree : null;
+  /**
+   * The directory this run works in: the worktree when isolated, else the
+   * process's own cwd. Every directory-dependent path below reads this — the
+   * ambient project snapshot, the step hand-off record and the tools' `cwd` —
+   * because a run isolated for its tools but reading its context from the
+   * original tree is not isolated, it is confused.
+   */
+  const turnCwd = worktree?.dir ?? projectDir;
+  const resumeRequest = resolveResumeRequest({ resume: opts.resume });
+  // Opened only when a resume was asked for: an ordinary run never touches the
+  // record store (no read, no write, no directory created).
+  const resume: OpenResume | null = resumeRequest
+    ? openResume({ goal, cwd: turnCwd, resume: resumeRequest })
+    : null;
+  if (worktree && !opts.quiet) logger.info(worktreeNotice(worktree));
+  // WS5 — what the RECORD holds, said before the run. The outcome is reported by
+  // `finishResult` below, where the counts are real (see `StepReplay.openNotice`).
+  if (resume && !opts.quiet) logger.info(resume.ledger.openNotice());
+  /**
+   * Attach this run's isolation and resume outcomes to whatever it returns.
+   *
+   * Called on EVERY exit path (a routing failure included), because a worktree
+   * that is not measured and removed is a directory left in the operator's profile
+   * with a branch pointing at it — the same reason `endIsolation` measures the
+   * diff before it tears anything down. `endIsolation` never throws, so cleanup
+   * cannot replace this run's own result with a git error.
+   */
+  const finishResult = (result: LoopExecutorResult): LoopExecutorResult => {
+    const extra: { worktree?: IsolationOutcome; resume?: ResumeOutcome; replayedSteps?: number } = {};
+    if (worktree) {
+      const outcome = endIsolation(worktree, { keep: isolationRequest.keep });
+      extra.worktree = outcome;
+      if (!opts.quiet) logger.info(outcome.notice);
+    }
+    if (resume) {
+      const outcome = closeResume(resume, { goal, cwd: turnCwd });
+      extra.resume = outcome;
+      extra.replayedSteps = outcome.replayed;
+      if (!opts.quiet) logger.info(outcome.notice);
+    }
+    return { ...result, ...extra };
+  };
   /** WS1 — findings recorded this run, in call order (see LoopExecutorResult.findings). */
   const findings: import('../findings/verdicts.js').WireFinding[] = [];
   // WS2 (#24) — the optional session debug log for this `execute` turn. Opened
@@ -488,25 +594,29 @@ export async function runLoopExecutor(
   } catch (err) {
     // G18 — a routing failure is a FAILED trace, not a missing one.
     endTrace(traceId, false, { kind: 'failed', tools: [] });
-    return failureResult(
-      // User-facing reason is sanitized (no provider wire text); the raw error
-      // rides along as the technical explanation below.
-      toUserFacingGenerationError(err),
-      startedAt,
-      opts.provider ?? 'auto',
-      opts.model ?? 'default',
-      `routing failed before an engine decision was possible: ${err instanceof Error ? err.message : String(err)}`,
+    return finishResult(
+      failureResult(
+        // User-facing reason is sanitized (no provider wire text); the raw error
+        // rides along as the technical explanation below.
+        toUserFacingGenerationError(err),
+        startedAt,
+        opts.provider ?? 'auto',
+        opts.model ?? 'default',
+        `routing failed before an engine decision was possible: ${err instanceof Error ? err.message : String(err)}`,
+      ),
     );
   }
 
   if (!provider) {
     endTrace(traceId, false, { kind: 'failed', tools: [] });
-    return failureResult(
-      'No available provider for the loop engine (check API keys / local runner).',
-      startedAt,
-      opts.provider ?? 'auto',
-      opts.model ?? 'default',
-      'no available provider after the candidate walk',
+    return finishResult(
+      failureResult(
+        'No available provider for the loop engine (check API keys / local runner).',
+        startedAt,
+        opts.provider ?? 'auto',
+        opts.model ?? 'default',
+        'no available provider after the candidate walk',
+      ),
     );
   }
 
@@ -525,7 +635,7 @@ export async function runLoopExecutor(
   let projectContext: string | undefined;
   if (!opts.skipProjectContext) {
     try {
-      const built = await buildLoopProjectContext(process.cwd());
+      const built = await buildLoopProjectContext(turnCwd);
       if (built) projectContext = built;
     } catch {
       projectContext = undefined; // best-effort — never breaks the turn
@@ -785,7 +895,7 @@ export async function runLoopExecutor(
         // incoming model is told what is genuinely still outstanding.
         try {
           recordStepHandoff({
-            projectPath: process.cwd(),
+            projectPath: turnCwd,
             goal,
             stepDescription: goal,
             declared: deliverablesNamedIn(goal),
@@ -834,12 +944,15 @@ export async function runLoopExecutor(
       otel: otelSpan,
       // WS4 (#26) — the label a tool hook reports this call under.
       surface: 'cli-execute',
+      // WS5 (#27) — the resume ledger, when this run was asked to resume.
+      // Omitted otherwise, so an ordinary run never consults it.
+      ...(resume ? { resume: resume.ledger } : {}),
       onToken: opts.onToken,
       signal: opts.signal,
       context: {
         configManager,
         loadedExtraTools,
-        cwd: process.cwd(),
+        cwd: turnCwd,
         // G18 — the autonomy gates report their DECISIONS on this bus
         // (`autonomy:write-applied`, emitted by write_file/edit_file/
         // run_terminal/run_cli/git). Forwarding them here is what makes "the
@@ -1018,7 +1131,7 @@ export async function runLoopExecutor(
       await flushSpans();
     }
 
-    return {
+    return finishResult({
       content: result.content,
       generationFailed: result.generationFailed ?? false,
       bounded: result.bounded,
@@ -1035,7 +1148,7 @@ export async function runLoopExecutor(
       gateDecisions: recorded.gateDecisions,
       ...(result.transport ? { transport: result.transport } : {}),
       ...(result.runTrace ? { runTrace: result.runTrace } : {}),
-    };
+    });
   } catch (err) {
     endTrace(traceId, false, { kind: 'failed', tools: [] });
     // WS3 (#25) — a run that THREW still ships its span, for the same reason it
@@ -1057,12 +1170,14 @@ export async function runLoopExecutor(
       const notice = opts.quiet ? null : debugLogNotice('cli-execute', path);
       if (notice) logger.info(notice);
     }
-    return failureResult(
-      toUserFacingGenerationError(err),
-      startedAt,
-      providerType,
-      model,
-      `loop execution failed: ${err instanceof Error ? err.message : String(err)}`,
+    return finishResult(
+      failureResult(
+        toUserFacingGenerationError(err),
+        startedAt,
+        providerType,
+        model,
+        `loop execution failed: ${err instanceof Error ? err.message : String(err)}`,
+      ),
     );
   }
 }

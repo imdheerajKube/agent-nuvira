@@ -131,9 +131,18 @@ describe('E3c — model-decides: the rules NEVER bypass the model', () => {
   it('every request enters the tool loop (runChatAnswer) before any dispatch', () => {
     // The old bypass ran runDeveloperMode when the rules said dispatch. In
     // E3c the only place rules can act is the generation-FAILED fallback.
-    const fallbackGate = chatSrc.match(/generationFailed && dispatchDecision\.dispatch/g);
+    //
+    // WS5 (#27) added one more term to the gate, `!answer.refused`: a refused
+    // turn (isolation was asked for and could not be made) also reports
+    // generationFailed, and the fallback must not re-dispatch it — which would run
+    // the ask on the pipeline, in the real tree, with the refusal never mentioned.
+    // Matched loosely on that middle term so a future guard can be added without
+    // this assertion having to be rewritten, while the two ends stay pinned.
+    const fallbackGate = chatSrc.match(/generationFailed && [^\n]*dispatchDecision\.dispatch/g);
     expect(fallbackGate).not.toBeNull();
     expect(fallbackGate!.length).toBeGreaterThanOrEqual(2); // single-shot + interactive
+    // And every one of them carries the refusal guard, so no gate was left behind.
+    expect(fallbackGate!.every((gate) => gate.includes('!answer.refused'))).toBe(true);
   });
 
   it('the system prompt is the simplified model-decides contract (4d30b7e)', () => {

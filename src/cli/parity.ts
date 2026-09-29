@@ -323,6 +323,50 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
     answer: 'Listed.',
     hooks: { phases: ['before', 'failed'], deny: ['list_dir'] },
   },
+  {
+    id: 'isolation-worktree',
+    message: 'write a marker file in an isolated copy, then answer',
+    // WS5 (#27) — an ISOLATED turn, on every surface: the turn runs in its own git
+    // worktree of the project and reports the diff against the commit it started
+    // from. The scenario CREATES A FILE, because the claim is a diff — a read-only
+    // turn would isolate nothing and prove the plumbing without ever exercising the
+    // measurement.
+    //
+    // THE WRITE GOES THROUGH `run_terminal`, and that is a deliberate, measured
+    // choice rather than convenience. `write_file` is one of `MUTATION_TOOLS`
+    // (`tools/edit-verification.ts`), so an in-process turn that writes one spends a
+    // bounded VERIFICATION NUDGE — an extra model call — while a forked child's
+    // simpler loop has no such gate. That difference is real and worth knowing (it
+    // is recorded in `TOOL_TRUTHFULNESS_TRACKER.md`), but this row is about WHERE a
+    // turn works and WHAT it changed, and a scenario built on `write_file` would
+    // measure the gate instead: `modelCalls` would differ by one on four surfaces
+    // and the parity verdict would be about the wrong capability. So the mutation is
+    // made the way a NON-`write_file` tool makes one, keeping the turn itself
+    // comparable. `confirm: true` states the write is authorized (the command
+    // classifies as `confirm`, not `verify`), so the tool runs instead of asking.
+    toolCall: {
+      tool: 'run_terminal',
+      args: {
+        command: `node -e "require('fs').writeFileSync('parity-isolated.txt','created inside an isolated worktree\\n')"`,
+        confirm: true,
+      },
+    },
+    answer: 'Isolated.',
+    isolation: true,
+  },
+  {
+    id: 'partial-resume',
+    message: 'list the working directory, then answer',
+    // WS5 (#27) — a RESUMED run, on every surface: the harness runs this ask
+    // twice, the second time against the record the first one wrote, and what is
+    // compared is what the second run did NOT pay for. The tool is READ-ONLY on
+    // purpose: a write would change the working state the next turn carries in its
+    // context, which is a REAL change to the input — the replay would rightly miss,
+    // and the row would measure that instead of the resume.
+    toolCall: { tool: 'list_dir', args: { path: '.' } },
+    answer: 'Listed.',
+    resume: true,
+  },
 ];
 
 /**

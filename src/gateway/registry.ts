@@ -1821,6 +1821,11 @@ export class GatewayRegistry {
         provider: useAuto ? 'auto' : providerType,
         model: useAuto ? 'auto' : providerConfig.model,
         history,
+        // WS5 (#27) — isolation and resume are asked through the environment
+        // (`NUVIRA_ISOLATE` / `NUVIRA_RESUME`), which is how a messaging gateway
+        // is configured: an inbound WhatsApp message has no flags to carry, and
+        // the operator decides once for the deployment. This is the code's own
+        // record of that decision, on the log line that reports the turn.
         onToolCall: (phase, info) => {
           if (phase !== 'called') return;
           toolCalls.push({ tool: info.tool, ...(typeof info.ok === 'boolean' ? { ok: info.ok } : {}) });
@@ -1990,6 +1995,13 @@ export class GatewayRegistry {
         ...(answer.transport ? { transport: answer.transport } : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(findings.length > 0 ? { findings } : {}),
+        // WS5 (#27) — the isolation this turn had, and what it changed against
+        // its base commit. Durable, for the same reason the tool lifecycle and
+        // the findings are: a messaging surface has no terminal, so the log IS
+        // where an operator can see that an isolated turn ran and what it
+        // touched.
+        ...(answer.worktree ? { worktree: answer.worktree } : {}),
+        ...(answer.resume ? { resume: answer.resume } : {}),
         generationFailed: answer.generationFailed === true,
       });
       return {
@@ -2000,6 +2012,8 @@ export class GatewayRegistry {
         ...(answer.transport ? { transport: answer.transport } : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(findings.length > 0 ? { findings } : {}),
+        ...(answer.worktree ? { worktree: answer.worktree } : {}),
+        ...(answer.resume ? { resume: answer.resume } : {}),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

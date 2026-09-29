@@ -73,6 +73,18 @@ export interface ChatEngine {
       signal?: AbortSignal;
       /** P0.6 — one tool-call lifecycle event (started → called with outcome). */
       onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
+      /**
+       * WS5 (#27) — ask the engine to run this turn in its own git worktree of
+       * the attached project and report the diff against the base commit.
+       * `undefined` defers to `NUVIRA_ISOLATE` (how a server is configured), and
+       * an unisolatable directory REFUSES the turn rather than running in the
+       * real tree.
+       */
+      worktree?: boolean;
+      /** WS5 (#27) — keep the worktree after the turn (its path is reported either way). */
+      keepWorktree?: boolean;
+      /** WS5 (#27) — replay the recorded steps of this ask whose input is unchanged. */
+      resume?: string | boolean;
       /** P0.7 — a plan mutation (structured checklist for the GUI card). */
       onPlanChange?: (snapshot: PlanSnapshot) => void;
       /** P3b — a git diff payload (rendered as a diff card in the GUI). */
@@ -142,6 +154,21 @@ export interface ChatEngine {
      * none"), which is what lets the surfaces be compared honestly.
      */
     findings?: import('../findings/verdicts.js').WireFinding[];
+    /** WS5 (#27) — the isolation this turn had, and the diff against its base. */
+    worktree?: import('../tools/worktree.js').IsolationOutcome;
+    /** WS5 (#27) — what this turn's resume replayed, and what it saved. */
+    resume?: import('../learning/step-checkpoint.js').ResumeOutcome;
+    /**
+     * WS5 (#27) — the turn REFUSED to run (nothing was attempted, no model was
+     * called), so its content is the reason rather than an answer.
+     *
+     * Carried separately from `generationFailed` because a surface must not
+     * RETRY it: a refusal is a decision about the request (isolation cannot be
+     * made here), and re-running the same ask in the same place fails the same
+     * way. It is also the flag that keeps a caller from re-dispatching the turn to
+     * another engine, which is how a refused turn could otherwise run isolated-nowhere.
+     */
+    refused?: boolean;
   }>;
 }
 
@@ -184,6 +211,12 @@ export interface ChatAnswerResult {
    * none"), which is what lets the surfaces be compared honestly.
    */
   findings?: import('../findings/verdicts.js').WireFinding[];
+  /** WS5 (#27) — the isolation this turn had, and the diff against its base. */
+  worktree?: import('../tools/worktree.js').IsolationOutcome;
+  /** WS5 (#27) — what this turn's resume replayed, and what it saved. */
+  resume?: import('../learning/step-checkpoint.js').ResumeOutcome;
+  /** WS5 (#27) — the turn refused to run; its content is the reason (see ChatEngine). */
+  refused?: boolean;
   generationFailed?: boolean;
   /** Phase 4 — true when the loop hit its step bound before an end turn. */
   bounded?: boolean;
@@ -616,6 +649,15 @@ export class ChatConsole {
       recordTurn?: boolean;
       /** WS1 — a finding was recorded this turn, with the gate's verdict. */
       onFinding?: (finding: import('../findings/verdicts.js').WireFinding) => void;
+      /**
+       * WS5 (#27) — isolation and partial resume for this turn. Both are also
+       * readable from the server's environment (`NUVIRA_ISOLATE` /
+       * `NUVIRA_RESUME`); passing them here is how one conversation asks without
+       * changing the deployment.
+       */
+      worktree?: boolean;
+      keepWorktree?: boolean;
+      resume?: string | boolean;
     } = {},
   ): Promise<ChatAnswerResult> {
     const clean = (message || '').trim();
@@ -701,6 +743,11 @@ export class ChatConsole {
         // ...and which CONVERSATION it belongs to, so the log it writes can be
         // found again from the chat rather than only from a filesystem listing.
         debugSession: sessionId,
+        // WS5 (#27) — the per-turn isolation/resume request (undefined defers to
+        // the server's environment).
+        worktree: opts.worktree,
+        keepWorktree: opts.keepWorktree,
+        resume: opts.resume,
         ...(opts.provider ? { provider: opts.provider } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         // P5 — a followup chip continues the previous execution.
@@ -898,6 +945,14 @@ export class ChatConsole {
         bounded: answer.bounded === true,
         // WS1 — the findings the turn recorded (empty when it recorded none).
         findings,
+        // WS5 (#27) — the isolation and resume this turn had. Passed through
+        // rather than summarised: the diff (and what it was against) is what the
+        // caller needs to act on, and the GUI has no other way to learn it.
+        ...(answer.worktree ? { worktree: answer.worktree } : {}),
+        ...(answer.resume ? { resume: answer.resume } : {}),
+        // WS5 — a refusal is a FAILED turn (so no surface shows it as an answer)
+        // but not a retryable one, and the caller needs to be able to tell.
+        ...(answer.refused ? { refused: true } : {}),
       };
     } catch (err) {
       // A cancel racing the engine's unwinding must not surface as an error

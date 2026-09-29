@@ -16,6 +16,24 @@ import { maybeAutoRecall, recallContextBlock } from '../context/session-recall.j
 import { getMemoryManager } from '../memory/manager.js';
 import { logger } from '../utils/logger.js';
 import { printOrchestrationResult } from './execute.js';
+// WS5 (#27) — isolation (a git worktree around the turn) and resume (replaying
+// recorded steps instead of re-paying for them). See the module headers for why
+// the worktree is created HERE, around the whole turn, and why a replay is
+// keyed on the step's whole input rather than its position alone.
+import {
+  beginIsolation,
+  endIsolation,
+  resolveIsolationRequest,
+  worktreeNotice,
+  type IsolationOutcome,
+} from '../tools/worktree.js';
+import {
+  closeResume,
+  openResume,
+  resolveResumeRequest,
+  type OpenResume,
+  type ResumeOutcome,
+} from '../learning/step-checkpoint.js';
 import { applyActiveModel } from './model.js';
 import { ConfigManager } from '../config/manager.js';
 import { InferenceProvider } from '../inference/interface.js';
@@ -612,11 +630,41 @@ export class ChatCommand extends BaseCommand {
      * omits the line, rather than inventing an id.
      */
     debugSession?: string;
+    /**
+     * WS5 (#27) — run this TURN in its own git worktree of the project, and
+     * report the diff against the base commit on the result.
+     *
+     * The whole turn moves: tools resolve relative to the worktree, so every
+     * write lands in the isolated copy. When the directory cannot be isolated the
+     * turn REFUSES — it never runs unisolated while claiming otherwise.
+     */
+    worktree?: boolean;
+    /** WS5 (#27) — keep the worktree after the turn (its path is reported either way). */
+    keepWorktree?: boolean;
+    /**
+     * WS5 (#27) — resume: replay this run's recorded steps whose input is
+     * unchanged instead of paying for them again. `true` = the record for this
+     * ask in this directory; a string = that record by name.
+     */
+    resume?: string | boolean;
   } = {},
 ): Promise<{
   content: string;
   followups: FollowupSuggestion[];
   generationFailed?: boolean;
+  /**
+   * WS5 (#27) — the turn REFUSED to run: it never reached a model, and `content`
+   * is the reason rather than an answer.
+   *
+   * Always accompanied by `generationFailed` (a refusal IS a failed turn), but not
+   * interchangeable with it — see the no-model fallback in `answerOnce`, which keys
+   * on `generationFailed` and must never re-dispatch a refused turn.
+   */
+  refused?: boolean;
+  /** WS5 (#27) — the isolation this turn had, and what it changed. */
+  worktree?: IsolationOutcome;
+  /** WS5 (#27) — what this turn's resume replayed, and what it saved. */
+  resume?: ResumeOutcome;
   /** P4 — true when the turn was cancelled via opts.signal (discarded). */
   cancelled?: boolean;
   /** Phase 4 — true when the loop hit its step bound before an end turn. */
@@ -736,26 +784,50 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat', debugSession: opts.debugSession },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat', debugSession: opts.debugSession, worktree: opts.worktree, keepWorktree: opts.keepWorktree, resume: opts.resume },
     );
 
     // No-model fallback: the tool loop could not generate a single response
     // AND the rules assessed a high-confidence pipeline intent — run the
     // pipeline directly (rules decide only when the model is unavailable; the
     // pipeline resolves its own working provider/model).
-    if (answer.generationFailed && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
+    // WS5 (#27) — `!answer.refused` is not an optimisation, it is the guard: a
+    // turn that REFUSED to run (see `runChatAnswer`) is failed, but it is not
+    // UNANSWERED, and the no-model fallback exists for the second case. Re-
+    // dispatching it here would run the ask on another engine entirely — the one
+    // path that can run it UNISOLATED while the caller asked for isolation.
+    if (answer.generationFailed && !answer.refused && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
       const r = await runPipelineTool(message, this.configManager, { provider: type, model, board: false });
       // `success`, not `error`: a pipeline that RAN and failed reports its
       // outcome in `summary` and only sometimes sets `error`, so keying off
       // `error` alone returned a failed run's summary with NO failure flag —
       // i.e. reported it as a successful turn on every surface.
       if (!r.success) {
-        return { content: '', followups: [], generationFailed: true, provider: type, model, transport: 'none' as const };
+        return {
+          content: '',
+          followups: [],
+          generationFailed: true,
+          provider: type,
+          model,
+          transport: 'none' as const,
+          // WS5 — the isolation/resume this turn had, carried even on this path:
+          // the worktree was made and measured before the fallback ran, and a
+          // caller that never hears about it cannot tell an isolated turn from one
+          // that ran in the real tree.
+          ...this.turnEnvelopeOf(answer),
+        };
       }
       // A pipeline turn carries no tool transport at all — reported as `none`
       // rather than left silent, so a caller can tell "no transport" apart from
       // "this surface never said".
-      return { content: r.result?.summary ?? '', followups: [], provider: type, model, transport: 'none' as const };
+      return {
+        content: r.result?.summary ?? '',
+        followups: [],
+        provider: type,
+        model,
+        transport: 'none' as const,
+        ...this.turnEnvelopeOf(answer),
+      };
     }
 
     // E3b: strip raw suggest_followups JSON embedded in content by the model
@@ -776,6 +848,35 @@ export class ChatCommand extends BaseCommand {
       model,
       // R2 — the transport the loop's model-call seam reported for this turn.
       transport: answer.transport,
+      // WS5 — and the isolation/resume the turn had. The engine reports them on
+      // ITS result; this method builds a new object, so without this spread they
+      // were dropped at the boundary — measured as a surface that isolated its
+      // turn correctly and then told its caller nothing about it.
+      ...this.turnEnvelopeOf(answer),
+      // WS5 — and whether the turn refused to run at all, for the same reason:
+      // a caller that cannot tell a refusal from a failed generation retries it,
+      // and there is nothing to retry (see the refusal return in `runChatAnswer`).
+      ...(answer.refused ? { refused: true } : {}),
+    };
+  }
+
+  /**
+   * WS5 (#27) — the isolation/resume facts of a finished turn, in the shape this
+   * command's callers read.
+   *
+   * Extracted because THREE returns in `answerOnce` hand back a turn the engine
+   * produced (the final answer, and the two no-model pipeline fallbacks), and a
+   * fact that travelled on only one of them would be a capability that disappears
+   * exactly when the model was unavailable — which is a failure mode, not an edge
+   * case.
+   */
+  private turnEnvelopeOf(answer: {
+    worktree?: IsolationOutcome;
+    resume?: ResumeOutcome;
+  }): { worktree?: IsolationOutcome; resume?: ResumeOutcome } {
+    return {
+      ...(answer.worktree ? { worktree: answer.worktree } : {}),
+      ...(answer.resume ? { resume: answer.resume } : {}),
     };
   }
 
@@ -788,14 +889,55 @@ export class ChatCommand extends BaseCommand {
       .option('-m, --model <model>', 'Model to use (if omitted, an interactive picker will appear)')
       .option('--no-cache', 'Disable response caching')
       .option('-d, --dev', 'Always dispatch requests to the coding pipeline (no confirmation)', false)
-      .action(async (prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean }) => {
+      // WS5 (#27) — isolation and partial resume, as the two things an operator
+      // asks for by hand. Both default to OFF and both are also readable from the
+      // environment (`NUVIRA_ISOLATE` / `NUVIRA_RESUME`), which is how the
+      // surfaces with no command line ask.
+      // NO `false` DEFAULT on any of the three, and that is load-bearing: commander
+      // would then hand this command `worktree: false` for a flag the operator never
+      // typed, an explicit FALSE outranks the environment in
+      // `resolveIsolationRequest`, and `NUVIRA_ISOLATE=1` would be silently ignored
+      // on the one surface whose flags outrank it. Absent is `undefined` — "nobody
+      // said" — which is what lets the environment ask for these on the CLI too.
+      .option(
+        '--worktree',
+        'Run this turn in its own git worktree of the project and report the diff against the base commit. Refuses rather than running unisolated when the directory cannot be isolated (also asked for by NUVIRA_ISOLATE=1)',
+      )
+      .option('--keep-worktree', 'Keep the isolated worktree after the turn instead of removing it')
+      .option(
+        '--resume [id]',
+        'Replay the recorded steps of this ask whose input is unchanged instead of paying for them again (defaults to the record for this goal + directory; also asked for by NUVIRA_RESUME=1)',
+      )
+      .action(async (prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean }) => {
         await this.execute(prompt, options || {});
       });
 
     return command;
   }
 
-  private async execute(prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean }): Promise<void> {
+  /**
+   * WS5 (#27) — the isolation/resume request the CLI's own flags carry.
+   *
+   * One place, because three call sites in this command hand the request to the
+   * shared engine (the one-shot turn, its picked followups, and every REPL
+   * message) and a request that reached only some of them would be a flag that
+   * worked until the second message. `undefined` (no flag) is passed through as
+   * `undefined` rather than `false`, which is what lets the environment ask for
+   * isolation on a surface the CLI did not.
+   */
+  private ws5Overrides(options?: {
+    worktree?: boolean;
+    keepWorktree?: boolean;
+    resume?: string | boolean;
+  }): { worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean } {
+    return {
+      worktree: options?.worktree,
+      keepWorktree: options?.keepWorktree,
+      resume: options?.resume,
+    };
+  }
+
+  private async execute(prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean }): Promise<void> {
     // Apply the active model state from `nuvira model switch` as defaults
     const activeOpts = applyActiveModel({ provider: options?.provider, model: options?.model });
     const mergedOpts = { ...options, provider: activeOpts.provider, model: activeOpts.model };
@@ -903,13 +1045,18 @@ export class ChatCommand extends BaseCommand {
         cacheEnabled,
         { auto: autoMode },
         parsed,
+        // WS5 (#27) — isolation and resume ride on the CLI's own flags. Passed
+        // per turn: in the REPL each message is its own turn (see the manual).
+        this.ws5Overrides(options),
       );
 
       // No-model fallback: the tool loop could not generate a single response
       // AND the rules assessed a high-confidence pipeline intent — run the
       // pipeline directly (rules decide only when the model is unavailable;
       // the pipeline resolves its own working provider/model).
-      if (answer.generationFailed && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
+      // WS5 — never on a REFUSED turn: the pipeline would run it in the real tree
+      // (see the guard in `answerOnce`).
+      if (answer.generationFailed && !answer.refused && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
         await runDeveloperMode(prompt, this.configManager, { provider: type, model });
         // After pipeline execution, show followups and continue conversation
         // (don't just return — keep user engaged with next steps)
@@ -959,7 +1106,7 @@ export class ChatCommand extends BaseCommand {
           { auto: autoMode },
           parseRequestSync(picked),
           // P5 — a picked followup continues the previous execution.
-          { continuation: true },
+          { continuation: true, ...this.ws5Overrides(options) },
         );
         const nextText = stripToolCallArtifacts(next.content);
         if (nextText) {
@@ -1068,7 +1215,10 @@ export class ChatCommand extends BaseCommand {
             parsed,
             // P5 — a picked followup (or a typed one that matches the last
             // suggestions) is a continuation, not a fresh independent request.
-            { continuation: pickedFollowup || isSuggestedFollowup(message, lastFollowups) },
+            {
+              continuation: pickedFollowup || isSuggestedFollowup(message, lastFollowups),
+              ...this.ws5Overrides(options),
+            },
           ),
         ),
       );
@@ -1076,7 +1226,8 @@ export class ChatCommand extends BaseCommand {
       // No-model fallback: the tool loop could not generate a single response
       // AND the rules assessed a high-confidence pipeline intent — run the
       // pipeline directly (rules decide only when the model is unavailable).
-      if (answer.generationFailed && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
+      // WS5 — never on a REFUSED turn, for the same reason as above.
+      if (answer.generationFailed && !answer.refused && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
         await runDeveloperMode(message, this.configManager, { provider: type, model });
         // After pipeline execution, continue conversation (don't just ask "press Enter")
         // The user can keep chatting or type /exit
@@ -1272,10 +1423,32 @@ export class ChatCommand extends BaseCommand {
       debugSurface?: string;
       /** WS2 — the conversation this turn belongs to (see `answerOnce`). */
       debugSession?: string;
+      /**
+       * WS5 (#27) — ask this turn to run in its own git worktree of the project.
+       * The lifecycle (create, measure the diff, tear down) is run HERE, around
+       * the whole turn, because this method is the seam every in-process surface
+       * shares. `undefined` defers to the environment.
+       */
+      worktree?: boolean;
+      /** WS5 (#27) — keep the worktree after the turn (its path is reported either way). */
+      keepWorktree?: boolean;
+      /**
+       * WS5 (#27) — ask this turn to resume: replay the recorded steps whose
+       * input is unchanged instead of paying for them again. `undefined` defers
+       * to the environment, which is how a deployment (or the parity harness)
+       * asks every turn on a surface.
+       */
+      resume?: string | boolean;
     },
   ): Promise<{
     content: string;
     generationFailed?: boolean;
+    /**
+     * WS5 (#27) — the turn REFUSED to run: nothing was attempted, no model was
+     * called, and `content` is the reason. Always with `generationFailed`, and
+     * never interchangeable with it (see the fallback guard in `answerOnce`).
+     */
+    refused?: boolean;
     /** P4 — true when the turn was cancelled via the signal (discarded). */
     cancelled?: boolean;
     /** Phase 4 — true when the loop hit its step bound before an end turn. */
@@ -1301,6 +1474,14 @@ export class ChatCommand extends BaseCommand {
      * `[]` is a real answer ("this surface reports findings, and there were
      * none"), which is what lets five surfaces be compared honestly.
      */      findings?: WireFinding[];
+    /**
+     * WS5 (#27) — the isolation this turn had, and the diff against its base.
+     * Present only when isolation was asked for AND the turn happened; a refused
+     * turn reports the refusal as its content instead.
+     */
+    worktree?: IsolationOutcome;
+    /** WS5 (#27) — what this turn's resume replayed, and what it saved. */
+    resume?: ResumeOutcome;
   }> {
     // WS2 (#24) — the optional session debug log for this turn. Null unless
     // `NUVIRA_DEBUG_LOG` is set, so the off path is one boolean check; when on,
@@ -1347,6 +1528,107 @@ export class ChatCommand extends BaseCommand {
         // Cache must never break the turn.
       }
     }
+
+    // ─── WS5 (#27) — ISOLATION AND RESUME, the whole turn's envelope ────────
+    //
+    // HERE, and not in each caller, because this is the seam every in-process
+    // surface already shares: the CLI's interactive REPL and one-shot answer, the
+    // dashboard console, the gateway's inbound chat and `execute`'s direct-answer
+    // arm all reach the tool loop through this method. A wrapper in each caller
+    // would be four copies of one policy, and the one that drifted would be the
+    // surface that quietly ran in the real tree.
+    //
+    // It sits AFTER the response-cache check on purpose: a cached answer does no
+    // work, so there is nothing to isolate and no step to replay — paying for a
+    // git checkout to replay a cached string would be pure cost.
+    /**
+     * Where a WS5 notice goes: the surface's own progress channel when it has one
+     * (the dashboard renders it, the gateway logs it), else this process's log.
+     *
+     * Deliberately NOT `ctxOverrides.onProgress` directly: the CLI passes no
+     * progress sink for a one-shot turn, and a notice that reached nothing would
+     * hide exactly the facts it exists for — which directory the turn is isolated
+     * in, and what it changed.
+     */
+    const report =
+      ctxOverrides?.onProgress ?? ((line: string): void => void logger.info(line));
+    const projectDir = ctxOverrides?.projectPath || process.cwd();
+    const isolationRequest = resolveIsolationRequest({
+      worktree: ctxOverrides?.worktree,
+      keepWorktree: ctxOverrides?.keepWorktree,
+    });
+    const isolation = beginIsolation({ request: isolationRequest, repoCwd: projectDir, label: message });
+    if (isolation && !isolation.ok) {
+      // REFUSED, not degraded: the operator asked for isolation on purpose, and a
+      // turn that ran unisolated while its result said otherwise would be the one
+      // outcome this capability exists to prevent. Reported as a FAILED turn, so
+      // no surface presents it as an answer.
+      report(isolation.refusal);
+      return {
+        content: isolation.refusal,
+        followups: [],
+        // BOTH flags, and they say different things. `generationFailed` keeps the
+        // turn a FAILED one, so no surface renders the refusal as an answer.
+        // `refused` says WHY it failed — the turn never ran, no model was called —
+        // and that distinction is load-bearing: the caller's no-model fallback
+        // keys off `generationFailed` alone, so without this a refused turn was
+        // silently re-dispatched to the PIPELINE, which ran the ask in the real
+        // tree. Measured: `nuvira chat "write a file…" --worktree` outside a git
+        // repository printed a three-task pipeline board and never mentioned the
+        // refusal — the exact outcome isolation exists to prevent.
+        generationFailed: true,
+        refused: true,
+      };
+    }
+    const worktree = isolation?.ok ? isolation.worktree : null;
+    /**
+     * The directory this turn works in: the worktree when isolated, the attached
+     * project when one was given, else the process's own cwd.
+     *
+     * EVERY path that resolves a directory from here on reads this — the tools'
+     * `cwd`, the ambient project snapshot, the working-state ledger — because a
+     * turn that is isolated for its tools but reads its context from the original
+     * tree is not isolated, it is confused.
+     */
+    const turnCwd = worktree?.dir ?? projectDir;
+    // The ledger is only opened when a resume was asked for (a `--resume`, or the
+    // environment asking for every turn on this surface). An ordinary turn never
+    // touches the record store: no read, no write, no directory created.
+    const resumeRequest = resolveResumeRequest({ resume: ctxOverrides?.resume });
+    const resume: OpenResume | null = resumeRequest
+      ? openResume({ goal: message, cwd: turnCwd, resume: resumeRequest })
+      : null;
+    if (worktree) report(worktreeNotice(worktree));
+    // WS5 — what the RECORD holds, said before the turn. The outcome (what was
+    // replayed, what it cost) is reported in `finish` below, where it is knowable —
+    // this line used to state the outcome here, which meant every resumed turn
+    // announced "nothing to replay" before it had tried anything.
+    if (resume) report(resume.ledger.openNotice());
+    /**
+     * Attach this turn's isolation and resume outcomes to whatever it returns.
+     *
+     * A helper at every return rather than a `finally`, because the outcomes have
+     * to ride ON the result a caller is waiting for: a diff reported later (or by
+     * a separate command) is a diff most callers never see, and `endIsolation`
+     * never throws, so a cleanup failure cannot replace the turn's own answer
+     * with a git error.
+     */
+    const finish = <T,>(result: T): T & { worktree?: IsolationOutcome; resume?: ResumeOutcome } => {
+      const extra: { worktree?: IsolationOutcome; resume?: ResumeOutcome } = {};
+      if (worktree) {
+        const outcome = endIsolation(worktree, { keep: isolationRequest.keep });
+        extra.worktree = outcome;
+        report(outcome.notice);
+      }
+      if (resume) {
+        const outcome = closeResume(resume, { goal: message, cwd: turnCwd });
+        extra.resume = outcome;
+        // The wording lives in `ResumeOutcome.notice` — one sentence, every
+        // surface, including the reason when nothing replayed.
+        report(outcome.notice);
+      }
+      return { ...result, ...extra };
+    };
 
     history.push({ role: 'user', content: message });
 
@@ -1410,7 +1692,7 @@ export class ChatCommand extends BaseCommand {
     let ambientProjectContext: string | undefined;
     if (!ctxOverrides?.projectContext) {
       try {
-        const built = await buildLoopProjectContext(ctxOverrides?.projectPath || process.cwd());
+        const built = await buildLoopProjectContext(turnCwd);
         if (built) ambientProjectContext = built;
       } catch {
         ambientProjectContext = undefined;
@@ -1422,7 +1704,7 @@ export class ChatCommand extends BaseCommand {
     // what previous turns already established. This is the fix for the
     // calculator session's core drift (it re-diagnosed the same root cause six
     // times, then undid its own earlier fixes).
-    const workingStatePath = ctxOverrides?.projectPath || process.cwd();
+    const workingStatePath = turnCwd;
     const workingStateBlock = formatWorkingState(getWorkingState(workingStatePath));
 
     // Session 3 — channel/format policy lives in the STABLE layer. It is
@@ -1498,7 +1780,7 @@ export class ChatCommand extends BaseCommand {
       loadedExtraTools,
       // P4 — when a project is attached, scope tools to its root so the
       // agent operates inside the project (not the dashboard server's cwd).
-      cwd: ctxOverrides?.projectPath || process.cwd(),
+      cwd: turnCwd,
       emit: (event, data, source) => {
         // G3 — collect mutated file paths from `tool:started` (which carries
         // the arguments) so the working-state ledger knows what changed.
@@ -1701,6 +1983,9 @@ export class ChatCommand extends BaseCommand {
         otel: otelSpan,
         // WS4 — the label a tool hook reports this call under.
         surface: ctxOverrides?.debugSurface ?? 'cli-chat',
+        // WS5 — the resume ledger, when this turn was asked to resume. Omitted
+        // entirely otherwise, so an ordinary turn never consults it.
+        ...(resume ? { resume: resume.ledger } : {}),
         onToken: ctxOverrides?.onToken,
         signal: ctxOverrides?.signal,
         // G18 — the same sink the execute loop uses: tool calls, gate decisions
@@ -1908,7 +2193,7 @@ export class ChatCommand extends BaseCommand {
       await flushSpans();
     }
 
-    return {
+    return finish({
       content: stripToolCallArtifacts(result.content),
       generationFailed: result.generationFailed,
       cancelled: result.cancelled,
@@ -1922,7 +2207,7 @@ export class ChatCommand extends BaseCommand {
       transport: result.transport,
       // WS1 — the findings this turn recorded, with their verdicts.
       findings,
-    };
+    });
   }
 
   /**

@@ -27,6 +27,10 @@ import {
   runToolOutcomeHooks,
   toolHookRefusalText,
 } from './tool-hooks.js';
+// WS5 (#27) — the resume ledger. A `StepReplay` is threaded through the turn
+// when the run is a resume; `stepDigest` is over the whole input, so a step whose
+// thread or tool schema changed MISSES and is paid for again (see the module).
+import { stepDigest, type StepReplay } from '../learning/step-checkpoint.js';
 import {
   detectPermissionSeeking,
   isAffirmativeReply,
@@ -312,6 +316,16 @@ export interface ToolLoopOptions {
    */
   otel?: SpanHandle | null;
   /**
+   * WS5 (#27) — the resume ledger for this run, or null when it is a fresh run.
+   *
+   * With one supplied, a model call whose EXACT input (thread + tool schema)
+   * matches a recorded step is replayed from the record instead of being made
+   * again, and every call that is still made is recorded so the next resume can
+   * replay it. Omitted entirely on an ordinary run: the ledger is then never
+   * consulted, never built, and the turn behaves exactly as it did before.
+   */
+  resume?: StepReplay | null;
+  /**
    * WS4 (#26) — the surface label this loop is running as (`cli-chat`,
    * `cli-execute`, `dashboard-chat`, `gateway-chat`, `subagent`).
    *
@@ -467,6 +481,11 @@ export interface ToolLoopResult {
    * (rules act only when the model is unavailable, never as a bypass).
    */
   generationFailed?: boolean;
+  /**
+   * WS5 (#27) — model calls this turn did NOT make because a recorded step with
+   * the SAME input was replayed. Omitted on a run with no resume ledger.
+   */
+  replayedSteps?: number;
   /**
    * P4 — true when the turn was cancelled via ToolLoopOptions.signal (the
    * dashboard's Cancel button). The caller DISCARDS the turn: no cache write,
@@ -1013,6 +1032,13 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // steps, one advisory delegate suggestion fires (bounded, deterministic).
   const parallel = makeParallelSuggester();
   let steps = 0;
+  /**
+   * WS5 (#27) — model calls this run did NOT make because the checkpoint had a
+   * recorded answer for the exact same input. Zero on an ordinary run, and
+   * reported rather than merely logged: "this turn cost one model call instead of
+   * three" is the whole claim of a partial resume.
+   */
+  let replayedSteps = 0;
   // The last SUBSTANTIVE answer text. JSON-only steps (a `{"tool":...}` block
   // with no visible text, common after the model already answered) must NOT
   // clobber it — otherwise the delivered answer is lost and the turn ends
@@ -1040,7 +1066,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // P4 — check cancellation BEFORE each step (a pre-aborted signal never
     // spends a model call) and after tool executions (below).
     if (opts.signal?.aborted) {
-      return { content: '', followups, toolCalls: toolCallsRun, steps, bounded: false, cancelled: true };
+      return { content: '', followups, toolCalls: toolCallsRun, steps, ...(opts.resume ? { replayedSteps } : {}), bounded: false, cancelled: true };
     }
     steps += 1;
     // Mechanical thread budget: trim BEFORE the model call so a provider
@@ -1062,7 +1088,25 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     syncRouteFeed(thread, opts.servedRoute, routeFeedState);
     let response: StepResponse;
     try {
-      response = await deps.callModel(thread, schemas, opts.onToken, opts.signal);
+      // WS5 (#27) — a resumed run replays this step when its input is unchanged.
+      // The key is the step's POSITION and the digest is its whole input, so both
+      // have to line up: a plan that shifted by one step replays nothing (the
+      // positions hold different inputs), while a re-run of the same plan replays
+      // every step whose thread and schema are byte-identical.
+      const resumeKey = `model:${steps}`;
+      const resumeDigest = opts.resume ? stepDigest(thread, schemas) : '';
+      const replayed = opts.resume?.replay(resumeKey, resumeDigest) ?? null;
+      if (replayed) {
+        response = replayed;
+        replayedSteps += 1;
+        deps.onEvent?.(`   ↩️ step ${steps} replayed from the checkpoint — no model call`);
+      } else {
+        response = await deps.callModel(thread, schemas, opts.onToken, opts.signal);
+        // Recorded AFTER the call, and only what the model actually returned: a
+        // failed call records nothing, so a resume cannot inherit a failure as an
+        // answer.
+        if (opts.resume) opts.resume.record(resumeKey, resumeDigest, response);
+      }
       // A provider/adapter that resolves with nothing usable (undefined, a
       // missing content field) must not crash the turn — treat it as this
       // step's generation failure so the bounded continuation logic below can
@@ -1080,7 +1124,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // generation failure: the caller discards the turn. No error text, no
       // fallback — the fetch itself aborted on the caller's signal.
       if (opts.signal?.aborted) {
-        return { content: '', followups, toolCalls: toolCallsRun, steps, bounded: false, cancelled: true };
+        return { content: '', followups, toolCalls: toolCallsRun, steps, ...(opts.resume ? { replayedSteps } : {}), bounded: false, cancelled: true };
       }
       // Generation failure — surface what we have rather than crash the turn.
       // generationFailed is TRUE only when NOTHING happened yet (no content, no
@@ -1144,6 +1188,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         followups,
         toolCalls: toolCallsRun,
         steps,
+        ...(opts.resume ? { replayedSteps } : {}),
         bounded: false,
         continuations,
         generationFailed: delivered === '' || !madeProgress,
@@ -1441,6 +1486,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         followups,
         toolCalls: toolCallsRun,
         steps,
+        ...(opts.resume ? { replayedSteps } : {}),
         bounded: false,
         continuations,
       };
@@ -1823,7 +1869,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // P4 — cancellation during/after tool execution: do NOT request another
     // model step on a cancelled turn (the user already walked away).
     if (opts.signal?.aborted) {
-      return { content: '', followups, toolCalls: toolCallsRun, steps, bounded: false, cancelled: true };
+      return { content: '', followups, toolCalls: toolCallsRun, steps, ...(opts.resume ? { replayedSteps } : {}), bounded: false, cancelled: true };
     }
 
     // ── endsAgentStep — a successful dispenser's RESULT is the answer ────────
@@ -1854,6 +1900,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         followups,
         toolCalls: toolCallsRun,
         steps,
+        ...(opts.resume ? { replayedSteps } : {}),
         bounded: false,
         continuations,
       };
@@ -1935,6 +1982,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         followups,
         toolCalls: toolCallsRun,
         steps,
+        ...(opts.resume ? { replayedSteps } : {}),
         bounded: false,
         continuations,
       };
@@ -1955,6 +2003,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     followups,
     toolCalls: toolCallsRun,
     steps,
+    ...(opts.resume ? { replayedSteps } : {}),
     bounded: true,
     continuations,
   };

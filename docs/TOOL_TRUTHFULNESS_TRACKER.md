@@ -374,6 +374,96 @@ gitignored, so on a fresh clone every comment pointed at nothing:
 All three are whitelisted in `.gitignore` alongside this file, so the guard needs
 no exemption for them and the acknowledgement list is empty.
 
+## Status — the forked child has no verification gate (2026-09-29, found by the parity harness)
+
+`write_file` / `edit_file` are `MUTATION_TOOLS` (`src/tools/edit-verification.ts`),
+so an **in-process** turn that writes one spends a bounded verification nudge and
+makes one more model call. The **forked child's** loop
+(`src/tools/child-agent-runtime.ts`) has no verification gate at all — the file has
+no reference to `assessEditActivity`, `MUTATION_TOOLS`, `unverifiedEdit` or the
+nudge — so the same write inside a delegated run is never followed by "nothing
+observed the result, run a check".
+
+Measured, not inferred. The WS5 isolation parity scenario was first written with
+`write_file` as the mutating call, and the harness reported exactly one field
+diverging across the five surfaces: `modelCalls 3 vs 2` — three for each in-process
+surface (ask for the write, get nudged to verify, answer), two for the child. The
+scenario was then re-pointed at `run_terminal` (not a mutation tool) so the WS5 row
+measures WHERE a turn works and what it changed rather than this gate, and this
+entry is the record of the difference the first version found.
+
+What is NOT claimed: that the child's loop should copy the whole nudge machinery
+(bounded counter, workspace-aware nudge text, `unverifiedEdit`/`unverifiedEditClaim`
+flags on its result) as part of WS5. It is a real gap in the *child's* engine and
+belongs to a change that can test it on its own terms.
+
+## Status — the dashboard isolation control (2026-09-29, found by the live dashboard run)
+
+Adding the 🌿 control to the chat composer meant driving the real dashboard server
+and the real bundle. Three things came out of it; the first two were invisible to the
+suite because they only appear when a real model, a real repository and the shipped
+artifact are in the same room.
+
+### 1. A REFUSED isolated turn was re-dispatched to the pipeline — unisolated
+
+`runChatAnswer` refuses a turn it cannot isolate and reports it as a failed turn
+(`generationFailed: true`), so no surface renders the refusal as an answer. But
+`generationFailed` is ALSO the trigger for the engine's no-model fallback — "the loop
+produced nothing, the rules say this is a coding ask, run the pipeline instead" — and
+that fallback runs a completely different engine with no isolation at all.
+
+Measured on the real CLI, in a directory that is not a git repository:
+
+```bash
+nuvira chat "write a file called hello.txt saying hi" --worktree
+```
+
+printed the pipeline's three-task board and "Repair budget exhausted", and the word
+"isolation" never appeared. A dashboard turn did the same and surfaced as
+*"I couldn't get an answer from the model just now"* — blaming the model for a
+decision about the directory. The operator asked for isolation, got an unisolated
+run in their real tree, and was told nothing. Exactly the outcome the capability
+exists to prevent.
+
+**Both halves are closed.** The refusal now carries its own `refused: true` beside
+`generationFailed`, every no-model gate requires `!answer.refused`, and the dashboard
+neither offers a Retry nor queues a background re-run for one (retrying cannot make a
+directory a git repository). Witnesses: the refusal reason reaches the reader
+verbatim, and `tests/cli/chat-answer-once-auto-parity.test.ts` asserts the pipeline
+was **never called** for a refused WRITE ask — verified to fail with the guard
+removed.
+
+### 2. A clean repository was reported as having an uncommitted change
+
+`gitRun` returns git's stdout with a fallback message when it is empty (`out ||
+'git reported no output'`), and `dirtyCount` counted LINES of that. `git status
+--porcelain` on a pristine tree prints NOTHING, so every isolated turn in a clean
+checkout announced:
+
+```text
+note: 1 uncommitted change(s) in the source tree are NOT in this worktree
+```
+
+and sent the operator looking for a change that did not exist. `gitRun` now returns
+the exact stdout (`raw`) beside the never-empty message, counting and parsing read
+`raw`, and the unit test asserts **0** on a clean repo where the old one only
+asserted `> 0` (which the bug satisfied).
+
+### 3. The card rendered nothing, because the guard demanded the wrong shape
+
+`WorktreeDiff` carries the changed PATHS (`files: string[]`) and the unified diff
+BODY (`payload: {files: [{path, body}]}`). The client-side guard checked `files` for
+`{path, body}` objects, so it rejected every real payload and the API client dropped
+the report — a card for a turn that changed a file would never have appeared. Found
+by printing the live response (`diff.files` is `["dash-iso.txt"]`, so `.map(f =>
+f.path)` gave `[null]`) rather than by any test, because the test fixture had been
+written in the same wrong shape as the guard.
+
+The guard now checks both halves, `src/api.test.ts` pins the REAL wire shape, and the
+live run pins the rest: a dashboard turn with isolation on changed `dash-iso.txt`,
+the response carried `payload.files[0].body` = the unified diff, and the project tree
+stayed clean.
+
 ## Open
 
 1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost

@@ -66,14 +66,24 @@ import {
 import { TOOL_HOOK_ENV, TOOL_HOOK_PHASES } from '../tools/tool-hooks.js';
 import {
   noDebugLog,
+  noIsolation,
   noOtelExport,
+  noResume,
   noToolHooks,
   type DebugLogObs,
+  type IsolationObs,
   type OtelExportObs,
+  type ResumeObs,
   type ToolCallObs,
   type ToolHooksObs,
   type TurnObservation,
 } from './observation.js';
+// WS5 (#27) — the two env keys the harness declares these capabilities THROUGH,
+// imported from the modules that define them so a renamed variable cannot leave
+// the harness silently declaring nothing (which would read as "no surface
+// isolated its turn", the failure this row is meant to catch).
+import { WORKTREE_ENABLE_ENV } from '../tools/worktree.js';
+import { RESUME_ENABLE_ENV } from '../learning/step-checkpoint.js';
 import type { ParityDriver, ParityScenario, StubDepth } from './scenarios.js';
 import type { SurfaceId } from './surfaces.js';
 
@@ -575,6 +585,80 @@ async function withToolHooks(
   }
 }
 
+// ─── The turn envelope (WS5: isolation and resume) ──────────────────────────
+
+/**
+ * Run one surface's turn with this scenario's isolation and resume DECLARED, and
+ * reduce the surface's own reports to what is compared.
+ *
+ * THE RESUME PROBE IS A PAIR OF TURNS, and it has to be: "a resumed run reuses
+ * unchanged steps instead of re-paying for every model call" is a statement about
+ * two runs — one that writes the record and one that reads it — so a single turn
+ * cannot produce the fact. The FIRST turn is the one everything else about the
+ * scenario is read from (a fully replayed turn reaches no model at all, and the
+ * runner refuses to compare such a turn); the SECOND contributes only its resume
+ * fields.
+ *
+ * THE RESPONSE CACHE IS CLEARED BEFORE EACH TURN, and skipping that would make
+ * this row lie in the most convenient direction: the second turn sends the same
+ * message as the first, so a cache hit would answer it without reaching the loop
+ * at all — no record read, no step replayed, and a `resuming: false` that a
+ * harness comparing only model counts would read as agreement. The driver's own
+ * turns clear it too; this is the second, independent guard.
+ *
+ * Both declarations are the ENVIRONMENT (`NUVIRA_ISOLATE` / `NUVIRA_RESUME`) and
+ * are restored afterwards, exactly like the OTLP endpoint and the hooks: the
+ * surfaces read them at call time, so a declaration that leaked into the next
+ * scenario would look like that scenario's own behaviour. The environment is also
+ * what makes ONE declaration cover all five surfaces — the dashboard server, the
+ * gateway and the forked child have no flags to carry.
+ */
+async function withTurnEnvelope(
+  scenario: ParityScenario,
+  surface: SurfaceId,
+  body: () => Promise<TurnObservation>,
+): Promise<TurnObservation> {
+  const askedIsolation = scenario.isolation === true;
+  const askedResume = scenario.resume === true;
+  const previousIsolation = process.env[WORKTREE_ENABLE_ENV];
+  const previousResume = process.env[RESUME_ENABLE_ENV];
+  const set = (name: string, value: string | undefined): void => {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  };
+  /**
+   * The record this surface's probe uses — NAMED, and namespaced by surface.
+   *
+   * The auto id is `checkpointIdFor(goal, cwd)`, which is the right default for a
+   * human (`--resume` means "the last run of this ask, here") and exactly wrong for
+   * this harness: every in-process surface runs the SAME ask in the SAME directory,
+   * so they would all read ONE record and a surface could "replay" a tree another
+   * surface recorded — measured, and it made two surfaces pass for a reason that had
+   * nothing to do with them. A per-surface id keeps each probe's record its own,
+   * which is also the path an operator uses to resume a named run.
+   */
+  const resumeId = `parity-${scenario.id}-${surface}`;
+  try {
+    set(WORKTREE_ENABLE_ENV, askedIsolation ? '1' : undefined);
+    // BOTH turns are asked to resume, and that is not a formality: the FIRST one is
+    // what WRITES the record the second replays. A probe whose first turn ran
+    // without a ledger would compare a resumed turn against an empty record —
+    // replayed 0, model calls unchanged — and report that as the capability working.
+    set(RESUME_ENABLE_ENV, askedResume ? resumeId : undefined);
+    await clearResponseCache();
+    const first = await body();
+    if (!askedResume) return first;
+    await clearResponseCache();
+    const second = await body();
+    // Only the resume fields come from the second turn: everything else about the
+    // scenario is read from the first one, which is the turn that reached a model.
+    return { ...first, resume: second.resume };
+  } finally {
+    set(WORKTREE_ENABLE_ENV, previousIsolation);
+    set(RESUME_ENABLE_ENV, previousResume);
+  }
+}
+
 // ─── The workspace ──────────────────────────────────────────────────────────
 
 /** The throwaway profile a run points the surfaces at. */
@@ -670,6 +754,57 @@ interface SurfaceAnswer {
   debugLog?: DebugLogObs;
   /** WS3 — the span tree this surface exported, as its collector received it. */
   otel?: OtelExportObs;
+  /** WS5 — the isolation this turn had (the surface's own report). */
+  worktree?: { dir: string; base: string; diff: { files: readonly string[] }; removed: boolean };
+  /** WS5 — what this turn's resume replayed (the surface's own report). */
+  resume?: { id: string; replayed: number; modelCalls: number; saved: boolean };
+}
+
+/**
+ * Reduce a surface's own isolation report to the compared projection.
+ *
+ * Takes the shape both the in-process surfaces and the subagent manager report
+ * (a base commit, a file list and whether the directory was removed) rather than
+ * one of their concrete types, because the two are produced by different code on
+ * purpose: the in-process turn makes its own worktree, the parent makes the
+ * child's. What must agree is the RESULT, and that is what this reduces.
+ */
+function isolationObsOf(
+  asked: boolean,
+  report: { base: string; diff: { files: readonly string[] }; removed: boolean } | undefined | null,
+): IsolationObs {
+  if (!report) return { ...noIsolation(), asked };
+  return {
+    asked,
+    isolated: true,
+    // Sorted, so the comparison is over the SET of files the run changed: a diff
+    // is measured from `git diff`, whose order is the repository's, not the
+    // surface's.
+    files: [...report.diff.files].sort(),
+    removed: report.removed,
+    base: report.base,
+  };
+}
+
+/**
+ * Reduce a surface's own resume report to the compared projection.
+ *
+ * `asked` with no report is the honest description of a surface that ignored the
+ * request: `resuming: false` against every other surface's `true`, which
+ * `compare` reports as a difference rather than as agreement about nothing.
+ */
+function resumeObsOf(
+  asked: boolean,
+  report: { replayed: number; modelCalls: number; saved: boolean } | undefined | null,
+): ResumeObs {
+  if (!report) return { ...noResume(), asked };
+  return {
+    asked,
+    resuming: true,
+    replayed: report.replayed,
+    modelCalls: report.modelCalls,
+    saved: report.saved,
+  };
 }
 
 /**
@@ -735,6 +870,13 @@ function toObservation(
     // actually received (`withToolHooks`): the log is written by the HOOK, and
     // only the wrapper knows which file this surface's run was pointed at.
     hooks: noToolHooks(),
+    // WS5 — the surface's OWN report of the isolation it ran with, and of what its
+    // resume replayed. `asked` comes from the scenario, which is what makes
+    // "asked for it and did not do it" a difference rather than a tautology. The
+    // resume field is REPLACED by `withTurnEnvelope` for the resumed scenario,
+    // whose second turn is the one that can answer it.
+    isolation: isolationObsOf(scenario.isolation === true, answer.worktree),
+    resume: resumeObsOf(scenario.resume === true, answer.resume),
     ...(typeof answer.content === 'string' ? { answer: answer.content } : {}),
     ...(succeeded
       ? {}
@@ -813,8 +955,16 @@ async function runViaConsole(ws: ParityWorkspace, scenario: ParityScenario): Pro
       });
     });
     try {
+      // WS5 (#27) — one session PER TURN, counter and all. The resume probe runs
+      // the same ask twice, and a second turn in the SAME conversation carries the
+      // first answer in its history — so its input genuinely differs, the replay
+      // correctly misses, and the row would compare two different questions. A
+      // fresh conversation each time is what the other surfaces do anyway (a
+      // one-shot CLI answer, a fresh child process). The counter keeps the ids
+      // unique within a run; nothing else reads them.
+      consoleRun += 1;
       const { value: result, otel } = await withOtlpCollector(() =>
-        console_.answer(`parity-${scenario.id}`, scenario.message, {
+        console_.answer(`parity-${scenario.id}-${consoleRun}`, scenario.message, {
           provider: PARITY_PROVIDER_TYPE,
           model: PARITY_MODEL,
         }),
@@ -852,6 +1002,13 @@ class RecordingAdapter implements ChannelAdapter {
 
 /** Unique per gateway run: the gateway dedups a re-delivered message. */
 let gatewayRun = 0;
+
+/**
+ * Unique per console turn (WS5): the resume probe drives the same ask twice, and
+ * two turns in one conversation would carry the first answer in the second's
+ * history (see the comment at the call site).
+ */
+let consoleRun = 0;
 
 /**
  * Gateway (WhatsApp / Telegram / …): the REAL registry handler, with no chat
@@ -930,6 +1087,15 @@ async function runViaGateway(ws: ParityWorkspace, scenario: ParityScenario): Pro
         debugLog: debugLogOf('gateway-chat'),
         // WS3 — the span tree the collector received from this surface.
         otel,
+        // WS5 — read from the gateway's own durable record, for the same reason
+        // the tool lifecycle and the findings are: a messaging surface has no
+        // terminal, so `inbound.chat` IS where this surface said what it did.
+        ...(record.worktree && typeof record.worktree === 'object'
+          ? { worktree: record.worktree as SurfaceAnswer['worktree'] }
+          : {}),
+        ...(record.resume && typeof record.resume === 'object'
+          ? { resume: record.resume as SurfaceAnswer['resume'] }
+          : {}),
       },
       toolCalls,
       stub.chatCalls(),
@@ -972,6 +1138,8 @@ async function runViaExecuteCommand(ws: ParityWorkspace, scenario: ParityScenari
         toolCalls?: string[];
         toolOutcomes?: Array<{ tool: string; ok?: boolean }>;
         findings?: WireFinding[];
+        worktree?: { dir: string; base: string; diff: { files: readonly string[] }; removed: boolean };
+        resume?: { id: string; replayed: number; modelCalls: number; saved: boolean };
       }>;
     };
     const { value: result, otel } = await withOtlpCollector(() =>
@@ -992,6 +1160,9 @@ async function runViaExecuteCommand(ws: ParityWorkspace, scenario: ParityScenari
         debugLog: debugLogOf('cli-execute'),
         // WS3 — the span tree this command's loop exported for the turn.
         otel,
+        // WS5 — the command's own report, on either engine arm.
+        ...(result.worktree ? { worktree: result.worktree } : {}),
+        ...(result.resume ? { resume: result.resume } : {}),
       },
       // The command's own per-call outcomes (captured from the loop's
       // `tool`/`refusal` events). The fallback keeps a name-only result honest:
@@ -1024,7 +1195,15 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
   const stub = await startStub(scenario);
   // The child gets its OWN config/memory dirs, because it is its own process —
   // but the file it reads points at the SAME stub server.
-  const childRoot = mkdtempSync(join(ws.root, 'subagent-'));
+  //
+  // DETERMINISTIC, not `mkdtemp`: a resume probe drives the same scenario twice,
+  // and the child's step record lives in the memory dir it inherits. A throwaway
+  // dir per call would put the second turn's record in a different place from the
+  // first one's, so the child could never replay anything and the probe would be
+  // measuring the harness's own bookkeeping. Keyed by SCENARIO (not by surface) on
+  // purpose: the child of one surface must not read another's record, and each
+  // surface's own two turns must share one.
+  const childRoot = join(ws.root, `subagent-${scenario.id}`);
   const childConfig = join(childRoot, 'config');
   mkdirSync(childConfig, { recursive: true });
   writeFileSync(
@@ -1072,6 +1251,13 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
         provider: PARITY_PROVIDER_TYPE,
         model: PARITY_MODEL,
         tools: [availableTool],
+        // WS5 (#27) — delegation-level isolation: the PARENT makes the worktree,
+        // forks the child INTO it and measures the diff itself. That is the
+        // mechanism a delegating caller actually has (the child resolves its own
+        // config and could decline), and it is why this surface is asked through
+        // the spawn config rather than through the environment the in-process
+        // surfaces read.
+        ...(scenario.isolation === true ? { worktree: true } : {}),
         env: {
           NUVIRA_CONFIG_DIR: childConfig,
           NUVIRA_MEMORY_DIR: join(childRoot, 'memory'),
@@ -1113,6 +1299,13 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
         // hook received: the child runs the hook in its OWN process and appends
         // to the log file it inherited the path of (`withToolHooks`).
         hooks: noToolHooks(),
+        // WS5 — the isolation the PARENT made for this child, and what the diff
+        // against the base commit was. Read from the result the manager hands its
+        // caller, which is the artifact a delegating caller actually receives.
+        isolation: isolationObsOf(scenario.isolation === true, result.worktree),
+        // WS5 — the CHILD's own resume report, read from the frame it sent (the
+        // child is a separate process; this is its only channel back).
+        resume: resumeObsOf(scenario.resume === true, result.resume),
         ...(result.result ? { answer: result.result } : {}),
         ...(result.success ? {} : { errorCode: result.refusalCode ?? 'turn_failed' }),
         noise: { at: Date.now() },
@@ -1121,8 +1314,10 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
       manager.off('progress', onProgress);
     }
   } finally {
+    // The child's root is left in place (the workspace's own teardown removes it):
+    // a resume probe's two turns must share it, so deleting it here would delete the
+    // record the second turn is about to read.
     await stub.close();
-    rmSync(childRoot, { recursive: true, force: true });
   }
 }
 
@@ -1182,6 +1377,11 @@ export async function createParityHarness(): Promise<ParityHarness> {
     debugLog: process.env.NUVIRA_DEBUG_LOG,
     otel: process.env[otelEnableVarName],
     otelEndpoint: process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+    // WS5 (#27) — never the developer's own request. The harness DECLARES these
+    // per scenario (`withTurnEnvelope`); a value inherited from the shell would
+    // make the scenarios that do not ask for the capability measure it anyway.
+    isolation: process.env[WORKTREE_ENABLE_ENV],
+    resume: process.env[RESUME_ENABLE_ENV],
   };
   process.env.NUVIRA_CONFIG_DIR = workspace.configDir;
   process.env.NUVIRA_MEMORY_DIR = workspace.memoryDir;
@@ -1216,13 +1416,17 @@ export async function createParityHarness(): Promise<ParityHarness> {
       // surface's collector, and every surface after that would read as having
       // exported nothing — a silent, permanent green on one surface only.
       await shutdownSpans();
-      // WS4 (#26) — the operator's hooks are DECLARED around the turn (and
-      // undeclared again after it), so "this surface ran the hook" is an
-      // assertion about a declaration the harness actually made rather than one
-      // it merely recorded. In this commit nothing wrapped the turn, so the
-      // `tool-hooks` row read `[]` invocations on every surface — the capability
-      // was implemented and unproven at the same time.
-      return withToolHooks(workspace, surface, scenario, () => run(workspace, scenario));
+      // WS5 — isolation and resume are DECLARED around the turn (and undeclared
+      // again after it), so "this surface isolated its turn / replayed its steps"
+      // is an assertion about a declaration the harness actually made. OUTSIDE
+      // the hook wrapper because the resume probe runs the turn twice, and each
+      // of those two turns is a whole turn of its own.
+      return withTurnEnvelope(scenario, surface, () =>
+        // WS4 — the operator's hooks are DECLARED around the turn (and undeclared
+        // again after it), so "this surface ran the hook" is an assertion about a
+        // declaration the harness actually made.
+        withToolHooks(workspace, surface, scenario, () => run(workspace, scenario)),
+      );
     },
   });
 
@@ -1253,6 +1457,10 @@ export async function createParityHarness(): Promise<ParityHarness> {
       else process.env[otelEnableVarName] = previous.otel;
       if (previous.otelEndpoint === undefined) delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
       else process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = previous.otelEndpoint;
+      if (previous.isolation === undefined) delete process.env[WORKTREE_ENABLE_ENV];
+      else process.env[WORKTREE_ENABLE_ENV] = previous.isolation;
+      if (previous.resume === undefined) delete process.env[RESUME_ENABLE_ENV];
+      else process.env[RESUME_ENABLE_ENV] = previous.resume;
       // Tear the LAST surface's provider down too: a test file that runs several
       // parity runs in a row would otherwise inherit the first one's provider,
       // still pointing at a collector that has been closed.

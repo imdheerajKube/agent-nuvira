@@ -1865,18 +1865,41 @@ registerTool({
         'Model id to pin, exactly as the provider names it. Only meaningful with provider; '
         + 'default is that provider default model.',
       ),
+    // WS5 (#27) — run the child in its own git worktree and get the diff back.
+    // Exposed to the MODEL because "isolate this and show me what changed" is a
+    // request a user makes conversationally, and delegating the risky work to an
+    // isolated copy is the case the capability exists for.
+    worktree: z
+      .boolean()
+      .optional()
+      .describe(
+        'Run the child in its own git worktree of the current project and return the diff against '
+        + 'the base commit. REFUSES (rather than running unisolated) when this is not a git repo '
+        + 'with a commit. Default false.',
+      ),
+    keepWorktree: z
+      .boolean()
+      .optional()
+      .describe('Keep the isolated worktree after the run instead of removing it. Default false.'),
   }),
   endsAgentStep: false,
-  run: (args) => import('./subagent-spawner.js').then((m) => {
-    const { action, goal, id, timeout, tools, provider, model } = args as any;
+  run: (args, ctx) => import('./subagent-spawner.js').then((m) => {
+    const { action, goal, id, timeout, tools, provider, model, worktree, keepWorktree } = args as any;
     const mgr = m.getSubagentManager();
     switch (action) {
       case 'spawn': return goal
         ? mgr.spawn({
             goal,
+            // WS5 (#27) — the child works where THIS turn is working. Without it
+            // a subagent spawned from an isolated turn (or from a dashboard turn
+            // attached to a project) forked in the process's own directory — so
+            // "isolate this and delegate it" delegated a copy of the real tree.
+            ...(ctx?.cwd ? { cwd: ctx.cwd } : {}),
             ...(Array.isArray(tools) && tools.length ? { tools } : {}),
             ...(typeof provider === 'string' && provider ? { provider } : {}),
             ...(typeof model === 'string' && model ? { model } : {}),
+            ...(worktree === true ? { worktree: true } : {}),
+            ...(keepWorktree === true ? { keepWorktree: true } : {}),
           }).then((s: any) => JSON.stringify(s))
         : 'goal required';
       case 'status': return id ? JSON.stringify(mgr.getState(id)) : 'id required';

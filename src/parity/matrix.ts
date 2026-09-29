@@ -277,13 +277,55 @@ export const CAPABILITIES: readonly Capability[] = [
     id: 'isolation-worktree',
     label: 'An investigation can be isolated in a git worktree and returns a diff against the base',
     workstream: 'WS5',
-    cells: everywhere('planned'),
+    cells: {
+      'cli-chat': {
+        status: 'supported',
+        note: 'Proven: `--worktree` on `nuvira chat`, or `NUVIRA_ISOLATE=1` for a deployment, runs the TURN in its own git worktree — the worktree is created around `answerOnce`/`runChatAnswer`, so the tools` `cwd`, the ambient project snapshot and the working-state ledger all resolve inside it. The result carries the diff against the base commit and the operator sees where the run happened (`🌿 isolated in a git worktree: …`). When the directory cannot be isolated (not a repo, no commit) the turn REFUSES and reports the refusal as its content — it never runs unisolated while claiming otherwise. Proven by the `isolation-worktree` parity scenario, which asserts the changed file, the removal and a real base sha on every surface.',
+      },
+      'cli-execute': {
+        status: 'supported',
+        note: 'Proven: `--worktree` on `nuvira execute` isolates BOTH engine arms — `runLoopExecutor` resolves the request before routing (so a refused run costs no provider walk) and the direct-answer arm passes the same flags to the shared engine. The command reports the isolation and its diff on its own result, so a caller reads it from the surface rather than from a log. Proven by the `isolation-worktree` parity scenario, which drives the command`s own `runSingleGoal`.',
+      },
+      'dashboard-chat': {
+        status: 'supported',
+        note: 'Proven: the console forwards a per-turn request (`worktree` on `answer`, which the chat request carries) and the server`s environment can declare it for the deployment — the same shared engine does the work. The diff comes back on the console`s own result, so the GUI (or an API caller) can show what an isolated turn changed instead of only that it was isolated. Proven by the `isolation-worktree` parity scenario, which drives the REAL console with no injected engine.',
+      },
+      'gateway-chat': {
+        status: 'supported',
+        note: 'Proven: a messaging turn has no flags, so the gateway is asked through `NUVIRA_ISOLATE` and the shared engine isolates the turn; the isolation and its diff are written to the gateway`s own durable `inbound.chat` record, which is where a surface with no terminal has to say what it did. Read back from that record by the parity driver rather than taken from a return value. Proven by the `isolation-worktree` parity scenario, which drives the REAL registry handler.',
+      },
+      'subagent': {
+        status: 'supported',
+        note: 'Proven ACROSS the process boundary, and with the isolation made by the PARENT rather than asked of the child: `subagent` accepts `worktree: true`, `tools/subagent-spawner.ts` creates the worktree, forks the child INTO it and measures the diff itself when the child exits — a child that quietly declined would leave the caller believing isolated work happened in the real tree. A spawn that cannot be isolated FAILS rather than running unisolated, and an isolated child that in turn spawns inherits the directory (the spawn tool passes `ctx.cwd`). Proven by the `isolation-worktree` parity scenario and by `tests/tools/subagent-end-to-end.test.ts`.',
+      },
+    },
   },
   {
     id: 'partial-resume',
     label: 'A resumed run reuses unchanged steps instead of re-paying for every model call',
     workstream: 'WS5',
-    cells: everywhere('planned'),
+    cells: {
+      'cli-chat': {
+        status: 'supported',
+        note: 'Proven: `--resume [id]` (or `NUVIRA_RESUME`) replays the recorded MODEL CALLS of this ask in this directory whose input is byte-identical — the thread and the tool schema, hashed together — and pays only for the steps that changed. An ordinary run opens no record at all (no read, no write, no directory created). The session reports what it replayed and what it paid for. Proven by the `partial-resume` parity scenario, which runs the same ask twice and asserts the second turn made ZERO model calls.',
+      },
+      'cli-execute': {
+        status: 'supported',
+        note: 'Proven: `--resume` now means the same thing on BOTH of this command`s engines and at both granularities — completed TASKS are skipped on the pipeline arm (`agents/checkpoint-store.ts`) and unchanged MODEL CALLS are replayed on the loop arm (`learning/step-checkpoint.ts`). Both resolve their id through `checkpointIdFor(goal, cwd)`, so one flag cannot mean two different runs. Proven by the `partial-resume` parity scenario, which drives the command`s own `runSingleGoal`.',
+      },
+      'dashboard-chat': {
+        status: 'supported',
+        note: 'Proven: the console forwards a per-turn `resume` request and the server can declare it for the deployment; the shared engine opens the record, replays the unchanged steps and reports the counts on the console`s own result. The parity case drives a FRESH conversation per turn, which is the honest way to ask — two turns in one conversation carry the first answer in the second`s history, so their inputs genuinely differ and the replay correctly misses.',
+      },
+      'gateway-chat': {
+        status: 'supported',
+        note: 'Proven: an inbound message has no flags, so the gateway is asked through `NUVIRA_RESUME`; the resumed turn`s counts are recorded on the gateway`s `inbound.chat` record, where a messaging surface has to report them. Proven by the `partial-resume` parity scenario, read back from that record.',
+      },
+      'subagent': {
+        status: 'supported',
+        note: 'Proven ACROSS the process boundary and in the child`s OWN process, which is where the model calls happen: the child opens its own record, replays the steps whose thread+schema hash matches, and reports what it avoided to the parent on a progress frame that becomes part of the run`s result. An empty recorded step (a provider failure) is never replayed, so a resume cannot inherit a failure as an answer. Proven by the `partial-resume` parity scenario, whose child root and memory dir are SHARED between the probe`s two turns so the second turn reads what the first wrote.',
+      },
+    },
   },
 ];
 

@@ -79,6 +79,30 @@ export interface ParityScenario {
     /** Tool names a `before` hook VETOES. Absent or empty = the hook observes only. */
     deny?: readonly string[];
   };
+  /**
+   * WS5 (#27) — ask this turn to run in its own git worktree and report the diff
+   * against its base commit.
+   *
+   * A scenario field rather than a harness-wide setting, for the same reason the
+   * hooks are: isolation CHANGES where the turn writes, so declaring it for every
+   * scenario would make the earlier cases measure a different system than the one
+   * they were written against. Absent means no isolation is asked for — the
+   * default every surface must also be correct under.
+   *
+   * The harness declares it through `NUVIRA_ISOLATE`, which is how a surface with
+   * no command line (the dashboard server, the gateway, the forked child) is
+   * asked, so ONE declaration covers all five rather than five different flags.
+   */
+  isolation?: boolean;
+  /**
+   * WS5 (#27) — ask this turn to RESUME: replay the steps of a previous run of the
+   * same ask whose input is unchanged, instead of paying for them again.
+   *
+   * The driver runs the scenario TWICE — once to write the record and once to
+   * replay it — and reports what the second turn avoided, because the claim is
+   * about a pair of runs and one turn cannot show it (see `ResumeObs`).
+   */
+  resume?: boolean;
 }
 
 /**

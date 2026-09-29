@@ -51,6 +51,23 @@ import {
 import { PARITY_SCENARIOS } from '../../src/cli/parity.js';
 import { readLatestDebugLog } from '../../src/observability/debug-log.js';
 import { otelExportEnabled } from '../../src/observability/otel.js';
+import {
+  WORKTREE_ENABLE_ENV,
+  resolveIsolationRequest,
+  worktreeRefusal,
+} from '../../src/tools/worktree.js';
+import { RESUME_ENABLE_ENV, resolveResumeRequest } from '../../src/learning/step-checkpoint.js';
+
+/**
+ * The two declarations, as they stood before any harness ran.
+ *
+ * Captured at import time so the cases can assert that the harness RESTORES them:
+ * a declaration that leaks past its scenario would make every later case measure
+ * a capability it never asked for — the failure mode both wrappers exist to
+ * prevent, and the one a test that only checks the happy path would never see.
+ */
+const previousIsolationEnv = process.env[WORKTREE_ENABLE_ENV];
+const previousResumeEnv = process.env[RESUME_ENABLE_ENV];
 
 // ─── 1. The runner's rules ─────────────────────────────────────────────────
 
@@ -96,6 +113,15 @@ function fakeObservation(over: Partial<TurnObservation> = {}): TurnObservation {
       vetoLeaked: false,
       surfacesSeen: ['cli-chat'],
     },
+    // WS5 — an isolated, resumed turn, for the same reason.
+    isolation: {
+      asked: true,
+      isolated: true,
+      files: ['parity-isolated.txt'],
+      removed: true,
+      base: 'b'.repeat(40),
+    },
+    resume: { asked: true, resuming: true, replayed: 2, modelCalls: 0, saved: true },
     answer: 'ok',
     ...over,
   };
@@ -675,6 +701,111 @@ describe('WS0 parity — every surface, real provider, transport-depth stub', ()
         expect(observation.modelCalls, `${where}: model calls`).toBe(2);
       }
     }
+  }, 240_000);
+
+  it('isolates the turn in a git worktree and reports the diff, on every surface', async () => {
+    // WS5 (#27). The harness DECLARES isolation for the scenario (through
+    // `NUVIRA_ISOLATE`), so "this surface isolated its turn" is an assertion about
+    // a request the harness actually made — and the assertions are on the VALUES:
+    // the worktree was a real one, the diff named the file the turn wrote, and the
+    // directory was removed afterwards. A surface that ignored the request would
+    // report `isolated: false`, and five surfaces agreeing that nothing happened
+    // would be agreement about nothing, which is why the case demands the values.
+    const scenario = PARITY_SCENARIOS.find((s) => s.id === 'isolation-worktree');
+    expect(scenario, 'the CLI no longer drives an isolation-worktree scenario').toBeDefined();
+    expect(scenario!.isolation, 'the scenario no longer declares isolation').toBe(true);
+
+    // Isolation needs a real git repository with at least one commit — which is
+    // where this test runs (the checkout). If that is not true the capability
+    // cannot be demonstrated at all, and the honest move is to say so rather than
+    // to pass: the surfaces themselves REFUSE in that case (see
+    // `isolationRefusalText`), which is a different, and tested, outcome.
+    const refusal = worktreeRefusal(process.cwd());
+    expect(
+      refusal,
+      `this checkout cannot be isolated (${refusal}), so the isolation case cannot be driven`,
+    ).toBeNull();
+
+    const run = await runParityScenario(scenario!, harness.drivers);
+    expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
+    expect(run.observations.map((o) => o.surface)).toEqual([
+      'cli-chat',
+      'dashboard-chat',
+      'gateway-chat',
+      'cli-execute',
+      'subagent',
+    ]);
+
+    for (const observation of run.observations) {
+      const where = `isolation on ${observation.surface}`;
+      expect(observation.isolation.asked, `${where}: the request`).toBe(true);
+      expect(observation.isolation.isolated, `${where}: ran in a worktree`).toBe(true);
+      // The DIFF is the deliverable, so it is asserted on the value: the file the
+      // scenario's tool call wrote. A surface that isolated but measured nothing
+      // would read as `files: []`.
+      expect(observation.isolation.files, `${where}: files changed against the base`).toEqual([
+        'parity-isolated.txt',
+      ]);
+      expect(observation.isolation.removed, `${where}: the worktree was removed`).toBe(true);
+      expect(observation.isolation.base, `${where}: the base commit`).toMatch(/^[0-9a-f]{40}$/);
+      // The turn itself still ran normally: isolation changes WHERE the work
+      // happened, not whether it happened, and a row that reported the diff while
+      // losing the turn would be a different (and worse) outcome.
+      expect(observation.status, `${where}: turn status`).toBe('completed');
+      expect(observation.answer).toBe('Isolated.');
+      expect(observation.toolCalls, `${where}: the write`).toEqual([
+        { tool: 'run_terminal', ok: true },
+      ]);
+      expect(observation.modelCalls, `${where}: model calls`).toBe(2);
+    }
+
+    // The gate is OFF by default: an ordinary turn pays no git work and makes no
+    // worktree. Asserted on the module's own predicate, so the row cannot be read
+    // as "every deployment is isolated whether it asked or not".
+    expect(resolveIsolationRequest({})).toEqual({ asked: false, keep: false });
+    expect(process.env[WORKTREE_ENABLE_ENV]).toBe(previousIsolationEnv);
+  }, 240_000);
+
+  it('replays the unchanged steps of a resumed run instead of re-paying, on every surface', async () => {
+    // WS5 (#27). One turn cannot show this: the claim is about a PAIR of runs —
+    // one that writes the record and one that reads it — so the driver runs the
+    // same ask twice and the assertions are on what the SECOND turn avoided. The
+    // tool is read-only on purpose: a write would change the working state the
+    // next turn carries, which is a genuine change to the input, and the replay
+    // would rightly miss.
+    const scenario = PARITY_SCENARIOS.find((s) => s.id === 'partial-resume');
+    expect(scenario, 'the CLI no longer drives a partial-resume scenario').toBeDefined();
+    expect(scenario!.resume, 'the scenario no longer declares a resume').toBe(true);
+
+    const run = await runParityScenario(scenario!, harness.drivers);
+    expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
+    expect(run.observations.map((o) => o.surface)).toEqual([
+      'cli-chat',
+      'dashboard-chat',
+      'gateway-chat',
+      'cli-execute',
+      'subagent',
+    ]);
+
+    for (const observation of run.observations) {
+      const where = `resume on ${observation.surface}`;
+      // The FIRST turn (the one compared for everything else) reached the model
+      // twice: it asked for the tool and then closed the turn.
+      expect(observation.modelCalls, `${where}: the recording turn's model calls`).toBe(2);
+      expect(observation.resume.asked, `${where}: the request`).toBe(true);
+      expect(observation.resume.resuming, `${where}: no record was opened`).toBe(true);
+      // THE ASSERTION THAT MATTERS: every step of the resumed turn came from the
+      // record. A surface that opened a record and replayed nothing would report
+      // `replayed: 0` with `modelCalls: 2` — which is exactly re-paying for every
+      // model call, the thing the capability claims not to do.
+      expect(observation.resume.replayed, `${where}: steps replayed`).toBe(2);
+      expect(observation.resume.modelCalls, `${where}: model calls the resume still made`).toBe(0);
+      expect(observation.resume.saved, `${where}: the record was written back`).toBe(true);
+    }
+
+    // The gate is OFF by default: an ordinary run never touches the record store.
+    expect(resolveResumeRequest({})).toBeUndefined();
+    expect(process.env[RESUME_ENABLE_ENV]).toBe(previousResumeEnv);
   }, 240_000);
 
   it('reports a FAILED READ as failed on every surface — the false-success regression', async () => {

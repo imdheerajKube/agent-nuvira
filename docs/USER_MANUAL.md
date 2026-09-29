@@ -1122,6 +1122,121 @@ What that buys and costs, in the order people ask:
   machine. It is the one place a hook sees the real `arguments`, bounded only by
   the result preview (`4000` characters).
 
+### Running a turn in its own worktree, and getting the diff back
+
+`--worktree` runs the turn in **its own git worktree** of the project:
+
+```bash
+nuvira chat "try the retry fix and see if it holds" --worktree
+nuvira execute "upgrade the parser" --worktree --keep-worktree
+```
+
+Everything the turn does happens in a real checkout of the same repository — same
+code, same `node_modules` (linked in, since a worktree has none), same test runner —
+and when the turn ends you get **the diff against the commit it started from**:
+
+```text
+🌿 isolated in a git worktree: ~/.nuvira/worktrees/try-the-retry-fix-m9x2k1-a4f2
+   base: 9c1f0d2 (branch nuvira/try-the-retry-fix-m9x2k1-a4f2)
+   2 files changed against 9c1f0d2
+   · src/retry.ts
+   · tests/retry.test.ts
+   (the worktree was removed — the diff above is what is left of it)
+```
+
+The details that matter:
+
+- **The base is a COMMIT, and the notice tells you what that means.** `git worktree
+  add … HEAD` checks out `HEAD`, so uncommitted changes in your working tree are
+  **not** visible inside the isolated copy. If your tree was dirty the notice says
+  how many files, so nothing quietly disappears. (Commit first if you want a run to
+  start from your own edits.)
+- **It refuses rather than pretending.** A directory that is not a git repository,
+  a repository with no commit, or a `git` that is not installed cannot be isolated,
+  so the turn **stops** and says why — it never runs unisolated while the result
+  claims otherwise. That failure mode (a caller believing it is isolated and acting
+  on the real tree) is the one thing this feature exists to prevent.
+
+  A refusal is reported as a **failed** turn whose *answer* is the reason, and it is
+  marked `refused: true` so nothing treats it as a retryable failure: the same ask in
+  the same directory refuses the same way, and the dashboard offers no Retry button
+  for one. It is also **never** re-dispatched: the engine's own "the model answered
+  nothing, run the pipeline instead" fallback would run the ask on another engine —
+  in the real tree — so a refused turn is excluded from it.
+- **Untracked files count as changes.** A run that *creates* a file has changed the
+  tree, so new files appear in the diff, not only edits to tracked ones.
+- **`--keep-worktree` keeps the directory** (and its branch) so you can look inside;
+  without it, the worktree is measured and removed. Each turn of an interactive
+  session gets its own worktree, so a follow-up turn starts from the base commit
+  again — pass `--keep-worktree` when you want to keep the result.
+- **In the dashboard, the 🌿 button in the composer** turns isolation on for the
+  conversation, with a 📌 `keep`/`drop` lever beside it once it is on. Every reply
+  then carries a **🌿 card** naming the worktree, the base commit, whether the
+  directory was removed or kept, and the diff itself — rendered with the same diff
+  card the git tool already used, so an isolated change and an ordinary one look the
+  same. Leaving the button OFF sends no isolation request at all, so a server started
+  with `NUVIRA_ISOLATE=1` still isolates.
+- **Deployments ask through the environment**, which is how the surfaces with no
+  command line do it: `NUVIRA_ISOLATE=1 nuvira dashboard` isolates every dashboard
+  turn, and the same for `nuvira gateway run`. A delegated subagent is isolated by
+  its parent (`subagent` takes `worktree: true`), which forks the child into the
+  worktree and measures the diff itself; a child spawned from an isolated turn
+  inherits the directory rather than making a worktree of a worktree.
+
+### Resuming a run without re-paying for it
+
+`--resume` replays the **model calls** of a previous run of the same ask, in the
+same directory, whose input is unchanged — and pays only for the steps that
+changed:
+
+```bash
+nuvira chat "add the retry test and make it pass" --resume
+nuvira execute "add the retry test and make it pass" --resume        # the last run of this ask, here
+nuvira execute "add the retry test and make it pass" --resume fix-ci # a named run
+```
+
+On `nuvira execute` the flag resumes **both** granularities, because they are the
+same run: the pipeline engine skips completed *tasks* (its checkpoints), and the
+loop engine replays unchanged *model calls*. Both resolve their id from the goal
+and directory, so one flag cannot mean two different runs.
+
+What makes a replay safe, and what it reports:
+
+- **A step is replayed only when its input is byte-identical** — the whole thread
+  and the tool schema, hashed together. A changed tool result, a changed schema, a
+  reordered message or an edited goal all **miss**, and that step is paid for again.
+  A cheap "same step number" match would substitute an answer to a question that was
+  never asked, with nothing in the transcript to show it.
+- **An empty recorded step is never replayed.** A response with no text and no tool
+  call is a provider failure; inheriting it would reproduce the failure and hide the
+  fact that the provider was never consulted.
+- **It says what it loaded BEFORE the run, and what it replayed AFTER** — the two
+  are separate facts, and only the second is knowable once the turn is over:
+
+  ```text
+  ↩️  resumed: 1 recorded step(s) loaded — a step replays only when its whole input is unchanged
+  ↩️  resume probe: replayed 0, made 1 model call(s)
+       why not: its input changed (1)
+  ```
+
+  The opening line is about the **record** ("no record for this ask in this
+  directory yet — this run will write one" on the first run), because at that point
+  no step has been attempted and any claim about replay would be one the run has yet
+  to earn. The closing line gives the real counts, and when nothing replayed it says
+  **why** — `its input changed` means the plan moved on and the record is being read
+  (the normal case when a previous run was interrupted by provider retries), while
+  `the recorded step was an empty provider response` or `not in the record` means the
+  record itself could not be used. "Resumed" with nothing replayed is the case that
+  looks like it worked and did not, so it says so plainly.
+- **An ordinary run touches nothing**: no record is read, written, or even looked
+  for unless `--resume` is given. Records live beside the pipeline checkpoints
+  (`~/.nuvira/memory/checkpoints/steps/`), and a resumed run rewrites the one it
+  read, so the next resume replays what this one learned.
+- **Deployments ask through the environment** (`NUVIRA_RESUME=1`, or a record name),
+  and a forked subagent resumes in **its own** process, with its own record: the
+  model calls happen there, so a resume that only existed in the parent would replay
+  nothing. The child reports what it avoided back to the parent on its own frame.
+
 ---
 
 ## 15. Verification log

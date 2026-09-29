@@ -55,6 +55,19 @@ import {
   runToolOutcomeHooks,
   toolHookRefusalText,
 } from './tool-hooks.js';
+// WS5 (#27) — the child's OWN partial resume. The model calls happen in THIS
+// process, so a resume that only the parent could do would replay nothing: the
+// child records its steps into its own store and replays the ones whose input is
+// unchanged, exactly as the in-process loop does (`tools/tool-loop.ts`).
+import {
+  closeResume,
+  openResume,
+  resolveResumeRequest,
+  stepDigest,
+  type OpenResume,
+  type ResumeOutcome,
+  type StepReplay,
+} from '../learning/step-checkpoint.js';
 
 export interface SubagentRuntimeConfig {
   /** The task the subagent must complete. */
@@ -73,6 +86,12 @@ export interface SubagentRuntimeConfig {
   maxIterations?: number;
   /** Working directory for tool execution. */
   cwd?: string;
+  /**
+   * WS5 (#27) — replay this child's recorded steps whose input is unchanged
+   * instead of paying for them again. `undefined` defers to the inherited
+   * `NUVIRA_RESUME`, so a resumed parent run resumes its children too.
+   */
+  resume?: string | boolean;
 }
 
 export interface SubagentRuntimeHooks {
@@ -108,6 +127,12 @@ export interface SubagentRuntimeResult {
   transport: 'native' | 'json' | 'none';
   /** True when the run hit an iteration/call ceiling before the model stopped. */
   truncated: boolean;
+  /**
+   * WS5 (#27) — what this run's resume replayed, and what it saved. Present only
+   * when a resume was asked for; reported to the parent on its own frame, because
+   * the child is a separate process and that frame is its only channel.
+   */
+  resume?: ResumeOutcome;
 }
 
 /**
@@ -273,6 +298,23 @@ export async function runSubagent(
     if (path) send({ type: 'progress', phase: 'debug_log', path });
   };
 
+  // WS5 (#27) — the child's own resume ledger, and the frame that reports what it
+  // did with it. Opened before the loop (a record is read once, not per step) and
+  // closed on every path that produces a result, so a child that ran is a child
+  // whose steps the NEXT resume can replay — and a child that could not write the
+  // record says so instead of reporting a resume that silently did nothing.
+  const resumeRequest = resolveResumeRequest({ resume: config.resume });
+  const resumeCwd = config.cwd ?? process.cwd();
+  const resume: OpenResume | null = resumeRequest
+    ? openResume({ goal: config.goal, cwd: resumeCwd, resume: resumeRequest })
+    : null;
+  const finishResume = (out: SubagentRuntimeResult): SubagentRuntimeResult => {
+    if (!resume) return out;
+    const outcome = closeResume(resume, { goal: config.goal, cwd: resumeCwd });
+    send({ type: 'progress', phase: 'resume', resume: outcome });
+    return { ...out, resume: outcome };
+  };
+
   // A backend that cannot be reached is a refusal, not an empty result.
   const available = await provider.isAvailable().catch(() => false);
   if (!available) {
@@ -299,6 +341,7 @@ export async function runSubagent(
       model,
       debug: debugLog,
       otel: otelSpan,
+      resume: resume?.ledger ?? null,
     });
     finishDebugLog({
       llmCalls: out.llmCalls,
@@ -314,7 +357,7 @@ export async function runSubagent(
       ok: true,
       ...(out.truncated ? { message: 'the subagent reached its ceiling' } : {}),
     });
-    return out;
+    return finishResume(out);
   }
 
   // ── Plain completion (no tools) ───────────────────────────────────────────
@@ -326,7 +369,7 @@ export async function runSubagent(
   const text = await provider.generate(prompt, modelOption(model));
   finishDebugLog({ llmCalls: 1, toolCalls: 0, transport: 'none' });
   await finishSpans({ ok: true });
-  return {
+  return finishResume({
     result: text.trim(),
     llmCalls: 1,
     toolCalls: 0,
@@ -334,7 +377,7 @@ export async function runSubagent(
     ...(model ? { model } : {}),
     transport: 'none',
     truncated: false,
-  };
+  });
 }
 
 /**
@@ -435,6 +478,15 @@ interface LoopHooks {
    * have to know how the context got there.
    */
   otel?: SpanHandle | null;
+  /**
+   * WS5 (#27) — the resume ledger, when this child was asked to resume.
+   *
+   * The child's messages are its own (a system prompt + the goal + tool results),
+   * so its steps are keyed and hashed by the same rule the shared loop uses: the
+   * KEY is the step's position and the DIGEST is the whole input, which is why a
+   * resume that changes the goal replays nothing.
+   */
+  resume?: StepReplay | null;
 }
 
 async function runToolLoop(
@@ -478,8 +530,26 @@ async function runToolLoop(
     }
 
     loop.send({ type: 'progress', phase: 'thinking', iteration: iteration + 1, llmCalls, toolCalls });
-    const response = await callModel(provider, transport, messages, schemas, model);
-    llmCalls += 1;
+    // WS5 (#27) — a resumed child replays this step when its input is unchanged.
+    // The digest is over the WHOLE input (the thread AND the schema), so a step
+    // whose tool result or tool list differs MISSES and is paid for again — the
+    // property that makes a replay an answer to the same question rather than to
+    // the same step number.
+    const stepKey = `model:${iteration + 1}`;
+    const stepHash = loop.resume ? stepDigest(messages, schemas) : '';
+    const replayed = loop.resume?.replay(stepKey, stepHash) ?? null;
+    let response: ToolCallResponse;
+    if (replayed) {
+      response = replayed;
+      // A REPLAYED step is not a model call, so `llmCalls` is not incremented —
+      // the count the parent records and the debug log carry is the number of
+      // calls this run actually made (see `ResumeOutcome.modelCalls`).
+      loop.send({ type: 'progress', phase: 'resume_step', step: stepKey });
+    } else {
+      response = await callModel(provider, transport, messages, schemas, model);
+      llmCalls += 1;
+      loop.resume?.record(stepKey, stepHash, response);
+    }
 
     if (response.toolCalls.length === 0) {
       return { result: response.content.trim(), llmCalls, toolCalls, ...base, truncated: false };

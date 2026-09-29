@@ -139,4 +139,35 @@ export const VERIFIED_CELLS: ReadonlySet<string> = new Set([
   'tool-hooks@gateway-chat',
   'tool-hooks@cli-execute',
   'tool-hooks@subagent',
+  // WS5 (#27). ALL FIVE surfaces isolate a turn in a real git worktree when the
+  // harness declares `NUVIRA_ISOLATE` — each in its own way: the four in-process
+  // surfaces create the worktree around the turn they are about to run
+  // (`cli/chat.ts` for the CLI answer, the dashboard console and the gateway,
+  // `cli/loop-executor.ts` for the execute loop arm), and the SUBAGENT's worktree
+  // is made by the PARENT (`tools/subagent-spawner.ts`), which forks the child into
+  // it and measures the diff itself. The scenario CREATES A FILE through
+  // `run_terminal` so the diff is non-empty (see the scenario's own note for why not
+  // `write_file`), and the assertions are on the values: the file the turn changed,
+  // removal of the directory, and the base commit sha. Proven by 'isolates the turn
+  // in a git worktree and reports the diff, on every surface'.
+  'isolation-worktree@cli-chat',
+  'isolation-worktree@dashboard-chat',
+  'isolation-worktree@gateway-chat',
+  'isolation-worktree@cli-execute',
+  'isolation-worktree@subagent',
+  // WS5 (#27). ALL FIVE surfaces replay the unchanged steps of a resumed run
+  // instead of re-paying for them. The harness runs the same ask twice — the first
+  // turn writes the step record, the second replays it — and compares what the
+  // second turn did NOT pay for, on every surface: the four in-process ones through
+  // the shared loop (`tools/tool-loop.ts`), and the forked child through its own
+  // loop and its own store (`tools/child-agent-runtime.ts`), whose per-step report
+  // reaches the parent on a progress frame. The record is NAMED per surface by the
+  // harness, which is both how an operator resumes a specific run and what keeps one
+  // surface's probe from replaying another's record. Proven by 'replays the unchanged
+  // steps of a resumed run instead of re-paying, on every surface'.
+  'partial-resume@cli-chat',
+  'partial-resume@dashboard-chat',
+  'partial-resume@gateway-chat',
+  'partial-resume@cli-execute',
+  'partial-resume@subagent',
 ]);

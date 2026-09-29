@@ -101,7 +101,7 @@ Run a cron job NOW (invoke its tool immediately)
 
 Start an interactive chat session with AI
 
-   - flags: `--dev, --file <file>, --model <model>, --no-cache, --provider <provider>`
+   - flags: `--dev, --file <file>, --keep-worktree, --model <model>, --no-cache, --provider <provider>, --resume [resume], --worktree`
 ### `nuvira edit`
 
 Edit a file using AI assistance
@@ -242,7 +242,7 @@ Run the model-registry maintenance daemon: probe + spot-check on a schedule
 
 Run a multi-agent pipeline to accomplish a goal
 
-   - flags: `--auto-branch, --auto-route, --checkpoint, --checkpoint-list, --context-limit <context_limit>, --context-prune <context_prune>, --dry-run, --engine <engine>, --gatherer-model <gatherer_model>, --json-events, --max-repairs <max_repairs>, --memory, --memory-clear, --memory-stats, --model <model>, --no-tool-calling, --plan-mode <plan_mode>, --planner-model <planner_model>, --provider <provider>, --repair-fallback-models <repair_fallback_models>, --repair-mode <repair_mode>, --resume [resume], --review, --reviewer-model <reviewer_model>, --sandbox, --skip-tests, --tool-calling, --verbose, --writer-model <writer_model>`
+   - flags: `--auto-branch, --auto-route, --checkpoint, --checkpoint-list, --context-limit <context_limit>, --context-prune <context_prune>, --dry-run, --engine <engine>, --gatherer-model <gatherer_model>, --json-events, --keep-worktree, --max-repairs <max_repairs>, --memory, --memory-clear, --memory-stats, --model <model>, --no-tool-calling, --plan-mode <plan_mode>, --planner-model <planner_model>, --provider <provider>, --repair-fallback-models <repair_fallback_models>, --repair-mode <repair_mode>, --resume [resume], --review, --reviewer-model <reviewer_model>, --sandbox, --skip-tests, --tool-calling, --verbose, --worktree, --writer-model <writer_model>`
 ### `nuvira run`
 
 Execute a shell command and show output (lightweight alternative to the full pipeline)

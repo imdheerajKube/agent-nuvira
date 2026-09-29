@@ -25,6 +25,29 @@ import { logger } from '../utils/logger.js';
 // WS3 (#25) — the W3C parent this child should continue, read from the ACTIVE
 // span (the tool call that spawned it), plus the env key it travels in.
 import { childTraceEnv, TRACEPARENT_ENV } from '../observability/otel.js';
+// WS5 (#27) — the env key the child resolves its resume request from.
+import { RESUME_ENABLE_ENV } from '../learning/step-checkpoint.js';
+// WS5 (#27) — delegation-level isolation: the parent makes the worktree, forks
+// INTO it, and measures the diff itself (see SubagentConfig.worktree).
+import {
+  createIsolatedWorktree,
+  discardWorktree,
+  worktreeDiff,
+  worktreeEnv,
+  worktreeRefusal,
+  type IsolatedWorktree,
+} from './worktree.js';
+
+/**
+ * How long the exit path may spend on git.
+ *
+ * Deliberately far below the creation budget: this runs inside the child's exit
+ * handler, so every millisecond here is a millisecond the manager's own event
+ * loop is blocked. A diff that cannot be produced in five seconds is reported as
+ * "no changes could be measured", which is honest, rather than stalling a
+ * server that may be answering other sessions.
+ */
+const WORKTREE_EXIT_TIMEOUT_MS = 5_000;
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -53,7 +76,28 @@ export interface SubagentConfig {
   cwd?: string;
   /** Environment variables */
   env?: Record<string, string>;
+  /**
+   * WS5 (#27) — run this child in its OWN git worktree of `cwd`, and return the
+   * diff against the commit it started from.
+   *
+   * The isolation is made by the PARENT, not asked of the child: the child is a
+   * separate process that resolves its own config and could decline, and a child
+   * that quietly declined would be the worst outcome — a parent that believes the
+   * work happened in a worktree while it happened in the real tree. So the parent
+   * creates the worktree, forks INTO it, and measures the diff itself.
+   */
+  worktree?: boolean;
+  /** Keep the worktree after the run instead of removing it (default: remove). */
+  keepWorktree?: boolean;
 }
+
+/**
+ * WS5 (#27) — how the resume request reaches the child: the inherited
+ * `NUVIRA_RESUME` (see `SubagentRuntimeConfig.resume`). The child resolves it from
+ * its own environment, exactly as an in-process surface does, so one request
+ * means the same thing on both sides of the fork.
+ */
+export const SUBAGENT_RESUME_ENV = RESUME_ENABLE_ENV;
 
 export interface SubagentState {
   /** Subagent ID */
@@ -85,6 +129,16 @@ export interface SubagentState {
    * reports the same wire shape every other surface reports.
    */
   findings?: import('../findings/verdicts.js').WireFinding[];
+  /** WS5 (#27) — the isolated worktree this run used, when it was isolated. */
+  worktree?: string;
+  /** WS5 (#27) — the commit the isolated run's diff is measured against. */
+  worktreeBase?: string;
+  /** WS5 (#27) — what the isolated run changed (filled in when it ends). */
+  worktreeDiff?: import('./worktree.js').WorktreeDiff;
+  /** WS5 (#27) — true when the worktree was removed after the run. */
+  worktreeRemoved?: boolean;
+  /** WS5 (#27) — the child's own resume report, when it was asked to resume. */
+  resume?: import('../learning/step-checkpoint.js').ResumeOutcome;
   /** LLM calls made */
   llmCalls: number;
   /** Tokens used */
@@ -152,6 +206,18 @@ export interface SubagentResult {
   durationMs: number;
   /** Full log */
   log: string[];
+  /**
+   * WS5 (#27) — the isolation this run had, and what it changed. Present only
+   * when isolation was asked for; `removed` says whether the directory is still
+   * on disk, so a caller can point at it or say it is gone.
+   */
+  worktree?: { dir: string; base: string; diff: import('./worktree.js').WorktreeDiff; removed: boolean };
+  /**
+   * WS5 (#27) — what the CHILD's resume replayed, and what it saved. Present only
+   * when a resume was asked for; read from the frame the child sent, so it is the
+   * child's own count rather than something the parent inferred.
+   */
+  resume?: import('../learning/step-checkpoint.js').ResumeOutcome;
 }
 
 // ─── Subagent Manager ─────────────────────────────────────────────────────
@@ -189,6 +255,8 @@ function resolveChildEntry(): { entry: string; execArgv?: string[] } {
 
 export class SubagentManager extends EventEmitter {
   private subagents: Map<string, SubagentState> = new Map();
+  /** WS5 (#27) — the live worktree of each isolated run, keyed by subagent id. */
+  private worktrees: Map<string, { handle: IsolatedWorktree; keep: boolean }> = new Map();
   private processes: Map<string, ChildProcess> = new Map();
   private maxConcurrent: number = 3;
   private maxDepth: number = 1;
@@ -222,6 +290,8 @@ export class SubagentManager extends EventEmitter {
     // Check spawn permissions
     const check = this.canSpawn();
     if (!check.allowed) throw new Error(check.reason);
+    /** WS5 — the worktree this run is isolated in, when one was asked for. */
+    let worktree: IsolatedWorktree | null = null;
 
     const id = randomUUID();
     const state: SubagentState = {
@@ -238,6 +308,27 @@ export class SubagentManager extends EventEmitter {
     this.saveState(state);
 
     try {
+      // WS5 (#27) — isolation, made by the parent BEFORE the fork. A refusal is a
+      // FAILED spawn rather than an unisolated run: the caller asked for isolation
+      // on purpose, and a run that silently happened in the real tree is the exact
+      // outcome this capability exists to prevent.
+      if (config.worktree) {
+        const repoCwd = config.cwd || process.cwd();
+        worktree = createIsolatedWorktree({ repoCwd, label: config.goal });
+        if (!worktree) {
+          const why = worktreeRefusal(repoCwd) ?? 'the worktree could not be created';
+          throw new Error(`Cannot isolate this subagent: ${why}`);
+        }
+        state.worktree = worktree.dir;
+        state.worktreeBase = worktree.base;
+        this.worktrees.set(id, { handle: worktree, keep: config.keepWorktree === true });
+        this.emit('progress', id, {
+          phase: 'worktree',
+          dir: worktree.dir,
+          base: worktree.base,
+          sourceDirty: worktree.sourceDirty,
+        });
+      }
       // Spawn child process
       const { entry, execArgv } = resolveChildEntry();
       // WS3 (#25) — hand the child the trace it belongs to. The loop makes the
@@ -263,8 +354,18 @@ export class SubagentManager extends EventEmitter {
       const traceparent = traceEnv[TRACEPARENT_ENV];
       if (traceparent) childEnv[TRACEPARENT_ENV] = traceparent;
       else delete childEnv[TRACEPARENT_ENV];
+      // WS5 — the resume request travels as the environment the child resolves it
+      // from. INHERITED when the caller does not name one (unlike the traceparent
+      // above, which is explicitly cleared): a parent run that was asked to resume
+      // is asking for its children's model calls to be replayed too, and a child
+      // with no record of its own simply records a fresh one. An explicit
+      // `false` is how a caller opts a child out of that.
+      // WS5 — the child's cwd IS the isolation, and it is told so in its
+      // environment: a tool inside the run can then report which worktree it is
+      // working in instead of guessing, and a nested spawn can isolate from it.
+      if (worktree) Object.assign(childEnv, worktreeEnv(worktree));
       const child = fork(entry, [], {
-        cwd: config.cwd || process.cwd(),
+        cwd: worktree?.dir ?? config.cwd ?? process.cwd(),
         ...(execArgv ? { execArgv } : {}),
         env: childEnv,
         stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
@@ -319,6 +420,13 @@ export class SubagentManager extends EventEmitter {
 
       return state;
     } catch (err) {
+      // A spawn that failed AFTER the worktree was made leaves nothing behind:
+      // the run never happened, so neither should its directory.
+      if (worktree) {
+        const kept = this.worktrees.get(id)?.keep === true;
+        if (!kept) discardWorktree(worktree, { timeoutMs: WORKTREE_EXIT_TIMEOUT_MS });
+        if (!kept) this.worktrees.delete(id);
+      }
       state.status = 'failed';
       state.error = String(err);
       state.endedAt = Date.now();
@@ -435,6 +543,11 @@ export class SubagentManager extends EventEmitter {
         if (msg.finding && typeof msg.finding === 'object') {
           state.findings = [...(state.findings ?? []), msg.finding];
         }
+        // WS5 (#27) — the child's own resume report. A frame, not a return value:
+        // the child is a separate process, and this is its only channel back.
+        if (msg.resume && typeof msg.resume === 'object') {
+          state.resume = msg.resume as import('../learning/step-checkpoint.js').ResumeOutcome;
+        }
         this.recordIdentity(state, msg);
         this.saveState(state);
         this.emit('progress', id, msg);
@@ -492,6 +605,23 @@ export class SubagentManager extends EventEmitter {
       if (outcome.error) state.error = outcome.error;
     }
 
+    // WS5 (#27) — what an isolated run changed, measured from the parent, and the
+    // teardown. Both happen BEFORE the result is built and emitted, so the diff
+    // rides on the result its caller is waiting for: a diff reported later (or by
+    // a separate command) is a diff most callers never see. A KILLED run is
+    // measured too — "what had it changed when you stopped it" is exactly the
+    // question a teardown needs answered.
+    const isolated = this.worktrees.get(id);
+    if (isolated) {
+      state.worktreeDiff = worktreeDiff(isolated.handle, { timeoutMs: WORKTREE_EXIT_TIMEOUT_MS });
+      if (isolated.keep) {
+        state.worktreeRemoved = false;
+      } else {
+        state.worktreeRemoved = discardWorktree(isolated.handle, { timeoutMs: WORKTREE_EXIT_TIMEOUT_MS });
+      }
+      this.worktrees.delete(id);
+    }
+
     this.saveState(state);
     this.processes.delete(id);
 
@@ -522,6 +652,17 @@ export class SubagentManager extends EventEmitter {
       ...(state.model ? { model: state.model } : {}),
       ...(state.transport ? { transport: state.transport } : {}),
       ...(state.findings && state.findings.length > 0 ? { findings: state.findings } : {}),
+      ...(state.resume ? { resume: state.resume } : {}),
+      ...(state.worktree && state.worktreeBase && state.worktreeDiff
+        ? {
+            worktree: {
+              dir: state.worktree,
+              base: state.worktreeBase,
+              diff: state.worktreeDiff,
+              removed: state.worktreeRemoved === true,
+            },
+          }
+        : {}),
       llmCalls: state.llmCalls,
       tokensUsed: state.tokensUsed,
       toolCalls: state.toolCalls,

@@ -116,10 +116,24 @@ interface ExecuteOptions {
   /** Save a checkpoint after every task batch (resume-able pipeline) */
   checkpoint?: boolean;
   /**
-   * Resume from a saved checkpoint. `true` (bare flag) = auto id for goal + cwd;
-   * a string = explicit checkpoint id. Completed steps are skipped.
+   * Resume a previous run of this ask in this directory. `true` (bare flag) =
+   * auto id for goal + cwd; a string = explicit id.
+   *
+   * WS5 (#27) — it resumes BOTH granularities, because they are the same run: the
+   * pipeline arm skips completed TASKS (`agents/checkpoint-store.ts`) and the loop
+   * arm replays recorded MODEL CALLS whose input is unchanged
+   * (`learning/step-checkpoint.ts`). Both resolve their id through
+   * `checkpointIdFor(goal, cwd)`, so the flag cannot mean two different runs.
    */
   resume?: string | boolean;
+  /**
+   * WS5 (#27) — run the goal in its own git worktree of the project and report
+   * the diff against the base commit. REFUSES (a failed run, never an unisolated
+   * one) when the directory cannot be isolated.
+   */
+  worktree?: boolean;
+  /** WS5 (#27) — keep the isolated worktree after the run instead of removing it. */
+  keepWorktree?: boolean;
   /** List saved checkpoints and exit */
   checkpointList?: boolean;
   /**
@@ -210,6 +224,17 @@ interface SingleGoalResult {
    * direct-answer path from the chat engine's `onToolCall` seam.
    */
   toolOutcomes?: Array<{ tool: string; ok?: boolean }>;
+  /**
+   * WS5 (#27) — the isolation this run had, and the diff against its base.
+   *
+   * Both engine arms report it: the loop arm from `runLoopExecutor`, the
+   * direct-answer arm from the shared chat engine. Absent when no isolation was
+   * asked for, and the refusal text is the run's content when one could not be
+   * made — the command reports that as a FAILURE, never as an answer.
+   */
+  worktree?: import('../tools/worktree.js').IsolationOutcome;
+  /** WS5 (#27) — what this run's resume replayed, and what it saved. */
+  resume?: import('../learning/step-checkpoint.js').ResumeOutcome;
   /**
    * WS1 — every finding this run recorded, in call order, with the verdict the
    * gate computed from the evidence the model supplied.
@@ -334,7 +359,17 @@ export class ExecuteCommand extends BaseCommand {
       .option('--engine <mode>', 'Execution engine: auto | loop | pipeline (default: auto — loop for strong models, pipeline for local/weak tier)')
       .option('--plan-mode <mode>', 'Planning depth: light | heavy (default: light — heavy forces the reasoner→planner front-matter for large greenfield builds)')
       .option('--checkpoint', 'Save a resume-able checkpoint after every task batch (in ~/.nuvira/memory/checkpoints/)', false)
-      .option('--resume [id]', 'Resume a saved checkpoint (defaults to the auto id for this goal + cwd). Completed steps are skipped', false)
+      // NO `false` DEFAULT here (or on the two below), and that is the point: a
+      // `false` commander invented for an untyped flag is an explicit DECLINE, and
+      // an explicit decline outranks the environment — which would make
+      // `NUVIRA_ISOLATE=1` / `NUVIRA_RESUME=1` dead letters on `nuvira execute`,
+      // the one arm the harness cannot reach through the flags. Absent stays
+      // `undefined`: "the operator did not ask", so the environment can.
+      .option('--resume [id]', 'Resume the last run of this goal in this directory (defaults to its auto id). Completed tasks are skipped on the pipeline engine, and recorded model calls whose input is unchanged are replayed on the loop engine')
+      // WS5 (#27) — isolation. Read from the environment too (`NUVIRA_ISOLATE`),
+      // which is how a surface with no command line asks for it.
+      .option('--worktree', 'Run the goal in its own git worktree of the project and report the diff against the base commit. Refuses rather than running unisolated when the directory cannot be isolated (also asked for by NUVIRA_ISOLATE=1)')
+      .option('--keep-worktree', 'Keep the isolated worktree after the run instead of removing it')
       .option('--checkpoint-list', 'List saved checkpoints and exit', false)
       .option('--json-events', 'Emit machine-readable NDJSON pipeline events on stdout (no human board)', false)
       .action(async (goal: string | undefined, options?: {
@@ -359,6 +394,8 @@ export class ExecuteCommand extends BaseCommand {
         autoRoute?: boolean;
         checkpoint?: boolean;
         resume?: string | boolean;
+        worktree?: boolean;
+        keepWorktree?: boolean;
         checkpointList?: boolean;
         jsonEvents?: boolean;
         engine?: string;
@@ -1717,6 +1754,12 @@ export class ExecuteCommand extends BaseCommand {
         // a `nuvira execute` run was labelled `cli-chat`, which is exactly the
         // kind of misattribution a bug report cannot afford.
         debugSurface: 'cli-execute',
+        // WS5 (#27) — the command's own flags, on the arm that answers directly.
+        // The loop arm is handed the same three by `runLoopEngineGoal`, so one
+        // `nuvira execute --worktree` isolates the run on EITHER engine.
+        worktree: options.worktree,
+        keepWorktree: options.keepWorktree,
+        resume: options.resume,
       });
       // Parity with the dashboard/gateway: never print a raw suggest_followups
       // payload (or the empty fence it leaves behind) as if it were the answer,
@@ -1751,6 +1794,9 @@ export class ExecuteCommand extends BaseCommand {
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(toolOutcomes.length > 0 ? { toolOutcomes } : {}),
         ...(findings.length > 0 ? { findings } : {}),
+        // WS5 — the isolation and resume this turn had, back to the caller.
+        ...(answer.worktree ? { worktree: answer.worktree } : {}),
+        ...(answer.resume ? { resume: answer.resume } : {}),
       };
     } catch (err) {
       logger.error(err instanceof Error ? err.message : String(err));
@@ -1785,6 +1831,13 @@ export class ExecuteCommand extends BaseCommand {
       const result = await runLoopExecutor(goal, this.configManager, {
         provider,
         model,
+        // WS5 (#27) — the command's own flags. `--resume` means the SAME run
+        // here as it does on the pipeline arm: the last run of this ask in this
+        // directory (both ids come from `checkpointIdFor`), so one flag resumes
+        // the plan on one engine and the recorded model calls on the other.
+        ...(options.worktree === undefined ? {} : { worktree: options.worktree }),
+        ...(options.keepWorktree === undefined ? {} : { keepWorktree: options.keepWorktree }),
+        ...(options.resume === undefined ? {} : { resume: options.resume }),
         quiet: !!options.jsonEvents,
         // G18 — `-v` echoes each tool's result (first line) under its call, so a
         // live run shows what came BACK, not only what was attempted. Without
@@ -1863,6 +1916,9 @@ export class ExecuteCommand extends BaseCommand {
           ? { toolOutcomes: result.toolOutcomes }
           : {}),
         ...(result.findings && result.findings.length > 0 ? { findings: result.findings } : {}),
+        // WS5 — the isolation and resume this run had, back to the caller.
+        ...(result.worktree ? { worktree: result.worktree } : {}),
+        ...(result.resume ? { resume: result.resume } : {}),
       };
     } catch (err) {
       logger.error(err instanceof Error ? err.message : String(err));

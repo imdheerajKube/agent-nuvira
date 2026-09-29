@@ -6072,6 +6072,26 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           : newChatSessionId();
       const provider = typeof body?.provider === 'string' ? body.provider : undefined;
       const model = typeof body?.model === 'string' ? body.model : undefined;
+      // WS5 (#27) — per-turn isolation and resume, from the GUI.
+      //
+      // Read as a strict TRI-state, because the three cases are genuinely
+      // different here: `true` asks for it, `false` declines a deployment-wide
+      // `NUVIRA_ISOLATE`/`NUVIRA_RESUME` for this one turn, and ABSENT (`undefined`)
+      // defers to that environment. Collapsing absent into `false` would make the
+      // GUI's silence outrank the deployment's configuration — the same defect the
+      // CLI's option defaults had.
+      const worktree =
+        body?.worktree === true ? true : body?.worktree === false ? false : undefined;
+      const keepWorktree =
+        body?.keepWorktree === true ? true : body?.keepWorktree === false ? false : undefined;
+      const resume =
+        typeof body?.resume === 'string'
+          ? body.resume
+          : body?.resume === true
+            ? true
+            : body?.resume === false
+              ? false
+              : undefined;
       // P8 + P2 — turn attachments (file picker / paste-as-attachment / drag-drop).
       //
       // The GUI sends TEXT inline. For anything it cannot decode as text (PDF, DOCX,
@@ -6125,7 +6145,16 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // Mark the failover log BEFORE the turn so a failure can report which
       // models were actually tried (same contract as the gateway).
       const attemptMark = markFailoverAttempts();
-      const result = await chatConsole.answer(sessionId, message, { provider, model, projectContext, projectPath, attachments });
+      const result = await chatConsole.answer(sessionId, message, {
+        provider,
+        model,
+        projectContext,
+        projectPath,
+        attachments,
+        ...(worktree === undefined ? {} : { worktree }),
+        ...(keepWorktree === undefined ? {} : { keepWorktree }),
+        ...(resume === undefined ? {} : { resume }),
+      });
       // The response is written below — remove the disconnect listener so a
       // post-completion close can never touch the console again.
       res.off('close', onResClose);
@@ -6146,7 +6175,12 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // retrying on its own — a manual re-send on top of the queued one would
       // run the same ask twice.
       let retryQueued = false;
-      if (result.generationFailed === true) {
+      // WS5 (#27) — a REFUSED turn is failed but not retryable: the turn declined
+      // to run (isolation was asked for and could not be made), and the answer is
+      // the reason, already in `content`. The retry machinery below would replace
+      // that reason with a "keep trying" offer for a request that cannot succeed,
+      // and would queue a background re-run of the very ask that refused.
+      if (result.generationFailed === true && result.refused !== true) {
         const report = chatRetryBroker.onFailure(sessionId, message, attemptMark);
         if (report) {
           content = content.trim() ? `${content}\n\n${report}` : report;
@@ -6171,6 +6205,21 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         // the subagent report (the GUI card is a rendering decision; the FACT
         // travels here rather than being dropped at the HTTP boundary).
         findings: result.findings ?? [],
+        // WS5 — the isolation this turn ACTUALLY had, as the console reported it
+        // (absent when the turn was not isolated), never re-derived from the flags
+        // this request sent: a client that asked for isolation and got a refusal
+        // must be able to see the difference, and the refusal is the turn's own
+        // content. The diff arrives with it — `diff.payload` is the same
+        // `{files, summary}` shape the `git:diff` event and the diff card already
+        // use, so the GUI renders one card for both.
+        ...(result.worktree ? { worktree: result.worktree } : {}),
+        // WS5 — what a resume replayed. Sent for the same reason: a deployment
+        // that sets `NUVIRA_RESUME` gets resumed turns, and a reader who is never
+        // told cannot tell a replayed turn from a fresh one.
+        ...(result.resume ? { resume: result.resume } : {}),
+        // WS5 — whether the turn declined to run, so the client labels the failure
+        // as the refusal it is instead of offering a Retry that cannot help.
+        refused: result.refused === true,
         generationFailed: result.generationFailed === true,
         retryQueued,
       });

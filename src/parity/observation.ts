@@ -197,6 +197,73 @@ export function noToolHooks(): ToolHooksObs {
 }
 
 /**
+ * WS5 (#27) — the isolation a turn had, and what it changed.
+ *
+ * `asked` is the HARNESS's own declaration (the scenario asked for isolation) and
+ * the rest is the SURFACE's report, and keeping both is what makes the comparison
+ * mean something: a surface that ignored the request reports `isolated: false`
+ * against an `asked: true`, which is a divergence — whereas a field derived from
+ * the request alone could never disagree with itself. Five surfaces agreeing that
+ * no isolation happened when nobody asked would be agreement about nothing, which
+ * is why the scenario that declares `asked` is the only one that proves the row.
+ *
+ * `base` is RECORDED, NEVER COMPARED, for the same reason `traceId` is: it is a
+ * commit sha, so it differs per run by construction. It is kept because "the diff
+ * is against a real commit" is the fact the row is about, and a failure report
+ * that shows two different shas proves both runs were real.
+ */
+export interface IsolationObs {
+  /** True when the turn was asked to run isolated (the scenario declared it). */
+  asked: boolean;
+  /** True when the surface reported a turn that actually ran in a worktree. */
+  isolated: boolean;
+  /** Sorted paths the isolated turn changed, against its base commit. */
+  files: readonly string[];
+  /** True when the surface reported removing the worktree afterwards. */
+  removed: boolean;
+  /** The base commit the diff is against (`''` when there was none). RECORDED. */
+  base: string;
+}
+
+/** The honest "this turn was not isolated" value. Fresh each call. */
+export function noIsolation(): IsolationObs {
+  return { asked: false, isolated: false, files: [], removed: false, base: '' };
+}
+
+/**
+ * WS5 (#27) — what a RESUMED turn replayed instead of paying for.
+ *
+ * Read from a SECOND turn against a record the FIRST one wrote, because "reuses
+ * unchanged steps instead of re-paying for every model call" is a claim about a
+ * pair of runs and cannot be observed in one. `modelCalls` here is the resumed
+ * turn's own count — the turn that is compared for everything else is the first
+ * one (a fully replayed turn reaches no model at all, and the runner refuses to
+ * compare a turn that never did).
+ *
+ * `asked`/`resuming` are separated so a failure says WHICH half broke: a surface
+ * that never opened a record reads as `resuming: false` while `asked: true`, and a
+ * surface that opened one but replayed nothing reads as `replayed: 0` with a
+ * `modelCalls` equal to the whole turn.
+ */
+export interface ResumeObs {
+  /** True when the harness asked this surface to resume (the scenario declared it). */
+  asked: boolean;
+  /** True when the surface reported a resume at all (it read a record). */
+  resuming: boolean;
+  /** Steps the resumed turn replayed from the record. */
+  replayed: number;
+  /** Model calls the RESUMED turn still made (0 = every step came from the record). */
+  modelCalls: number;
+  /** True when the resumed turn could write the record back for the next run. */
+  saved: boolean;
+}
+
+/** The honest "this turn was not resumed" value. Fresh each call. */
+export function noResume(): ResumeObs {
+  return { asked: false, resuming: false, replayed: 0, modelCalls: 0, saved: false };
+}
+
+/**
  * One surface's view of one turn. Fields the surface does not report stay
  * `undefined` — and `compare` treats "absent on one surface, present on another"
  * as a difference, because a surface that cannot say which model served a turn
@@ -257,6 +324,26 @@ export interface TurnObservation {
    */
   hooks: ToolHooksObs;
   /**
+   * WS5 (#27) — the isolation this turn had, and what it changed.
+   *
+   * REQUIRED, for the reason `otel` and `hooks` are: the row is "an investigation
+   * can be isolated and returns a diff against the base", and an optional field
+   * would let a surface that runs in the real tree go on reading as at-par. The
+   * harness asks for isolation on the scenario that declares it, so `isolated:
+   * false` there is a failure rather than a neutral value.
+   */
+  isolation: IsolationObs;
+  /**
+   * WS5 (#27) — what this surface's resumed turn replayed instead of paying for.
+   *
+   * REQUIRED, for the same reason: the row is "a resumed run reuses unchanged
+   * steps", and a surface that quietly paid for every model call must not read as
+   * at-par. The driver wrapper runs the second turn and replaces this field with
+   * what the RESUMED turn did (`src/parity/drivers.ts`), so an ordinary scenario
+   * carries the honest "not asked" value rather than a missing one.
+   */
+  resume: ResumeObs;
+  /**
    * WS1 — the findings the turn recorded, in call order, in the shared wire
    * form (`findings/verdicts.ts`).
    *
@@ -292,6 +379,8 @@ export interface ComparableObservation {
   debugLog: DebugLogObs;
   otel: OtelExportObs;
   hooks: ToolHooksObs;
+  isolation: IsolationObs;
+  resume: ResumeObs;
   answer: string | null;
   refusalCode: string | null;
   errorCode: string | null;
@@ -314,6 +403,8 @@ export function comparableOf(observation: TurnObservation): ComparableObservatio
     debugLog: observation.debugLog ?? noDebugLog(),
     otel: observation.otel ?? noOtelExport(),
     hooks: observation.hooks ?? noToolHooks(),
+    isolation: observation.isolation ?? noIsolation(),
+    resume: observation.resume ?? noResume(),
     answer: observation.answer ?? null,
     refusalCode: observation.refusalCode ?? null,
     errorCode: observation.errorCode ?? null,
@@ -471,6 +562,51 @@ export function compare(a: TurnObservation, b: TurnObservation): string[] {
     const r = right.hooks[field].join(', ');
     if (l !== r) {
       differences.push(`${who}: hooks.${field} differs — [${l}] vs [${r}]`);
+    }
+  }
+
+  // WS5 (#27) — isolation. `asked` is compared like any other field on purpose:
+  // the scenario declares it, so both sides carrying the SAME declaration is the
+  // proof that the value compared is the request that was made, and `isolated`
+  // against it is what catches a surface that ignored it. `base` is deliberately
+  // absent (a per-run commit sha — see `IsolationObs`).
+  const isolationScalars: Array<'asked' | 'isolated' | 'removed'> = [
+    'asked',
+    'isolated',
+    'removed',
+  ];
+  for (const field of isolationScalars) {
+    const l = left.isolation[field];
+    const r = right.isolation[field];
+    if (l !== r) {
+      differences.push(`${who}: isolation.${field} differs — ${String(l)} vs ${String(r)}`);
+    }
+  }
+  const isolationFiles = left.isolation.files.join(', ');
+  if (isolationFiles !== right.isolation.files.join(', ')) {
+    differences.push(
+      `${who}: isolation.files differs — [${isolationFiles}] vs [${right.isolation.files.join(', ')}]`,
+    );
+  }
+
+  // WS5 (#27) — resume. Field by field, so a failure says WHICH half broke: a
+  // surface that never opened a record (`resuming`) is a different bug from one
+  // that opened it and replayed nothing (`replayed`, `modelCalls`), and reporting
+  // both as "resume differs" would hide that.
+  const resumeFields: Array<keyof ResumeObs> = [
+    'asked',
+    'resuming',
+    'replayed',
+    'modelCalls',
+    'saved',
+  ];
+  for (const field of resumeFields) {
+    const l = left.resume[field];
+    const r = right.resume[field];
+    if (l !== r) {
+      differences.push(
+        `${who}: resume.${field} differs — ${show(String(l))} vs ${show(String(r))}`,
+      );
     }
   }
 
