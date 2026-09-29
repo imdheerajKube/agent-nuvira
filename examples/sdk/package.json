@@ -11,7 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@agent-nuvira/sdk": "^1.0.1"
+    "@agent-nuvira/sdk": "^3.3.4"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

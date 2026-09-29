@@ -105,7 +105,9 @@ code --install-extension agent-nuvira-vscode.vsix
 
 ### Prerequisites
 
-The extension requires the [agent-nuvira CLI](https://www.npmjs.com/package/agent-nuvira) to be installed:
+The extension ships on the **same version number as the CLI** — `3.3.4` matches
+`agent-nuvira@3.3.4` — so "which version are you on" has one answer across the
+editor and the terminal. It requires the [agent-nuvira CLI](https://www.npmjs.com/package/agent-nuvira) to be installed:
 
 ```bash
 npm install -g agent-nuvira
@@ -182,6 +184,7 @@ Right-click any source file to **Review File**, **Quick Fix**, or **Generate Tes
 |---------|-------------|
 | `Agent-Nuvira: Execute Goal...` | Run a multi-agent pipeline |
 | `Agent-Nuvira: Quick Fix` | Apply quick agent fix |
+| `Agent-Nuvira: Open Chat` | Open (or focus) the chat sidebar |
 | `Agent-Nuvira: Review File` | Review current file |
 | `Agent-Nuvira: Explain Code` | Explain selected code |
 | `Agent-Nuvira: Generate Test` | Generate unit tests |
@@ -193,6 +196,37 @@ Right-click any source file to **Review File**, **Quick Fix**, or **Generate Tes
 | `Agent-Nuvira: Check Model Health` | Run a health check on the active provider |
 | `Agent-Nuvira: Show Quota Ledger` | View quota usage, parked providers, and the failover timeline |
 
+Each command is a thin mapping onto a CLI verb, so nothing here can do something the
+CLI cannot: Execute Goal runs `execute "<goal>"`, Quick Fix runs `edit <path> --quick`,
+Review File and Generate Test run `execute` with a fixed prompt, Explain Code runs
+`chat … --stream`, and Run Workflow runs `workflow run <template> "<goal>"`. With
+`agent-nuvira.useAutoRouting` on, execute gains `--auto-route` and chat/inline gain
+`--model auto` — that flag is the whole difference.
+
+---
+
+## Use it from other extensions
+
+`activate()` returns a small, explicit API (also available as `extension.exports`):
+
+```ts
+interface AgentNuviraApi {
+  readonly version: string;          // this extension's manifest version
+  readonly commands: readonly string[];
+  openChat(): void;
+  executeGoal(goal: string): Promise<CLIResult>;
+  getActiveModel(): Promise<ActiveModelInfo | null>;
+  getQuotaStatus(): Promise<QuotaStatusInfo>;
+}
+```
+
+```ts
+const ext = vscode.extensions.getExtension<AgentNuviraApi>('dheerajsharma.agent-nuvira-vscode');
+const nuvira = ext!.isActive ? ext!.exports : await ext!.activate();
+const run = await nuvira.executeGoal('audit this workspace for hardcoded secrets');
+if (run.success) nuvira.openChat();
+```
+
 ---
 
 ## Requirements
@@ -201,6 +235,16 @@ Right-click any source file to **Review File**, **Quick Fix**, or **Generate Tes
 - **Node.js** >= 18.0.0
 - **agent-nuvira CLI** (`npm install -g agent-nuvira`)
 - **API key** for at least one cloud provider, or **Ollama** for local inference
+
+---
+
+## Full usage guide
+
+Everything in depth — all 13 commands with the CLI verb each one runs, keybindings,
+every setting, the three language-model tools with their input schemas, the
+programmatic API with a worked example, telemetry attribution, troubleshooting, and
+an explicit statement of **what this surface can and cannot do** — is in
+[`docs/VSCODE_EXTENSION.md`](https://github.com/imdheerajKube/agent-nuvira-documentation/blob/main/docs/vscode-extension.md).
 
 ---
 

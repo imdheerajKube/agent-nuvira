@@ -158,13 +158,19 @@ This table highlights core capabilities for quick machine parsing and comparison
 - **Memory compression & pruning** — automatic trajectory summarization with configurable retention policies
 - **VS Code extension** — Chat Panel with streaming responses, slash commands, and session history;
   Diagnostic → AI Fix from lightbulb menu; Code Lens actions (Test/Review/Explain/Fix) above functions
-  and classes; 9 commands, inline code suggestions, diff viewer, agent progress panel
+  and classes; 13 commands, inline code suggestions, diff viewer, agent progress panel; three
+  language-model tools so Copilot Chat can delegate to this engine (`#reviewFileWithAgentNuvira`,
+  `#explainWithAgentNuvira`, `#executeGoalWithAgentNuvira`) and a small programmatic API
+  (`openChat`, `executeGoal`, `getActiveModel`, `getQuotaStatus`). **[Full usage guide → docs/VSCODE_EXTENSION.md](docs/VSCODE_EXTENSION.md)**
 - **22-platform multi-channel gateway** — `agent-nuvira gateway start / send / status / alias` runs the agent from Telegram, Discord, Slack, WhatsApp (Cloud API + Baileys personal bridge), Email, Signal, DingTalk, Feishu, WeCom, Mattermost, Matrix, generic Webhook, BlueBubbles (iMessage), ntfy, Teams, Google Chat, Weixin, SMS (Twilio), IRC (two-way), SimpleX (two-way),  and Home Assistant — all opt-in via standard env vars per platform, with a guaranteed delivery ledger (auto-retry on `agent-nuvira gateway start`), the dashboard Channels send-test, and a `X/22 platforms configured` status line
 - **Remote agent federation** — multi-machine collaboration with protocol, server, and client
 - **Web UI dashboard** — React dashboard with DAG visualization, model health, cost charts, and history browser
 - **Hybrid model routing** — intelligent model selection based on task complexity, cost, and availability
 - **Team collaboration** — Git-synced shared config, memory, and review pipelines
-- **Agent SDK** — `@agent-nuvira/sdk` npm package for building custom agents with scaffolding CLI
+- **Agent SDK** — `@agent-nuvira/sdk` npm package for building, testing and registering custom
+  agents: a provider-agnostic `Agent` base class, `defineAgent()` descriptors that fail at
+  definition time rather than at plan time, ten testing helpers that need no key and no network, and
+  scaffolding in three shapes. **[Full guide, with examples and an explicit depth statement → docs/AGENT_SDK.md](docs/AGENT_SDK.md)**
 - **Provider CLI** — `agent-nuvira provider list` with color-coded status table, `agent-nuvira provider health` with per-provider diagnostics
 - **Provider fallback routing** — automatic failover between providers with circuit breaker and configurable chain
 - **Startup progress feedback** — first launch never looks like a silent hang: a live spinner reports each startup phase (plugins → history & search → semantic index) as it runs
@@ -2276,6 +2282,8 @@ npx tsc --noEmit
 
 > 🛠️ **Complete CLI reference:** [docs/COMMANDS.md](./docs/COMMANDS.md) — every command with objective, exact syntax and examples, plus the first-run expectations. [docs/COMMANDS_SURFACE.md](./docs/COMMANDS_SURFACE.md) — the same surface, generated from the live command tree and drift-guarded in CI.
 >
+> 🧩 **Building your own agent:** [docs/AGENT_SDK.md](./docs/AGENT_SDK.md) — install, the full agent contract, `defineAgent()`'s failure modes, the ten testing helpers, scaffolding, registration, and an explicit **what you get / what you do not get**.&nbsp; 💻 **In the editor:** [docs/VSCODE_EXTENSION.md](./docs/VSCODE_EXTENSION.md) — all 13 commands mapped to the CLI verb each one runs, settings, keybindings, the three language-model tools, the programmatic API, and the same depth statement.
+
 > 📊 **Architecture, strategy & contribution materials:** [ARCHITECTURE.md](./ARCHITECTURE.md) — Modular execution engine design with 7 module specifications, extensibility/observability systems, and phased migration plan. [ARCHITECTURE_DIAGRAMS.md](./ARCHITECTURE_DIAGRAMS.md) — Mermaid-rendered versions of all architecture diagrams (Module Architecture, Extensibility, Safe Execution, Data Flow, Observability Bus). [PRODUCT_STRATEGY.md](./PRODUCT_STRATEGY.md) — Competitive landscape, positioning map, OKR framework, and risk register. [PITCH_DECK.md](./PITCH_DECK.md) — 10-slide investor presentation outline with talking points and data. [CONTRIBUTING.md](./CONTRIBUTING.md) — Quick-reference contributor guide with docs map, dev setup, and contribution workflow. [GATEWAY.md](./docs/GATEWAY.md) — Complete user guide for the 22-platform multi-channel gateway: what it offers, CLI + dashboard setup for every platform, channel aliases, guaranteed delivery, natural-language task dispatch, security, and troubleshooting.
 
 | Phase | Feature | Status |
@@ -2297,7 +2305,7 @@ npx tsc --noEmit
 | 2.5 | Provider health dashboard — `agent-nuvira doctor` | ✅ Complete |
 | 2.6 | Memory compression & pruning — trajectory summarization | ✅ Complete |
 | **Phase 3: Major Upgrades** | | |
-| 3.1 | VS Code extension — 9 commands, inline suggestions, diff viewer, agent progress panel | ✅ Complete |
+| 3.1 | VS Code extension — 13 commands, inline suggestions, diff viewer, agent progress panel | ✅ Complete |
 | 3.2 | **B1: Chat Panel** — Multi-turn chat with streaming, 6 slash commands, session history, file context | ✅ Complete (v1.33.0) |
 | 3.3 | **B3: Diagnostic → AI Fix** — "Fix with Agent-Nuvira" in lightbulb menu on red squiggles | ✅ Complete (v1.33.0) |
 | 3.4 | **B5: Code Lens Actions** — Test/Review/Explain/Fix actions above functions and classes | ✅ Complete (v1.34.0) |
@@ -2483,12 +2491,12 @@ npx tsc --noEmit
 ### Phase 3: Major Upgrades — Advanced Agent Systems
 | Feature | Description |
 |---------|-------------|
-| **VS Code Extension** | Chat Panel (streaming, slash commands), Diagnostic→AI Fix, Code Lens actions, 9 commands, inline suggestions, diff viewer, agent progress panel |
+| **VS Code Extension** | Chat Panel (streaming, slash commands), Diagnostic→AI Fix, Code Lens actions, 13 commands, inline suggestions, diff viewer, agent progress panel |
 | **Agent Federation** | Multi-machine collaboration via A2A protocol, server, and client |
 | **Web Dashboard** | React + Recharts + DAG visualization, model health, cost charts |
 | **Hybrid Model Routing** | Complexity-based model selection with cost optimization |
 | **Team Collaboration** | Git-synced shared config, memory, and review pipelines |
-| **Agent SDK** | `@agent-nuvira/sdk` npm package with scaffolding CLI |
+| **Agent SDK** | [`@agent-nuvira/sdk`](docs/AGENT_SDK.md) npm package with scaffolding CLI |
 | **Provider CLI** | `agent-nuvira provider list/health` with per-provider diagnostics |
 | **Provider Fallback** | Auto-failover with circuit breaker and configurable chain |
 | **Security Scanner** | Detects PII, prompt injections, and dangerous code patterns |

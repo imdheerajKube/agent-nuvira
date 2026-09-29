@@ -4,6 +4,19 @@
 
 The SDK is a clean-room types + base-class package: it has **no runtime dependency on the Agent-Nuvira internals**, so a custom agent can be built, unit-tested, and published without pulling in the whole CLI. Its type surface is kept structurally compatible with the main package by an in-repo compatibility test.
 
+**Version:** the SDK ships on the **same version number as the CLI and the VS Code extension** — `3.3.4` — so `nuvira sdk info`, `nuvira --version` and the extension's `version` export agree. A custom agent built against a mismatched SDK is the usual reason one fails to load, so check that first.
+
+> **📖 The full guide is [`docs/AGENT_SDK.md`](../../docs/AGENT_SDK.md).** It covers the
+authoritative version of everything below — the complete agent contract, `defineAgent()`'s
+failure modes, the context bus field by field, the ten testing helpers with their real
+signatures, registration (including what registering genuinely edits), troubleshooting, and
+a section stating **what depth the SDK offers and what it deliberately does not** (no tool
+calling, no direct filesystem writes, no runtime agent registry). This README is the npm
+landing page; that guide is the manual.
+
+A runnable example agent with its own tests lives in `examples/sdk/`; verify it against
+the SDK source with `npm run examples:verify` from the repository root.
+
 ## Installation
 
 ```bash
@@ -73,6 +86,12 @@ describe('CodeFormatter', () => {
 ```
 
 ### 4. Register it with the orchestrator
+
+> Registration edits a **source checkout**: it adds an import, a `case` in
+> `createAgent()` and an `AGENT_ICONS` entry to `src/agents/orchestrator.ts`. With the CLI
+> installed from npm there is no such file, and the call reports
+> `Orchestrator file not found at: …` rather than pretending. To install an agent into a
+> normal CLI install, distribute it as a plugin file instead (`nuvira plugins list`).
 
 ```ts
 import { registerAgent } from '@agent-nuvira/sdk/register';

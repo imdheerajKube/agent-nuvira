@@ -18,7 +18,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { scaffold, listTemplates } from '../../src/agent-sdk/src/scaffold.js';
+import { scaffold, listTemplates, SDK_VERSION } from '../../src/agent-sdk/src/scaffold.js';
 
 const dirs: string[] = [];
 
@@ -45,6 +45,17 @@ describe('sdk scaffold — output targets the published SDK', () => {
     };
     expect(pkg.dependencies).toHaveProperty('@agent-nuvira/sdk');
     expect(pkg.dependencies).not.toHaveProperty('@agent-baba-d/sdk');
+  });
+
+  it('pins the SDK version this CLI actually ships, not a stale major', () => {
+    // The template is compiled into the CLI, so a stale constant here builds a
+    // consumer project against an SDK that does not match the CLI which produced
+    // it — the mismatch that makes a custom agent fail to load. A release that
+    // bumps one and forgets the other fails here instead of at a user's install.
+    const sdkPkg = JSON.parse(
+      readFileSync(join(__dirname, '../../src/agent-sdk/package.json'), 'utf-8'),
+    ) as { version: string };
+    expect(SDK_VERSION).toBe(sdkPkg.version);
   });
 
   it('generates an agent and a test that both import the published SDK', () => {

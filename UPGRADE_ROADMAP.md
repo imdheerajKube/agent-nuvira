@@ -822,12 +822,12 @@ buff team review create "Title" "Goal"  # Create review from files
 
 | Component | File(s) | Purpose |
 |---|---|---|
-| **npm Package** | `packages/sdk/` | `@agent-nuvira/sdk` with dual entry points (main, agent, testing) |
-| **Base Agent Class + Types** | `packages/sdk/src/agent.ts` | Abstract `Agent`, `AgentContext`, `AgentResult`, `LLMCallFn`, `FileChange` |
-| **Testing Utilities** | `packages/sdk/src/testing.ts` | `MockLLM`, `createTestContext()`, `createMockCallLLM()`, `assertAgentResult()` |
+| **npm Package** | `src/agent-sdk/` | `@agent-nuvira/sdk` with per-entry-point subpath exports (main, agent, types, testing, register, scaffold, define) |
+| **Base Agent Class + Types** | `src/agent-sdk/src/agent.ts` | Abstract `Agent`, `AgentContext`, `AgentResult`, `LLMCallFn`, `FileChange` |
+| **Testing Utilities** | `src/agent-sdk/src/testing.ts` | `createMockContext()`, `createMockLLM()`, `runAgentTest()`, `assertAgentSuccess()` / `assertAgentFailure()` |
 | **Scaffolding CLI** | `src/cli/sdk.ts`, `src/agent-sdk/src/scaffold.ts` | 3 templates: basic-agent, full-agent, agent-pack |
 | **Plugin Auto-Discovery** | `src/plugins/agent-plugin.ts` | Agents in `~/.buff/agents/` auto-discovered |
-| **SDK Documentation** | `packages/sdk/README.md` | Quick start, step-by-step guide, full API reference |
+| **SDK Documentation** | `docs/AGENT_SDK.md` | Quick start, the full agent contract, the testing helpers, registration, and what depth the SDK offers |
 | **Type Compatibility Tests** | `tests/agent-sdk/type-compatibility.test.ts` | 23 tests verifying SDK ↔ main type compatibility |
 
 #### CLI Usage

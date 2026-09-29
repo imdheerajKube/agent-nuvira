@@ -853,6 +853,98 @@ nuvira phase create <name> <goals...>   # multi-goal phase scopes
 nuvira sdk
 ```
 
+### Write your own agent (SDK)
+
+Three commands take you from nothing to a tested agent:
+
+```bash
+nuvira sdk templates                                       # basic-agent | full-agent | agent-pack
+nuvira sdk scaffold code-formatter CodeFormatter "Formats source code" -t full-agent
+cd code-formatter && npm install && npm run build && npm test   # passes before you edit anything
+nuvira sdk info                                            # the SDK version THIS CLI expects
+```
+
+An agent extends `Agent`, declares `name`/`description`, implements
+`execute(context, callLLM)`, and exposes a descriptor built with `defineAgent()` —
+which derives `agentType` from the class name and **throws at definition time** if
+it is not kebab-case, rather than letting a plan step silently never match:
+
+```ts
+import { Agent, defineAgent, type AgentContext, type AgentResult, type LLMCallFn } from '@agent-nuvira/sdk';
+
+export class CodeFormatter extends Agent {
+  readonly name = 'CodeFormatter';
+  readonly description = 'Formats source code according to project conventions';
+
+  validate(context: AgentContext): true | string {
+    return context.artifacts.length ? true : 'Pass me at least one file to format.';
+  }
+
+  async execute(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult> {
+    const out = await callLLM(
+      [`Format these files.`, ...context.artifacts.map((f) => `--- ${f.path} ---\n${f.content}`)].join('\n'),
+      { temperature: 0.2, maxTokens: 2048 },
+    );
+    return { success: true, summary: `Formatted ${context.artifacts.length} file(s)`, details: out };
+  }
+}
+
+export const agentDescriptor = defineAgent({ AgentClass: CodeFormatter, tags: 'code, format' });
+```
+
+Two things decide whether this is the right tool for what you are building, and
+the second one is the one people are surprised by:
+
+- **You never choose a provider.** The orchestrator injects `callLLM`, so your agent
+  inherits routing, failover, the quota ledger and the model-substitution repairs
+  automatically. It cannot call tools, and it proposes file edits through
+  `context.fileChanges` rather than writing to disk itself — so `--dry-run` and
+  review mode keep working.
+- **`nuvira sdk register` edits SOURCE.** It adds an import, a `case` in
+  `createAgent()` and an `AGENT_ICONS` entry to `src/agents/orchestrator.ts`, so it
+  needs a checkout of this repository; with the CLI installed from npm there is no
+  such file and the command says `Orchestrator file not found at: …` instead of
+  pretending. Distributing an agent to a normal install means shipping a plugin
+  file (`nuvira plugins list`).
+
+`nuvira sdk info` first, always: an SDK built against a different version than the
+CLI running it is the usual cause of a custom agent that will not load. The full
+guide — the context bus, the ten testing helpers, scaffolding, registration and an
+explicit "what you get / what you do not get" — is
+[docs/AGENT_SDK.md](AGENT_SDK.md).
+
+### Drive it from VS Code
+
+The extension (`dheerajsharma.agent-nuvira-vscode`) is an editor surface for the
+SAME engine — every action spawns `agent-nuvira` as a child process, so it shares
+your routing, quota ledger and memory with the terminal:
+
+```bash
+code --install-extension dheerajsharma.agent-nuvira-vscode
+npm install -g agent-nuvira      # required: the extension is a surface, not an engine
+```
+
+| In the editor | What it runs underneath |
+|---|---|
+| **Agent-Nuvira: Execute Goal** | `execute "<goal>"` |
+| **Agent-Nuvira: Quick Fix** | `edit <path> --quick` |
+| **Agent-Nuvira: Review File** | `execute "Review the file <path> …"` |
+| **Agent-Nuvira: Explain Code** | `chat "Explain the following …" --stream` |
+| **Agent-Nuvira: Generate Test** | `execute "Generate comprehensive unit tests …"` |
+| **Agent-Nuvira: Run Workflow** | `workflow run <template> "<goal>"` |
+
+With `agent-nuvira.useAutoRouting` on, an `execute` gains `--auto-route` and chat
+and inline completions gain `--model auto`; that switch is the entire difference.
+Three language-model tools (`#reviewFileWithAgentNuvira`,
+`#explainWithAgentNuvira`, `#executeGoalWithAgentNuvira`) also let Copilot Chat
+delegate to this engine and read the result as ordinary text, and `activate()`
+returns a small programmatic API (`version`, `commands`, `openChat`,
+`executeGoal`, `getActiveModel`, `getQuotaStatus`) for other extensions.
+
+Everything else — all 13 commands, every setting and keybinding, the language-model
+tools, the API with a worked example, and an explicit depth statement — is in
+[docs/VSCODE_EXTENSION.md](VSCODE_EXTENSION.md).
+
 ---
 
 ## 11. Cookbook: copy-paste recipes

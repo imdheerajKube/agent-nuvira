@@ -182,6 +182,8 @@ const PUBLISHED_FILES = new Set([
   'docs/pitch-deck.md',
   'docs/demos/index.md',
   'docs/demos/nuvira-cli-tour.cast',
+  'docs/agent-sdk.md',
+  'docs/vscode-extension.md',
 ]);
 
 /** A private path → its published equivalent. */
@@ -194,6 +196,8 @@ const LINK_REWRITES = [
   ['ARCHITECTURE_DIAGRAMS.md', 'docs/architecture.md'],
   ['PITCH_DECK.md', 'docs/pitch-deck.md'],
   ['PRODUCT_STRATEGY.md', 'docs/product-strategy.md'],
+  ['docs/AGENT_SDK.md', 'docs/agent-sdk.md'],
+  ['docs/VSCODE_EXTENSION.md', 'docs/vscode-extension.md'],
 ];
 
 /** Links that are relative to the containing docs/ directory. */
@@ -201,6 +205,8 @@ const DOCS_LINK_REWRITES = [
   ['COMMANDS_SURFACE.md', 'reference/commands-surface.md'],
   ['COMMANDS.md', 'commands.md'],
   ['USER_MANUAL.md', 'user-manual.md'],
+  ['AGENT_SDK.md', 'agent-sdk.md'],
+  ['VSCODE_EXTENSION.md', 'vscode-extension.md'],
 ];
 
 /** The markdown link target pattern, shared by the fixer and the guard. */
@@ -487,6 +493,10 @@ terminal, a web dashboard, or any of 22 messaging platforms.
 - **[Full Command Surface](reference/commands-surface.md)** — all 289 command entries,
   generated from the live CLI tree.
 - **[Architecture](architecture.md)** — how the execution engine is put together.
+- **[Building custom agents (SDK)](agent-sdk.md)** — write, test and register your
+  own agent, with what depth the SDK offers and what it deliberately does not.
+- **[VS Code extension](vscode-extension.md)** — every command, setting, language-model
+  tool and API, with an explicit depth statement.
 - **[What's New](whats-new.md)** — the 3.x release index.
 
 ## The shape of it
@@ -613,6 +623,8 @@ nav:
   - Command Reference: commands.md
   - Full Command Surface: reference/commands-surface.md
   - Architecture: architecture.md
+  - Building custom agents (SDK): agent-sdk.md
+  - VS Code extension: vscode-extension.md
   - What's New: whats-new.md
   - CLI Tour: demos/index.md
   - Product Strategy: product-strategy.md
@@ -795,6 +807,19 @@ const PUBLISH_SET = [
     transform: publicManual,
   },
   {
+    // The two guides for the SDK and the editor surface. They are the only pages
+    // that state the DEPTH each offers — including the explicit "what you do not
+    // get" lists — which is the part a reader cannot infer from a feature list.
+    from: 'docs/AGENT_SDK.md',
+    to: 'docs/agent-sdk.md',
+    transform: (s, base) => fixLinks(scrub(s), base),
+  },
+  {
+    from: 'docs/VSCODE_EXTENSION.md',
+    to: 'docs/vscode-extension.md',
+    transform: (s, base) => fixLinks(scrub(s), base),
+  },
+  {
     from: 'PRODUCT_STRATEGY.md',
     to: 'docs/product-strategy.md',
     transform: (s, base) => fixLinks(scrub(s), base),
@@ -826,6 +851,8 @@ const OUT_BASE = {
   'docs/commands.md': 'docs',
   'docs/reference/commands-surface.md': 'docs/reference',
   'docs/user-manual.md': 'docs',
+  'docs/agent-sdk.md': 'docs',
+  'docs/vscode-extension.md': 'docs',
   'docs/product-strategy.md': 'docs',
   'docs/pitch-deck.md': 'docs',
   'docs/demos/nuvira-cli-tour.cast': 'docs/demos',

@@ -109,6 +109,14 @@ docs/demos/nuvira-commands-all.cast
 !src/agent-sdk/README.md
 !vscode-extension/README.md
 !vscode-extension/CHANGELOG.md
+# The two guides for the SDK and the editor surface. They are the only pages that
+# state what depth each one offers (and, explicitly, what it does not), and both
+# are inputs to the public documentation build (scripts/build-docs-repo.mjs) —
+# whose publish workflow fails with "missing source file" when an input is absent,
+# so an ignored guide here becomes a publish that only breaks in CI. Ignored, they
+# also degrade every README/CONTRIBUTING link into a 404 on a fresh clone.
+!docs/AGENT_SDK.md
+!docs/VSCODE_EXTENSION.md
 # The SDK example's README is the only place a consumer learns to copy the
 # example out of the repo and run it — a packaging-required doc, not prose.
 !examples/sdk/README.md

@@ -5,7 +5,10 @@ All notable changes to the Agent-Nuvira VS Code extension will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.3.4] — 2026-09-29
+
+> Version aligned with the CLI: this release ships alongside **CLI v3.3.4**, and
+> the SDK ships on `3.3.4` too, so all three artifacts report one number.
 
 ### Added
 - **Language Model tools** — three `contributes.languageModelTools` entries
@@ -50,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   activity-bar icon exists on disk
 - 31 new unit tests across `output`, `l10n`, `lmTools`, the extension API, and
   chat-panel template resolution
+
+### Docs
+- [`docs/VSCODE_EXTENSION.md`](../docs/VSCODE_EXTENSION.md) — the full usage
+  guide: all 13 commands mapped to the CLI verb each one runs, keybindings,
+  settings, the three language-model tools with their input schemas, the
+  programmatic API with a worked example, telemetry attribution, troubleshooting,
+  and an explicit **what this surface can and cannot do**
 
 ## [1.56.1] — 2026-08-05
 

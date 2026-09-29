@@ -16,10 +16,10 @@
 | **🚀 README** | [README.md](./README.md) | Quick start, features, configuration, CLI commands, multi-agent orchestration, development |
 | **🛣️ Roadmap** | [UPGRADE_ROADMAP.md](./UPGRADE_ROADMAP.md) | Full implementation journey — 30 phased features with status |
 | **📋 Changelog** | [CHANGELOG.md](./CHANGELOG.md) | Version history (v1.0.0 → v1.17.0), organized by Keep a Changelog format |
-| **🔧 SDK** | [`src/agent-sdk/README.md`](./src/agent-sdk/README.md) | `@agent-nuvira/sdk` — build custom agents with scaffolding CLI |
-| **💻 VS Code Extension** | [`vscode-extension/README.md`](./vscode-extension/README.md) | VS Code extension — 9 commands, inline suggestions, diff viewer, agent panel |
+| **🔧 SDK** | [`docs/AGENT_SDK.md`](./docs/AGENT_SDK.md) | `@agent-nuvira/sdk` — build, test and register custom agents: install, full agent contract, the ten testing helpers, scaffolding, and what depth the SDK offers |
+| **💻 VS Code Extension** | [`docs/VSCODE_EXTENSION.md`](./docs/VSCODE_EXTENSION.md) | The editor surface — all 13 commands mapped to the CLI verb they run, settings, keybindings, the three language-model tools, the programmatic API, and what depth it offers |
 | **🧪 Tests** | [`tests/README.md`](./tests/README.md) | Test suite overview — 1,830+ tests across 55 files, organized by module |
-| **📦 Published SDK** | [`packages/sdk/README.md`](./packages/sdk/README.md) | Published `@agent-nuvira/sdk` npm package documentation |
+| **📦 SDK package README** | [`src/agent-sdk/README.md`](./src/agent-sdk/README.md) | The npm package landing page for `@agent-nuvira/sdk` (the fuller guide is `docs/AGENT_SDK.md` above) |
 | **🔌 MCP Examples** | [`examples/mcp/README.md`](./examples/mcp/README.md) | MCP server configuration examples (filesystem, GitHub, Exa) |
 
 ---

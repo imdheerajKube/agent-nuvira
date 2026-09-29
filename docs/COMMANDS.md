@@ -971,13 +971,19 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ### 10.5 Custom agents (SDK + scaffold)
 
 - **Objective:** Scaffold and register custom agent-nuvira agents.
-- **Command:** `nuvira agent create [-n <name>] [-d <desc>] [--dir <dir>]` · `nuvira agent list` · `nuvira agent info <name>` · `nuvira sdk scaffold [-t <template>] [--agent-type <type>]` · `nuvira sdk templates` · `nuvira sdk register <path> [-i <icon>]` · `nuvira sdk unregister <name>`
+- **Command:** `nuvira agent create [-n <name>] [-d <desc>] [--dir <dir>]` · `nuvira agent list` · `nuvira agent info <name>` · `nuvira sdk scaffold <outDir> <agentName> [description] [-t <basic-agent|full-agent|agent-pack>] [--agent-type <type>]` · `nuvira sdk templates` · `nuvira sdk register <className> <agentType> <sourceModule> [-i <icon>]` · `nuvira sdk unregister <agentType>`
 - **Examples:**
   ```bash
   nuvira agent create -n code-reviewer -d "Reviews PRs"
-  nuvira sdk scaffold -t typescript --agent-type plugin
-  nuvira sdk register ./my-agent --orchestrator-path ~/.nuvira/agents
+  nuvira sdk scaffold code-formatter CodeFormatter "Formats source code" -t full-agent
+  nuvira sdk register CodeFormatter code-formatter ./agents/code-formatter.js --orchestrator-path ./src/agents/orchestrator.ts
   ```
+- **First-timer details:** `sdk scaffold` takes the output directory and the class
+  name positionally, and an unknown `--template` is refused with the valid list
+  rather than silently falling back to a default. `sdk register` needs all three
+  positional arguments in that order, and its default orchestrator path is
+  `./src/agents/orchestrator.ts` — so it edits a **source checkout**, not an
+  npm-installed CLI. Full guide: [docs/AGENT_SDK.md](AGENT_SDK.md).
 
 ---
 

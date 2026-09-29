@@ -47,6 +47,20 @@ function toCamelCase(pascal: string): string {
   return pascal.charAt(0).toLowerCase() + pascal.slice(1);
 }
 
+// ─── SDK version pin ────────────────────────────────────────────────────────
+
+/**
+ * The SDK version a scaffolded project depends on.
+ *
+ * Kept as one constant, and deliberately in step with the SDK's own
+ * `package.json`: the scaffolded project is the first thing a consumer installs,
+ * and a template that pinned a stale major would build a project against an SDK
+ * that does not match the CLI which produced it — the exact mismatch that makes
+ * a custom agent fail to load. A test asserts the two agree, so a release that
+ * forgets this constant fails rather than shipping.
+ */
+export const SDK_VERSION = '3.3.4';
+
 // ─── Templates ──────────────────────────────────────────────────────────────
 
 const PACKAGE_JSON_TEMPLATE = (opts: ScaffoldOptions) => `{
@@ -63,7 +77,7 @@ const PACKAGE_JSON_TEMPLATE = (opts: ScaffoldOptions) => `{
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@agent-nuvira/sdk": "^1.0.0"
+    "@agent-nuvira/sdk": "^${SDK_VERSION}"
   },
   "devDependencies": {
     "typescript": "^5.3.0",
