@@ -47,6 +47,7 @@ import {
 import {
   compare,
   isAtPar,
+  noDebugLog,
   reportParityFailure,
   type TurnObservation,
 } from '../../src/parity/observation.js';
@@ -170,6 +171,8 @@ const observation = (over: Partial<TurnObservation> = {}): TurnObservation => ({
   toolCalls: [{ tool: 'read_file' }, { tool: 'str_replace' }],
   // WS1 — findings are part of the projection; `[]` is the honest "none".
   findings: [],
+  // WS2 — the session debug log's header; the backend triple is compared.
+  debugLog: { written: true, provider: 'groq', model: 'qwen/qwen3.8-27b', transport: 'native' },
   answer: 'done',
   ...over,
 });
@@ -218,6 +221,17 @@ describe('WS0 parity projection', () => {
     // An absent outcome is not a failure either: it is absence.
     const unknown = observation({ surface: 'gateway-chat', toolCalls: [{ tool: 'read_file' }] });
     expect(compare(succeeded, unknown).length).toBeGreaterThan(0);
+  });
+
+  it('treats a missing session debug log as a difference, not as noise', () => {
+    // WS2 — with logging on, a surface that writes no attachable log has not
+    // delivered the capability. "Both produced nothing" is agreement on nothing,
+    // which is why the field is required and compared rather than optional.
+    const logged = observation();
+    const missing = observation({ surface: 'subagent', debugLog: noDebugLog() });
+    const differences = compare(logged, missing);
+    expect(differences.join('\n')).toContain('debugLog.written');
+    expect(differences.join('\n')).toContain('subagent');
   });
 
   it('treats a missing attribution as a difference, not as noise', () => {

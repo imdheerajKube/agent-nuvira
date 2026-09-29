@@ -81,6 +81,13 @@ export interface ChatEngine {
       onSkillDraft?: (payload: import('../tools/skill-tool.js').SkillDraftPayload) => void;
       /** WS1 — a finding was recorded this turn, with the gate's verdict. */
       onFinding?: (finding: import('../findings/verdicts.js').WireFinding) => void;
+      /**
+       * WS2 — which surface this turn runs as, for the session debug log's
+       * header. The console drives the SAME `answerOnce` the CLI and the
+       * gateway do, so it must say who it is: a dashboard bug report must not
+       * arrive labelled `cli-chat`.
+       */
+      debugSurface?: string;
       /** PA4 — a skill loaded but needs env vars (non-blocking notification). */
       onSecretRequest?: (payload: { skillName: string; missing: string[]; persisted: Record<string, boolean> }) => void;
       /** P0.7 — the session's plan store (per-conversation, survives turns). */
@@ -290,6 +297,21 @@ export type ChatConsoleEvent =
       stdout: string;
       stderr: string;
       timestamp: number;
+    }
+  | {
+      /**
+       * WS1 — a finding was recorded this turn, carrying the verdict the GATE
+       * computed and the evidence behind it.
+       *
+       * Forwarded live for the same reason `plan`/`diff` are: the verdict is the
+       * thing the reader needs to see WHILE the turn runs — a CONFIRMED claim and
+       * a PLAUSIBLE guess must not arrive as interchangeable prose. Unlike those
+       * two, the console does NOT collect these for the result — the caller
+       * already owns the collection (`onFinding`/`findings`), and a second copy
+       * here would be the drift this workstream exists to refuse.
+       */
+      kind: 'finding';
+      finding: import('../findings/verdicts.js').WireFinding;
     }
   | { kind: 'status'; status: 'working' | 'done' | 'error' }
   | {
@@ -657,12 +679,18 @@ export class ChatConsole {
       const answer = await engine.answerOnce(clean, {
         // P4 — the cancel signal rides into the turn.
         signal: controller.signal,
-        // WS1 — a recorded finding, kept for the result and handed to the
-        // caller through the same seam.
+        // WS1 — a recorded finding, forwarded live and kept for the result.
         onFinding: (finding) => {
           findings.push(finding);
+          // Live card: the GUI subscribes to the console's event stream, so the
+          // verdict appears as the turn records it (the POST response remains
+          // authoritative for the transcript snapshot).
+          emitTurn({ kind: 'finding', finding });
           opts.onFinding?.(finding);
         },
+        // WS2 (#24) — this turn is the DASHBOARD's, and the session debug log's
+        // header must say so (the engine is shared with the CLI and gateway).
+        debugSurface: 'dashboard-chat',
         ...(opts.provider ? { provider: opts.provider } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         // P5 — a followup chip continues the previous execution.

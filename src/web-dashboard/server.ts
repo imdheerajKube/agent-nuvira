@@ -22,6 +22,7 @@ import { loadEnv } from '../utils/env.js';
 import { ConfigManager } from '../config/manager.js';
 import { runAllChecks, type CheckResult, type HealthStatus } from '../cli/doctor.js';
 import type { ProviderConfig } from '../config/types.js';
+import type { WireFinding } from '../findings/verdicts.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import { readRecallHits } from '../context/session-recall.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
@@ -1100,7 +1101,20 @@ interface DashboardTrace {
     delivered?: boolean;
     unverifiedClaim?: boolean;
     unfulfilledPromise?: boolean;
+    /** Files changed but nothing verified the result (see `reasoning-trace.ts`). */
+    unverifiedEdit?: boolean;
+    /** The answer asserted a code change nothing verified. */
+    unverifiedEditClaim?: boolean;
+    /** The request asked for an authored deliverable and no file was written. */
+    undeliveredArtifact?: boolean;
   };
+  /**
+   * WS1 (#23) — the findings the run recorded, in call order, with the verdict
+   * the GATE computed and the evidence behind it. Persisted on the trace by
+   * `recordTraceFindings`; the Trace tab renders them so a verdict can be
+   * audited after the run. Absent on traces written before this existed.
+   */
+  findings?: WireFinding[];
   steps: DashboardTraceStep[];
 }
 
@@ -6052,6 +6066,11 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         followups: result.followups ?? [],
         provider: result.provider ?? null,
         model: result.model ?? null,
+        // WS1 — the findings this turn recorded, with the gate's verdicts, so
+        // a dashboard client reads the same wire form the CLI, the gateway and
+        // the subagent report (the GUI card is a rendering decision; the FACT
+        // travels here rather than being dropped at the HTTP boundary).
+        findings: result.findings ?? [],
         generationFailed: result.generationFailed === true,
         retryQueued,
       });
@@ -6229,6 +6248,12 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
             markdown: event.markdown,
             updatedAt: event.updatedAt,
           })}\n\n`);
+        } else if (event.kind === 'finding') {
+          // WS1 — a recorded finding: the claim, the outcome, the evidence and
+          // the verdict the GATE computed. Rendered as its own card so a
+          // CONFIRMED verdict and a PLAUSIBLE guess never read the same in the
+          // thread — the whole point of the row.
+          res.write(`event: finding\ndata: ${JSON.stringify({ finding: event.finding })}\n\n`);
         } else if (event.kind === 'status') {
           res.write(`event: status\ndata: ${JSON.stringify({ status: event.status })}\n\n`);
         } else if (event.kind === 'token') {

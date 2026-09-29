@@ -1712,6 +1712,11 @@ export class ExecuteCommand extends BaseCommand {
         onFinding: (finding) => {
           findings.push(finding);
         },
+        // WS2 (#24) — this turn is the EXECUTE command's, even though it runs
+        // through the shared chat engine. Without this the session debug log of
+        // a `nuvira execute` run was labelled `cli-chat`, which is exactly the
+        // kind of misattribution a bug report cannot afford.
+        debugSurface: 'cli-execute',
       });
       // Parity with the dashboard/gateway: never print a raw suggest_followups
       // payload (or the empty fence it leaves behind) as if it were the answer,

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { dashboardAPI } from '../api';
-import type { TraceEntry, TraceStep } from '../types';
+import type { TraceEntry, TraceFinding, TraceStep } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -81,6 +81,78 @@ function outcomeBadge(outcome: TraceEntry['outcome']): { text: string; color: st
   if (outcome.kind === 'answered') return { text: '💬 answered — no action taken', color: '#8b949e', ...base };
   if (outcome.kind === 'cancelled') return { text: '⏹ cancelled', color: '#8b949e', ...base };
   return { text: '❌ generation failed', color: '#f85149', bg: '#2d0f0f', border: '#f85149' };
+}
+
+/**
+ * WS1 (#23) — how many of a run's findings were actually CONFIRMED.
+ *
+ * The split is computed here rather than trusted from a count field for the same
+ * reason `summarizeVerdicts` exists: "4 findings" reads as four facts, while
+ * "4 findings (1 confirmed, 3 plausible)" cannot. A CONFIRMED verdict with no
+ * usable evidence is counted as PLAUSIBLE — the gate forbids it, and a renderer
+ * must not be the place the rule gets relaxed.
+ */
+function findingsSummary(findings: TraceFinding[]): string {
+  const confirmed = findings.filter((f) => f.verdict === 'CONFIRMED' && findingEvidence(f).length > 0).length;
+  return `${findings.length} finding${findings.length === 1 ? '' : 's'}: ${confirmed} confirmed, ${findings.length - confirmed} plausible`;
+}
+
+/** The checks behind a finding — a blank `ref` is not a check (see verdicts.ts). */
+function findingEvidence(finding: TraceFinding): NonNullable<TraceFinding['evidence']> {
+  return (finding.evidence ?? []).filter((e) => typeof e?.ref === 'string' && e.ref.trim().length > 0);
+}
+
+/** One recorded finding: the claim, the gate's verdict, and the evidence behind it. */
+function FindingRow({ finding }: { finding: TraceFinding }) {
+  const evidence = findingEvidence(finding);
+  const confirmed = finding.verdict === 'CONFIRMED' && evidence.length > 0;
+  return (
+    <div style={{
+      background: '#0d1117', border: '1px solid #21262d',
+      borderLeft: `3px solid ${confirmed ? '#238636' : '#d29922'}`,
+      borderRadius: 8, padding: '8px 12px', marginBottom: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+        <span style={{ fontSize: 13 }}>{confirmed ? '✅' : '🔎'}</span>
+        <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: '#e6edf3' }}>{finding.claim}</span>
+        <span style={{
+          fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em', padding: '1px 7px',
+          borderRadius: 10, border: '1px solid',
+          color: confirmed ? '#3fb950' : '#d29922',
+          background: confirmed ? '#0d2818' : '#3d2c00',
+          borderColor: confirmed ? '#238636' : '#d29922',
+        }}>
+          {confirmed ? 'CONFIRMED' : 'PLAUSIBLE'}
+        </span>
+      </div>
+      {finding.outcome ? (
+        <div style={{ marginTop: 3, fontSize: 11.5, color: '#8b949e' }}>{finding.outcome}</div>
+      ) : null}
+      {evidence.length > 0 ? (
+        <ul style={{ listStyle: 'none', margin: '5px 0 0', padding: 0 }}>
+          {evidence.map((e, i) => (
+            <li key={i} style={{ fontSize: 11, color: '#8b949e', marginBottom: 3 }}>
+              <span style={{
+                fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '0.04em',
+                color: '#58a6ff', marginRight: 5,
+              }}>
+                {e.kind}
+              </span>
+              <span style={{ color: '#c9d1d9', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>{e.ref}</span>
+              {e.detail ? <span style={{ marginLeft: 5 }}>({e.detail})</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div style={{ marginTop: 5, fontSize: 11, color: '#d29922' }}>
+          no evidence — reported as PLAUSIBLE, not verified
+        </div>
+      )}
+      {finding.source ? (
+        <div style={{ marginTop: 4, fontSize: 10, color: '#6e7681' }}>source: {finding.source}</div>
+      ) : null}
+    </div>
+  );
 }
 
 function SectionCard({ icon, title, subtitle, children }: {
@@ -295,7 +367,26 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
             🧮 {fmtTokens(trace.totalTokens)} tok
           </span>
         )}
+        {trace.findings && trace.findings.length > 0 && (
+          <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#0d1117', border: '1px solid #30363d', color: '#8b949e' }}>
+            {`🔎 ${findingsSummary(trace.findings)}`}
+          </span>
+        )}
       </div>
+
+      {/* WS1 (#23) — the run's recorded findings, above the steps: a verdict is
+          the FIRST thing a reader wants, and burying it under a dozen LLM calls
+          would let a CONFIRMED claim and a PLAUSIBLE guess read the same. */}
+      {trace.findings && trace.findings.length > 0 ? (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 6 }}>
+            {`🔎 Findings — ${findingsSummary(trace.findings)}`}
+          </div>
+          {trace.findings.map((finding, i) => (
+            <FindingRow key={`finding-${i}`} finding={finding} />
+          ))}
+        </div>
+      ) : null}
 
       {trace.systemPrompt && (
         <details style={{ marginBottom: 12 }}>
@@ -391,6 +482,11 @@ function TraceList({ traces }: { traces: TraceEntry[] }) {
               <span>⏱ {fmtDuration(trace.durationMs)}</span>
               {trace.failedSteps ? <span style={{ color: '#f85149' }}>❌ {trace.failedSteps} failed</span> : <span style={{ color: '#3fb950' }}>✓ all ok</span>}
               {trace.totalTokens !== undefined && <span>🧮 {fmtTokens(trace.totalTokens)} tok</span>}
+              {trace.findings && trace.findings.length > 0 && (
+                <span style={{ color: '#d29922' }}>
+                  {`🔎 ${trace.findings.filter((f) => f.verdict === 'CONFIRMED' && findingEvidence(f).length > 0).length}/${trace.findings.length} confirmed`}
+                </span>
+              )}
               {agents && <span>🤖 {agents.slice(0, 60)}</span>}
             </div>
           </button>

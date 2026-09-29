@@ -61,6 +61,34 @@ export interface ObservationNoise {
 }
 
 /**
+ * WS2 — the session debug log a surface produced for the turn, reduced to what
+ * the attachable header carries.
+ *
+ * `written` is separate from the backend on purpose: "this surface wrote no log"
+ * and "this surface wrote a log that names no backend" are different failures,
+ * and collapsing them would let a surface that produces NOTHING read as one that
+ * produces an honest `unknown`. The backend triple is what a bug report cannot
+ * be reconstructed without, so it is what is compared — the file's path, size
+ * and timestamps differ per run by construction (the same reason `turnId` and
+ * `at` are noise).
+ */
+export interface DebugLogObs {
+  /** True when the surface actually wrote a log file for this turn. */
+  written: boolean;
+  /** The provider named in the log's header (null = not named). */
+  provider: string | null;
+  /** The model named in the log's header. */
+  model: string | null;
+  /** The transport named in the log's header (`native`/`json`/`none`). */
+  transport: string | null;
+}
+
+/** The honest "this surface produced no log" value. Fresh each call. */
+export function noDebugLog(): DebugLogObs {
+  return { written: false, provider: null, model: null, transport: null };
+}
+
+/**
  * One surface's view of one turn. Fields the surface does not report stay
  * `undefined` — and `compare` treats "absent on one surface, present on another"
  * as a difference, because a surface that cannot say which model served a turn
@@ -87,6 +115,17 @@ export interface TurnObservation {
   transport?: 'native' | 'json' | 'none';
   /** Tool calls in call order, with the outcome each surface reported. Order is part of the behaviour. */
   toolCalls: readonly ToolCallObs[];
+  /**
+   * WS2 — the session debug log this surface wrote for the turn.
+   *
+   * REQUIRED, for the reason `modelCalls` and `findings` are: the capability is
+   * "every surface produces an attachable log whose header names the backend",
+   * and an optional field would let a surface that produces nothing go on
+   * reading as at-par. `noDebugLog()` is the honest answer when logging is off
+   * or the surface wrote nothing — the harness turns logging ON for the run, so
+   * a `written: false` there is a failure, not a neutral value.
+   */
+  debugLog: DebugLogObs;
   /**
    * WS1 — the findings the turn recorded, in call order, in the shared wire
    * form (`findings/verdicts.ts`).
@@ -120,6 +159,7 @@ export interface ComparableObservation {
   transport: string | null;
   toolCalls: readonly ToolCallObs[];
   findings: readonly WireFinding[];
+  debugLog: DebugLogObs;
   answer: string | null;
   refusalCode: string | null;
   errorCode: string | null;
@@ -139,6 +179,7 @@ export function comparableOf(observation: TurnObservation): ComparableObservatio
     // difference: the field is required by the type, and a driver that forgot it
     // should fail the typecheck, not silently diverge at runtime.
     findings: observation.findings ?? [],
+    debugLog: observation.debugLog ?? noDebugLog(),
     answer: observation.answer ?? null,
     refusalCode: observation.refusalCode ?? null,
     errorCode: observation.errorCode ?? null,
@@ -230,6 +271,21 @@ export function compare(a: TurnObservation, b: TurnObservation): string[] {
           ? `${who}: ${a.surface} recorded a finding the other surface did not, at #${i + 1} — ${say(l)}`
           : `${who}: finding #${i + 1} differs — ${say(l)} vs ${say(r)}`,
     );
+  }
+
+  // WS2 — the session debug log's header. Compared field by field (rather than
+  // by object identity) so a failure names WHICH part of the header diverged:
+  // "one surface wrote no log" and "one named a different model" are very
+  // different bugs, and a bare `debugLog differs` would hide that.
+  const debugFields: Array<keyof DebugLogObs> = ['written', 'provider', 'model', 'transport'];
+  for (const field of debugFields) {
+    const l = left.debugLog[field];
+    const r = right.debugLog[field];
+    if (l !== r) {
+      differences.push(
+        `${who}: debugLog.${field} differs — ${show(l === null ? null : String(l))} vs ${show(r === null ? null : String(r))}`,
+      );
+    }
   }
 
   return differences;

@@ -91,4 +91,17 @@ export const VERIFIED_CELLS: ReadonlySet<string> = new Set([
   'findings-verdicts@gateway-chat',
   'findings-verdicts@cli-execute',
   'findings-verdicts@subagent',
+  // WS2 (#24). ALL FIVE surfaces write a session debug log for a turn and read
+  // it back FROM DISK with the same backend in the header — provider, model and
+  // transport. Each surface opens its log at its own seam (`cli/chat.ts`,
+  // `cli/loop-executor.ts` and the child runtime, with the console and the
+  // gateway passing their identity down to the shared chat engine), and the
+  // harness turns logging on for the whole run so "wrote a log" is an assertion
+  // rather than a thing that happened to be true. Proven by 'writes a session
+  // debug log whose header names the backend, on every surface'.
+  'debug-log@cli-chat',
+  'debug-log@dashboard-chat',
+  'debug-log@gateway-chat',
+  'debug-log@cli-execute',
+  'debug-log@subagent',
 ]);

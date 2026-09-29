@@ -29,6 +29,7 @@ import type { LLMCallFn } from '../agents/agent.js';
 import type { InferenceOptions } from '../config/types.js';
 import { estimateTokens } from './cost-tracker.js';
 import { splitPromptLayers, digestPromptLayers, type PromptLayerDigests } from './prompt-layers.js';
+import { describeFinding, toWire, type WireFinding, type Finding } from '../findings/verdicts.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -240,6 +241,19 @@ export interface ReasoningTrace {
    * treat `undefined` as "no events were recorded", never as "none happened".
    */
   events?: TraceEvent[];
+  /**
+   * WS1 (#23) — the findings the run recorded, in call order, in the shared wire
+   * form (`findings/verdicts.ts`): the claim, the outcome, the evidence and the
+   * verdict the GATE computed.
+   *
+   * Persisted on the trace for the same reason the outcome flags are: a verdict
+   * that only ever existed in the turn's return value cannot be audited after the
+   * turn — a reader opening the Trace tab would see the tool calls and the
+   * hallucinations flags but not that the run ASSERTED something and whether
+   * anything backed it. Absent on traces written before this existed; readers
+   * must treat `undefined` as "this trace predates findings", never as "none".
+   */
+  findings?: WireFinding[];
   /**
    * The FULL stable layer (system prompt), captured ONCE per trace.
    * Previously every trace exposed only the first 80 characters of it, so the
@@ -483,6 +497,71 @@ export function recordTraceEvent(
   } catch {
     // Best-effort — an instrument must never break the run it observes.
   }
+}
+
+/**
+ * Attach the findings a run recorded to its trace — WS1 (#23).
+ *
+ * The findings are already GATED when they arrive (`confirmFinding` refused any
+ * promotion without usable evidence), so this stores them verbatim rather than
+ * re-deciding: the trace must show what the run actually reported, and a reader
+ * comparing the Trace tab against the turn's own output must not find two
+ * different verdicts. `toWire` is applied anyway, so a `Finding` passed by
+ * mistake is normalised into the comparable form instead of leaking `at` (which
+ * would differ on every run).
+ *
+ * Best-effort on purpose: the trace store is an instrument, and an instrument
+ * must never break the run it observes — `recordStep` and `recordTraceEvent`
+ * follow the same rule. An id-less call attaches to the run in progress, exactly
+ * like `recordTraceEvent`, so a recorder that never held the id still lands on
+ * the right trace.
+ *
+ * Each finding ALSO lands as a `decision` event, so the run's timeline reads in
+ * order (the tool call that checked something, then the verdict it earned)
+ * instead of the verdicts appearing only in a section of their own.
+ */
+export function recordTraceFindings(
+  traceId: string | undefined,
+  findings: readonly (WireFinding | Finding)[],
+): void {
+  if (findings.length === 0) return;
+  try {
+    const id = traceId || currentTraceId;
+    if (!id) return;
+    const data = readFile();
+    const trace = data.traces.find((t) => t.id === id);
+    if (!trace) return;
+    const wire = findings.map((finding) => (isWireFinding(finding) ? finding : toWire(finding)));
+    const stored = trace.findings ?? (trace.findings = []);
+    for (const finding of wire) stored.push(finding);
+    const events = trace.events ?? (trace.events = []);
+    for (const finding of wire) {
+      events.push({
+        seq: events.length + 1,
+        timestamp: Date.now(),
+        kind: 'decision',
+        summary: describeFinding(finding),
+      });
+    }
+    // Same cap and re-numbering rule as `recordTraceEvent`, so the timeline's
+    // `seq` stays 1-based contiguous however the events arrived.
+    if (events.length > MAX_EVENTS_PER_TRACE) {
+      trace.events = events.slice(-MAX_EVENTS_PER_TRACE);
+      trace.events.forEach((e, i) => { e.seq = i + 1; });
+    }
+    writeFile(data);
+  } catch {
+    // Best-effort — an instrument must never break the run it observes.
+  }
+}
+
+/**
+ * Is this already the wire form? `WireFinding` and `Finding` differ only in
+ * `at`, which `Finding` may carry — checked structurally rather than by a flag
+ * so either shape can be passed.
+ */
+function isWireFinding(finding: WireFinding | Finding): finding is WireFinding {
+  return !('at' in finding && finding.at !== undefined);
 }
 
 /**

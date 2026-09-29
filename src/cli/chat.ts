@@ -48,7 +48,7 @@ import {
   isToolCallingUnsupported,
   stripToolCallArtifacts,
 } from '../inference/tool-call-utils.js';
-import { beginTrace, endTrace, recordStep, recordTraceEvent, buildTraceOutcome } from '../learning/reasoning-trace.js';
+import { beginTrace, endTrace, recordStep, recordTraceEvent, recordTraceFindings, buildTraceOutcome } from '../learning/reasoning-trace.js';
 import { recordWorkingState, getWorkingState, formatWorkingState } from '../learning/working-state.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile, shouldSkipNativeTools } from '../learning/model-harness.js';
@@ -78,6 +78,7 @@ import { getTool, TOOL_CONTRACT_JSON, type ToolContext } from '../tools/registry
 // WS1 — the finding tool's bus event, and the wire shape every surface reports.
 import { FINDING_EVENT } from '../tools/finding-tool.js';
 import type { WireFinding } from '../findings/verdicts.js';
+import { debugLogNotice, sessionDebugLog } from '../observability/debug-log.js';
 import {
   buildFollowupContinuationPrompt,
   isSuggestedFollowup,
@@ -592,6 +593,13 @@ export class ChatCommand extends BaseCommand {
      * (no cache/history/memory). The CLI never passes it.
      */
     signal?: AbortSignal;
+    /**
+     * WS2 — which SURFACE this turn is running as, for the session debug log's
+     * header. `answerOnce` is shared by three surfaces (the CLI, the dashboard
+     * console and the gateway), so the label cannot be inferred here; a caller
+     * that does not say is labelled `cli-chat`.
+     */
+    debugSurface?: string;
   } = {},
 ): Promise<{
   content: string;
@@ -716,7 +724,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat' },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -1248,6 +1256,8 @@ export class ChatCommand extends BaseCommand {
       continuation?: boolean;
       /** WS1 — a finding was recorded this turn (see the emit forwarding). */
       onFinding?: (finding: WireFinding) => void;
+      /** WS2 — the surface label for the session debug log header. */
+      debugSurface?: string;
     },
   ): Promise<{
     content: string;
@@ -1278,6 +1288,17 @@ export class ChatCommand extends BaseCommand {
      * none"), which is what lets five surfaces be compared honestly.
      */      findings?: WireFinding[];
   }> {
+    // WS2 (#24) — the optional session debug log for this turn. Null unless
+    // `NUVIRA_DEBUG_LOG` is set, so the off path is one boolean check; when on,
+    // the events below are redacted and bounded, and the file is written at the
+    // END so its header can name the backend that actually served the turn.
+    const debugLog = sessionDebugLog({
+      surface: ctxOverrides?.debugSurface ?? 'cli-chat',
+      goal: message,
+      backend: { engine: 'loop', provider: session.type, ...(session.model ? { model: session.model } : {}) },
+    });
+    debugLog?.event('turn.start', { provider: session.type });
+
     // Cache check first (same as the legacy path).
     const cache = getCache();
     const cacheModel = this.cacheModelFor(session);
@@ -1292,6 +1313,11 @@ export class ChatCommand extends BaseCommand {
           history.push({ role: 'user', content: message });
           history.push({ role: 'assistant', content: cachedResult });
           this.memoryNoteTurn(message, cachedResult);
+          // WS2 — a cache replay reached no model, so the log says exactly that
+          // rather than borrowing an attribution from a turn that did not run.
+          debugLog?.event('cache.hit', { chars: cachedResult.length });
+          const cacheNotice = debugLogNotice(ctxOverrides?.debugSurface ?? 'cli-chat', debugLog?.write() ?? null);
+          if (cacheNotice) logger.info(cacheNotice);
           return { content: cachedResult };
         }
       } catch {
@@ -1466,6 +1492,19 @@ export class ChatCommand extends BaseCommand {
         if (ctxOverrides?.onToolCall && (event === 'tool:started' || event === 'tool:called')) {
           ctxOverrides.onToolCall(event === 'tool:started' ? 'started' : 'called', data as ToolCallInfo);
         }
+        // WS2 — the same lifecycle into the session debug log: a bug report
+        // needs the tool NAMES and their outcomes, in order. `write()` is never
+        // called here (the log is buffered and written once at turn end); this
+        // records, it does not persist per call.
+        if (debugLog && (event === 'tool:started' || event === 'tool:called')) {
+          const call = data as { tool?: string; ok?: boolean } | undefined;
+          if (call?.tool) {
+            debugLog.event(event === 'tool:started' ? 'tool.start' : 'tool.end', {
+              tool: call.tool,
+              ...(call.ok === undefined ? {} : { ok: call.ok }),
+            });
+          }
+        }
         // P0.7 — forward plan mutations to the GUI (structured checklist).
         if (ctxOverrides?.onPlanChange && event === 'plan:changed') {
           ctxOverrides.onPlanChange(data as import('../tools/plan-store.js').PlanSnapshot);
@@ -1486,6 +1525,8 @@ export class ChatCommand extends BaseCommand {
           const finding = data as WireFinding;
           findings.push(finding);
           ctxOverrides?.onFinding?.(finding);
+          // WS2 — a verdict is exactly the kind of fact a bug report is missing.
+          debugLog?.event('finding', `${finding.verdict} ${finding.claim}`);
         }
         // G18 — an autonomy gate DECIDING to proceed is a fact about the turn
         // ("this change was applied without asking, and here is why"), not just
@@ -1698,6 +1739,13 @@ export class ChatCommand extends BaseCommand {
       }),
     );
 
+    // WS1 (#23) — persist the turn's findings (claim, outcome, evidence and the
+    // gate's verdict) on the trace, so the verdicts can be audited from the
+    // Trace tab after the run instead of only existing in this turn's return.
+    // Best-effort by construction; `endTrace` above cleared the in-progress id,
+    // so the trace id is passed explicitly.
+    recordTraceFindings(chatTraceId, findings);
+
     // G3 — record what this turn actually did so the NEXT turn starts from it
     // (files changed, whether anything verified the work, and whether the user
     // reported a regression). Best-effort: the ledger must never break a turn.
@@ -1783,6 +1831,31 @@ export class ChatCommand extends BaseCommand {
     // directly, so a model that wrote the tool JSON as text used to leak it
     // into the chat. The loop already salvages such blocks into real tool
     // calls; this is the belt-and-braces strip for any residue.
+    // WS2 — close the session debug log. The header names the backend that
+    // ACTUALLY served the turn (`lastAttempt`, updated by the provider walk),
+    // not the pair this surface merely resolved before the turn started — those
+    // diverge exactly when failover happens, which is when a bug report needs
+    // the right answer. Best-effort: a log that cannot be written must never
+    // affect the answer.
+    if (debugLog) {
+      const servedModel = this.lastAttempt?.model ?? session.model;
+      debugLog.backendOf({
+        provider: this.lastAttempt?.provider ?? session.type,
+        ...(servedModel ? { model: servedModel } : {}),
+        transport: result.transport ?? null,
+      });
+      debugLog.event('turn.end', {
+        generationFailed: result.generationFailed === true,
+        cancelled: result.cancelled === true,
+        bounded: result.bounded === true,
+        contentChars: result.content.length,
+        toolCalls: result.toolCalls?.length ?? 0,
+        findings: findings.length,
+      });
+      const notice = debugLogNotice(ctxOverrides?.debugSurface ?? 'cli-chat', debugLog.write());
+      if (notice) logger.info(notice);
+    }
+
     return {
       content: stripToolCallArtifacts(result.content),
       generationFailed: result.generationFailed,

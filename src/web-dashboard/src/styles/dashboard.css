@@ -3938,6 +3938,132 @@ body {
   color: var(--text-secondary);
 }
 
+/* WS1 (#23) — finding cards: a claim, the gate's verdict, and the evidence.
+   A CONFIRMED card and a PLAUSIBLE one must never read the same, so the verdict
+   chip and the left border carry the distinction (not just the icon). */
+.chat-finding-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 2px;
+}
+
+.chat-finding-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid #a78bfa;
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-finding-card.chat-finding-confirmed {
+  border-left-color: #22c55e;
+}
+
+.chat-finding-card.chat-finding-plausible {
+  border-left-color: #d29922;
+}
+
+.chat-finding-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-finding-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-finding-claim {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-finding-verdict {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid;
+}
+
+.chat-finding-verdict-ok {
+  color: #3fb950;
+  background: #0d2818;
+  border-color: #238636;
+}
+
+.chat-finding-verdict-guess {
+  color: #d29922;
+  background: #3d2c00;
+  border-color: #d29922;
+}
+
+.chat-finding-outcome {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.chat-finding-evidence {
+  list-style: none;
+  margin: 5px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chat-finding-evidence li {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chat-finding-kind {
+  flex: none;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #58a6ff;
+}
+
+.chat-finding-ref {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-primary);
+  word-break: break-word;
+  min-width: 0;
+}
+
+.chat-finding-detail {
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.chat-finding-noevidence {
+  margin-top: 5px;
+  font-size: 11px;
+  color: #d29922;
+}
+
+.chat-finding-source {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
 /* P0.7 — plan checklist card (live, updates in place) */
 .chat-plan-card {
   border: 1px solid var(--border);

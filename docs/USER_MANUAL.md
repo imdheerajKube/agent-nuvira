@@ -621,7 +621,12 @@ evidence — never the verdict: a claim with usable evidence is recorded
 result rather than a failure. Every surface reports the same wire form (the
 engine result and `onFinding` on the CLI and dashboard, the `inbound.chat` log
 record on the gateway, a `finding` IPC frame from a subagent), so a claim cannot
-be reported as verified on one surface and unchecked on another.
+be reported as verified on one surface and unchecked on another. The dashboard
+**draws** each finding as a card in the chat thread — evidence for a CONFIRMED
+one, an explicit "no evidence — reported as PLAUSIBLE" for the rest — and the
+**Traces** tab lists the findings a finished run recorded, with the split
+(`1 confirmed, 3 plausible`) on the row and the evidence on the trace, so a
+verdict can be audited after the run rather than only watched live.
 
 ### Examples
 
@@ -889,6 +894,50 @@ for the registry). `docs/COMMANDS_SURFACE.md` is correct — it is generated.
 | Slow first run | Model discovery walks every provider — expected |
 | Key handling | `nuvira config vault status`, `nuvira config vault migrate-keys` |
 | Whole-system health | `nuvira doctor --verbose` |
+
+### Attaching evidence to a bug report (session debug log)
+
+"It did not answer" / "it sent the wrong thing" is usually unactionable, because
+the failing run left nothing behind that says which backend served it. Set
+`NUVIRA_DEBUG_LOG=1` (any value except `0`, `false`, `off` or `no` turns it on)
+and every surface writes one plain-text log per turn:
+
+```bash
+NUVIRA_DEBUG_LOG=1 nuvira chat "list the working directory, then answer"
+# 🐞 cli-chat: session debug log written to ~/.nuvira/debug-logs/cli-chat-…log — attach it to a bug report.
+```
+
+```bash
+NUVIRA_DEBUG_LOG=1 nuvira dashboard      # the server process logs every dashboard turn
+NUVIRA_DEBUG_LOG=1 nuvira gateway run    # every inbound messaging turn
+NUVIRA_DEBUG_LOG=1 nuvira execute "run the failing test"
+```
+
+The file opens with the header a bug report cannot be debugged without — the
+surface, the tool transport, and **the backend that actually served the turn**
+(provider and model as resolved *after* any failover):
+
+```text
+# nuvira session debug log — safe to attach to a bug report
+# credentials are redacted; memory and prompts are previews, not payloads
+# surface: dashboard-chat
+# engine: loop
+# backend.provider: groq
+# backend.model: llama-3.3-70b-versatile
+# backend.transport: native
+...
+```
+
+Under the header come the turn's events in order — tool starts and their
+outcomes, gate decisions, refusals, and the findings the turn recorded. Three
+properties are deliberate: **redacted** (anything key-shaped is masked with the
+same scrubber the gateway log uses, so the file is safe to paste into an issue),
+**bounded** (lines are previews, the event list is capped and says what it
+dropped, and the file itself is capped), and **written once at the end** — which
+is what lets the header name the backend that actually answered. Logs live in
+`~/.nuvira/debug-logs/`; `NUVIRA_DEBUG_LOG_DIR` moves them. A forked subagent
+writes its own, and a turn served from the response cache says so rather than
+borrowing an attribution from a turn that never ran.
 
 ---
 

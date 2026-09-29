@@ -28,6 +28,7 @@
 import { ConfigManager } from '../config/manager.js';
 import { resolveProvider } from './router.js';
 import { resolveRoute, servedRouteFrom, type ServedRoute } from '../inference/route-resolver.js';
+import { debugLogNotice, sessionDebugLog } from '../observability/debug-log.js';
 import { noteServedRoute } from '../tools/loop-route-feed.js';
 import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
 import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
@@ -52,6 +53,7 @@ import {
   endTrace,
   recordStep,
   recordTraceEvent,
+  recordTraceFindings,
   buildTraceOutcome,
 } from '../learning/reasoning-trace.js';
 import type { LoopTraceEvent } from '../tools/tool-loop.js';
@@ -244,6 +246,11 @@ export async function runLoopExecutor(
   const toolOutcomes: Array<{ tool: string; ok: boolean }> = [];
   /** WS1 — findings recorded this run, in call order (see LoopExecutorResult.findings). */
   const findings: import('../findings/verdicts.js').WireFinding[] = [];
+  // WS2 (#24) — the optional session debug log for this `execute` turn. Opened
+  // before routing (like the trace) so a run that dies in the provider walk
+  // still leaves the evidence of what it tried. Null unless logging is on.
+  const debugLog = sessionDebugLog({ surface: 'cli-execute', goal, backend: { engine: 'loop' } });
+  debugLog?.event('turn.start');
   /**
    * G18 — one sink for the loop's non-LLM facts: persisted to the trace store,
    * and (only under `-v`) echoed to the console so a live run is readable
@@ -251,6 +258,14 @@ export async function runLoopExecutor(
    */
   const onTraceEvent = (event: LoopTraceEvent): void => {
     recordTraceEvent(traceId, event);
+    // WS2 — the same facts into the session debug log (bounded + redacted): a
+    // bug report needs the tool calls, gate decisions and refusals in order.
+    debugLog?.event(event.kind, {
+      ...(event.tool ? { tool: event.tool } : {}),
+      ...(event.gate ? { gate: event.gate } : {}),
+      ...(event.ok === undefined ? {} : { ok: event.ok }),
+      summary: event.summary,
+    });
     if (event.kind === 'refusal') recorded.refusals += 1;
     if (event.kind === 'gate') recorded.gateDecisions += 1;
     // One event per executed call, so this is the call-ordered per-call outcome
@@ -937,6 +952,37 @@ export async function runLoopExecutor(
       }),
     );
 
+    // WS1 (#23) — persist the run's findings on its trace too, so a `nuvira
+    // execute` turn's verdicts are auditable from the Trace tab exactly like a
+    // chat turn's. Best-effort; an id-less traceId would still attach to the
+    // run in progress, but the explicit id is what `endTrace` just closed.
+    recordTraceFindings(traceId, findings);
+
+    // WS2 — close the session debug log with the backend that ACTUALLY served
+    // the run: `servedRoute` is kept current through every failover, which is
+    // exactly the fact a debug header exists to record.
+    if (debugLog) {
+      const servedModel = servedRoute?.model ?? model;
+      debugLog.backendOf({
+        provider: servedRoute?.providerType ?? providerType,
+        ...(servedModel ? { model: servedModel } : {}),
+        transport: result.transport ?? null,
+      });
+      debugLog.event('turn.end', {
+        generationFailed: result.generationFailed === true,
+        toolCalls: toolOutcomes.length,
+        refusals: recorded.refusals,
+        gateDecisions: recorded.gateDecisions,
+        findings: findings.length,
+      });
+      // A QUIET run (which is what `--json-events` sets) prints nothing extra:
+      // its stdout is a machine-readable event stream, and a helpful log line
+      // inside it is a corrupt event. The file is still written.
+      const path = debugLog.write();
+      const notice = opts.quiet ? null : debugLogNotice('cli-execute', path);
+      if (notice) logger.info(notice);
+    }
+
     return {
       content: result.content,
       generationFailed: result.generationFailed ?? false,
@@ -957,6 +1003,15 @@ export async function runLoopExecutor(
     };
   } catch (err) {
     endTrace(traceId, false, { kind: 'failed', tools: [] });
+    // WS2 — a run that THREW still writes its log: a crash is the single most
+    // useful bug report there is, and the backend fields stay `unknown` rather
+    // than being invented.
+    if (debugLog) {
+      debugLog.event('turn.error', { error: err instanceof Error ? err.message : String(err) });
+      const path = debugLog.write();
+      const notice = opts.quiet ? null : debugLogNotice('cli-execute', path);
+      if (notice) logger.info(notice);
+    }
     return failureResult(
       toUserFacingGenerationError(err),
       startedAt,

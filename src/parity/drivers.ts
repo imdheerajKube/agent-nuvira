@@ -49,7 +49,8 @@ import { getCache } from '../context/cache.js';
 import type { WireFinding } from '../findings/verdicts.js';
 import { readGatewayLog } from '../gateway/gateway-log.js';
 import type { ChannelAdapter } from '../gateway/adapters.js';
-import type { ToolCallObs, TurnObservation } from './observation.js';
+import { debugLogDir, readLatestDebugLog } from '../observability/debug-log.js';
+import { noDebugLog, type DebugLogObs, type ToolCallObs, type TurnObservation } from './observation.js';
 import type { ParityDriver, ParityScenario, StubDepth } from './scenarios.js';
 import type { SurfaceId } from './surfaces.js';
 
@@ -281,6 +282,30 @@ interface SurfaceAnswer {
   generationFailed?: boolean;
   /** WS1 — the findings the turn recorded, in the shared wire form. */
   findings?: readonly WireFinding[];
+  /** WS2 — the session debug log this surface wrote, reduced to its header. */
+  debugLog?: DebugLogObs;
+}
+
+/**
+ * Read a surface's OWN session debug log and reduce its header to the compared
+ * facts — WS2.
+ *
+ * Read from DISK rather than from a return value, for the same reason the
+ * gateway driver reads `inbound.chat` from the gateway log: the capability is
+ * "a file you can attach to a bug report", so the artifact itself is the
+ * evidence. `written: false` when the surface produced nothing, which the
+ * harness refuses to read as agreement (the run turns logging on for every
+ * surface).
+ */
+function debugLogOf(surface: string, dir: string = debugLogDir()): DebugLogObs {
+  const found = readLatestDebugLog(surface, dir);
+  if (!found) return noDebugLog();
+  return {
+    written: true,
+    provider: found.header.provider,
+    model: found.header.model,
+    transport: found.header.transport,
+  };
 }
 
 /**
@@ -313,6 +338,9 @@ function toObservation(
     toolCalls,
     // WS1 — recorded findings, in order. `[]` when the surface reported none.
     findings: answer.findings ?? [],
+    // WS2 — the session debug log's header. `written: false` when the surface
+    // produced none, which the harness (logging ON) reads as a failure.
+    debugLog: answer.debugLog ?? noDebugLog(),
     ...(typeof answer.content === 'string' ? { answer: answer.content } : {}),
     ...(succeeded
       ? {}
@@ -351,7 +379,12 @@ async function runViaChatOnce(ws: ParityWorkspace, scenario: ParityScenario): Pr
       model: PARITY_MODEL,
       onToolCall: (phase, info) => collectCalled(toolCalls, phase, info),
     });
-    return toObservation('cli-chat', answer, toolCalls, stub.chatCalls());
+    return toObservation(
+      'cli-chat',
+      { ...answer, debugLog: debugLogOf('cli-chat') },
+      toolCalls,
+      stub.chatCalls(),
+    );
   } finally {
     await stub.close();
   }
@@ -387,7 +420,12 @@ async function runViaConsole(ws: ParityWorkspace, scenario: ParityScenario): Pro
         provider: PARITY_PROVIDER_TYPE,
         model: PARITY_MODEL,
       });
-      return toObservation('dashboard-chat', result, toolCalls, stub.chatCalls());
+      return toObservation(
+        'dashboard-chat',
+        { ...result, debugLog: debugLogOf('dashboard-chat') },
+        toolCalls,
+        stub.chatCalls(),
+      );
     } finally {
       off();
     }
@@ -485,6 +523,8 @@ async function runViaGateway(ws: ParityWorkspace, scenario: ParityScenario): Pro
               ? 'none'
               : undefined,
         generationFailed: record.generationFailed === true,
+        // WS2 — read from the same isolated profile the gateway wrote into.
+        debugLog: debugLogOf('gateway-chat'),
       },
       toolCalls,
       stub.chatCalls(),
@@ -541,6 +581,7 @@ async function runViaExecuteCommand(ws: ParityWorkspace, scenario: ParityScenari
         transport: result.transport,
         generationFailed: !result.success,
         ...(result.findings ? { findings: result.findings } : {}),
+        debugLog: debugLogOf('cli-execute'),
       },
       // The command's own per-call outcomes (captured from the loop's
       // `tool`/`refusal` events). The fallback keeps a name-only result honest:
@@ -619,6 +660,12 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
         env: {
           NUVIRA_CONFIG_DIR: childConfig,
           NUVIRA_MEMORY_DIR: join(childRoot, 'memory'),
+          // WS2 — the child keeps its OWN config/memory (that IS the isolation
+          // boundary) but writes its debug log into the run's throwaway debug
+          // dir, so this driver and a test can read the artifact the child
+          // actually produced instead of re-deriving a path inside the child's
+          // private profile.
+          NUVIRA_DEBUG_LOG_DIR: debugLogDir(),
         },
       });
       const result = await manager.waitForCompletion(state.id, 60_000);
@@ -635,6 +682,11 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
         toolCalls: callsByRun.get(state.id) ?? [],
         // WS1 — the child's own findings, read from the frames it sent.
         findings: result.findings ?? [],
+        // WS2 — the child's own debug log, read back from the file it wrote
+        // (its dir is pinned into the child's env above, so this is the CHILD's
+        // artifact — produced in its own process, with its own provider object —
+        // and not something reconstructed here).
+        debugLog: debugLogOf('subagent'),
         ...(result.result ? { answer: result.result } : {}),
         ...(result.success ? {} : { errorCode: result.refusalCode ?? 'turn_failed' }),
         noise: { at: Date.now() },
@@ -701,9 +753,16 @@ export async function createParityHarness(): Promise<ParityHarness> {
     memoryDir: process.env.NUVIRA_MEMORY_DIR,
     buffConfigDir: process.env.BUFF_CONFIG_DIR,
     buffMemoryDir: process.env.BUFF_MEMORY_DIR,
+    debugLog: process.env.NUVIRA_DEBUG_LOG,
   };
   process.env.NUVIRA_CONFIG_DIR = workspace.configDir;
   process.env.NUVIRA_MEMORY_DIR = workspace.memoryDir;
+  // WS2 — logging is turned ON for the whole run, so "this surface wrote a log
+  // whose header names the backend" is an ASSERTION rather than something the
+  // harness never asked for. Every surface writes into the isolated profile
+  // above (a forked child into its own), so nothing reaches the developer's
+  // real `~/.nuvira`.
+  process.env.NUVIRA_DEBUG_LOG = '1';
   // The legacy aliases would otherwise win on the modules that check them, and
   // point half the run back at the developer's real profile.
   delete process.env.BUFF_CONFIG_DIR;
@@ -740,6 +799,8 @@ export async function createParityHarness(): Promise<ParityHarness> {
       else process.env.BUFF_CONFIG_DIR = previous.buffConfigDir;
       if (previous.buffMemoryDir === undefined) delete process.env.BUFF_MEMORY_DIR;
       else process.env.BUFF_MEMORY_DIR = previous.buffMemoryDir;
+      if (previous.debugLog === undefined) delete process.env.NUVIRA_DEBUG_LOG;
+      else process.env.NUVIRA_DEBUG_LOG = previous.debugLog;
       rmSync(workspace.root, { recursive: true, force: true });
     },
   };

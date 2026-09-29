@@ -26,6 +26,7 @@ import type {
   TaskStatus,
   SkillEnvVarRow,
   TraceEntry,
+  TraceFinding,
   WhatsAppPairStatus,
 } from './types';
 
@@ -1309,7 +1310,23 @@ export class DashboardAPI {
     },
     signal?: AbortSignal,
   ): Promise<
-    | { ok: true; content: string; followups: Array<{ prompt: string; label?: string }>; provider: string | null; model: string | null; generationFailed: boolean; retryQueued?: boolean }
+    | {
+        ok: true;
+        content: string;
+        followups: Array<{ prompt: string; label?: string }>;
+        provider: string | null;
+        model: string | null;
+        generationFailed: boolean;
+        retryQueued?: boolean;
+        /**
+         * WS1 — every finding this turn recorded, already gated by the server
+         * (`confirmFinding`), in call order. AUTHORITATIVE for the transcript
+         * snapshot: the live `finding` SSE event renders while the turn runs,
+         * and this replaces it when the POST resolves — the same contract the
+         * streamed answer text has.
+         */
+        findings?: TraceFinding[];
+      }
     | { ok: false; error: string; unauthorized?: boolean; forbidden?: boolean }
   > {
     const token = getAdminToken();
@@ -1334,6 +1351,7 @@ export class DashboardAPI {
           model: typeof d.model === 'string' ? d.model : null,
           generationFailed: d.generationFailed === true,
           retryQueued: d.retryQueued === true,
+          ...(Array.isArray(d.findings) ? { findings: d.findings as TraceFinding[] } : {}),
         };
       }
       return {
@@ -1384,6 +1402,13 @@ export class DashboardAPI {
       onSecretRequest?: (d: { skillName: string; missing: string[]; persisted: Record<string, boolean> }) => void;
       /** Execution result from skill execution engine. */
       onExecutionResult?: (d: { skillName: string; runtime: string; success: boolean; durationMs: number; exitCode: number; stdout: string; stderr: string; timestamp: number }) => void;
+      /**
+       * WS1 (#23) — a finding was recorded this turn, carrying the verdict the
+       * GATE computed and the evidence behind it. Delivered live so the card can
+       * appear while the turn runs; the POST response stays authoritative for the
+       * transcript snapshot (like every other live event).
+       */
+      onFinding?: (finding: TraceFinding) => void;
     },
   ): () => void {
     const token = getAdminToken();
@@ -1458,6 +1483,25 @@ export class DashboardAPI {
           handlers.onDiff?.({
             files: payload.files,
             summary: payload.summary ?? '',
+          });
+        }
+      } catch { /* ignore malformed */ }
+    });
+    es.addEventListener('finding', (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { finding?: TraceFinding };
+        const finding = payload.finding;
+        if (
+          finding &&
+          typeof finding.claim === 'string' &&
+          (finding.verdict === 'CONFIRMED' || finding.verdict === 'PLAUSIBLE')
+        ) {
+          handlers.onFinding?.({
+            claim: finding.claim,
+            verdict: finding.verdict,
+            outcome: typeof finding.outcome === 'string' ? finding.outcome : '',
+            evidence: Array.isArray(finding.evidence) ? finding.evidence : [],
+            source: typeof finding.source === 'string' ? finding.source : '',
           });
         }
       } catch { /* ignore malformed */ }

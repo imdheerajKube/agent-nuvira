@@ -1831,6 +1831,9 @@ export class GatewayRegistry {
         onFinding: (finding) => {
           findings.push(finding);
         },
+        // WS2 (#24) — a messaging turn is the GATEWAY's; the session debug log's
+        // header must name it that way rather than the shared engine's default.
+        debugSurface: 'gateway-chat',
         // Session 3 — the channel rules go in the STABLE layer, not the ask.
         systemPolicy: CHANNEL_POLICY,
         // P5 — a replied followup carries the continuation marker into the

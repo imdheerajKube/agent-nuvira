@@ -29,7 +29,7 @@ import Markdown from './Markdown';
 // test/build output, deploy URLs) rendered as cards, not raw markdown.
 import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
 import { stripAnsi } from '../ansi';
-import type { TaskLogLine, TaskStatus } from '../types';
+import type { TaskLogLine, TaskStatus, TraceFinding } from '../types';
 import { formatCount } from '../format';
 
 interface AuthState {
@@ -61,6 +61,12 @@ interface ChatMessage {
    * into their own fields; this covers blocks the model wrote directly.
    */
   artifacts?: ExtractedArtifacts;
+  /**
+   * WS1 (#23) — the findings this turn recorded, with the gate's verdicts and
+   * the evidence behind them (rendered as verdict cards). The POST response is
+   * authoritative; the live SSE events only fill the card while the turn runs.
+   */
+  findings?: TraceFinding[];
   /** P2 — a CLI command run as an inline execution card (the ⚡ Run path). */
   task?: TaskRunView;
 }
@@ -726,6 +732,65 @@ function ToolCards({ tools, live }: { tools: ToolStep[]; live?: boolean }) {
   );
 }
 
+/**
+ * WS1 (#23) — a finding is only as good as the check behind it, so the card
+ * shows the evidence of a CONFIRMED verdict and says so plainly when there is
+ * none. Mirrors `describeFinding` in `src/findings/verdicts.ts` (the one place
+ * that wording lives) rather than inventing a second phrasing.
+ *
+ * DEFENSIVE ON PURPOSE: a CONFIRMED verdict with nothing behind it is
+ * impossible past the gate, but if one ever arrived the card must not render it
+ * as verified — it falls back to the PLAUSIBLE reading WITH the reason, the same
+ * way `fromWire` re-applies the gate when reading a finding back off the wire.
+ */
+function usableEvidence(finding: TraceFinding): NonNullable<TraceFinding['evidence']> {
+  return (finding.evidence ?? []).filter((e) => typeof e?.ref === 'string' && e.ref.trim().length > 0);
+}
+
+function FindingCards({ findings }: { findings: TraceFinding[] }) {
+  if (!findings || findings.length === 0) return null;
+  return (
+    <div className="chat-finding-cards">
+      {findings.map((f, i) => {
+        const evidence = usableEvidence(f);
+        const confirmed = f.verdict === 'CONFIRMED' && evidence.length > 0;
+        return (
+          <div
+            key={`${i}-${f.claim}`}
+            className={`chat-finding-card ${confirmed ? 'chat-finding-confirmed' : 'chat-finding-plausible'}`}
+          >
+            <div className="chat-finding-head">
+              <span className="chat-finding-icon" aria-hidden="true">{confirmed ? '✅' : '🔎'}</span>
+              <span className="chat-finding-claim">{f.claim}</span>
+              <span
+                className={`chat-finding-verdict ${confirmed ? 'chat-finding-verdict-ok' : 'chat-finding-verdict-guess'}`}
+                title={confirmed ? 'a check was performed and is shown below' : 'reasoned, not verified'}
+              >
+                {confirmed ? 'CONFIRMED' : 'PLAUSIBLE'}
+              </span>
+            </div>
+            {f.outcome ? <div className="chat-finding-outcome">{f.outcome}</div> : null}
+            {evidence.length > 0 ? (
+              <ul className="chat-finding-evidence">
+                {evidence.map((e, ei) => (
+                  <li key={ei}>
+                    <span className="chat-finding-kind">{e.kind}</span>
+                    <code className="chat-finding-ref">{e.ref}</code>
+                    {e.detail ? <span className="chat-finding-detail">({e.detail})</span> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="chat-finding-noevidence">no evidence — reported as PLAUSIBLE, not verified</div>
+            )}
+            {f.source ? <div className="chat-finding-source">source: {f.source}</div> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function newSessionId(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -776,6 +841,8 @@ export default function ChatPage() {
   const [liveDiff, setLiveDiff] = useState<DiffView | null>(null);
   // P6a — the /learn preview card (skill_manage create/patch emits it).
   const [liveDraft, setLiveDraft] = useState<SkillDraftView | null>(null);
+  // WS1 — findings recorded so far this turn (rendered as verdict cards).
+  const [liveFindings, setLiveFindings] = useState<TraceFinding[]>([]);
   // PA4 — skill env-var notification card (non-blocking: shows missing vars).
   const [secretRequests, setSecretRequests] = useState<Array<{ skillName: string; missing: string[]; persisted: Record<string, boolean> }>>([]);
   const [executionResults, setExecutionResults] = useState<Array<{ skillName: string; runtime: string; success: boolean; durationMs: number; exitCode: number; stdout: string; stderr: string; timestamp: number }>>([]);
@@ -790,6 +857,9 @@ export default function ChatPage() {
   const livePlanRef = useRef<PlanView | null>(null);
   const liveDiffRef = useRef<DiffView | null>(null);
   const liveDraftRef = useRef<SkillDraftView | null>(null);
+  // WS1 — mirrors liveFindings for the async send callback (state is stale in
+  // the closure when the POST resolves); the final message snapshots this.
+  const liveFindingsRef = useRef<TraceFinding[]>([]);
   // P4 — the live answer typewriter: tokens stream in via SSE while the POST
   // is in flight. The POST response is AUTHORITATIVE (the engine's S1
   // longest-substantive logic may pick an earlier, longer answer) — the
@@ -902,6 +972,8 @@ export default function ChatPage() {
     liveDiffRef.current = null;
     setLiveDraft(null);
     liveDraftRef.current = null;
+    setLiveFindings([]);
+    liveFindingsRef.current = [];
     streamingRef.current = '';
     setStreamingText('');
     setRetryAsk(null);
@@ -940,6 +1012,8 @@ export default function ChatPage() {
     liveDiffRef.current = null;
     setLiveDraft(null);
     liveDraftRef.current = null;
+    setLiveFindings([]);
+    liveFindingsRef.current = [];
     streamingRef.current = '';
     setStreamingText('');
     setRetryAsk(null);
@@ -1218,6 +1292,8 @@ export default function ChatPage() {
       liveDiffRef.current = null;
       setLiveDraft(null);
       liveDraftRef.current = null;
+      setLiveFindings([]);
+      liveFindingsRef.current = [];
       setMessages((m) => [...m, { role: 'user', content: clean, attachments: chipList.length > 0 ? chipList : undefined }]);
       setInput('');
       setAttachments([]);
@@ -1307,6 +1383,13 @@ export default function ChatPage() {
           liveDraftRef.current = view;
           setLiveDraft(view);
         },
+        // WS1 (#23) — a finding was recorded this turn. Append its card (the
+        // gate's verdict plus the evidence behind it); a turn may legitimately
+        // record several, so they accumulate in call order.
+        onFinding: (finding) => {
+          liveFindingsRef.current = [...liveFindingsRef.current, finding];
+          setLiveFindings(liveFindingsRef.current);
+        },
         // PA4 — a skill loaded but needs env vars; show notification card.
         onSecretRequest: (d) => {
           setSecretRequests((prev) => {
@@ -1367,6 +1450,12 @@ export default function ChatPage() {
             plan: livePlanRef.current,
             diff: liveDiffRef.current,
             draft: liveDraftRef.current,
+            // WS1 — the POST response is AUTHORITATIVE, exactly as it is for the
+            // streamed answer text: the server re-reports the gated findings it
+            // recorded, so it wins when present. The live events fill the cards
+            // WHILE the turn runs, and they are the fallback for a server that
+            // predates the `findings` field (its response omits it).
+            findings: r.findings ?? liveFindingsRef.current,
             // P2 — extract artifact cards from the answer TEXT (diff/result/
             // deploy blocks the model wrote directly, beyond the live events).
             artifacts: extractArtifacts(replyContent),
@@ -1624,6 +1713,8 @@ export default function ChatPage() {
     liveDiffRef.current = null;
     setLiveDraft(null);
     liveDraftRef.current = null;
+    setLiveFindings([]);
+    liveFindingsRef.current = [];
     streamingRef.current = '';
     setStreamingText('');
     setRetryAsk(null);
@@ -1976,6 +2067,9 @@ export default function ChatPage() {
                       <PlanCard plan={m.plan} />
                     </details>
                   ) : null}
+                  {m.role === 'assistant' && m.findings && m.findings.length > 0 ? (
+                    <FindingCards findings={m.findings} />
+                  ) : null}
                   {m.role === 'assistant' && m.tools && m.tools.length > 0 ? (
                     <details className="chat-steps" open>
                       <summary>
@@ -2000,6 +2094,7 @@ export default function ChatPage() {
                 <div className="chat-bubble-role">🤖 Agent</div>
                 {livePlan ? <PlanCard plan={livePlan} /> : null}
                 {liveDiff ? <DiffCard diff={liveDiff} /> : null}
+                {liveFindings.length > 0 ? <FindingCards findings={liveFindings} /> : null}
                 {liveDraft ? <SkillDraftCard draft={liveDraft} onAccept={acceptDraft} onReject={rejectDraft} onEdit={editDraft} /> : null}
                 {secretRequests.map((sr) => (
                   <SecretRequestCard key={sr.skillName} request={sr} onSave={saveSecrets} />

@@ -33,6 +33,7 @@ import { SubagentRefusalError } from './subagent-refusal.js';
 import { getTool, toolJsonSchemas, TOOL_CONTRACT_JSON, type ToolContext } from './registry.js';
 // WS1 — the finding tool's bus event; forwarded to the parent as its own frame.
 import { FINDING_EVENT } from './finding-tool.js';
+import { sessionDebugLog, type SessionDebugLog } from '../observability/debug-log.js';
 
 export interface SubagentRuntimeConfig {
   /** The task the subagent must complete. */
@@ -195,9 +196,43 @@ export async function runSubagent(
     transport: hasTools ? transport : 'none',
   });
 
+  // WS2 (#24) — the optional session debug log for this child process.
+  // Opened HERE, after the provider is constructed, so its header can name the
+  // backend from the first line; `null` unless `NUVIRA_DEBUG_LOG` is set (the
+  // parent's process env is inherited across the fork).
+  const debugLog = sessionDebugLog({
+    surface: 'subagent',
+    goal: config.goal,
+    backend: {
+      engine: 'loop',
+      provider: type,
+      ...(model ? { model } : {}),
+      transport: hasTools ? transport : 'none',
+    },
+  });
+  debugLog?.event('turn.start', { tools: allowed.length, transport: hasTools ? transport : 'none' });
+
+  /**
+   * Write the child's debug log and announce where it landed.
+   *
+   * The path travels as a `progress` frame (the same channel `starting` and
+   * `finding` use) because the child has no console of its own worth reading —
+   * an unattended fork's stdout is easy to lose, and a log nobody can find is
+   * not an attachable artifact. The parent ignores phases it does not know.
+   */
+  const finishDebugLog = (detail: Record<string, unknown> = {}): void => {
+    if (!debugLog) return;
+    debugLog.event('turn.end', detail);
+    const path = debugLog.write();
+    if (path) send({ type: 'progress', phase: 'debug_log', path });
+  };
+
   // A backend that cannot be reached is a refusal, not an empty result.
   const available = await provider.isAvailable().catch(() => false);
   if (!available) {
+    // WS2 — a REFUSAL is exactly the run a bug report is about, so the log is
+    // still written (with the backend already in its header) before throwing.
+    finishDebugLog({ refused: 'provider_not_reachable', provider: type });
     throw new SubagentRefusalError(
       'not_configured',
       `Provider '${type}' is not reachable. Configure it (or start its backend, e.g. \`ollama serve\`) and re-run.`,
@@ -206,13 +241,21 @@ export async function runSubagent(
 
   // ── Tool loop (native protocol, or the shared JSON fallback) ──────────────
   if (hasTools) {
-    return runToolLoop(config, allowed, provider, type, transport, {
+    const out = await runToolLoop(config, allowed, provider, type, transport, {
       send,
       runTool: hooks.runTool,
       maxLlmCalls,
       maxIterations,
       model,
+      debug: debugLog,
     });
+    finishDebugLog({
+      llmCalls: out.llmCalls,
+      toolCalls: out.toolCalls,
+      truncated: out.truncated,
+      transport: out.transport,
+    });
+    return out;
   }
 
   // ── Plain completion (no tools) ───────────────────────────────────────────
@@ -222,6 +265,7 @@ export async function runSubagent(
     `Task: ${config.goal}`,
   ].join('\n');
   const text = await provider.generate(prompt, modelOption(model));
+  finishDebugLog({ llmCalls: 1, toolCalls: 0, transport: 'none' });
   return {
     result: text.trim(),
     llmCalls: 1,
@@ -321,6 +365,8 @@ interface LoopHooks {
   maxIterations: number;
   /** The model every call in this loop is pinned to (see {@link effectiveModel}). */
   model?: string;
+  /** WS2 — the child's session debug log, when logging is on (else null). */
+  debug?: SessionDebugLog | null;
 }
 
 async function runToolLoop(
@@ -383,6 +429,7 @@ async function runToolLoop(
 
     for (const call of response.toolCalls) {
       if (!allowed.includes(call.name)) {
+        loop.debug?.event('tool.refused', { tool: call.name });
         messages.push({
           role: 'tool',
           content: `Refused: '${call.name}' is not available to this subagent.`,
@@ -396,6 +443,7 @@ async function runToolLoop(
       // FAILED looked exactly like one that worked (recorded on #22 as
       // tool-call-lifecycle@subagent).
       loop.send({ type: 'progress', phase: 'tool_call', tool: call.name });
+      loop.debug?.event('tool.start', { tool: call.name });
       const output = await executeTool(config, call.name, call.arguments, loop.runTool, (event, data) => {
         // WS1 — a finding the child recorded, shipped on its own frame (the
         // same way its tool lifecycle crosses IPC). The parent records it, so a
@@ -403,16 +451,22 @@ async function runToolLoop(
         // surface instead of leaving them inside the child's process.
         if (event === FINDING_EVENT) {
           loop.send({ type: 'progress', phase: 'finding', finding: data, llmCalls, toolCalls });
+          // WS2 — and into the child's own debug log, so a bug report from a
+          // forked run carries the verdicts it recorded.
+          const finding = data as { verdict?: string; claim?: string };
+          loop.debug?.event('finding', `${finding?.verdict ?? '?'} ${finding?.claim ?? ''}`);
         }
       });
       toolCalls += 1;
+      const ok = !output.startsWith('Error:');
+      // The same convention the main loop and the tool registry use: a tool
+      // signals failure by returning text that starts with `Error:`.
+      loop.debug?.event('tool.end', { tool: call.name, ok });
       loop.send({
         type: 'progress',
         phase: 'tool_result',
         tool: call.name,
-        // The same convention the main loop and the tool registry use: a tool
-        // signals failure by returning text that starts with `Error:`.
-        ok: !output.startsWith('Error:'),
+        ok,
         llmCalls,
         toolCalls,
       });

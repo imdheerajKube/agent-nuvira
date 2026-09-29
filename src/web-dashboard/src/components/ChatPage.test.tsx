@@ -10,7 +10,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import ChatPage from './ChatPage';
 import { dashboardAPI, setAdminToken } from '../api';
-import type { TaskLogLine, TaskStatus } from '../types';
+import type { TaskLogLine, TaskStatus, TraceFinding } from '../types';
 
 function mockAuthed(role: 'admin' | 'operator' | 'viewer' = 'admin', authenticated = true) {
   vi.spyOn(dashboardAPI, 'fetchAdminAuthStatus').mockResolvedValue({
@@ -374,6 +374,75 @@ describe('ChatPage', () => {
     resolveSend(OK_RESPONSE);
     await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
     await waitFor(() => expect(screen.getByText(/Changes: 1 file changed/)).toBeTruthy());
+    expect(unsub).toHaveBeenCalled();
+  });
+
+  it('WS1 — renders live finding cards with the GATE verdict, and snapshots them into the reply', async () => {
+    mockAuthed('admin');
+    let findingCb: ((f: TraceFinding) => void) | null = null;
+    let unsub: (() => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      findingCb = handlers.onFinding ?? null;
+      unsub = vi.fn();
+      return unsub;
+    });
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    let resolveSend: (v: ChatSendResult) => void = () => {};
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      () => new Promise<ChatSendResult>((resolve) => { resolveSend = resolve; }),
+    );
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'verify the harness' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(findingCb).toBeTruthy());
+
+    // A finding the GATE confirmed: the card shows the EVIDENCE, never just the
+    // word CONFIRMED — a verdict with nothing behind it is the defect WS1 closes.
+    findingCb!({
+      claim: 'the harness can drive every surface',
+      verdict: 'CONFIRMED',
+      outcome: 'checked by running the harness',
+      evidence: [{ kind: 'observation', ref: 'all five surfaces agreed' }],
+      source: 'agent',
+    });
+    await waitFor(() => expect(screen.getByText('the harness can drive every surface')).toBeTruthy());
+    expect(screen.getByText('CONFIRMED')).toBeTruthy();
+    expect(screen.getByText('all five surfaces agreed')).toBeTruthy();
+
+    // An unearned claim stays PLAUSIBLE and SAYS SO — the gate's refusal has to
+    // be visible in the thread, not silently upgraded by the renderer.
+    findingCb!({
+      claim: 'this guess was never checked',
+      verdict: 'PLAUSIBLE',
+      outcome: 'reported as a guess',
+      evidence: [],
+      source: 'agent',
+    });
+    await waitFor(() => expect(screen.getByText('this guess was never checked')).toBeTruthy());
+    expect(screen.getByText('PLAUSIBLE')).toBeTruthy();
+    expect(screen.getByText(/no evidence — reported as PLAUSIBLE, not verified/)).toBeTruthy();
+
+    // The POST response is AUTHORITATIVE: it snapshots the findings into the
+    // bubble, replacing the live cards (exactly like the streamed answer text).
+    const snapshotted: ChatSendResult = {
+      ...OK_RESPONSE,
+      findings: [
+        {
+          claim: 'snapshotted claim',
+          verdict: 'CONFIRMED',
+          outcome: 'checked',
+          evidence: [{ kind: 'file', ref: 'src/parity/drivers.ts' }],
+          source: 'agent',
+        },
+      ],
+    };
+    resolveSend(snapshotted);
+    await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('snapshotted claim')).toBeTruthy());
+    expect(screen.getByText('src/parity/drivers.ts')).toBeTruthy();
+    expect(screen.queryByText('this guess was never checked')).toBeNull();
     expect(unsub).toHaveBeenCalled();
   });
 

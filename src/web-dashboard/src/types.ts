@@ -743,6 +743,42 @@ export interface RequestsInsights {
   updatedAt: number;
 }
 
+// ─── Findings (WS1 #23) ─────────────────────────────────────────────────────
+
+/** The only two amounts a finding is worth — see `src/findings/verdicts.ts`. */
+export type FindingVerdict = 'CONFIRMED' | 'PLAUSIBLE';
+
+/**
+ * One check that was actually performed. `ref` IS the evidence — the line, the
+ * command, the path — never a summary of it, and a blank one is not a check.
+ */
+export interface FindingEvidence {
+  kind: 'quote' | 'command' | 'file' | 'observation';
+  ref: string;
+  detail?: string;
+}
+
+/**
+ * One finding a turn recorded, in the shared wire form every surface reports.
+ *
+ * MIRRORED, not imported, from `src/findings/verdicts.ts`'s `WireFinding` —
+ * exactly like `TraceStep`/`TraceOutcome` below, and for the same reason: the
+ * dashboard bundle is built from `src/web-dashboard/src` alone (see
+ * `vite.config.ts`), so a frontend type cannot depend on a server module
+ * without pulling it into the bundle. The shape is asserted on the wire by the
+ * server side of the trace/chat payloads, so drift is a type error there.
+ *
+ * `verdict` is computed by the GATE (`confirmFinding`), never by this UI: the
+ * GUI only ever renders what the gate decided.
+ */
+export interface TraceFinding {
+  claim: string;
+  verdict: FindingVerdict;
+  outcome: string;
+  evidence: FindingEvidence[];
+  source: string;
+}
+
 // ─── Reasoning Trace Types (P0) ────────────────────────────────────────────
 
 /** One LLM call recorded in a reasoning trace. */
@@ -825,6 +861,14 @@ export interface TraceEntry {
     /** The answer asserted a code change that no verification backed. */
     unverifiedEditClaim?: boolean;
   };
+  /**
+   * WS1 — the findings this run recorded, in call order, with the verdicts the
+   * GATE computed and the evidence behind them. Present on both the list and
+   * the detail payload (they are small, and a count on the row is how a reader
+   * sees that an audit is available at all). Absent means the run recorded
+   * none — never "this surface cannot say".
+   */
+  findings?: TraceFinding[];
   /** Present in the detail endpoint only. */
   steps?: TraceStep[];
   /** List-view aggregates. */

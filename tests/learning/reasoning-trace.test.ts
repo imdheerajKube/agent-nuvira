@@ -23,6 +23,7 @@ const {
   getTraceStats,
   deleteTrace,
   withTraceCapture,
+  recordTraceFindings,
   MAX_TRACES,
 } = await import('../../src/learning/reasoning-trace.js');
 
@@ -292,6 +293,81 @@ describe('reasoning-trace store', () => {
     expect(traces[MAX_TRACES - 1].goal).toBe('goal-5');
     expect(getTrace(ids[0])).toBeNull();
     expect(getTrace(ids[MAX_TRACES + 4])).not.toBeNull();
+  });
+});
+
+// ─── WS1 (#23) — findings persisted on the trace ────────────────────────────
+
+describe('reasoning-trace — recorded findings (WS1)', () => {
+  beforeEach(() => clearTraces());
+  afterEach(() => clearTraces());
+
+  const confirmed = {
+    claim: 'the harness can drive every surface',
+    verdict: 'CONFIRMED' as const,
+    outcome: 'checked by running the harness',
+    evidence: [{ kind: 'observation' as const, ref: 'all five surfaces agreed' }],
+    source: 'agent',
+  };
+  const plausible = {
+    claim: 'this claim was never checked',
+    verdict: 'PLAUSIBLE' as const,
+    outcome: 'reported as a guess — no usable evidence',
+    evidence: [],
+    source: 'agent',
+  };
+
+  it('attaches the findings to the trace, in order, with the verdicts intact', () => {
+    // The point of the whole row: a verdict that only lived in the turn's return
+    // value cannot be audited after the turn, so the Trace tab would show the
+    // tool calls and the honesty flags but not that the run ASSERTED something.
+    const id = beginTrace({ goal: 'verify the harness', source: 'chat' });
+    recordTraceFindings(id, [confirmed, plausible]);
+
+    const trace = getTrace(id)!;
+    expect(trace.findings).toEqual([confirmed, plausible]);
+  });
+
+  it('records a decision event per finding, so the timeline reads in order', () => {
+    const id = beginTrace({ goal: 'g', source: 'chat' });
+    recordTraceFindings(id, [confirmed]);
+
+    const events = getTrace(id)!.events ?? [];
+    expect(events).toHaveLength(1);
+    expect(events[0].kind).toBe('decision');
+    expect(events[0].seq).toBe(1);
+    // The summary is the ONE shared wording (`describeFinding`), not a second
+    // phrasing that could disagree with the CLI's.
+    expect(events[0].summary).toContain('the harness can drive every surface');
+    // `describeFinding` prints the ✅ for a confirmed verdict and the evidence
+    // that earned it — the same line the CLI prints, never a second phrasing.
+    expect(events[0].summary).toContain('✅');
+    expect(events[0].summary).toContain('all five surfaces agreed');
+  });
+
+  it('normalises a Finding through toWire so the volatile `at` never lands', () => {
+    // `WireFinding` excludes `at` on purpose: it differs every invocation, so
+    // persisting it would make two identical runs compare unequal.
+    const id = beginTrace({ goal: 'g', source: 'chat' });
+    recordTraceFindings(id, [{ ...confirmed, at: 1_700_000_000_000 }]);
+    const [stored] = getTrace(id)!.findings!;
+    expect(stored).toEqual(confirmed);
+    expect('at' in stored).toBe(false);
+  });
+
+  it('is a best-effort no-op for an empty list or an unknown trace', () => {
+    const id = beginTrace({ goal: 'g', source: 'chat' });
+    expect(() => recordTraceFindings(id, [])).not.toThrow();
+    expect(getTrace(id)!.findings).toBeUndefined();
+    expect(() => recordTraceFindings('trace-nope', [confirmed])).not.toThrow();
+  });
+
+  it('attaches to the run IN PROGRESS when no id is passed', () => {
+    // Same contract as `recordTraceEvent`: a recorder deep in the stack that
+    // never held the id still lands on the trace that is open right now.
+    const id = beginTrace({ goal: 'g', source: 'chat' });
+    recordTraceFindings(undefined, [confirmed]);
+    expect(getTrace(id)!.findings).toEqual([confirmed]);
   });
 });
 

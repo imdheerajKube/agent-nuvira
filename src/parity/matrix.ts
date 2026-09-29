@@ -159,15 +159,15 @@ export const CAPABILITIES: readonly Capability[] = [
       },
       'cli-execute': {
         status: 'supported',
-        note: 'Proven: the command returns the findings its run recorded — the loop arm from its own context bus (`finding:recorded`), the direct-answer arm from the shared engine seam — asserted by the same two scenarios.',
+        note: 'Proven: the command returns the findings its run recorded — the loop arm from its own context bus (`finding:recorded`), the direct-answer arm from the engine`s `onFinding` seam — asserted by the same two scenarios.',
       },
       'dashboard-chat': {
         status: 'supported',
-        note: 'Proven: the console collects findings from the engine seam onto ChatAnswerResult.findings, so a dashboard caller reads the same wire verdicts the CLI does.',
+        note: 'Proven: the console collects findings from the engine seam onto ChatAnswerResult.findings AND forwards each one live as a `finding` event over the chat SSE stream, so a dashboard caller reads the same wire verdicts as the CLI. The GUI draws a verdict card per finding (evidence for a CONFIRMED one, an explicit "no evidence — reported as PLAUSIBLE" for the rest) and the POST response stays authoritative for the snapshot — pinned by the ChatPage finding-card case.',
       },
       'gateway-chat': {
         status: 'supported',
-        note: 'Proven: runInboundChat records each finding on its `inbound.chat` log entry and its return — internal, exactly like the tool lifecycle, and never sent to the channel sender. The driver reads the durable record this surface wrote.',
+        note: 'Proven: runInboundChat records each finding on its `inbound.chat` log entry and its return — internal, exactly like the tool lifecycle, and never sent to the channel sender. The driver reads the surface`s own durable record.',
       },
       subagent: {
         status: 'supported',
@@ -179,7 +179,42 @@ export const CAPABILITIES: readonly Capability[] = [
     id: 'debug-log',
     label: 'A session debug log you can attach to a bug report, with a header naming the backend',
     workstream: 'WS2',
-    cells: everywhere('planned'),
+    // NOW SUPPORTED ON EVERY SURFACE, and the proof is read from DISK rather
+    // than from a return value. `observability/debug-log.ts` writes one plain
+    // text file per turn — opt-in via `NUVIRA_DEBUG_LOG`, redacted with the
+    // gateway's own `scrubSecrets`, bounded in lines and bytes, and written ONCE
+    // at turn end so its header can name the backend that ACTUALLY served the
+    // turn (the provider walk mutates `session.model`/`lastAttempt`/`servedRoute`
+    // mid-turn, so anything captured at turn START would be wrong exactly when
+    // failover happened). The parity harness turns logging on for the whole run,
+    // then reads each surface's own file back: `written: true` on every surface
+    // and the same provider/model/transport triple in every header — asserted by
+    // 'writes a session debug log whose header names the backend, on every
+    // surface' in `tests/parity/scenario-parity.test.ts`. The `written: false`
+    // case is the load-bearing one: a surface that produces NOTHING must diverge,
+    // not agree.
+    cells: {
+      'cli-chat': {
+        status: 'supported',
+        note: 'Proven: `ChatCommand.runChatAnswer` opens the log for the turn, records turn start, every tool start/end and every finding, then writes it with the backend from `lastAttempt` (which the provider walk keeps current) and reports the path on the console. Read back from disk by the cli-chat driver.',
+      },
+      'cli-execute': {
+        status: 'supported',
+        note: 'Proven: BOTH arms log. The loop arm (`runLoopExecutor`) opens the log before routing — so a run that dies in the provider walk still leaves evidence — and records each tool/gate/refusal event, closing with `servedRoute` (kept current through failover). The direct-answer arm passes `debugSurface: "cli-execute"` down to the shared chat engine, so its log is attributed to the command that ran it rather than mislabelled `cli-chat`.',
+      },
+      'dashboard-chat': {
+        status: 'supported',
+        note: 'Proven: the console passes `debugSurface: "dashboard-chat"` to the shared engine, so a dashboard turn\'s log names the dashboard rather than the CLI. Read back from the isolated profile the console wrote into.',
+      },
+      'gateway-chat': {
+        status: 'supported',
+        note: 'Proven: `runInboundChat` passes `debugSurface: "gateway-chat"` to the shared engine, so a messaging turn\'s attachable log names the gateway — the surface with no terminal to scroll, and therefore the one where a written artifact matters most.',
+      },
+      'subagent': {
+        status: 'supported',
+        note: 'Proven: the CHILD opens its own log after it constructs its own provider (so the header names the backend from the first line), records turn start, each tool start/end, refusals and findings, and writes into ITS isolated profile — the driver reads it from the child`s config dir, not the parent`s, because a forked process is the isolation boundary. A provider refusal still writes the log before throwing.',
+      },
+    },
   },
   {
     id: 'otel-export',

@@ -25,7 +25,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll, beforeAll } from 'vitest';
 
-import { reportParityFailure, type TurnObservation } from '../../src/parity/observation.js';
+import { compare, noDebugLog, reportParityFailure, type TurnObservation } from '../../src/parity/observation.js';
 import {
   runParityScenario,
   type ParityDriver,
@@ -43,6 +43,7 @@ import {
 // CLI and this suite must prove the SAME cases, and a copy here is how the two
 // would drift into covering different things while both staying green.
 import { PARITY_SCENARIOS } from '../../src/cli/parity.js';
+import { readLatestDebugLog } from '../../src/observability/debug-log.js';
 
 // ─── 1. The runner's rules ─────────────────────────────────────────────────
 
@@ -63,6 +64,9 @@ function fakeObservation(over: Partial<TurnObservation> = {}): TurnObservation {
     provider: 'groq',
     toolCalls: [],
     findings: [],
+    // WS2 — a log DOES exist here, so the differential cases can vary it while
+    // still testing the runner rather than a surface.
+    debugLog: { written: true, provider: 'groq', model: 'stub', transport: 'native' },
     answer: 'ok',
     ...over,
   };
@@ -194,6 +198,32 @@ describe('WS0 parity runner — verdict rules', () => {
     expect(run.refusal && 'message' in run.refusal ? run.refusal.message : '').toContain(
       'no model call',
     );
+  });
+
+  it('treats a surface that wrote NO debug log as divergent, and names the field', async () => {
+    // WS2 — the load-bearing half. With logging ON, a surface that produces no
+    // attachable log has not delivered the capability, and "both wrote nothing"
+    // must never read as agreement either. The difference has to NAME which part
+    // of the header failed, because "no log" and "a different model in the
+    // header" are different bugs.
+    const differences = compare(
+      fakeObservation(),
+      fakeObservation({ surface: 'dashboard-chat', debugLog: noDebugLog() }),
+    );
+    expect(differences.join('\n')).toContain('debugLog.written');
+    expect(differences.join('\n')).toContain('dashboard-chat');
+
+    // And a header that names a DIFFERENT backend is a difference too, field by
+    // field — so a misattributed log cannot slip through as "a log exists".
+    const modelDiff = compare(
+      fakeObservation(),
+      fakeObservation({
+        surface: 'gateway-chat',
+        debugLog: { written: true, provider: 'groq', model: 'some-other-model', transport: 'native' },
+      }),
+    );
+    expect(modelDiff.join('\n')).toContain('debugLog.model');
+    expect(modelDiff.join('\n')).not.toContain('debugLog.written');
   });
 
   it('records a reason for every skipped surface, even when the driver forgot one', async () => {
@@ -413,6 +443,41 @@ describe('WS0 parity — every surface, real provider, transport-depth stub', ()
       expect(finding!.evidence).toEqual([]);
       expect(finding!.outcome).toContain('no usable evidence');
       expect(observation.status).toBe('completed');
+    }
+  }, 120_000);
+
+  it('writes a session debug log whose header names the backend, on every surface', async () => {
+    // WS2 (#24). The harness turns logging ON for the run, so "this surface
+    // produced an attachable log" is an ASSERTION — and the assertion is made on
+    // the VALUES (the real triple), not merely on the surfaces agreeing. Two
+    // surfaces both reporting an unnamed backend would agree and prove nothing,
+    // so `written: true` plus `groq/parity-stub-model/native` is what the case
+    // demands. Read back from disk, because the capability is "a file you can
+    // attach to a bug report" — the artifact IS the evidence.
+    const scenario = PARITY_SCENARIOS.find((s) => s.id === 'plain-completion');
+    expect(scenario, 'the CLI no longer drives a plain-completion scenario').toBeDefined();
+
+    const run = await runParityScenario(scenario!, harness.drivers);
+    expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
+
+    for (const observation of run.observations) {
+      expect(
+        observation.debugLog,
+        `${observation.surface} produced no session debug log`,
+      ).toEqual({
+        written: true,
+        provider: 'groq',
+        model: 'parity-stub-model',
+        transport: 'native',
+      });
+      // The FILE itself, not just the reduced fields: the header must name the
+      // surface it belongs to, and must carry the human-readable first line a
+      // reader attaching it to a bug report sees.
+      const log = readLatestDebugLog(observation.surface);
+      expect(log, `${observation.surface} wrote no log file for this turn`).not.toBeNull();
+      expect(log!.header.surface).toBe(observation.surface);
+      expect(log!.text).toContain('nuvira session debug log');
+      expect(log!.text).toContain('# backend.provider: groq');
     }
   }, 120_000);
 
