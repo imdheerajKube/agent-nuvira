@@ -46,6 +46,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { getCache } from '../context/cache.js';
+import type { WireFinding } from '../findings/verdicts.js';
 import { readGatewayLog } from '../gateway/gateway-log.js';
 import type { ChannelAdapter } from '../gateway/adapters.js';
 import type { ToolCallObs, TurnObservation } from './observation.js';
@@ -278,6 +279,8 @@ interface SurfaceAnswer {
   transport?: 'native' | 'json' | 'none' | null;
   error?: string;
   generationFailed?: boolean;
+  /** WS1 — the findings the turn recorded, in the shared wire form. */
+  findings?: readonly WireFinding[];
 }
 
 /**
@@ -308,6 +311,8 @@ function toObservation(
     ...(answer.model ? { model: answer.model } : {}),
     ...(answer.transport ? { transport: answer.transport } : {}),
     toolCalls,
+    // WS1 — recorded findings, in order. `[]` when the surface reported none.
+    findings: answer.findings ?? [],
     ...(typeof answer.content === 'string' ? { answer: answer.content } : {}),
     ...(succeeded
       ? {}
@@ -460,10 +465,17 @@ async function runViaGateway(ws: ParityWorkspace, scenario: ParityScenario): Pro
         }))
       : [];
     const reply = [...adapter.sent].reverse().find((line) => line.includes(scenario.answer));
+    // WS1 — the findings the gateway recorded for this turn, read from its own
+    // durable record for the same reason the tool lifecycle is: a messaging
+    // surface has no terminal, so `inbound.chat` IS where this surface said it.
+    const findings: WireFinding[] = Array.isArray(record.findings)
+      ? (record.findings as WireFinding[])
+      : [];
     return toObservation(
       'gateway-chat',
       {
         content: reply,
+        findings,
         provider: typeof record.provider === 'string' ? record.provider : undefined,
         model: typeof record.model === 'string' ? record.model : undefined,
         transport:
@@ -514,6 +526,7 @@ async function runViaExecuteCommand(ws: ParityWorkspace, scenario: ParityScenari
         transport?: 'native' | 'json' | 'none';
         toolCalls?: string[];
         toolOutcomes?: Array<{ tool: string; ok?: boolean }>;
+        findings?: WireFinding[];
       }>;
     };
     const result = await command.runSingleGoal(scenario.message, PARITY_PROVIDER_TYPE, PARITY_MODEL, {
@@ -527,6 +540,7 @@ async function runViaExecuteCommand(ws: ParityWorkspace, scenario: ParityScenari
         model: result.model,
         transport: result.transport,
         generationFailed: !result.success,
+        ...(result.findings ? { findings: result.findings } : {}),
       },
       // The command's own per-call outcomes (captured from the loop's
       // `tool`/`refusal` events). The fallback keeps a name-only result honest:
@@ -619,6 +633,8 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
         ...(result.model ? { model: result.model } : {}),
         transport,
         toolCalls: callsByRun.get(state.id) ?? [],
+        // WS1 — the child's own findings, read from the frames it sent.
+        findings: result.findings ?? [],
         ...(result.result ? { answer: result.result } : {}),
         ...(result.success ? {} : { errorCode: result.refusalCode ?? 'turn_failed' }),
         noise: { at: Date.now() },

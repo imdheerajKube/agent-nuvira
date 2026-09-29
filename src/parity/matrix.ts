@@ -142,20 +142,38 @@ export const CAPABILITIES: readonly Capability[] = [
     id: 'findings-verdicts',
     label: 'A finding carries CONFIRMED/PLAUSIBLE and an outcome, and cannot be promoted without evidence',
     workstream: 'WS1',
-    // GROUNDWORK ONLY, and deliberately still `planned` on every surface.
-    // WS1 has started: the model and its evidence gate are real
-    // (`src/findings/verdicts.ts`), and the intent audit the gateway runs on a
-    // repeated failure now carries a verdict and reports it in the gateway log
-    // (`gateway/registry.ts`, `intent.confirmed` / `intent.corrected`). What has
-    // NOT landed is the CAPABILITY this row describes — a finding on an ordinary
-    // turn OF THIS SURFACE, carrying a verdict — and no parity case proves one.
-    // Marking it `supported` now would be the exact claim-without-a-proof the
-    // matrix exists to catch, so the note records the progress and the status
-    // stays honest until a harness case can flip a cell at a time.
-    cells: everywhere(
-      'planned',
-      'Groundwork only: the model and its evidence gate exist (`src/findings/verdicts.ts`) and the intent audit reports a verdict, but nothing on this surface produces findings on an ordinary turn and no parity case proves one yet.',
-    ),
+    // NOW PROVEN ON EVERY SURFACE, and the proof is two-sided on purpose. The
+    // `finding` tool (`tools/finding-tool.ts`) lets the model state a claim and
+    // the evidence it checked, and NEVER the verdict — the gate
+    // (`findings/verdicts.ts`) decides, promoting only when a non-blank evidence
+    // reference was supplied. Two parity scenarios drive it: `finding-confirmed`
+    // (usable evidence ⇒ CONFIRMED, with the evidence carried) and
+    // `finding-refused` (a blank reference ⇒ the promotion is refused and every
+    // surface must report PLAUSIBLE). The second is the one that matters —
+    // agreement on a promoted verdict that nothing earned is the defect this
+    // whole workstream exists to close.
+    cells: {
+      'cli-chat': {
+        status: 'supported',
+        note: 'Proven: a turn that calls `finding` reports the gated wire finding on the engine result (ChatAnswerResult.findings) AND through the `onFinding` seam, driven by the `finding-confirmed` / `finding-refused` scenarios.',
+      },
+      'cli-execute': {
+        status: 'supported',
+        note: 'Proven: the command returns the findings its run recorded — the loop arm from its own context bus (`finding:recorded`), the direct-answer arm from the shared engine seam — asserted by the same two scenarios.',
+      },
+      'dashboard-chat': {
+        status: 'supported',
+        note: 'Proven: the console collects findings from the engine seam onto ChatAnswerResult.findings, so a dashboard caller reads the same wire verdicts the CLI does.',
+      },
+      'gateway-chat': {
+        status: 'supported',
+        note: 'Proven: runInboundChat records each finding on its `inbound.chat` log entry and its return — internal, exactly like the tool lifecycle, and never sent to the channel sender. The driver reads the durable record this surface wrote.',
+      },
+      subagent: {
+        status: 'supported',
+        note: 'Proven: the child ships each recorded finding on its own `finding` progress frame and the manager accumulates them on the run, so a forked subagent reports the verdicts it produced rather than leaving them inside its process.',
+      },
+    },
   },
   {
     id: 'debug-log',

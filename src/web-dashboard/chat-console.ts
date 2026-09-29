@@ -79,6 +79,8 @@ export interface ChatEngine {
       onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
       /** P6a — a skill draft payload (rendered as the /learn preview card). */
       onSkillDraft?: (payload: import('../tools/skill-tool.js').SkillDraftPayload) => void;
+      /** WS1 — a finding was recorded this turn, with the gate's verdict. */
+      onFinding?: (finding: import('../findings/verdicts.js').WireFinding) => void;
       /** PA4 — a skill loaded but needs env vars (non-blocking notification). */
       onSecretRequest?: (payload: { skillName: string; missing: string[]; persisted: Record<string, boolean> }) => void;
       /** P0.7 — the session's plan store (per-conversation, survives turns). */
@@ -120,6 +122,12 @@ export interface ChatEngine {
      * attribution triple the CLI and the subagent child report.
      */
     transport?: 'native' | 'json' | 'none';
+    /**
+     * WS1 — every finding this turn recorded, in call order, already gated.
+     * `[]` is a real answer ("this surface reports findings, and there were
+     * none"), which is what lets the surfaces be compared honestly.
+     */
+    findings?: import('../findings/verdicts.js').WireFinding[];
   }>;
 }
 
@@ -156,6 +164,12 @@ export interface ChatAnswerResult {
    * the `none` the engine returns for a turn that carried no tool call.
    */
   transport?: 'native' | 'json' | 'none' | null;
+  /**
+   * WS1 — every finding this turn recorded, in call order, already gated.
+   * `[]` is a real answer ("this surface reports findings, and there were
+   * none"), which is what lets the surfaces be compared honestly.
+   */
+  findings?: import('../findings/verdicts.js').WireFinding[];
   generationFailed?: boolean;
   /** Phase 4 — true when the loop hit its step bound before an end turn. */
   bounded?: boolean;
@@ -564,7 +578,16 @@ export class ChatConsole {
   async answer(
     sessionId: string,
     message: string,
-    opts: { provider?: string; model?: string; projectContext?: string; projectPath?: string; attachments?: ChatAttachment[]; recordTurn?: boolean } = {},
+    opts: {
+      provider?: string;
+      model?: string;
+      projectContext?: string;
+      projectPath?: string;
+      attachments?: ChatAttachment[];
+      recordTurn?: boolean;
+      /** WS1 — a finding was recorded this turn, with the gate's verdict. */
+      onFinding?: (finding: import('../findings/verdicts.js').WireFinding) => void;
+    } = {},
   ): Promise<ChatAnswerResult> {
     const clean = (message || '').trim();
     if (!clean) return { ok: false, error: 'Empty message.' };
@@ -628,9 +651,18 @@ export class ChatConsole {
     }
     try {
       const engine = await this.ensureEngine();
+      // WS1 — the findings this turn records, collected from the engine's
+      // `onFinding` seam (the same event the CLI and the gateway hear).
+      const findings: import('../findings/verdicts.js').WireFinding[] = [];
       const answer = await engine.answerOnce(clean, {
         // P4 — the cancel signal rides into the turn.
         signal: controller.signal,
+        // WS1 — a recorded finding, kept for the result and handed to the
+        // caller through the same seam.
+        onFinding: (finding) => {
+          findings.push(finding);
+          opts.onFinding?.(finding);
+        },
         ...(opts.provider ? { provider: opts.provider } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         // P5 — a followup chip continues the previous execution.
@@ -826,6 +858,8 @@ export class ChatConsole {
         transport: answer.transport ?? null,
         generationFailed: answer.generationFailed === true,
         bounded: answer.bounded === true,
+        // WS1 — the findings the turn recorded (empty when it recorded none).
+        findings,
       };
     } catch (err) {
       // A cancel racing the engine's unwinding must not surface as an error

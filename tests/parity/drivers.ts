@@ -76,4 +76,19 @@ export const VERIFIED_CELLS: ReadonlySet<string> = new Set([
   'tool-call-lifecycle@gateway-chat',
   'tool-call-lifecycle@cli-execute',
   'tool-call-lifecycle@subagent',
+  // ALL FIVE surfaces report a finding their turn recorded — the claim, the
+  // outcome, the evidence and the verdict the GATE computed — through their own
+  // seams: the CLI result + `onFinding`, the command's own result, the console's
+  // result, the gateway's `inbound.chat` record, and the child's `finding`
+  // progress frame. Proven by the pair of WS1 scenarios in
+  // `scenario-parity.test.ts`: 'finding-confirmed' (usable evidence ⇒ CONFIRMED,
+  // with the evidence carried) and 'finding-refused' (a blank reference ⇒ the
+  // promotion is refused, so every surface must report PLAUSIBLE). The second is
+  // the load-bearing one: a surface agreeing on a CONFIRMED verdict that no
+  // evidence earned is exactly the false-success shape this workstream closes.
+  'findings-verdicts@cli-chat',
+  'findings-verdicts@dashboard-chat',
+  'findings-verdicts@gateway-chat',
+  'findings-verdicts@cli-execute',
+  'findings-verdicts@subagent',
 ]);

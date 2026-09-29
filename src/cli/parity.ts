@@ -188,14 +188,16 @@ export function capabilityMatrixCheck(): ParityCheck {
 /**
  * The scenarios `nuvira parity run` drives on every surface. Kept small and
  * deterministic: a plain completion (does the turn and its attribution agree),
- * a tool call that WORKS, and a tool call that FAILS.
+ * a tool call that WORKS, a tool call that FAILS, and the WS1 finding pair — a
+ * claim with evidence (promoted to CONFIRMED) and a claim without (the gate
+ * refuses the promotion, so every surface must report PLAUSIBLE).
  *
  * The failing case is not a corner. Two surfaces can agree that a tool ran and
  * disagree about whether it worked, and an outcome that is merely ABSENT is not
  * a failure either — `compare` (`src/parity/observation.ts`) treats "no outcome"
  * as equal to "no outcome", so five surfaces that all stopped reporting `ok`
- * would still read as at-par. The test suite pins these three scenarios by id so
- * the CLI and the suite prove the same thing.
+ * would still read as at-par. The test suite pins each of these scenarios by id
+ * so the CLI and the suite prove the same thing.
  */
 export const PARITY_SCENARIOS: readonly ParityScenario[] = [
   {
@@ -224,6 +226,43 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
       args: { command: 'node --check no-such-file-parity-probe.js' },
     },
     answer: 'Command failed.',
+  },
+  {
+    id: 'finding-confirmed',
+    message: 'record what you checked as a finding, then answer',
+    // WS1 (#23) — a finding the turn recorded, on every surface. The stub asks
+    // for the `finding` tool WITH a usable evidence reference, so the gate
+    // promotes it: the case proves the surface carries the verdict AND the
+    // evidence behind it, not merely that a tool ran.
+    toolCall: {
+      tool: 'finding',
+      args: {
+        claim: 'the parity harness can drive every surface',
+        outcome: 'checked by running the harness',
+        evidence: [
+          { kind: 'observation', ref: 'all five surfaces reported the same verdict' },
+        ],
+      },
+    },
+    answer: 'Recorded.',
+  },
+  {
+    id: 'finding-refused',
+    message: 'record a finding you have not checked, then answer',
+    // The GATE, proved on every surface: the same tool with a blank evidence
+    // reference. `confirmFinding` refuses the promotion, so the verdict stays
+    // PLAUSIBLE and the outcome names the refusal. Asserting the PLAUSIBLE
+    // verdict (rather than only that the surfaces agree) is what makes this
+    // evidence that no surface can be handed a CONFIRMED verdict it did not earn.
+    toolCall: {
+      tool: 'finding',
+      args: {
+        claim: 'this claim was never checked',
+        outcome: 'reported as a guess',
+        evidence: [{ kind: 'file', ref: '   ' }],
+      },
+    },
+    answer: 'Recorded as a guess.',
   },
   {
     id: 'failing-read',

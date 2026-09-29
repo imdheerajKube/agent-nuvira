@@ -65,6 +65,8 @@ import {
 } from '../inference/tool-call-utils.js';
 import type { InferenceProvider, ToolMessage } from '../inference/interface.js';
 import type { ToolJsonSchema } from '../tools/registry.js';
+// WS1 — the finding tool's bus event (the loop's context emit carries it).
+import { FINDING_EVENT } from '../tools/finding-tool.js';
 
 /**
  * Serialize the loop's thread the way the chat transport does, so the SAME
@@ -155,6 +157,16 @@ export interface LoopExecutorResult {
    * made at all (a routing failure), which is the honest answer there.
    */
   transport?: 'native' | 'json' | 'none';
+  /**
+   * WS1 — every finding this run recorded, in call order, already gated.
+   *
+   * Read from the `finding:recorded` event the tool emits on this loop's own
+   * context bus — the same seam that carries `autonomy:write-applied` — so the
+   * command reports the verdicts its turn produced rather than leaving them in
+   * the model thread. `[]`/absent is "none recorded", never silence about a
+   * surface that cannot report them.
+   */
+  findings?: import('../findings/verdicts.js').WireFinding[];
 }
 
 /** Options for runLoopExecutor — mirrors the pipeline arm's surface. */
@@ -230,6 +242,8 @@ export async function runLoopExecutor(
   const recorded = { refusals: 0, gateDecisions: 0 };
   /** Per-call tool outcomes, in call order (see LoopExecutorResult.toolOutcomes). */
   const toolOutcomes: Array<{ tool: string; ok: boolean }> = [];
+  /** WS1 — findings recorded this run, in call order (see LoopExecutorResult.findings). */
+  const findings: import('../findings/verdicts.js').WireFinding[] = [];
   /**
    * G18 — one sink for the loop's non-LLM facts: persisted to the trace store,
    * and (only under `-v`) echoed to the console so a live run is readable
@@ -807,6 +821,11 @@ export async function runLoopExecutor(
         // reason" reviewable after the fact instead of inferred from a missing
         // round trip.
         emit: (event, data) => {
+          // WS1 — a finding the turn recorded, with the gate's verdict.
+          if (event === FINDING_EVENT) {
+            findings.push(data as import('../findings/verdicts.js').WireFinding);
+            return;
+          }
           if (event !== 'autonomy:write-applied') return;
           const d = data as { tool?: string; reason?: string } | undefined;
           onTraceEvent({
@@ -925,6 +944,7 @@ export async function runLoopExecutor(
       toolCalls: result.toolCalls,
       erroredTools,
       toolOutcomes,
+      ...(findings.length > 0 ? { findings } : {}),
       durationMs: Date.now() - startedAt,
       provider: providerType,
       model,

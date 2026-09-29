@@ -28,6 +28,7 @@ import { envBuff } from '../config/paths';
 import { z, toJSONSchema, type ZodType } from 'zod';
 import { ACTION_BY_INTENT } from '../nlu/actions.js';
 import { detectPermissionSeeking, IRREVERSIBLE_ACTION_RE } from '../learning/autonomy-policy.js';
+import { createFindingTool } from './finding-tool.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -628,6 +629,7 @@ export const TOOL_CONTRACT = `You have tools available. Call them when appropria
 - If a request needs code written, debugged, or prior work resumed, call \`build\`, \`repair\`, or \`resume\` with the goal.
 - If a request needs documentation, a website, analysis of a project, or running tests, call \`document\`, \`website\`, \`analyze\`, or \`test\` with the goal.
 - If a request asks to publish a release (npm/GitHub), call \`publish\`. It leaves this machine and is irreversible — confirm the bump type and target with the user via \`ask_user\` first unless they already specified them.
+- When your answer ASSERTS something a second party could check (a test passed, a file contains X, the count is N, a command was run), call \`finding\` with the claim, what became of it, and the evidence you ACTUALLY checked — the command and its real output, the path you read, a quote from the request. Usable evidence records it CONFIRMED; with none it is recorded PLAUSIBLE, which is the honest result for a reasoned guess. You cannot set the verdict and must never claim a check you did not perform.
 - If a request's completeness is uncertain, call \`verify_requirement\` first.
 - If a request asks to deliver a message or result to a DIFFERENT contact/channel than the one you are currently chatting on (WhatsApp, Telegram, Slack, email, …), call \`gateway_send\` with the target (e.g. \`whatsapp:Alex\`) and the text. Do NOT call gateway_send to reply to the CURRENT conversation — your text response is automatically delivered back. If the target contact is not configured, tell the user what to set up.
 - If a request asks to manage the system/agent itself in plain English — start/stop the dashboard or gateway, check status, add/remove a verified sender, configure a platform (telegram/whatsapp), run evals, show stats — call \`run_cli\` with the plain-English ask. It resolves the exact \`nuvira\` command and runs it. If the user's own request already resolves to that command ("stop the dashboard"), it just runs — do not ask for permission to do what was just asked. If it reports AMBIGUOUS, call \`ask_user\` with the two choices; if the intent is one YOU chose rather than the user (or is irreversible: history.clear, memory.prune, stats.cost.clear, publish), call \`ask_user\` first and retry with confirm:true.
@@ -977,6 +979,16 @@ registerTool({
     return store.toText ? store.toText() : `Plan updated (${action}).`;
   },
 });
+
+// ─── WS1 (#23) finding tool — a claim, and the verdict the gate computed ────
+// The model states the claim, the outcome and the evidence it actually checked;
+// it does NOT state the verdict (`finding-tool.ts` has no such parameter, and
+// the gate refuses a promotion without a non-blank evidence reference). Each
+// recorded finding is emitted as `finding:recorded` with the SAME wire form the
+// gateway already logs for an intent verdict, so all five surfaces report one
+// shape — which is what `findings-verdicts@<surface>` is proved against.
+
+registerTool(createFindingTool());
 
 // ─── I1 web-research tools (web_search / read_page) ─────────────────────────
 // The research-tool pattern

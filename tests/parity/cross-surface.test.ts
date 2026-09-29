@@ -168,6 +168,8 @@ const observation = (over: Partial<TurnObservation> = {}): TurnObservation => ({
   model: 'qwen/qwen3.8-27b',
   transport: 'native',
   toolCalls: [{ tool: 'read_file' }, { tool: 'str_replace' }],
+  // WS1 — findings are part of the projection; `[]` is the honest "none".
+  findings: [],
   answer: 'done',
   ...over,
 });

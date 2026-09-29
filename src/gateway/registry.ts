@@ -68,7 +68,7 @@ import {
 // wire shape every other surface reports (WS1, `findings/verdicts.ts`): a
 // messaging surface has no terminal to scroll, so "what we decided, and what it
 // was checked against" has to be in the log or it does not exist.
-import { toWire } from '../findings/verdicts.js';
+import { toWire, type WireFinding } from '../findings/verdicts.js';
 import type { AskKind } from '../nlu/conversation-gate.js';
 // The retry queue behind the "Reply *yes* and I will keep trying" offer. LEAF
 // import: a plain store + matcher, so the gateway does not pull routing in for it.
@@ -1808,6 +1808,15 @@ export class GatewayRegistry {
       // optional: a call whose outcome never arrived is recorded as absent, the
       // same honest reading the other surfaces use, never up-graded to success.
       const toolCalls: Array<{ tool: string; ok?: boolean }> = [];
+      /**
+       * WS1 — the findings this turn recorded, in call order.
+       *
+       * Read from the shared engine seam like `toolCalls` above, and written to
+       * the `inbound.chat` log record for the same reason: a messaging surface
+       * has no terminal to scroll, so the log is where a turn's verdicts have to
+       * live (and it is what the parity driver reads).
+       */
+      const findings: WireFinding[] = [];
       const answer = await engine.answerOnce(prompt, {
         provider: useAuto ? 'auto' : providerType,
         model: useAuto ? 'auto' : providerConfig.model,
@@ -1815,6 +1824,12 @@ export class GatewayRegistry {
         onToolCall: (phase, info) => {
           if (phase !== 'called') return;
           toolCalls.push({ tool: info.tool, ...(typeof info.ok === 'boolean' ? { ok: info.ok } : {}) });
+        },
+        // WS1 — every finding the turn recorded, with the gate's verdict. Kept
+        // internal exactly like onToolCall: it belongs in the log and this
+        // method's return, never in the channel sender's message.
+        onFinding: (finding) => {
+          findings.push(finding);
         },
         // Session 3 — the channel rules go in the STABLE layer, not the ask.
         systemPolicy: CHANNEL_POLICY,
@@ -1971,6 +1986,7 @@ export class GatewayRegistry {
         ...(answer.model ? { model: answer.model } : {}),
         ...(answer.transport ? { transport: answer.transport } : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(findings.length > 0 ? { findings } : {}),
         generationFailed: answer.generationFailed === true,
       });
       return {
@@ -1980,6 +1996,7 @@ export class GatewayRegistry {
         ...(answer.model ? { model: answer.model } : {}),
         ...(answer.transport ? { transport: answer.transport } : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(findings.length > 0 ? { findings } : {}),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

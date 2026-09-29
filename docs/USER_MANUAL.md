@@ -609,7 +609,19 @@ file". Categories below are descriptive; run `nuvira tools list` for the live re
 
 **Meta** — `ask_user`, `approval`, `write_approval`, `interrupt`, `todo`,
 `tool_search`, `tool_output_limits`, `tool_result_storage`, `budget_config`,
-`analyze`, `build`, `document`, `repair`, `resume`, `test`, `website`.
+`analyze`, `build`, `document`, `repair`, `resume`, `test`, `website`,
+`finding`.
+
+**`finding` — what was CHECKED vs what is a guess.** The agent records a finding
+for anything its answer asserts that a second party could check, together with
+the evidence it actually gathered (a command and its real output, a path it read,
+a quote from the request). The agent states the claim, the outcome and the
+evidence — never the verdict: a claim with usable evidence is recorded
+**CONFIRMED**, and one without is recorded **PLAUSIBLE**, which is an honest
+result rather than a failure. Every surface reports the same wire form (the
+engine result and `onFinding` on the CLI and dashboard, the `inbound.chat` log
+record on the gateway, a `finding` IPC frame from a subagent), so a claim cannot
+be reported as verified on one surface and unchecked on another.
 
 ### Examples
 

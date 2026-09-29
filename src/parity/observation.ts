@@ -29,6 +29,7 @@
  */
 
 import type { EngineMode } from '../learning/engine-router.js';
+import type { WireFinding } from '../findings/verdicts.js';
 import type { SurfaceId } from './surfaces.js';
 
 /** How a turn ended, in the taxonomy every surface already reports. */
@@ -86,6 +87,20 @@ export interface TurnObservation {
   transport?: 'native' | 'json' | 'none';
   /** Tool calls in call order, with the outcome each surface reported. Order is part of the behaviour. */
   toolCalls: readonly ToolCallObs[];
+  /**
+   * WS1 — the findings the turn recorded, in call order, in the shared wire
+   * form (`findings/verdicts.ts`).
+   *
+   * REQUIRED, for the reason `modelCalls` is: a surface that cannot report its
+   * verdicts is precisely the gap this row closes, and an optional field would
+   * let it go on being silent while still reading as at-par. `[]` is the honest
+   * answer for a turn that recorded none — not the same statement as "this
+   * surface does not say". Compared in ORDER and by VALUE, because the verdict
+   * (CONFIRMED vs PLAUSIBLE) and the evidence behind it are the whole point: two
+   * surfaces agreeing that a finding exists while disagreeing about whether it
+   * was checked have not agreed on anything.
+   */
+  findings: readonly WireFinding[];
   /** Terminal answer text. Compared exactly: parity runs use one stub provider. */
   answer?: string;
   /** Typed refusal code (no provider, unreachable backend, tools on a non-tool provider). */
@@ -104,6 +119,7 @@ export interface ComparableObservation {
   model: string | null;
   transport: string | null;
   toolCalls: readonly ToolCallObs[];
+  findings: readonly WireFinding[];
   answer: string | null;
   refusalCode: string | null;
   errorCode: string | null;
@@ -119,6 +135,10 @@ export function comparableOf(observation: TurnObservation): ComparableObservatio
     model: observation.model ?? null,
     transport: observation.transport ?? null,
     toolCalls: observation.toolCalls.map((call) => ({ tool: call.tool, ...(call.ok === undefined ? {} : { ok: call.ok }) })),
+    // Absent at runtime is normalised to `[]` rather than compared as a
+    // difference: the field is required by the type, and a driver that forgot it
+    // should fail the typecheck, not silently diverge at runtime.
+    findings: observation.findings ?? [],
     answer: observation.answer ?? null,
     refusalCode: observation.refusalCode ?? null,
     errorCode: observation.errorCode ?? null,
@@ -190,6 +210,25 @@ export function compare(a: TurnObservation, b: TurnObservation): string[] {
         : r === undefined
           ? `${who}: ${a.surface} made a call the other surface did not, at #${i + 1} — ${showCall(l)}`
           : `${who}: tool call #${i + 1} differs — ${showCall(l)} vs ${showCall(r)}`,
+    );
+  }
+
+  // WS1 — findings, in order, by value. The VERDICT is part of the value: two
+  // surfaces that both recorded the claim while one called it CONFIRMED and the
+  // other PLAUSIBLE have not agreed, and the evidence decides which is honest.
+  const maxFindings = Math.max(left.findings.length, right.findings.length);
+  for (let i = 0; i < maxFindings; i += 1) {
+    const l = left.findings[i];
+    const r = right.findings[i];
+    if (l && r && JSON.stringify(l) === JSON.stringify(r)) continue;
+    const say = (f: WireFinding | undefined): string =>
+      f === undefined ? '(none)' : `${show(f.claim)} [${f.verdict}]`;
+    differences.push(
+      l === undefined
+        ? `${who}: ${b.surface} recorded a finding the other surface did not, at #${i + 1} — ${say(r)}`
+        : r === undefined
+          ? `${who}: ${a.surface} recorded a finding the other surface did not, at #${i + 1} — ${say(l)}`
+          : `${who}: finding #${i + 1} differs — ${say(l)} vs ${say(r)}`,
     );
   }
 

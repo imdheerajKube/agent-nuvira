@@ -71,8 +71,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'experience',
     label: 'Experience',
-    description: 'In-loop UX tools: clarification (ask_user), requirement verification, end-of-response follow-ups, and loading reusable capability packs (skill).',
-    tools: ['ask_user', 'suggest_followups', 'verify_requirement', 'skill'],
+    description: 'In-loop UX tools: clarification (ask_user), requirement verification, end-of-response follow-ups, loading reusable capability packs (skill), and recording a finding whose verdict the gate computes from the evidence supplied.',
+    tools: ['ask_user', 'suggest_followups', 'verify_requirement', 'skill', 'finding'],
   },
   {
     name: 'code',
@@ -332,6 +332,7 @@ export const CORE_TOOL_NAMES: readonly string[] = [
   'ask_user',
   'suggest_followups',
   'plan_todo',
+  'finding',
   'skill',
   'delegate',
   'tool_search', // the discovery/load tool MUST be core or tiering is a trap

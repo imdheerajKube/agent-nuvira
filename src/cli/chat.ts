@@ -75,6 +75,9 @@ export interface ToolCallInfo {
 }
 import type { ToolLoopDeps, StepResponse, ToolLoopResult } from '../tools/tool-loop.js';
 import { getTool, TOOL_CONTRACT_JSON, type ToolContext } from '../tools/registry.js';
+// WS1 — the finding tool's bus event, and the wire shape every surface reports.
+import { FINDING_EVENT } from '../tools/finding-tool.js';
+import type { WireFinding } from '../findings/verdicts.js';
 import {
   buildFollowupContinuationPrompt,
   isSuggestedFollowup,
@@ -535,6 +538,12 @@ export class ChatCommand extends BaseCommand {
     /** P6a — /learn preview card: skill_manage create/patch emits the draft. */
     onSkillDraft?: (payload: import('../tools/skill-tool.js').SkillDraftPayload) => void;
     /**
+     * WS1 — a finding was recorded this turn, with the verdict the gate
+     * computed from the evidence supplied. The wire shape on purpose: the same
+     * object the gateway logs and the child ships over IPC.
+     */
+    onFinding?: (finding: WireFinding) => void;
+    /**
      * P0.7 — the session's plan store (the dashboard console injects one per
      * conversation so plans never leak across sessions).
      */
@@ -622,6 +631,12 @@ export class ChatCommand extends BaseCommand {
    * (the no-model pipeline fallback reports `none`).
    */
   transport?: 'native' | 'json' | 'none';
+  /**
+   * WS1 — every finding this turn recorded, in call order, already gated.
+   * `[]` is a real answer ("this surface reports findings, and there were
+   * none"), which is what lets five surfaces be compared honestly.
+   */
+  findings?: WireFinding[];
 }> {
     // `'default'` is the config SENTINEL for "use the provider's default
     // model", never a real model id. Left in place it (a) disables auto routing
@@ -701,7 +716,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -735,6 +750,8 @@ export class ChatCommand extends BaseCommand {
       unverifiedActionClaim: answer.unverifiedActionClaim,
       unfulfilledPromise: answer.unfulfilledPromise,
       undeliveredArtifact: answer.undeliveredArtifact,
+      // WS1 — the findings this turn recorded (empty when it recorded none).
+      findings: answer.findings ?? [],
       provider: type,
       model,
       // R2 — the transport the loop's model-call seam reported for this turn.
@@ -1229,6 +1246,8 @@ export class ChatCommand extends BaseCommand {
        * scope. History keeps the raw text (marker never accumulates).
        */
       continuation?: boolean;
+      /** WS1 — a finding was recorded this turn (see the emit forwarding). */
+      onFinding?: (finding: WireFinding) => void;
     },
   ): Promise<{
     content: string;
@@ -1253,6 +1272,11 @@ export class ChatCommand extends BaseCommand {
      * replay, or a turn that died before a model call).
      */
     transport?: 'native' | 'json' | 'none';
+    /**
+     * WS1 — every finding this turn recorded, in call order, already gated.
+     * `[]` is a real answer ("this surface reports findings, and there were
+     * none"), which is what lets five surfaces be compared honestly.
+     */      findings?: WireFinding[];
   }> {
     // Cache check first (same as the legacy path).
     const cache = getCache();
@@ -1405,6 +1429,15 @@ export class ChatCommand extends BaseCommand {
     // the ledger can remember them (the loop reports tool NAMES, not paths).
     const touchedFiles = new Set<string>();
     /**
+     * WS1 — the findings this turn RECORDED, in call order.
+     *
+     * Collected from the same `finding:recorded` event the GUI hears, so the
+     * result the caller returns and the live card a user watches are fed by one
+     * source rather than two that can disagree. Empty is a real answer ("this
+     * surface reports findings, and this turn recorded none"), never silence.
+     */
+    const findings: WireFinding[] = [];
+    /**
      * G18 — the turn's trace id, for the autonomy-gate events that tools emit
      * DURING the loop. Assigned a few lines below (the trace begins once the
      * thread and tool surface exist); the emit can only fire from tool
@@ -1445,6 +1478,14 @@ export class ChatCommand extends BaseCommand {
         // card with accept / edit / reject).
         if (ctxOverrides?.onSkillDraft && event === 'skill:draft') {
           ctxOverrides.onSkillDraft(data as import('../tools/skill-tool.js').SkillDraftPayload);
+        }
+        // WS1 — a finding the turn recorded. Kept on this surface's own result
+        // (so a caller that never sees the GUI still gets the verdict) AND
+        // forwarded to the caller's live view, one event, two readers.
+        if (event === FINDING_EVENT) {
+          const finding = data as WireFinding;
+          findings.push(finding);
+          ctxOverrides?.onFinding?.(finding);
         }
         // G18 — an autonomy gate DECIDING to proceed is a fact about the turn
         // ("this change was applied without asking, and here is why"), not just
@@ -1754,6 +1795,8 @@ export class ChatCommand extends BaseCommand {
       undeliveredArtifact: result.undeliveredArtifact,
       // R2 — the transport this turn travelled on (interactive REPL path).
       transport: result.transport,
+      // WS1 — the findings this turn recorded, with their verdicts.
+      findings,
     };
   }
 

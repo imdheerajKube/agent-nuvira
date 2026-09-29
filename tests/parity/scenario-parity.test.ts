@@ -48,6 +48,26 @@ import { PARITY_SCENARIOS } from '../../src/cli/parity.js';
 
 const SCENARIO: ParityScenario = { id: 'runner-rules', message: 'hello', answer: 'ok' };
 
+/**
+ * One fixed observation shape, so a differential case varies exactly one field.
+ *
+ * `modelCalls: 1` on purpose: the fake stands for a real turn, and rule 4
+ * refuses to compare a turn that never reached a model.
+ */
+function fakeObservation(over: Partial<TurnObservation> = {}): TurnObservation {
+  return {
+    surface: 'cli-chat',
+    engine: 'loop',
+    status: 'completed',
+    modelCalls: 1,
+    provider: 'groq',
+    toolCalls: [],
+    findings: [],
+    answer: 'ok',
+    ...over,
+  };
+}
+
 /** A driver that returns a fixed observation, for testing the runner rather than a surface. */
 function fakeDriver(
   surface: SurfaceId,
@@ -59,18 +79,7 @@ function fakeDriver(
     depth: over.depth ?? 'provider',
     available: over.available ?? true,
     ...(over.blockedBy ? { blockedBy: over.blockedBy } : {}),
-    run: async (): Promise<TurnObservation> => ({
-      surface,
-      engine: 'loop',
-      status: 'completed',
-      // One model call: the fake driver stands for a real turn, and rule 4
-      // refuses to compare a turn that never reached a model.
-      modelCalls: 1,
-      provider: 'groq',
-      toolCalls: [],
-      answer: 'ok',
-      ...observation,
-    }),
+    run: async (): Promise<TurnObservation> => fakeObservation({ surface, ...observation }),
   };
 }
 
@@ -332,6 +341,80 @@ describe('WS0 parity — every surface, real provider, transport-depth stub', ()
       expect(observation.modelCalls, `${observation.surface} model calls`).toBe(2);
     }
   }, 90_000);
+
+  it('reports a recorded finding with the verdict the gate EARNED, on every surface', async () => {
+    // WS1 (#23). The stub asks for the `finding` tool with a usable evidence
+    // reference, so the gate promotes the claim. Demanding the CONFIRMED verdict
+    // AND the evidence behind it — rather than only that the surfaces agree — is
+    // what makes this evidence that the verdict travelled as content, not as a
+    // label each surface invented for itself.
+    const scenario = PARITY_SCENARIOS.find((s) => s.id === 'finding-confirmed');
+    expect(scenario, 'the CLI no longer drives a finding-confirmed scenario').toBeDefined();
+
+    const run = await runParityScenario(scenario!, harness.drivers);
+    expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
+    expect(run.observations.map((o) => o.surface)).toEqual([
+      'cli-chat',
+      'dashboard-chat',
+      'gateway-chat',
+      'cli-execute',
+      'subagent',
+    ]);
+
+    for (const observation of run.observations) {
+      expect(
+        observation.findings,
+        `${observation.surface} did not report the recorded finding`,
+      ).toEqual([
+        {
+          claim: 'the parity harness can drive every surface',
+          verdict: 'CONFIRMED',
+          outcome: 'checked by running the harness',
+          evidence: [{ kind: 'observation', ref: 'all five surfaces reported the same verdict' }],
+          source: 'agent',
+        },
+      ]);
+      // The turn itself still completes, and the tool call is still reported:
+      // a finding is an addition to the lifecycle, not a replacement for it.
+      expect(observation.status).toBe('completed');
+      expect(observation.answer).toBe('Recorded.');
+      expect(observation.modelCalls, `${observation.surface} model calls`).toBe(2);
+      expect(observation.toolCalls).toEqual([{ tool: 'finding', ok: true }]);
+    }
+  }, 120_000);
+
+  it('reports an UNEARNED claim as PLAUSIBLE on every surface — the gate holds', async () => {
+    // The load-bearing half of WS1. The same tool, with a blank evidence
+    // reference, must NOT be promoted: `confirmFinding` refuses, so every surface
+    // has to report PLAUSIBLE with the reason in the outcome. Five surfaces
+    // agreeing on a CONFIRMED verdict that no evidence earned would be the
+    // false-success defect with a nicer name, and this case is what makes that
+    // disagreement a test failure rather than a quiet pass.
+    const scenario = PARITY_SCENARIOS.find((s) => s.id === 'finding-refused');
+    expect(scenario, 'the CLI no longer drives a finding-refused scenario').toBeDefined();
+
+    const run = await runParityScenario(scenario!, harness.drivers);
+    expect(run.verdict, reportParityFailure(run.observations, run.differences)).toBe('at-par');
+    expect(run.observations.map((o) => o.surface)).toEqual([
+      'cli-chat',
+      'dashboard-chat',
+      'gateway-chat',
+      'cli-execute',
+      'subagent',
+    ]);
+
+    for (const observation of run.observations) {
+      const [finding] = observation.findings;
+      expect(finding, `${observation.surface} reported no finding at all`).toBeDefined();
+      expect(finding!.claim).toBe('this claim was never checked');
+      expect(finding!.verdict, `${observation.surface} promoted a claim with no evidence`).toBe('PLAUSIBLE');
+      // The blank reference is dropped rather than carried: a renderer must never
+      // be able to show a check that did not happen.
+      expect(finding!.evidence).toEqual([]);
+      expect(finding!.outcome).toContain('no usable evidence');
+      expect(observation.status).toBe('completed');
+    }
+  }, 120_000);
 
   it('reports a FAILED READ as failed on every surface — the false-success regression', async () => {
     // MEASURED, before the fix: `read_file` on a missing path produced a message

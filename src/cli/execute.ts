@@ -211,6 +211,17 @@ interface SingleGoalResult {
    */
   toolOutcomes?: Array<{ tool: string; ok?: boolean }>;
   /**
+   * WS1 — every finding this run recorded, in call order, with the verdict the
+   * gate computed from the evidence the model supplied.
+   *
+   * Both arms report it: the loop arm from the loop's own `finding:recorded`
+   * event, the direct-answer arm from the chat engine's `onFinding` seam. The
+   * command returns the verdicts rather than leaving them where only the model
+   * thread can see them — the difference between "the tool recorded it" and
+   * "this surface reports it".
+   */
+  findings?: import('../findings/verdicts.js').WireFinding[];
+  /**
    * The answer this run produced. Returned as DATA, not only printed, so a
    * caller (and the parity harness) can read the turn the surface reports
    * rather than scrape a console.
@@ -1687,6 +1698,9 @@ export class ExecuteCommand extends BaseCommand {
       // the gap `tool-call-lifecycle@cli-execute` recorded.
       const toolCalls: string[] = [];
       const toolOutcomes: Array<{ tool: string; ok?: boolean }> = [];
+      // WS1 — the findings this answer recorded, from the same engine seam as
+      // the tool lifecycle above.
+      const findings: import('../findings/verdicts.js').WireFinding[] = [];
       const answer = await new ChatCommand().answerOnce(goal, {
         ...(provider ? { provider } : {}),
         ...(model ? { model } : {}),
@@ -1694,6 +1708,9 @@ export class ExecuteCommand extends BaseCommand {
           if (phase !== 'called') return;
           toolCalls.push(info.tool);
           toolOutcomes.push({ tool: info.tool, ...(typeof info.ok === 'boolean' ? { ok: info.ok } : {}) });
+        },
+        onFinding: (finding) => {
+          findings.push(finding);
         },
       });
       // Parity with the dashboard/gateway: never print a raw suggest_followups
@@ -1728,6 +1745,7 @@ export class ExecuteCommand extends BaseCommand {
         ...(answer.transport ? { transport: answer.transport } : {}),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(toolOutcomes.length > 0 ? { toolOutcomes } : {}),
+        ...(findings.length > 0 ? { findings } : {}),
       };
     } catch (err) {
       logger.error(err instanceof Error ? err.message : String(err));
@@ -1839,6 +1857,7 @@ export class ExecuteCommand extends BaseCommand {
         ...(result.toolOutcomes && result.toolOutcomes.length > 0
           ? { toolOutcomes: result.toolOutcomes }
           : {}),
+        ...(result.findings && result.findings.length > 0 ? { findings: result.findings } : {}),
       };
     } catch (err) {
       logger.error(err instanceof Error ? err.message : String(err));

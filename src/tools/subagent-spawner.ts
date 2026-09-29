@@ -76,6 +76,12 @@ export interface SubagentState {
   model?: string;
   /** How tool calls travelled: `native`, `json` (fallback) or `none`. */
   transport?: string;
+  /**
+   * WS1 — the findings the child recorded, in call order, with the gate's
+   * verdict. Accumulated from its `finding` progress frames so a subagent run
+   * reports the same wire shape every other surface reports.
+   */
+  findings?: import('../findings/verdicts.js').WireFinding[];
   /** LLM calls made */
   llmCalls: number;
   /** Tokens used */
@@ -128,6 +134,11 @@ export interface SubagentResult {
   model?: string;
   /** Tool transport the run used: `native`, `json` or `none`. */
   transport?: string;
+  /**
+   * WS1 — the findings this run recorded, in call order, with the gate's
+   * verdict — the child's own report, carried across the process boundary.
+   */
+  findings?: import('../findings/verdicts.js').WireFinding[];
   /** LLM calls made */
   llmCalls: number;
   /** Tokens used */
@@ -404,6 +415,11 @@ export class SubagentManager extends EventEmitter {
         state.llmCalls = msg.llmCalls || state.llmCalls;
         state.tokensUsed = msg.tokensUsed || state.tokensUsed;
         state.toolCalls = msg.toolCalls || state.toolCalls;
+        // WS1 — a finding the child recorded. Appended, never replaced: a run
+        // can record several, and the order is part of what it did.
+        if (msg.finding && typeof msg.finding === 'object') {
+          state.findings = [...(state.findings ?? []), msg.finding];
+        }
         this.recordIdentity(state, msg);
         this.saveState(state);
         this.emit('progress', id, msg);
@@ -490,6 +506,7 @@ export class SubagentManager extends EventEmitter {
       ...(state.provider ? { provider: state.provider } : {}),
       ...(state.model ? { model: state.model } : {}),
       ...(state.transport ? { transport: state.transport } : {}),
+      ...(state.findings && state.findings.length > 0 ? { findings: state.findings } : {}),
       llmCalls: state.llmCalls,
       tokensUsed: state.tokensUsed,
       toolCalls: state.toolCalls,

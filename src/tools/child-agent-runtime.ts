@@ -31,6 +31,8 @@ import type { InferenceProvider, ToolCallResponse, ToolMessage, ToolSchema } fro
 import { resolveAdapterDefault } from '../learning/model-selection.js';
 import { SubagentRefusalError } from './subagent-refusal.js';
 import { getTool, toolJsonSchemas, TOOL_CONTRACT_JSON, type ToolContext } from './registry.js';
+// WS1 — the finding tool's bus event; forwarded to the parent as its own frame.
+import { FINDING_EVENT } from './finding-tool.js';
 
 export interface SubagentRuntimeConfig {
   /** The task the subagent must complete. */
@@ -394,7 +396,15 @@ async function runToolLoop(
       // FAILED looked exactly like one that worked (recorded on #22 as
       // tool-call-lifecycle@subagent).
       loop.send({ type: 'progress', phase: 'tool_call', tool: call.name });
-      const output = await executeTool(config, call.name, call.arguments, loop.runTool);
+      const output = await executeTool(config, call.name, call.arguments, loop.runTool, (event, data) => {
+        // WS1 — a finding the child recorded, shipped on its own frame (the
+        // same way its tool lifecycle crosses IPC). The parent records it, so a
+        // subagent run reports the verdicts it produced like every other
+        // surface instead of leaving them inside the child's process.
+        if (event === FINDING_EVENT) {
+          loop.send({ type: 'progress', phase: 'finding', finding: data, llmCalls, toolCalls });
+        }
+      });
       toolCalls += 1;
       loop.send({
         type: 'progress',
@@ -429,6 +439,7 @@ async function executeTool(
   name: string,
   args: Record<string, unknown>,
   override?: (name: string, args: Record<string, unknown>) => Promise<string>,
+  emit?: (event: string, data: unknown) => void,
 ): Promise<string> {
   if (override) return override(name, args);
   const tool = getTool(name);
@@ -436,6 +447,11 @@ async function executeTool(
   const ctx: ToolContext = {
     configManager: new ConfigManager(),
     cwd: config.cwd ?? process.cwd(),
+    // A tool that reports through the bus (the finding tool emits
+    // `finding:recorded`) needs a sink on this side of the fork; the caller
+    // forwards it as a frame. Absent for a direct/test invocation, exactly like
+    // the other optional context fields.
+    ...(emit ? { emit } : {}),
   };
   try {
     const out = await tool.run(args as never, ctx);
