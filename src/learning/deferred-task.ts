@@ -293,12 +293,21 @@ export function listPendingTasks(): DeferredTask[] {
 export type TaskOwnership = (task: DeferredTask) => boolean;
 
 /** Tasks whose next attempt is due and whose TTL has not elapsed. */
-export function dueTasks(now: number = Date.now(), owns: TaskOwnership = () => true): DeferredTask[] {
-  return loadDeferredTasks().filter(
+export function dueTasks(now?: number, owns: TaskOwnership = () => true): DeferredTask[] {
+  // LOAD FIRST, then sample the clock. `loadDeferredTasks` self-heals an
+  // abandoned `running` task (see STALE_RUNNING_MS) and stamps the recovered
+  // task's `notBefore` with ITS `Date.now()`. A default parameter would be
+  // evaluated BEFORE that — so a repair landing in the next millisecond parks
+  // the task one ms past a `now` that is already stale, and the very read that
+  // performed the repair would not see it. Measured at ~2% of reads before this
+  // ordering; the caller's own clock (`now`) still takes precedence.
+  const tasks = loadDeferredTasks();
+  const at = now ?? Date.now();
+  return tasks.filter(
     (t) =>
       t.status === 'pending' &&
-      t.notBefore <= now &&
-      t.deadline > now &&
+      t.notBefore <= at &&
+      t.deadline > at &&
       t.attempts < attemptCap(t) &&
       owns(t),
   );
