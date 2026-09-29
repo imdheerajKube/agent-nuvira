@@ -4064,6 +4064,117 @@ body {
   opacity: 0.8;
 }
 
+/*
+ * WS5 (#27) — the isolation toggle, in its ON state. Coloured like the other
+ * "this is an active mode" affordances rather than only tinted on hover, because
+ * the failure that matters here is a user forgetting it is on and being surprised
+ * by a worktree (or, worse, believing it is on when it is not — which the cards
+ * answer, the button cannot).
+ *
+ * Set after the `.chat-attach-btn` rules above so the ON state wins over the plain
+ * hover tint rather than depending on source order by accident.
+ */
+.chat-attach-btn-on {
+  border-color: #22c55e;
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.chat-attach-btn-on:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.2);
+}
+
+/*
+ * WS5 (#27) — the isolation of one turn, as a card. Green left edge (matching the
+ * confirmed-verdict card's use of a colour to mean "this is a stated fact") and the
+ * directory on its own line, since it is long and the reader may need to copy it.
+ */
+.chat-worktree-card {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid #22c55e;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-worktree-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chat-worktree-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-worktree-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.chat-worktree-state {
+  margin-left: auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+.chat-worktree-state.chat-worktree-kept {
+  color: #22c55e;
+}
+
+.chat-worktree-state.chat-worktree-gone {
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+.chat-worktree-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.chat-worktree-dir {
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.chat-worktree-note {
+  margin-top: 3px;
+}
+
+/*
+ * WS5 (#27) — a REFUSED turn. Red-left-edged rather than inheriting the reply's
+ * error styling: the failure is a decision about where the turn was asked to run,
+ * not a model or provider problem, and it is the one outcome the operator must not
+ * mistake for a transient failure they can simply retry.
+ */
+.chat-refused-line {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid #f85149;
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+/* WS5 (#27) — one line of resume fact on a reply (see `ResumeOutcome.notice`). */
+.chat-resume-line {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: pre-line;
+}
+
 /* P0.7 — plan checklist card (live, updates in place) */
 .chat-plan-card {
   border: 1px solid var(--border);

@@ -29,7 +29,7 @@ import Markdown from './Markdown';
 // test/build output, deploy URLs) rendered as cards, not raw markdown.
 import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
 import { stripAnsi } from '../ansi';
-import type { TaskLogLine, TaskStatus, TraceFinding } from '../types';
+import type { ResumeOutcome, TaskLogLine, TaskStatus, TraceFinding, WorktreeOutcome } from '../types';
 import { formatCount } from '../format';
 
 interface AuthState {
@@ -67,6 +67,23 @@ interface ChatMessage {
    * authoritative; the live SSE events only fill the card while the turn runs.
    */
   findings?: TraceFinding[];
+  /**
+   * WS5 (#27) — the git worktree this turn ran in, and what it changed. The POST
+   * response is authoritative (the same contract as `findings`), and the card is
+   * a rendering of the FACT — a turn that asked for isolation and got a refusal
+   * carries no `worktree`, so the card cannot claim one.
+   */
+  worktree?: WorktreeOutcome;
+  /** WS5 (#27) — what a resumed turn replayed, when the deployment asked. */
+  resume?: ResumeOutcome;
+  /**
+   * WS5 (#27) — the turn REFUSED to run (isolation was asked for and could not
+   * be made), so `content` is the reason, not an answer. Rendered as a refusal
+   * rather than a generic failure: "the agent could not answer" would blame the
+   * model for a decision about the directory, and would invite a retry that must
+   * fail the same way.
+   */
+  refused?: boolean;
   /** P2 — a CLI command run as an inline execution card (the ⚡ Run path). */
   task?: TaskRunView;
 }
@@ -791,6 +808,44 @@ function FindingCards({ findings }: { findings: TraceFinding[] }) {
   );
 }
 
+/**
+ * WS5 (#27) — the isolation of one turn, as a card.
+ *
+ * Shows the DIRECTORY and the BASE COMMIT, not only the diff: the diff is against
+ * a commit, so uncommitted work in the real tree is not in the run, and a reader
+ * who is not told which commit will look for their own edit and not find it. The
+ * removed/kept line is the other half — a diff whose directory is gone is a record
+ * of the turn, while a kept one is somewhere they can go and look.
+ *
+ * The diff body reuses `DiffCard`, the same renderer the `git:diff` event feeds,
+ * so an isolated turn's changes and an ordinary turn's changes cannot drift apart.
+ */
+function WorktreeCard({ worktree }: { worktree: WorktreeOutcome }) {
+  return (
+    <div className="chat-worktree-card">
+      <div className="chat-worktree-head">
+        <span className="chat-worktree-icon" aria-hidden="true">🌿</span>
+        <span className="chat-worktree-title">Ran in an isolated worktree</span>
+        <span className={`chat-worktree-state ${worktree.removed ? 'chat-worktree-gone' : 'chat-worktree-kept'}`}>
+          {worktree.removed ? 'removed' : 'kept'}
+        </span>
+      </div>
+      <div className="chat-worktree-meta">
+        <code className="chat-worktree-dir" title={worktree.dir}>{worktree.dir}</code>
+        <span className="admin-hint">base {worktree.base.slice(0, 7)}</span>
+      </div>
+      <div className="chat-worktree-note admin-hint">
+        {worktree.removed
+          ? 'the diff below is what is left of it — nothing was written into the project tree'
+          : 'the directory above is still on disk'}
+      </div>
+      {/* The diff BODY (`payload`), not `diff.files` — the latter is the list of
+          changed paths, and feeding it to the diff card renders an empty one. */}
+      <DiffCard diff={worktree.diff.payload} />
+    </div>
+  );
+}
+
 function newSessionId(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -840,6 +895,18 @@ export default function ChatPage() {
    * one.
    */
   const [bundleNote, setBundleNote] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /**
+   * WS5 (#27) — run this conversation's turns in their own git worktree.
+   *
+   * A MODE, not a per-message checkbox, because the reason to turn it on ("do not
+   * touch my tree") does not expire after one message — and it is echoed on every
+   * reply by the card, so an operator can always see whether the turn they are
+   * reading ran isolated. Sent as `true` only when on, so an OFF control leaves the
+   * server's own `NUVIRA_ISOLATE` in charge; once toggled, the explicit value is
+   * what the operator asked for and it wins.
+   */
+  const [isolate, setIsolate] = useState(false);
+  const [keepWorktree, setKeepWorktree] = useState(false);
   const [meta, setMeta] = useState<string | null>(null);
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
   // P0.6 — live tool-call cards (upserted by id: started creates, called completes).
@@ -1429,6 +1496,11 @@ export default function ChatPage() {
             kind: c.kind,
             encoding: c.encoding ?? 'text',
           })),
+          // WS5 (#27) — isolation for this turn, as the toggle asks. Both are sent
+          // ONLY while the toggle is on: with it off the keys are omitted, so the
+          // server's `NUVIRA_ISOLATE` still decides (a control that never expressed
+          // an opinion must not overrule the deployment's).
+          ...(isolate ? { worktree: true, keepWorktree } : {}),
         },
         controller.signal,
       );
@@ -1445,7 +1517,10 @@ export default function ChatPage() {
         // when the server already queued the ask (see `retryQueued`): the retry
         // loop is re-running it and will push the answer here, so a manual
         // re-send would run the same ask a second time.
-        setRetryAsk(r.generationFailed && !r.retryQueued ? clean : null);
+        // WS5 — never offer Retry for a REFUSED turn: the refusal is a decision
+        // about where the turn was asked to run, so re-sending it must refuse
+        // again (see `refused` on the response).
+        setRetryAsk(r.generationFailed && !r.retryQueued && !r.refused ? clean : null);
         const replyContent = r.content || '(the agent produced no text — try rephrasing)';
         setMessages((m) => [
           ...m,
@@ -1465,6 +1540,14 @@ export default function ChatPage() {
             // WHILE the turn runs, and they are the fallback for a server that
             // predates the `findings` field (its response omits it).
             findings: r.findings ?? liveFindingsRef.current,
+            // WS5 (#27) — the isolation and resume this turn had, straight off the
+            // response. Absent when the turn was not isolated, INCLUDING when
+            // isolation was asked for and refused — a refusal comes back as a
+            // failed turn whose `content` says why, so the card can never appear
+            // over a turn that ran in the real tree.
+            worktree: r.worktree,
+            resume: r.resume,
+            refused: r.refused,
             // P2 — extract artifact cards from the answer TEXT (diff/result/
             // deploy blocks the model wrote directly, beyond the live events).
             artifacts: extractArtifacts(replyContent),
@@ -1491,7 +1574,7 @@ export default function ChatPage() {
       // P8 — the turn resolved: bring the history rail back.
       setRailOpen(true);
     },
-    [busy, attachedProject, attachments],
+    [busy, attachedProject, attachments, isolate, keepWorktree],
   );
 
   /** P4 — cancel the in-flight turn (aborts the POST; the server cancels it). */
@@ -2097,6 +2180,20 @@ export default function ChatPage() {
                       <PlanCard plan={m.plan} />
                     </details>
                   ) : null}
+                  {m.role === 'assistant' && m.refused ? (
+                    <div className="chat-refused-line">
+                      ⛔ This turn did not run — the isolation it asked for could not be made. Nothing
+                      was written, and the reason is above.
+                    </div>
+                  ) : null}
+                  {m.role === 'assistant' && m.worktree ? (
+                    <WorktreeCard worktree={m.worktree} />
+                  ) : null}
+                  {m.role === 'assistant' && m.resume ? (
+                    <div className="chat-resume-line" title="what this turn replayed instead of paying for">
+                      {m.resume.notice}
+                    </div>
+                  ) : null}
                   {m.role === 'assistant' && m.findings && m.findings.length > 0 ? (
                     <FindingCards findings={m.findings} />
                   ) : null}
@@ -2124,6 +2221,16 @@ export default function ChatPage() {
                 <div className="chat-bubble-role">🤖 Agent</div>
                 {livePlan ? <PlanCard plan={livePlan} /> : null}
                 {liveDiff ? <DiffCard diff={liveDiff} /> : null}
+                {/* WS5 — the worktree this turn is running in. Rendered from the
+                    live step lines the engine reports ("🌿 isolated in a git
+                    worktree: …") rather than inferred from the toggle: the card
+                    states a fact the SERVER sent, never the request the client
+                    made. */}
+                {isolate && busy ? (
+                  <div className="chat-resume-line">
+                    🌿 this turn is running in its own git worktree — the diff arrives with the answer
+                  </div>
+                ) : null}
                 {liveFindings.length > 0 ? <FindingCards findings={liveFindings} /> : null}
                 {liveDraft ? <SkillDraftCard draft={liveDraft} onAccept={acceptDraft} onReject={rejectDraft} onEdit={editDraft} /> : null}
                 {secretRequests.map((sr) => (
@@ -2326,6 +2433,43 @@ export default function ChatPage() {
               >
                 🐞
               </button>
+              {/*
+                WS5 (#27) — isolation, as a toggle beside the other composer
+                controls, plus its own second lever once it is on. Both are backed
+                by real facts rather than a hopeful label: a turn that could not be
+                isolated FAILS with the reason as its content (the worktree is made
+                before the model is asked anything), so this button cannot leave a
+                user believing their tree was protected when it was not.
+              */}
+              <button
+                type="button"
+                className={`chat-attach-btn${isolate ? ' chat-attach-btn-on' : ''}`}
+                aria-label="Run turns in an isolated git worktree"
+                aria-pressed={isolate}
+                title={
+                  isolate
+                    ? 'Turns run in their own git worktree and report the diff — click to run in the project tree again'
+                    : 'Run turns in their own git worktree of the attached project, and report the diff against the base commit. Refuses rather than running in your tree when the directory cannot be isolated. Needs an attached project (or the server\'s own git working directory).'
+                }
+                onClick={() => { setIsolate((v) => !v); setBundleNote(null); }}
+              >
+                🌿{isolate ? ' isolated' : ' isolate'}
+              </button>
+              {isolate ? (
+                <button
+                  type="button"
+                  className={`chat-attach-btn${keepWorktree ? ' chat-attach-btn-on' : ''}`}
+                  aria-pressed={keepWorktree}
+                  title={
+                    keepWorktree
+                      ? 'The worktree is KEPT after the turn so you can look inside it'
+                      : 'The worktree is measured and removed after each turn'
+                  }
+                  onClick={() => setKeepWorktree((v) => !v)}
+                >
+                  📌{keepWorktree ? ' keep' : ' drop'}
+                </button>
+              ) : null}
               <textarea
                 className="chat-input-box"
                 value={input}

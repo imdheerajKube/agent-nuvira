@@ -779,6 +779,47 @@ export interface TraceFinding {
   source: string;
 }
 
+/**
+ * WS5 (#27) — the isolation a chat turn had, as the dashboard reads it.
+ *
+ * Mirrors `IsolationOutcome` in `src/tools/worktree.ts`. NOTE the diff's two
+ * halves, because they are NOT the same list and reading the wrong one renders an
+ * empty card: `files` is the changed PATHS (a plain string per file, what a reader
+ * scans) and `payload` is the unified-diff BODY the existing diff card renders.
+ *
+ * `payload` is deliberately the same `{files, summary}` shape the `git:diff` event
+ * carries, so an isolated turn's changes render with the card that is already
+ * there rather than a second renderer that could drift from it.
+ */
+export interface WorktreeOutcome {
+  /** The worktree the turn ran in (reported even after it is removed). */
+  dir: string;
+  /** The commit the diff is measured against. */
+  base: string;
+  diff: {
+    /** Changed paths, one entry per file. */
+    files: string[];
+    summary: string;
+    /** True when the run changed nothing — a fact, not a failure. */
+    unchanged: boolean;
+    /** The unified diff, in the shared diff-card shape. */
+    payload: { files: Array<{ path: string; body: string }>; summary: string };
+  };
+  /** False when the directory was KEPT (`keepWorktree`). */
+  removed: boolean;
+}
+
+/** WS5 (#27) — what a resumed turn replayed instead of paying for. */
+export interface ResumeOutcome {
+  id: string;
+  replayed: number;
+  modelCalls: number;
+  /** False when the record could not be written (the turn still happened). */
+  saved: boolean;
+  /** The operator-facing line the surface composed (see `closeResume`). */
+  notice: string;
+}
+
 // ─── Reasoning Trace Types (P0) ────────────────────────────────────────────
 
 /** One LLM call recorded in a reasoning trace. */

@@ -70,6 +70,29 @@ class FakeEngine implements ChatEngine {
   generationFailed = false;
   /** What the failover walk recorded while this turn was failing (see seedFailoverAttempts). */
   failoverAttempts: Array<Parameters<typeof recordFailoverAttempt>[0]> = [];
+  /**
+   * WS5 (#27) — the isolation this turn reports having run in, when it did.
+   *
+   * Set by the test to stand in for the REAL worktree the engine made: the route
+   * must pass this through untouched (it is what the GUI card renders), and must
+   * report NOTHING when it is absent — which is how a refused turn reads.
+   */
+  worktreeAnswer: {
+    dir: string;
+    base: string;
+    /** The REAL wire shape: `files` is the changed PATHS; `payload` is the diff body. */
+    diff: { files: string[]; summary: string; unchanged: boolean; payload: { files: Array<{ path: string; body: string }>; summary: string } };
+    removed: boolean;
+  } | null = null;
+  /** WS5 (#27) — what this turn's resume replayed, when the engine reported one. */
+  resumeAnswer: { id: string; replayed: number; modelCalls: number; saved: boolean; notice: string } | null = null;
+  /**
+   * WS5 (#27) — stand in for a turn that REFUSED to run, returning the reason as
+   * its content with `generationFailed` AND `refused`. Both, because that is what
+   * the engine actually returns and the route must treat them differently: the
+   * first says "failed", the second says "do not retry this".
+   */
+  refusedAnswer: string | null = null;
   async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string; generationFailed?: boolean }> {
     this.calls.push({ message, opts });
     const o = opts as { onProgress?: (line: string) => void; onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void; onPlanChange?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void; onGitDiff?: (d: { files: Array<{ path: string; body: string }>; summary: string }) => void };
@@ -89,6 +112,23 @@ class FakeEngine implements ChatEngine {
         });
       }
     }
+    if (this.refusedAnswer !== null) {
+      // Attempts recorded BEFORE the refusal, which is the real order on this
+      // path: the provider walk runs first, and only then does the turn discover
+      // it cannot isolate. Without this the retry broker has nothing in its window
+      // and cannot report, so a test could not tell whether the route's refusal
+      // guard does anything (measured: the whole refused-turn test passed with the
+      // guard removed until these attempts were seeded).
+      for (const a of this.failoverAttempts) recordFailoverAttempt(a);
+      return {
+        content: this.refusedAnswer,
+        followups: [],
+        generationFailed: true,
+        refused: true,
+        provider: 'groq',
+        model: 'llama-3.3-70b',
+      };
+    }
     if (this.generationFailed) {
       // Logged HERE, mid-turn — the same window the real walk records into.
       for (const a of this.failoverAttempts) recordFailoverAttempt(a);
@@ -99,6 +139,8 @@ class FakeEngine implements ChatEngine {
       followups: [{ prompt: 'What next?', label: 'Next' }],
       provider: 'groq',
       model: 'llama-3.3-70b',
+      ...(this.worktreeAnswer ? { worktree: this.worktreeAnswer } : {}),
+      ...(this.resumeAnswer ? { resume: this.resumeAnswer } : {}),
     };
   }
 }
@@ -239,6 +281,97 @@ describe('/api/chat', () => {
     expect(body.sessionId.length).toBeGreaterThan(0);
     expect(engine.calls).toHaveLength(1);
     expect(engine.calls[0].message).toBe('hello agent');
+  });
+
+  it('WS5 — passes the GUI`s isolation request to the engine and reports the worktree it ran in', async () => {
+    engine.worktreeAnswer = {
+      dir: '/tmp/profile/.nuvira/worktrees/fix-the-retry-bug-abc',
+      base: '1234567890abcdef',
+      diff: {
+        // Paths, and the diff body beside them — mirroring `WorktreeDiff` exactly,
+        // because a fixture in the wrong shape is how the client guard came to
+        // reject every real payload while its test passed.
+        files: ['src/retry.ts'],
+        summary: '1 file changed against 1234567',
+        unchanged: false,
+        payload: {
+          files: [{ path: 'src/retry.ts', body: '@@ -1 +1 @@\n-old\n+new\n' }],
+          summary: '1 file changed against 1234567',
+        },
+      },
+      removed: true,
+    };
+    engine.resumeAnswer = { id: 'cp-abc', replayed: 2, modelCalls: 1, saved: true, notice: '↩️  resume cp-abc: replayed 2, made 1 model call(s)' };
+    const res = await authedFetch('/api/chat', 'POST', { message: 'fix the retry bug', worktree: true, keepWorktree: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      worktree?: { dir: string; base: string; removed: boolean; diff: { files: string[]; payload: { files: Array<{ path: string }> } } };
+      resume?: { replayed: number; modelCalls: number; notice: string };
+    };
+    // ASKED FOR: the engine sees the request, so isolation is not a GUI-only idea.
+    const opts = engine.calls.at(-1)?.opts as { worktree?: boolean; keepWorktree?: boolean };
+    expect(opts.worktree).toBe(true);
+    expect(opts.keepWorktree).toBe(true);
+    // REPORTED: the diff and its base ride back, which is what the card renders.
+    expect(body.worktree?.dir).toBe('/tmp/profile/.nuvira/worktrees/fix-the-retry-bug-abc');
+    expect(body.worktree?.base).toBe('1234567890abcdef');
+    expect(body.worktree?.removed).toBe(true);
+    expect(body.worktree?.diff.files).toEqual(['src/retry.ts']);
+    expect(body.worktree?.diff.payload.files.map((f) => f.path)).toEqual(['src/retry.ts']);
+    expect(body.resume?.replayed).toBe(2);
+    expect(body.resume?.notice).toContain('replayed 2');
+    engine.worktreeAnswer = null;
+    engine.resumeAnswer = null;
+  });
+
+  it('WS5 — sends NO isolation keys when the GUI did not ask, so the deployment environment still decides', async () => {
+    // The tri-state that matters: an untouched control must be ABSENT (the
+    // deployment's `NUVIRA_ISOLATE` is then in charge), not `false` (which would
+    // be this one turn explicitly declining it).
+    const res = await authedFetch('/api/chat', 'POST', { message: 'just saying hi' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { worktree?: unknown; resume?: unknown };
+    const opts = engine.calls.at(-1)?.opts as { worktree?: unknown; keepWorktree?: unknown; resume?: unknown };
+    expect(opts.worktree).toBeUndefined();
+    expect(opts.keepWorktree).toBeUndefined();
+    expect(opts.resume).toBeUndefined();
+    // And a turn the engine did not isolate reports none — including a REFUSED one,
+    // whose refusal is the turn's own content. A card over such a turn would be the
+    // single worst outcome this feature exists to prevent.
+    expect(body.worktree).toBeUndefined();
+    expect(body.resume).toBeUndefined();
+  });
+
+  it('WS5 — a REFUSED turn reaches the client as a refusal, and is never offered a retry', async () => {
+    engine.refusedAnswer =
+      'Isolation was requested for this turn, but the work could not be isolated: /tmp/x is not inside a git work tree.\nNothing ran.';
+    // The provider walk failed before the refusal, so the retry broker HAS a report
+    // to offer — the case where a refusal would otherwise be handed a "keep trying"
+    // affordance and a queued background re-run of an ask that cannot succeed.
+    engine.failoverAttempts = seedFailoverAttempts();
+    const res = await authedFetch('/api/chat', 'POST', { message: 'write a file', worktree: true });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      content: string;
+      refused?: boolean;
+      generationFailed?: boolean;
+      retryQueued?: boolean;
+    };
+    // The reason reaches the reader — NOT replaced by the sweep's canned "could not
+    // get an answer from the model" line, which blames the model for a decision
+    // about the directory (measured before this was fixed).
+    expect(body.content).toContain('Isolation was requested');
+    expect(body.content).toContain('Nothing ran');
+    expect(body.refused).toBe(true);
+    // Still a FAILED turn, so no client renders the reason as an answer.
+    expect(body.generationFailed).toBe(true);
+    // And nothing was queued to re-run: the same ask in the same directory refuses
+    // the same way, so a background retry would be an infinite loop of refusals
+    // billed to the operator.
+    expect(body.retryQueued).toBeFalsy();
+    engine.refusedAnswer = null;
   });
 
   it('P4 — cancels the in-flight turn when the client disconnects (abort)', async () => {

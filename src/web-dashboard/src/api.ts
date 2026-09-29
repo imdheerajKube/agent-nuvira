@@ -25,9 +25,11 @@ import type {
   TaskRecord,
   TaskStatus,
   SkillEnvVarRow,
+  ResumeOutcome,
   TraceEntry,
   TraceFinding,
   WhatsAppPairStatus,
+  WorktreeOutcome,
 } from './types';
 
 // ─── Admin session token persistence (Session 18) ────────────────────────────
@@ -52,6 +54,56 @@ function getLocalStorage(): Storage | null {
     /* not a browser-like environment */
   }
   return null;
+}
+
+/**
+ * WS5 (#27) — the wire guards for a turn's isolation and resume reports.
+ *
+ * Narrowed off the response rather than cast, because a payload that is MISSING a
+ * field is a different statement from one that is absent: a card built from
+ * `{ dir, diff: undefined }` would render "no changes" for a turn whose diff simply
+ * did not arrive. Anything that does not prove its shape is dropped, and the turn
+ * then reads as "not isolated" — which for a server too old to send the field is
+ * the truth.
+ */
+function isWorktreeOutcome(value: unknown): value is WorktreeOutcome {
+  if (!value || typeof value !== 'object') return false;
+  const w = value as Partial<WorktreeOutcome>;
+  const d = w.diff;
+  return (
+    typeof w.dir === 'string' &&
+    typeof w.base === 'string' &&
+    typeof w.removed === 'boolean' &&
+    !!d &&
+    typeof d === 'object' &&
+    // The changed PATHS first (`string[]`), then the diff BODY. Guarding only the
+    // body (an earlier version checked `files` for `{path, body}` objects) rejects
+    // every real payload and drops the whole card — measured against a live
+    // response, whose `diff.files` is `["dashboard-isolated.txt"]`.
+    Array.isArray(d.files) &&
+    d.files.every((f) => typeof f === 'string') &&
+    typeof d.summary === 'string' &&
+    // The body is guarded on its own: `files` being present does not imply the
+    // unified diff arrived, and a card rendered from a missing payload would say
+    // "no changes" about a turn that changed three files.
+    !!d.payload &&
+    typeof d.payload === 'object' &&
+    typeof d.payload.summary === 'string' &&
+    Array.isArray(d.payload.files) &&
+    d.payload.files.every((f) => !!f && typeof f.path === 'string' && typeof f.body === 'string')
+  );
+}
+
+function isResumeOutcome(value: unknown): value is ResumeOutcome {
+  if (!value || typeof value !== 'object') return false;
+  const r = value as Partial<ResumeOutcome>;
+  return (
+    typeof r.id === 'string' &&
+    typeof r.replayed === 'number' &&
+    typeof r.modelCalls === 'number' &&
+    typeof r.saved === 'boolean' &&
+    typeof r.notice === 'string'
+  );
 }
 
 /** In-memory fallback when window.localStorage is unavailable. */
@@ -1307,6 +1359,17 @@ export class DashboardAPI {
        * absent) means the content is the text to inject inline.
        */
       attachments?: Array<{ name: string; content: string; kind?: string; encoding?: 'text' | 'base64' }>;
+      /**
+       * WS5 (#27) — run THIS turn in its own git worktree of the attached project.
+       * Omitted (not `false`) defers to the dashboard process's `NUVIRA_ISOLATE`;
+       * `false` is what a control that was switched OFF sends, so one conversation
+       * can decline a server-wide default.
+       */
+      worktree?: boolean;
+      /** WS5 (#27) — keep the worktree after the turn, so its directory survives. */
+      keepWorktree?: boolean;
+      /** WS5 (#27) — replay this ask's recorded steps whose input is unchanged. */
+      resume?: boolean | string;
     },
     signal?: AbortSignal,
   ): Promise<
@@ -1318,6 +1381,23 @@ export class DashboardAPI {
         model: string | null;
         generationFailed: boolean;
         retryQueued?: boolean;
+        /**
+         * WS5 (#27) — the turn REFUSED to run, so `content` is the reason rather
+         * than an answer. Distinct from `generationFailed` on purpose: the GUI uses
+         * it to suppress the Retry affordance, because the same ask in the same
+         * place refuses the same way.
+         */
+        refused?: boolean;
+        /**
+         * WS5 (#27) — the isolation this turn actually had: the worktree's path,
+         * the commit the diff is against, what changed, and whether the directory
+         * was removed. Absent when the turn was not isolated, which is NOT the
+         * same statement as "isolation failed" — a refusal comes back as the
+         * turn's `content` with the request reported as a failure.
+         */
+        worktree?: WorktreeOutcome;
+        /** WS5 (#27) — what a resume replayed instead of paying for. */
+        resume?: ResumeOutcome;
         /**
          * WS1 — every finding this turn recorded, already gated by the server
          * (`confirmFinding`), in call order. AUTHORITATIVE for the transcript
@@ -1334,7 +1414,19 @@ export class DashboardAPI {
       const res = await fetch(`${this.baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ sessionId, message, provider: opts?.provider, model: opts?.model, projectPath: opts?.projectPath, attachments: opts?.attachments }),
+        body: JSON.stringify({
+          sessionId,
+          message,
+          provider: opts?.provider,
+          model: opts?.model,
+          projectPath: opts?.projectPath,
+          attachments: opts?.attachments,
+          // WS5 — sent only when the caller decided something, so an untouched
+          // control leaves the server's environment in charge (see the option doc).
+          ...(opts?.worktree === undefined ? {} : { worktree: opts.worktree }),
+          ...(opts?.keepWorktree === undefined ? {} : { keepWorktree: opts.keepWorktree }),
+          ...(opts?.resume === undefined ? {} : { resume: opts.resume }),
+        }),
         // P4 — the Cancel button aborts the POST; the 5-minute ceiling still
         // applies alongside the caller's signal.
         signal: signal ? AbortSignal.any([AbortSignal.timeout(300_000), signal]) : AbortSignal.timeout(300_000),
@@ -1351,6 +1443,9 @@ export class DashboardAPI {
           model: typeof d.model === 'string' ? d.model : null,
           generationFailed: d.generationFailed === true,
           retryQueued: d.retryQueued === true,
+          ...(d.refused === true ? { refused: true } : {}),
+          ...(isWorktreeOutcome(d.worktree) ? { worktree: d.worktree } : {}),
+          ...(isResumeOutcome(d.resume) ? { resume: d.resume } : {}),
           ...(Array.isArray(d.findings) ? { findings: d.findings as TraceFinding[] } : {}),
         };
       }
