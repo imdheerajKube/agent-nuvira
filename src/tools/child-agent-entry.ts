@@ -94,6 +94,12 @@ async function main(): Promise<void> {
       ...(outcome.model ? { model: outcome.model } : {}),
       transport: outcome.transport,
       truncated: outcome.truncated,
+      // G1 — the child's OWN verification verdict, on the frame like every other
+      // fact the parent can only learn across the fork. Without it a delegated run
+      // that wrote and verified nothing looked exactly like one that checked its
+      // work: the honesty flags live in this process and nowhere else.
+      ...(outcome.unverifiedEdit ? { unverifiedEdit: true } : {}),
+      ...(outcome.unverifiedEditClaim ? { unverifiedEditClaim: true } : {}),
     });
     process.exit(0);
   } catch (err) {

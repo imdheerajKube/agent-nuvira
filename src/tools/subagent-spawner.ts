@@ -139,6 +139,15 @@ export interface SubagentState {
   worktreeRemoved?: boolean;
   /** WS5 (#27) — the child's own resume report, when it was asked to resume. */
   resume?: import('../learning/step-checkpoint.js').ResumeOutcome;
+  /**
+   * G1 — the child's own verification verdict: it mutated the workspace and
+   * nothing observed the result. Recorded from the child's result frame, so a
+   * delegated run's unverified edit is visible to the parent's dashboard, CLI and
+   * findings the same way an in-process turn's is.
+   */
+  unverifiedEdit?: boolean;
+  /** G1/G2 — the child's answer claimed a code change no verification backed. */
+  unverifiedEditClaim?: boolean;
   /** LLM calls made */
   llmCalls: number;
   /** Tokens used */
@@ -218,6 +227,14 @@ export interface SubagentResult {
    * child's own count rather than something the parent inferred.
    */
   resume?: import('../learning/step-checkpoint.js').ResumeOutcome;
+  /**
+   * G1 — the child's own verification verdict, carried across the fork. Present
+   * (and `true`) only when the child reported it: like `findings`, an absent flag
+   * means the child did not claim it, never that the edit was verified.
+   */
+  unverifiedEdit?: boolean;
+  /** G1/G2 — the child's answer claimed a code change no verification backed. */
+  unverifiedEditClaim?: boolean;
 }
 
 // ─── Subagent Manager ─────────────────────────────────────────────────────
@@ -557,6 +574,11 @@ export class SubagentManager extends EventEmitter {
         state.llmCalls = msg.llmCalls || state.llmCalls;
         state.tokensUsed = msg.tokensUsed || state.tokensUsed;
         state.toolCalls = msg.toolCalls || state.toolCalls;
+        // G1 — the child's verification verdict, read off its result frame. Only
+        // a truthy flag is recorded: the child omits it when the edit WAS verified,
+        // so `undefined` here means "not claimed", and never `false`.
+        if (msg.unverifiedEdit === true) state.unverifiedEdit = true;
+        if (msg.unverifiedEditClaim === true) state.unverifiedEditClaim = true;
         this.recordIdentity(state, msg);
         this.saveState(state);
         break;
@@ -653,6 +675,8 @@ export class SubagentManager extends EventEmitter {
       ...(state.transport ? { transport: state.transport } : {}),
       ...(state.findings && state.findings.length > 0 ? { findings: state.findings } : {}),
       ...(state.resume ? { resume: state.resume } : {}),
+      ...(state.unverifiedEdit ? { unverifiedEdit: true } : {}),
+      ...(state.unverifiedEditClaim ? { unverifiedEditClaim: true } : {}),
       ...(state.worktree && state.worktreeBase && state.worktreeDiff
         ? {
             worktree: {

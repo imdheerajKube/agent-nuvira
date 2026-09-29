@@ -334,15 +334,15 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
     //
     // THE WRITE GOES THROUGH `run_terminal`, and that is a deliberate, measured
     // choice rather than convenience. `write_file` is one of `MUTATION_TOOLS`
-    // (`tools/edit-verification.ts`), so an in-process turn that writes one spends a
-    // bounded VERIFICATION NUDGE — an extra model call — while a forked child's
-    // simpler loop has no such gate. That difference is real and worth knowing (it
-    // is recorded in `TOOL_TRUTHFULNESS_TRACKER.md`), but this row is about WHERE a
-    // turn works and WHAT it changed, and a scenario built on `write_file` would
-    // measure the gate instead: `modelCalls` would differ by one on four surfaces
-    // and the parity verdict would be about the wrong capability. So the mutation is
-    // made the way a NON-`write_file` tool makes one, keeping the turn itself
-    // comparable. `confirm: true` states the write is authorized (the command
+    // (`tools/edit-verification.ts`), so every surface that writes one spends a
+    // bounded VERIFICATION NUDGE — an extra model call. When this row was written a
+    // forked child's loop had no such gate, so a `write_file` scenario would have
+    // measured THAT difference (`modelCalls` would have differed by one on four of
+    // the five surfaces) instead of WHERE a turn works and WHAT it changed; the
+    // divergence is recorded in `TOOL_TRUTHFULNESS_TRACKER.md`, and the child's loop
+    // now applies the same gate, so the two would agree today. The row still makes
+    // its mutation the way a NON-`write_file` tool makes one, keeping it about
+    // isolation. `confirm: true` states the write is authorized (the command
     // classifies as `confirm`, not `verify`), so the tool runs instead of asking.
     toolCall: {
       tool: 'run_terminal',

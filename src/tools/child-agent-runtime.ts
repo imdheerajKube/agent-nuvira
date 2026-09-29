@@ -68,6 +68,23 @@ import {
   type ResumeOutcome,
   type StepReplay,
 } from '../learning/step-checkpoint.js';
+// G1 — the verification gate, in the CHILD's own engine. `write_file`/`edit_file`
+// are mutations (`edit-verification.ts`), so an in-process turn that writes one
+// gets one bounded nudge before it can answer and reports the residual honestly.
+// The forked child had no gate at all, so the SAME write inside a delegated run
+// was never followed by "nothing observed the result, run a check" — measured by
+// the parity harness as `modelCalls 3 vs 2` across surfaces
+// (see docs/TOOL_TRUTHFULNESS_TRACKER.md). The gate is imported, not reimplemented,
+// so the nudge text, the tool classification and the honesty flags cannot drift
+// between the loop that runs in this process and the loop that runs in the parent's.
+import {
+  assessEditActivity,
+  detectUnverifiedEditClaim,
+  isMutationTool,
+  isVerificationTool,
+  verificationNudgeFor,
+  type ToolCallEvidence,
+} from './edit-verification.js';
 
 export interface SubagentRuntimeConfig {
   /** The task the subagent must complete. */
@@ -133,6 +150,21 @@ export interface SubagentRuntimeResult {
    * the child is a separate process and that frame is its only channel.
    */
   resume?: ResumeOutcome;
+  /**
+   * G1 — this run MUTATED the workspace and nothing observed the result (the
+   * bounded nudge was spent and the model still answered without verifying, or
+   * the run hit its ceiling first). Set whether or not the nudge fired, exactly
+   * as `ToolLoopResult.unverifiedEdit` is: honesty is not a function of
+   * configuration, so a caller can never read an unverified edit as a checked one.
+   */
+  unverifiedEdit?: boolean;
+  /**
+   * G1/G2 — the answer ASSERTS a completed code change that no verification
+   * backed (`detectUnverifiedEditClaim`). The child's own flag, carried across the
+   * fork, so a delegated run whose summary claims "I fixed it" is recorded as
+   * unverified rather than read as an observed result.
+   */
+  unverifiedEditClaim?: boolean;
 }
 
 /**
@@ -513,20 +545,54 @@ async function runToolLoop(
 
   let llmCalls = 0;
   let toolCalls = 0;
+  // G1 — the accumulators the verification gate reads, the same three the
+  // in-process loop keeps (`successfulToolCalls` / `mutatedPaths` /
+  // `verificationEvidence`). Only calls that actually RAN SUCCEEDED are recorded:
+  // a refusal is neither a mutation nor a verification.
+  const successfulToolCalls: string[] = [];
+  const mutatedPaths: string[] = [];
+  const verificationEvidence: ToolCallEvidence[] = [];
+  // Bounded exactly once, like the in-process gate (`verificationNudges < 1`).
+  let verificationNudges = 0;
+  // The iteration ceiling is the loop's `loop.maxIterations` plus one for each
+  // nudge spent: the ceiling bounds the WORK, and a nudge the loop itself asked
+  // for must not eat the budget the goal was owed (in-process does the same by
+  // raising its step limit).
+  let iterationLimit = loop.maxIterations;
   // One config read per loop rather than per call: the hooks are declared in the
   // child's own configuration (this process's, not the parent's), and the
   // declarations are resolved through the same manager the tools use.
   const hookConfigManager = new ConfigManager();
+  // The in-process loop's refusal classifier is the authority for "this call did
+  // NOT run": `write_file` refusing a path outside the workspace returns
+  // "… escapes the workspace … — denied" with NO `Error:` prefix, so a bare prefix
+  // check would count a refused write as a mutation and nudge the child to verify
+  // a file that was never written. Imported lazily for the same reason
+  // `extractFallbackToolCalls` is: `tool-loop.ts` pulls in the registry and the
+  // event bus.
+  const { classifyToolRefusal } = await import('./tool-loop.js');
 
-  for (let iteration = 0; iteration < loop.maxIterations; iteration += 1) {
+  /**
+   * Finish the loop, annotating the result with the honesty flags.
+   *
+   * Computed from the SAME accumulators the gate reads, so the nudge and the flag
+   * can never disagree — and computed on EVERY exit (including a ceiling), since a
+   * run cut short with a mutation unobserved is exactly the one that needs the
+   * flag. Nothing here depends on whether the nudge fired.
+   */
+  const finish = (result: string, truncated: boolean): SubagentRuntimeResult => {
+    const activity = assessEditActivity(successfulToolCalls, verificationEvidence, mutatedPaths);
+    const out: SubagentRuntimeResult = { result, llmCalls, toolCalls, ...base, truncated };
+    if (activity.needsVerification) out.unverifiedEdit = true;
+    if (detectUnverifiedEditClaim(result, activity.mutations, activity.verifications)) {
+      out.unverifiedEditClaim = true;
+    }
+    return out;
+  };
+
+  for (let iteration = 0; iteration < iterationLimit; iteration += 1) {
     if (llmCalls >= loop.maxLlmCalls) {
-      return {
-        result: 'Subagent stopped: reached its model-call ceiling before finishing.',
-        llmCalls,
-        toolCalls,
-        ...base,
-        truncated: true,
-      };
+      return finish('Subagent stopped: reached its model-call ceiling before finishing.', true);
     }
 
     loop.send({ type: 'progress', phase: 'thinking', iteration: iteration + 1, llmCalls, toolCalls });
@@ -552,7 +618,43 @@ async function runToolLoop(
     }
 
     if (response.toolCalls.length === 0) {
-      return { result: response.content.trim(), llmCalls, toolCalls, ...base, truncated: false };
+      // ── G1 — VERIFICATION GATE ────────────────────────────────────────────
+      // The model is about to answer, but this run MUTATED the workspace and
+      // nothing observed the result: spend ONE bounded nudge asking for the check
+      // (the same nudge the in-process loop sends, naming THIS workspace's
+      // strongest real command). A nudge, not a hard block — a task with no
+      // runnable check must still finish, and the residual `unverifiedEdit` flag
+      // carries the honesty for that case.
+      if (
+        verificationNudges < 1 &&
+        assessEditActivity(successfulToolCalls, verificationEvidence, mutatedPaths).needsVerification
+      ) {
+        verificationNudges += 1;
+        iterationLimit += 1;
+        const mutations = successfulToolCalls.filter(isMutationTool);
+        // A frame, because the child's stdout is easy to lose and the parent is
+        // its only channel; the GATE is reported for the same reason the
+        // in-process loop records a `gate` trace event — a run that asked for a
+        // check and one that never needed to are otherwise indistinguishable.
+        loop.send({
+          type: 'progress',
+          phase: 'gate',
+          gate: 'verification',
+          summary:
+            'the subagent mutated the workspace and nothing observed the result — one bounded nudge to verify',
+          mutations,
+          llmCalls,
+          toolCalls,
+        });
+        loop.debug?.event('gate.verification', { mutations });
+        messages.push({ role: 'assistant', content: response.content });
+        messages.push({
+          role: 'user',
+          content: verificationNudgeFor(config.cwd ?? process.cwd(), mutatedPaths),
+        });
+        continue;
+      }
+      return finish(response.content.trim(), false);
     }
 
     // Replay the assistant turn exactly as the provider asked for it — the
@@ -643,9 +745,25 @@ async function runToolLoop(
           }),
         );
         toolCalls += 1;
-        const ok = !output.startsWith('Error:');
         // The same convention the main loop and the tool registry use: a tool
         // signals failure by returning text that starts with `Error:`.
+        const ok = !output.startsWith('Error:');
+        // HONEST ACCOUNTING for the gate. A DECLINED call is not a success
+        // whatever prefix it used, so it may not count as a mutation (or a
+        // verification) — the same rule the in-process loop applies, and the
+        // reason `classifyToolRefusal` is consulted here rather than the prefix
+        // alone. `ok` stays the parent-facing outcome (unchanged wire shape).
+        const ranOk = ok && classifyToolRefusal(output) === null;
+        if (ranOk) {
+          successfulToolCalls.push(call.name);
+          if (isMutationTool(call.name)) {
+            const a = call.arguments as { path?: unknown; file_path?: unknown; file?: unknown } | undefined;
+            const p = a?.path ?? a?.file_path ?? a?.file;
+            if (typeof p === 'string' && p) mutatedPaths.push(p);
+          } else if (isVerificationTool(call.name)) {
+            verificationEvidence.push({ tool: call.name, args: call.arguments, result: output });
+          }
+        }
         loop.debug?.event('tool.end', { tool: call.name, ok });
         loop.send({
           type: 'progress',
@@ -703,13 +821,7 @@ async function runToolLoop(
     }
   }
 
-  return {
-    result: 'Subagent stopped: reached its iteration ceiling before finishing.',
-    llmCalls,
-    toolCalls,
-    ...base,
-    truncated: true,
-  };
+  return finish('Subagent stopped: reached its iteration ceiling before finishing.', true);
 }
 
 /**

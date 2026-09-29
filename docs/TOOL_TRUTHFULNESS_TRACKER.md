@@ -374,7 +374,7 @@ gitignored, so on a fresh clone every comment pointed at nothing:
 All three are whitelisted in `.gitignore` alongside this file, so the guard needs
 no exemption for them and the acknowledgement list is empty.
 
-## Status — the forked child has no verification gate (2026-09-29, found by the parity harness)
+## Closed — the forked child has a verification gate (2026-09-29, found by the parity harness; closed 2026-09-29)
 
 `write_file` / `edit_file` are `MUTATION_TOOLS` (`src/tools/edit-verification.ts`),
 so an **in-process** turn that writes one spends a bounded verification nudge and
@@ -392,10 +392,57 @@ scenario was then re-pointed at `run_terminal` (not a mutation tool) so the WS5 
 measures WHERE a turn works and what it changed rather than this gate, and this
 entry is the record of the difference the first version found.
 
-What is NOT claimed: that the child's loop should copy the whole nudge machinery
-(bounded counter, workspace-aware nudge text, `unverifiedEdit`/`unverifiedEditClaim`
-flags on its result) as part of WS5. It is a real gap in the *child's* engine and
-belongs to a change that can test it on its own terms.
+What was NOT claimed at the time: that the child's loop should copy the whole nudge
+machinery (bounded counter, workspace-aware nudge text, `unverifiedEdit`/
+`unverifiedEditClaim` flags on its result) as part of WS5. It was a real gap in the
+*child's* engine and belonged to a change that could test it on its own terms.
+
+### What closed it, in those terms
+
+The child's loop now applies the SAME gate — imported, not reimplemented, so the
+nudge text, the tool classification and the honesty flags cannot drift between the
+loop that runs in the parent's process and the loop that runs in the child's:
+
+- **One bounded nudge.** `runToolLoop` spends it before the child can answer when
+  `assessEditActivity(successfulToolCalls, verificationEvidence, mutatedPaths)`
+  says a mutation went unobserved, sends it as a `{phase:'gate', gate:'verification'}`
+  progress frame (the parent's only channel), and raises the iteration ceiling by one
+  so the check the loop itself asked for is not paid for out of the goal's budget.
+- **Honest accounting** before the gate reads it: only calls that ran AND were not
+  declined count, and `mutatedPaths` comes from the call's own `path`/`file_path`/
+  `file` argument. `classifyToolRefusal` was reused rather than the bare `Error:`
+  prefix for exactly the reason the in-process loop does it.
+- **The verdict crosses the fork.** `unverifiedEdit` / `unverifiedEditClaim` are set
+  on EVERY exit (including a ceiling), sent on the `result` frame, and recorded on
+  `SubagentState`/`SubagentResult` — so a delegated run whose summary claims "I fixed
+  it" is recorded as unverified instead of read as an observed result.
+- **Measured, on the child's own terms.** `tests/tools/subagent-end-to-end.test.ts`
+  drives the loop with a scripted provider (a write earns the nudge and the flags; a
+  write plus a real check does not; a REFUSED write is not a mutation at all) and then
+  forks a REAL child on the JSON transport, whose write reaches disk and whose result
+  arrives at the parent with `unverifiedEdit: true` — the `modelCalls 3 vs 2`
+  divergence above measured again, now `3 vs 3`.
+
+Two things came out of doing it, both fixed in the same change:
+
+1. **`write_file`'s REAL decline read as a success.** The classifier matched
+   "needs explicit confirmation" / "retry with confirm", but `confirmFirst`
+   (`src/tools/coding-tools.ts`) actually returns "…state-changing — NOT applied. Ask
+   the user first via ask_user (…), then retry write_file with confirm:true…" — the
+   same words, different phrasing. A write that was **NOT applied** therefore counted
+   as a call that ran: it landed in `successfulToolCalls`, its path landed in
+   `mutatedPaths`, the run trace recorded a change that never happened, and the
+   verification gate asked the model to check a file nothing had written. The
+   classifier now matches that wording (`confirmation`), with its own case in
+   `tests/tools/tool-loop.test.ts`. It was the child's gate that surfaced it: the fork
+   reported `unverifiedEdit` for an empty diff.
+2. That fix also re-arms the **deliverable** gate correctly, which skips itself when
+   `mutatedPaths` is non-empty — a declined write is no longer mistaken for a produced
+   file.
+
+The `isolation-worktree` parity scenario still makes its mutation through
+`run_terminal` and keeps measuring WHERE a turn works and WHAT it changed; the
+comment in `src/cli/parity.ts` no longer claims the child has no gate.
 
 ## Status — the dashboard isolation control (2026-09-29, found by the live dashboard run)
 
@@ -468,9 +515,12 @@ stayed clean.
 
 1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost
    original.
-2. The forked child's loop has no verification gate (see the section above): a
-   delegated `write_file`/`edit_file` is never followed by a check, and the child's
-   result carries no `unverifiedEdit` flag.
+2. ~~The forked child's loop has no verification gate: a delegated
+   `write_file`/`edit_file` was never followed by a check, and the child's result
+   carried no `unverifiedEdit` flag.~~ **Closed** — the child's loop now spends the
+   same bounded nudge and reports the same flags (see the section above). Writing it
+   also exposed a real false-success in `classifyToolRefusal` (`write_file`'s actual
+   decline wording), now fixed.
 2. ~~`subagent` on a non-tool-calling provider (`local`/Ollama) refuses when asked
    for tools.~~ **Closed** by the JSON fallback above: the subagent now offers the
    tools in the prompt and parses the `{"tool":…}` reply, so a local-only setup can

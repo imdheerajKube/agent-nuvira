@@ -2375,7 +2375,19 @@ function previewToolResult(result: string, max = 200): string {
  */
 export function classifyToolRefusal(result: string): { gate?: TraceGateName; summary: string } | null {
   const text = result || '';
-  if (/needs explicit confirmation|requires confirmation|retry with confirm|call ask_user/i.test(text)) {
+  if (
+    /needs explicit confirmation|requires confirmation|retry with confirm|call ask_user/i.test(text) ||
+    // The REAL `confirmFirst` wording (coding-tools.ts: "write_file: state-changing
+    // — NOT applied. Ask the user first via ask_user (…), then retry write_file with
+    // confirm:true once they approve.") matched NONE of the patterns above: the
+    // words are the same but the phrasing is "retry write_file with confirm", not
+    // "retry with confirm". A write that was NOT applied therefore counted as a call
+    // that ran — so the path it named counted as a MUTATION, the run trace recorded
+    // a change that never happened, and the verification gate asked the model to
+    // check a file nothing had written. Found by the child's gate, where the same
+    // miscount reported `unverifiedEdit` for an empty diff.
+    /\bstate-changing\b[^.]*\bNOT applied\b|\bretry\s+\w+\s+with\s+confirm/i.test(text)
+  ) {
     return { gate: 'confirmation', summary: 'declined until the user approves — the gate asked before acting' };
   }
   // A BOUNDARY denial is the other refusal that did not read as one. The

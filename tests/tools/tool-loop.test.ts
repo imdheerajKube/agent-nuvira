@@ -1430,6 +1430,42 @@ describe('tool loop — trace events (G18)', () => {
     expect(result.successfulToolCalls ?? []).not.toContain('write_file');
   });
 
+  it('classifies the REAL `confirmFirst` wording as a confirmation refusal — it read as a success', async () => {
+    // The wording `coding-tools.ts` actually returns: "write_file: state-changing —
+    // NOT applied. Ask the user first via ask_user (…), then retry write_file with
+    // confirm:true once they approve." It matched none of the classifier's patterns
+    // ("retry with confirm" is not "retry write_file with confirm"), so a write that
+    // was NOT applied counted as a call that RAN: it landed in `successfulToolCalls`,
+    // its path landed in `mutatedPaths`, and the verification gate then asked the
+    // model to verify a file nothing had written. Found by the child's gate, which
+    // reported `unverifiedEdit` for an empty diff.
+    const { events, sink } = collect();
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'write_file', arguments: { path: 'a.md', content: 'x' } }] },
+        { content: 'a.md was not written — the tool needs your approval first.', toolCalls: [] },
+      ],
+      async () =>
+        'write_file: state-changing — NOT applied. Ask the user first via ask_user ("Apply writing 1 chars to a.md?" with a one-line summary), then retry write_file with confirm:true once they approve.',
+    );
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'write the notes to a.md' }],
+      context: ctx,
+      deps,
+      requireDeliverable: false,
+      onTraceEvent: sink,
+    });
+
+    const refusal = events.find((e) => e.kind === 'refusal');
+    expect(refusal?.tool).toBe('write_file');
+    expect(refusal?.gate).toBe('confirmation');
+    expect(result.successfulToolCalls ?? []).not.toContain('write_file');
+    // And no verification was asked for: there was nothing to verify.
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'verification')).toEqual([]);
+    expect(deps.callModel).toHaveBeenCalledTimes(2);
+  });
+
   it('records the authorized-work nudge as a gate DECISION', async () => {
     const { events, sink } = collect();
     const deps = mockDeps([

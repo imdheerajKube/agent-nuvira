@@ -23,7 +23,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // `SubagentManager` computes its state/log dirs from `resolveNuviraHome()` at
@@ -66,6 +66,15 @@ const seen: string[] = [];
  */
 let generateDelayMs = 0;
 
+/**
+ * G1 — make the stub answer the NEXT `/api/generate` call with a JSON-transport
+ * `write_file` request, so a REAL forked child mutates its workspace and verifies
+ * nothing. Reset by the test that sets it; the counter is per-server, not per
+ * child, so it is only armed for the duration of one spawn.
+ */
+let jsonWriteFirst = false;
+let generateCalls = 0;
+
 /** Poll until `pred()` holds, so a test can synchronise with a forked child. */
 async function waitFor(pred: () => boolean, timeoutMs = 20_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -87,7 +96,19 @@ beforeAll(async () => {
       };
       if (req.url === '/api/tags') return json({ models: [{ name: 'test-model' }] });
       if (req.url === '/api/generate') {
-        const reply = () => json({ response: 'REAL-SUBAGENT-ANSWER', done: true });
+        generateCalls += 1;
+        const body =
+          jsonWriteFirst && generateCalls === 1
+            ? {
+                // `confirm:true` because `write_file` is state-changing and would
+                // otherwise be declined — the gate under test is the VERIFICATION
+                // one, and it needs a write that really happened.
+                response:
+                  'Writing the note.\n{"tool":"write_file","arguments":{"path":"out.txt","content":"hi","confirm":true}}',
+                done: true,
+              }
+            : { response: 'REAL-SUBAGENT-ANSWER', done: true };
+        const reply = () => json(body);
         if (generateDelayMs > 0) return void setTimeout(reply, generateDelayMs);
         return reply();
       }
@@ -586,4 +607,169 @@ describe('subagent — the tool loop runs real tools', () => {
     expect((failure as SubagentRefusalError).code).toBe('unsupported_format');
     expect((failure as Error).message).toMatch(/Unknown tool/);
   });
+});
+
+// ─── 3. G1 — the child applies the verification gate ────────────────────────
+
+/**
+ * A provider that replays a fixed script, one entry per model call, and records
+ * what each call was sent. The interesting facts about the gate are how MANY
+ * calls the child made and what the extra one was asked for.
+ */
+function turnsProvider(script: ToolCallResponse[]): { provider: InferenceProvider; calls: ToolMessage[][] } {
+  const calls: ToolMessage[][] = [];
+  let i = 0;
+  const provider: InferenceProvider = {
+    name: 'scripted-turns',
+    async isAvailable() {
+      return true;
+    },
+    async generate() {
+      return 'NO-TOOLS-ANSWER';
+    },
+    async generateTools(messages): Promise<ToolCallResponse> {
+      calls.push([...messages]);
+      const next = script[Math.min(i, script.length - 1)];
+      i += 1;
+      return next;
+    },
+  };
+  return { provider, calls };
+}
+
+/** The nudge text the loop sends — asserted by NAME, not by paraphrase. */
+const NUDGE_MARKER = 'nothing VERIFIED the change';
+
+const wroteOut = (): ToolCallResponse => ({
+  content: '',
+  toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'hi' } }],
+});
+
+const answered = (content: string): ToolCallResponse => ({ content, toolCalls: [] });
+
+describe('G1 — the child applies the same verification gate as the in-process loop', () => {
+  it('spends ONE bounded nudge when the child wrote and verified nothing, and flags it', async () => {
+    const workDir = mkdtempSync(join(testHome.value, 'gate-'));
+    const { provider, calls } = turnsProvider([wroteOut(), answered('I have successfully created out.txt.')]);
+
+    const outcome = await runSubagent(
+      { goal: 'write out.txt', tools: ['write_file'], cwd: workDir },
+      {
+        createProvider: async () => ({ provider, type: 'scripted' }),
+        runTool: async () => 'Wrote out.txt (3 bytes)',
+      },
+    );
+
+    // write → nudge → answer. The nudge is a REAL model call, and it did not eat
+    // the iteration budget: the ceiling is what the goal was owed.
+    expect(outcome.llmCalls).toBe(3);
+    expect(outcome.toolCalls).toBe(1);
+    expect(outcome.truncated).toBe(false);
+    expect(calls).toHaveLength(3);
+    // The extra call was asked for the check, in the same words the in-process
+    // loop uses — the gate is imported, not reimplemented.
+    expect(calls[0].some((m) => m.content.includes(NUDGE_MARKER))).toBe(false);
+    expect(calls[2].some((m) => m.role === 'user' && m.content.includes(NUDGE_MARKER))).toBe(true);
+    expect(calls[2].some((m) => m.role === 'user' && m.content.includes('out.txt'))).toBe(true);
+
+    // And the result says so, whether or not a caller acted on the nudge. A run
+    // whose write nothing observed may not be read as a checked one.
+    expect(outcome.unverifiedEdit).toBe(true);
+    expect(outcome.unverifiedEditClaim).toBe(true);
+  });
+
+  it('does not nudge a child that verified its own write', async () => {
+    const workDir = mkdtempSync(join(testHome.value, 'gate-'));
+    const { provider, calls } = turnsProvider([
+      wroteOut(),
+      { content: '', toolCalls: [{ id: 'v1', name: 'run_terminal', arguments: { command: 'npm test' } }] },
+      answered('Wrote out.txt and ran the check: 12 passed.'),
+    ]);
+
+    const outcome = await runSubagent(
+      { goal: 'write out.txt and check it', tools: ['write_file', 'run_terminal'], cwd: workDir },
+      {
+        createProvider: async () => ({ provider, type: 'scripted' }),
+        runTool: async (name) => (name === 'run_terminal' ? 'npm test — 12 passed' : 'Wrote out.txt'),
+      },
+    );
+
+    // write → verify → answer, with no fourth call: the gate saw the artifact
+    // observed and stayed quiet (and so did the needless-nudge path in-process).
+    expect(outcome.llmCalls).toBe(3);
+    expect(outcome.toolCalls).toBe(2);
+    expect(calls.some((sent) => sent.some((m) => m.content.includes(NUDGE_MARKER)))).toBe(false);
+    expect(outcome.unverifiedEdit).toBeUndefined();
+    expect(outcome.unverifiedEditClaim).toBeUndefined();
+  });
+
+  it('does not treat a REFUSED write as a mutation to verify', async () => {
+    const workDir = mkdtempSync(join(testHome.value, 'gate-'));
+    const { provider, calls } = turnsProvider([
+      {
+        content: '',
+        toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: '../escape.txt', content: 'x' } }],
+      },
+      answered('That path is outside the workspace, so nothing was written.'),
+    ]);
+
+    const outcome = await runSubagent(
+      { goal: 'write ../escape.txt', tools: ['write_file'], cwd: workDir },
+      {
+        createProvider: async () => ({ provider, type: 'scripted' }),
+        // The workspace guard's own wording — a refusal with NO `Error:` prefix.
+        runTool: async () => 'Path ../escape.txt escapes the workspace (/tmp) — denied',
+      },
+    );
+
+    // Two calls, not three: a declined write is not a mutation, so there was
+    // nothing to verify. Counting it would send the model to verify a file that
+    // was never written.
+    expect(outcome.llmCalls).toBe(2);
+    expect(calls.some((sent) => sent.some((m) => m.content.includes(NUDGE_MARKER)))).toBe(false);
+    expect(outcome.unverifiedEdit).toBeUndefined();
+  });
+
+  it('carries the child\'s verdict across the FORK onto the parent\'s result', async () => {
+    // The tracker item was about a real forked child, so the last check is a real
+    // fork: a JSON-transport `write_file`, no verification, and the flag arriving
+    // on the result frame the parent records.
+    const workDir = mkdtempSync(join(testHome.value, 'gate-fork-'));
+    // A forked child resolves its loader (`tsx` in a source run) from ITS cwd, so
+    // an empty temp workspace has to have the dependencies linked in — exactly
+    // what an isolated worktree does (`src/tools/worktree.ts`). Without this the
+    // fork dies on `Cannot find package 'tsx'` before any of it runs.
+    symlinkSync(join(process.cwd(), 'node_modules'), join(workDir, 'node_modules'), 'dir');
+    const configDir = mkdtempSync(join(testHome.value, 'config-'));
+    const mgr = getSubagentManager();
+    jsonWriteFirst = true;
+    generateCalls = 0;
+    try {
+      const state = await mgr.spawn({
+        goal: 'write the note',
+        provider: 'local',
+        model: 'test-model',
+        tools: ['write_file'],
+        cwd: workDir,
+        env: { OLLAMA_HOST: baseUrl, NUVIRA_CONFIG_DIR: configDir },
+      });
+      const result = await mgr.waitForCompletion(state.id, 60_000);
+
+      expect(result.success, `expected success, got: ${result.error ?? ''}\n${result.log.join('\n')}`).toBe(
+        true,
+      );
+      // The write really happened (in the child's own cwd), and the child made the
+      // extra call to ask for a check before answering.
+      expect(readFileSync(join(workDir, 'out.txt'), 'utf8')).toBe('hi');
+      expect(result.toolCalls).toBe(1);
+      expect(result.llmCalls).toBe(3);
+      // The parent knows: recorded from the frame, not inferred from the text.
+      expect(result.unverifiedEdit).toBe(true);
+      expect(mgr.getState(state.id)?.unverifiedEdit).toBe(true);
+    } finally {
+      jsonWriteFirst = false;
+      generateCalls = 0;
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  }, 90_000);
 });
