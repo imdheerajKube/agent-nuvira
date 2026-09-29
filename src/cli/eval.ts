@@ -571,7 +571,10 @@ export class EvalCommand extends BaseCommand {
         },
       });
 
-      board.finish(!run.aborted && run.summary.fixed === run.summary.tasks);
+      // Green only for a run that actually scored something and fixed all of it: a
+      // board finishing green over zero tasks reports a pass for a run that measured
+      // nothing, which is the shape this repo keeps having to remove.
+      board.finish(!run.aborted && run.summary.tasks > 0 && run.summary.fixed === run.summary.tasks);
       console.log('');
       if (run.aborted && run.verification) {
         console.log(formatSeedVerification(run.verification));

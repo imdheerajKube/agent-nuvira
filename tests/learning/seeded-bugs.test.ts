@@ -180,17 +180,30 @@ describe('WS7 seeded bugs — scoring reads three separate things', () => {
     expect(run.summary.detected).toBe(0);
   }, 60_000);
 
-  it('refuses to score a seed that did not verify', async () => {
-    // A seed whose checks cannot pass even when fixed is not broken — it is a
-    // broken TEST, and a number computed over it would be a lie about the model.
+  it('ignores an unknown task id rather than inventing a task for it', async () => {
     const run = await runSeededSuite('fake', 'fake-model', {
       taskIds: ['seed-range-off-by-one', 'seed-does-not-exist'],
       runAgent: async () => ({ summary: '', success: true }),
     });
-    // An unknown id contributes no task at all (the id filter drops it), and the
-    // real one verifies — so the guard below is the one that matters:
+    expect(run.aborted).toBeUndefined();
     expect(run.scores.map((s) => s.id)).toEqual(['seed-range-off-by-one']);
   }, 60_000);
+
+  it('ABORTS when the filter matches no task, instead of reporting a clean run of nothing', async () => {
+    // "0 tasks, 0 failures" reads as a pass to anything that only looks at the
+    // summary — and the same reasoning covers a seed that did not verify: a number
+    // computed over a task that was not run (or was not broken) is not a result.
+    const run = await runSeededSuite('fake', 'fake-model', {
+      taskIds: ['seed-does-not-exist'],
+      runAgent: async () => {
+        throw new Error('the agent must never be invoked for a filter that matched nothing');
+      },
+    });
+    expect(run.aborted).toMatch(/no seeded bug matched seed-does-not-exist/);
+    expect(run.aborted).toMatch(/declared ids:/);
+    expect(run.scores).toEqual([]);
+    expect(run.summary.composite).toBeNull();
+  }, 30_000);
 
   it('scores a fix that rewrites an unrelated file as NOT clean', async () => {
     const run = await runSeededSuite('fake', 'fake-model', {

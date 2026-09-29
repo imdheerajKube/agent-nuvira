@@ -239,6 +239,24 @@ export async function runSeededSuite(
       ? options.taskIds.map((id) => seededBugById(id)).filter((b): b is SeededBug => Boolean(b))
       : [...SEEDED_BUGS];
 
+  // A filter that matches nothing is not a clean run, it is a run that measured
+  // nothing — the same reason an unverified seed aborts rather than scoring. The
+  // M2b path reports this too; a suite that returns "0 tasks, 0 failures" reads as
+  // a pass to anything that only looks at the summary.
+  if (bugs.length === 0) {
+    return {
+      provider,
+      model,
+      startedAt,
+      endedAt: Date.now(),
+      scores: [],
+      aborted:
+        `no seeded bug matched ${options.taskIds?.length ? options.taskIds.join(', ') : '(no filter)'} — ` +
+        `declared ids: ${SEEDED_BUGS.map((b) => b.id).join(', ')}.`,
+      summary: { tasks: 0, verified: 0, detected: 0, fixed: 0, cleanFix: 0, composite: null },
+    };
+  }
+
   let verification: SeedVerification[] | undefined;
   if (options.verifySeeds !== false) {
     verification = bugs.map((bug) => verifySeededBug(bug));
