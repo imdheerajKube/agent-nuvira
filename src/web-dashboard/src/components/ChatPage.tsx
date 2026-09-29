@@ -846,6 +846,46 @@ function WorktreeCard({ worktree }: { worktree: WorktreeOutcome }) {
   );
 }
 
+/**
+ * WS5 (#27) — what a resumed turn replayed instead of paying for, as a card.
+ *
+ * The counts come from the ledger's OWN report (`ResumeOutcome`), never from the
+ * request the client made: asking to resume and replaying nothing look identical
+ * from the composer, and only the card can tell them apart. That is why it renders
+ * on every resumed turn, including the one whose record does not exist yet — the
+ * notice says so, instead of the turn quietly paying in full while the toggle glows.
+ *
+ * `saved: false` is the other half: the turn happened but its record could not be
+ * written, so the NEXT resume will replay nothing from it, and a reader who is not
+ * told that will read the missing replay as the feature not working.
+ */
+function ResumeCard({ resume }: { resume: ResumeOutcome }) {
+  return (
+    <div className="chat-resume-card">
+      <div className="chat-resume-head">
+        <span className="chat-resume-icon" aria-hidden="true">↩️</span>
+        <span className="chat-resume-title">Resumed a recorded run</span>
+        <span
+          className={`chat-resume-state ${resume.saved ? 'chat-resume-saved' : 'chat-resume-unsaved'}`}
+          title={
+            resume.saved
+              ? 'the record was written back, so a later resume can replay this run'
+              : 'the record could NOT be written — a later resume will replay nothing from this run'
+          }
+        >
+          {resume.saved ? 'recorded' : 'not recorded'}
+        </span>
+      </div>
+      <div className="chat-resume-meta">
+        <span>{resume.replayed} step{resume.replayed === 1 ? '' : 's'} replayed</span>
+        <span>{resume.modelCalls} model call{resume.modelCalls === 1 ? '' : 's'} made</span>
+        <code className="chat-resume-id" title="the checkpoint record this run used">{resume.id}</code>
+      </div>
+      <div className="chat-resume-note">{resume.notice}</div>
+    </div>
+  );
+}
+
 function newSessionId(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -907,6 +947,17 @@ export default function ChatPage() {
    */
   const [isolate, setIsolate] = useState(false);
   const [keepWorktree, setKeepWorktree] = useState(false);
+  /**
+   * WS5 (#27) — replay this conversation's recorded steps instead of paying for
+   * them again.
+   *
+   * A MODE like isolation, and for the same reason: the runs worth resuming are
+   * the ones you repeat. `resumeId` is the optional explicit record — blank asks
+   * for the automatic one, keyed by the ask and the directory, which is what the
+   * CLI's bare `--resume` does.
+   */
+  const [resume, setResume] = useState(false);
+  const [resumeId, setResumeId] = useState('');
   const [meta, setMeta] = useState<string | null>(null);
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
   // P0.6 — live tool-call cards (upserted by id: started creates, called completes).
@@ -1501,6 +1552,11 @@ export default function ChatPage() {
           // server's `NUVIRA_ISOLATE` still decides (a control that never expressed
           // an opinion must not overrule the deployment's).
           ...(isolate ? { worktree: true, keepWorktree } : {}),
+          // WS5 (#27) — the resume the operator asked for, and ONLY then: the key
+          // is omitted while the control is off, so the deployment's `NUVIRA_RESUME`
+          // is still in charge. A named id wins over the automatic record for this
+          // ask + directory; a blank box asks for that automatic one.
+          ...(resume ? { resume: resumeId.trim() || true } : {}),
         },
         controller.signal,
       );
@@ -1574,7 +1630,7 @@ export default function ChatPage() {
       // P8 — the turn resolved: bring the history rail back.
       setRailOpen(true);
     },
-    [busy, attachedProject, attachments, isolate, keepWorktree],
+    [busy, attachedProject, attachments, isolate, keepWorktree, resume, resumeId],
   );
 
   /** P4 — cancel the in-flight turn (aborts the POST; the server cancels it). */
@@ -2189,11 +2245,7 @@ export default function ChatPage() {
                   {m.role === 'assistant' && m.worktree ? (
                     <WorktreeCard worktree={m.worktree} />
                   ) : null}
-                  {m.role === 'assistant' && m.resume ? (
-                    <div className="chat-resume-line" title="what this turn replayed instead of paying for">
-                      {m.resume.notice}
-                    </div>
-                  ) : null}
+                  {m.role === 'assistant' && m.resume ? <ResumeCard resume={m.resume} /> : null}
                   {m.role === 'assistant' && m.findings && m.findings.length > 0 ? (
                     <FindingCards findings={m.findings} />
                   ) : null}
@@ -2229,6 +2281,14 @@ export default function ChatPage() {
                 {isolate && busy ? (
                   <div className="chat-resume-line">
                     🌿 this turn is running in its own git worktree — the diff arrives with the answer
+                  </div>
+                ) : null}
+                {/* WS5 — the resume the client asked for, while it runs. Stated as
+                    the REQUEST (the toggle's own setting), because what was actually
+                    replayed is only known when the turn ends — the card says that. */}
+                {resume && busy ? (
+                  <div className="chat-resume-line">
+                    ↩️ this turn is replaying the recorded steps of this ask that are unchanged — the count arrives with the answer
                   </div>
                 ) : null}
                 {liveFindings.length > 0 ? <FindingCards findings={liveFindings} /> : null}
@@ -2455,6 +2515,38 @@ export default function ChatPage() {
               >
                 🌿{isolate ? ' isolated' : ' isolate'}
               </button>
+              {/*
+                WS5 (#27) — resume, as a toggle beside the other composer controls,
+                plus the optional record id once it is on. Backed by the ledger's own
+                report rather than a hopeful label: the reply carries a card stating
+                what was actually replayed, and an ask with no record yet says so
+                instead of silently paying in full.
+              */}
+              <button
+                type="button"
+                className={`chat-attach-btn${resume ? ' chat-attach-btn-on' : ''}`}
+                aria-label="Replay this ask's recorded steps instead of paying for them again"
+                aria-pressed={resume}
+                title={
+                  resume
+                    ? 'Recorded steps whose input is unchanged are replayed instead of paid for — click to run fresh again'
+                    : 'Replay the steps of an earlier run of this same ask whose input is unchanged, instead of paying for them again. The record is keyed by the ask and the directory; name a checkpoint id below to resume a specific one. A step whose input CHANGED is paid for again.'
+                }
+                onClick={() => { setResume((v) => !v); setBundleNote(null); }}
+              >
+                ↩️{resume ? ' resuming' : ' resume'}
+              </button>
+              {resume ? (
+                <input
+                  className="chat-resume-input"
+                  value={resumeId}
+                  onChange={(e) => setResumeId(e.target.value)}
+                  placeholder="checkpoint id (blank = this ask's record)"
+                  title="Resume this specific checkpoint record. Blank resumes the record for this ask in this directory."
+                  aria-label="Checkpoint id to resume"
+                  disabled={busy}
+                />
+              ) : null}
               {isolate ? (
                 <button
                   type="button"

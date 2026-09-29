@@ -825,6 +825,101 @@ describe('ChatPage', () => {
     await waitFor(() => expect(screen.queryByText('new title')).toBeNull());
   });
 
+  it('WS5 (#27) — the reply card reports what the ledger REPLAYED, which the composer cannot know', async () => {
+    // Asking to resume and replaying nothing look identical from the composer, so
+    // the card is the only place the distinction can be made — and it states the
+    // counts the LEDGER reported, not the request the client made.
+    mockAuthed('admin');
+    mockChatStream();
+    const send = mockChatSend({
+      ...OK_RESPONSE,
+      resume: {
+        id: 'cp-abc123',
+        replayed: 2,
+        modelCalls: 1,
+        saved: true,
+        notice: '↩️  resume cp-abc123: replayed 2, made 1 model call(s)',
+      },
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'assess the repo again' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    // The turn was NOT asked to resume (the control is off), so the key is absent
+    // from the request and the deployment's own NUVIRA_RESUME stays in charge.
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    const opts = send.mock.calls[0][2] as { resume?: unknown } | undefined;
+    expect(opts && 'resume' in opts).toBe(false);
+
+    // The card renders on the reply the server reported one on.
+    await waitFor(() => expect(screen.getByText('Resumed a recorded run')).toBeTruthy());
+    expect(screen.getByText('2 steps replayed')).toBeTruthy();
+    expect(screen.getByText('1 model call made')).toBeTruthy();
+    expect(screen.getByText('cp-abc123')).toBeTruthy();
+    expect(screen.getByText('recorded')).toBeTruthy();
+    expect(screen.getByText(/replayed 2, made 1 model call/)).toBeTruthy();
+  });
+
+  it('WS5 (#27) — resume is asked for only when the control is on, and a named record wins over the automatic one', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const send = mockChatSend(OK_RESPONSE);
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    const toggle = screen.getByLabelText("Replay this ask's recorded steps instead of paying for them again");
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    // No id box until the mode is on: the control shows what it actually carries.
+    expect(screen.queryByLabelText('Checkpoint id to resume')).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    const idBox = await screen.findByLabelText('Checkpoint id to resume');
+    fireEvent.change(idBox, { target: { value: 'cp-named' } });
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'assess the repo' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect((send.mock.calls[0][2] as { resume?: unknown }).resume).toBe('cp-named');
+
+    // A blank box asks for the AUTOMATIC record — `true`, not the empty string,
+    // which is what the CLI's bare `--resume` means.
+    fireEvent.change(idBox, { target: { value: '   ' } });
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'assess it again' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect((send.mock.calls[1][2] as { resume?: unknown }).resume).toBe(true);
+  });
+
+  it('WS5 (#27) — a record that could NOT be written says so, instead of reading as a no-op resume', async () => {
+    // `saved: false` means the turn happened but its record was not written back,
+    // so the NEXT resume will replay nothing from it. A reader who is not told that
+    // reads the missing replay as the feature not working.
+    mockAuthed('admin');
+    mockChatStream();
+    mockChatSend({
+      ...OK_RESPONSE,
+      resume: {
+        id: 'cp-xyz',
+        replayed: 0,
+        modelCalls: 3,
+        saved: false,
+        notice: '↩️  resume cp-xyz: no record for this ask in this directory yet — recording now',
+      },
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'a fresh ask' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    await waitFor(() => expect(screen.getByText('not recorded')).toBeTruthy());
+    expect(screen.getByText('0 steps replayed')).toBeTruthy();
+    expect(screen.getByText(/no record for this ask in this directory yet/)).toBeTruthy();
+  });
+
   it('P8 — New chat button resets the thread', async () => {
     mockAuthed('admin');
     mockChatStream();

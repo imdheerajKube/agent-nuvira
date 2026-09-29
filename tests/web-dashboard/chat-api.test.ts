@@ -343,6 +343,21 @@ describe('/api/chat', () => {
     expect(body.resume).toBeUndefined();
   });
 
+  it('WS5 — passes the GUI`s RESUME request to the engine, named record or automatic', async () => {
+    // The composer's ↩️ toggle is the only way a dashboard operator can ask for a
+    // replay, so the request has to reach the engine intact — and the two shapes
+    // are different asks: a named id resumes THAT record, `true` resumes the one
+    // keyed by this ask + directory (the CLI's bare `--resume`).
+    const named = await authedFetch('/api/chat', 'POST', { message: 'assess the repo again', resume: 'cp-named' });
+    expect(named.status).toBe(200);
+    const namedOpts = engine.calls.at(-1)?.opts as { resume?: unknown };
+    expect(namedOpts.resume).toBe('cp-named');
+
+    await authedFetch('/api/chat', 'POST', { message: 'assess the repo again', resume: true });
+    const autoOpts = engine.calls.at(-1)?.opts as { resume?: unknown };
+    expect(autoOpts.resume).toBe(true);
+  });
+
   it('WS5 — a REFUSED turn reaches the client as a refusal, and is never offered a retry', async () => {
     engine.refusedAnswer =
       'Isolation was requested for this turn, but the work could not be isolated: /tmp/x is not inside a git work tree.\nNothing ran.';

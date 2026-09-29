@@ -1232,6 +1232,14 @@ What makes a replay safe, and what it reports:
   for unless `--resume` is given. Records live beside the pipeline checkpoints
   (`~/.nuvira/memory/checkpoints/steps/`), and a resumed run rewrites the one it
   read, so the next resume replays what this one learned.
+- **In the dashboard, the ↩️ button in the composer** turns resume on for the
+  conversation, and a box appears beside it for an optional **checkpoint id** (blank
+  asks for the record keyed by this ask and this directory, exactly like the CLI's
+  bare `--resume`). Every reply then carries a **↩️ card** with the counts the ledger
+  reported — steps replayed, model calls actually made, the record's id — and a
+  `recorded` / `not recorded` badge, because a turn whose record could not be written
+  is the one the *next* resume will replay nothing from. Leaving the button OFF sends
+  no resume request at all, so a server started with `NUVIRA_RESUME=1` still resumes.
 - **Deployments ask through the environment** (`NUVIRA_RESUME=1`, or a record name),
   and a forked subagent resumes in **its own** process, with its own record: the
   model calls happen there, so a resume that only existed in the parent would replay

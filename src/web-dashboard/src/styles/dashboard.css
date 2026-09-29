@@ -4167,12 +4167,97 @@ body {
   color: var(--text-secondary);
 }
 
-/* WS5 (#27) — one line of resume fact on a reply (see `ResumeOutcome.notice`). */
+/* WS5 (#27) — one line of resume fact while a turn runs (the request). */
 .chat-resume-line {
   margin-top: 6px;
   font-size: 11px;
   color: var(--text-secondary);
   white-space: pre-line;
+}
+
+/*
+ * WS5 (#27) — a resumed turn, as a card. Purple left edge, distinct from the
+ * worktree card's green: both are statements about a turn, and the two can appear
+ * on the SAME reply now that a turn may be isolated and resumed at once.
+ *
+ * The counts are the ledger's own report, so the card is the only place that can
+ * tell "asked to resume" from "replayed something" — which is exactly the
+ * distinction an operator needs and the composer cannot make.
+ */
+.chat-resume-card {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid #a78bfa;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-resume-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chat-resume-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-resume-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.chat-resume-state {
+  margin-left: auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+.chat-resume-state.chat-resume-saved {
+  color: #a78bfa;
+}
+
+/* A record that could NOT be written is a warning, not a neutral fact: the next
+ * resume will replay nothing from this run, and only this chip says so. */
+.chat-resume-state.chat-resume-unsaved {
+  color: #f59e0b;
+}
+
+.chat-resume-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chat-resume-id {
+  font-size: 11px;
+  word-break: break-all;
+  opacity: 0.85;
+}
+
+.chat-resume-note {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: pre-line;
+}
+
+/* The optional checkpoint id, beside the resume toggle in the composer. */
+.chat-resume-input {
+  max-width: 220px;
+  font-size: 11px;
+  padding: 4px 6px;
 }
 
 /* P0.7 — plan checklist card (live, updates in place) */

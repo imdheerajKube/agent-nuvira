@@ -315,7 +315,7 @@ export const CAPABILITIES: readonly Capability[] = [
       },
       'dashboard-chat': {
         status: 'supported',
-        note: 'Proven: the console forwards a per-turn `resume` request and the server can declare it for the deployment; the shared engine opens the record, replays the unchanged steps and reports the counts on the console`s own result. The parity case drives a FRESH conversation per turn, which is the honest way to ask — two turns in one conversation carry the first answer in the second`s history, so their inputs genuinely differ and the replay correctly misses.',
+        note: 'Proven: the console forwards a per-turn `resume` request and the server can declare it for the deployment; the composer`s ↩️ control is what asks for it (with an optional checkpoint id, blank meaning this ask`s own record), and every reply carries a card with the counts the ledger reported. The shared engine opens the record, replays the unchanged steps and reports the counts on the console`s own result. The parity case drives a FRESH conversation per turn, which is the honest way to ask — two turns in one conversation carry the first answer in the second`s history, so their inputs genuinely differ and the replay correctly misses.',
       },
       'gateway-chat': {
         status: 'supported',

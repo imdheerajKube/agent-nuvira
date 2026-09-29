@@ -111,6 +111,75 @@ describe('DashboardAPI.chatSend — WS5 (#27) isolation', () => {
   });
 });
 
+describe('DashboardAPI.chatSend — WS5 (#27) resume', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const wireResume = {
+    id: 'cp-abc123',
+    replayed: 2,
+    modelCalls: 1,
+    saved: true,
+    notice: '↩️  resume cp-abc123: replayed 2, made 1 model call(s)',
+  };
+
+  it('sends a NAMED record, or asks for the automatic one, and keeps the outcome the server reported', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        sessionId: 's1',
+        content: 'done',
+        followups: [],
+        provider: null,
+        model: null,
+        generationFailed: false,
+        resume: wireResume,
+      }),
+    );
+    const api = new DashboardAPI('http://test');
+
+    const named = await api.chatSend('s1', 'do it again', { resume: 'cp-abc123' });
+    expect((JSON.parse(String((fetchSpy.mock.calls[0][1] as RequestInit).body)) as Record<string, unknown>).resume).toBe(
+      'cp-abc123',
+    );
+    if (!named.ok) throw new Error('expected ok');
+    expect(named.resume?.id).toBe('cp-abc123');
+    expect(named.resume?.replayed).toBe(2);
+    expect(named.resume?.modelCalls).toBe(1);
+
+    // `true` is the automatic record (the CLI's bare `--resume`), and it is sent
+    // as a boolean rather than the empty string a blank box would produce.
+    await api.chatSend('s1', 'do it again', { resume: true });
+    expect((JSON.parse(String((fetchSpy.mock.calls[1][1] as RequestInit).body)) as Record<string, unknown>).resume).toBe(
+      true,
+    );
+  });
+
+  it('drops a resume report that does not prove its shape', async () => {
+    // A card built from `{ id }` alone would print counts the server never sent —
+    // "0 steps replayed" about a run nobody measured. The report is refused, and
+    // the turn then reads as one that reported no resume, which is the truth about
+    // a server too old to send the field.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        sessionId: 's1',
+        content: 'done',
+        followups: [],
+        provider: null,
+        model: null,
+        generationFailed: false,
+        resume: { id: 'cp-partial' },
+      }),
+    );
+    const api = new DashboardAPI('http://test');
+    const r = await api.chatSend('s1', 'again', { resume: true });
+    if (!r.ok) throw new Error('expected ok');
+    expect(r.resume).toBeUndefined();
+  });
+});
+
 describe('DashboardAPI.fetchAll', () => {
   afterEach(() => {
     vi.restoreAllMocks();
