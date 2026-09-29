@@ -24,17 +24,25 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { createServer } from 'node:http';
+import { createServer as createHttpServer } from 'node:http';
+import { createServer as createTcpServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
+import { DiagLogLevel, diag } from '@opentelemetry/api';
 
 import {
   DEFAULT_SERVICE_NAME,
   OTEL_ATTR_PREVIEW_CHARS,
+  OTEL_BSP_VAR,
+  OTEL_FLUSH_TIMEOUT_MS,
+  OTEL_MAX_EXPORT_BATCH_SIZE,
+  OTEL_MAX_QUEUE,
+  OTEL_SCHEDULE_DELAY_MS,
   TRACEPARENT_ENV,
   TURN_SPAN_NAME,
   childTraceEnv,
   flushSpans,
+  otelBatchSettings,
   otelEnableVarName,
   otelEndpoint,
   otelExportEnabled,
@@ -76,7 +84,7 @@ async function startCollector(): Promise<Collector> {
     bodies: [],
     close: async () => {},
   };
-  const server: Server = createServer((req, res) => {
+  const server: Server = createHttpServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
@@ -115,6 +123,7 @@ const KEYS = [
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT',
   TRACEPARENT_ENV,
+  ...Object.values(OTEL_BSP_VAR),
 ] as const;
 
 const previous = new Map<string, string | undefined>(KEYS.map((k) => [k, process.env[k]]));
@@ -137,6 +146,7 @@ async function exportToCollector(extra: Record<string, string> = {}): Promise<Co
 
 afterEach(async () => {
   await shutdownSpans();
+  diag.disable();
   for (const key of KEYS) {
     const value = previous.get(key);
     if (value === undefined) delete process.env[key];
@@ -211,6 +221,105 @@ describe('WS3 OTLP export — opt-in', () => {
 });
 
 // ─── 2. The tree, as a collector receives it ────────────────────────────────
+
+describe('WS3 OTLP export — the standard batch settings', () => {
+  it('resolves the OTEL_BSP_* variables, falling back to this module`s defaults', () => {
+    // The SDK's own fallbacks apply only to a config key left UNDEFINED, and this
+    // module passes defaults for all of them — so before this resolution existed,
+    // `OTEL_BSP_EXPORT_TIMEOUT=30000` was silently ignored. One precedence rule:
+    // the environment wins, the module's default fills the gap.
+    expect(otelBatchSettings({})).toEqual({
+      maxQueueSize: OTEL_MAX_QUEUE,
+      scheduledDelayMillis: OTEL_SCHEDULE_DELAY_MS,
+      maxExportBatchSize: OTEL_MAX_EXPORT_BATCH_SIZE,
+      exportTimeoutMillis: OTEL_FLUSH_TIMEOUT_MS,
+    });
+
+    expect(
+      otelBatchSettings({
+        [OTEL_BSP_VAR.maxQueueSize]: '99',
+        [OTEL_BSP_VAR.scheduledDelayMillis]: '250',
+        [OTEL_BSP_VAR.maxExportBatchSize]: '7',
+        [OTEL_BSP_VAR.exportTimeoutMillis]: '60000',
+      }),
+    ).toEqual({
+      maxQueueSize: 99,
+      scheduledDelayMillis: 250,
+      maxExportBatchSize: 7,
+      exportTimeoutMillis: 60_000,
+    });
+
+    // A value that is set but unreadable is not honoured: a queue of zero and a
+    // negative delay are both worse than the default, and neither is what the
+    // user asked for.
+    for (const bad of ['0', '-1', 'abc', '1.5', '', '   ', 'Infinity']) {
+      const resolved = otelBatchSettings({ [OTEL_BSP_VAR.maxQueueSize]: bad });
+      expect(resolved.maxQueueSize, bad).toBe(OTEL_MAX_QUEUE);
+    }
+  });
+
+  it('hands those settings to the SDK, not merely to itself', async () => {
+    // MEASURED rather than assumed: a queue of 1 makes the SDK DROP a span, and
+    // it says so through `diag` — so this asserts the variable reached the
+    // processor instead of stopping at this module's own function.
+    const warnings: string[] = [];
+    diag.setLogger(
+      {
+        error: (m) => warnings.push(String(m)),
+        warn: (m) => warnings.push(String(m)),
+        info: () => {},
+        debug: () => {},
+        verbose: () => {},
+      },
+      DiagLogLevel.WARN,
+      true,
+    );
+    await exportToCollector({ [OTEL_BSP_VAR.maxQueueSize]: '1' });
+    const turn = await startTurnSpan({ surface: 'cli-chat', goal: 'overflow the queue' });
+    // One span is buffered; the next few are dropped, and the SDK reports the
+    // count on the first add after a drop.
+    turn!.child('nuvira.tool.a').end({ ok: true });
+    turn!.child('nuvira.tool.b').end({ ok: true });
+    turn!.child('nuvira.tool.c').end({ ok: true });
+    turn!.end({ ok: true });
+    await flushSpans();
+
+    expect(warnings.join('\n')).toContain('maxQueueSize');
+  });
+
+  it('bounds the flush by the export timeout the operator set', async () => {
+    // A collector that ACCEPTS the request and never answers — the case the bound
+    // exists for, and the one a timing assertion can actually discriminate: with
+    // `OTEL_BSP_EXPORT_TIMEOUT=200` the flush must return in well under the
+    // module's 3s default. If the variable never reached the flush, this fails.
+    const sockets: Array<import('node:net').Socket> = [];
+    const silent = createTcpServer((socket) => {
+      // Accept, and never answer. The sockets are kept so the teardown can
+      // destroy them rather than waiting out the exporter's own 10s timeout.
+      sockets.push(socket);
+    });
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
+    const port = (silent.address() as AddressInfo).port;
+    try {
+      setEnv({
+        [otelEnableVarName]: '1',
+        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: `http://127.0.0.1:${port}/v1/traces`,
+        [OTEL_BSP_VAR.exportTimeoutMillis]: '200',
+      });
+      const turn = await startTurnSpan({ surface: 'cli-chat', goal: 'slow collector' });
+      expect(turn).not.toBeNull();
+      turn!.end({ ok: true });
+      const started = Date.now();
+      await flushSpans();
+      expect(Date.now() - started).toBeLessThan(1_500);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      silent.close();
+      silent.closeAllConnections?.();
+      await shutdownSpans();
+    }
+  }, 30_000);
+});
 
 describe('WS3 OTLP export — the tree a collector receives', () => {
   it('sends a turn span with one child per tool call, one trace, and the SDK-encoded fields', async () => {

@@ -988,8 +988,16 @@ A few decisions worth knowing, because they are the parts that surprise people:
   some surfaces, and a tree that differs per surface is a tracing feature that
   lies.
 - **It cannot break the run.** Provider setup, attribute rendering and the final
-  flush are each best-effort, and the flush is bounded (about three seconds): an
-  unreachable collector costs a turn a pause, once, and never an exception.
+  flush are each best-effort, and the flush is bounded by ONE export timeout
+  (three seconds by default): an unreachable collector costs a turn a pause, once,
+  and never an exception.
+- **The standard batch settings are honoured.** `OTEL_BSP_MAX_QUEUE_SIZE`,
+  `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` and
+  `OTEL_BSP_EXPORT_TIMEOUT` set the span queue, the batch window, the batch size
+  and one export's timeout — which is also the flush's bound, so raising it is how
+  a slow path to your collector stops being cut off. Unset, they fall back to this
+  project's defaults rather than the SDK's: a 1s batch window and a 3s export
+  timeout, both shorter because a turn waits for its own spans to ship.
 - **Attribute values are previews, and redacted** with the same scrubber the
   gateway log and the debug log use. A span is shipped to a third party by
   definition, so the file-safe rule applies here too.

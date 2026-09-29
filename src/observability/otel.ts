@@ -27,9 +27,13 @@
  *
  *  2. IT CAN NEVER BREAK THE RUN. Provider setup, attribute rendering and the
  *     final flush are each best-effort, and the flush is BOUNDED — an
- *     unreachable collector costs a turn at most three seconds, once, and never
- *     an exception. A tracer that can fail the turn it observes is worse than no
- *     tracer.
+ *     unreachable collector costs a turn at most one export timeout, once, and
+ *     never an exception. A tracer that can fail the turn it observes is worse
+ *     than no tracer. The bound is not a private constant: the standard
+ *     `OTEL_BSP_*` variables (`MAX_QUEUE_SIZE`, `SCHEDULE_DELAY`,
+ *     `MAX_EXPORT_BATCH_SIZE`, `EXPORT_TIMEOUT`) set both the batch processor and
+ *     the flush, with this module's defaults filling in the rest — see
+ *     {@link otelBatchSettings}.
  *
  *  3. IT CARRIES WHAT THE OTHER SINKS CARRY. Attribute values are previewed and
  *     scrubbed with the SAME `scrubSecrets` the gateway log and the debug log
@@ -112,12 +116,91 @@ export const INSTRUMENTATION_NAME = 'agent-nuvira';
 export const DEFAULT_SERVICE_NAME = 'agent-nuvira';
 /** Attribute values are previews, not payloads — the longest line we ship. */
 export const OTEL_ATTR_PREVIEW_CHARS = 300;
-/** Bound on a flush: an unreachable collector must not stall a turn. */
+/**
+ * How long one export, and the flush that awaits it, may take.
+ *
+ * The DEFAULT for `OTEL_BSP_EXPORT_TIMEOUT` (which also bounds `flushSpans`), and
+ * the reason it is 3s rather than the SDK's 30s: a turn WAITS for its own spans to
+ * ship, and an unreachable collector must not hold an answer for half a minute.
+ * Raise the standard variable if a slow path to your collector needs longer.
+ */
 export const OTEL_FLUSH_TIMEOUT_MS = 3_000;
-/** Span queue bound, so a long-lived server cannot grow without limit. */
+/**
+ * Span queue bound, so a long-lived server cannot grow without limit.
+ *
+ * The DEFAULT for `OTEL_BSP_MAX_QUEUE_SIZE` (whose own spec default this is).
+ */
 export const OTEL_MAX_QUEUE = 2_048;
-/** How long the batch waits before shipping, in a process that keeps running. */
+/**
+ * How long the batch waits before shipping, in a process that keeps running.
+ *
+ * The DEFAULT for `OTEL_BSP_SCHEDULE_DELAY`. Faster than the SDK's 5s because a
+ * CLI turn is usually the whole process: the explicit flush at the end of a turn
+ * is what actually ships it, and this only bounds how long a long-running server
+ * holds a span it could have sent.
+ */
 export const OTEL_SCHEDULE_DELAY_MS = 1_000;
+/** The DEFAULT for `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` (the SDK's own default). */
+export const OTEL_MAX_EXPORT_BATCH_SIZE = 512;
+
+/**
+ * The standard batch-processor variables this module honours, by field.
+ *
+ * WHY WE RESOLVE THEM OURSELVES. The SDK's `BatchSpanProcessor` does implement
+ * these fallbacks — but only for a config key left `undefined`, and this module
+ * passes its own defaults for all of them, so a user setting
+ * `OTEL_BSP_EXPORT_TIMEOUT=30000` would have been silently IGNORED. Reading the
+ * variables here keeps one precedence rule instead of two: an explicit value from
+ * the environment wins, the module's default fills the gap, and the SDK's own
+ * fallback then has nothing left to do.
+ */
+export const OTEL_BSP_VAR = {
+  maxQueueSize: 'OTEL_BSP_MAX_QUEUE_SIZE',
+  scheduledDelayMillis: 'OTEL_BSP_SCHEDULE_DELAY',
+  maxExportBatchSize: 'OTEL_BSP_MAX_EXPORT_BATCH_SIZE',
+  exportTimeoutMillis: 'OTEL_BSP_EXPORT_TIMEOUT',
+} as const;
+
+/** The batch processor's resolved settings, in the SDK's own vocabulary. */
+export interface OtelBatchSettings {
+  maxQueueSize: number;
+  scheduledDelayMillis: number;
+  maxExportBatchSize: number;
+  exportTimeoutMillis: number;
+}
+
+/**
+ * One positive integer from the environment, or the fallback.
+ *
+ * A value that is set but unreadable (`abc`, `0`, `-5`, `1.5`) falls back rather
+ * than reaching the SDK: a queue of zero and a negative delay are both worse than
+ * the default, and neither is what the user meant to ask for.
+ */
+function positiveInt(raw: string | undefined, fallback: number): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw.trim());
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * The batch settings for this process: the standard `OTEL_BSP_*` variables where
+ * they are set, this module's defaults everywhere else.
+ *
+ * Exported so the resolution is testable on its own — the wiring is one call
+ * site, and a test that only exercised the resolver through a live collector
+ * could not tell a misparsed variable from a value the SDK ignored.
+ */
+export function otelBatchSettings(env: NodeJS.ProcessEnv = process.env): OtelBatchSettings {
+  return {
+    maxQueueSize: positiveInt(env[OTEL_BSP_VAR.maxQueueSize], OTEL_MAX_QUEUE),
+    scheduledDelayMillis: positiveInt(env[OTEL_BSP_VAR.scheduledDelayMillis], OTEL_SCHEDULE_DELAY_MS),
+    maxExportBatchSize: positiveInt(
+      env[OTEL_BSP_VAR.maxExportBatchSize],
+      OTEL_MAX_EXPORT_BATCH_SIZE,
+    ),
+    exportTimeoutMillis: positiveInt(env[OTEL_BSP_VAR.exportTimeoutMillis], OTEL_FLUSH_TIMEOUT_MS),
+  };
+}
 
 /** The variable a user sets to turn this on, spelled out for a message. */
 export const otelEnableVarName = `NUVIRA_${OTEL_ENABLE_ENV}`;
@@ -357,11 +440,9 @@ async function ensureProvider(): Promise<OtelRuntime | null> {
               // whole reason for depending on the SDK instead of re-implementing
               // its environment contract.
               new OTLPTraceExporter(),
-              {
-                maxQueueSize: OTEL_MAX_QUEUE,
-                scheduledDelayMillis: OTEL_SCHEDULE_DELAY_MS,
-                exportTimeoutMillis: OTEL_FLUSH_TIMEOUT_MS,
-              },
+              // The standard `OTEL_BSP_*` variables, resolved here rather than
+              // left to the SDK (whose fallbacks only fire for an ABSENT key).
+              otelBatchSettings(),
             ),
           ],
         });
@@ -486,8 +567,12 @@ export async function flushSpans(): Promise<void> {
       otel.provider.forceFlush(),
       new Promise<void>((resolve) => {
         // A collector that accepted a request but never answered must not hold a
-        // turn open. Unref'd, so the timer itself cannot keep a CLI alive.
-        const timer = setTimeout(resolve, OTEL_FLUSH_TIMEOUT_MS);
+        // turn open. Unref'd, so the timer itself cannot keep a CLI alive. The
+        // bound FOLLOWS the export timeout the user configured (`OTEL_BSP_
+        // EXPORT_TIMEOUT`) rather than being a second, independent number: a
+        // slower path to their collector must not be cut off by a limit they
+        // never set, and the flush can only ever wait as long as one export may.
+        const timer = setTimeout(resolve, otelBatchSettings().exportTimeoutMillis);
         timer.unref?.();
       }),
     ]);
