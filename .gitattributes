@@ -1,0 +1,19 @@
+# Line endings.
+#
+# This project is developed on macOS and gated on the windows-latest CI runner,
+# where git's core.autocrlf=true rewrites text files to CRLF on checkout. That is
+# not cosmetic: CRLF moves `#!/usr/bin/env node` off line 1, and any tool that
+# re-emits the file (Vite's SSR transform, which Vitest runs project .mjs through
+# by default) then produces a module that cannot be parsed at all — the suite
+# fails to LOAD with a bare `SyntaxError: Invalid or unexpected token` and no
+# location. That is exactly how the 3.3.6 release gate went red on Windows.
+#
+# Pinning these to LF makes the bytes identical on every platform, so no tooling
+# decision depends on how a developer's machine happened to configure git.
+#
+# Deliberately scoped rather than `* text=auto`: only files that carry a shebang
+# or are executed by a shell need a fixed ending, and a repo-wide rule would
+# rewrite checkouts (and fixtures that may legitimately contain CRLF) for no gain.
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.sh  text eol=lf

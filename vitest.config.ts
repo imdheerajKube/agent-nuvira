@@ -47,6 +47,33 @@ export default defineConfig({
     // Bounded on purpose: these suites fork node processes and bind sockets, so
     // unbounded workers would trade one kind of contention for another.
     maxWorkers: 4,
+    // Load every .mjs through Node's own loader instead of Vite's SSR transform.
+    //
+    // WHY. Vitest inlines project .mjs files (`defaultInline` contains
+    // /^(?!.*node_modules).*\\.mjs$/) and hands them to Vite, which re-emits the
+    // module body. Vite parks a shebang AFTER the hoisted `__vite_ssr_import__`
+    // preamble, so `#!/usr/bin/env node` stops being line 1 and becomes line 9.
+    // A `#!` anywhere but byte 0 is not a hashbang, it is a syntax error —
+    // `SyntaxError: Invalid or unexpected token`, reported against the suite
+    // with no stack and no location.
+    //
+    // This only bites when the file is checked out with CRLF: with LF, Vite
+    // keeps the shebang on line 1. That is why it looked Windows-only — the
+    // windows-latest runner has core.autocrlf=true and this repository had no
+    // .gitattributes to override it, so the checked-out scripts/.*.mjs arrived
+    // with CRLF and the whole suite failed to LOAD. (Reproduced on macOS by
+    // converting scripts/build-dashboard.mjs to CRLF.)
+    //
+    // .gitattributes now pins those files to LF, but the suite should not be
+    // able to fail on a line-ending decision at all. These are plain Node
+    // scripts that import nothing but builtins, so the native loader is both
+    // sufficient and what actually runs them in production
+    // (`node scripts/build-dashboard.mjs`).
+    server: {
+      deps: {
+        external: [/\.mjs$/],
+      },
+    },
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

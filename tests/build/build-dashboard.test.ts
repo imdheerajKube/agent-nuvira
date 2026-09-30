@@ -12,26 +12,20 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 
-/**
- * Load the build script through a FILE URL, not a static relative specifier.
- *
- * This is the only test file that statically imports a `scripts/*.mjs`, and on
- * the windows runner it was the only suite that failed to LOAD — with a bare
- * `SyntaxError: Invalid or unexpected token` and no location, on both Node 22
- * and 23. A resolved Windows path (`D:\...\scripts\build-dashboard.mjs`) is not
- * a valid ESM specifier, which is the same class of bug `await
- * import(join(...))` caused in generate-commands-surface.mjs (fixed by going
- * through pathToFileURL there too).
- */
-const { missingDashboardDeps, buildDashboardBundle } = (await import(
-  pathToFileURL(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'build-dashboard.mjs')).href
-)) as {
-  missingDashboardDeps: (dashboardDir?: string) => string[];
-  buildDashboardBundle: (dashboardDir?: string) => { provisioned: boolean; output: string; bytes: number };
-};
+// A plain static import is correct here, and deliberately so. This suite once
+// failed to LOAD on the windows runner — bare `SyntaxError: Invalid or
+// unexpected token`, no location, `0 test`, on both Node 22 and 23 — and the
+// cause was NOT the specifier. Vitest was inlining the .mjs and running it
+// through Vite's SSR transform, which re-emits a shebang AFTER its hoisted
+// import preamble; with LF the shebang stays on line 1 and a `#!` is a legal
+// hashbang, but the windows runner checks files out with CRLF (core.autocrlf,
+// and this repo had no .gitattributes), so the shebang landed on line 9, where
+// `#!` is a syntax error. See `server.deps.external` in vitest.config.ts:
+// project .mjs files now go to Node's own loader, so this file's line endings
+// cannot decide whether the suite loads.
+import { missingDashboardDeps, buildDashboardBundle } from '../../scripts/build-dashboard.mjs';
 
 const REQUIRED = ['vite', '@vitejs/plugin-react', 'react'];
 
