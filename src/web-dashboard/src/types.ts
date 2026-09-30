@@ -301,6 +301,38 @@ export interface SkillEnvVarRow {
   isProviderCredential?: boolean;
 }
 
+/**
+ * One row of the Process Environment page.
+ *
+ * `fileValue` and `processValue` are kept apart on purpose: the first is the
+ * line this page writes and the next run reads, the second is what the RUNNING
+ * dashboard already obeys. When they disagree, `shadowed` says a shell or
+ * systemd value is outranking the file — which is the one thing a config page
+ * that only showed the file would hide.
+ */
+export interface ProcessEnvVarRow {
+  name: string;
+  label: string;
+  group: 'turn' | 'observability' | 'hooks';
+  kind: 'flag' | 'text';
+  rule?: 'asks' | 'truthy' | 'strict-one' | 'asks-or-names';
+  /** A flag that also accepts a name (`NUVIRA_RESUME` = a checkpoint id). */
+  acceptsValue?: boolean;
+  valueLabel?: string;
+  placeholder?: string;
+  description: string;
+  /** What leaving it unset means — the state the row starts in. */
+  unsetMeans: string;
+  cliEquivalent?: string;
+  /** The persisted line, or null when there is no line at all. */
+  fileValue: string | null;
+  /** What the running process sees, or null when it is not set. */
+  processValue: string | null;
+  state: 'on' | 'off' | 'set' | 'unset';
+  shadowed: boolean;
+  warning?: string;
+}
+
 export interface HistoryData {
   total: number;
   recent: HistorySession[];
@@ -1545,4 +1577,44 @@ export interface WhatsAppPairStatus {
   phone: string | null;
   error: string | null;
   startedAt: number | null;
+}
+
+// ─── Timeline action: "verify next N" (the never-verified backlog) ──────────
+//
+// Mirrors `VerifyBacklogState` in `src/learning/model-verify-job.ts`. The run
+// happens in the server process, so the panel never sees an outcome it could not
+// have been told — it reads this back by polling.
+
+/** Exactly the vocabulary `spotCheckModel` returns. */
+export type SpotCheckOutcome = 'verified' | 'unavailable' | 'skipped' | 'error';
+
+export interface VerifyBacklogResult {
+  provider: string;
+  model: string;
+  outcome: SpotCheckOutcome;
+}
+
+export interface VerifyBacklogState {
+  status: 'idle' | 'running' | 'done';
+  /** Changes per run, so a poller can tell a new run from the one it watched. */
+  runId: string | null;
+  requested: number;
+  planned: number;
+  processed: number;
+  verified: number;
+  unavailable: number;
+  skipped: number;
+  errored: number;
+  /** The model being probed right now. */
+  current: { provider: string; model: string } | null;
+  results: VerifyBacklogResult[];
+  startedAt: number | null;
+  finishedAt: number | null;
+  /** Why nothing ran — "already running" vs "nothing left to verify". */
+  refusal: string | null;
+  /** Actionable never-verified models left when the run finished. */
+  remaining: number | null;
+  /** The band the server will accept for the next run. */
+  defaultCount?: number;
+  maxCount?: number;
 }

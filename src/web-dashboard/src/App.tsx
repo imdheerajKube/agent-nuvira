@@ -39,6 +39,10 @@ import { ExecutionHistory } from './components/ExecutionHistory';
 // rows + callbacks the presentational editor expects, and gates writes on the
 // same role the server enforces.
 import SkillEnvPage from './components/SkillEnvPage';
+// The process switches (isolation, resume, the debug log, OTLP export, tool
+// hooks) are read by the run itself, not by a skill, and several are tri-state —
+// so they get a page that can express on/off/unset rather than a NAME=VALUE box.
+import ProcessEnvPage from './components/ProcessEnvPage';
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -97,6 +101,7 @@ export default function App() {
         <Route path="/contacts" element={<ContactsPage />} />
         <Route path="/gateway" element={<GatewayPage />} />
         <Route path="/env" element={<SkillEnvPage />} />
+        <Route path="/process-env" element={<ProcessEnvPage />} />
         <Route path="/memory" element={<MemoryPanel data={data} />} />
         <Route path="/history" element={<HistoryBrowser data={data} />} />
         <Route

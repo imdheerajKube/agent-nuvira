@@ -1689,6 +1689,31 @@ export class ModelRegistry {
   }
 
   /**
+   * Re-read the JSON mirror into memory — adopt what OTHER processes learned.
+   *
+   * The singleton loads the mirror exactly ONCE, in the constructor, and
+   * {@link persist} writes the WHOLE entry map from `this.data`. Those two facts
+   * together mean a long-lived process holds a snapshot of every model it never
+   * touched, and flushes that snapshot back over the file the moment it persists
+   * anything — silently reverting anything another process (the gateway, a CLI
+   * run, the warmup daemon) verified in the meantime.
+   *
+   * Callers that are about to spend a probe budget and persist should reload
+   * first so that `this.data` is as current as the file allows. The window does
+   * not close — a write from another process DURING a long run is still lost on
+   * this process's next persist — but it shrinks from "since this process booted"
+   * to "since this run started".
+   *
+   * DISCARDING, deliberately: this drops any in-memory change this process has
+   * made but not yet persisted. Every mutator on this class persists immediately,
+   * so there is normally nothing pending — but that is the contract that makes
+   * this safe, and it is why this is not called from arbitrary paths.
+   */
+  reloadFromMirror(): void {
+    this.data = this.loadMirror();
+  }
+
+  /**
    * Persist: JSON mirror synchronously (canonical, guaranteed), then mirror to
    * the VectorStore namespace asynchronously (best-effort, auto-tiers to JSON
    * when FAISS/native aren't installed — so it can never throw).

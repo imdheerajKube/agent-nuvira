@@ -2,6 +2,128 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.3.5 — "fresh" stops standing in for "usable", and the backlog it hid can now be worked down
+
+### Added: a curated Process Environment page (`/process-env`)
+
+Every switch that changes how a **run** behaves was reachable only from a shell. The dashboard had an env
+page, but `/env` edits *skill* secrets — any well-formed name a skill declares, masked, opaque — so the four
+tri-state switches and three hook commands had no surface at all: `NUVIRA_OTEL` appeared in zero dashboard
+files, and the tool-hook variables in zero GUI files.
+
+- **Added: `/process-env`, a page per switch rather than a name-and-value box.** Get the allowlist, write one,
+  remove one (`GET`/`POST /api/process-env`, `POST /api/process-env/delete`). The list is enforced on the
+  **server**, so a hand-made request cannot use a page that claims to be curated to append an arbitrary
+  variable to the credential `.env`; reads need a session and writes need the same `admin`/`operator` role
+  every other persisted-config route requires.
+- **Added: each row reports what its own reader will really do.** The five readers do not agree, and the page
+  encodes each one instead of assuming a boolean: `envAsks` (`NUVIRA_ISOLATE`) takes `1`/`true`/`yes`;
+  `debugLoggingEnabled` and `otelExportEnabled` take anything but `0`/`false`/`off`/`no`; `strictModelMode`
+  takes only the literal `1`; and `resolveResumeRequest` treats any value that is not `''`/`0`/`false` as the
+  **name of a checkpoint** — which makes `NUVIRA_RESUME=no` an active resume, not a refusal. Values are
+  therefore stored in the canonical spelling (`true` → `1`, `no` → `0`), because storing what was typed would
+  show a switch as on while the run ignored it.
+- **Added: unset is described, not assumed to be off.** `NUVIRA_RESUME` and `NUVIRA_ISOLATE` distinguish
+  "nobody asked" from "asked against", so every row carries what leaving it unset means, and the control is
+  on / off / unset — the middle state a `KEY=VALUE` field cannot express.
+- **Added: the file value and the in-process value are shown apart, and a disagreement is named.**
+  `loadEnv()` never overrides a variable that is already set, so an export in the shell silently beats this
+  file for the dashboard and for every CLI run in that shell. A row showing only the file would let a user
+  write `NUVIRA_OTEL=0`, watch the row turn off, and keep exporting spans; a row marked *shell value wins*
+  says which value is actually in charge.
+- **Added: two refusals that a generic editor would have accepted.** A name off the allowlist, an empty
+  value (use Unset), and a value containing a newline (it would add a second variable to the file) are all
+  refused with a reason rather than written. Hook commands are stored in plain text and the page says so,
+  since a hook is the one place a user might paste a token.
+- **Added: a warning for the combination that looks configured and is not.** With export on and no
+  `OTEL_EXPORTER_OTLP_ENDPOINT` (or the per-signal name), `otelEndpoint()` returns null — the spans are
+  built and then dropped — so the row says so instead of leaving it to be discovered. The generic
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is on the page as the writable companion to `NUVIRA_OTEL`; the per-signal
+  `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is read for that warning but is deliberately NOT on the allowlist,
+  because it is a standard OpenTelemetry name rather than one of ours.
+
+### Fixed: the Discovery Timeline contradicted itself about "Fresh"
+
+The `/models/timeline` cards and filter classified on PROBE age, while each row's badge checked
+verification `status` first. MEASURED on a real profile — 555 tracked models, 17 verified, 531 probed
+within 7 days — so the "Fresh (531)" card opened a list in which **514 rows read "Unverified"**. The card
+was right, the filter was right, the badge was answering a different question, and the page looked broken.
+
+- **Fixed: freshness and routability are now two axes instead of one muddled one.** "Is the provider still
+  listing this id" (probe age) and "would the router use it right now" (verification) are different
+  questions, and conflating them is what produced the contradiction. The cards, the filter and the per-row
+  badge all read ONE server-computed classification, so they cannot disagree by construction.
+- **Added: `src/learning/model-reachability.ts`, which mirrors `ModelRegistry.isUsable()` clause for clause.**
+  `Routable` means exactly "the router would pick this now" — verified, un-parked, verified within the 7-day
+  cutoff — including the subtlety that a PROVIDER-level park never excludes a proven model while a
+  MODEL-level one does. A second copy of that rule is how the Models page once presented a listing as
+  availability, so the panel filters on the string it is handed and never re-derives it.
+- **Fixed: `never-verified` is no longer described as unreachable.** It means the provider lists the id and
+  nothing has ever been tried against it. On the profile above that is 514 of 555 rows, so calling it
+  "unreachable" would assert 514 things nobody checked. It reads as an unknown — and the page says the
+  background spot-checks (a bounded six never-verified models per cycle, one token each) are how it gets
+  resolved, rather than implying the models are broken.
+- **Added: four reasons instead of one "no", because they need opposite actions.** `Proven dead`
+  (`unavailable` — re-probing will not help), `Proof expired` (verified, but outside the 7-day window — a
+  re-probe restores it, and this is the state quietly shrinking a routing pool), `Parked` (a quota window
+  that clears itself), and `Never verified` (unknown). The old page flattened all four into "Not routable".
+- **Fixed: the page says what it is for.** It is the registry's AGE profile — probe/verify/use recency and
+  what is ageing out — not a second Models page, which already answers "can I use this right now, and if
+  not why" against a live probe. The panel now states that, and a server older than the bundle is told to
+  restart itself rather than rendering every row with a blank badge.
+
+### Added: the Timeline can work the never-verified backlog down ("Verify next N now")
+
+Reclassifying the Timeline made the gap legible but left it unfixable from the UI: on the reference profile
+535 of 553 tracked models read `Never verified`, which means no turn has ever succeeded on them, which means
+the router cannot pick them — and the only thing that could turn one into a routable model was the background
+warmup daemon, six models per cycle, on a timer. A fix nobody can ask for, watch, or aim.
+
+- **Added: an action on `/models/timeline` — pick 1–25 and verify that many now.** It reports the model it
+  is probing, then each verdict, then how many never-verified models remain, so the number the user is trying
+  to move is visible the whole way down. Each check is a REAL 1-token generation against a provider key, not
+  a listing lookup, so the count in the field is a budget rather than a filter.
+- **Added: an outcome vocabulary that refuses to over-claim.** `verified` (a call succeeded), `unavailable`
+  (the provider refused it — 403/404, re-probing will not help), and `errored` (a transient blip: the entry is
+  left untouched and the model is **still unknown**, never counted as verified). The third is the one a
+  progress counter would otherwise swallow.
+- **Added: `src/learning/model-verify-job.ts` — a run that is safe behind a button.** Single-flight (a second
+  start while one is running is refused, not queued: two runs read the same candidate list and would probe the
+  same models twice, since the candidate throttle is ten minutes), bounded server-side at 25 per run (the
+  field is a suggestion), sequential rather than concurrent (a 429 parks a model, and the user is watching a
+  counter), and never-verified-only by construction — it selects through `selectExplorationCandidates`, so
+  proven models, providers without credentials, parked models, the config sentinel, and anything inside its
+  probe throttle are all excluded before the run is even planned.
+- **Added: it is self-consuming, which is what makes "work it down" true rather than hopeful.** A check either
+  verifies a model or marks it proven dead, and both leave the never-verified set, so a repeat run has less to
+  do by construction. Tests pin that directly, including the repeat run probing only what run one left behind.
+- **Added: `GET`/`POST /api/models/verify-next`.** The read is open, like the Timeline data it sits beside;
+  the write requires `routing.operate` (**admin**/**operator**), because only the write spends quota. An empty
+  backlog returns `ok: false` with a **refusal reason** — "nothing to verify" is good news and has to read as
+  good news, not as a failed run, and not as a silent no-op.
+- **Fixed: a run reads the registry from DISK before planning, not from the process's boot-time snapshot.**
+  `ModelRegistry.persist()` writes the whole entry map from memory and the singleton loads the mirror exactly
+  once at startup, so a dashboard that had been up for hours would have flushed an hours-old view of every
+  model it never touched back over whatever the gateway and the CLI had since learned. `reloadFromMirror()`
+  narrows that window from "since this process booted" to "since this run started" — it does not close it,
+  and the method says so.
+- **Tests:** 16 unit tests on the runner (cap, single-flight, thin-provider ordering, error-is-not-verified,
+  self-consumption, disk-fresh planning, refusal-on-empty), 8 HTTP tests on the routes (open read, 401/403
+  write gates, server-side cap, refusal shape), and 5 panel tests (the count in the label follows the field,
+  progress is polled rather than assumed, an empty backlog reads as information while a real refusal reads as
+  an error, and an older server renders no action at all rather than a button that does nothing).
+
+### Added: `scripts/prune-test-registry-rows.mjs`
+
+The suite drives the real Orchestrator with fixture model names, and before `tests/setup/hermetic-env.ts`
+isolated the memory dir those runs wrote into the developer's REAL registry. Nothing pruned the rows already
+there, and the cost was not cosmetic: `isUsable()` needs only `status === 'verified'` plus a recent
+`lastVerifiedAt`, so a leaked `local/test-model` (`requests: 0`) sat in the local provider's routable pool
+as its second-newest verified model. The script removes exactly the narrow set — `source: 'telemetry'`, no
+recorded requests, and an exact fixture name — dry-run by default, with a timestamped backup on `--apply`.
+It deliberately does not substring-match: a diagnostic `/test|…/` regex flagged every `-latest` alias in the
+registry as junk, which is why the match is by name.
+
 ## v3.3.4 — every surface proves the same claims, and no claim is reported as checked until something checked it
 
 Thirty commits, and they are one story told in eight parts. This repository runs the same agent engine behind **five surfaces** — `nuvira chat`, `nuvira execute`, the dashboard, the gateway (WhatsApp/Telegram/Discord/Slack) and the forked subagent child — and until now the only thing asserting they agreed was a suite that could reach three of them. Workstreams WS0–WS7 close that: the parity harness is now a command a terminal and CI both run, and every capability claimed at par is driven on all five surfaces through real entry points with a real provider stub, not through a spy. WS4–WS7 add the four capabilities thematically reserved for infrastructure rather than a matrix row (tool hooks, isolation, partial resume, fault injection, the seeded-bug benchmark).

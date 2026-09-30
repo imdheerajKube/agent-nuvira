@@ -210,7 +210,7 @@ nuvira dashboard --no-gateway       # do not start messaging alongside
 nuvira dashboard stop                # graceful SIGTERM, from any terminal
 ```
 
-### The 22 pages
+### The 23 pages
 
 | Page | Route | What it is for |
 |---|---|---|
@@ -223,12 +223,13 @@ nuvira dashboard stop                # graceful SIGTERM, from any terminal
 | 📇 Contacts | `/contacts` | Outbound contacts, send-by-name |
 | 📡 Gateway | `/gateway` | Channel status, send tests |
 | 🧠 Models | `/models` | Registry, availability, exclusions |
-| 📅 Timeline | `/models/timeline` | Model history over time |
+| 📅 Timeline | `/models/timeline` | Registry age profile: what is routable, what is ageing out |
 | 🤖 Routing | `/routing` | Why the router chose what it chose |
 | 📨 Requests | `/requests` | Per-request telemetry |
 | 🧰 Agent Hub | `/hub` | Tools, skills, permissions, channels |
 | 🔍 Traces | `/traces` | Per-step reasoning traces |
 | 🔐 Environment | `/env` | Skill env / secrets surface |
+| 🌱 Process Env | `/process-env` | Run switches: isolation, resume, debug log, OTLP export, tool hooks |
 | 💾 Memory | `/memory` | Trajectory + vector memory |
 | 📜 Executions | `/executions` | Execution audit browser |
 | 📝 History | `/history` | Conversation history |
@@ -242,6 +243,42 @@ There is also a `/bedrock` onboarding route that is not in the left nav.
 **Key point:** the dashboard is not a separate product. Its console delegates to the same
 chat engine, its channel send-test uses the same gateway, and its model/routing/cost panels
 read the same ledger the CLI writes.
+
+### Process Env — the switches, and the value that wins
+
+The **Environment** page (`/env`) edits *skill* secrets: any well-formed name a skill might
+declare. The **Process Env** page (`/process-env`) is a different thing — it edits the curated
+switches that change how a **run** behaves, and each row is a real control (on / off / unset)
+rather than a name-and-value box:
+
+| Switch | Unset means | Also reachable as |
+|---|---|---|
+| `NUVIRA_ISOLATE` | a turn runs in the project directory | `nuvira chat --worktree` |
+| `NUVIRA_RESUME` | nothing is replayed | `nuvira chat --resume [id]` |
+| `NUVIRA_STRICT_MODEL` | a dead pin is substituted, and the swap is announced | — |
+| `NUVIRA_DEBUG_LOG` | no log is written | — |
+| `NUVIRA_OTEL` | the SDK is never imported | — |
+| `NUVIRA_TOOL_HOOK_BEFORE` / `_AFTER` / `_FAILED` | no hook for that phase | `tools.hooks` in `buffconfig.json` |
+
+Three things the page is deliberately honest about:
+
+- **On writes the spelling the reader reads.** `NUVIRA_STRICT_MODEL` is enabled only by the
+  literal `1`, so the page stores `1` rather than whatever was typed — `true` would look like a
+  working switch while `strictModelMode()` compared it to `'1'` and ignored it. Values are
+  canonicalised (`true` → `1`, `no` → `0`) before they reach the file.
+- **Unset is not the same as off**, and each row says what unset means. `NUVIRA_RESUME` is the
+  clearest case: `1` asks for the record for this ask in this directory, any other non-falsey
+  value *names* a checkpoint, and nothing at all declines.
+- **A shell value outranks this file.** `loadEnv()` never overrides an environment variable that
+  is already set, so an export in your shell — or a systemd unit's `Environment=` — wins over the
+  dashboard AND over every CLI run in that shell. A row that says **shell value wins** is
+  reporting exactly that, and writing here will not change it; unset the export instead.
+
+The page also refuses things a generic editor would accept: a name that is not on the list
+(the endpoint is curated, so a page that claims to be cannot write an arbitrary variable), an
+empty value (use **Unset**), and a value containing a newline (it would add a second variable to
+the file). Hook commands are stored in plain text — the page says so, because a hook is the one
+place a user might paste a token, and it is not masked here the way a skill secret is.
 
 ### First login, and the password you must change
 
@@ -747,6 +784,47 @@ nuvira models refresh
 👀 A provider that stays skipped with a working key is a bug — `nuvira models unblock <provider>`
 ```
 
+**Two different questions, and it matters which one you are asking.** "Is the provider still
+listing this model" (probe age) and "would the router use it right now" (verification) are not
+the same thing, and a model can be freshly probed and never verified — which is the common
+case, because a provider lists hundreds of ids and only a handful have ever been tried.
+
+The dashboard's **Timeline** tab (`/models/timeline`) keeps them apart: *Reachability* is
+`Routable` / `Parked` / `Proof expired` / `Proven dead` / `Never verified`, computed from the
+same predicate the router uses (`isUsable()`), and *Freshness* is a separate chip for probe age.
+So the Reachable count is exactly the set the router can pick — and **Never verified is not
+"unreachable"**: it means nothing has ever been tried against that id, which is an unknown, not
+a failure. Background spot-checks resolve them a few per cycle. `Proof expired` is the one that
+quietly shrinks a pool — the model works, but its proof is older than 7 days, and a re-probe
+(`nuvira models refresh`) restores it.
+
+#### Working the never-verified backlog down
+
+The Timeline carries one action, **"Verify next N now"**, so that backlog is not something you
+have to wait on the background daemon for. Pick a count (1–25) and it spot-checks that many
+never-verified ids, one at a time, showing which model it is on and what each check decided:
+
+* ✅ **verified** — a 1-token call succeeded, so the router can now pick it.
+* ⛔ **proven unavailable** — the provider refused it (403/404). Re-probing will not help.
+* ⚠️ **errored** — a transient blip, so the entry is left untouched and the model is **still
+  unknown**; it will be picked again next run. It is never counted as verified.
+
+Each check is a real generation against one of your provider keys, so the run is bounded (25 per
+run), single-flight (a second click while one is running is refused rather than queued — two
+runs would probe the same models twice), and it only ever spends on models that are unknown
+*and* reachable: proven models, providers you have no credentials for, and anything inside its
+10-minute probe throttle are all skipped. Because a check either proves a model or marks it
+dead, both outcomes remove it from the backlog — so repeating the action makes real progress,
+and the panel reports how many never-verified models remain after each run.
+
+Under the hood: `POST /api/models/verify-next` (requires `routing.operate`, i.e. an
+**admin** or **operator** session) starts a run and returns as soon as it is planned;
+`GET /api/models/verify-next` reports progress, which is what the panel polls. The read is open
+like the Timeline data itself; only the write is gated, because only the write spends quota.
+
+The **Models** tab (`/models`) is the live counterpart: it probes each provider now and says
+`<N> listed · <M> routable right now` with a per-model reason.
+
 ### Observability
 
 ```bash
@@ -1003,6 +1081,7 @@ nuvira retrieval stats
 | Run a pipeline | Tasks (`/tasks`), Execution (`/dag`) | `nuvira execute` |
 | See why a model was chosen | Routing (`/routing`) | `nuvira models excluded`, `nuvira learn stats` |
 | Manage providers/keys | Environment (`/env`), Models (`/models`) | `nuvira config`, `nuvira config vault` |
+| Set a run switch (isolation, resume, debug log, OTLP, tool hooks) | Process Env (`/process-env`) | `--worktree`, `--resume [id]`, `NUVIRA_OTEL`, `NUVIRA_DEBUG_LOG`, `NUVIRA_TOOL_HOOK_*` |
 | Manage channels | Gateway (`/gateway`), Platforms (`/platforms`), Contacts (`/contacts`) | `nuvira gateway`, `nuvira config gateway` |
 | Manage skills/tools/permissions | Agent Hub (`/hub`) | `nuvira skill`, `nuvira tools list` |
 | Inspect a bad run | Traces (`/traces`), Executions (`/executions`) | `nuvira trace replay <id>` |

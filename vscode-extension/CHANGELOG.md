@@ -5,6 +5,22 @@ All notable changes to the Agent-Nuvira VS Code extension will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.5] — 2026-09-30
+
+> Version aligned with the CLI: this release ships alongside **CLI v3.3.5**, and
+> the SDK ships on `3.3.5` too, so all three artifacts report one number.
+
+### Fixed
+- **`npm ci` failed on the extension's CI runner (Node 22).** The `@types/node`
+  devDependency was `^20.11.0` while `vite`'s peer range requires
+  `^20.19.0 || >=22.12.0`. npm 11 tolerated the mismatch; npm 10 refused it with
+  `Missing: @types/node@26.6.3 from lock file`, which had kept
+  `test-vscode-extension` red. Pinned to the peer floor and regenerated the
+  lockfile with npm 10.
+
+> No runtime change to the extension in this release — it is a version alignment
+> plus the CI dependency pin above.
+
 ## [3.3.4] — 2026-09-29
 
 > Version aligned with the CLI: this release ships alongside **CLI v3.3.4**, and

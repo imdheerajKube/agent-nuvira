@@ -5168,6 +5168,48 @@ body {
   color: var(--danger, #f85149);
 }
 
+/* ── Process Environment page (/process-env) ─────────────────────────────
+   The curated switches, grouped by when a run meets them. The page reuses the
+   env-var editing styles above; what it adds is a section heading per group and
+   the two badges a generic NAME=VALUE editor has no way to express: the ON/OFF
+   state of a switch, and a warning about the current combination (export on
+   with nowhere to send spans). */
+.process-env-group {
+  margin-bottom: 18px;
+}
+
+.process-env-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 2px 0;
+}
+
+.process-env-group-blurb {
+  font-size: 11px;
+  color: var(--text-secondary, #8b949e);
+  margin: 0 0 8px 0;
+}
+
+/* The active half of an on/off/unset control. Colour alone would be ambiguous
+   for a switch whose OFF state is also a real setting, so the pressed state is
+   marked by border and weight as well. */
+.admin-mini-btn.process-env-active {
+  border-color: var(--accent, #58a6ff);
+  color: var(--accent, #58a6ff);
+  font-weight: 600;
+}
+
+.env-var-warning {
+  margin: 6px 0 0 0;
+  padding: 6px 8px;
+  background: var(--bg-secondary, #1b1f27);
+  border-left: 3px solid var(--accent-yellow, #d29922);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--accent-yellow, #d29922);
+}
+
 /* ── Execution History ─────────────────────────────────────────────────── */
 .execution-history {
   padding: 12px;

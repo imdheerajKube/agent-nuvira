@@ -62,6 +62,26 @@ import { clearModelListCache } from '../inference/model-validator.js';
 import { probeProviderList } from '../inference/model-probe.js';
 import { CATALOG_PROVIDER_IDS, getCatalogProvider } from '../inference/provider-catalog.js';
 import { readHubData } from './hub-data.js';
+import {
+  isCuratedProcessEnvVar,
+  normalizeProcessEnvValue,
+  type ProcessEnvValueError,
+} from '../config/process-env.js';
+import {
+  FRESH_DAYS,
+  FRESHNESS_COPY,
+  REACHABILITY_COPY,
+  classifyFreshness,
+  classifyReachability,
+  type ModelFreshness,
+  type ModelReachability,
+} from '../learning/model-reachability.js';
+import {
+  VERIFY_BACKLOG_DEFAULT_PER_RUN,
+  VERIFY_BACKLOG_MAX_PER_RUN,
+  getVerifyBacklogState,
+  startVerifyBacklogRun,
+} from '../learning/model-verify-job.js';
 import { setToolsetEnabled } from '../tools/toolsets.js';
 import { setSkillEnabled } from '../learning/hub-skill-catalog.js';
 // I11 — dashboard channel send-test: the same registry/adapters `nuvira gateway
@@ -3301,6 +3321,33 @@ function writeJson(res: ServerResponse, status: number, data: unknown): void {
   res.end(JSON.stringify(data));
 }
 
+/**
+ * Turn a refused process-environment value into something a user can act on.
+ *
+ * UI copy on purpose: the validator sends a stable machine reason, and the
+ * message is composed here. The two that matter most are the ones a user would
+ * otherwise read as success — a name off the allowlist (the endpoint is curated,
+ * and saying so is friendlier than a bare 400) and a value that is not a flag
+ * (`NUVIRA_STRICT_MODEL=true` reads as OFF, so accepting it would store a
+ * setting that does not do what the page says it does).
+ */
+function describeProcessEnvRefusal(name: string, reason: ProcessEnvValueError): string {
+  switch (reason) {
+    case 'unknown-name':
+      return `${name || 'That name'} is not one of the curated process switches. Skill secrets live on the Environment page, and provider credentials in provider setup.`;
+    case 'empty':
+      return `${name} cannot be set to an empty value — use Unset to remove it from the env file.`;
+    case 'multiline':
+      return `${name} was not saved: a value may not contain a newline, or it would add a second variable to the env file.`;
+    case 'too-long':
+      return `${name} was not saved: the value is too long (limit 512 characters).`;
+    case 'not-a-flag':
+      return `${name} was not saved: it is a switch, so its value must be on (1, true, yes, on) or off (0, false, off, no).`;
+    default:
+      return `${name} was not saved.`;
+  }
+}
+
 // ─── Request Handler ────────────────────────────────────────────────────────
 
 function handleRequest(req: IncomingMessage, res: ServerResponse): void {
@@ -4070,6 +4117,136 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         const { probeSkillEnvVar } = await import('../skills/skill-env-inventory.js');
         const probe = probeSkillEnvVar(name);
         writeJson(res, 200, { ok: true, usable: probe.usable, detail: probe.detail });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+
+  // ── Process environment — the curated switches, not a general env editor ─
+  //
+  // `/env` edits SKILL secrets: any well-formed NAME a skill might declare. The
+  // switches that change how a RUN behaves (isolation, resume, the debug log,
+  // OTLP export, tool hooks) are a different thing, and the useful thing to
+  // expose is not "write a variable" but "here is what this switch is currently
+  // set to, what unset means, and whether something outranks it".
+  //
+  // The allowlist is enforced HERE rather than in the UI, so a hand-made request
+  // cannot use this endpoint to append an arbitrary name to the credential
+  // `.env` — the page is curated because the server is. Reads need a session;
+  // writing needs routing.operate (admin or operator), matching every other
+  // route that mutates persisted configuration.
+  if (pathname === '/api/process-env' && req.method === 'GET') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      try {
+        const { readProcessEnvInventory } = await import('./process-env-inventory.js');
+        writeJson(res, 200, { ok: true, vars: readProcessEnvInventory() });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+  if (pathname === '/api/process-env' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot change the process environment (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const name = typeof body?.name === 'string' ? body.name.trim() : '';
+      const rawValue = typeof body?.value === 'string' ? body.value : '';
+      const normalized = normalizeProcessEnvValue(name, rawValue);
+      if (!normalized.ok) {
+        writeJson(res, 400, { ok: false, error: describeProcessEnvRefusal(name, normalized.reason), reason: normalized.reason });
+        return;
+      }
+      try {
+        const { saveEnvValue } = await import('../skills/secret-capture.js');
+        const written = saveEnvValue(name, normalized.value);
+        if (!written.success) {
+          writeJson(res, 400, { ok: false, error: `${name} could not be written to the env file (${written.reason ?? 'write-failed'}).` });
+          return;
+        }
+        // Apply to THIS process, so the dashboard's own turns obey the switch
+        // without a restart. It is also why the row stops reading as shadowed:
+        // the process now holds the value that was just written to the file.
+        try {
+          const { applyEnvToProcess } = await import('../gateway/platform-config.js');
+          applyEnvToProcess({ [name]: normalized.value });
+        } catch {
+          /* best-effort */
+        }
+        const { readProcessEnvInventory } = await import('./process-env-inventory.js');
+        writeJson(res, 200, {
+          ok: true,
+          saved: { name, value: normalized.value },
+          row: readProcessEnvInventory().find((r) => r.name === name),
+        });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+  if (pathname === '/api/process-env/delete' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot change the process environment (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const name = typeof body?.name === 'string' ? body.name.trim() : '';
+      // The same allowlist the write path uses: deleting an arbitrary name from
+      // the credential file would be a write wearing a different verb.
+      if (!isCuratedProcessEnvVar(name)) {
+        writeJson(res, 400, { ok: false, error: describeProcessEnvRefusal(name, 'unknown-name'), reason: 'unknown-name' });
+        return;
+      }
+      try {
+        const { deleteEnvValue } = await import('../skills/secret-capture.js');
+        const result = deleteEnvValue(name);
+        if (!result.success) {
+          writeJson(res, 400, { ok: false, error: result.reason ?? 'delete failed' });
+          return;
+        }
+        // Drop it from this process too. "Unset" has to mean unset for the run
+        // that is about to happen, or the row would read as unset while the
+        // dashboard kept obeying the value it just removed.
+        try {
+          const { applyEnvToProcess } = await import('../gateway/platform-config.js');
+          applyEnvToProcess({}, [name]);
+        } catch {
+          /* best-effort */
+        }
+        const { readProcessEnvInventory } = await import('./process-env-inventory.js');
+        writeJson(res, 200, {
+          ok: true,
+          removed: result.removed,
+          row: readProcessEnvInventory().find((r) => r.name === name),
+        });
       } catch (err) {
         writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
       }
@@ -4876,27 +5053,37 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       }> }>(join(MEMORY_DIR, 'model-registry.json'));
       const now = Date.now();
       const entries = Object.values(registryData?.entries ?? {});
-      
-      const STALE_DAYS = 7;
-      const REMOVED_DAYS = 30;
-      
-      let freshCount = 0;
-      let staleCount = 0;
-      let removedCount = 0;
-      
+
+      // Two classifications per entry, deliberately separate — see
+      // `model-reachability.ts` for why: "is the provider still listing it"
+      // (probe age) and "would the router use it" (verification) are different
+      // questions, and this endpoint previously answered both with one rule
+      // while the panel's badges answered with another.
+      const counts: Record<ModelReachability, number> = {
+        routable: 0,
+        parked: 0,
+        'proof-expired': 0,
+        'proven-dead': 0,
+        'never-verified': 0,
+      };
+      const freshnessCounts: Record<ModelFreshness, number> = {
+        fresh: 0,
+        stale: 0,
+        'likely-removed': 0,
+      };
+
       const timelineEntries = entries.map((e: any) => {
-        const daysSinceProbe = e.lastProbedAt ? (now - e.lastProbedAt) / (24 * 60 * 60 * 1000) : Infinity;
-        const isStale = daysSinceProbe > STALE_DAYS;
-        const isRemoved = daysSinceProbe > REMOVED_DAYS && e.errorRate > 0.5;
-        
-        if (isRemoved) removedCount++;
-        else if (isStale) staleCount++;
-        else freshCount++;
-        
+        const reachability = classifyReachability(e, now);
+        const freshness = classifyFreshness(e.lastProbedAt, e.errorRate, now);
+        counts[reachability] += 1;
+        freshnessCounts[freshness] += 1;
+
         return {
           provider: e.provider,
           model: e.model,
           status: e.status,
+          reachability,
+          freshness,
           lastVerifiedAt: e.lastVerifiedAt || 0,
           lastProbedAt: e.lastProbedAt || 0,
           lastUsedAt: e.lastUsedAt || 0,
@@ -4904,22 +5091,82 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           latencyMs: e.latencyMs,
           contextWindowTokens: e.contextWindowTokens,
           firstSeenAt: e.firstSeenAt || e.lastProbedAt || 0,
+          /** How stale this model's PROOF is — the number `isUsable()` gates on. */
+          daysSinceVerify: e.lastVerifiedAt
+            ? (now - e.lastVerifiedAt) / (24 * 60 * 60 * 1000)
+            : null,
         };
       });
-      
+
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         entries: timelineEntries,
         lastUpdated: now,
         totalModels: entries.length,
-        freshCount,
-        staleCount,
-        removedCount,
+        counts,
+        freshnessCounts,
+        // The wording travels WITH the data, so the panel cannot drift from the
+        // classifier that produced the state. `reachability-copy` is one small
+        // map, not a per-row string, and it keeps the root learning modules out
+        // of the browser bundle (they are server-side only).
+        reachabilityCopy: REACHABILITY_COPY,
+        freshnessCopy: FRESHNESS_COPY,
+        freshDays: FRESH_DAYS,
       }));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Failed to load timeline data' }));
     }
+    return;
+  }
+
+  // ── Timeline action: "verify next N" the never-verified backlog ──────────
+  // READ is open, like `/api/model-timeline` above: it carries model ids, counts
+  // and prose, no credentials, and it renders on a page that is already readable
+  // without a session. The WRITE below is where the gate belongs — a spot-check
+  // is a real generation against the user's provider quota.
+  if (pathname === '/api/models/verify-next' && req.method === 'GET') {
+    writeJson(res, 200, {
+      ...getVerifyBacklogState(),
+      defaultCount: VERIFY_BACKLOG_DEFAULT_PER_RUN,
+      maxCount: VERIFY_BACKLOG_MAX_PER_RUN,
+    });
+    return;
+  }
+
+  // POST /api/models/verify-next — start probing the next N never-verified ids.
+  // Returns as soon as the run is PLANNED; the probes continue in the background
+  // and the panel watches them through the GET above. A run that is refused
+  // (already running, or an empty backlog) is reported with `ok: false` plus the
+  // reason, so "nothing left to do" never has to be inferred from a zero count.
+  if (pathname === '/api/models/verify-next' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot spend provider quota on model verification.`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const requested =
+        typeof body?.count === 'number' ? body.count : VERIFY_BACKLOG_DEFAULT_PER_RUN;
+      const result = startVerifyBacklogRun(new ConfigManager(), requested);
+      writeJson(res, 200, {
+        ok: result.started,
+        started: result.started,
+        error: result.error,
+        refusal: result.state.refusal,
+        state: result.state,
+        defaultCount: VERIFY_BACKLOG_DEFAULT_PER_RUN,
+        maxCount: VERIFY_BACKLOG_MAX_PER_RUN,
+      });
+    })();
     return;
   }
 

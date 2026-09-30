@@ -25,6 +25,8 @@ import type {
   TaskRecord,
   TaskStatus,
   SkillEnvVarRow,
+  ProcessEnvVarRow,
+  VerifyBacklogState,
   ResumeOutcome,
   TraceEntry,
   TraceFinding,
@@ -1849,6 +1851,105 @@ export class DashboardAPI {
       });
       const data = (await res.json()) as { ok?: boolean; usable?: boolean; detail?: string; error?: string };
       return { ok: data.ok === true, usable: data.usable, detail: data.detail, error: data.error };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * The curated process switches, with both the stored and the in-process value.
+   *
+   * Returns `[]` rather than null, so the page renders its empty state instead
+   * of a spinner when the server is older than the bundle.
+   */
+  async fetchProcessEnv(): Promise<ProcessEnvVarRow[]> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/process-env`, { headers: { ...authHeaders() } });
+      const data = (await parseJsonOrNull(res)) as { vars?: ProcessEnvVarRow[] } | null;
+      return data?.vars ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * The Timeline's "verify next N" run state, or null when the server predates
+   * the endpoint (an old server must read as "no such action", not as a crash).
+   */
+  async fetchVerifyBacklog(): Promise<VerifyBacklogState | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/models/verify-next`, {
+        headers: { ...authHeaders() },
+      });
+      return (await parseJsonOrNull(res)) as VerifyBacklogState | null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Start probing the next N never-verified models.
+   *
+   * Resolves as soon as the run is PLANNED — the probes take up to 20s each and
+   * continue in the server process, so progress is read back by polling
+   * {@link fetchVerifyBacklog} rather than by holding this request open.
+   */
+  async startVerifyBacklog(
+    count: number,
+  ): Promise<{ ok: boolean; error?: string; refusal?: string; state?: VerifyBacklogState }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/models/verify-next`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ count }),
+      });
+      const data = (await parseJsonOrNull(res)) as {
+        ok?: boolean;
+        error?: string;
+        refusal?: string;
+        state?: VerifyBacklogState;
+      } | null;
+      if (!data) return { ok: false, error: 'The dashboard server did not respond.' };
+      return { ok: data.ok === true, error: data.error, refusal: data.refusal, state: data.state };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Could not start the run.' };
+    }
+  }
+
+  /**
+   * Set one curated switch. The server re-reads the row and returns it, so the
+   * page shows what was really stored (including a value the server normalized)
+   * instead of what the user typed.
+   */
+  async saveProcessEnvVar(
+    name: string,
+    value: string,
+  ): Promise<{ ok: boolean; row?: ProcessEnvVarRow; error?: string; reason?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/process-env`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ name, value }),
+      });
+      const data = (await res.json()) as { ok?: boolean; row?: ProcessEnvVarRow; error?: string; reason?: string };
+      return { ok: data.ok === true, row: data.row, error: data.error, reason: data.reason };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Remove one curated switch from the credential `.env`. */
+  async deleteProcessEnvVar(
+    name: string,
+  ): Promise<{ ok: boolean; removed?: boolean; row?: ProcessEnvVarRow; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/process-env/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ name }),
+      });
+      const data = (await res.json()) as { ok?: boolean; removed?: boolean; row?: ProcessEnvVarRow; error?: string };
+      return { ok: data.ok === true, removed: data.removed, row: data.row, error: data.error };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }

@@ -4,7 +4,7 @@
 
 The SDK is a clean-room types + base-class package: it has **no runtime dependency on the Agent-Nuvira internals**, so a custom agent can be built, unit-tested, and published without pulling in the whole CLI. Its type surface is kept structurally compatible with the main package by an in-repo compatibility test.
 
-**Version:** the SDK ships on the **same version number as the CLI and the VS Code extension** — `3.3.4` — so `nuvira sdk info`, `nuvira --version` and the extension's `version` export agree. A custom agent built against a mismatched SDK is the usual reason one fails to load, so check that first.
+**Version:** the SDK ships on the **same version number as the CLI and the VS Code extension** — `3.3.5` — so `nuvira sdk info`, `nuvira --version` and the extension's `version` export agree. A custom agent built against a mismatched SDK is the usual reason one fails to load, so check that first.
 
 > **📖 The full guide is [`docs/AGENT_SDK.md`](../../docs/AGENT_SDK.md).** It covers the
 authoritative version of everything below — the complete agent contract, `defineAgent()`'s

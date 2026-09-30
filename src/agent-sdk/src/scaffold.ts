@@ -59,7 +59,7 @@ function toCamelCase(pascal: string): string {
  * a custom agent fail to load. A test asserts the two agree, so a release that
  * forgets this constant fails rather than shipping.
  */
-export const SDK_VERSION = '3.3.4';
+export const SDK_VERSION = '3.3.5';
 
 // ─── Templates ──────────────────────────────────────────────────────────────
 

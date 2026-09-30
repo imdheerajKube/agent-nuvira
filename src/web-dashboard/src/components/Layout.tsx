@@ -24,6 +24,7 @@ const NAV_ITEMS = [
   { path: '/hub', label: 'Agent Hub', icon: '🧰' },
   { path: '/traces', label: 'Traces', icon: '🔍' },
   { path: '/env', label: 'Environment', icon: '🔐' },
+  { path: '/process-env', label: 'Process Env', icon: '🌱' },
   { path: '/memory', label: 'Memory', icon: '💾' },
   { path: '/executions', label: 'Executions', icon: '📜' },
   { path: '/history', label: 'History', icon: '📝' },
