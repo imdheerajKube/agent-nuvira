@@ -1,16 +1,27 @@
 /**
  * FAISS IVF vs Exact backend benchmark.
  *
- * Measures the pure-JS IVF-flat ANN tradeoff on a large corpus (2,000 vectors,
- * well above the 512-entry exact threshold): recall@k against the exact JSON
- * backend (ground truth) plus search latency, so the approximate-search
- * behavior is observable and regression-guarded.
+ * Measures the pure-JS IVF-flat ANN tradeoff on a large corpus (1,250 vectors,
+ * ~2.4x the 512-entry exact threshold, so the exact backend is genuinely
+ * bypassed): recall@k against the exact JSON backend (ground truth) plus search
+ * latency, so the approximate-search behavior is observable and
+ * regression-guarded.
  *
  * - Deterministic (mulberry32 PRNG) — reproducible across runs/CI.
  * - Hermetic: writes to a temp BUFF_MEMORY_DIR, never the real ~/.nuvira/memory.
  * - Recall thresholds are generous (≥0.9@5, ≥0.8@1) to avoid flakiness while
  *   still catching a broken IVF implementation.
  * - Latency is logged, not asserted (timing assertions flake on CI).
+ *
+ * WHY 1,250 AND NOT 2,000. There is no bulk insert: every `insert()` rewrites
+ * the whole JSON index, so a corpus of n costs O(n²) disk I/O — this file had
+ * the largest wall-clock in the suite by an order of magnitude, and it timed
+ * out on the windows-latest runner (`Test timed out in 120000ms`) while
+ * MEASURING 115.9s on ubuntu Node 22, i.e. it had under 4% headroom on a good
+ * day. Scaling the corpus to 1.25/2.0 cuts the quadratic insert work to ~39% of
+ * what it was, which is what actually buys the margin. Measured recall is
+ * unaffected: exact@5 and ivf@5 sat at 100% against floors of 99%/90%, so this
+ * trims runtime, not signal.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
@@ -79,12 +90,14 @@ function buildCorpus(seed: number, dim = 32, clusters = 25, perCluster = 80): nu
 describe('IVF vs exact — large corpus benchmark', () => {
   const DIM = 32;
   const CLUSTERS = 25;
-  const PER_CLUSTER = 80;
-  const TOTAL = CLUSTERS * PER_CLUSTER; // 2,000 entries
+  const PER_CLUSTER = 50;
+  const TOTAL = CLUSTERS * PER_CLUSTER; // 1,250 entries
 
-  // 2,000 sequential insert() calls each rewrite the growing JSON index file
-  // (O(n²) disk I/O) — a generous timeout beyond the 5s default is required.
-  it('achieves high recall@k against the exact backend on 2,000 vectors', async () => {
+  // Every insert() rewrites the growing JSON index file (O(n²) disk I/O) — see
+  // the note at the top of this file. The budget is sized off MEASUREMENT, not
+  // the 5s default: on ubuntu Node 22 this test ran 115.9s at 2,000 vectors
+  // (≈44s at this size), and the windows runner is slower still.
+  it('achieves high recall@k against the exact backend on 1,250 vectors', async () => {
     const corpus = buildCorpus(7, DIM, CLUSTERS, PER_CLUSTER);
 
     const ivf = new FaissIvfBackend('bench-ivf', { nlist: 16, nprobe: 4, exactThreshold: 128, seed: 7 });
@@ -156,7 +169,7 @@ describe('IVF vs exact — large corpus benchmark', () => {
 
     expect(ivfRecall5Avg).toBeGreaterThanOrEqual(0.9);
     expect(ivfRecall1Avg).toBeGreaterThanOrEqual(0.8);
-  }, 120_000);
+  }, 180_000);
 
   it('keeps the exact backend as ground truth (recall@k = 1.0 vs itself)', async () => {
     // Sanity: exact backend is deterministic and self-consistent on the corpus.
@@ -170,5 +183,5 @@ describe('IVF vs exact — large corpus benchmark', () => {
     const res = await exact.search(query, 5);
     expect(res[0].entry.id).toBe('v-42');
     expect(res[0].similarity).toBeGreaterThan(0.99);
-  }, 120_000);
+  }, 180_000);
 });
