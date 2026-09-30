@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   recordWorkingState,
   getWorkingState,
@@ -107,7 +107,9 @@ describe('recordWorkingState — files + persistence', () => {
     recordWorkingState(PROJECT, { filesTouched: ['a.js'], unverifiedEdit: true });
     clearWorkingState(PROJECT);
     expect(getWorkingState(PROJECT)).toBeNull();
-    expect(normalizeProjectPath('/tmp/example-calc')).toBe('/tmp/example-calc');
+    // A native path, so the expectation is the platform's own normalization —
+    // `/tmp/example-calc` is `D:\\tmp\\example-calc` on Windows.
+    expect(normalizeProjectPath('/tmp/example-calc')).toBe(resolve('/tmp/example-calc'));
   });
 
   it('returns null for an unknown project', () => {

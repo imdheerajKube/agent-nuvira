@@ -449,7 +449,23 @@ export function listDebugLogs(dir: string = debugLogDir()): DebugLogFile[] {
         const path = join(dir, name);
         return { path, header: parseDebugLogHeader(readFileSafe(path) ?? ''), at: statSafe(path) };
       })
-      .sort((a, b) => b.at - a.at)
+      .sort((a, b) => {
+        // Primary: write time. But `mtimeMs` granularity is coarse — 1ms on
+        // most filesystems — so two turns written back to back routinely share
+        // it, and `readLatestDebugLog` would then return whichever file the
+        // directory listing happened to yield first. That is not "the newest
+        // log for this surface"; it is a coin flip the old sort left to the
+        // filesystem.
+        const byMtime = b.at - a.at;
+        if (byMtime !== 0) return byMtime;
+        // Break the tie on the log's OWN start time (it is in the header and in
+        // the filename), which is what "newest" actually means here.
+        const byStart = (b.header?.startedAt ?? 0) - (a.header?.startedAt ?? 0);
+        if (byStart !== 0) return byStart;
+        // A total order even when both are equal, so the result is never an
+        // artefact of directory enumeration order.
+        return b.path.localeCompare(a.path);
+      })
       .map(({ path, header }) => ({ path, header }));
   } catch {
     return [];

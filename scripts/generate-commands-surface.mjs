@@ -28,7 +28,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..');
@@ -114,7 +114,11 @@ async function main() {
     // createCLI lives in its own module since 2026-09-16: `router.ts` became a
     // pure provider-resolution service so the command dispatcher's ~35 command
     // imports no longer formed a 28-module import cycle with it.
-    ({ createCLI } = await import(join(repoRoot, 'dist', 'cli', 'cli-program.js')));
+    // pathToFileURL: a bare Windows path (`D:\\a\\...`) is not a valid ESM
+    // specifier, so on the windows runner this import threw and the script
+    // exited 2 ("could not import dist/cli/cli-program.js") even though the
+    // build had run — which the drift guard then reported as a CLI drift.
+    ({ createCLI } = await import(pathToFileURL(join(repoRoot, 'dist', 'cli', 'cli-program.js')).href));
   } catch (err) {
     console.error('✗ could not import dist/cli/cli-program.js — run `npm run build` first.');
     console.error(String(err?.message ?? err));

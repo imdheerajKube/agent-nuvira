@@ -51,7 +51,9 @@ describe('write_file — authorized creation needs no round trip', () => {
 
     expect(existsSync(join(root, 'chapters/01-chapter-1.md'))).toBe(true);
     expect(readFileSync(join(root, 'chapters/01-chapter-1.md'), 'utf-8')).toBe('Chapter one prose.');
-    expect(result).toContain("created 'chapters/01-chapter-1.md'");
+    // `gated.rel` is a NATIVE path (coding-tools' gatePath) — `join` builds the
+    // expected separator for the host.
+    expect(result).toContain(`created '${join('chapters', '01-chapter-1.md')}'`);
     // Reported, never silent — the model is told to state the decision.
     expect(result).toContain('Applied without asking');
   });

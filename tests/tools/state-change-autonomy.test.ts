@@ -78,7 +78,9 @@ describe('edit_file — the verify loop must not need a human per iteration', ()
       ctxFor(FIX_THE_CALC),
     );
 
-    expect(result).toContain("edit_file: applied to 'src/calc.ts'");
+    // `gated.rel` is a NATIVE path (coding-tools' gatePath), so build the
+    // expected spelling with `join` rather than hard-coding the POSIX form.
+    expect(result).toContain(`edit_file: applied to '${join('src', 'calc.ts')}'`);
     expect(result).toContain('Applied without asking');
     expect(readFileSync(join(root, 'src/calc.ts'), 'utf-8')).toContain('return x + 100;');
   });
@@ -151,7 +153,7 @@ describe('edit_file — the verify loop must not need a human per iteration', ()
 
     expect(emit).toHaveBeenCalledWith(
       'autonomy:write-applied',
-      expect.objectContaining({ tool: 'edit_file', path: 'src/calc.ts', share: expect.any(Number) }),
+      expect.objectContaining({ tool: 'edit_file', path: join('src', 'calc.ts'), share: expect.any(Number) }),
       'tool-loop',
     );
   });

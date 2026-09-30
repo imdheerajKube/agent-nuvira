@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   detectNoOpCommand,
@@ -89,7 +89,10 @@ describe('isArchivePath / resolveArtifact', () => {
 
   it('passes absolute paths through and resolves relative ones against the root', () => {
     expect(resolveArtifact('/tmp/x/y.py', '/some/root')).toBe('/tmp/x/y.py');
-    expect(resolveArtifact('addon/manifest.ini', '/some/root')).toBe('/some/root/addon/manifest.ini');
+    // Compare against the platform's own resolution: `resolveArtifact` returns a
+    // NATIVE path, so the expected value must be built the same way or the
+    // assertion is really about the host's separator, not the contract.
+    expect(resolveArtifact('addon/manifest.ini', '/some/root')).toBe(resolve('/some/root', 'addon/manifest.ini'));
   });
 });
 

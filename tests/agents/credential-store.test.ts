@@ -429,7 +429,11 @@ describe('CredentialStore', () => {
       expect(store.canPush).toBe(true);
     });
 
-    it('writes the store owner-only (0600)', async () => {
+    // Windows has no POSIX permission bits: `chmod` toggles the read-only flag
+    // only, so `mode & 0o777` is always 0o666 there and this assertion cannot
+    // hold. The owner-only guarantee on Windows is an ACL, outside Node's
+    // portable API — so the mode check is skipped rather than asserted falsely.
+    it.skipIf(process.platform === 'win32')('writes the store owner-only (0600)', async () => {
       const mod = await import('../../src/agents/credential-store.js');
       const result = mod.storeReleaseCredential('NPM_TOKEN', 'npm_perm_check_value');
       expect(result.success).toBe(true);

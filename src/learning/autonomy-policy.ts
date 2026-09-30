@@ -433,10 +433,17 @@ function escapeRegexLiteral(text: string): string {
  * unreviewed overwrite.
  */
 export function requestNamesPath(request: string, path: string): boolean {
-  const text = (request || '').trim();
+  // Separator-insensitive on BOTH sides. `gated.rel` is a NATIVE path (see
+  // coding-tools' gatePath), so on Windows it is `src\\calc.ts` while a user
+  // writing the request almost always types `src/calc.ts` — and the candidate
+  // test below would then compare a backslash string against a slash string and
+  // decide the request named nothing. An authorized rewrite was refused on
+  // Windows for that reason alone, so normalise both to `/` before matching.
+  const text = (request || '').trim().replace(/\\/g, '/');
   if (!text) return false;
-  const base = path.split(/[\\/]/).pop() ?? '';
-  const candidates = [base, path].filter((c) => c.length >= 3);
+  const normalized = path.replace(/\\/g, '/');
+  const base = normalized.split('/').pop() ?? '';
+  const candidates = [base, normalized].filter((c) => c.length >= 3);
   return candidates.some(
     (c) => new RegExp(`(?:^|[^\\w.\\/-])${escapeRegexLiteral(c)}(?:$|[^\\w.\\/-])`, 'i').test(text),
   );

@@ -290,7 +290,10 @@ describe('release-runner — git phase', () => {
     execSync('git init -q', { cwd: project });
     execSync('git config user.email t@t', { cwd: project });
     execSync('git config user.name t', { cwd: project });
-    execSync('git add -A && git commit -qm init', { cwd: project, shell: '/bin/bash' });
+    // No explicit `shell: '/bin/bash'` — that path does not exist on Windows and
+    // execSync then threw ENOENT before git ever ran. The default shell handles
+    // `&&` on both platforms.
+    execSync('git add -A && git commit -qm init', { cwd: project });
     execSync('git remote add origin https://example.invalid/demo.git', { cwd: project });
 
     writeProject({ 'packages/web/package.json': JSON.stringify({ name: 'web', version: '1.0.0' }, null, 2) + '\n' });
@@ -318,7 +321,7 @@ describe('release-runner — git phase', () => {
       execSync('git init -q', { cwd: project });
       execSync('git config user.email t@t', { cwd: project });
       execSync('git config user.name t', { cwd: project });
-      execSync('git add -A && git commit -qm init', { cwd: project, shell: '/bin/bash' });
+      execSync('git add -A && git commit -qm init', { cwd: project });
       execSync(`git remote add origin "${remoteDir}"`, { cwd: project });
 
       writeProject({ 'src/new-file.ts': 'export const x = 1;\n' });

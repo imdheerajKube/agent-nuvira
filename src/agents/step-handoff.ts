@@ -525,11 +525,17 @@ export function deliverablesNamedIn(goal: string): string[] {
   //    accountable to. Two or more segments, so a bare `/tmp` in prose is not
   //    mistaken for a deliverable. Directories satisfy existence, so these are
   //    verified (and re-opened on resume) by the same artifact check as files.
-  const absolute = (goal || '').match(/(?:~\/|\/)[\w.-]+(?:\/[\w.-]+)+\/?/g) ?? [];
+  // Roots: POSIX absolute (`/x/y`), home (`~/x/y`), AND a Windows drive path
+  // (`C:\\x\\y`). Without the drive form a Windows ask naming an absolute
+  // destination folder — the live NVDA-addon case — matched nothing, so the
+  // hand-off was keyed on the refused path instead of the deliverable the ask
+  // actually named. Separators are accepted either way so the same goal works
+  // on both platforms.
+  const absolute = (goal || '').match(/(?:~\/|\/|[A-Za-z]:[\\/])[\w.-]+(?:[\\/][\w.-]+)+[\\/]?/g) ?? [];
   for (const raw of absolute) {
     const path = raw.replace(/[.,;:]+$/, '').trim();
     if (!path || path.includes('.')) continue; // extensions handled above
-    if (path.split('/').filter(Boolean).length < 2) continue;
+    if (path.split(/[\\/]/).filter(Boolean).length < 2) continue;
     if (push(path)) return found;
   }
 

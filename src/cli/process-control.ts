@@ -27,48 +27,65 @@ import { execSync, execFileSync } from 'node:child_process';
 
 // ─── PID discovery ──────────────────────────────────────────────────────────
 
+/**
+ * Every process on Windows, as `<pid>|<commandline>` lines, or null when no
+ * probe is available.
+ *
+ * ONE listing, shared by the single-pid and all-pids probes: they were written
+ * separately once and only the single-pid path learned the `wmic` fallback, so
+ * "stop every matching process" silently could not see the second half of a
+ * supervised gateway on Windows.
+ */
+function windowsProcessLines(): string[] | null {
+  // Use execFileSync to avoid cmd.exe mangling PowerShell $() syntax.
+  try {
+    const out = execFileSync(
+      'powershell',
+      ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }'],
+      { encoding: 'utf8', timeout: 10_000 }
+    );
+    return out.split(/\r?\n/);
+  } catch {
+    // Fall back to wmic
+  }
+  try {
+    const out = execSync('wmic process get processid,commandline /format:csv', { encoding: 'utf8' });
+    const rows: string[] = [];
+    for (const line of out.split(/\r?\n/)) {
+      // wmic CSV: "Node,<host>,<pid>,<commandline>"
+      // Command lines can contain commas, so split only on first 3 commas
+      const parts = line.split(',');
+      if (parts.length < 4) continue;
+      rows.push(`${Number.parseInt(parts[2], 10)}|${parts.slice(3).join(',')}`);
+    }
+    return rows;
+  } catch {
+    return null;
+  }
+}
+
+/** One `<pid>|<commandline>` line, or null when it does not parse / is us. */
+function parseProcessLine(line: string): { pid: number; cmd: string } | null {
+  const pipeIdx = line.indexOf('|');
+  if (pipeIdx === -1) return null;
+  const pid = Number.parseInt(line.slice(0, pipeIdx), 10);
+  if (isNaN(pid) || pid === process.pid) return null;
+  return { pid, cmd: line.slice(pipeIdx + 1) };
+}
+
 /** Find the PID of a process whose command line matches `pattern`, or null.
  *  Never matches the current process. Cross-platform (ps / wmic / PowerShell). */
 export function findPidByCommandLine(pattern: RegExp): number | null {
   try {
-    let lines: string[];
     if (process.platform === 'win32') {
-      // Use execFileSync to avoid cmd.exe mangling PowerShell $() syntax.
-      try {
-        const out = execFileSync(
-          'powershell',
-          ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }'],
-          { encoding: 'utf8', timeout: 10_000 }
-        );
-        lines = out.split(/\r?\n/);
-        for (const line of lines) {
-          const pipeIdx = line.indexOf('|');
-          if (pipeIdx === -1) continue;
-          const pid = Number.parseInt(line.slice(0, pipeIdx), 10);
-          const cmd = line.slice(pipeIdx + 1);
-          if (isNaN(pid) || pid === process.pid) continue;
-          if (pattern.test(cmd)) return pid;
-        }
-        return null;
-      } catch {
-        // Fall back to wmic
-      }
-      const out = execSync('wmic process get processid,commandline /format:csv', { encoding: 'utf8' });
-      lines = out.split(/\r?\n/);
-      for (const line of lines) {
-        // wmic CSV: "Node,<host>,<pid>,<commandline>"
-        // Command lines can contain commas, so split only on first 3 commas
-        const parts = line.split(',');
-        if (parts.length < 4) continue;
-        const pid = Number.parseInt(parts[2], 10);
-        const cmd = parts.slice(3).join(',');
-        if (pid !== process.pid && pattern.test(cmd)) return pid;
+      for (const line of windowsProcessLines() ?? []) {
+        const parsed = parseProcessLine(line);
+        if (parsed && pattern.test(parsed.cmd)) return parsed.pid;
       }
       return null;
     }
     const out = execSync('ps -eo pid=,command=', { encoding: 'utf8' });
-    lines = out.split('\n');
-    for (const line of lines) {
+    for (const line of out.split('\n')) {
       const m = /^\s*(\d+)\s+(.*)$/.exec(line);
       if (!m) continue;
       const pid = Number.parseInt(m[1], 10);
@@ -145,8 +162,15 @@ export function findPidsByCommandLine(pattern: RegExp): number[] {
   const pids: number[] = [];
   try {
     if (process.platform === 'win32') {
-      const p = findPidByCommandLine(pattern);
-      return p === null ? [] : [p];
+      // EVERY match, like the POSIX branch below — not just the first. A
+      // supervised gateway is two processes, and returning only one left the
+      // other running on Windows exactly as it had on POSIX before this
+      // function existed.
+      for (const line of windowsProcessLines() ?? []) {
+        const parsed = parseProcessLine(line);
+        if (parsed && pattern.test(parsed.cmd)) pids.push(parsed.pid);
+      }
+      return pids;
     }
     const out = execSync('ps -eo pid=,command=', { encoding: 'utf8' });
     for (const line of out.split('\n')) {

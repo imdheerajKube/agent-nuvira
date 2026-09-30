@@ -21,7 +21,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { execSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   evaluateNestedManifests,
@@ -39,7 +39,10 @@ function withRepo(files: Record<string, string>): string {
   execSync('git config user.email t@t && git config user.name t', { cwd: dir });
   for (const [name, content] of Object.entries(files)) {
     const full = join(dir, name);
-    execSync(`mkdir -p "${join(name, '..')}"`, { cwd: dir });
+    // `mkdir -p` is a POSIX shell command: on Windows cmd.exe it fails
+    // ("A subdirectory or file . already exists"), which took the whole repo
+    // fixture down. mkdirSync is the same operation without a shell.
+    mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, content, 'utf-8');
   }
   execSync('git add -A && git commit -qm init', { cwd: dir });

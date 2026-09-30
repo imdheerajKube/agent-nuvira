@@ -1204,8 +1204,13 @@ describe('tool loop — deliverable gate (G13b)', () => {
       expect(readFileSync(target, 'utf-8')).toContain('Kharig');
       // The nudge told the model the destination the REQUEST gave, not one it
       // would otherwise have invented.
-      const nudgeTurn = JSON.stringify(deps.callModel.mock.calls[1][0]);
-      expect(nudgeTurn).toContain('write a 12 page story to ' + target);
+      // Read the RAW message contents, not their JSON form: JSON.stringify
+      // escapes a Windows path's backslashes (`\\`), so a containment check on
+      // the serialized turn can never match `target` there.
+      const nudgeTurn = (deps.callModel.mock.calls[1][0] as Array<{ content?: string }>)
+        .map((m) => m.content ?? '')
+        .join('\n');
+      expect(nudgeTurn).toContain(`write a 12 page story to ${target}`);
       expect(nudgeTurn).toContain('write the complete work to');
       // A turn that produced the file is not flagged as undelivered.
       expect(result.undeliveredArtifact).toBeFalsy();

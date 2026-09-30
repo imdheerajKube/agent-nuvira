@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -203,10 +203,19 @@ describe('WS2 debug log — writing and reading back', () => {
     const dir = tempDir();
     const first = new SessionDebugLog({ surface: 'cli-chat', dir, now: () => 1_000 });
     first.backendOf({ provider: 'groq', model: 'old' });
-    first.write();
+    const firstPath = first.write()!;
     const second = new SessionDebugLog({ surface: 'cli-chat', dir, now: () => 2_000 });
     second.backendOf({ provider: 'groq', model: 'new' });
-    second.write();
+    const secondPath = second.write()!;
+
+    // Force the case that flaked on CI: two turns written inside the same
+    // millisecond, so their mtimes are IDENTICAL. The newest-first order then
+    // has to come from the log's own start time, not from whatever order the
+    // directory listing happened to return. Before the tie-break existed this
+    // assertion passed or returned 'old' depending on the runner's speed.
+    const sameInstant = new Date(1_700_000_000_000);
+    utimesSync(firstPath, sameInstant, sameInstant);
+    utimesSync(secondPath, sameInstant, sameInstant);
 
     const found = readLatestDebugLog('cli-chat', dir)!;
     expect(found.header.model).toBe('new');
