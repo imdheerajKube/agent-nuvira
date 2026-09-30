@@ -108,7 +108,13 @@ export default function App() {
           path="/executions"
           element={<ExecutionHistory onFetch={(f) => dashboardAPI.fetchExecutionAudit(f)} />}
         />
-        <Route path="/system" element={<HealthPanel data={data} />} />
+        {/* The System tab is the doctor page: it shows the pass/warn/fail checks
+            and the REAL SSE state, which is tracked here and passed down — the
+            panel used to hardcode "● Connected" and could not be wrong. */}
+        <Route
+          path="/system"
+          element={<HealthPanel data={data} connected={connected} lastUpdated={lastUpdated} />}
+        />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

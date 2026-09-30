@@ -5,6 +5,15 @@ All notable changes to the Agent-Nuvira VS Code extension will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.6] — 2026-09-30
+
+> Version aligned with the CLI: this release ships alongside **CLI v3.3.6**, and
+> the SDK ships on `3.3.6` too, so all three artifacts report one number.
+
+> No extension changes. The CLI gains a System-tab doctor page and fixes
+> `nuvira doctor`'s fix lines, which printed a literal `${getCliName()}` instead
+> of the command to run.
+
 ## [3.3.5] — 2026-09-30
 
 > Version aligned with the CLI: this release ships alongside **CLI v3.3.5**, and

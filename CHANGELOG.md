@@ -2,6 +2,60 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.3.6 — the doctor's fix lines print real commands, and the System tab is where you read them
+
+### Fixed: `nuvira doctor` was telling users to run `${getCliName()}`
+
+Sixteen user-facing strings in `src/cli/doctor.ts` put a template expression inside a SINGLE-quoted
+string, so it never interpolated. What the CLI actually printed was literal:
+
+```
+💡 Run `${getCliName()} doctor --fix` to attempt auto-fix for common issues.
+```
+
+Every one of those lines is an actionable instruction — "run this and it is fixed" — and every one was
+unusable, because the command it named does not exist. The broken set covered the routing-governance and
+gateway-telemetry fixes, all four SBOM/licence fixes, the vault key-migration fix, the fact-memory hint,
+both model-probe hints, and the `doctor --fix` pointer itself. Each is now a template literal (with the
+inner backticks escaped where the command was already quoted), so the interpolation actually happens.
+
+Verified by RUNNING it rather than reading it: `nuvira doctor` and `nuvira doctor --enterprise` now
+contain zero occurrences of the literal `getCliName`, and the line above prints `nuvira doctor --fix`.
+
+**Still broken, same cause, deliberately not fixed here:** `src/cli/bedrock.ts` (4 sites),
+`src/cli/eval.ts` (3), `src/cli/marketplace.ts` (2), `src/cli/workflow.ts` (1). They are written down
+rather than quietly folded in, so the remaining work stays visible.
+
+### Fixed: the System tab is the doctor page now, and its status can be wrong
+
+`/system` was titled "System Health" and showed four counters — the size of the JSON stores the agent
+learns into — plus a **Status** row that was the hardcoded string `● Connected`. A status that reads
+nothing cannot be wrong, which is worse than useless: it was a green light for a stream that could be
+down. The real connection state was already tracked in `Layout` (the nav footer), and the doctor checks
+a user would look for under that name were rendered on the **Admin** tab.
+
+- **Fixed: the checks ARE the page.** The same `runAllChecks()` behind `nuvira doctor`, served from
+  `/api/admin/checks`, grouped into System and Enterprise with a rollup that states failures first. The
+  fetch is deliberately independent of the SSE payload, so the doctor output is readable before the
+  first stream frame — the old panel gated everything behind `data` being non-null, which made a page
+  about system health the last thing to load.
+- **Fixed: the connection state is read, not asserted.** It is the SSE state `App` already tracks and
+  now passes down, so it can say *Reconnecting…* — and the checks keep working when it does.
+- **Added: agent performance.** `health.agentStats` — total recorded runs, the overall success rate,
+  and a per-agent row with runs, rate and last run — has been computed by the server all along and
+  rendered nowhere. Rates are stored as FRACTIONS and printed as percentages (0.875 → 87.5%), which is
+  the unit the CLI itself uses.
+- **Fixed: the store counters are demoted and labelled.** "How big is my memory" is a fair question;
+  it was never the answer to "System Health".
+- **Fixed: an empty check group is stated, not hidden.** A section that silently disappears reads as
+  "this category passed" when it means "the server returned nothing for it".
+- **Added: `CheckRow` is shared.** Extracted from `AdminPanel` into `CheckRow.tsx` so the Admin and
+  System tabs cannot come to describe one check two different ways — the same defect class the Timeline
+  rework closed on the model side.
+- **Tests:** 11 new panel tests, including the regression that matters (the state must be ABLE to say
+  Reconnecting, and must not contain "Connected" while the stream is down) and the units check that
+  would have caught a raw fraction. Dashboard suite 337 → 348.
+
 ## v3.3.5 — "fresh" stops standing in for "usable", and the backlog it hid can now be worked down
 
 ### Added: a curated Process Environment page (`/process-env`)

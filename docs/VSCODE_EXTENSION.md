@@ -13,10 +13,10 @@ shared with whatever you run in a terminal. If a goal works from
 `npx agent-nuvira execute "…"`, it works from the extension, and vice versa.
 
 - **Extension:** `dheerajsharma.agent-nuvira-vscode` (Marketplace and
-  Open VSX), version `3.3.5`
+  Open VSX), version `3.3.6`
 - **Requires:** VS Code `>= 1.85.0`, Node `>= 18`, and the `agent-nuvira` CLI
-- **Same version number as the CLI**, so "the extension says 3.3.5, the CLI says
-  3.3.5" is the whole compatibility question.
+- **Same version number as the CLI**, so "the extension says 3.3.6, the CLI says
+  3.3.6" is the whole compatibility question.
 
 ---
 

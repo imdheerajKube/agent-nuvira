@@ -18,7 +18,7 @@ statement.
 - **Module format:** ESM only (`"type": "module"`, `NodeNext` resolution)
 - **Peer dependency:** TypeScript `>= 5.0.0`
 - **Guide version:** the SDK ships on the same version number as the CLI
-  (`3.3.5`), so `nuvira --version` and the SDK version always tell you the same
+  (`3.3.6`), so `nuvira --version` and the SDK version always tell you the same
   number. A mismatch between the SDK you built against and the CLI running your
   agent is the single most common reason a custom agent fails to load; check
   both with `nuvira sdk info`.

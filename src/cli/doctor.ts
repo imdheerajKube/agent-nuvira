@@ -342,7 +342,7 @@ function checkRbacConfig(config: BuffConfig): CheckResult {
     status: 'warn',
     message: 'No admin allow/deny policy configured',
     detail: 'Fully permissive mode (default). Teams: set routing.governance.allowProviders "groq,local" etc.',
-    fix: '${getCliName()} config set routing.governance.allowProviders "groq,local"',
+    fix: `${getCliName()} config set routing.governance.allowProviders "groq,local"`,
   };
 }
 
@@ -430,7 +430,7 @@ export function checkGatewayTelemetry(
       detail:
         'No prompt content is ever captured — enabling only reports aggregate requests/tokens/cost. ' +
         'Set routing.gatewayTelemetry.enabled true to surface usage-health in this report.',
-      fix: '${getCliName()} config set routing.gatewayTelemetry.enabled true',
+      fix: `${getCliName()} config set routing.gatewayTelemetry.enabled true`,
     };
   }
   const showFlags = telemetry?.healthFlags === true;
@@ -510,8 +510,8 @@ export function checkSbomSupplyChain(
       name: 'Supply Chain (SBOM)',
       status: 'warn',
       message: 'No package-lock.json — cannot generate a deterministic SBOM',
-      detail: 'Commit package-lock.json and run `${getCliName()} sbom` to produce a procurement-ready BOM.',
-      fix: 'Commit package-lock.json, then run `${getCliName()} sbom --out sbom.json`.',
+      detail: `Commit package-lock.json and run \`${getCliName()} sbom\` to produce a procurement-ready BOM.`,
+      fix: `Commit package-lock.json, then run \`${getCliName()} sbom --out sbom.json\`.`,
     };
   }
   if (!verify) {
@@ -519,8 +519,8 @@ export function checkSbomSupplyChain(
       name: 'Supply Chain (SBOM)',
       status: 'warn',
       message: 'No stored SBOM to verify',
-      detail: '`${getCliName()} sbom --out sbom.json` writes a CycloneDX 1.5 BOM from the lockfile.',
-      fix: 'Run `${getCliName()} sbom --out sbom.json` to generate, then re-run doctor.',
+      detail: `\`${getCliName()} sbom --out sbom.json\` writes a CycloneDX 1.5 BOM from the lockfile.`,
+      fix: `Run \`${getCliName()} sbom --out sbom.json\` to generate, then re-run doctor.`,
     };
   }
   if (!verify.ok) {
@@ -534,7 +534,7 @@ export function checkSbomSupplyChain(
       status: 'fail',
       message: `Dependency drift detected: ${parts}`,
       detail: 'The SBOM no longer matches package-lock.json — deps changed or the BOM was tampered.',
-      fix: 'Regenerate: `${getCliName()} sbom --out sbom.json`, then re-run doctor.',
+      fix: `Regenerate: \`${getCliName()} sbom --out sbom.json\`, then re-run doctor.`,
     };
   }
   if (verify.flaggedLicenses.length > 0) {
@@ -543,14 +543,14 @@ export function checkSbomSupplyChain(
       status: 'warn',
       message: `SBOM matches lockfile — ${verify.flaggedLicenses.length} copyleft/unknown license(s) flagged for review`, 
       detail: verify.flaggedLicenses.slice(0, 5).map((f) => `${f.name}: ${f.license}`).join(' · '),
-      fix: 'Review licenses with `${getCliName()} sbom licenses`; document exceptions in your compliance policy.',
+      fix: `Review licenses with \`${getCliName()} sbom licenses\`; document exceptions in your compliance policy.`,
     };
   }
   return {
     name: 'Supply Chain (SBOM)',
     status: 'pass',
     message: 'SBOM matches package-lock.json — no drift, no flagged licenses',
-    detail: 'CycloneDX 1.5 inventory is current; `${getCliName()} sbom verify` passes.',
+    detail: `CycloneDX 1.5 inventory is current; \`${getCliName()} sbom verify\` passes.`,
   };
 }
 
@@ -753,9 +753,9 @@ export async function runSystemChecks(configManager: ConfigManager): Promise<Che
     const cfg = configManager.getAll();
     const { refs: vaultRefs, plaintext: plaintextKeys } = countKeyStates(cfg);
     const plaintextNote = plaintextKeys > 0
-      ? `, ${plaintextKeys} key(s) still plaintext — run '${getCliName()} config vault migrate-keys'`
+      ? `, ${plaintextKeys} key(s) still plaintext — run \`${getCliName()} config vault migrate-keys\``
       : '';
-    const fixMigrate = plaintextKeys > 0 ? '${getCliName()} config vault migrate-keys' : undefined;
+    const fixMigrate = plaintextKeys > 0 ? `${getCliName()} config vault migrate-keys` : undefined;
     if (st.tier === 'keyring') {
       checks.push({
         name: 'Secret Vault',
@@ -786,7 +786,7 @@ export async function runSystemChecks(configManager: ConfigManager): Promise<Che
         status: 'warn',
         message: 'No vault — API keys stored in plaintext buffconfig.json',
         detail: `No reachable OS keyring, no OS credential tool, and BUFF_VAULT_PASSPHRASE not set (platform ${st.platform}). ${plaintextKeys} plaintext key(s) in config.`,
-        fix: 'Install an OS keychain/Secret Service, or set BUFF_VAULT_PASSPHRASE, then run `${getCliName()} config vault migrate-keys`',
+        fix: `Install an OS keychain/Secret Service, or set BUFF_VAULT_PASSPHRASE, then run \`${getCliName()} config vault migrate-keys\``,
       });
     }
   } catch {
@@ -867,7 +867,7 @@ export async function runSystemChecks(configManager: ConfigManager): Promise<Che
       detail: factStats.total > 0
         ? `By project: ${perProject}${Object.keys(factStats.byProject).length > 5 ? '…' : ''}`
         : 'No facts yet — facts are extracted from sessions and injected into planner prompts (Phase B1).',
-      fix: factStats.total === 0 ? 'Run a chat session; facts accumulate automatically (or `${getCliName()} memory facts add --text "…"`)' : undefined,
+      fix: factStats.total === 0 ? `Run a chat session; facts accumulate automatically (or \`${getCliName()} memory facts add --text "…"\`)` : undefined,
     });
   } catch {
     checks.push({
@@ -1389,7 +1389,7 @@ export class DoctorCommand extends BaseCommand {
           name: 'Model Listing',
           status: 'pass',
           message: 'Skipped (use --verbose to check)',
-          detail: 'Run `${getCliName()} doctor --verbose` to check model listing',
+          detail: `Run \`${getCliName()} doctor --verbose\` to check model listing`,
         });
       }
 
@@ -1435,7 +1435,7 @@ export class DoctorCommand extends BaseCommand {
           name: 'Quick Generation',
           status: 'pass',
           message: 'Skipped (use --verbose to test)',
-          detail: 'Run `${getCliName()} doctor --verbose` to test actual generation',
+          detail: `Run \`${getCliName()} doctor --verbose\` to test actual generation`,
         });
       }
     } catch (err) {
@@ -1552,7 +1552,7 @@ export class DoctorCommand extends BaseCommand {
     if (failed > 0) {
       console.log('');
       console.log('  ❌ Failed checks require attention. Use --verbose for details.');
-      console.log('  💡 Run `${getCliName()} doctor --fix` to attempt auto-fix for common issues.');
+      console.log(`  💡 Run \`${getCliName()} doctor --fix\` to attempt auto-fix for common issues.`);
     }
   }
 

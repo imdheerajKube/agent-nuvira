@@ -2,7 +2,7 @@
   "name": "agent-nuvira-vscode",
   "displayName": "%nuvira.displayName%",
   "description": "%nuvira.description%",
-  "version": "3.3.5",
+  "version": "3.3.6",
   "publisher": "dheerajsharma",
   "license": "MIT",
   "icon": "icon.png",

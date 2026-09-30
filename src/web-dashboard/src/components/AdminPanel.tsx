@@ -22,17 +22,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
 import QuotaPanel from './QuotaPanel';
+// The check row is shared with the System tab, which shows the same doctor
+// checks under their real name — one renderer, so the two cannot drift.
+import { CheckRow } from './CheckRow';
 import type {
   AdminCatalogProvider,
-  AdminCheck,
   AdminChecksData,
   AdminProviderSummary,
   AdminUser,
-  CheckStatus,
 } from '../types';
 
-const STATUS_ICON: Record<CheckStatus, string> = { pass: '✅', warn: '⚠️', fail: '❌' };
-const STATUS_LABEL: Record<CheckStatus, string> = { pass: 'PASS', warn: 'WARN', fail: 'FAIL' };
 const KEY_SOURCE_LABEL: Record<string, string> = {
   env: 'Environment',
   config: 'Config',
@@ -46,22 +45,6 @@ interface ProviderDraft {
   baseUrl?: string;
   model?: string;
   runner?: string;
-}
-
-function CheckRow({ check }: { check: AdminCheck }) {
-  return (
-    <div className="admin-check-row" data-status={check.status}>
-      <span className={`admin-check-badge admin-check-${check.status}`}>
-        {STATUS_ICON[check.status]} {STATUS_LABEL[check.status]}
-      </span>
-      <div className="admin-check-body">
-        <div className="admin-check-name">{check.name}</div>
-        <div className="admin-check-message">{check.message}</div>
-        {check.detail ? <div className="admin-check-detail">{check.detail}</div> : null}
-        {check.fix ? <div className="admin-check-fix">💡 {check.fix}</div> : null}
-      </div>
-    </div>
-  );
 }
 
 export default function AdminPanel() {

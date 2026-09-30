@@ -235,7 +235,7 @@ nuvira dashboard stop                # graceful SIGTERM, from any terminal
 | 📝 History | `/history` | Conversation history |
 | 💰 Costs | `/costs` | Spend per provider/session |
 | 📈 Benchmarks | `/benchmarks` | Model benchmark charts |
-| ⚙️ System | `/system` | Health panel |
+| ⚙️ System | `/system` | Doctor checks (pass/warn/fail), live stream state, agent stats |
 | 🛠️ Admin | `/admin` | Governance policy (RBAC, allow/deny, cost cap) |
 
 There is also a `/bedrock` onboarding route that is not in the left nav.
@@ -279,6 +279,29 @@ The page also refuses things a generic editor would accept: a name that is not o
 empty value (use **Unset**), and a value containing a newline (it would add a second variable to
 the file). Hook commands are stored in plain text — the page says so, because a hook is the one
 place a user might paste a token, and it is not masked here the way a skill secret is.
+
+### System — the doctor page, not a second set of counters
+
+The **System** tab (`/system`) runs the same checks `nuvira doctor` runs, on demand, and shows each
+one as pass / warn / fail with the fix for anything that is not passing. The groups are the ones the
+CLI uses: **System** (runtime, filesystem, configuration, local models) and **Enterprise**
+(governance, audit, RBAC, cost cap — `nuvira doctor --enterprise`). The rollup states failures
+first, so a mostly-green summary cannot bury one.
+
+Two things it deliberately does *not* claim:
+
+- **The stream state is real.** The page used to print a hardcoded `● Connected`, which could never
+  be wrong because it read nothing at all. It now reports the actual SSE state — the same value as
+  the nav footer — so *Reconnecting…* means the dashboard is not receiving updates. The checks keep
+  working when it says that, because they are their own HTTP request rather than a stream frame.
+- **Size is not health.** The four learning-store counters (patterns, feedback, vectors, memory
+  directory) are still on the page, under **Learning Stores** and labelled as sizes. They were
+  previously the *entire* page under the title "System Health", which is not a question they answer.
+
+**Agent performance** is read from `agent-stats.json` and computed by the server, not the browser:
+recorded runs, the overall success rate, and a per-agent row with runs, success rate and last run.
+Rates are stored as fractions and rendered as percentages. With nothing recorded yet, the section
+says so rather than showing an empty table.
 
 ### First login, and the password you must change
 
