@@ -141,7 +141,11 @@ async function main() {
   if (CHECK) {
     let current;
     try {
-      current = readFileSync(DOC_PATH, 'utf-8');
+      // Normalise CRLF. A Windows checkout (core.autocrlf=true, and there is no
+      // .gitattributes pinning eol) reads this file with \r\n while the
+      // generator builds with \n, so an exact comparison reported drift on every
+      // Windows run for a doc that was in fact identical.
+      current = readFileSync(DOC_PATH, 'utf-8').replace(/\r\n/g, '\n');
     } catch {
       console.error(`✗ ${DOC_PATH} missing — run: node scripts/generate-commands-surface.mjs`);
       process.exit(1);

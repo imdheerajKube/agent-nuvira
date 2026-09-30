@@ -12,12 +12,26 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import {
-  missingDashboardDeps,
-  buildDashboardBundle,
-} from '../../scripts/build-dashboard.mjs';
+/**
+ * Load the build script through a FILE URL, not a static relative specifier.
+ *
+ * This is the only test file that statically imports a `scripts/*.mjs`, and on
+ * the windows runner it was the only suite that failed to LOAD — with a bare
+ * `SyntaxError: Invalid or unexpected token` and no location, on both Node 22
+ * and 23. A resolved Windows path (`D:\...\scripts\build-dashboard.mjs`) is not
+ * a valid ESM specifier, which is the same class of bug `await
+ * import(join(...))` caused in generate-commands-surface.mjs (fixed by going
+ * through pathToFileURL there too).
+ */
+const { missingDashboardDeps, buildDashboardBundle } = (await import(
+  pathToFileURL(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'build-dashboard.mjs')).href
+)) as {
+  missingDashboardDeps: (dashboardDir?: string) => string[];
+  buildDashboardBundle: (dashboardDir?: string) => { provisioned: boolean; output: string; bytes: number };
+};
 
 const REQUIRED = ['vite', '@vitejs/plugin-react', 'react'];
 

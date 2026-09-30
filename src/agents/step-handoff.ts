@@ -531,7 +531,10 @@ export function deliverablesNamedIn(goal: string): string[] {
   // hand-off was keyed on the refused path instead of the deliverable the ask
   // actually named. Separators are accepted either way so the same goal works
   // on both platforms.
-  const absolute = (goal || '').match(/(?:~\/|\/|[A-Za-z]:[\\/])[\w.-]+(?:[\\/][\w.-]+)+[\\/]?/g) ?? [];
+  // `~` is allowed inside a segment because Windows short names are built from
+  // it (`C:\\Users\\RUNNER~1\\...`), and stopping at the tilde truncated the
+  // destination to `C:\\Users\\RUNNER` — a path the ask never named.
+  const absolute = (goal || '').match(/(?:~\/|\/|[A-Za-z]:[\\/])[\w.~-]+(?:[\\/][\w.~-]+)+[\\/]?/g) ?? [];
   for (const raw of absolute) {
     const path = raw.replace(/[.,;:]+$/, '').trim();
     if (!path || path.includes('.')) continue; // extensions handled above
