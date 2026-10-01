@@ -303,12 +303,23 @@ body {
 
 .nav-group { padding-top: var(--space-2); }
 
+/* The group heading is a tinted BAND, the reference's treatment of its section
+   headers. Two deliberate choices:
+
+   - it is one of the two rail tints the contrast suite already asserts, so the
+     band needs no new colour and cannot drift out of AA;
+   - its text is `--sidebar-ink`, not the muted ink a caption would normally use,
+     because muted ink on a band measures 4.28:1 on the palettes whose rail is
+     LIGHT (pastel/light) — knowable only by measuring, which is why the ink and
+     the band are the pair that is already pinned. */
 .nav-group-title {
-  margin: 0;
-  /* Aligned to the LINK TEXT, not the pill edge: 12px gutter + 12px pill
-     padding, which is why the title does not use .nav-links' own padding. */
-  padding: var(--space-2) var(--space-3) var(--space-1);
-  color: var(--sidebar-ink-muted);
+  /* Aligned to the LINK TEXT, not the pill edge: 12px gutter + 12px padding,
+     which is why the title does not use .nav-links' own padding. */
+  margin: 0 0 var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background: var(--sidebar-hover);
+  color: var(--sidebar-ink);
+  border-radius: var(--radius-sm);
   font-size: calc(10px * var(--font-scale));
   font-weight: 700;
   text-transform: uppercase;
@@ -812,19 +823,37 @@ body {
   list-style: none;
 }
 
+/* A tinted card with the tone's coloured icon chip — the reference's treatment.
+   The tint is the palette's own SOFT status colour, not a saturated fill: the
+   reference's filled variant puts white text on solid amber, which measures
+   ~2:1, and there is no way to make that pass. Every pairing this creates is
+   asserted in theme-contrast.test.ts (value, label and tone text on the tint),
+   which is what makes colour here safe rather than a matter of taste. */
 .metric-tile {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-4);
-  background: var(--bg-card);
+  background: var(--metric-soft);
   border: 1px solid var(--border);
   border-left: 4px solid var(--metric-tone);
   border-radius: var(--radius-md);
   box-shadow: var(--elevation-1);
 }
 
-.metric-tile-icon { font-size: calc(var(--text-xl) * var(--font-scale)); }
+/* The chip is the card surface lifted onto the tint, so the glyph keeps its
+   tone-on-surface contrast (already asserted) instead of sitting on the tint. */
+.metric-tile-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  background: var(--bg-card);
+  color: var(--metric-tone);
+  border-radius: var(--radius-md);
+  font-size: calc(var(--text-lg) * var(--font-scale));
+}
 
 .metric-tile-value {
   display: block;
@@ -840,10 +869,12 @@ body {
   font-size: calc(var(--text-sm) * var(--font-scale));
 }
 
-.metric-tile--accent { --metric-tone: var(--accent); }
-.metric-tile--ok { --metric-tone: var(--accent-green); }
-.metric-tile--warn { --metric-tone: var(--accent-yellow); }
-.metric-tile--danger { --metric-tone: var(--accent-red); }
+/* Tone and its matching tint travel together, so a tile cannot end up warning-
+   coloured on a success tint. */
+.metric-tile--accent { --metric-tone: var(--accent); --metric-soft: var(--accent-soft); }
+.metric-tile--ok { --metric-tone: var(--accent-green); --metric-soft: var(--ok-soft); }
+.metric-tile--warn { --metric-tone: var(--accent-yellow); --metric-soft: var(--warn-soft); }
+.metric-tile--danger { --metric-tone: var(--accent-red); --metric-soft: var(--danger-soft); }
 
 /* ═══ Overview summary row (cards + quick actions) ═══ */
 .overview-summary {

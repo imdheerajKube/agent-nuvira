@@ -424,10 +424,24 @@ export async function drive({ chromePath, url }) {
     await sleep(400);
     facts.afterF1 = await state();
 
-    // And the navigation back, so the run does not depend on being on /help.
+    // 9. The Overview metric tiles, which only exist when the instance has real
+    // data — so this is meaningful on a `--url` run against a live dashboard and
+    // is a no-op against the bare bundle. The tint is the claim being checked:
+    // four tiles must not collapse into one colour, and a tile must not lose its
+    // background entirely.
     await evaluate(`(() => { window.history.pushState({}, '', '/overview');` +
       ` window.dispatchEvent(new PopStateEvent('popstate')); return true; })()`);
-    await sleep(500);
+    await sleep(2200);
+    facts.tiles = await evaluate(
+      `(() => { const tiles = [...document.querySelectorAll('.metric-tile')];` +
+        ` return {` +
+        `   count: tiles.length,` +
+        `   backgrounds: tiles.map((el) => getComputedStyle(el).backgroundColor),` +
+        `   chips: tiles.map((el) => { const c = el.querySelector('.metric-tile-icon');` +
+        `     return c ? getComputedStyle(c).backgroundColor : null; }),` +
+        `   values: tiles.map((el) => { const v = el.querySelector('.metric-tile-value');` +
+        `     return v ? getComputedStyle(v).color : null; }) }; })()`,
+    );
 
     return facts;
   } finally {
@@ -524,6 +538,29 @@ export function judge(facts) {
   }
   if (facts.afterF1.dialogOpen) bad.push('F1 opened the cheatsheet instead of the Help page');
 
+  // ─── metric tiles (only when the instance has data) ───
+  const tiles = facts.tiles;
+  if (tiles && tiles.count > 1) {
+    const backgrounds = new Set(tiles.backgrounds);
+    if (backgrounds.size !== tiles.count) {
+      bad.push(
+        `metric tiles share a background (${[...backgrounds].join(', ')}) — the per-tone tints are not applied`,
+      );
+    }
+    if (tiles.backgrounds.some((colour) => !colour || colour === 'rgba(0, 0, 0, 0)')) {
+      bad.push('a metric tile has no background');
+    }
+    // The chip is the card surface lifted onto the tint, so it must be distinct.
+    if (tiles.chips.some((chip, i) => chip && chip === tiles.backgrounds[i])) {
+      bad.push('a metric tile chip is painted the same as its own tile');
+    }
+    // Each value keeps its tone colour; four identical values means the tone
+    // classes stopped reaching the CSS.
+    if (new Set(tiles.values.filter(Boolean)).size !== tiles.count) {
+      bad.push('metric tile values do not each carry their tone colour');
+    }
+  }
+
   return bad;
 }
 
@@ -556,9 +593,10 @@ async function main() {
     console.error(`input-smoke: ✘ ${bad.length} problem(s):\n - ${bad.join('\n - ')}`);
     process.exit(1);
   }
+  const tilesNote = facts.tiles?.count ? ` · ${facts.tiles.count} metric tiles tinted` : '';
   console.log(
     `input-smoke: ✔ real clicks applied · rail ${facts.rail.railBg} vs bar ${facts.rail.barBg}` +
-      ` · active pill ${facts.rail.activeBg}${url ? ` · against ${url}` : ''}`,
+      ` · active pill ${facts.rail.activeBg}${tilesNote}${url ? ` · against ${url}` : ''}`,
   );
 }
 

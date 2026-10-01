@@ -245,7 +245,11 @@ html[data-palette='neutral'][data-mode='light'] {
   --p-line-strong: #afb8c1;
   --p-accent: #0969da;
   --p-accent-strong: #0757b8;
-  --p-accent-soft: #ddf0ff;
+  /* One step lighter than it looks like it needs to be. As a chip background
+     behind --p-accent TEXT this measured 4.45:1 — just under AA — which nothing
+     caught until the metric tiles started using the soft tints as surfaces and
+     theme-contrast.test.ts learned to assert text on them. */
+  --p-accent-soft: #e8f4ff;
   --p-on-accent: #ffffff;
   --p-chrome: #1f2937;
   --p-chrome-ink: #f0f3f6;
