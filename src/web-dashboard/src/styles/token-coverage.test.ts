@@ -153,6 +153,49 @@ describe('dashboard.css stays fully tokenized', () => {
   });
 });
 
+/* ── Metric tiles: a tone and its MATCHING tint ─────────────────────────────
+   The tiles are the first surface painted with the soft status tints, so the
+   pairing between a tile's tone and its tint became a contract between two CSS
+   rules that nothing enforced. The failure modes are both silent: a tile with a
+   tone but no tint looks like every other card, and a tone paired with the WRONG
+   tint reads as a success card carrying a warning colour.
+
+   This lives here rather than in a browser check on purpose — the tiles only
+   render when the instance has live data, so a route walk sees an empty grid and
+   would pass either way. */
+describe('metric tiles carry a tone and its matching tint', () => {
+  const TONES: Array<[string, string]> = [
+    ['accent', '--accent-soft'],
+    ['ok', '--ok-soft'],
+    ['warn', '--warn-soft'],
+    ['danger', '--danger-soft'],
+  ];
+
+  it('paints the tile from its tint, not from the plain card surface', () => {
+    const rule = /\.metric-tile\s*\{([^}]*)\}/.exec(CSS);
+    expect(rule, '.metric-tile rule not found').toBeTruthy();
+    expect(rule![1]).toMatch(/background:\s*var\(--metric-soft\)/);
+  });
+
+  it.each(TONES)('maps the %s tone to its own tint (%s)', (tone, soft) => {
+    const rule = new RegExp(`\\.metric-tile--${tone}\\s*\\{([^}]*)\\}`).exec(CSS);
+    expect(rule, `.metric-tile--${tone} rule not found`).toBeTruthy();
+    const body = rule![1];
+    expect(body, `${tone} has no tone colour`).toMatch(/--metric-tone:\s*var\(--[a-z-]+\)/);
+    expect(body, `${tone} is paired with the wrong tint`).toContain(`--metric-soft: var(${soft})`);
+  });
+
+  it('keeps every tint it references defined in the theme layer', () => {
+    // The tints are asserted for text contrast by theme-contrast.test.ts, so a
+    // tint that is not a theme primitive would sit outside the guard entirely.
+    const themes = readFileSync(findStylesheet('themes.css'), 'utf8');
+    const missing = TONES.map(([, soft]) => soft.replace('--', '--p-')).filter(
+      (primitive) => !themes.includes(`${primitive}:`),
+    );
+    expect(missing, `tint(s) with no theme primitive: ${missing.join(', ')}`).toEqual([]);
+  });
+});
+
 /* ── The same rule, applied to the components ───────────────────────────────
    Closing `dashboard.css` was only half the job: the components held ~950 more
    literal colours, so a theme could still be broken from `.tsx`. Those are now

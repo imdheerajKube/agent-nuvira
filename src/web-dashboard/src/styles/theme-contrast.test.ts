@@ -134,6 +134,24 @@ const TEXT_PAIRS: Array<[string, string, string]> = [
   ['--p-sidebar-ink-2', '--p-sidebar', 'rail secondary text'],
   ['--p-sidebar-ink', '--p-sidebar-hover', 'rail nav text on a hovered pill'],
   ['--p-sidebar-ink', '--p-sidebar-active', 'rail nav text on the active pill'],
+  // The soft status tints are SURFACES, not just chip fills: the Overview metric
+  // tiles are painted with them, so the value, the label and the tone's own text
+  // all sit on a tint. A tint is exactly where a palette quietly loses contrast —
+  // it is close enough to the card surface to look fine and far enough to fail —
+  // and the measurement above is what found neutral/light's accent text sitting
+  // at 4.45:1 on its own tint.
+  ['--p-ink', '--p-accent-soft', 'body text on an accent-tinted tile'],
+  ['--p-ink-2', '--p-accent-soft', 'label on an accent-tinted tile'],
+  ['--p-accent', '--p-accent-soft', 'accent value on an accent-tinted tile'],
+  ['--p-ink', '--p-ok-soft', 'body text on a success-tinted tile'],
+  ['--p-ink-2', '--p-ok-soft', 'label on a success-tinted tile'],
+  ['--p-ok', '--p-ok-soft', 'success value on a success-tinted tile'],
+  ['--p-ink', '--p-warn-soft', 'body text on a warning-tinted tile'],
+  ['--p-ink-2', '--p-warn-soft', 'label on a warning-tinted tile'],
+  ['--p-warn', '--p-warn-soft', 'warning value on a warning-tinted tile'],
+  ['--p-ink', '--p-danger-soft', 'body text on a danger-tinted tile'],
+  ['--p-ink-2', '--p-danger-soft', 'label on a danger-tinted tile'],
+  ['--p-danger', '--p-danger-soft', 'danger value on a danger-tinted tile'],
 ];
 
 /**
