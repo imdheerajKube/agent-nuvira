@@ -2,6 +2,112 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.3.7 — the dashboard becomes one themeable, accessible design
+
+### The dashboard was a dark UI with ~1,000 colour literals — and no way to be anything else
+
+Every page was written against a single palette with the colours typed in place: 318 hex values and 171
+`rgb()`/`rgba()` values in `dashboard.css` alone, and roughly 950 more across the components. That is not a
+styling preference, it is the reason the dashboard could not have a light mode — about eighteen near-white
+text colours would have rendered white-on-white the moment one was added.
+
+- **Added: a token layer with five palettes and both modes.** `themes.css` defines the primitives and
+  every surface, text and accent reads a token; `enterprise` is the reference design, and enterprise
+  **light** is the one from the handoff (navy chrome over a light canvas).
+- **Fixed: the component tree is tokenized too.** The `.tsx` files now carry no colour literal except the
+  two that must not be themed — WhatsApp green and Telegram blue, which identify someone else's brand.
+- **Added: two guards that keep it that way.** `token-coverage.test.ts` fails if a literal returns to
+  either the stylesheet or a component, and also catches a `var()` that names a token nothing defines and
+  a local declaration nothing reads; `theme-contrast.test.ts` computes contrast across all ten theme
+  combinations (4.5:1 for text, 3:1 for graphical UI), so "accessible" is measured rather than asserted.
+- **Fixed: `systemDefaultTheme()` could not tell "the OS prefers light" from "this runtime has no
+  `matchMedia`".** The truthy `&&` chain returned `false` for both, so a bare runtime silently got light
+  mode. Absence of information is now kept apart from a preference, and the first-run default follows the
+  OS only when the OS can be asked.
+- **Fixed: a handful of dark-only shadow/filter values** that had been exempted from the token rule: a
+  black `text-shadow` that smudged dark text on a light surface, a near-white caret glow that vanished
+  into one, and a 50%-alpha selection ring that fell to ~1.7:1. Shadows are judged like everything else
+  now.
+
+### Added: a theme switcher, and an accessibility mode that is not a dead control
+
+`ThemeSwitcher` writes the palette, the mode and the accessibility layer to `<html>` **before React
+renders**, so a page never paints the wrong colours and then flickers to the right ones.
+
+- **Added: the accessibility layer** — larger type steps, bigger targets, heavier borders and no motion —
+  deliberately OFF by default, because it is help rather than the product. What is *not* behind the opt-in
+  is the operating system: `prefers-reduced-motion` and `prefers-contrast` are honoured in CSS
+  unconditionally, since those are the user telling us.
+- **Fixed: the Text size control did nothing.** A font scale means nothing outside the help layer, so
+  `resolveTheme` pins it to 100% while accessibility mode is off and the switcher turns that mode on when
+  a size is chosen — otherwise the control moved and changed no pixels.
+
+### Added: a shell rebuilt around the pages, not beside them
+
+The rail, the top bar and the pages were three separate designs. They are one now: a top bar carrying the
+connection state and the same Refresh the pages use, a grouped sidebar with a navigation search, a mobile
+drawer, and a status footer.
+
+- **Added: `PageHeader`, adopted by all 24 routed pages.** One title/description/actions block, so every
+  page opens the same way and the heading order begins at the page rather than at a section.
+- **Fixed: 45 `section-subtitle` headings were `h3` directly under the page's `h1`** — a skipped level,
+  which is exactly the cue a screen-reader user navigates by. They are `h2` now, and
+  `dashboard-consistency.test.ts` fails if a page ships more than one `h1` or skips a level.
+- **Added: a keyboard layer.** `?` opens a focus-trapping shortcuts dialog, `/` focuses the navigation
+  search, `[` toggles the drawer, and a `g`-chord (`g t` → Tasks, `g h` → Agent Hub, …) navigates. A
+  chord expires after 1.5s, and no shortcut fires while the user is typing — a `?` in the chat box stays a
+  question mark.
+
+### Fixed: three shell defects no jsdom test could have seen
+
+- **The mobile drawer was unfocusable for the frames it was opening**, because a `visibility` transition
+  kept the subtree out of the tab order; visibility now flips instantly on open and only the slide is
+  animated.
+- **`@media (max-width: 768px)` hid every navigation link**, leaving a 60px empty rail and no way to
+  reach any page on a narrow window.
+- **`/bedrock` was a route with no link to it.** `Layout.test.tsx` now reads the routes from `App.tsx` and
+  asserts each one is reachable from the shell, so a page cannot be added and orphaned again.
+
+### Fixed: the exported conversation document styled nothing
+
+Exporting a conversation opened a new window with no stylesheet, and the document asked for
+`var(--bg-card)` and friends — tokens that exist only inside the dashboard, so every bubble painted
+transparent. The export now resolves the live theme to concrete colours (falling back to CSS system
+colours), carries its own `<style>`, and escapes the message content, contact name and platform it
+interpolates. The builder is a pure, tested function, so "the export carries no dashboard tokens" is an
+assertion rather than a hope.
+
+### Added: a real browser walk, committed and gated in CI
+
+The jsdom suite renders one component at a time and cannot see the shell: a route nothing links to, a page
+that skips a heading level, or the theme the user chose never actually applying.
+
+- **Added `npm run smoke:dashboard`** (`scripts/smoke-dashboard-walk.mjs`): headless Chrome walks every
+  linked route and asserts exactly one `h1` per page, no skipped heading levels, the requested theme on
+  `<html>`, one surface pair across the whole app, and the keyboard layer end to end.
+- **It closes a silent hole in the earlier harness**, which wrote the theme under the wrong `localStorage`
+  key — so every "theme" walk had in fact been testing the default theme. The walk now uses the key the
+  app reads and verifies `data-palette`/`data-mode` before it trusts a page.
+- **Wired into CI**: four theme combinations on Linux, two on Windows, with `--require-chrome` so a
+  missing browser is a failure rather than a skip.
+
+### Fixed: the Overview page's numbers, and tests that pin them
+
+`Overview` was rebuilt on the reference layout — summary cards (Task Summary, Models, Gateway Status),
+metric tiles and Quick Actions — with two deliberate departures from the reference written down rather
+than faked: no filled colour tiles (white-on-yellow is about 2:1, so the value is coloured instead), and
+no "Stop Gateway" button, because there is no endpoint behind it.
+
+- **Added: tests for the summary row.** The cards read from two sources that can arrive independently, so
+  each card must appear only when its source did; a **401** on the admin-gated task read now says "Sign in
+  to Admin to see task history" instead of rendering as an empty queue; and the Quick Actions are asserted
+  by the route they navigate to.
+
+### Tests
+
+Dashboard suite **759 tests across 42 files**; root suite **7,329 passed, 18 skipped**. The browser walk
+is green across 24 routes × 4 themes.
+
 ## v3.3.6 — the doctor's fix lines print real commands, and the System tab is where you read them
 
 ### Fixed: `nuvira doctor` was telling users to run `${getCliName()}`
