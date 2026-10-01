@@ -2,6 +2,112 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.3.8 — the Appearance panel works with a real mouse, and the dashboard explains itself
+
+### Fixed: the Appearance panel ignored every real click
+
+The theme switcher rendered, opened, showed its options and the options did nothing — for a mouse. The
+cause was a bad assumption with a narrow trigger: the panel closed itself on any blur whose
+`relatedTarget` was null, read as "focus left the document". **Chrome on macOS does not focus a form
+control on mouse-down**, so clicking an option blurred the panel's own auto-focused radio to `<body>`
+with a null target. The handler closed the panel, which unmounted the label before mouse-up, so no click
+and no change ever fired: the panel simply vanished and the theme stayed put. Windows focuses on
+mouse-down, which is why a single-platform check would never have seen it.
+
+- **Fixed: only a real hand-off closes the panel.** A null `relatedTarget` no longer counts as leaving —
+  outside-click and `Esc` still close it, so it cannot be stranded open.
+- **Fixed: the panel was capped at `70vh`.** On a 757px-tall window it clipped at 530px while its content
+  is ~630px, pushing the Accessibility switch and Reset past the scroll edge. It now uses the space
+  actually available below the bar it drops from.
+
+### Added: coverage for the one thing jsdom and synthetic events cannot see
+
+**Why ~850 green component tests missed a broken button.** Every option is a `<label>` wrapping a
+visually-hidden radio, and it is the browser's DEFAULT ACTION that forwards the label's click to the
+control. A synthetic event has no default action, so both the jsdom suite (which clicks the input
+directly) and the browser walk (which dispatches events it creates itself) skipped the entire failing
+path. Only a trusted event reproduces it.
+
+- **Added: `scripts/smoke-dashboard-input.mjs`** (`npm run smoke:dashboard:input`, wired into the Linux
+  and Windows gates). It drives the built bundle over the Chrome DevTools Protocol with real
+  `Input.dispatchMouseEvent`/`KeyEvent` and asserts that a real click opens the panel, changes the mode,
+  changes the palette, flips the accessibility switch (targets really grow to 44px) and resets.
+- **Added: `--url`,** so the same script can verify a RUNNING instance rather than only a built bundle. A
+  stale server process serving an older asset hash is exactly how "the button does nothing" survives a
+  green build.
+- **Both new guards were proven load-bearing** by reverting the fix and watching them fail with the
+  user-visible symptom, then restoring it.
+
+### Fixed: two accessibility defects and a skipped heading level, found by the new audit
+
+The browser walk now measures what the rendered DOM actually exposes — accessible names, labels, `alt`
+text, dangling `aria-controls`/`aria-labelledby` references, duplicate ids, positive `tabindex`, and
+whether a page with controls has anything focusable at all. It found real defects on its first run:
+
+- **`/contacts`:** five inputs named only by a placeholder. A placeholder is not a label — it is not
+  announced as the field's name and it disappears as soon as the user types. Each one now names the
+  platform whose list it edits, because five identical anonymous boxes are five identical box names.
+- **`/executions`:** the skill and status filters had no accessible name.
+- **`/tasks`:** the History heading was an `h3` under the page's `h1`. This one had been invisible to the
+  walk because the walk never has an admin session, so it only ever saw the logged-out branch of the page.
+
+### Changed: the navigation rail is its own surface, not the top bar repeated
+
+The rail was painted from the top bar's tokens, so the two read as one slab. It now has a dedicated
+`--sidebar-*` family (ten themes) and pill nav links whose active state is a filled shape plus weight
+rather than a 3px edge stripe, with the reference's tinted band behind each group heading.
+
+- **The contrast guard caught two real problems while the tokens were written:** a dark rail needs its own
+  control boundary — the page's input edge measured **2.95:1** on it, under the 3:1 AA requires — and
+  `executive/dark`'s pill tint was imperceptible at **1.22:1**.
+- **Band ink is the stronger ink, not the muted caption ink:** muted rail ink on a tinted heading band
+  measures **4.28:1** on the one palette whose rail is light (`pastel`) — a number nobody would guess.
+- **`contrast` keeps its rail pure black on purpose.** That palette exists for maximum legibility, so it
+  is separated from the top bar by its border and its pills rather than by a tint. The walk encodes that
+  as the one documented exception instead of weakening the check.
+
+### Changed: the metric tiles are colour-coded, and the colour is measured
+
+The Overview tiles take the reference's formatting but not its saturated filled variant, which puts white
+text on solid amber at roughly **2:1** — a pairing that cannot be made to pass. Instead each tile is
+painted with the palette's own soft status tint, with the tone colouring the value and the icon in a
+surface-coloured chip.
+
+- **120 new contrast assertions** cover value, label and tone text on all four tints in all ten themes,
+  because turning a tint into a SURFACE creates pairings nothing was asserting. They found two real
+  misses: `neutral/light`'s accent text sat at **4.45:1** on its own tint, and is now a step lighter.
+- **Tone and tint are wired in one rule and pinned by a CSS test.** The silent failure modes are a tile
+  with a tone but no tint (it looks like every other card) and a tone paired with the WRONG tint (a
+  success card carrying a warning colour). A browser check cannot see either, since tiles only render when
+  an instance has live data — so the trusted-input smoke asserts them only when they are present, which is
+  how the running dashboard was verified.
+
+### Added: a Help page, and a command surface you can browse
+
+- **Added: `Help` in the top bar (`/help`, or `F1`).** It documents the layout, every shortcut, the
+  appearance and accessibility controls, where each destination lives, and what to check when something
+  looks wrong. **Everything on it is derived** — the shortcut table from the same constant the `?`
+  cheatsheet and the key handler use, the destinations from the navigation model, the palette names from
+  the theme module — so it cannot describe a shortcut or a page that no longer exists. A help page is the
+  easiest thing in a product to leave quietly wrong.
+- **Added: a browsable picker in the Command Console** — 250 commands in 50 collapsible groups with their
+  descriptions and flags, filterable, one click to insert into the run box. It replaces an empty input
+  whose only help was a placeholder naming four commands, which is a reference to a manual rather than a
+  way to work.
+- **The catalogue is GENERATED from the live commander tree** by the same script that writes
+  `docs/COMMANDS_SURFACE.md`, and the drift guard now covers both outputs. Hand-typing the commands into a
+  component would have reintroduced exactly the drift that generator exists to prevent — a UI offering a
+  command that does not exist. Verified by `npm run docs:commands:check`.
+- **`F1` opens the Help page** while `?` keeps the quick cheatsheet, and the keyboard layer is now
+  validated with real key events rather than synthetic ones.
+
+### Tests
+
+- Dashboard: **995 assertions across 44 files**, including **523 contrast measurements** and the CSS
+  guards; the root suite: **7,329 passed, 18 skipped**.
+- Browser walk: **25 routes × 10 themes** clean, now auditing accessibility on every route rather than
+  only measuring structure. Trusted-input smoke clean against both the built bundle and a live instance.
+
 ## v3.3.7 — the dashboard becomes one themeable, accessible design
 
 ### The dashboard was a dark UI with ~1,000 colour literals — and no way to be anything else
