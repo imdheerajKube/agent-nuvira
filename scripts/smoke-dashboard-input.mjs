@@ -25,6 +25,12 @@
  * Usage:
  *   node scripts/smoke-dashboard-input.mjs
  *   node scripts/smoke-dashboard-input.mjs --require-chrome
+ *   node scripts/smoke-dashboard-input.mjs --url http://localhost:3032   # drive a RUNNING dashboard
+ *
+ * `--url` skips the built-in static server and drives an already-running
+ * instance instead. That matters because the built bundle and the served one can
+ * differ (a stale server process serves an older hash), and the complaint that
+ * produced this script was about the SERVED dashboard, not the built one.
  *
  * No Chrome/Chromium found = SKIP (exit 0) unless --require-chrome is given.
  */
@@ -187,10 +193,17 @@ function startServer() {
   return server;
 }
 
-export async function drive({ chromePath }) {
-  const server = startServer();
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  const port = server.address().port;
+export async function drive({ chromePath, url }) {
+  // `--url` drives a running dashboard; otherwise serve the committed bundle.
+  let server = null;
+  let port;
+  let baseUrl = url;
+  if (!baseUrl) {
+    server = startServer();
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    port = server.address().port;
+    baseUrl = `http://127.0.0.1:${port}/`;
+  }
 
   const debugPort = 9400 + Math.floor(Math.random() * 400);
   const profileDir = mkdtempSync(join(tmpdir(), 'nuvira-input-'));
@@ -204,7 +217,7 @@ export async function drive({ chromePath }) {
       '--window-size=1440,900',
       `--user-data-dir=${profileDir}`,
       `--remote-debugging-port=${debugPort}`,
-      `http://127.0.0.1:${port}/`,
+      baseUrl,
     ],
     { stdio: 'ignore' },
   );
@@ -333,7 +346,7 @@ export async function drive({ chromePath }) {
         ` JSON.stringify({ palette: 'enterprise', mode: 'light', a11y: false, fontScale: 100 })); } catch (e) {}` +
         ` return true; })()`,
     );
-    await rpc(client, 'Page.navigate', { url: `http://127.0.0.1:${port}/` });
+    await rpc(client, 'Page.navigate', { url: baseUrl });
     await sleep(2600);
 
     facts.initial = await state();
@@ -424,7 +437,7 @@ export async function drive({ chromePath }) {
       // Nothing useful to do if the socket is already gone.
     }
     chrome.kill('SIGKILL');
-    server.close();
+    server?.close();
     await new Promise((r) => {
       if (chrome.exitCode !== null || chrome.signalCode !== null) return r();
       chrome.once('exit', r);
@@ -522,6 +535,9 @@ async function main() {
     process.exit(1);
   }
 
+  const urlFlag = process.argv.indexOf('--url');
+  const url = urlFlag !== -1 && process.argv[urlFlag + 1] ? process.argv[urlFlag + 1] : undefined;
+
   const chromePath = findChrome();
   if (!chromePath) {
     const message = 'no Chrome/Chromium found — set CHROME_PATH to drive real input';
@@ -533,7 +549,7 @@ async function main() {
     process.exit(0);
   }
 
-  const facts = await drive({ chromePath });
+  const facts = await drive({ chromePath, url });
   const bad = judge(facts);
 
   if (bad.length) {
@@ -542,7 +558,7 @@ async function main() {
   }
   console.log(
     `input-smoke: ✔ real clicks applied · rail ${facts.rail.railBg} vs bar ${facts.rail.barBg}` +
-      ` · active pill ${facts.rail.activeBg}`,
+      ` · active pill ${facts.rail.activeBg}${url ? ` · against ${url}` : ''}`,
   );
 }
 
