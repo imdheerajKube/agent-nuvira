@@ -216,6 +216,15 @@ describe('keyboard layer', () => {
     expect(document.activeElement).toBe(screen.getByLabelText(/filter navigation/i));
   });
 
+  it('opens the Help page on F1', () => {
+    // F1 is the platform's own help key, so the page has the conventional one and
+    // `?` keeps the quick cheatsheet. It must not open the modal instead.
+    renderRouted();
+    fireEvent.keyDown(document, { key: 'F1' });
+    expect(screen.getByTestId('path').textContent).toBe('/help');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('toggles the drawer on [', () => {
     renderRouted();
     fireEvent.keyDown(document, { key: '[' });

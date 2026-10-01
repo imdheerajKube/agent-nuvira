@@ -97,8 +97,32 @@ describe('TasksPage', () => {
 
     await waitFor(() => expect(startMock).toHaveBeenCalledWith(['memory', 'stats'], 300000));
     await waitFor(() => expect(subMock).toHaveBeenCalledWith('t2', expect.any(Object)));
-    // The console header shows the running command.
-    await waitFor(() => expect(screen.getByText('memory stats')).toBeTruthy());
+    // The console header shows the running command. Scoped to the console on
+    // purpose: the command browser below the form also lists `memory stats`, so
+    // a bare getByText matches two elements and would pass for the wrong reason
+    // the moment either one is removed.
+    await waitFor(() =>
+      expect(document.querySelector('.task-console-cmd')?.textContent).toBe('memory stats'),
+    );
+  });
+
+  it('fills the run box from a browsed command, ready to run', async () => {
+    mockAuthed();
+    renderPage();
+    const input = await screen.findByPlaceholderText(/eval run --task smoke-test/);
+
+    fireEvent.change(screen.getByLabelText(/filter commands/i), { target: { value: 'eval run' } });
+    const row = [...document.querySelectorAll<HTMLButtonElement>('.command-use')].find(
+      (candidate) => candidate.querySelector('.command-item-name')?.textContent === 'eval run',
+    );
+    expect(row).toBeTruthy();
+    fireEvent.click(row as HTMLButtonElement);
+
+    // A trailing space, so the next keystroke starts the ARGUMENT rather than
+    // completing the command name.
+    expect((input as HTMLInputElement).value).toBe('eval run ');
+    // Focus follows the insert, so typing continues where the user is looking.
+    expect(document.activeElement).toBe(input);
   });
 
   it('shows a friendly error when start fails', async () => {

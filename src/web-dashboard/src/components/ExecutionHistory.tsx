@@ -215,15 +215,20 @@ export function ExecutionHistory({
 
       {/* Filters */}
       <div className="execution-history-filters">
+        {/* A placeholder is not a label: it is not announced as the field's
+            name, and it disappears the moment the user types. Both filters name
+            themselves, so the browser walk's accessibility audit can see them. */}
         <input
           className="env-var-input"
           type="text"
+          aria-label="Filter by skill name"
           placeholder="Filter by skill name..."
           value={filterSkill}
           onChange={(e) => setFilterSkill(e.target.value)}
         />
         <select
           className="env-var-input"
+          aria-label="Filter by status"
           value={filterStatus}
           onChange={(e) => setFilterStatus(e.target.value)}
         >

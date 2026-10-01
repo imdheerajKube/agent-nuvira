@@ -2,6 +2,9 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import ThemeSwitcher from './ThemeSwitcher';
 import KeyboardHelp, { GO_TARGETS, isTypingTarget } from './KeyboardHelp';
+// The navigation MODEL lives outside the shell: the Help page lists it too, and
+// a page should not have to import the shell to describe where things are.
+import { PRIMARY_NAV, filterGroups } from '../nav';
 
 interface LayoutProps {
   children: ReactNode;
@@ -15,97 +18,6 @@ interface LayoutProps {
   onRefresh: () => void;
   /** True while an explicit refresh is in flight, so the control can say so. */
   refreshing?: boolean;
-}
-
-interface NavItem {
-  path: string;
-  label: string;
-  icon: string;
-}
-
-/**
- * The four destinations the reference design keeps in the top bar. They are
- * cross-cutting views of the whole system rather than one per section below,
- * which is why they are not also in the sidebar.
- */
-const PRIMARY_NAV: NavItem[] = [
-  { path: '/overview', label: 'Overview', icon: '📊' },
-  { path: '/tasks', label: 'Tasks', icon: '🚀' },
-  { path: '/models', label: 'Models', icon: '🧠' },
-  { path: '/system', label: 'System', icon: '⚙️' },
-];
-
-interface NavGroup {
-  label: string;
-  items: NavItem[];
-}
-
-/**
- * Every route App declares has a home here. The grouping is the reference's
- * editorial split (what the agent does / what we measured / what it reads /
- * what it talks to / how it runs), and it replaces one 23-item flat list where
- * "Chat" and "Process Env" sat at the same level.
- *
- * `/bedrock` used to be a route with no link anywhere in the UI — reachable
- * only by typing the URL. It is listed here so the page can be found.
- */
-const NAV_GROUPS: NavGroup[] = [
-  {
-    label: 'Agent Management',
-    items: [
-      // Chat is the front door (the lobby); the other rooms are panels.
-      { path: '/', label: 'Chat', icon: '💬' },
-      { path: '/dag', label: 'Execution', icon: '🔀' },
-      { path: '/routing', label: 'Routing', icon: '🤖' },
-      { path: '/requests', label: 'Requests', icon: '📨' },
-      { path: '/hub', label: 'Agent Hub', icon: '🧰' },
-    ],
-  },
-  {
-    label: 'Analysis & Monitoring',
-    items: [
-      { path: '/traces', label: 'Traces', icon: '🔍' },
-      { path: '/evals', label: 'Evals', icon: '🏆' },
-      { path: '/benchmarks', label: 'Benchmarks', icon: '📈' },
-      { path: '/costs', label: 'Costs', icon: '💰' },
-    ],
-  },
-  {
-    label: 'Resources',
-    items: [
-      { path: '/memory', label: 'Memory', icon: '💾' },
-      { path: '/history', label: 'History', icon: '📝' },
-      { path: '/env', label: 'Env Config', icon: '🔐' },
-      { path: '/process-env', label: 'Process Env', icon: '🌱' },
-    ],
-  },
-  {
-    label: 'Integrations',
-    items: [
-      { path: '/platforms', label: 'Platforms', icon: '🌐' },
-      { path: '/gateway', label: 'Gateway', icon: '📡' },
-      { path: '/contacts', label: 'Contacts', icon: '📇' },
-      { path: '/bedrock', label: 'Bedrock', icon: '🪨' },
-    ],
-  },
-  {
-    label: 'Runtime',
-    items: [
-      { path: '/models/timeline', label: 'Timeline', icon: '📅' },
-      { path: '/executions', label: 'Executions', icon: '📜' },
-      { path: '/admin', label: 'Admin', icon: '🛠️' },
-    ],
-  },
-];
-
-/** Case-insensitive match on the item label or its group's label. */
-function filterGroups(query: string): NavGroup[] {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return NAV_GROUPS;
-  return NAV_GROUPS.map((group) => {
-    if (group.label.toLowerCase().includes(needle)) return group;
-    return { ...group, items: group.items.filter((i) => i.label.toLowerCase().includes(needle)) };
-  }).filter((group) => group.items.length > 0);
 }
 
 export default function Layout({
@@ -160,6 +72,14 @@ export default function Layout({
       if (event.key === '?') {
         event.preventDefault();
         setHelpOpen(true);
+        return;
+      }
+
+      // F1 is the platform's own "help" key and costs no chord, so the full Help
+      // page has the conventional key while `?` keeps the quick cheatsheet.
+      if (event.key === 'F1') {
+        event.preventDefault();
+        navigate('/help');
         return;
       }
 

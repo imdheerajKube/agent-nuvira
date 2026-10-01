@@ -18,7 +18,10 @@
  *     every "theme" walk was silently running the default theme. This script
  *     asserts `data-palette`/`data-mode` on <html> before it trusts a page;
  *   - whether the shell's keyboard layer works end to end (a modal that traps
- *     focus, a `?` cheatsheet, a `g`-chord that navigates).
+ *     focus, a `?` cheatsheet, a `g`-chord that navigates);
+ *   - whether the rail is still its OWN surface. It must not be painted from the
+ *     top bar's token, and its active pill must have a visible fill — the two
+ *     ways a "tinted rail" change silently reverts to a flat slab.
  *
  * The page reports back over HTTP rather than being scraped from `--dump-dom`:
  * this dashboard polls its API forever, so Chrome never goes idle and the dump
@@ -40,7 +43,8 @@ import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { findChrome } from './lib/find-chrome.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..');
@@ -71,46 +75,6 @@ function arg(name, fallback) {
   return i !== -1 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--')
     ? process.argv[i + 1]
     : fallback;
-}
-
-/**
- * Find a Chrome/Chromium binary, or null.
- *
- * An explicit $CHROME_PATH always wins so CI can pin one. Otherwise the usual
- * per-platform locations are tried, then PATH lookup on Unix.
- */
-function findChrome() {
-  if (process.env.CHROME_PATH) {
-    return existsSync(process.env.CHROME_PATH) ? process.env.CHROME_PATH : null;
-  }
-
-  const candidates = [
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    '/usr/bin/google-chrome',
-    '/usr/bin/google-chrome-stable',
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/snap/bin/chromium',
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  for (const name of ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']) {
-    try {
-      const found = execFileSync(process.platform === 'win32' ? 'where' : 'which', [name], {
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-        // `where` on Windows emits CRLF, so split on either ending.
-      }).split(/\r?\n/)[0].trim();
-      if (found && existsSync(found)) return found;
-    } catch {
-      // Not on PATH — try the next.
-    }
-  }
-  return null;
 }
 
 /**
@@ -145,6 +109,119 @@ function beacon(stage, data) {
   });
 }
 
+// ── Accessibility audit ────────────────────────────────────────────────────
+// Run on EVERY route in a REAL engine, because the failures below are
+// properties of the rendered DOM and the cascade, not of a component's props:
+// a control can be named in jsdom and nameless once a decorative span swallows
+// the text, and an aria-controls can point at an id that a conditional render
+// removed. This is the subset of an axe-style audit that has no false positives
+// worth arguing about, so a failure here is a bug rather than a judgement call.
+
+function isVisible(el) {
+  const cs = getComputedStyle(el);
+  if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+  if (el.closest('[hidden]')) return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 || rect.height > 0;
+}
+
+function accessibleName(el) {
+  const aria = el.getAttribute('aria-label');
+  if (aria && aria.trim()) return aria.trim();
+  const labelledby = el.getAttribute('aria-labelledby');
+  if (labelledby) {
+    const joined = labelledby.split(/\s+/).map(function (id) {
+      const target = document.getElementById(id);
+      return target ? (target.textContent || '') : '';
+    }).join(' ').trim();
+    if (joined) return joined;
+  }
+  const tag = el.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+    const wrapping = el.closest('label');
+    if (wrapping && (wrapping.textContent || '').trim()) return wrapping.textContent.trim();
+    if (el.id) {
+      const forLabel = document.querySelector('label[for="' + el.id + '"]');
+      if (forLabel && (forLabel.textContent || '').trim()) return forLabel.textContent.trim();
+    }
+  }
+  // A visible label wins over the title attribute: title is the last resort,
+  // and it is usually what an icon-only control carries.
+  const text = (el.textContent || '').trim();
+  if (text) return text;
+  const title = el.getAttribute('title');
+  if (title && title.trim()) return title.trim();
+  const img = el.querySelector('img[alt]');
+  if (img) return (img.getAttribute('alt') || '').trim();
+  return '';
+}
+
+function describe(el) {
+  const cls = typeof el.className === 'string' && el.className ? '.' + el.className.split(/\s+/)[0] : '';
+  return '<' + el.tagName.toLowerCase() + cls + '>';
+}
+
+function auditA11y() {
+  const unnamed = [];
+  for (const el of document.querySelectorAll('button, a[href], [role="button"], select, textarea')) {
+    if (!isVisible(el)) continue;
+    if (!accessibleName(el)) unnamed.push(describe(el));
+  }
+
+  const unlabelled = [];
+  for (const el of document.querySelectorAll('input')) {
+    if (el.type === 'hidden' || !isVisible(el)) continue;
+    if (!accessibleName(el)) unlabelled.push(describe(el));
+  }
+
+  const missingAlt = [];
+  for (const el of document.querySelectorAll('img')) {
+    if (!el.hasAttribute('alt') && isVisible(el)) missingAlt.push(describe(el));
+  }
+
+  // A dangling reference is a promise the DOM does not keep: the control says
+  // "I control X" and X is not there, so a screen reader announces nothing.
+  const dangling = [];
+  const refAttrs = ['aria-controls', 'aria-labelledby', 'aria-describedby', 'aria-activedescendant'];
+  for (const attr of refAttrs) {
+    for (const el of document.querySelectorAll('[' + attr + ']')) {
+      for (const id of (el.getAttribute(attr) || '').split(/\s+/)) {
+        if (id && !document.getElementById(id)) dangling.push(attr + '→' + id + ' (' + describe(el) + ')');
+      }
+    }
+  }
+
+  // Duplicate ids break every id-based reference, including labels.
+  const seen = {};
+  const duplicateIds = [];
+  for (const el of document.querySelectorAll('[id]')) {
+    if (seen[el.id]) duplicateIds.push(el.id);
+    else seen[el.id] = true;
+  }
+
+  // A positive tabindex reorders the whole page for keyboard users, so it is
+  // never a local fix. Nothing in the dashboard should need one.
+  let positiveTabindex = 0;
+  for (const el of document.querySelectorAll('[tabindex]')) {
+    if (Number(el.getAttribute('tabindex')) > 0) positiveTabindex += 1;
+  }
+
+  const focusable = document.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  ).length;
+
+  return {
+    unnamed: unnamed.slice(0, 5),
+    unlabelled: unlabelled.slice(0, 5),
+    missingAlt: missingAlt.slice(0, 5),
+    dangling: [...new Set(dangling)].slice(0, 5),
+    duplicateIds: [...new Set(duplicateIds)].slice(0, 5),
+    positiveTabindex: positiveTabindex,
+    focusable: focusable,
+    controls: document.querySelectorAll('button, a[href], input, select, textarea').length,
+  };
+}
+
 function pageFacts() {
   const page = document.querySelector('.main') || document.body;
   const h1s = [...page.querySelectorAll('h1')];
@@ -160,6 +237,8 @@ function pageFacts() {
   const root = document.documentElement;
   const pageHeader = document.querySelector('.page-header');
   const topbar = document.querySelector('.topbar');
+  const rail = document.querySelector('.nav');
+  const activeLink = document.querySelector('.nav-link.active');
   return {
     path: location.pathname,
     levelsSkipped,
@@ -172,9 +251,13 @@ function pageFacts() {
     mainChildren: document.querySelector('.main') ? document.querySelector('.main').children.length : -1,
     bodyBg: getComputedStyle(document.body).backgroundColor,
     chromeBg: topbar ? getComputedStyle(topbar).backgroundColor : null,
+    railBg: rail ? getComputedStyle(rail).backgroundColor : null,
+    railActiveBg: activeLink ? getComputedStyle(activeLink).backgroundColor : null,
+    railActiveWeight: activeLink ? getComputedStyle(activeLink).fontWeight : null,
     palette: root.getAttribute('data-palette'),
     mode: root.getAttribute('data-mode'),
     errors: window.__errs.slice(),
+    a11y: auditA11y(),
   };
 }
 
@@ -358,6 +441,18 @@ export function judge(summary, theme, mode) {
     if (r.levelsSkipped) bad.push(`${r.path}: heading levels skip (${r.levelsSkipped})`);
     if (!r.hasPageHeader) bad.push(`${r.path}: no .page-header`);
     if (r.mainChildren === 0) bad.push(`${r.path}: rendered nothing`);
+
+    // ─── accessibility, measured on the rendered page ───
+    const a = r.a11y;
+    if (a.unnamed.length) bad.push(`${r.path}: control(s) with no accessible name — ${a.unnamed.join(', ')}`);
+    if (a.unlabelled.length) bad.push(`${r.path}: input(s) with no label — ${a.unlabelled.join(', ')}`);
+    if (a.missingAlt.length) bad.push(`${r.path}: image(s) with no alt — ${a.missingAlt.join(', ')}`);
+    if (a.dangling.length) bad.push(`${r.path}: aria reference(s) pointing at nothing — ${a.dangling.join(', ')}`);
+    if (a.duplicateIds.length) bad.push(`${r.path}: duplicate id(s) — ${a.duplicateIds.join(', ')}`);
+    if (a.positiveTabindex) bad.push(`${r.path}: ${a.positiveTabindex} element(s) with a positive tabindex`);
+    // A page with controls but nothing focusable is a page a keyboard user
+    // cannot operate at all — the failure this whole layer exists to prevent.
+    if (a.controls > 0 && a.focusable === 0) bad.push(`${r.path}: ${a.controls} controls but nothing focusable`);
     if (r.headerBorder && r.headerBorder !== 'solid') bad.push(`${r.path}: page header border is ${r.headerBorder}`);
   }
 
@@ -370,10 +465,35 @@ export function judge(summary, theme, mode) {
   if (k.focusRingOnField && k.focusRingOnField.style === 'none') bad.push(`${label}: a focused text field has no focus ring`);
   if (k.navAfterChord !== '/tasks') bad.push(`${label}: g-t did not navigate: ${k.navAfterChord}`);
 
-  // One canvas and one chrome colour for the whole app in a theme. A page that
-  // forgets to inherit the surfaces shows up here as a second pair.
-  const pairs = new Set(summary.results.map((r) => `${r.bodyBg}|${r.chromeBg}`));
+  // One canvas, one chrome and one rail colour for the whole app in a theme. A
+  // page that forgets to inherit the surfaces shows up here as a second triple.
+  const pairs = new Set(summary.results.map((r) => `${r.bodyBg}|${r.chromeBg}|${r.railBg}`));
   if (pairs.size !== 1) bad.push(`${label}: pages disagree about the theme surfaces: ${[...pairs].join(' / ')}`);
+
+  // The rail is a SECOND surface, not the top bar repeated. Painting both from
+  // the same token is the regression the dedicated --sidebar-* family exists to
+  // prevent, and it is invisible to every jsdom test — only a real engine
+  // resolves the cascade down to a computed colour.
+  //
+  // `contrast` is the ONE deliberate exception: that palette exists for maximum
+  // legibility, so its rail stays pure black and is separated from the bar by
+  // its border and its pills instead of by a tint. Exempting it here rather than
+  // tinting it in the stylesheet keeps the exception in one visible place.
+  if (theme !== 'contrast') {
+    const sameAsBar = summary.results.filter((r) => r.railBg && r.railBg === r.chromeBg);
+    if (sameAsBar.length) {
+      bad.push(`${label}: the rail is painted the same as the top bar (${sameAsBar[0].railBg})`);
+    }
+  }
+
+  // A nav pill the user cannot see is not a nav pill. Both the fill and the
+  // weight change carry the "you are here" state, so both are checked.
+  const pills = summary.results.map((r) => ({ path: r.path, bg: r.railActiveBg, weight: r.railActiveWeight }));
+  const invisible = pills.filter((p) => p.bg && p.bg === summary.results[0].railBg);
+  if (invisible.length) bad.push(`${label}: ${invisible[0].path} has an active pill with no fill`);
+  if (!pills.some((p) => p.weight && Number(p.weight) >= 600)) {
+    bad.push(`${label}: no active nav pill is emphasised`);
+  }
 
   return bad;
 }

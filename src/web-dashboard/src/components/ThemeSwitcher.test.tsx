@@ -90,6 +90,31 @@ describe('ThemeSwitcher — disclosure behaviour', () => {
     fireEvent.pointerDown(document.body);
     expect(trigger().getAttribute('aria-expanded')).toBe('false');
   });
+
+  it('stays open when focus lands on nothing', () => {
+    // REGRESSION. Chrome on macOS does not focus a form control on mouse-down,
+    // so clicking an option blurs the auto-focused radio to <body> with
+    // relatedTarget null — BEFORE the click that carries the choice. Closing on
+    // a null relatedTarget unmounted the label mid-interaction, so no click and
+    // no change ever fired: every real mouse selection was silently swallowed,
+    // while these jsdom tests (which click the input directly) all passed.
+    render(<ThemeSwitcher />);
+    openPanel();
+    fireEvent.focusOut(trigger().parentElement as HTMLElement, { relatedTarget: null });
+    expect(trigger().getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('closes when focus hands off to an element outside the panel', () => {
+    // The other half: tabbing out still dismisses it, so ignoring a null
+    // relatedTarget cannot leave the panel stranded open.
+    render(<ThemeSwitcher />);
+    openPanel();
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    fireEvent.focusOut(trigger().parentElement as HTMLElement, { relatedTarget: outside });
+    expect(trigger().getAttribute('aria-expanded')).toBe('false');
+    outside.remove();
+  });
 });
 
 describe('ThemeSwitcher — group semantics', () => {

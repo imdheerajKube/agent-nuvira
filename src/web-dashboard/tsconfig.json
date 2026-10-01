@@ -6,6 +6,9 @@
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
+    // The generated CLI catalogue is imported as JSON so the Command Console
+    // picker is built from the live command tree instead of a hand-typed list.
+    "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "moduleDetection": "force",

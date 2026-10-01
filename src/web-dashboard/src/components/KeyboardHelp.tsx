@@ -10,7 +10,8 @@ export const SHORTCUTS: Array<{ group: string; items: Shortcut[] }> = [
   {
     group: 'General',
     items: [
-      { keys: ['?'], description: 'Show this help' },
+      { keys: ['?'], description: 'Show the shortcut cheatsheet' },
+      { keys: ['F1'], description: 'Open the Help page' },
       { keys: ['Esc'], description: 'Close a dialog or panel' },
       { keys: ['g', 'c'], description: 'Go to Chat' },
       { keys: ['g', 'o'], description: 'Go to Overview' },
