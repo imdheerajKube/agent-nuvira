@@ -9,6 +9,7 @@
  */
 
 import TaskConsole from './TaskConsole';
+import PageHeader from './PageHeader';
 
 const PRESETS = [
   { label: '🌐 Gateway status', args: ['gateway', 'status'] },
@@ -23,9 +24,7 @@ const PRESETS = [
 export default function GatewayPage() {
   return (
     <div className="panel">
-      <div className="panel-header">
-        <h2>🌐 Gateway ops — run buff gateway from the GUI</h2>
-      </div>
+      <PageHeader icon="🌐" title="Gateway ops — run buff gateway from the GUI" />
 
       <TaskConsole
         presets={PRESETS}

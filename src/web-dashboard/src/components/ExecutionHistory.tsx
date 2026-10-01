@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import PageHeader from './PageHeader';
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -158,34 +159,37 @@ export function ExecutionHistory({
 
   return (
     <div className="execution-history">
-      <div className="execution-history-header">
-        <h3 className="execution-history-title">📜 Execution History</h3>
-        <div className="execution-history-actions">
-          <button
-            className="admin-mini-btn"
-            type="button"
-            onClick={() => handleExport('json')}
-          >
-            📥 Export JSON
-          </button>
-          <button
-            className="admin-mini-btn"
-            type="button"
-            onClick={() => handleExport('csv')}
-          >
-            📥 Export CSV
-          </button>
-          {onClear && (
+      <PageHeader
+        icon="📜"
+        title="Execution History"
+        actions={
+          <div className="execution-history-actions">
             <button
-              className="admin-mini-btn admin-mini-btn-danger"
+              className="admin-mini-btn"
               type="button"
-              onClick={handleClear}
+              onClick={() => handleExport('json')}
             >
-              🗑️ Clear
+              📥 Export JSON
             </button>
-          )}
-        </div>
-      </div>
+            <button
+              className="admin-mini-btn"
+              type="button"
+              onClick={() => handleExport('csv')}
+            >
+              📥 Export CSV
+            </button>
+            {onClear && (
+              <button
+                className="admin-mini-btn admin-mini-btn-danger"
+                type="button"
+                onClick={handleClear}
+              >
+                🗑️ Clear
+              </button>
+            )}
+          </div>
+        }
+      />
 
       {/* Stats */}
       {stats && (

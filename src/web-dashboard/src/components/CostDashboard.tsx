@@ -1,5 +1,6 @@
 import type { DashboardData } from '../types';
 import { formatCount } from '../format';
+import PageHeader from './PageHeader';
 
 interface CostDashboardProps {
   data: DashboardData | null;
@@ -26,7 +27,16 @@ function formatTime(ts: number): string {
 
 export default function CostDashboard({ data }: CostDashboardProps) {
   if (!data) {
-    return <div className="loading-state"><p>Loading cost data...</p></div>;
+    // The header stays while the data arrives. It used to be skipped in this
+    // branch, so a page that was still loading had no heading at all — the only
+    // headings on screen were the sidebar's, and "which page am I on" was
+    // unanswerable from the page itself.
+    return (
+      <>
+        <PageHeader icon="💰" title="Cost Tracking" />
+        <div className="loading-state"><p>Loading cost data...</p></div>
+      </>
+    );
   }
 
   const { cost } = data;
@@ -36,7 +46,7 @@ export default function CostDashboard({ data }: CostDashboardProps) {
 
   return (
     <>
-      <h2 className="section-title">💰 Cost Tracking</h2>
+      <PageHeader icon="💰" title="Cost Tracking" />
 
       <div className="cost-summary">
         <div className="cost-total">
@@ -66,7 +76,7 @@ export default function CostDashboard({ data }: CostDashboardProps) {
         </div>
       </div>
 
-      <h3 className="section-subtitle">By Provider</h3>
+      <h2 className="section-subtitle">By Provider</h2>
       <div className="cost-list">
         {byProvider.length === 0 ? (
           <div className="empty-state">No costs recorded yet.</div>
@@ -86,7 +96,7 @@ export default function CostDashboard({ data }: CostDashboardProps) {
         )}
       </div>
 
-      <h3 className="section-subtitle">By Model</h3>
+      <h2 className="section-subtitle">By Model</h2>
       <div className="cost-list">
         {byModel.length === 0 ? (
           <div className="empty-state">No model costs recorded yet.</div>
@@ -107,7 +117,7 @@ export default function CostDashboard({ data }: CostDashboardProps) {
         )}
       </div>
 
-      <h3 className="section-subtitle">Recent Requests</h3>
+      <h2 className="section-subtitle">Recent Requests</h2>
       <div className="request-list">
         {(!cost.recent || cost.recent.length === 0) ? (
           <div className="empty-state">No requests recorded yet.</div>

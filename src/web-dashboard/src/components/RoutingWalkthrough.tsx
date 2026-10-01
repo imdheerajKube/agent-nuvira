@@ -251,8 +251,8 @@ function ScoreBar({ value, color }: { value: number; color: string }) {
   const pctWidth = Math.min(100, Math.max(0, value * 100));
   return (
     <div style={{
-      flex: 1, background: '#0d1117', borderRadius: 4, height: 6,
-      overflow: 'hidden', border: '1px solid #21262d',
+      flex: 1, background: 'var(--bg-primary)', borderRadius: 4, height: 6,
+      overflow: 'hidden', border: '1px solid var(--border-light)',
     }}>
       <div style={{ width: `${pctWidth}%`, background: color, height: '100%', transition: 'width 0.4s ease' }} />
     </div>
@@ -264,8 +264,8 @@ function StepHeader({ icon, title, narration }: { icon: string; title: string; n
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 14 }}>
       <span style={{ fontSize: 20, lineHeight: '24px' }}>{icon}</span>
       <div>
-        <div style={{ fontSize: 14, fontWeight: 600, color: '#e6edf3' }}>{title}</div>
-        <div style={{ fontSize: 12, color: '#8b949e', marginTop: 2 }}>{narration}</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{narration}</div>
       </div>
     </div>
   );
@@ -315,24 +315,24 @@ export default function RoutingWalkthroughSection({ routing }: { routing: Routin
 
   return (
     <div style={{
-      background: '#161b22', borderRadius: 12, border: '1px solid #21262d',
+      background: 'var(--bg-card)', borderRadius: 12, border: '1px solid var(--border-light)',
       padding: '18px 20px', marginBottom: 16,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
         <span style={{ fontSize: 20 }}>🎬</span>
-        <h3 style={{ fontSize: 15, fontWeight: 600, color: '#e6edf3', margin: 0 }}>
+        <h3 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
           Why did the router pick this?
         </h3>
         {active.real && (
           <span style={{
             fontSize: 11, padding: '1px 8px', borderRadius: 10,
-            background: '#12291a', border: '1px solid #238636', color: '#3fb950',
+            background: 'var(--ok-soft)', border: '1px solid var(--accent-green)', color: 'var(--accent-green)',
           }}>
             ✓ real decision
           </span>
         )}
       </div>
-      <p style={{ fontSize: 12, color: '#8b949e', margin: '2px 0 12px 0' }}>
+      <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 12px 0' }}>
         Narrated step-by-step replay of a routing decision — request, candidates,
         exclusions, and the pick. Scrubbable, or hit play.
       </p>
@@ -344,12 +344,12 @@ export default function RoutingWalkthroughSection({ routing }: { routing: Routin
         onChange={(e) => { setActiveId(e.target.value); setStepIdx(0); setPlaying(false); }}
         style={{
           width: '100%', marginBottom: 16, padding: '8px 10px',
-          background: '#0d1117', color: '#e6edf3', fontSize: 12,
-          border: '1px solid #30363d', borderRadius: 8, outline: 'none',
+          background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 12,
+          border: '1px solid var(--border)', borderRadius: 8, outline: 'none',
         }}
       >
         {decisions.map((d) => (
-          <option key={d.id} value={d.id} style={{ background: '#0d1117', color: '#e6edf3' }}>
+          <option key={d.id} value={d.id} style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
             {d.real ? '● ' : '○ '}{d.label}
           </option>
         ))}
@@ -364,26 +364,26 @@ export default function RoutingWalkthroughSection({ routing }: { routing: Routin
 
       {/* Step content */}
       {step.key === 'request' && (
-        <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 10, padding: '14px 16px' }}>
+        <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 10, padding: '14px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-            <span style={{ fontSize: 12, padding: '2px 10px', borderRadius: 12, background: '#161b22', border: '1px solid #30363d', color: '#e6edf3' }}>
+            <span style={{ fontSize: 12, padding: '2px 10px', borderRadius: 12, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}>
               {COMPLEXITY_ICONS[active.complexity] || '•'} {COMPLEXITY_LABELS[active.complexity] || active.complexity}
             </span>
-            <span style={{ fontSize: 12, padding: '2px 10px', borderRadius: 12, background: '#161b22', border: '1px solid #30363d', color: '#8b949e' }}>
+            <span style={{ fontSize: 12, padding: '2px 10px', borderRadius: 12, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
               🤖 {active.agentType}
             </span>
             {active.source && (
-              <span style={{ fontSize: 12, padding: '2px 10px', borderRadius: 12, background: '#161b22', border: '1px solid #30363d', color: '#8b949e' }}>
+              <span style={{ fontSize: 12, padding: '2px 10px', borderRadius: 12, background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
                 {sourceLabel(active.source)}
               </span>
             )}
             {active.timestamp && (
-              <span style={{ fontSize: 11, color: '#6e7681', marginLeft: 'auto' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
                 {timeAgo(active.timestamp)}
               </span>
             )}
           </div>
-          <div style={{ fontSize: 13, color: '#e6edf3' }}>{active.task}</div>
+          <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{active.task}</div>
         </div>
       )}
 
@@ -394,17 +394,17 @@ export default function RoutingWalkthroughSection({ routing }: { routing: Routin
             return (
               <div key={c.provider} style={{
                 display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-                background: isWinner ? '#12291a' : '#0d1117',
-                border: `1px solid ${isWinner ? '#238636' : '#21262d'}`,
+                background: isWinner ? 'var(--ok-soft)' : 'var(--bg-primary)',
+                border: `1px solid ${isWinner ? 'var(--accent-green)' : 'var(--border-light)'}`,
                 borderRadius: 8, marginBottom: 6,
               }}>
-                <span style={{ width: 18, fontSize: 11, color: '#6e7681', textAlign: 'right' }}>{i + 1}.</span>
-                <span style={{ width: 104, color: isWinner ? '#3fb950' : '#e6edf3', fontWeight: isWinner ? 600 : 400, whiteSpace: 'nowrap', fontSize: 12 }}>
+                <span style={{ width: 18, fontSize: 11, color: 'var(--text-muted)', textAlign: 'right' }}>{i + 1}.</span>
+                <span style={{ width: 104, color: isWinner ? 'var(--accent-green)' : 'var(--text-primary)', fontWeight: isWinner ? 600 : 400, whiteSpace: 'nowrap', fontSize: 12 }}>
                   {providerIcon(c.provider)} {providerLabel(c.provider).split(' ')[0]}
                   {isWinner && ' 👑'}
                 </span>
-                <ScoreBar value={c.score} color={isWinner ? '#3fb950' : '#58a6ff'} />
-                <span style={{ width: 44, textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 11, color: '#8b949e' }}>
+                <ScoreBar value={c.score} color={isWinner ? 'var(--accent-green)' : 'var(--accent-blue)'} />
+                <span style={{ width: 44, textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 11, color: 'var(--text-secondary)' }}>
                   {c.score.toFixed(3)}
                 </span>
               </div>
@@ -412,10 +412,10 @@ export default function RoutingWalkthroughSection({ routing }: { routing: Routin
           })}
           {active.candidates.length > 0 && (
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 11, color: '#6e7681', marginBottom: 4 }}>Why each ranked where it did</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>Why each ranked where it did</div>
               {active.candidates.map((c) => (
-                <div key={c.provider} style={{ fontSize: 12, color: '#8b949e', marginBottom: 3 }}>
-                  <span style={{ color: '#e6edf3' }}>{c.provider}</span>: {c.reason || 'scored'}
+                <div key={c.provider} style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 3 }}>
+                  <span style={{ color: 'var(--text-primary)' }}>{c.provider}</span>: {c.reason || 'scored'}
                 </div>
               ))}
             </div>
@@ -429,20 +429,20 @@ export default function RoutingWalkthroughSection({ routing }: { routing: Routin
             {active.exclusions.map((ex) => (
               <div key={ex.provider} style={{
                 display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-                background: '#0d1117', border: '1px solid #21262d', borderRadius: 8, marginBottom: 6,
+                background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 8, marginBottom: 6,
               }}>
                 <span style={{ fontSize: 13 }}>🚫</span>
-                <span style={{ width: 110, color: '#e6edf3', whiteSpace: 'nowrap', fontSize: 12 }}>
+                <span style={{ width: 110, color: 'var(--text-primary)', whiteSpace: 'nowrap', fontSize: 12 }}>
                   {providerIcon(ex.provider)} {providerLabel(ex.provider).split(' ')[0]}
                 </span>
-                <span style={{ flex: 1, fontSize: 12, color: '#8b949e' }}>{ex.reason}</span>
+                <span style={{ flex: 1, fontSize: 12, color: 'var(--text-secondary)' }}>{ex.reason}</span>
               </div>
             ))}
           </div>
         ) : (
           <div style={{
-            background: '#0d1117', border: '1px dashed #30363d', borderRadius: 10,
-            padding: '14px 16px', color: '#8b949e', fontSize: 13,
+            background: 'var(--bg-primary)', border: '1px dashed var(--border)', borderRadius: 10,
+            padding: '14px 16px', color: 'var(--text-secondary)', fontSize: 13,
           }}>
             ✅ No exclusions — every provider known to the system was scored for this decision.
           </div>
@@ -451,22 +451,22 @@ export default function RoutingWalkthroughSection({ routing }: { routing: Routin
 
       {step.key === 'pick' && (
         <div style={{
-          background: '#12291a', border: '1px solid #238636', borderRadius: 10,
+          background: 'var(--ok-soft)', border: '1px solid var(--accent-green)', borderRadius: 10,
           padding: '16px 18px',
         }}>
-          <div style={{ fontSize: 12, color: '#3fb950', fontWeight: 600, marginBottom: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--accent-green)', fontWeight: 600, marginBottom: 6 }}>
             🏆 ROUTER PICK
           </div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#e6edf3', fontFamily: "'SFMono-Regular', Consolas, monospace", marginBottom: 4 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'SFMono-Regular', Consolas, monospace", marginBottom: 4 }}>
             {providerIcon(active.winner.split('/')[0])} {active.winner}
           </div>
-          <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 10 }}>
-            composite score <span style={{ fontFamily: "'SFMono-Regular', Consolas, monospace", color: '#3fb950' }}>{active.winnerScore.toFixed(3)}</span>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+            composite score <span style={{ fontFamily: "'SFMono-Regular', Consolas, monospace", color: 'var(--accent-green)' }}>{active.winnerScore.toFixed(3)}</span>
             {!active.real && ' · profile preview'}
           </div>
           {active.winnerReason && (
-            <div style={{ fontSize: 12, color: '#8b949e', borderTop: '1px solid #23863655', paddingTop: 8 }}>
-              <span style={{ color: '#e6edf3' }}>Why:</span> {active.winnerReason}
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', borderTop: '1px solid color-mix(in srgb, var(--accent-green) 33%, transparent)', paddingTop: 8 }}>
+              <span style={{ color: 'var(--text-primary)' }}>Why:</span> {active.winnerReason}
             </div>
           )}
         </div>
@@ -484,7 +484,7 @@ export default function RoutingWalkthroughSection({ routing }: { routing: Routin
         <button
           onClick={togglePlay}
           aria-label={playing ? 'Pause playback' : 'Play playback'}
-          style={{ ...btnStyle, minWidth: 84, color: playing ? '#d29922' : '#3fb950' }}
+          style={{ ...btnStyle, minWidth: 84, color: playing ? 'var(--accent-yellow)' : 'var(--accent-green)' }}
         >
           {playing ? '⏸ Pause' : '▶ Play'}
         </button>
@@ -506,8 +506,8 @@ export default function RoutingWalkthroughSection({ routing }: { routing: Routin
               style={{
                 width: 22, height: 22, borderRadius: 11, border: 'none', cursor: 'pointer',
                 fontSize: 10, lineHeight: '22px', padding: 0,
-                background: i === stepIdx ? '#58a6ff' : '#21262d',
-                color: i === stepIdx ? '#0d1117' : '#8b949e',
+                background: i === stepIdx ? 'var(--accent-blue)' : 'var(--bg-hover)',
+                color: i === stepIdx ? 'var(--bg-primary)' : 'var(--text-secondary)',
               }}
               title={s.title}
             >
@@ -516,7 +516,7 @@ export default function RoutingWalkthroughSection({ routing }: { routing: Routin
           ))}
         </div>
 
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: '#6e7681' }}>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>
           step {stepIdx + 1}/{STEP_ORDER.length}
         </span>
       </div>
@@ -525,7 +525,7 @@ export default function RoutingWalkthroughSection({ routing }: { routing: Routin
 }
 
 const btnStyle: CSSProperties = {
-  background: '#21262d', color: '#e6edf3', border: '1px solid #30363d',
+  background: 'var(--bg-hover)', color: 'var(--text-primary)', border: '1px solid var(--border)',
   borderRadius: 8, padding: '6px 12px', fontSize: 13, cursor: 'pointer',
   transition: 'background 0.15s',
 };

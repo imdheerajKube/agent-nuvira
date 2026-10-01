@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardAPI } from '../api';
 import type { BedrockStatus } from '../types';
+import PageHeader from './PageHeader';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -130,7 +131,7 @@ export default function BedrockOnboarding({ canWrite, sessionExpired }: Props) {
 
   return (
     <div className="bedrock-onboarding">
-      <h2 className="section-title">🟠 AWS Bedrock</h2>
+      <PageHeader icon="🟠" title="AWS Bedrock" />
       <p className="admin-subtitle">
         Bedrock gives you access to Claude, Llama, Mistral, DeepSeek, and more — all through a single AWS account.
         Unlike other providers, Bedrock requires a <strong>region</strong>, <strong>AWS credentials</strong>, and explicit <strong>model access approval</strong>.
@@ -180,7 +181,7 @@ export default function BedrockOnboarding({ canWrite, sessionExpired }: Props) {
       {/* ── Setup Wizard ──────────────────────────────────────────────── */}
       {step === 'setup' && (
         <div className="bedrock-setup-wizard">
-          <h3 className="section-subtitle">🚀 Bedrock Setup Wizard</h3>
+          <h2 className="section-subtitle">🚀 Bedrock Setup Wizard</h2>
 
           {/* Step 1: Auth Method */}
           <div className="bedrock-wizard-step">
@@ -345,7 +346,7 @@ export default function BedrockOnboarding({ canWrite, sessionExpired }: Props) {
       {/* ── Probe Results ──────────────────────────────────────────────── */}
       {step === 'test' && probeResults && (
         <div className="bedrock-probe-results">
-          <h3 className="section-subtitle">🔍 Model Probe Results ({status.region})</h3>
+          <h2 className="section-subtitle">🔍 Model Probe Results ({status.region})</h2>
           <div className="bedrock-probe-grid">
             {probeResults.map((r) => (
               <div key={r.modelId} className={`bedrock-probe-card bedrock-probe-${r.status}`}>
@@ -383,7 +384,7 @@ export default function BedrockOnboarding({ canWrite, sessionExpired }: Props) {
       {/* ── Getting Started Guide (when not configured) ──────────────── */}
       {!status.configured && step === 'overview' && (
         <div className="bedrock-getting-started">
-          <h3 className="section-subtitle">📋 Getting Started with Bedrock</h3>
+          <h2 className="section-subtitle">📋 Getting Started with Bedrock</h2>
           <div className="bedrock-steps">
             <div className="bedrock-step">
               <span className="bedrock-step-num">1</span>

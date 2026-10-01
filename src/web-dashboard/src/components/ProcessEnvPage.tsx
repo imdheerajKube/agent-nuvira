@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
 import type { ProcessEnvVarRow } from '../types';
+import PageHeader from './PageHeader';
 
 interface AuthState {
   configured: boolean;
@@ -131,7 +132,7 @@ export default function ProcessEnvPage() {
 
   return (
     <div>
-      <h2 className="section-title">🌱 Process Environment</h2>
+      <PageHeader icon="🌱" title="Process Environment" />
       <div className="env-var-header">
         <span className="env-var-title">
           These are the switches Agent-Nuvira reads for how a run behaves. Values are written to the credential

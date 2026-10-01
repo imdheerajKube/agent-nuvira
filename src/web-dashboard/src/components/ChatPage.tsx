@@ -31,6 +31,7 @@ import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
 import { stripAnsi } from '../ansi';
 import type { ResumeOutcome, TaskLogLine, TaskStatus, TraceFinding, WorktreeOutcome } from '../types';
 import { formatCount } from '../format';
+import PageHeader from './PageHeader';
 
 interface AuthState {
   configured: boolean;
@@ -1900,15 +1901,18 @@ export default function ChatPage() {
 
   return (
     <div className="panel">
-      <div className="panel-header">
-        <h2>💬 Chat with the agent</h2>
-        <div className="chat-head-actions">
-          {meta ? <span className="admin-hint">{meta}</span> : null}
-          <button className="admin-refresh-btn" type="button" onClick={() => void resetConversation()} disabled={busy || messages.length === 0}>
-            🗑 New conversation
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        icon="💬"
+        title="Chat with the agent"
+        actions={
+          <div className="chat-head-actions">
+            {meta ? <span className="admin-hint">{meta}</span> : null}
+            <button className="admin-refresh-btn" type="button" onClick={() => void resetConversation()} disabled={busy || messages.length === 0}>
+              🗑 New conversation
+            </button>
+          </div>
+        }
+      />
 
       {!auth?.authenticated ? (
         <div className="admin-login-hint">

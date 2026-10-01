@@ -327,7 +327,12 @@ describe('FlakinessSparkline', () => {
     // Healing trend → tooltip + green end dot.
     expect(screen.getByTitle(/Flakiness healing/)).toBeTruthy();
     expect(screen.getByTitle(/trending down/)).toBeTruthy();
-    expect(container.querySelector('circle')?.getAttribute('fill')).toBe('#3fb950');
+    // The end dot's colour is a THEME TOKEN carried as an inline style rather
+    // than a literal in a `fill` attribute — a presentation attribute cannot
+    // reliably hold a themeable colour (see the Recharts block in
+    // dashboard.css). jsdom does not resolve var(), so assert the token; its
+    // value is pinned per theme by theme-contrast.test.ts.
+    expect(container.querySelector('circle')?.getAttribute('style')).toContain('var(--accent-green)');
   });
 
   it('flags a climbing (worse) trajectory with the accumulating tooltip', () => {
@@ -339,7 +344,7 @@ describe('FlakinessSparkline', () => {
       ]}
     />);
     expect(screen.getByTitle(/Flakiness climbing/)).toBeTruthy();
-    expect(container.querySelector('circle')?.getAttribute('fill')).toBe('#bc8cff');
+    expect(container.querySelector('circle')?.getAttribute('style')).toContain('var(--accent-purple)');
   });
 });
 
@@ -372,8 +377,10 @@ describe('ActionTelemetryCard partial presentation', () => {
     expect(screen.getByText(/mid-stream interruption/i)).toBeTruthy();
     // The chip carries the streamed-chunk detail in its tooltip.
     expect(screen.getByTitle(/~128 chunks in/)).toBeTruthy();
-    // Violet border wins (partial > killed > verified) — jsdom computes rgb().
-    expect(container.querySelector('[style*="rgb(188, 140, 255)"]')).toBeTruthy();
+    // Violet border wins (partial > killed > verified). The colour is the purple
+    // accent TOKEN applied inline, so match the token rather than a resolved
+    // rgb() — jsdom does not resolve var().
+    expect(container.querySelector('[style*="var(--accent-purple)"]')).toBeTruthy();
   });
 });
 

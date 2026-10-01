@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { dashboardAPI } from '../api';
+import PageHeader from './PageHeader';
 
 interface Contact {
   name: string;
@@ -195,10 +196,11 @@ export default function ContactsPage() {
 
   return (
     <div className="panel contacts-page">
-      <div className="panel-header">
-        <h2>📇 Contacts — Outbound Messaging Directory</h2>
-        <p className="admin-hint">Manage who the bot can send messages to. Users auto-register on first Telegram message.</p>
-      </div>
+      <PageHeader
+        icon="📇"
+        title="Contacts — Outbound Messaging Directory"
+        description="Manage who the bot can send messages to. Users auto-register on first Telegram message."
+      />
 
       {msg && (
         <div className={`admin-row-msg ${msg.kind === 'err' ? 'admin-row-msg-err' : ''}`}>

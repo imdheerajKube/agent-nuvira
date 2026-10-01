@@ -149,6 +149,25 @@ jobs:
         env:
           CI: true
 
+      # A real browser walk of every route a nav link reaches, in four theme
+      # combinations, against the COMMITTED bundle. The jsdom suite renders one
+      # component at a time and cannot see a route nothing links to, a skipped
+      # heading level on a page, the theme the user chose never actually
+      # applying, or the shell's keyboard layer (a focus-trapping `?` dialog,
+      # the `g`-chord). The earlier throwaway harness read the wrong
+      # localStorage key, so those walks silently tested the DEFAULT theme —
+      # this script asserts data-palette/data-mode before it trusts a page.
+      # --require-chrome turns a missing browser into a failure: the ubuntu
+      # runner image ships Chrome, so "no Chrome" here is a broken runner, not
+      # an absent one. The Windows gate runs the same walk over two themes
+      # (see test-windows.yml): there the value is argv/path/spawn handling, so
+      # it needs the route + keyboard checks, not all four palettes.
+      - name: Dashboard browser walk (routes + themes + keyboard)
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
+        run: npm run smoke:dashboard -- --require-chrome
+        env:
+          CI: true
+
   # Bun latest — validates the full root suite under the Bun runtime (M4).
   # Bun can run vitest via bunx; the tsc typecheck is part of the gate so a
   # Bun-specific resolution regression is caught the same way Node catches it.

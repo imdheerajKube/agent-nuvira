@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardAPI } from '../api';
 import type { PlatformConfigEntry } from '../types';
+import PageHeader from './PageHeader';
 
 const GUIDES: Record<string, { icon: string; category: string; steps: string[]; testTarget: string }> = {
   telegram: { icon: '✈️', category: 'Chat', steps: ['Open Telegram and search for @BotFather', 'Send /newbot and follow the prompts', 'Give your bot a name (e.g. "My Agent Bot")', 'Give your bot a username ending in "bot"', 'BotFather gives you a token — paste it in Step 2', 'Open your bot in Telegram and send /start'], testTarget: 'telegram:' },
@@ -126,9 +127,7 @@ export default function PlatformsPage() {
 
   return (
     <div className="panel">
-      <div className="panel-header">
-        <h2>Platforms — Messaging Gateway Onboarding</h2>
-      </div>
+      <PageHeader icon="🌐" title="Platforms — Messaging Gateway Onboarding" />
 
       <div className="platforms-summary">
         <div className="platforms-summary-stat">

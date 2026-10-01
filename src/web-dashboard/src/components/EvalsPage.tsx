@@ -9,6 +9,7 @@
 
 import TaskConsole from './TaskConsole';
 import type { DashboardData, EvalRun } from '../types';
+import PageHeader from './PageHeader';
 
 const PRESETS = [
   { label: '⚡ Quick smoke', args: ['eval', 'run', '--tasks', 'quick', '--format', 'text'] },
@@ -32,9 +33,7 @@ export default function EvalsPage({ data }: { data: DashboardData | null }) {
 
   return (
     <div className="panel">
-      <div className="panel-header">
-        <h2>🏆 Evals — run buff eval from the GUI</h2>
-      </div>
+      <PageHeader icon="🏆" title="Evals — run buff eval from the GUI" />
 
       <TaskConsole
         presets={PRESETS}
@@ -48,7 +47,7 @@ export default function EvalsPage({ data }: { data: DashboardData | null }) {
         }
       />
 
-      <h3 className="section-subtitle">📜 Past runs (auto-refreshes)</h3>
+      <h2 className="section-subtitle">📜 Past runs (auto-refreshes)</h2>
       {runs.length > 0 ? (
         <div className="admin-table-wrapper">
           <table className="admin-table">

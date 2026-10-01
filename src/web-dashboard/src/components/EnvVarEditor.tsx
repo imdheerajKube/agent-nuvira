@@ -97,7 +97,8 @@ export function EnvVarEditor({
   return (
     <div className="env-var-editor">
       <div className="env-var-header">
-        <h3 className="env-var-title">🔐 Environment Variables</h3>
+        {/* h2, not h3: this editor renders INSIDE a page that already has an h1. */}
+        <h2 className="env-var-title">🔐 Environment Variables</h2>
         {!readOnly && (
           <button
             className="admin-mini-btn"

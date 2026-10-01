@@ -1,5 +1,6 @@
 import type { DashboardData } from '../types';
 import { formatCount } from '../format';
+import PageHeader from './PageHeader';
 
 interface MemoryPanelProps {
   data: DashboardData | null;
@@ -19,7 +20,13 @@ function formatPercent(value: number | undefined): string {
 
 export default function MemoryPanel({ data }: MemoryPanelProps) {
   if (!data) {
-    return <div className="loading-state"><p>Loading memory data...</p></div>;
+    // Header kept in the loading branch, so the page still says what it is.
+    return (
+      <>
+        <PageHeader icon="💾" title="Memory Store" />
+        <div className="loading-state"><p>Loading memory data...</p></div>
+      </>
+    );
   }
 
   const { memory, health } = data;
@@ -29,7 +36,7 @@ export default function MemoryPanel({ data }: MemoryPanelProps) {
 
   return (
     <>
-      <h2 className="section-title">💾 Memory Store</h2>
+      <PageHeader icon="💾" title="Memory Store" />
 
       <div className="stats-grid mini">
         <div className="stat-card">
@@ -65,7 +72,7 @@ export default function MemoryPanel({ data }: MemoryPanelProps) {
 
       {entries.length > 0 && (
         <>
-          <h3 className="section-subtitle">By Project Type</h3>
+          <h2 className="section-subtitle">By Project Type</h2>
           <div className="memory-list">
             {entries.map(([project, count]) => (
               <div className="memory-item" key={project}>
@@ -79,7 +86,7 @@ export default function MemoryPanel({ data }: MemoryPanelProps) {
 
       {factEntries.length > 0 && (
         <>
-          <h3 className="section-subtitle">Facts by Project</h3>
+          <h2 className="section-subtitle">Facts by Project</h2>
           <div className="memory-list">
             {factEntries.map(([project, count]) => (
               <div className="memory-item" key={project}>

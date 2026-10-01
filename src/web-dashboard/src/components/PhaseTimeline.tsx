@@ -19,18 +19,18 @@ const AGENT_ICONS: Record<string, string> = {
 };
 
 const AGENT_COLORS: Record<string, string> = {
-  planner: '#58a6ff',
-  'context-gatherer': '#39d2c0',
-  writer: '#d29922',
-  reviewer: '#bc8cff',
-  tester: '#3fb950',
-  debugger: '#f85149',
-  runner: '#58a6ff',
-  git: '#f0883e',
-  package: '#db6d28',
-  'github-release': '#3fb950',
-  security: '#f85149',
-  orchestrator: '#f0883e',
+  planner: 'var(--accent-blue)',
+  'context-gatherer': 'var(--accent-cyan)',
+  writer: 'var(--accent-yellow)',
+  reviewer: 'var(--accent-purple)',
+  tester: 'var(--accent-green)',
+  debugger: 'var(--accent-red)',
+  runner: 'var(--accent-blue)',
+  git: 'var(--accent-yellow)',
+  package: 'var(--accent-yellow)',
+  'github-release': 'var(--accent-green)',
+  security: 'var(--accent-red)',
+  orchestrator: 'var(--accent-yellow)',
 };
 
 const AGENT_LABELS: Record<string, string> = {
@@ -56,10 +56,10 @@ const STATUS_BADGES: Record<PipelinePhase['status'], { icon: string; label: stri
 };
 
 const STATUS_COLORS: Record<PipelinePhase['status'], string> = {
-  pending: '#6e7681',
-  running: '#58a6ff',
-  completed: '#3fb950',
-  failed: '#f85149',
+  pending: 'var(--text-muted)',
+  running: 'var(--accent-blue)',
+  completed: 'var(--accent-green)',
+  failed: 'var(--accent-red)',
 };
 
 // ─── Run derivation helpers (shared with DAGView) ────────────────────────────
@@ -386,7 +386,7 @@ export default function PhaseTimeline({
           style={{ cursor: 'grab' }}
         >
           {laid.map((p) => {
-            const color = AGENT_COLORS[p.agentType] || '#58a6ff';
+            const color = AGENT_COLORS[p.agentType] || 'var(--accent-blue)';
             const statusColor = STATUS_COLORS[p.status];
             const isActive = currentPhase?.id === p.id;
             return (
@@ -433,7 +433,7 @@ export default function PhaseTimeline({
           <>
             <div className="phase-detail-title">
               <span className="phase-detail-icon">{AGENT_ICONS[currentPhase.agentType] || '⚙️'}</span>
-              <span className="phase-detail-agent" style={{ color: AGENT_COLORS[currentPhase.agentType] || '#58a6ff' }}>
+              <span className="phase-detail-agent" style={{ color: AGENT_COLORS[currentPhase.agentType] || 'var(--accent-blue)' }}>
                 {AGENT_LABELS[currentPhase.agentType] || currentPhase.agentType}
               </span>
               <span className={`phase-status-badge phase-status-${currentPhase.status}`}>
