@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { parseJsonOrNull } from '../jsonOrNull';
 import type { ModelsHealthData, ProviderHealth, ModelStatus, TestedModel, ModelRegistryInsights, RegistryModelEntry, ActionTelemetryInsights } from '../types';
 import { formatCount } from '../format';
+import PageHeader from './PageHeader';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -10,9 +11,9 @@ const LOCAL_PROVIDERS = new Set(['local', 'lmstudio', 'vllm']);
 const SPEECH_PROVIDERS = new Set<string>([]);
 
 const STATUS_STYLES: Record<ModelStatus, { bg: string; text: string; dot: string; cardBorder: string; cardBg: string }> = {
-  available: { bg: '#0a2e1a', text: '#3fb950', dot: '#3fb950', cardBorder: '#3fb950', cardBg: '#0d2818' },
-  limited: { bg: '#2d1f00', text: '#d29922', dot: '#d29922', cardBorder: '#d29922', cardBg: '#1f1700' },
-  unavailable: { bg: '#2d0f0f', text: '#f85149', dot: '#f85149', cardBorder: '#f85149', cardBg: '#1f0a0a' },
+  available: { bg: 'var(--ok-soft)', text: 'var(--accent-green)', dot: 'var(--accent-green)', cardBorder: 'var(--accent-green)', cardBg: 'var(--ok-soft)' },
+  limited: { bg: 'var(--warn-soft)', text: 'var(--accent-yellow)', dot: 'var(--accent-yellow)', cardBorder: 'var(--accent-yellow)', cardBg: 'var(--warn-soft)' },
+  unavailable: { bg: 'var(--danger-soft)', text: 'var(--accent-red)', dot: 'var(--accent-red)', cardBorder: 'var(--accent-red)', cardBg: 'var(--danger-soft)' },
 };
 
 const COL_OPTIONS = [3, 4, 5] as const;
@@ -173,15 +174,15 @@ function ActionBar({ onRefresh, loading }: { onRefresh: () => void; loading: boo
         style={{
           cursor: loading ? 'not-allowed' : 'pointer',
           opacity: loading ? 0.6 : 1,
-          border: '1px solid #30363d',
+          border: '1px solid var(--border)',
           justifyContent: 'center',
           fontSize: 13,
         }}
       >
         {loading ? '⏳ Testing...' : '🔄 Refresh Status'}
       </button>
-      <div className="stat-card" style={{ border: '1px solid #30363d' }}>
-        <div style={{ fontSize: 13, color: '#8b949e', textAlign: 'center', width: '100%' }}>
+      <div className="stat-card" style={{ border: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', textAlign: 'center', width: '100%' }}>
           Tests all configured providers and their API keys in real time
         </div>
       </div>
@@ -202,17 +203,17 @@ function ProgressBar({ data }: { data: ModelsHealthData }) {
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{
-        background: '#0d1117', borderRadius: 8, overflow: 'hidden',
-        height: 10, display: 'flex', border: '1px solid #21262d',
+        background: 'var(--bg-primary)', borderRadius: 8, overflow: 'hidden',
+        height: 10, display: 'flex', border: '1px solid var(--border-light)',
       }}>
-        {available > 0 && <div style={{ width: `${(available / total) * 100}%`, background: '#3fb950', transition: 'width 0.5s' }} title={`${available} available`} />}
-        {limited > 0 && <div style={{ width: `${(limited / total) * 100}%`, background: '#d29922', transition: 'width 0.5s' }} title={`${limited} limited`} />}
-        {unavailable > 0 && <div style={{ width: `${(unavailable / total) * 100}%`, background: '#f85149', transition: 'width 0.5s' }} title={`${unavailable} unavailable`} />}
+        {available > 0 && <div style={{ width: `${(available / total) * 100}%`, background: 'var(--accent-green)', transition: 'width 0.5s' }} title={`${available} available`} />}
+        {limited > 0 && <div style={{ width: `${(limited / total) * 100}%`, background: 'var(--accent-yellow)', transition: 'width 0.5s' }} title={`${limited} limited`} />}
+        {unavailable > 0 && <div style={{ width: `${(unavailable / total) * 100}%`, background: 'var(--accent-red)', transition: 'width 0.5s' }} title={`${unavailable} unavailable`} />}
       </div>
-      <div style={{ display: 'flex', gap: 16, marginTop: 6, fontSize: 12, color: '#8b949e' }}>
-        <span><span style={{ color: '#3fb950' }}>●</span> Ready</span>
-        <span><span style={{ color: '#d29922' }}>●</span> Limited</span>
-        <span><span style={{ color: '#f85149' }}>●</span> Unavailable</span>
+      <div style={{ display: 'flex', gap: 16, marginTop: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+        <span><span style={{ color: 'var(--accent-green)' }}>●</span> Ready</span>
+        <span><span style={{ color: 'var(--accent-yellow)' }}>●</span> Limited</span>
+        <span><span style={{ color: 'var(--accent-red)' }}>●</span> Unavailable</span>
       </div>
       {/*
         Reconciliation. The bar above is a LISTING breakdown — it says a provider
@@ -221,15 +222,15 @@ function ProgressBar({ data }: { data: ModelsHealthData }) {
         card below it and the router's actual behaviour.
       */}
       {typeof data.routable === 'number' && (
-        <div style={{ marginTop: 6, fontSize: 12, color: '#8b949e', lineHeight: 1.5 }}>
-          <strong style={{ color: '#e6edf3' }}>{total}</strong> listed by providers ·{' '}
-          <strong style={{ color: data.routable > 0 ? '#3fb950' : '#d29922' }}>{data.routable}</strong>{' '}
+        <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+          <strong style={{ color: 'var(--text-primary)' }}>{total}</strong> listed by providers ·{' '}
+          <strong style={{ color: data.routable > 0 ? 'var(--accent-green)' : 'var(--accent-yellow)' }}>{data.routable}</strong>{' '}
           routable right now (verified, un-parked, not stale)
           {typeof data.registryTotal === 'number' && data.registryTotal > 0 && (
             <>
               {' '}· registry tracks{' '}
-              <strong style={{ color: '#e6edf3' }}>{data.registryVerified ?? 0}</strong> of{' '}
-              <strong style={{ color: '#e6edf3' }}>{data.registryTotal}</strong> verified
+              <strong style={{ color: 'var(--text-primary)' }}>{data.registryVerified ?? 0}</strong> of{' '}
+              <strong style={{ color: 'var(--text-primary)' }}>{data.registryTotal}</strong> verified
             </>
           )}
         </div>
@@ -252,7 +253,7 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
 
   return (
     <div style={{
-      background: '#161b22', borderRadius: 12,
+      background: 'var(--bg-card)', borderRadius: 12,
       border: `1px solid ${borderColor}44`,
       borderLeft: `4px solid ${borderColor}`,
       marginBottom: 12, overflow: 'hidden',
@@ -268,7 +269,7 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
         <span style={{ fontSize: 24 }}>{provider.icon}</span>
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 2 }}>
-            <span style={{ fontSize: 16, fontWeight: 600, color: '#e6edf3' }}>
+            <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>
               {provider.providerLabel}
             </span>
             <StatusBadge
@@ -276,23 +277,23 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
               label={getStatusLabel(provider.overallStatus)}
             />
           </div>
-          <div style={{ fontSize: 13, color: '#8b949e' }}>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
             {provider.models.length} model{provider.models.length !== 1 ? 's' : ''}
-            {counts.available > 0 && <span style={{ color: '#3fb950' }}> · {counts.available} ready</span>}
-            {counts.limited > 0 && <span style={{ color: '#d29922' }}> · {counts.limited} limited</span>}
-            {counts.unavailable > 0 && <span style={{ color: '#f85149' }}> · {counts.unavailable} unavailable</span>}
+            {counts.available > 0 && <span style={{ color: 'var(--accent-green)' }}> · {counts.available} ready</span>}
+            {counts.limited > 0 && <span style={{ color: 'var(--accent-yellow)' }}> · {counts.limited} limited</span>}
+            {counts.unavailable > 0 && <span style={{ color: 'var(--accent-red)' }}> · {counts.unavailable} unavailable</span>}
           </div>
         </div>
-        <div style={{ fontSize: 12, color: '#8b949e', textAlign: 'right' }}>
-          <div style={{ marginBottom: 2, color: provider.apiConfigured ? '#3fb950' : '#f85149' }}>
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'right' }}>
+          <div style={{ marginBottom: 2, color: provider.apiConfigured ? 'var(--accent-green)' : 'var(--accent-red)' }}>
             {provider.apiConfigured ? '✅ Key set' : '❌ No key'}
           </div>
-          <div style={{ color: provider.apiAccessible ? '#3fb950' : '#f85149' }}>
+          <div style={{ color: provider.apiAccessible ? 'var(--accent-green)' : 'var(--accent-red)' }}>
             {provider.apiAccessible ? '✅ Connected' : '❌ Offline'}
           </div>
         </div>
         <span style={{
-          color: '#8b949e', fontSize: 18,
+          color: 'var(--text-secondary)', fontSize: 18,
           transition: 'transform 0.2s',
           transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
         }}>▶</span>
@@ -301,19 +302,19 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
       {expanded && (
         <>
           <div style={{
-            padding: '10px 18px', background: '#0d1117', fontSize: 13, color: '#8b949e',
+            padding: '10px 18px', background: 'var(--bg-primary)', fontSize: 13, color: 'var(--text-secondary)',
             display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8,
-            borderTop: '1px solid #21262d',
+            borderTop: '1px solid var(--border-light)',
           }}>
             <span>{provider.notes}</span>
             {provider.freeTierInfo && (
-              <span style={{ color: '#d29922' }}>🎁 {provider.freeTierInfo}</span>
+              <span style={{ color: 'var(--accent-yellow)' }}>🎁 {provider.freeTierInfo}</span>
             )}
           </div>
-          <div style={{ overflowX: 'auto', borderTop: '1px solid #21262d' }}>
+          <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border-light)' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
-                <tr style={{ borderBottom: '1px solid #21262d', color: '#8b949e' }}>
+                <tr style={{ borderBottom: '1px solid var(--border-light)', color: 'var(--text-secondary)' }}>
                   <th style={{ padding: '8px 18px', textAlign: 'left', fontWeight: 500 }}>Model</th>
                   <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Status</th>
                   <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Quota</th>
@@ -323,11 +324,11 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
               <tbody>
                 {provider.models.map((model, i) => (
                   <tr key={model.id} style={{
-                    borderBottom: i < provider.models.length - 1 ? '1px solid #21262d' : 'none',
-                    background: model.status === 'unavailable' ? '#0d1117' : 'transparent',
+                    borderBottom: i < provider.models.length - 1 ? '1px solid var(--border-light)' : 'none',
+                    background: model.status === 'unavailable' ? 'var(--bg-primary)' : 'transparent',
                   }}>
                     <td style={{
-                      padding: '8px 18px', color: '#e6edf3',
+                      padding: '8px 18px', color: 'var(--text-primary)',
                       fontFamily: "'SFMono-Regular', Consolas, monospace",
                       fontSize: 12,
                     }}>
@@ -340,14 +341,14 @@ function ProviderCard({ provider }: { provider: ProviderHealth }) {
                     <td style={{ padding: '8px 12px' }}>
                       <StatusBadge status={model.status} label={getStatusBadgeLabel(model.status)} />
                     </td>
-                    <td style={{ padding: '8px 12px', color: '#8b949e', fontSize: 12, fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+                    <td style={{ padding: '8px 12px', color: 'var(--text-secondary)', fontSize: 12, fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
                       {model.rateLimitRemaining !== undefined
                         ? model.rateLimitTotal
                           ? `${model.rateLimitRemaining}/${model.rateLimitTotal}`
                           : `${model.rateLimitRemaining} left`
                         : '—'}
                     </td>
-                    <td style={{ padding: '8px 18px', color: '#8b949e', fontSize: 12 }}>
+                    <td style={{ padding: '8px 18px', color: 'var(--text-secondary)', fontSize: 12 }}>
                       {model.statusReason}
                     </td>
                   </tr>
@@ -377,9 +378,9 @@ function fmtDuration(ms: number): string {
 }
 
 function registryStatusStyle(status: string) {
-  if (status === 'verified') return { text: '#3fb950', bg: '#0a2e1a', dot: '#3fb950' };
-  if (status === 'unavailable') return { text: '#f85149', bg: '#2d0f0f', dot: '#f85149' };
-  return { text: '#8b949e', bg: '#21262d', dot: '#8b949e' };
+  if (status === 'verified') return { text: 'var(--accent-green)', bg: 'var(--ok-soft)', dot: 'var(--accent-green)' };
+  if (status === 'unavailable') return { text: 'var(--accent-red)', bg: 'var(--danger-soft)', dot: 'var(--accent-red)' };
+  return { text: 'var(--text-secondary)', bg: 'var(--bg-hover)', dot: 'var(--bg-hover)' };
 }
 
 /**
@@ -395,7 +396,7 @@ export function FlakinessChip({ rate }: { rate: number }) {
       title={`⏸ flaky mid-stream ${pct}% — started streaming, died before finish; the router deprioritizes flaky models (P4 M4.4)`}
       style={{
         marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
-        background: '#21122e', border: '1px solid #bc8cff', color: '#bc8cff',
+        background: 'var(--purple-soft)', border: '1px solid var(--accent-purple)', color: 'var(--accent-purple)',
       }}
     >
       ⏸ flaky {pct}%
@@ -423,7 +424,7 @@ export function ContextWindowChip({ tokens }: { tokens: number }) {
       title={`⏳ context window ${formatCount(tokens)} tokens — live from the provider's model list (v1.60.x); feeds the router's context preflight`}
       style={{
         marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
-        background: '#0a1e2e', border: '1px solid #58a6ff', color: '#58a6ff',
+        background: 'var(--info-soft)', border: '1px solid var(--accent-blue)', color: 'var(--accent-blue)',
       }}
     >
       ⏳ {compact}
@@ -466,12 +467,12 @@ export function FlakinessSparkline({ history }: { history?: Array<{ t: number; r
           ? `Flakiness healing — ${pct}% now, trending down (clean successes decay the signal)`
           : `Flakiness climbing — ${pct}% now (recent mid-stream interruptions)`}
       </title>
-      <polyline points={pts} fill="none" stroke="#bc8cff" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.9} />
+      <polyline points={pts} fill="none" style={{ stroke: 'var(--accent-purple)' }} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.9} />
       <circle
         cx={W - PAD}
         cy={H - PAD - (last / max) * (H - PAD * 2)}
         r={2}
-        fill={healing ? '#3fb950' : '#bc8cff'}
+        style={{ fill: healing ? 'var(--accent-green)' : 'var(--accent-purple)' }}
       />
     </svg>
   );
@@ -483,8 +484,8 @@ function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
     ? `${formatCount(entry.remainingTokens)} left`
     : 'unlimited';
   return (
-    <tr style={{ borderBottom: '1px solid #21262d' }}>
-      <td style={{ padding: '8px 12px', color: '#e6edf3', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12 }}>
+    <tr style={{ borderBottom: '1px solid var(--border-light)' }}>
+      <td style={{ padding: '8px 12px', color: 'var(--text-primary)', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12 }}>
         <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: style.dot, marginRight: 8 }} />
         {entry.model.length > 32 ? entry.model.slice(0, 29) + '…' : entry.model}
         {(entry.partialRate ?? 0) > 0 && <FlakinessChip rate={entry.partialRate ?? 0} />}
@@ -492,20 +493,20 @@ function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
         {entry.parked && (
           <span style={{
             marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8,
-            background: '#2d1616', border: '1px solid #f85149', color: '#f85149',
+            background: 'var(--danger-soft)', border: '1px solid var(--accent-red)', color: 'var(--accent-red)',
           }}>⏸ parked</span>
         )}
         {entry.measuredSamples ? (
           <span style={{
             marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
-            background: '#0a2e1a', border: '1px solid #3fb950', color: '#3fb950',
+            background: 'var(--ok-soft)', border: '1px solid var(--accent-green)', color: 'var(--accent-green)',
           }}>
             📏 {entry.measuredInputTokens}→{entry.measuredOutputTokens} tok
           </span>
         ) : (
           <span style={{
             marginLeft: 8, fontSize: 10, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
-            background: '#21262d', border: '1px solid #8b949e', color: '#8b949e',
+            background: 'var(--bg-hover)', border: '1px solid var(--border-hover)', color: 'var(--text-secondary)',
           }}>📐 est</span>
         )}
         {entry.contextWindowTokens && <ContextWindowChip tokens={entry.contextWindowTokens} />}
@@ -518,16 +519,16 @@ function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
           {entry.status === 'verified' ? '✓ Verified' : entry.status === 'unavailable' ? '✗ Unavailable' : '◌ Unverified'}
         </span>
       </td>
-      <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12, color: entry.remainingTokens >= 0 && entry.remainingTokens <= 100 ? '#d29922' : '#8b949e' }}>
+      <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12, color: entry.remainingTokens >= 0 && entry.remainingTokens <= 100 ? 'var(--accent-yellow)' : 'var(--text-secondary)' }}>
         {tokens}
       </td>
-      <td style={{ padding: '8px 12px', textAlign: 'right', color: '#8b949e', fontSize: 12, whiteSpace: 'nowrap' }}>
+      <td style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--text-secondary)', fontSize: 12, whiteSpace: 'nowrap' }}>
         {entry.resetsInMs > 0 ? fmtDuration(entry.resetsInMs) : '—'}
       </td>
-      <td style={{ padding: '8px 12px', textAlign: 'right', color: '#8b949e', fontSize: 12, fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
+      <td style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--text-secondary)', fontSize: 12, fontFamily: "'SFMono-Regular', Consolas, monospace" }}>
         {entry.latencyMs !== undefined ? `${entry.latencyMs}ms` : '—'}
       </td>
-      <td style={{ padding: '8px 12px', color: '#6e7681', fontSize: 11, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <td style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: 11, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {entry.lastError || (entry.source ? `learned via ${entry.source}` : '')}
       </td>
     </tr>
@@ -536,11 +537,11 @@ function RegistryEntryRow({ entry }: { entry: RegistryModelEntry }) {
 
 function RegistryCard({ provider }: { provider: ModelRegistryInsights['providers'][number] }) {
   const [expanded, setExpanded] = useState(false);
-  const borderColor = provider.verified > 0 ? '#3fb950' : provider.unavailable > 0 ? '#f85149' : '#8b949e';
+  const borderColor = provider.verified > 0 ? 'var(--accent-green)' : provider.unavailable > 0 ? 'var(--accent-red)' : 'var(--border-hover)';
 
   return (
     <div style={{
-      background: '#161b22', borderRadius: 12,
+      background: 'var(--bg-card)', borderRadius: 12,
       border: `1px solid ${borderColor}44`,
       borderLeft: `4px solid ${borderColor}`,
       marginBottom: 12, overflow: 'hidden',
@@ -552,35 +553,35 @@ function RegistryCard({ provider }: { provider: ModelRegistryInsights['providers
         <span style={{ fontSize: 24 }}>{getProviderIcon(provider.provider)}</span>
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 2 }}>
-            <span style={{ fontSize: 16, fontWeight: 600, color: '#e6edf3' }}>{getProviderLabel(provider.provider)}</span>
+            <span style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>{getProviderLabel(provider.provider)}</span>
             <span style={{
               fontSize: 11, padding: '2px 8px', borderRadius: 10,
-              background: provider.parked > 0 ? '#2d1616' : '#12291a',
-              border: `1px solid ${provider.parked > 0 ? '#f85149' : '#238636'}`,
-              color: provider.parked > 0 ? '#f85149' : '#3fb950',
+              background: provider.parked > 0 ? 'var(--danger-soft)' : 'var(--ok-soft)',
+              border: `1px solid ${provider.parked > 0 ? 'var(--accent-red)' : 'var(--accent-green)'}`,
+              color: provider.parked > 0 ? 'var(--accent-red)' : 'var(--accent-green)',
             }}>
               {provider.parked > 0 ? `${provider.parked} parked` : 'routable'}
             </span>
             {(provider.flaky ?? 0) > 0 && (
               <span style={{
                 fontSize: 11, padding: '2px 8px', borderRadius: 10,
-                background: '#21122e', border: '1px solid #bc8cff', color: '#bc8cff',
+                background: 'var(--purple-soft)', border: '1px solid var(--accent-purple)', color: 'var(--accent-purple)',
               }}>
                 ⏸ {provider.flaky} flaky
               </span>
             )}
           </div>
-          <div style={{ fontSize: 13, color: '#8b949e' }}>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
             {provider.verified} verified · {provider.unverified} unverified · {provider.unavailable} unavailable
           </div>
         </div>
-        <span style={{ color: '#8b949e', fontSize: 18, transition: 'transform 0.2s', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+        <span style={{ color: 'var(--text-secondary)', fontSize: 18, transition: 'transform 0.2s', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
       </div>
       {expanded && (
-        <div style={{ overflowX: 'auto', borderTop: '1px solid #21262d' }}>
+        <div style={{ overflowX: 'auto', borderTop: '1px solid var(--border-light)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid #21262d', color: '#8b949e' }}>
+              <tr style={{ borderBottom: '1px solid var(--border-light)', color: 'var(--text-secondary)' }}>
                 <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Model</th>
                 <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Availability</th>
                 <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 500 }}>Tokens left</th>
@@ -610,24 +611,24 @@ export function keyHygieneWarning(hygiene?: { threshold: number; consecutive: Re
   if (pending.length === 0) return null;
   return (
     <div style={{
-      background: 'rgba(210, 153, 34, 0.08)', border: '1px solid #9e6a03',
+      background: 'color-mix(in srgb, var(--accent-yellow) 8%, transparent)', border: '1px solid var(--accent-yellow)',
       borderRadius: 10, padding: '10px 14px', marginBottom: 14,
-      fontSize: 12, color: '#d29922', display: 'flex', gap: 10, alignItems: 'flex-start',
+      fontSize: 12, color: 'var(--accent-yellow)', display: 'flex', gap: 10, alignItems: 'flex-start',
     }}>
       <span style={{ fontSize: 15, lineHeight: '18px' }}>🧹</span>
       <div>
-        <div style={{ fontWeight: 600, color: '#e3b341', marginBottom: 2 }}>Key hygiene in progress</div>
+        <div style={{ fontWeight: 600, color: 'var(--accent-yellow)', marginBottom: 2 }}>Key hygiene in progress</div>
         <div>
           {pending.map(([provider, count]) => (
             <span key={provider} style={{ display: 'inline-block', marginRight: 12 }}>
-              <code style={{ color: '#e6edf3' }}>{provider}</code> {count}/{hygiene.threshold} consecutive auth failures
+              <code style={{ color: 'var(--text-primary)' }}>{provider}</code> {count}/{hygiene.threshold} consecutive auth failures
               {count >= hygiene.threshold ? ' — key auto-cleared 🚫' : ' — key will be auto-cleared at the threshold'}
             </span>
           ))}
         </div>
-        <div style={{ marginTop: 4, color: '#9e6a03' }}>
+        <div style={{ marginTop: 4, color: 'var(--accent-yellow)' }}>
           After {hygiene.threshold} consecutive 401/403s the invalid key is removed from config; run{' '}
-          <code style={{ color: '#58a6ff' }}>buff config set providers.&lt;provider&gt;.apiKey &lt;real-key&gt;</code> to re-enable.
+          <code style={{ color: 'var(--accent-blue)' }}>buff config set providers.&lt;provider&gt;.apiKey &lt;real-key&gt;</code> to re-enable.
         </div>
       </div>
     </div>
@@ -638,15 +639,15 @@ function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
   if (!data.enabled) {
     return (
       <div style={{
-        background: '#161b22', borderRadius: 12, border: '1px dashed #30363d',
+        background: 'var(--bg-card)', borderRadius: 12, border: '1px dashed var(--border)',
         padding: '20px 24px', marginTop: 24, textAlign: 'center' as const,
       }}>
         <div style={{ fontSize: 24, marginBottom: 8 }}>📦</div>
-        <div style={{ fontSize: 14, fontWeight: 600, color: '#e6edf3', marginBottom: 4 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
           Model Availability Registry
         </div>
-        <div style={{ fontSize: 12, color: '#6e7681' }}>
-          No registry data yet — run <code style={{ color: '#58a6ff' }}>buff models refresh</code> or use Auto routing;
+        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          No registry data yet — run <code style={{ color: 'var(--accent-blue)' }}>buff models refresh</code> or use Auto routing;
           the registry learns from real usage and probes.
         </div>
       </div>
@@ -655,7 +656,7 @@ function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
 
   return (
     <>
-      <h2 className="section-title" style={{ marginTop: 36 }}>📦 Model Availability Registry — the store routing reads</h2>
+      <PageHeader icon="📦" title="Model Availability Registry" />
       <p className="section-description">
         The unified sub-ms FAISS/JSON snapshot the Auto router consults on every pick:
         verified vs unavailable models plus quota telemetry (tokens remaining, reset
@@ -677,42 +678,42 @@ function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
         <div className="stat-card">
           <span className="stat-icon">✅</span>
           <div className="stat-body">
-            <div className="stat-value" style={{ color: '#3fb950' }}>{data.verified}</div>
+            <div className="stat-value" style={{ color: 'var(--accent-green)' }}>{data.verified}</div>
             <div className="stat-label">Verified</div>
           </div>
         </div>
         <div className="stat-card">
           <span className="stat-icon">◌</span>
           <div className="stat-body">
-            <div className="stat-value" style={{ color: '#8b949e' }}>{data.unverified}</div>
+            <div className="stat-value" style={{ color: 'var(--text-secondary)' }}>{data.unverified}</div>
             <div className="stat-label">Unverified</div>
           </div>
         </div>
         <div className="stat-card">
           <span className="stat-icon">⛔</span>
           <div className="stat-body">
-            <div className="stat-value" style={{ color: '#f85149' }}>{data.unavailable}</div>
+            <div className="stat-value" style={{ color: 'var(--accent-red)' }}>{data.unavailable}</div>
             <div className="stat-label">Unavailable</div>
           </div>
         </div>
         <div className="stat-card">
           <span className="stat-icon">⏸</span>
           <div className="stat-body">
-            <div className="stat-value" style={{ color: '#d29922' }}>{data.parked}</div>
+            <div className="stat-value" style={{ color: 'var(--accent-yellow)' }}>{data.parked}</div>
             <div className="stat-label">Quota-parked</div>
           </div>
         </div>
         <div className="stat-card">
           <span className="stat-icon">⏸</span>
           <div className="stat-body">
-            <div className="stat-value" style={{ color: '#bc8cff' }}>{data.flaky ?? 0}</div>
+            <div className="stat-value" style={{ color: 'var(--accent-purple)' }}>{data.flaky ?? 0}</div>
             <div className="stat-label">Flaky mid-stream</div>
           </div>
         </div>
         <div className="stat-card">
           <span className="stat-icon">🗑️</span>
           <div className="stat-body">
-            <div className="stat-value" style={{ color: '#8b949e' }}>{data.deletedLocal ?? 0}</div>
+            <div className="stat-value" style={{ color: 'var(--text-secondary)' }}>{data.deletedLocal ?? 0}</div>
             <div className="stat-label">Deleted locally</div>
           </div>
         </div>
@@ -724,7 +725,7 @@ function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
         <RegistryCard key={provider.provider} provider={provider} />
       ))}
 
-      <div style={{ textAlign: 'center', fontSize: 12, color: '#484f58', marginTop: 12 }}>
+      <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', marginTop: 12 }}>
         Backend snapshot · auto-refreshes every 60s
       </div>
     </>
@@ -778,8 +779,8 @@ function ModelLearnChip({ provider, model, reason, killed, transient, partial, s
   // Partial gets its own violet signal: distinct from a clean error (transient)
   // because a provider that starts-but-can't-finish is a worse reliability
   // signal — the router deprioritizes flaky mid-stream providers.
-  const color = isPartial ? '#bc8cff' : isTransient ? '#d29922' : isKilled ? '#f85149' : '#3fb950';
-  const bg = isPartial ? '#21122e' : isTransient ? '#2d1f00' : isKilled ? '#2d0f0f' : '#0a2e1a';
+  const color = isPartial ? 'var(--accent-purple)' : isTransient ? 'var(--accent-yellow)' : isKilled ? 'var(--accent-red)' : 'var(--accent-green)';
+  const bg = isPartial ? 'var(--purple-soft)' : isTransient ? 'var(--warn-soft)' : isKilled ? 'var(--danger-soft)' : 'var(--ok-soft)';
   return (
     <span
       title={isPartial
@@ -936,14 +937,14 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
   const chips = day ? dedupeDayEvents(day.events || []) : [];
 
   return (
-    <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #21262d' }}>
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border-light)' }}>
       <div style={{
-        fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8,
+        fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8,
         textTransform: 'uppercase', letterSpacing: 0.4,
         display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
       }}>
         <span>📈 Learned from real usage — last {len} days</span>
-        <span style={{ fontWeight: 400, color: '#6e7681', letterSpacing: 0 }}>
+        <span style={{ fontWeight: 400, color: 'var(--text-muted)', letterSpacing: 0 }}>
           — drag across days · click a day · play to sweep
         </span>
       </div>
@@ -962,8 +963,8 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
           disabled={len <= 1}
           aria-label={playing ? 'Pause scrub' : 'Play scrub'}
           style={{
-            background: '#21262d', border: `1px solid ${playing ? '#f85149' : '#30363d'}`,
-            color: '#e6edf3', padding: '3px 10px', borderRadius: 6,
+            background: 'var(--bg-hover)', border: `1px solid ${playing ? 'var(--accent-red)' : 'var(--border)'}`,
+            color: 'var(--text-primary)', padding: '3px 10px', borderRadius: 6,
             cursor: len <= 1 ? 'not-allowed' : 'pointer', fontSize: 11, fontWeight: 600,
             transition: 'all 0.15s', whiteSpace: 'nowrap',
             opacity: len <= 1 ? 0.5 : 1,
@@ -971,7 +972,7 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
         >
           {playing ? '⏸ Pause' : '▶ Play'}
         </button>
-        <span style={{ fontSize: 11, color: '#8b949e', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
           {dayLabel(day.day)} · ✓ {day.verified} · ✗ {day.killed}
           {day.transient > 0 ? ` · ~ ${day.transient}` : ''}
           {day.partial > 0 ? ` · ⏸ ${day.partial}` : ''}
@@ -984,7 +985,7 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
           value={clamped}
           onChange={(e) => { setPlaying(false); setDayIdx(Number(e.target.value)); }}
           aria-label="Scrub action timeline"
-          style={{ flex: 1, accentColor: '#58a6ff', cursor: 'pointer', minWidth: 80 }}
+          style={{ flex: 1, accentColor: 'var(--accent-blue)', cursor: 'pointer', minWidth: 80 }}
         />
       </div>
 
@@ -1018,10 +1019,10 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
               <div style={{
                 position: 'relative', width: '100%', borderRadius: 3,
                 overflow: isActive ? 'visible' : 'hidden',
-                background: total === 0 ? '#21262d' : 'transparent',
+                background: total === 0 ? 'var(--bg-hover)' : 'transparent',
                 height: total === 0 ? 4 : 56,
                 display: 'flex', flexDirection: 'column-reverse',
-                boxShadow: isActive ? '0 0 0 1.5px #58a6ff' : undefined,
+                boxShadow: isActive ? '0 0 0 1.5px var(--accent-blue)' : undefined,
                 opacity: total === 0 ? 0.5 : 1,
                 transition: 'box-shadow 0.15s',
               }}>
@@ -1030,25 +1031,25 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
                   <div style={{
                     position: 'absolute', top: -3, bottom: -3, width: 2, left: '50%',
                     transform: 'translateX(-50%)',
-                    background: '#58a6ff', borderRadius: 2, pointerEvents: 'none',
-                    boxShadow: '0 0 8px #58a6ff88', zIndex: 1,
+                    background: 'var(--accent-blue)', borderRadius: 2, pointerEvents: 'none',
+                    boxShadow: '0 0 8px color-mix(in srgb, var(--accent-blue) 53%, transparent)', zIndex: 1,
                   }} />
                 )}
                 {b.verified > 0 && (
-                  <div style={{ height: hVerified, background: '#3fb950', minHeight: 3 }} />
+                  <div style={{ height: hVerified, background: 'var(--accent-green)', minHeight: 3 }} />
                 )}
                 {b.killed > 0 && (
-                  <div style={{ height: hKilled, background: '#f85149', minHeight: 3 }} />
+                  <div style={{ height: hKilled, background: 'var(--accent-red)', minHeight: 3 }} />
                 )}
                 {b.transient > 0 && (
-                  <div style={{ height: hTransient, background: '#d29922', minHeight: 3 }} />
+                  <div style={{ height: hTransient, background: 'var(--accent-yellow)', minHeight: 3 }} />
                 )}
                 {b.partial > 0 && (
-                  <div style={{ height: hPartial, background: '#bc8cff', minHeight: 3 }} />
+                  <div style={{ height: hPartial, background: 'var(--accent-purple)', minHeight: 3 }} />
                 )}
               </div>
               <div style={{
-                fontSize: 9, color: isActive ? '#58a6ff' : '#6e7681', marginTop: 4,
+                fontSize: 9, color: isActive ? 'var(--accent-blue)' : 'var(--text-muted)', marginTop: 4,
                 whiteSpace: 'nowrap', fontWeight: isActive ? 700 : 400,
               }}>
                 {dayLabel(b.day)}
@@ -1057,26 +1058,26 @@ export function ActionTimelineChart({ timeline }: { timeline: ActionDayBucket[] 
           );
         })}
       </div>
-      <div style={{ display: 'flex', gap: 14, marginTop: 6, fontSize: 11, color: '#8b949e' }}>
-        <span><span style={{ color: '#3fb950' }}>■</span> verified</span>
-        <span><span style={{ color: '#f85149' }}>■</span> killed</span>
-        <span><span style={{ color: '#d29922' }}>■</span> transient</span>
-        <span><span style={{ color: '#bc8cff' }}>■</span> partial</span>
+      <div style={{ display: 'flex', gap: 14, marginTop: 6, fontSize: 11, color: 'var(--text-secondary)' }}>
+        <span><span style={{ color: 'var(--accent-green)' }}>■</span> verified</span>
+        <span><span style={{ color: 'var(--accent-red)' }}>■</span> killed</span>
+        <span><span style={{ color: 'var(--accent-yellow)' }}>■</span> transient</span>
+        <span><span style={{ color: 'var(--accent-purple)' }}>■</span> partial</span>
       </div>
 
       {/* Day detail — the chips for the scrubbed day */}
       <div style={{
-        marginTop: 10, background: '#161b22', border: '1px solid #21262d',
+        marginTop: 10, background: 'var(--bg-card)', border: '1px solid var(--border-light)',
         borderRadius: 8, padding: '10px 12px',
       }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: '#e6edf3', marginBottom: 6 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6 }}>
           {dayLabel(day.day)}{' '}
-          <span style={{ color: '#8b949e', fontWeight: 400 }}>
+          <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>
             — what this action learned that day
           </span>
         </div>
         {chips.length === 0 ? (
-          <div style={{ fontSize: 12, color: '#6e7681' }}>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
             No learning recorded that day — nothing verified, killed, or partial.
           </div>
         ) : (
@@ -1127,11 +1128,11 @@ export function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights[
   // Partial mid-stream interruptions are the strongest reliability signal —
   // violet border wins even over killed (a provider that starts-but-can't-
   // finish is worse than one that errors cleanly).
-  const borderColor = (entry.partial || 0) > 0 ? '#bc8cff' : entry.killed > 0 ? '#f85149' : entry.verified > 0 ? '#3fb950' : '#d29922';
+  const borderColor = (entry.partial || 0) > 0 ? 'var(--accent-purple)' : entry.killed > 0 ? 'var(--accent-red)' : entry.verified > 0 ? 'var(--accent-green)' : 'var(--accent-yellow)';
 
   return (
     <div style={{
-      background: '#161b22', borderRadius: 12,
+      background: 'var(--bg-card)', borderRadius: 12,
       border: `1px solid ${borderColor}33`,
       borderLeft: `4px solid ${borderColor}`,
       marginBottom: 12, overflow: 'hidden',
@@ -1142,24 +1143,24 @@ export function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights[
       >
         <span style={{ fontSize: 20 }}>{actionIcon(entry.action)}</span>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: '#e6edf3', marginBottom: 2 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 2 }}>
             {actionLabel(entry.action)}
           </div>
-          <div style={{ fontSize: 12, color: '#8b949e', display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-            <span><span style={{ color: '#3fb950' }}>✓ {entry.verified}</span> verified</span>
-            <span><span style={{ color: '#f85149' }}>✗ {entry.killed}</span> killed</span>
-            {entry.transient > 0 && <span><span style={{ color: '#d29922' }}>~ {entry.transient}</span> transient</span>}
-            {(entry.partial || 0) > 0 && <span><span style={{ color: '#bc8cff' }}>⏸ {entry.partial}</span> partial</span>}
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+            <span><span style={{ color: 'var(--accent-green)' }}>✓ {entry.verified}</span> verified</span>
+            <span><span style={{ color: 'var(--accent-red)' }}>✗ {entry.killed}</span> killed</span>
+            {entry.transient > 0 && <span><span style={{ color: 'var(--accent-yellow)' }}>~ {entry.transient}</span> transient</span>}
+            {(entry.partial || 0) > 0 && <span><span style={{ color: 'var(--accent-purple)' }}>⏸ {entry.partial}</span> partial</span>}
           </div>
         </div>
-        <span style={{ color: '#8b949e', fontSize: 16, transition: 'transform 0.2s', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+        <span style={{ color: 'var(--text-secondary)', fontSize: 16, transition: 'transform 0.2s', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
       </div>
       {expanded && (
-        <div style={{ padding: '12px 16px', borderTop: '1px solid #21262d', background: '#0d1117' }}>
+        <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-light)', background: 'var(--bg-primary)' }}>
           {entry.killedModels.length > 0 && (
             <>
               <div style={{
-                fontSize: 11, fontWeight: 600, color: '#f85149', marginBottom: 6,
+                fontSize: 11, fontWeight: 600, color: 'var(--accent-red)', marginBottom: 6,
                 textTransform: 'uppercase', letterSpacing: 0.4,
               }}>
                 ⛔ Killed — skipped predictively by routing
@@ -1174,7 +1175,7 @@ export function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights[
           {entry.verifiedModels.length > 0 && (
             <>
               <div style={{
-                fontSize: 11, fontWeight: 600, color: '#3fb950', marginBottom: 6,
+                fontSize: 11, fontWeight: 600, color: 'var(--accent-green)', marginBottom: 6,
                 textTransform: 'uppercase', letterSpacing: 0.4,
               }}>
                 ✅ Verified — trusted by routing
@@ -1189,7 +1190,7 @@ export function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights[
           {(entry.partialModels?.length || 0) > 0 && (
             <>
               <div style={{
-                fontSize: 11, fontWeight: 600, color: '#bc8cff', marginBottom: 6,
+                fontSize: 11, fontWeight: 600, color: 'var(--accent-purple)', marginBottom: 6,
                 textTransform: 'uppercase', letterSpacing: 0.4,
               }}>
                 ⏸ Partial — mid-stream interruption (flaky provider, deprioritized)
@@ -1202,7 +1203,7 @@ export function ActionTelemetryCard({ entry }: { entry: ActionTelemetryInsights[
             </>
           )}
           {entry.killedModels.length === 0 && entry.verifiedModels.length === 0 && (entry.partialModels?.length || 0) === 0 && (
-            <div style={{ fontSize: 12, color: '#6e7681' }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
               Only transient failures — health decayed, no model flipped.
             </div>
           )}
@@ -1219,17 +1220,17 @@ function ActionTelemetrySection({ registry }: { registry: ModelRegistryInsights 
   if (!tele.enabled) {
     return (
       <div style={{
-        background: '#161b22', borderRadius: 12, border: '1px dashed #30363d',
+        background: 'var(--bg-card)', borderRadius: 12, border: '1px dashed var(--border)',
         padding: '18px 24px', marginTop: 24, textAlign: 'center' as const,
       }}>
         <div style={{ fontSize: 22, marginBottom: 6 }}>🎓</div>
-        <div style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3', marginBottom: 4 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
           Learned from real usage — per action
         </div>
-        <div style={{ fontSize: 12, color: '#6e7681', lineHeight: 1.5 }}>
-          No per-action telemetry yet. As you use <strong style={{ color: '#8b949e' }}>chat</strong>,{' '}
-          <strong style={{ color: '#8b949e' }}>execute</strong>, <strong style={{ color: '#8b949e' }}>plan</strong>,
-          and <strong style={{ color: '#8b949e' }}>edit</strong>, each action's verified / killed provider ×
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          No per-action telemetry yet. As you use <strong style={{ color: 'var(--text-secondary)' }}>chat</strong>,{' '}
+          <strong style={{ color: 'var(--text-secondary)' }}>execute</strong>, <strong style={{ color: 'var(--text-secondary)' }}>plan</strong>,
+          and <strong style={{ color: 'var(--text-secondary)' }}>edit</strong>, each action's verified / killed provider ×
           model combos appear here — showing exactly what routing learned from real usage.
         </div>
       </div>
@@ -1237,11 +1238,11 @@ function ActionTelemetrySection({ registry }: { registry: ModelRegistryInsights 
   }
   return (
     <>
-      <h2 className="section-title" style={{ marginTop: 36 }}>🎓 Learned from real usage — per action</h2>
+      <h2 className="section-subtitle">🎓 Learned from real usage — per action</h2>
       <p className="section-description">
         Every LLM call writes through to the health store with its action tag. This panel shows which
-        provider × model each action <span style={{ color: '#3fb950' }}>verified</span> (routable) or{' '}
-        <span style={{ color: '#f85149' }}>killed</span> (predictively skipped) — the exact feed that turns
+        provider × model each action <span style={{ color: 'var(--accent-green)' }}>verified</span> (routable) or{' '}
+        <span style={{ color: 'var(--accent-red)' }}>killed</span> (predictively skipped) — the exact feed that turns
         &ldquo;fail gemini → fail nim → local&rdquo; into &ldquo;straight to local&rdquo;.
       </p>
 
@@ -1277,7 +1278,7 @@ function ActionTelemetrySection({ registry }: { registry: ModelRegistryInsights 
           <div className="stat-card" title="Written by a test process — excluded from every number on this panel. The records remain in the hash-chained log.">
             <span className="stat-icon">🧪</span>
             <div className="stat-body">
-              <div className="stat-value" style={{ color: '#d29922' }}>{tele.synthetic}</div>
+              <div className="stat-value" style={{ color: 'var(--accent-yellow)' }}>{tele.synthetic}</div>
               <div className="stat-label">Test-origin, excluded</div>
             </div>
           </div>
@@ -1286,7 +1287,7 @@ function ActionTelemetrySection({ registry }: { registry: ModelRegistryInsights 
 
       {tele.actions.map((a) => <ActionTelemetryCard key={a.action} entry={a} />)}
 
-      <div style={{ textAlign: 'center', fontSize: 12, color: '#484f58', marginTop: 12 }}>
+      <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', marginTop: 12 }}>
         All actions share one health store — a provider killed by any action is skipped by all others
       </div>
     </>
@@ -1299,13 +1300,13 @@ function SectionHeader({ icon, title, count }: { icon: string; title: string; co
   if (count === 0) return null;
   return (
     <h3 style={{
-      fontSize: 15, fontWeight: 600, color: '#e6edf3',
+      fontSize: 15, fontWeight: 600, color: 'var(--text-primary)',
       margin: '24px 0 12px 0', display: 'flex', alignItems: 'center', gap: 8,
     }}>
       <span>{icon}</span> {title}
       <span style={{
-        fontSize: 12, color: '#8b949e', fontWeight: 400,
-        background: '#161b22', padding: '1px 8px', borderRadius: 8,
+        fontSize: 12, color: 'var(--text-secondary)', fontWeight: 400,
+        background: 'var(--bg-card)', padding: '1px 8px', borderRadius: 8,
       }}>
         {count}
       </span>
@@ -1324,12 +1325,12 @@ function SearchBar({ value, onChange, totalCount }: { value: string; onChange: (
       <div style={{
         flex: 1, position: 'relative',
         display: 'flex', alignItems: 'center',
-        background: '#161b22', borderRadius: 8,
-        border: '1px solid #30363d',
+        background: 'var(--bg-card)', borderRadius: 8,
+        border: '1px solid var(--border)',
         transition: 'border-color 0.2s',
       }}>
         <span style={{
-          position: 'absolute', left: 12, fontSize: 14, color: '#6e7681',
+          position: 'absolute', left: 12, fontSize: 14, color: 'var(--text-muted)',
           pointerEvents: 'none',
         }}>🔍</span>
         <input
@@ -1340,25 +1341,25 @@ function SearchBar({ value, onChange, totalCount }: { value: string; onChange: (
           style={{
             width: '100%', padding: '10px 12px 10px 36px',
             background: 'transparent', border: 'none',
-            color: '#e6edf3', fontSize: 13,
+            color: 'var(--text-primary)', fontSize: 13,
             outline: 'none',
             fontFamily: 'inherit',
           }}
-          onFocus={(e) => { e.currentTarget.parentElement!.style.borderColor = '#58a6ff'; }}
-          onBlur={(e) => { e.currentTarget.parentElement!.style.borderColor = '#30363d'; }}
+          onFocus={(e) => { e.currentTarget.parentElement!.style.borderColor = 'var(--accent-blue)'; }}
+          onBlur={(e) => { e.currentTarget.parentElement!.style.borderColor = 'var(--border)'; }}
         />
         {value && (
           <button
             onClick={() => onChange('')}
             style={{
-              background: 'none', border: 'none', color: '#6e7681',
+              background: 'none', border: 'none', color: 'var(--text-muted)',
               cursor: 'pointer', padding: '8px 12px', fontSize: 14,
               lineHeight: 1,
             }}
           >✕</button>
         )}
       </div>
-      <div style={{ fontSize: 12, color: '#8b949e', whiteSpace: 'nowrap' }}>
+      <div style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
         {totalCount} model{totalCount !== 1 ? 's' : ''}
       </div>
     </div>
@@ -1371,7 +1372,7 @@ function ColToggle({ value, onChange }: { value: number; onChange: (v: number) =
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 8,
-      fontSize: 12, color: '#8b949e', marginBottom: 14,
+      fontSize: 12, color: 'var(--text-secondary)', marginBottom: 14,
     }}>
       <span>Columns:</span>
       {COL_OPTIONS.map((c) => (
@@ -1380,9 +1381,9 @@ function ColToggle({ value, onChange }: { value: number; onChange: (v: number) =
           onClick={() => onChange(c)}
           style={{
             padding: '4px 12px', borderRadius: 6,
-            background: value === c ? '#1f6feb' : '#21262d',
-            color: value === c ? '#fff' : '#8b949e',
-            border: `1px solid ${value === c ? '#1f6feb' : '#30363d'}`,
+            background: value === c ? 'var(--accent-blue)' : 'var(--bg-hover)',
+            color: value === c ? 'var(--text-on-accent)' : 'var(--text-secondary)',
+            border: `1px solid ${value === c ? 'var(--accent-blue)' : 'var(--border)'}`,
             cursor: 'pointer', fontSize: 12, fontWeight: value === c ? 600 : 400,
             transition: 'all 0.15s',
           }}
@@ -1438,7 +1439,7 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
 
         {/* Line 1: Model name */}
         <div style={{
-          fontSize: 13, fontWeight: 600, color: '#e6edf3',
+          fontSize: 13, fontWeight: 600, color: 'var(--text-primary)',
           fontFamily: "'SFMono-Regular', Consolas, monospace",
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           paddingTop: 2,
@@ -1447,7 +1448,7 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
         </div>
 
         {/* Line 2: Provider */}
-        <div style={{ fontSize: 12, color: '#8b949e' }}>
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
           {getProviderIcon(provider)} {getProviderLabel(provider)}
         </div>
 
@@ -1464,11 +1465,11 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
         </div>
 
         {/* Line 4: Token remaining */}
-        <div style={{ fontSize: 11, color: '#6e7681' }}>
-          <span style={{ color: '#8b949e' }}>Tokens:</span>{' '}
+        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          <span style={{ color: 'var(--text-secondary)' }}>Tokens:</span>{' '}
           <span style={{
             color: model.rateLimitRemaining !== undefined && model.rateLimitRemaining <= 10
-              ? '#d29922' : '#8b949e',
+              ? 'var(--accent-yellow)' : 'var(--text-secondary)',
             fontFamily: "'SFMono-Regular', Consolas, monospace",
             fontWeight: 500,
           }}>
@@ -1481,7 +1482,7 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
             so without this line a model the router never picks looks exactly like
             the one it picks for 87% of calls. */}
         {model.routable === false && (
-          <div style={{ fontSize: 10, color: '#d29922', lineHeight: 1.3, marginTop: 2 }}>
+          <div style={{ fontSize: 10, color: 'var(--accent-yellow)', lineHeight: 1.3, marginTop: 2 }}>
             {model.registryStatus === 'unavailable'
               ? model.registryDead
                 ? '✗ Not served here — this id does not exist on the endpoint'
@@ -1498,7 +1499,7 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
             model" is auditable — e.g. a 403 (repairable by the key's owner) reads
             differently from a 404 (the id is simply not served). */}
         {model.routable === false && model.registryError && (
-          <div style={{ fontSize: 10, color: '#6e7681', lineHeight: 1.3, marginTop: 1 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.3, marginTop: 1 }}>
             {model.registryError.length > 60 ? model.registryError.slice(0, 57) + '…' : model.registryError}
           </div>
         )}
@@ -1512,7 +1513,7 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
               fontSize: 10,
               lineHeight: 1.3,
               marginTop: 2,
-              color: model.entitlement.tier === 'free' ? '#3fb950' : '#8b949e',
+              color: model.entitlement.tier === 'free' ? 'var(--accent-green)' : 'var(--text-secondary)',
             }}
           >
             {model.entitlement.tier === 'free' ? '🎁 free' : '💸 metered'}
@@ -1521,7 +1522,7 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
 
         {/* Extra: reason if limited/unavailable */}
         {model.status !== 'available' && model.statusReason && (
-          <div style={{ fontSize: 10, color: '#6e7681', lineHeight: 1.3, marginTop: 2 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.3, marginTop: 2 }}>
             {model.statusReason.length > 45 ? model.statusReason.slice(0, 42) + '…' : model.statusReason}
           </div>
         )}
@@ -1529,9 +1530,9 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
         {/* Quota reset time when parked */}
         {model.parked && model.resetsInMs !== undefined && model.resetsInMs > 0 && (
           <div style={{
-            fontSize: 10, color: '#d29922', lineHeight: 1.3, marginTop: 4,
+            fontSize: 10, color: 'var(--accent-yellow)', lineHeight: 1.3, marginTop: 4,
             padding: '3px 6px', borderRadius: 4,
-            background: '#2d2200', border: '1px solid #d2992244',
+            background: 'var(--warn-soft)', border: '1px solid color-mix(in srgb, var(--accent-yellow) 27%, transparent)',
           }}>
             ⏳ Resets in {fmtDuration(model.resetsInMs)}
           </div>
@@ -1581,7 +1582,7 @@ function ModelsGrid({ providers, colsPerRow, searchQuery }: {
 
   return (
     <>
-      <h2 className="section-title" style={{ marginTop: 36 }}>📋 Model Health Overview</h2>
+      <h2 className="section-subtitle">📋 Model Health Overview</h2>
       <p className="section-description">
         All models across all providers, color-coded by health status.
         Each cell shows: Model · Provider · Health · Token Remaining.
@@ -1608,7 +1609,7 @@ function ModelsGrid({ providers, colsPerRow, searchQuery }: {
               ))
             ) : (
               <tr>
-                <td colSpan={colsPerRow} style={{ textAlign: 'center', padding: 40, color: '#6e7681', fontSize: 13 }}>
+                <td colSpan={colsPerRow} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)', fontSize: 13 }}>
                   No models match your search "{searchQuery}"
                 </td>
               </tr>
@@ -1618,7 +1619,7 @@ function ModelsGrid({ providers, colsPerRow, searchQuery }: {
       </div>
 
       {searchQuery.trim() && filtered.length > 0 && (
-        <div style={{ textAlign: 'right', fontSize: 11, color: '#6e7681', marginTop: 4 }}>
+        <div style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
           Showing {filtered.length} of {allModels.length} models
         </div>
       )}
@@ -1631,23 +1632,23 @@ function ModelsGrid({ providers, colsPerRow, searchQuery }: {
 function SpeechProviderSection() {
   return (
     <div style={{
-      background: '#161b22', borderRadius: 12,
-      border: '1px dashed #30363d',
+      background: 'var(--bg-card)', borderRadius: 12,
+      border: '1px dashed var(--border)',
       padding: '20px 24px',
       marginTop: 24,
       textAlign: 'center' as const,
     }}>
       <div style={{ fontSize: 24, marginBottom: 8 }}>🎙️</div>
-      <div style={{ fontSize: 14, fontWeight: 600, color: '#e6edf3', marginBottom: 4 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
         Speech / TTS Provider
       </div>
-      <div style={{ fontSize: 12, color: '#6e7681' }}>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
         Speech/TTS provider support coming soon.
         {' '}<a
           href="https://github.com/imdheerajKube/agent-nuvira-documentation/issues/new"
           target="_blank"
           rel="noopener noreferrer"
-          style={{ color: '#58a6ff', textDecoration: 'none', cursor: 'pointer' }}
+          style={{ color: 'var(--accent-blue)', textDecoration: 'none', cursor: 'pointer' }}
           onMouseEnter={(e) => { e.currentTarget.style.textDecoration = 'underline'; }}
           onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
         >
@@ -1663,20 +1664,20 @@ function SpeechProviderSection() {
 function Legend() {
   return (
     <div style={{
-      background: '#0d1117', borderRadius: 10, padding: 14, marginBottom: 20,
-      border: '1px solid #21262d', fontSize: 13, color: '#8b949e',
+      background: 'var(--bg-primary)', borderRadius: 10, padding: 14, marginBottom: 20,
+      border: '1px solid var(--border-light)', fontSize: 13, color: 'var(--text-secondary)',
       display: 'flex', flexWrap: 'wrap', gap: 20,
     }}>
       <div>
-        <div style={{ fontWeight: 600, color: '#e6edf3', marginBottom: 6 }}>Color Coding</div>
+        <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6 }}>Color Coding</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span><span style={{ color: '#3fb950' }}>●</span> <strong style={{ color: '#e6edf3' }}>Green</strong> — Working with rate limit available</span>
-          <span><span style={{ color: '#d29922' }}>●</span> <strong style={{ color: '#e6edf3' }}>Amber</strong> — Slow / low rate limit / needs action</span>
-          <span><span style={{ color: '#f85149' }}>●</span> <strong style={{ color: '#e6edf3' }}>Red</strong> — API key missing / payment needed / unreachable</span>
+          <span><span style={{ color: 'var(--accent-green)' }}>●</span> <strong style={{ color: 'var(--text-primary)' }}>Green</strong> — Working with rate limit available</span>
+          <span><span style={{ color: 'var(--accent-yellow)' }}>●</span> <strong style={{ color: 'var(--text-primary)' }}>Amber</strong> — Slow / low rate limit / needs action</span>
+          <span><span style={{ color: 'var(--accent-red)' }}>●</span> <strong style={{ color: 'var(--text-primary)' }}>Red</strong> — API key missing / payment needed / unreachable</span>
         </div>
       </div>
       <div>
-        <div style={{ fontWeight: 600, color: '#e6edf3', marginBottom: 6 }}>Provider Sections</div>
+        <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6 }}>Provider Sections</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 12 }}>
           <span>✅ <strong>Cloud</strong> — Online providers with active API keys</span>
           <span>🏠 <strong>Local</strong> — Locally running inference servers</span>
@@ -1783,11 +1784,11 @@ export default function ModelsPanel() {
 
   return (
     <>
-      <h2 className="section-title">🧠 Model Provider Status</h2>
-      <p className="section-description">
-        Real-time health check of all AI providers and their available models.
-        Providers are grouped into sections: Available cloud → Local → Unavailable.
-      </p>
+      <PageHeader
+        icon="🧠"
+        title="Model Provider Status"
+        description="Real-time health check of all AI providers and their available models. Providers are grouped into sections: Available cloud → Local → Unavailable."
+      />
 
       <ActionBar onRefresh={fetchModels} loading={loading} />
       <Legend />
@@ -1800,7 +1801,7 @@ export default function ModelsPanel() {
       )}
 
       {error && (
-        <div className="empty-state" style={{ color: '#f85149', border: '1px solid #f8514944', borderRadius: 10, padding: 16, marginBottom: 16 }}>
+        <div className="empty-state" style={{ color: 'var(--accent-red)', border: '1px solid color-mix(in srgb, var(--accent-red) 27%, transparent)', borderRadius: 10, padding: 16, marginBottom: 16 }}>
           ⚠️ {error}
         </div>
       )}
@@ -1819,21 +1820,21 @@ export default function ModelsPanel() {
             <div className="stat-card">
               <span className="stat-icon">✅</span>
               <div className="stat-body">
-                <div className="stat-value" style={{ color: '#3fb950' }}>{modelsData.available}</div>
+                <div className="stat-value" style={{ color: 'var(--accent-green)' }}>{modelsData.available}</div>
                 <div className="stat-label">Available</div>
               </div>
             </div>
             <div className="stat-card">
               <span className="stat-icon">🟡</span>
               <div className="stat-body">
-                <div className="stat-value" style={{ color: '#d29922' }}>{modelsData.limited}</div>
+                <div className="stat-value" style={{ color: 'var(--accent-yellow)' }}>{modelsData.limited}</div>
                 <div className="stat-label">Limited</div>
               </div>
             </div>
             <div className="stat-card">
               <span className="stat-icon">🔴</span>
               <div className="stat-body">
-                <div className="stat-value" style={{ color: '#f85149' }}>{modelsData.unavailable}</div>
+                <div className="stat-value" style={{ color: 'var(--accent-red)' }}>{modelsData.unavailable}</div>
                 <div className="stat-label">Unavailable</div>
               </div>
             </div>
@@ -1902,13 +1903,13 @@ export default function ModelsPanel() {
               sections above are absent instead of showing a blank gap. */}
           {modelsData && !registryData && (
             <div style={{
-              background: '#161b22', borderRadius: 12, border: '1px dashed #30363d',
-              padding: '14px 20px', marginTop: 24, fontSize: 12, color: '#8b949e',
+              background: 'var(--bg-card)', borderRadius: 12, border: '1px dashed var(--border)',
+              padding: '14px 20px', marginTop: 24, fontSize: 12, color: 'var(--text-secondary)',
               lineHeight: 1.6,
             }}>
               📦 Registry &amp; telemetry sections are hidden — this dashboard
               server did not return model-registry data (it may be an{' '}
-              <strong style={{ color: '#e6edf3' }}>older version</strong>).
+              <strong style={{ color: 'var(--text-primary)' }}>older version</strong>).
               Restart the dashboard from the latest install to see them.
             </div>
           )}
@@ -1916,7 +1917,7 @@ export default function ModelsPanel() {
           {/* Speech provider coming-soon placeholder */}
           <SpeechProviderSection />
 
-          <div style={{ textAlign: 'center', fontSize: 12, color: '#484f58', marginTop: 16 }}>
+          <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', marginTop: 16 }}>
             Last checked: {new Date(modelsData.lastChecked).toLocaleTimeString()}
             {' · '}Auto-refreshes every 60s
           </div>

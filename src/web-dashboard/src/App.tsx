@@ -48,6 +48,7 @@ export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [connected, setConnected] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string>('--');
+  const [refreshing, setRefreshing] = useState(false);
 
   const handleData = useCallback((d: DashboardData) => {
     setData(d);
@@ -57,6 +58,20 @@ export default function App() {
   const handleConnection = useCallback((c: boolean) => {
     setConnected(c);
   }, []);
+
+  // The top bar's Refresh goes through the SAME call the initial load uses, so
+  // the button cannot refresh a different set of things than the page shows.
+  // `fetchAll` resolves null on failure (the SSE stream reports health itself),
+  // so a failed refresh keeps the last good data rather than blanking the page.
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const d = await dashboardAPI.fetchAll();
+      if (d) handleData(d);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [handleData]);
 
   useEffect(() => {
     // Fetch initial data
@@ -77,12 +92,22 @@ export default function App() {
   }, [handleData, handleConnection]);
 
   return (
-    <Layout connected={connected} lastUpdated={lastUpdated}>
+    <Layout
+      connected={connected}
+      lastUpdated={lastUpdated}
+      onRefresh={handleRefresh}
+      refreshing={refreshing}
+    >
       <Routes>
         {/* Phase 5 — Chat is the front door; Overview (and every other room)
             stays reachable as a panel, never required. */}
         <Route path="/" element={<ChatPage />} />
-        <Route path="/overview" element={<Overview data={data} />} />
+        {/* Overview gets the same refresh handler the top bar uses, so its own
+            "Refresh data" control cannot drift from the shell's. */}
+        <Route
+          path="/overview"
+          element={<Overview data={data} onRefresh={handleRefresh} refreshing={refreshing} />}
+        />
         <Route path="/chat" element={<Navigate to="/" replace />} />
         <Route path="/dag" element={<DAGView data={data} />} />
         <Route path="/costs" element={<CostDashboard data={data} />} />

@@ -32,6 +32,7 @@
     "test:coverage": "vitest run --coverage",
     "build:dashboard": "node scripts/build-dashboard.mjs",
     "dashboard:bundle:check": "node scripts/check-dashboard-bundle.mjs",
+    "smoke:dashboard": "node scripts/smoke-dashboard-walk.mjs",
     "build:sdk": "cd src/agent-sdk && npx tsc",
     "examples:typecheck": "npx tsc -p examples/sdk/tsconfig.verify.json",
     "examples:test": "npx vitest run --config examples/sdk/vitest.config.ts",

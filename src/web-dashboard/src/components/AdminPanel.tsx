@@ -25,6 +25,7 @@ import QuotaPanel from './QuotaPanel';
 // The check row is shared with the System tab, which shows the same doctor
 // checks under their real name — one renderer, so the two cannot drift.
 import { CheckRow } from './CheckRow';
+import PageHeader from './PageHeader';
 import type {
   AdminCatalogProvider,
   AdminChecksData,
@@ -340,7 +341,7 @@ export default function AdminPanel() {
   if (error && !authStatus) {
     return (
       <div className="admin-header">
-        <h2 className="section-title">🛠️ Admin</h2>
+        <PageHeader icon="🛠️" title="Admin" />
         <div className="admin-error">{error}</div>
       </div>
     );
@@ -349,7 +350,7 @@ export default function AdminPanel() {
   if (!authStatus || (!authed && loading)) {
     return (
       <div className="admin-header">
-        <h2 className="section-title">🛠️ Admin</h2>
+        <PageHeader icon="🛠️" title="Admin" />
         <div className="loading-state"><div className="loading-spinner" /><p>Loading…</p></div>
       </div>
     );
@@ -359,7 +360,7 @@ export default function AdminPanel() {
     const isSetup = !authStatus.configured;
     return (
       <div className="admin-header">
-        <h2 className="section-title">🛠️ Admin — {isSetup ? 'Set up access' : 'Log in'}</h2>
+        <PageHeader icon="🛠️" title={`Admin — ${isSetup ? 'Set up access' : 'Log in'}`} />
         <p className="admin-subtitle">
           {isSetup
             ? 'Create the admin user-id and password that gate the dashboard write surface (API-key/provider configuration). The CLI keeps working exactly as before — this only guards the GUI.'
@@ -443,7 +444,7 @@ export default function AdminPanel() {
 
     return (
       <div className="admin-header">
-        <h2 className="section-title">🔐 Set your own password</h2>
+        <PageHeader icon="🔐" title="Set your own password" />
         <p className="admin-subtitle">
           This dashboard is running on its <strong>published default password</strong>, so
           anyone who can reach this port can sign in. Until you replace it, the agent
@@ -513,14 +514,19 @@ export default function AdminPanel() {
   return (
     <>
       <div className="admin-header">
-        <h2 className="section-title">
-          🛠️ Admin — Command Runner &amp; Configuration
-          {userName ? (
-            <span className={`admin-role-badge admin-role-${role || 'viewer'}`}>
-              {userName} · {role || 'viewer'}
-            </span>
-          ) : null}
-        </h2>
+        <PageHeader
+          icon="🛠️"
+          title={
+            <>
+              Admin — Command Runner &amp; Configuration
+              {userName ? (
+                <span className={`admin-role-badge admin-role-${role || 'viewer'}`}>
+                  {' '}{userName} · {role || 'viewer'}
+                </span>
+              ) : null}
+            </>
+          }
+        />
         <div className="admin-header-actions">
           <button
             className="admin-refresh-btn"
@@ -588,19 +594,19 @@ export default function AdminPanel() {
             </div>
           </div>
 
-          <h3 className="section-subtitle">⚙️ System Checks (buff doctor)</h3>
+          <h2 className="section-subtitle">⚙️ System Checks (buff doctor)</h2>
           <div className="admin-check-list">
             {data.system.map((c) => <CheckRow key={c.name} check={c} />)}
           </div>
 
-          <h3 className="section-subtitle">🏥 Enterprise Self-Check (doctor --enterprise)</h3>
+          <h2 className="section-subtitle">🏥 Enterprise Self-Check (doctor --enterprise)</h2>
           <div className="admin-check-list">
             {data.enterprise.length > 0
               ? data.enterprise.map((c) => <CheckRow key={c.name} check={c} />)
               : <div className="empty-state">No enterprise checks returned.</div>}
           </div>
 
-          <h3 className="section-subtitle">🔑 Provider Configuration (keys masked)</h3>
+          <h2 className="section-subtitle">🔑 Provider Configuration (keys masked)</h2>
           <div className="admin-table-wrapper">
             <table className="admin-table">
               <thead>
@@ -735,7 +741,7 @@ export default function AdminPanel() {
 
           {isAdmin ? (
             <>
-              <h3 className="section-subtitle">👥 Dashboard Users (role.manage)</h3>
+              <h2 className="section-subtitle">👥 Dashboard Users (role.manage)</h2>
               <div className="admin-users-list">
                 {users.map((u) => (
                   <div className="admin-user-row" key={u.user}>

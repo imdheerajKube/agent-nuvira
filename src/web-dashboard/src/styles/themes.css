@@ -1,0 +1,727 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Agent-Nuvira Dashboard — Design Tokens & Theme Engine
+   ═══════════════════════════════════════════════════════════════════════════
+
+   WHY THIS FILE EXISTS
+   --------------------
+   `dashboard.css` shipped ONE palette (dark, GitHub-ish) written two ways: 19
+   tokens, plus 334 raw hex values and 172 raw rgba() values that could not
+   re-theme. Adding Light, Dark and the three reference palettes on top of that
+   would have produced a light shell wrapped around dark cards.
+
+   So all colour now lives here, and `dashboard.css` consumes it. The 796
+   existing `var(--token)` references across 24 routes keep working unchanged —
+   that is what makes a whole-dashboard re-theme affordable — and the legacy
+   names are deliberately preserved as an alias layer over the new semantics.
+
+   THREE LAYERS
+   ------------
+     1. DESIGN  — colour-independent: space, radius, type, motion, targets.
+     2. PALETTE — primitive ramps (`--p-*`): 5 palettes x light/dark.
+     3. SEMANTIC— the names components use, mapped from the primitives. ONE
+                  block, because the mapping is identical in every theme; only
+                  the primitives differ. This is why 10 themes cost ~10 short
+                  blocks instead of 10 long ones.
+
+   STATE IS ON <html>, not <body>:  html[data-palette][data-mode]
+     data-palette = enterprise | neutral | pastel | executive | contrast
+     data-mode    = light | dark
+     data-a11y    = off | on
+     data-font-scale = 100 | 112 | 125 | 150
+
+   CONTRAST: every pairing below is asserted against WCAG 2.2 AA by
+   `theme-contrast.test.ts`. Do not hand-edit a colour without running it.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+
+/* ── 1. DESIGN TOKENS (colour-independent) ──────────────────────────────── */
+
+:root {
+  /* Spacing — a 4px base, so vertical rhythm is arithmetic, not taste. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Radius — the reference is a squared-off enterprise look, not pill-shaped. */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+  --radius-full: 999px;
+
+  /* Type — family, then a scale. Every size in dashboard.css is these values
+     multiplied by --font-scale, which is what makes accessibility font sizing
+     global instead of a few hand-picked elements. */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --font-scale: 1;
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 28px;
+  --leading-tight: 1.25;
+  --leading-normal: 1.55;
+
+  /* Motion. `--transition` is the single most valuable token here: 20 rules
+     already funnel through it, so the accessibility mode's "reduce motion"
+     switch is one line rather than 20. */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --transition: background-color var(--motion-base) var(--ease), color var(--motion-base) var(--ease),
+    border-color var(--motion-base) var(--ease);
+
+  /* Elevation — three steps, tinted by the palette's shadow colour. */
+  --elevation-1: 0 1px 2px var(--p-shadow);
+  --elevation-2: 0 2px 6px var(--p-shadow);
+  --elevation-3: 0 10px 28px var(--p-shadow);
+
+  /* Focus. A visible ring is a REQUIREMENT, not decoration: 10 rules in the old
+     sheet set `outline: none`, which is why keyboard users could not see where
+     they were. The ring is drawn with box-shadow so it never affects layout. */
+  --focus-ring-color: var(--p-focus);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+
+  /* Minimum interactive target. WCAG 2.2 AA asks for 24px (2.5.8); the
+     accessibility mode raises this to 44px for motor/touch users. */
+  --target-min: 32px;
+
+  /* Chrome (sidebar + top bar) and content width. */
+  --nav-width: 258px;
+  --topbar-height: 58px;
+  --content-max: 1600px;
+
+  /* z-index scale, so nothing is ever a magic number again. */
+  --z-base: 1;
+  --z-sticky: 100;
+  --z-sidebar: 200;
+  --z-topbar: 300;
+  --z-overlay: 400;
+  --z-palette: 500;
+  --z-toast: 600;
+}
+
+
+/* ── 2. PALETTE PRIMITIVES ──────────────────────────────────────────────────
+   `--p-*` are the only raw colour values in the dashboard. A theme is a set of
+   these. Adding a sixth palette is ~30 lines and no component changes.
+   ────────────────────────────────────────────────────────────────────────── */
+
+html[data-palette='enterprise'][data-mode='light'] {
+  --p-canvas: #eef1f7;
+  --p-surface: #ffffff;
+  --p-sunken: #f6f8fc;
+  --p-raised: #ffffff;
+  --p-hover: #e9eff9;
+  --p-input: #ffffff;
+  --p-ink: #0b2a54;
+  --p-ink-2: #46587a;
+  --p-ink-3: #5c6e88;
+  --p-ink-inverse: #ffffff;
+  --p-line: #c7d2e4;
+  --p-line-soft: #dfe6f1;
+  --p-line-strong: #9db0cd;
+  --p-accent: #075bc2;
+  --p-accent-strong: #064da5;
+  --p-accent-soft: #e2ebf8;
+  --p-on-accent: #ffffff;
+  --p-chrome: #06295c;
+  --p-chrome-ink: #ffffff;
+  --p-chrome-ink-2: #c3d7f2;
+  --p-chrome-hover: #154a86;
+  --p-chrome-line: #1d407a;
+  --p-ok: #1c7038;
+  --p-ok-soft: #e3f2e7;
+  --p-warn: #8a5600;
+  --p-warn-soft: #fbf0dc;
+  --p-danger: #ab2318;
+  --p-danger-soft: #fbe7e4;
+  --p-info: #075bc2;
+  --p-info-soft: #e2ebf8;
+  --p-purple: #6b3fa0;
+  --p-cyan: #0b6e7a;
+  --p-focus: #0b4f9e;
+  --p-focus-chrome: #ffffff;
+  --p-line-control: #5f7691;
+  --p-shadow: rgba(9, 30, 66, 0.16);
+}
+
+/* What a bare <html> gets: before `theme.ts` has run, or with script disabled.
+   Deliberately EQUAL to DEFAULT_THEME so the two cannot disagree — this block
+   used to carry the `:root` fallback while DEFAULT_THEME was dark, so a
+   script-less load rendered a different dashboard than an ordinary one.
+
+   It cannot follow the OS: a stylesheet cannot read a stored preference. So for
+   the instant before the module script sets the attributes, a light-preferring
+   user sees the dark palette. Doing better would mean duplicating all thirty
+   primitives inside a `prefers-color-scheme` query — and that copy would sit
+   outside the reach of theme-contrast.test.ts, which is a worse trade than one
+   frame of the wrong palette. */
+:root,
+html[data-palette='enterprise'][data-mode='dark'] {
+  --p-canvas: #0c1523;
+  --p-surface: #142033;
+  --p-sunken: #101a2b;
+  --p-raised: #1a2941;
+  --p-hover: #1f3252;
+  --p-input: #16233a;
+  --p-ink: #e9eff9;
+  --p-ink-2: #aab9d0;
+  --p-ink-3: #8a9cb6;
+  --p-ink-inverse: #0c1523;
+  --p-line: #2b3d59;
+  --p-line-soft: #1f2e46;
+  --p-line-strong: #46608a;
+  --p-accent: #6aa8ff;
+  --p-accent-strong: #8dbcff;
+  --p-accent-soft: #1b3355;
+  --p-on-accent: #08192e;
+  --p-chrome: #071a38;
+  --p-chrome-ink: #eef4fd;
+  --p-chrome-ink-2: #b6c9e4;
+  --p-chrome-hover: #123c74;
+  --p-chrome-line: #1c3766;
+  --p-ok: #55c877;
+  --p-ok-soft: #14301f;
+  --p-warn: #e3ab4c;
+  --p-warn-soft: #362a12;
+  --p-danger: #ff8f85;
+  --p-danger-soft: #3d1f1c;
+  --p-info: #6aa8ff;
+  --p-info-soft: #1b3355;
+  --p-purple: #c0a0ff;
+  --p-cyan: #5ed4e0;
+  --p-focus: #9cc6ff;
+  --p-focus-chrome: #ffffff;
+  --p-line-control: #6d8cbe;
+  --p-shadow: rgba(0, 0, 0, 0.55);
+}
+
+/* Neutral — the dashboard's ORIGINAL GitHub-ish palette, re-expressed. This is
+   the "I liked it as it was" option, and its dark mode is deliberately close to
+   the old values so existing screenshots still describe something real. */
+html[data-palette='neutral'][data-mode='light'] {
+  --p-canvas: #f6f7f9;
+  --p-surface: #ffffff;
+  --p-sunken: #f0f2f5;
+  --p-raised: #ffffff;
+  --p-hover: #eef1f5;
+  --p-input: #ffffff;
+  --p-ink: #1f2328;
+  --p-ink-2: #57606a;
+  --p-ink-3: #636b74;
+  --p-ink-inverse: #ffffff;
+  --p-line: #d8dee4;
+  --p-line-soft: #e6eaef;
+  --p-line-strong: #afb8c1;
+  --p-accent: #0969da;
+  --p-accent-strong: #0757b8;
+  --p-accent-soft: #ddf0ff;
+  --p-on-accent: #ffffff;
+  --p-chrome: #1f2937;
+  --p-chrome-ink: #f0f3f6;
+  --p-chrome-ink-2: #b9c2cd;
+  --p-chrome-hover: #35414f;
+  --p-chrome-line: #3a4552;
+  --p-ok: #1a7f37;
+  --p-ok-soft: #dafbe1;
+  --p-warn: #8a5a00;
+  --p-warn-soft: #fff1d6;
+  --p-danger: #b3261e;
+  --p-danger-soft: #ffebe9;
+  --p-info: #0969da;
+  --p-info-soft: #ddf0ff;
+  --p-purple: #8250df;
+  --p-cyan: #0f6b78;
+  --p-focus: #0969da;
+  --p-focus-chrome: #ffffff;
+  --p-line-control: #5f6b78;
+  --p-shadow: rgba(31, 35, 40, 0.14);
+}
+
+html[data-palette='neutral'][data-mode='dark'] {
+  --p-canvas: #0d1117;
+  --p-surface: #161b22;
+  --p-sunken: #12171e;
+  --p-raised: #1c2333;
+  --p-hover: #1f2733;
+  --p-input: #0d1117;
+  --p-ink: #e6edf3;
+  --p-ink-2: #adb6c0;
+  --p-ink-3: #939ca6;
+  --p-ink-inverse: #0d1117;
+  --p-line: #30363d;
+  --p-line-soft: #21262d;
+  --p-line-strong: #4d565f;
+  --p-accent: #6cb6ff;
+  --p-accent-strong: #8cc8ff;
+  --p-accent-soft: #1b2b42;
+  --p-on-accent: #08192e;
+  --p-chrome: #010409;
+  --p-chrome-ink: #e6edf3;
+  --p-chrome-ink-2: #adb6c0;
+  --p-chrome-hover: #161b22;
+  --p-chrome-line: #30363d;
+  --p-ok: #56d364;
+  --p-ok-soft: #132f1c;
+  --p-warn: #e3b341;
+  --p-warn-soft: #33280f;
+  --p-danger: #ff8a80;
+  --p-danger-soft: #3a1d1a;
+  --p-info: #6cb6ff;
+  --p-info-soft: #1b2b42;
+  --p-purple: #d2a8ff;
+  --p-cyan: #56d4dd;
+  --p-focus: #8cc8ff;
+  --p-focus-chrome: #ffffff;
+  --p-line-control: #768390;
+  --p-shadow: rgba(0, 0, 0, 0.5);
+}
+
+/* Pastel — the soft lavender reference. Chrome stays LIGHT here, which is the
+   whole point of the palette, so chrome-ink is dark rather than white. */
+html[data-palette='pastel'][data-mode='light'] {
+  --p-canvas: #f0effa;
+  --p-surface: #ffffff;
+  --p-sunken: #f6f6fc;
+  --p-raised: #ffffff;
+  --p-hover: #e9eaf7;
+  --p-input: #ffffff;
+  --p-ink: #253c6b;
+  --p-ink-2: #4c5f88;
+  --p-ink-3: #54668a;
+  --p-ink-inverse: #ffffff;
+  --p-line: #d1d8ea;
+  --p-line-soft: #e4e8f4;
+  --p-line-strong: #a8b4d0;
+  --p-accent: #35619f;
+  --p-accent-strong: #2b5187;
+  --p-accent-soft: #e4ecf9;
+  --p-on-accent: #ffffff;
+  --p-chrome: #dce8f7;
+  --p-chrome-ink: #24406f;
+  --p-chrome-ink-2: #44598b;
+  --p-chrome-hover: #c9dbf1;
+  --p-chrome-line: #b7cbe6;
+  --p-ok: #23704a;
+  --p-ok-soft: #dff2e7;
+  --p-warn: #8a5a12;
+  --p-warn-soft: #fbeed8;
+  --p-danger: #b12f56;
+  --p-danger-soft: #fbe4ec;
+  /* Was #3f6fb5, which measured 4.44:1 on this palette's canvas — under the 4.5
+     the sheet's own `color: var(--accent-blue)` text needs, and invisible to the
+     eye. 2% darker clears it at 4.58:1 on the canvas and 5.21:1 on a card. */
+  --p-info: #3e6db1;
+  --p-info-soft: #e4ecf9;
+  --p-purple: #7a4fb3;
+  --p-cyan: #0f6a80;
+  --p-focus: #2f5aa0;
+  --p-focus-chrome: #12408f;
+  --p-line-control: #5a6f9c;
+  --p-shadow: rgba(52, 64, 110, 0.15);
+}
+
+html[data-palette='pastel'][data-mode='dark'] {
+  --p-canvas: #191c2b;
+  --p-surface: #212537;
+  --p-sunken: #1c2030;
+  --p-raised: #282d43;
+  --p-hover: #2e3450;
+  --p-input: #232840;
+  --p-ink: #e8ebf7;
+  --p-ink-2: #b3bad4;
+  --p-ink-3: #9aa2c0;
+  --p-ink-inverse: #191c2b;
+  --p-line: #363d59;
+  --p-line-soft: #2a3048;
+  --p-line-strong: #55608a;
+  --p-accent: #9db8f0;
+  --p-accent-strong: #b9cdfb;
+  --p-accent-soft: #2b3355;
+  --p-on-accent: #161a2c;
+  --p-chrome: #121524;
+  --p-chrome-ink: #e8ebf7;
+  --p-chrome-ink-2: #b3bad4;
+  --p-chrome-hover: #262c45;
+  --p-chrome-line: #333a58;
+  --p-ok: #6fd39c;
+  --p-ok-soft: #12301f;
+  --p-warn: #e5b567;
+  --p-warn-soft: #33280f;
+  --p-danger: #f79ab0;
+  --p-danger-soft: #3a1c26;
+  --p-info: #9db8f0;
+  --p-info-soft: #2b3355;
+  --p-purple: #c6a6f5;
+  --p-cyan: #74d3e4;
+  --p-focus: #b9cdfb;
+  --p-focus-chrome: #ffffff;
+  --p-line-control: #8b98c4;
+  --p-shadow: rgba(0, 0, 0, 0.5);
+}
+
+/* Executive — near-black chrome, muted teal accent, the most "boardroom" of the
+   five. Warm greys rather than blue-greys. */
+html[data-palette='executive'][data-mode='light'] {
+  --p-canvas: #f2f2ef;
+  --p-surface: #ffffff;
+  --p-sunken: #f7f7f4;
+  --p-raised: #ffffff;
+  --p-hover: #ebebe7;
+  --p-input: #ffffff;
+  --p-ink: #202624;
+  --p-ink-2: #4f5754;
+  --p-ink-3: #636b68;
+  --p-ink-inverse: #ffffff;
+  --p-line: #d6d9d4;
+  --p-line-soft: #e7e9e5;
+  --p-line-strong: #a9aeaa;
+  --p-accent: #0f6055;
+  --p-accent-strong: #0b4c44;
+  --p-accent-soft: #e0efec;
+  --p-on-accent: #ffffff;
+  --p-chrome: #23282a;
+  --p-chrome-ink: #f2f3f1;
+  --p-chrome-ink-2: #bcc1bd;
+  --p-chrome-hover: #343a3c;
+  --p-chrome-line: #3b4143;
+  --p-ok: #2c6b45;
+  --p-ok-soft: #e0f0e6;
+  --p-warn: #7d5a12;
+  --p-warn-soft: #f7efdc;
+  --p-danger: #a33a2c;
+  --p-danger-soft: #f7e6e2;
+  --p-info: #2f6079;
+  --p-info-soft: #e2eef4;
+  --p-purple: #6b4a8f;
+  --p-cyan: #16636e;
+  --p-focus: #0b4c44;
+  --p-focus-chrome: #ffffff;
+  --p-line-control: #5f6663;
+  --p-shadow: rgba(32, 38, 36, 0.16);
+}
+
+html[data-palette='executive'][data-mode='dark'] {
+  --p-canvas: #171a19;
+  --p-surface: #1f2422;
+  --p-sunken: #1a1e1d;
+  --p-raised: #272d2b;
+  --p-hover: #2d3431;
+  --p-input: #222825;
+  --p-ink: #e9ece9;
+  --p-ink-2: #b0b7b3;
+  --p-ink-3: #969d99;
+  --p-ink-inverse: #171a19;
+  --p-line: #343b38;
+  --p-line-soft: #282e2c;
+  --p-line-strong: #525b57;
+  --p-accent: #5fc7b6;
+  --p-accent-strong: #85d8ca;
+  --p-accent-soft: #1b3833;
+  --p-on-accent: #0e1a18;
+  --p-chrome: #101312;
+  --p-chrome-ink: #e9ece9;
+  --p-chrome-ink-2: #b0b7b3;
+  --p-chrome-hover: #242927;
+  --p-chrome-line: #2f3634;
+  --p-ok: #6ecf95;
+  --p-ok-soft: #16301f;
+  --p-warn: #dfb45f;
+  --p-warn-soft: #322713;
+  --p-danger: #ef9584;
+  --p-danger-soft: #391f1a;
+  --p-info: #86c3dd;
+  --p-info-soft: #1a363f;
+  --p-purple: #c0a2e0;
+  --p-cyan: #6fd0dc;
+  --p-focus: #85d8ca;
+  --p-focus-chrome: #ffffff;
+  --p-line-control: #7d8783;
+  --p-shadow: rgba(0, 0, 0, 0.55);
+}
+
+/* Contrast — the accessibility palette. Pure background/foreground pairs, no
+   subtlety: this is the one a low-vision user picks when the decorative
+   palettes are not legible enough. Everything is either #000/#fff or within a
+   whisker of it, and the accent is a bright yellow so it never disappears. */
+html[data-palette='contrast'][data-mode='light'] {
+  --p-canvas: #ffffff;
+  --p-surface: #ffffff;
+  --p-sunken: #f2f2f2;
+  --p-raised: #ffffff;
+  --p-hover: #e0e0e0;
+  --p-input: #ffffff;
+  --p-ink: #000000;
+  --p-ink-2: #1a1a1a;
+  --p-ink-3: #2b2b2b;
+  --p-ink-inverse: #ffffff;
+  --p-line: #000000;
+  --p-line-soft: #767676;
+  --p-line-strong: #000000;
+  --p-accent: #0b3d91;
+  --p-accent-strong: #062a66;
+  --p-accent-soft: #dde7f7;
+  --p-on-accent: #ffffff;
+  --p-chrome: #000000;
+  --p-chrome-ink: #ffffff;
+  --p-chrome-ink-2: #ffffff;
+  --p-chrome-hover: #2b2b2b;
+  --p-chrome-line: #767676;
+  --p-ok: #0a5c23;
+  --p-ok-soft: #ddf0e2;
+  --p-warn: #6b4300;
+  --p-warn-soft: #f7ecd6;
+  --p-danger: #8f1409;
+  --p-danger-soft: #f8e0dd;
+  --p-info: #0b3d91;
+  --p-info-soft: #dde7f7;
+  --p-purple: #4a1f7a;
+  --p-cyan: #0a4f57;
+  --p-focus: #0b3d91;
+  --p-focus-chrome: #ffe066;
+  --p-line-control: #000000;
+  --p-shadow: rgba(0, 0, 0, 0.4);
+}
+
+html[data-palette='contrast'][data-mode='dark'] {
+  --p-canvas: #000000;
+  --p-surface: #000000;
+  --p-sunken: #0a0a0a;
+  --p-raised: #141414;
+  --p-hover: #2b2b2b;
+  --p-input: #000000;
+  --p-ink: #ffffff;
+  --p-ink-2: #f0f0f0;
+  --p-ink-3: #dcdcdc;
+  --p-ink-inverse: #000000;
+  --p-line: #ffffff;
+  --p-line-soft: #8f8f8f;
+  --p-line-strong: #ffffff;
+  --p-accent: #ffe066;
+  --p-accent-strong: #fff2a8;
+  --p-accent-soft: #332c00;
+  --p-on-accent: #000000;
+  --p-chrome: #000000;
+  --p-chrome-ink: #ffffff;
+  --p-chrome-ink-2: #f0f0f0;
+  --p-chrome-hover: #2b2b2b;
+  --p-chrome-line: #8f8f8f;
+  --p-ok: #7ef29a;
+  --p-ok-soft: #062b11;
+  --p-warn: #ffd166;
+  --p-warn-soft: #2e2400;
+  --p-danger: #ff9d92;
+  --p-danger-soft: #340b06;
+  --p-info: #8fc4ff;
+  --p-info-soft: #001a3d;
+  --p-purple: #d9b8ff;
+  --p-cyan: #8bf0f7;
+  --p-focus: #ffe066;
+  --p-focus-chrome: #ffe066;
+  --p-line-control: #ffffff;
+  --p-shadow: rgba(255, 255, 255, 0.25);
+}
+
+
+/* ── 2b. PALETTE PREVIEW SWATCHES ──────────────────────────────────────────
+   The appearance switcher shows each palette as a two-tone disc (chrome + its
+   accent). These are the one place in the dashboard where a literal colour is
+   the CORRECT answer: a swatch for a palette you are not currently using has to
+   display that other palette's colour, so it cannot be a token of the current
+   theme. It lives here, in the palette layer, rather than in dashboard.css,
+   which is guarded to hold no literals at all.
+   ──────────────────────────────────────────────────────────────────────── */
+
+.theme-swatch[data-swatch='enterprise'] { background: linear-gradient(135deg, #06295c 50%, #075bc2 50%); }
+.theme-swatch[data-swatch='neutral'] { background: linear-gradient(135deg, #1f2937 50%, #0969da 50%); }
+.theme-swatch[data-swatch='pastel'] { background: linear-gradient(135deg, #dce8f7 50%, #35619f 50%); }
+.theme-swatch[data-swatch='executive'] { background: linear-gradient(135deg, #23282a 50%, #0f6055 50%); }
+.theme-swatch[data-swatch='contrast'] { background: linear-gradient(135deg, #000000 50%, #0b3d91 50%); }
+
+
+/* ── 3. SEMANTIC LAYER ──────────────────────────────────────────────────────
+   ONE block. Legacy names are kept as aliases so the 796 existing references
+   (and therefore all 24 routes) re-theme with no component edits, and the seven
+   names that were referenced but NEVER defined — so 58 declarations were being
+   silently dropped by the browser — are defined here for the first time.
+   ────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Surfaces */
+  --bg-primary: var(--p-canvas);
+  --bg-secondary: var(--p-sunken);
+  --bg-tertiary: var(--p-raised);
+  --bg-card: var(--p-surface);
+  --bg-hover: var(--p-hover);
+  --surface-canvas: var(--p-canvas);
+  --surface-raised: var(--p-raised);
+  --surface-sunken: var(--p-sunken);
+  --surface-inset: var(--p-sunken);
+
+  /* Text */
+  --text-primary: var(--p-ink);
+  --text-secondary: var(--p-ink-2);
+  --text-muted: var(--p-ink-3);
+  --text-inverse: var(--p-ink-inverse);
+  --text-on-accent: var(--p-on-accent);
+
+  /* Lines */
+  --border: var(--p-line);
+  --border-light: var(--p-line-soft);
+  --border-hover: var(--p-line-strong);
+  --line-strong: var(--p-line-strong);
+
+  /* Status / accents. --accent, --danger and --accent-warn were used 16 times
+     between them and defined nowhere. */
+  --accent: var(--p-accent);
+  --accent-blue: var(--p-info);
+  --accent-green: var(--p-ok);
+  --accent-yellow: var(--p-warn);
+  --accent-warn: var(--p-warn);
+  --accent-red: var(--p-danger);
+  --accent-purple: var(--p-purple);
+  --accent-cyan: var(--p-cyan);
+  --danger: var(--p-danger);
+  --ok: var(--p-ok);
+  --warn: var(--p-warn);
+  --info: var(--p-info);
+  --accent-soft: var(--p-accent-soft);
+  --bg-input: var(--p-input);
+  --bg: var(--p-canvas);
+
+  /* Chrome (sidebar + top bar) */
+  --chrome-bg: var(--p-chrome);
+  --chrome-ink: var(--p-chrome-ink);
+  --chrome-ink-muted: var(--p-chrome-ink-2);
+  --chrome-hover: var(--p-chrome-hover);
+  --chrome-line: var(--p-chrome-line);
+
+  --shadow: var(--p-shadow);
+
+  /* Soft status tints. `rgba(<status>, 0.15)` was hand-written 9 times for the
+     same three statuses; one token each replaces the lot, and they follow the
+     theme instead of pinning the dark-mode status colour. */
+  --ok-soft: var(--p-ok-soft);
+  --warn-soft: var(--p-warn-soft);
+  --danger-soft: var(--p-danger-soft);
+  --info-soft: var(--p-info-soft);
+
+  /* A chip background for the "partial"/purple status. DERIVED rather than a
+     twenty-first primitive: a 14% wash of the palette's purple over its own
+     surface keeps the chip in the palette's hue in all ten themes, and costs no
+     per-theme block. `--accent-purple` is the text/line on top of it. */
+  --purple-soft: color-mix(in srgb, var(--p-purple) 14%, var(--p-surface));
+
+  /* Modal/page scrim. Tinted by the palette rather than fixed black, because a
+     pure-black scrim over a light palette reads as a hole. */
+  --scrim: var(--p-shadow);
+
+  /* DELIBERATELY NOT PER-THEME: a QR code is read by a camera, which needs dark
+     modules on a light background. Theming this would have "fixed" the palette
+     and quietly broken WhatsApp pairing in dark mode. */
+  --qr-background: #ffffff;
+}
+
+/* Syntax highlighting for code blocks, chosen by MODE rather than by palette:
+   code is code, and a fifth variant of One Dark would be noise. Without this
+   group the seven One Dark literals in dashboard.css pinned every code block to
+   dark-mode colours, which is a light-mode bug waiting to be reported. */
+html[data-mode='light'] {
+  --code-text: #383a42;
+  --code-keyword: #8c1d95;
+  --code-string: #17683a;
+  --code-number: #93520d;
+  --code-comment: #5a616b;
+  --code-function: #1c4f9c;
+  --code-error: #a5231b;
+}
+
+html[data-mode='dark'] {
+  --code-text: #cfd6e4;
+  --code-keyword: #d2a8ff;
+  --code-string: #7ee787;
+  --code-number: #f0b072;
+  --code-comment: #98a3b3;
+  --code-function: #79c0ff;
+  --code-error: #ff9d92;
+}
+
+
+/* ── 4. OPT-IN ACCESSIBILITY MODE ───────────────────────────────────────────
+   OFF by default. The default experience stays the designed one — a user who
+   needs none of this should not have their interface thinned out or their
+   type enlarged. Turning it on is a user decision, remembered per browser.
+   ────────────────────────────────────────────────────────────────────────── */
+
+html[data-a11y='on'] {
+  /* Bigger targets (WCAG 2.2 2.5.8 asks 24px; 44px is the comfortable size). */
+  --target-min: 44px;
+
+  /* A thicker ring, and one that survives on top of any palette. */
+  --focus-ring-width: 3px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color: var(--p-focus);
+
+  /* Motion off. Every animated rule in dashboard.css funnels through either
+     --transition or a keyframe, so this is genuinely global. */
+  --transition: none;
+
+  /* Stronger separation for users who cannot rely on subtle tone differences. */
+  --border: var(--p-line-strong);
+  --border-light: var(--p-line-strong);
+}
+
+/* Font scale. dashboard.css sizes text as calc(<n>px * var(--font-scale)), so
+   these four values scale the ENTIRE 352 font-size declarations, not a sample
+   of them. 100% is the default so nothing changes until asked. */
+html[data-font-scale='100'] { --font-scale: 1; }
+html[data-font-scale='112'] { --font-scale: 1.125; }
+html[data-font-scale='125'] { --font-scale: 1.25; }
+html[data-font-scale='150'] { --font-scale: 1.5; }
+
+/* Spacing compensation: at 150% the sidebar must grow or labels wrap to two
+   lines and the nav becomes unusable. */
+html[data-font-scale='125'] { --nav-width: 288px; }
+html[data-font-scale='150'] { --nav-width: 320px; }
+
+
+/* ── 5. SYSTEM PREFERENCES ─────────────────────────────────────────────────
+   Honouring these is not optional, and it must work even with accessibility
+   mode off, because the OS setting is the user's own instruction.
+   ────────────────────────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition: none;
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --border: var(--p-line-strong);
+    --border-light: var(--p-line-strong);
+  }
+}
+
+/* Windows High Contrast / forced-colors: the palette is replaced by the OS, so
+   the job is to stop fighting it and keep our structure legible. */
+@media (forced-colors: active) {
+  :root {
+    --focus-ring-color: Highlight;
+    --shadow: transparent;
+  }
+}

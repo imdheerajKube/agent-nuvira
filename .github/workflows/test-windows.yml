@@ -134,6 +134,21 @@ jobs:
         run: npx vitest run --reporter=verbose
         shell: bash
 
+      # The same real-browser walk the Unix gate runs, on the platform where
+      # argv/path/spawn handling is the usual suspect: it serves the COMMITTED
+      # bundle, launches headless Chrome, and walks every linked route +
+      # keyboard layer. Needs no dashboard node_modules (it reads public/), so
+      # it runs in this job as-is. --require-chrome makes a missing browser a
+      # failure instead of a silent skip. Two themes here (not the Unix gate's
+      # four) to bound time on the slowest runner; the shell and keyboard are
+      # engine behaviour, not palette behaviour, so two modes cover it.
+      - name: Dashboard browser walk (routes + keyboard)
+        if: matrix.node-version == 22
+        run: npm run smoke:dashboard -- --require-chrome --themes enterprise:light,enterprise:dark
+        shell: bash
+        env:
+          CI: true
+
       # The SDK example is a real consumer of the published package surface.
       # Windows matters here: path handling in the example's configs is exactly
       # where a Linux-only setup breaks.

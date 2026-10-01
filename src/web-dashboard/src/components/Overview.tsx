@@ -1,40 +1,97 @@
-import type { DashboardData } from '../types';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
+import type { DashboardData, HubData, TaskRecord } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { formatCount } from '../format';
+import { formatCost, formatNumber } from '../format';
+import { dashboardAPI } from '../api';
+import MetricTiles, { buildMetricTiles } from './MetricTiles';
+import PageHeader from './PageHeader';
 
 interface OverviewProps {
   data: DashboardData | null;
-}
-
-function formatCost(usd: number | undefined): string {
-  if (usd === undefined || usd === null) return '$0.00';
-  if (usd < 0.00001) return '$0.00';
-  if (usd < 0.01) return '$' + usd.toFixed(6);
-  return '$' + usd.toFixed(4);
-}
-
-function formatNumber(n: number | undefined): string {
-  if (n === undefined || n === null) return '0';
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-  return formatCount(n);
+  /** Same handler the top bar's Refresh uses, so both refresh the same things. */
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
-  local: '#3fb950',
-  groq: '#58a6ff',
-  gemini: '#bc8cff',
-  nim: '#39d2c0',
-  openrouter: '#d29922',
+  local: 'var(--accent-green)',
+  groq: 'var(--accent-blue)',
+  gemini: 'var(--accent-purple)',
+  nim: 'var(--accent-cyan)',
+  openrouter: 'var(--accent-yellow)',
 };
 
-export default function Overview({ data }: OverviewProps) {
+/** Local midnight, so "today" means the user's today and not the last 24h. */
+function isToday(ts: number | null | undefined): boolean {
+  if (!ts) return false;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  return ts >= start.getTime();
+}
+
+function SummaryCard({
+  title,
+  children,
+  action,
+}: {
+  title: string;
+  children: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <section className="summary-card">
+      {/* h2: the page's own title is the h1 above, so sections sit one level down. */}
+      <h2 className="summary-card-title">{title}</h2>
+      <div className="summary-rows">{children}</div>
+      {action ? <div className="summary-card-action">{action}</div> : null}
+    </section>
+  );
+}
+
+function SummaryRow({ value, label }: { value: string; label: string }) {
+  return (
+    <p className="summary-row">
+      <span className="summary-row-value">{value}</span>
+      <span className="summary-row-label">{label}</span>
+    </p>
+  );
+}
+
+export default function Overview({ data, onRefresh, refreshing = false }: OverviewProps) {
+  // The headline tiles and the gateway card need the Agent Hub aggregate (tools,
+  // skills, conversations, platforms), which is deliberately NOT part of the
+  // shared /api/all payload — it is the one endpoint that reads the skills and
+  // toolset registries off disk. So it is fetched here, once, exactly as
+  // AgentHub does. A failure is not an error state: whatever a card has no
+  // source for is omitted rather than shown as zero.
+  const [hub, setHub] = useState<HubData | null>(null);
+  const [tasks, setTasks] = useState<{ status: number; tasks: TaskRecord[] } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    dashboardAPI.fetchHub().then((h) => {
+      if (!cancelled && h) setHub(h);
+    });
+    void dashboardAPI.listTasks().then((r) => {
+      if (!cancelled && r) setTasks(r);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   if (!data) {
+    // The header stays while the data arrives, so the page keeps its title and
+    // its identity instead of becoming an anonymous spinner.
     return (
-      <div className="loading-state">
-        <div className="loading-spinner" />
-        <p>Connecting to dashboard...</p>
-      </div>
+      <>
+        <PageHeader icon="📊" title="System Overview" description="Cost, memory, benchmarks and routing — read live from the dashboard server." />
+        <div className="loading-state">
+          <div className="loading-spinner" />
+          <p>Connecting to dashboard...</p>
+        </div>
+      </>
     );
   }
 
@@ -60,10 +117,119 @@ export default function Overview({ data }: OverviewProps) {
     .sort((a, b) => b.value - a.value)
     .slice(0, 8);
 
+  const tiles = buildMetricTiles(data, hub);
+
+  // Task Summary. `listTasks` is admin-gated, so a 401 is a real answer and gets
+  // said out loud instead of rendering as "0 running".
+  const taskList = tasks?.tasks ?? [];
+  const needsAuth = tasks !== null && tasks.status === 401;
+  const running = taskList.filter((t) => t.status === 'running').length;
+  const failedToday = taskList.filter((t) => isToday(t.finishedAt) && (t.status === 'failed' || t.status === 'error')).length;
+  const doneToday = taskList.filter((t) => isToday(t.finishedAt) && t.status === 'done').length;
+
+  const registry = data.modelRegistry;
+  const platforms = hub?.channels?.platforms ?? [];
+  const configuredPlatforms = platforms.filter((p) => p.configured).length;
+
   return (
     <>
-      <h2 className="section-title">📊 System Overview</h2>
+      <PageHeader
+        icon="📊"
+        title="System Overview"
+        description="Cost, memory, benchmarks and routing — read live from the dashboard server."
+        actions={
+          onRefresh ? (
+            <button type="button" className="btn-secondary" onClick={onRefresh} disabled={refreshing} aria-busy={refreshing}>
+              {refreshing ? 'Refreshing…' : '⟳ Refresh data'}
+            </button>
+          ) : null
+        }
+      />
 
+      <MetricTiles tiles={tiles} />
+
+      {/* The reference's summary row: three cards beside a quick-actions column.
+          Every action here is a real navigation or a call to the same refresh the
+          top bar uses — there is no gateway stop endpoint behind this dashboard,
+          so the reference's "Stop Gateway" button is deliberately absent rather
+          than wired to nothing. */}
+      <div className="overview-summary">
+        <div className="summary-cards">
+          <SummaryCard
+            title="Task Summary"
+            action={
+              <Link className="summary-card-link" to="/tasks">
+                Open console →
+              </Link>
+            }
+          >
+            {needsAuth ? (
+              <p className="summary-note">Sign in to Admin to see task history.</p>
+            ) : tasks === null ? (
+              <p className="summary-note">Loading task history…</p>
+            ) : (
+              <>
+                <SummaryRow value={formatNumber(running)} label="Running now" />
+                <SummaryRow value={formatNumber(doneToday)} label="Completed today" />
+                {failedToday > 0 && <SummaryRow value={formatNumber(failedToday)} label="Failed today" />}
+              </>
+            )}
+          </SummaryCard>
+
+          {registry && (
+            <SummaryCard
+              title="Models"
+              action={
+                <Link className="summary-card-link" to="/models">
+                  Manage →
+                </Link>
+              }
+            >
+              <SummaryRow value={formatNumber(registry.verified)} label="Verified / routable" />
+              <SummaryRow value={formatNumber(registry.total)} label="In the registry" />
+              {registry.parked > 0 && <SummaryRow value={formatNumber(registry.parked)} label="Quota-parked" />}
+            </SummaryCard>
+          )}
+
+          {hub && (
+            <SummaryCard
+              title="Gateway Status"
+              action={
+                <Link className="summary-card-link" to="/gateway">
+                  Gateway ops →
+                </Link>
+              }
+            >
+              <SummaryRow value={`${configuredPlatforms}/${platforms.length}`} label="Platforms configured" />
+              <SummaryRow value={formatNumber(hub.skills.total)} label="Skills loaded" />
+              <SummaryRow value={formatNumber(hub.toolsets.enabled)} label="Toolsets enabled" />
+            </SummaryCard>
+          )}
+        </div>
+
+        <aside className="quick-actions" aria-labelledby="quick-actions-title">
+          <h2 className="summary-card-title" id="quick-actions-title">
+            Quick Actions
+          </h2>
+          <Link className="quick-action" to="/tasks">
+            <span aria-hidden="true">🚀</span> Run a CLI command
+          </Link>
+          <Link className="quick-action" to="/hub">
+            <span aria-hidden="true">🧰</span> Skills &amp; channels
+          </Link>
+          <Link className="quick-action" to="/models">
+            <span aria-hidden="true">🧠</span> Model registry
+          </Link>
+          <Link className="quick-action" to="/traces">
+            <span aria-hidden="true">🔍</span> Reasoning traces
+          </Link>
+          <Link className="quick-action" to="/system">
+            <span aria-hidden="true">⚙️</span> Doctor checks
+          </Link>
+        </aside>
+      </div>
+
+      <h2 className="section-subtitle">Key metrics</h2>
       <div className="stats-grid">
         {stats.map((stat) => (
           <div className="stat-card" key={stat.label}>
@@ -78,7 +244,7 @@ export default function Overview({ data }: OverviewProps) {
 
       {/* Memory Health Summary Card */}
       <div className="memory-health-card">
-        <h3 className="section-subtitle">🧠 Memory Health</h3>
+        <h2 className="section-subtitle">🧠 Memory Health</h2>
         <div className="memory-health-stats">
           <div className="memory-health-stat">
             <span className="memory-health-value">{formatNumber(memory.total)}</span>
@@ -103,22 +269,22 @@ export default function Overview({ data }: OverviewProps) {
         </p>
       </div>
 
-      <h3 className="section-subtitle">💰 Cost by Provider</h3>
+      <h2 className="section-subtitle">💰 Cost by Provider</h2>
       <div className="chart-container">
         {providerEntries.length > 0 ? (
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={providerEntries} margin={{ top: 20, right: 20, left: 10, bottom: 40 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-              <XAxis dataKey="name" tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} />
-              <YAxis tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} tickFormatter={(v) => '$' + v.toFixed(4)} />
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => '$' + v.toFixed(4)} />
               <Tooltip
-                contentStyle={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8 }}
-                labelStyle={{ color: '#e6edf3' }}
+                contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}
+                labelStyle={{ color: 'var(--text-primary)' }}
                 formatter={(value: number) => [formatCost(value), 'Cost']}
               />
               <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                 {providerEntries.map((entry) => (
-                  <Cell key={entry.name} fill={PROVIDER_COLORS[entry.name] || '#58a6ff'} fillOpacity={0.8} />
+                  <Cell key={entry.name} fillOpacity={0.8} style={{ fill: PROVIDER_COLORS[entry.name] || 'var(--accent-blue)' }} />
                 ))}
               </Bar>
             </BarChart>
@@ -128,19 +294,19 @@ export default function Overview({ data }: OverviewProps) {
         )}
       </div>
 
-      <h3 className="section-subtitle">📊 Trajectories by Project Type</h3>
+      <h2 className="section-subtitle">📊 Trajectories by Project Type</h2>
       <div className="chart-container">
         {projectEntries.length > 0 ? (
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={projectEntries} margin={{ top: 20, right: 20, left: 10, bottom: 40 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-              <XAxis dataKey="name" tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} />
-              <YAxis tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} />
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
               <Tooltip
-                contentStyle={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8 }}
-                labelStyle={{ color: '#e6edf3' }}
+                contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}
+                labelStyle={{ color: 'var(--text-primary)' }}
               />
-              <Bar dataKey="value" fill="#bc8cff" radius={[4, 4, 0, 0]} fillOpacity={0.8} />
+              <Bar dataKey="value" radius={[4, 4, 0, 0]} fillOpacity={0.8} fill="var(--accent-purple)" style={{ fill: 'var(--accent-purple)' }} />
             </BarChart>
           </ResponsiveContainer>
         ) : (

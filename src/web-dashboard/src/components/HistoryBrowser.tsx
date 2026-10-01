@@ -1,4 +1,5 @@
 import type { DashboardData } from '../types';
+import PageHeader from './PageHeader';
 
 interface HistoryBrowserProps {
   data: DashboardData | null;
@@ -11,7 +12,13 @@ function formatTime(ts: number): string {
 
 export default function HistoryBrowser({ data }: HistoryBrowserProps) {
   if (!data) {
-    return <div className="loading-state"><p>Loading history...</p></div>;
+    // Header kept in the loading branch, so the page still says what it is.
+    return (
+      <>
+        <PageHeader icon="📝" title="Conversation History" />
+        <div className="loading-state"><p>Loading history...</p></div>
+      </>
+    );
   }
 
   const { history } = data;
@@ -19,7 +26,7 @@ export default function HistoryBrowser({ data }: HistoryBrowserProps) {
 
   return (
     <>
-      <h2 className="section-title">📝 Conversation History</h2>
+      <PageHeader icon="📝" title="Conversation History" />
       <div className="history-stats">
         <span className="history-count">Total: <strong>{history.total}</strong> sessions</span>
       </div>

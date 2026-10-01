@@ -59,10 +59,10 @@ export default function BatchEconomy({ jobs }: BatchEconomyProps) {
 
   return (
     <div className="dag-timeline-section" data-testid="batch-economy">
-      <h3 className="section-subtitle">
+      <h2 className="section-subtitle">
         📊 Per-batch cost &amp; latency{' '}
         <span className="timeline-subtitle">— measured, not estimated</span>
-      </h3>
+      </h2>
 
       {runs.length > 1 && (
         <div className="dag-loop-turn-meta" style={{ marginBottom: 8 }}>

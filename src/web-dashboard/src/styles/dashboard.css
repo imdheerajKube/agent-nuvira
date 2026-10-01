@@ -1,30 +1,87 @@
 /* ═══════════════════════════════════════════════════
-   Agent-Nuvira Dashboard — Dark Theme Styles (React)
-   ═══════════════════════════════════════════════════ */
+   Agent-Nuvira Dashboard — component styles
+   ═══════════════════════════════════════════════════
 
-:root {
-  --bg-primary: #0d1117;
-  --bg-secondary: #161b22;
-  --bg-tertiary: #1c2333;
-  --bg-card: #1a1f2e;
-  --bg-hover: #1c2538;
-  --text-primary: #e6edf3;
-  --text-secondary: #8b949e;
-  --text-muted: #6e7681;
-  --accent-blue: #58a6ff;
-  --accent-green: #3fb950;
-  --accent-yellow: #d29922;
-  --accent-red: #f85149;
-  --accent-purple: #bc8cff;
-  --accent-cyan: #39d2c0;
-  --border: #30363d;
-  --border-light: #21262d;
-  --shadow: rgba(0, 0, 0, 0.3);
-  --nav-width: 220px;
-  --transition: all 0.2s ease;
-}
+   COLOUR AND TYPE TOKENS NO LONGER LIVE HERE.
+
+   This file used to open with a `:root` block holding one dark palette, and
+   then use 334 raw hex values and 172 raw rgba() values that ignored it — so
+   the dashboard could not be themed at all, and adding a light mode on top
+   would have produced a light shell wrapped around dark cards.
+
+   Every token this file consumes is now defined in `themes.css`: five palettes
+   x light/dark, plus the opt-in accessibility layer. Nothing below changed its
+   token names on purpose, so all 796 `var(--token)` references — and therefore
+   every route — re-theme without being touched.
+
+   THE CONVERSION IS FINISHED. This file holds no literal colour: the only hex
+   values left are `var(--token, #fallback)` fallbacks, which apply solely when a
+   token is undefined and so cannot break a theme. `token-coverage.test.ts` fails
+   if a real literal returns — shadows included, which used to be exempt on the
+   reasoning that decoration needs no theming, and which turned out to hide three
+   light-mode defects (a black smudge, an invisible glow, a 1.7:1 ring). */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* Visually hidden but still announced and still focusable. Used for skip links,
+   live regions, and the labels of controls that paint their own affordance. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Keyboard focus is visible on every field, once. This restores the ring the 10
+   `input:focus { outline: none }` rules below had traded away for a 1px border
+   colour change — a colour change is a weak indicator for a text field (nothing
+   changes thickness, so in forced-colors mode it can vanish entirely).
+
+   The `html .layout` prefix is arithmetic, not decoration: those 10 rules are
+   `.admin-input:focus` (specificity 0,2,0), which beats a plain `input:focus-visible`
+   (0,1,1) no matter where it sits in the file. `html .layout input:focus-visible`
+   is (0,2,1) and therefore wins, so the ring cannot be silently overridden by the
+   next form control someone styles. */
+html .layout input:focus-visible,
+html .layout textarea:focus-visible,
+html .layout select:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* The one secondary button. Named so the next page reaches for this instead of
+   inventing a fifth `*-mini-btn`, which is how the sheet acquired
+   `.admin-mini-btn`, `.hub-mini-btn` and `.theme-trigger` for the same shape. */
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--target-min);
+  padding: 0 var(--space-3);
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: calc(var(--text-sm) * var(--font-scale));
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
@@ -39,73 +96,257 @@ body {
 
 .layout {
   display: flex;
+  flex-direction: column;
   min-height: 100vh;
 }
 
-/* ═══ Navigation ═══ */
-.nav {
-  width: var(--nav-width);
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
+/* The row below the top bar: rail + content. Splitting it out is what lets the
+   rail be `sticky` under the bar instead of a fixed overlay the content has to
+   compensate for with a magic margin. */
+.layout-body {
   display: flex;
-  flex-direction: column;
-  position: fixed;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  overflow-y: auto;
-  z-index: 100;
+  flex: 1;
+  min-height: 0;
 }
 
-.nav-header {
+/* ═══ Shell — top bar ═══
+   The bar and the rail below it are both "chrome", and every palette colors
+   them from the same --chrome-* group, so the two read as one piece rather
+   than as a card sitting above a card. `--chrome-ink` is the one colour the
+   contrast test guarantees against `--chrome-bg`, which is why the active
+   indicator is drawn in it rather than in an accent. */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-topbar);
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 20px 16px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-4);
+  height: var(--topbar-height);
+  padding: 0 var(--space-4);
+  background: var(--chrome-bg);
+  color: var(--chrome-ink);
+  border-bottom: 1px solid var(--chrome-line);
 }
 
-.nav-logo { font-size: 24px; }
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
 
-.nav-title {
-  font-size: 15px;
+.topbar-logo { font-size: calc(20px * var(--font-scale)); }
+
+.topbar-title {
+  font-size: calc(15px * var(--font-scale));
   font-weight: 600;
-  color: var(--text-primary);
+  white-space: nowrap;
 }
+
+/* Only exists where the rail becomes a drawer; below the 900px breakpoint. */
+.topbar-menu {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--target-min);
+  min-height: var(--target-min);
+  background: transparent;
+  color: var(--chrome-ink);
+  border: 1px solid var(--chrome-line);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: calc(14px * var(--font-scale));
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.topbar-menu:hover { background: var(--chrome-hover); }
+
+.primary-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+  /* Rather than dropping the four cross-cutting views on a narrow screen, the
+     strip scrolls — they are the destinations a phone user is most likely to
+     want, and a hidden tab is a route with no link. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.primary-nav::-webkit-scrollbar { display: none; }
+
+.primary-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--target-min);
+  padding: 0 var(--space-3);
+  color: var(--chrome-ink-muted);
+  text-decoration: none;
+  font-size: calc(13px * var(--font-scale));
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  transition: var(--transition);
+}
+
+.primary-link:hover {
+  background: var(--chrome-hover);
+  color: var(--chrome-ink);
+}
+
+.primary-link.active {
+  color: var(--chrome-ink);
+  font-weight: 600;
+  border-bottom-color: var(--chrome-ink);
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  margin-left: auto;
+}
+
+/* One control shape for everything sitting on the chrome: Refresh here and the
+   Appearance trigger in the switcher section below. They are the same kind of
+   thing, so they share a rule instead of two that drift. */
+.topbar-action,
+.theme-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--target-min);
+  padding: 0 var(--space-3);
+  background: transparent;
+  color: var(--chrome-ink);
+  border: 1px solid var(--chrome-line);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: calc(12px * var(--font-scale));
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.topbar-action:hover:not(:disabled),
+.theme-trigger:hover {
+  background: var(--chrome-hover);
+}
+
+.topbar-action:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+/* ═══ Shell — navigation rail ═══
+   Sticky, not fixed: it stays in flow so the content column needs no
+   compensating margin and the two cannot drift apart. */
+.nav {
+  flex: none;
+  position: sticky;
+  top: var(--topbar-height);
+  width: var(--nav-width);
+  height: calc(100vh - var(--topbar-height));
+  display: flex;
+  flex-direction: column;
+  background: var(--chrome-bg);
+  color: var(--chrome-ink);
+  border-right: 1px solid var(--chrome-line);
+  overflow-y: auto;
+  z-index: var(--z-sidebar);
+}
+
+/* Sits above the page and below the drawer it dismisses — hence the arithmetic
+   rather than another z token, which would have to be kept in sync by hand. */
+.nav-scrim {
+  position: fixed;
+  inset: var(--topbar-height) 0 0 0;
+  z-index: calc(var(--z-sidebar) - 1);
+  background: var(--scrim);
+}
+
+.nav-search {
+  padding: var(--space-3) var(--space-3) 0;
+}
+
+.nav-search-input {
+  width: 100%;
+  min-height: var(--target-min);
+  padding: 0 var(--space-3);
+  background: var(--chrome-hover);
+  color: var(--chrome-ink);
+  border: 1px solid var(--chrome-line);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: calc(12px * var(--font-scale));
+}
+
+.nav-search-input::placeholder { color: var(--chrome-ink-muted); }
 
 .nav-links {
   flex: 1;
-  padding: 8px 0;
+  padding: var(--space-2) 0;
+}
+
+.nav-group { padding-top: var(--space-2); }
+
+.nav-group-title {
+  margin: 0;
+  padding: var(--space-2) var(--space-4) var(--space-1);
+  color: var(--chrome-ink-muted);
+  font-size: calc(10px * var(--font-scale));
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+
+.nav-icon {
+  flex: none;
+  width: 18px;
+  text-align: center;
 }
 
 .nav-link {
-  display: block;
-  padding: 10px 16px;
-  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--target-min);
+  padding: 0 var(--space-4);
+  color: var(--chrome-ink-muted);
   text-decoration: none;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   transition: var(--transition);
   border-left: 3px solid transparent;
 }
 
 .nav-link:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--chrome-hover);
+  color: var(--chrome-ink);
 }
 
 .nav-link.active {
-  color: var(--accent-blue);
-  background: rgba(88, 166, 255, 0.08);
-  border-left-color: var(--accent-blue);
-  font-weight: 500;
+  background: var(--chrome-hover);
+  color: var(--chrome-ink);
+  border-left-color: var(--chrome-ink);
+  font-weight: 600;
+}
+
+.nav-empty {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--chrome-ink-muted);
+  font-size: calc(12px * var(--font-scale));
 }
 
 .nav-footer {
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--chrome-line);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
@@ -116,26 +357,163 @@ body {
   display: inline-block;
 }
 
-.status-dot.connected { background: var(--accent-green); box-shadow: 0 0 6px rgba(63, 185, 80, 0.4); }
+.status-dot.connected { background: var(--accent-green); box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 40%, transparent); }
 .status-dot.reconnecting { background: var(--accent-yellow); animation: pulse 1s infinite; }
 
 .status-text {
-  font-size: 11px;
-  color: var(--text-secondary);
+  font-size: calc(11px * var(--font-scale));
+  color: var(--chrome-ink-muted);
   flex: 1;
 }
 
 .last-updated {
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale));
+  color: var(--chrome-ink-muted);
+}
+
+/* ═══ Shortcuts cheatsheet (modal) ═══
+   A real dialog, so the scrim covers the whole viewport and the panel is
+   centred in it — unlike the navigation drawer's scrim, which deliberately sits
+   under the top bar so the hamburger stays reachable. */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--scrim);
+}
+
+.shortcuts-dialog {
+  width: 100%;
+  max-width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: var(--space-5);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-3);
+}
+
+.shortcuts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.shortcuts-title {
+  margin: 0;
+  font-size: calc(var(--text-lg) * var(--font-scale));
+  font-weight: 600;
+}
+
+.shortcuts-group { margin-bottom: var(--space-4); }
+
+.shortcuts-group-title {
+  margin: 0 0 var(--space-2);
   color: var(--text-muted);
+  font-size: calc(var(--text-2xs) * var(--font-scale));
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.shortcuts-list { margin: 0; }
+
+.shortcuts-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+}
+
+.shortcuts-keys {
+  display: flex;
+  gap: var(--space-1);
+  flex: none;
+  min-width: 96px;
+}
+
+.shortcuts-key {
+  display: inline-block;
+  min-width: 20px;
+  padding: 2px var(--space-2);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: calc(var(--text-xs) * var(--font-scale));
+  text-align: center;
+}
+
+.shortcuts-description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: calc(var(--text-md) * var(--font-scale));
+}
+
+.shortcuts-note {
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: calc(var(--text-sm) * var(--font-scale));
 }
 
 /* ═══ Main Content ═══ */
 .main {
-  margin-left: var(--nav-width);
   flex: 1;
-  padding: 32px 40px;
-  max-width: 1200px;
+  min-width: 0;
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-10);
+}
+
+/* ═══ Page header ═══
+   One header for every routed page: level, size and spacing decided once. The
+   rule under the title is the reference design's, and it is also what separates
+   the page's own heading from the first section without another element. */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.page-header-text { min-width: 0; }
+
+.page-header-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: calc(var(--text-2xl) * var(--font-scale));
+  font-weight: 600;
+  line-height: var(--leading-tight);
+}
+
+.page-header-description {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: calc(var(--text-md) * var(--font-scale));
+  max-width: 90ch;
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
 /* ═══ Sections ═══ */
@@ -158,6 +536,159 @@ body {
   font-size: 13px;
   margin-bottom: 24px;
   line-height: 1.6;
+}
+
+/* ═══ Metric tiles (the summary band) ═══
+   Tone is carried by a left bar and the VALUE's colour, not by a filled block.
+   The reference fills each tile with solid colour and sets white on top, which
+   is how the yellow tile lands near 2:1 — and the four accents used here are the
+   ones `theme-contrast.test.ts` already asserts against the card surface, so a
+   palette edit that broke one of them fails the suite rather than shipping. */
+.metric-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-6);
+  padding: 0;
+  list-style: none;
+}
+
+.metric-tile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--metric-tone);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-1);
+}
+
+.metric-tile-icon { font-size: calc(var(--text-xl) * var(--font-scale)); }
+
+.metric-tile-value {
+  display: block;
+  color: var(--metric-tone);
+  font-size: calc(var(--text-2xl) * var(--font-scale));
+  font-weight: 700;
+  line-height: var(--leading-tight);
+}
+
+.metric-tile-label {
+  display: block;
+  color: var(--text-secondary);
+  font-size: calc(var(--text-sm) * var(--font-scale));
+}
+
+.metric-tile--accent { --metric-tone: var(--accent); }
+.metric-tile--ok { --metric-tone: var(--accent-green); }
+.metric-tile--warn { --metric-tone: var(--accent-yellow); }
+.metric-tile--danger { --metric-tone: var(--accent-red); }
+
+/* ═══ Overview summary row (cards + quick actions) ═══ */
+.overview-summary {
+  display: grid;
+  /* The cards take the room; the action column stays narrow, which is what
+     makes the row read as "summary + things you can do" rather than two grids. */
+  grid-template-columns: minmax(0, 3fr) minmax(180px, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+  align-items: start;
+}
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+}
+
+.summary-card,
+.quick-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-1);
+}
+
+.summary-card-title {
+  margin: 0;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: calc(var(--text-base) * var(--font-scale));
+  font-weight: 600;
+}
+
+.summary-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1;
+}
+
+.summary-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.summary-row-value {
+  color: var(--text-primary);
+  font-size: calc(var(--text-xl) * var(--font-scale));
+  font-weight: 700;
+  line-height: var(--leading-tight);
+}
+
+.summary-row-label {
+  color: var(--text-secondary);
+  font-size: calc(var(--text-sm) * var(--font-scale));
+}
+
+.summary-note {
+  color: var(--text-secondary);
+  font-size: calc(var(--text-sm) * var(--font-scale));
+}
+
+.summary-card-link {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-min);
+  padding: 0 var(--space-3);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-radius: var(--radius-sm);
+  font-size: calc(var(--text-sm) * var(--font-scale));
+  font-weight: 600;
+  text-decoration: none;
+  transition: var(--transition);
+}
+
+.summary-card-link:hover { filter: brightness(1.1); }
+
+.quick-action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--target-min);
+  padding: 0 var(--space-3);
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: calc(var(--text-sm) * var(--font-scale));
+  text-decoration: none;
+  transition: var(--transition);
+}
+
+.quick-action:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
 }
 
 /* ═══ Stats Grid ═══ */
@@ -215,6 +746,65 @@ body {
   padding: 16px;
   margin-bottom: 10px;
 }
+
+/* ── Recharts internals ────────────────────────────────────────────────────
+   Recharts paints its grid lines, axis lines, tick labels and legend swatch
+   from per-chart props, and those reach the DOM as SVG PRESENTATION
+   ATTRIBUTES. A presentation attribute is the wrong place for a themeable
+   colour: `fill="var(--x)"` does resolve in Blink, but that is not dependable
+   across engines, and where it fails the browser falls back to the initial
+   paint — black — which would render every chart monochrome with no error.
+
+   So the colour props were removed from the charts and the chrome is defined
+   HERE instead. A stylesheet rule always beats a presentation attribute
+   (presentation attributes sit at the bottom of the cascade), so this block is
+   the single definition of chart chrome — one place, all charts, every theme. */
+.recharts-cartesian-grid line {
+  stroke: var(--border-light);
+}
+
+.recharts-cartesian-axis-line,
+.recharts-cartesian-axis-tick-line {
+  stroke: var(--border);
+}
+
+.recharts-cartesian-axis-tick-value {
+  fill: var(--text-secondary);
+  /* Overrides the font-size attribute Recharts writes, so the accessibility
+     font-scale reaches chart labels like it reaches everything else. */
+  font-size: calc(11px * var(--font-scale));
+}
+
+.recharts-legend-item-text {
+  color: var(--text-secondary);
+}
+
+.recharts-default-tooltip {
+  background-color: var(--bg-card) !important;
+  border: 1px solid var(--border) !important;
+}
+
+.recharts-tooltip-label,
+.recharts-tooltip-item {
+  color: var(--text-primary) !important;
+}
+
+/* SERIES colours are deliberately NOT here — each series needs its own colour,
+   so it passes a real inline style through the component's `style` prop, where
+   var() resolves in every engine. The rules below repair the one piece Recharts
+   will not accept that way: the legend swatch, which is driven by the series'
+   `fill` prop and so still arrives as a presentation attribute. Matching the
+   attribute's literal text and re-declaring the colour as real CSS makes the
+   swatch independent of how that attribute is resolved.
+
+   These are kept in sync with the series fills by token-coverage.test.ts — add
+   a series colour there and the test fails until it is added here. */
+.recharts-legend-icon[fill='var(--accent-blue)'] { fill: var(--accent-blue); }
+.recharts-legend-icon[fill='var(--accent-green)'] { fill: var(--accent-green); }
+.recharts-legend-icon[fill='var(--accent-yellow)'] { fill: var(--accent-yellow); }
+.recharts-legend-icon[fill='var(--accent-red)'] { fill: var(--accent-red); }
+.recharts-legend-icon[fill='var(--accent-purple)'] { fill: var(--accent-purple); }
+.recharts-legend-icon[fill='var(--accent-cyan)'] { fill: var(--accent-cyan); }
 
 /* ═══ Cost Section ═══ */
 .cost-summary {
@@ -382,7 +972,7 @@ body {
 }
 
 .history-tag {
-  background: rgba(88, 166, 255, 0.15);
+  background: color-mix(in srgb, var(--accent-blue) 15%, transparent);
   color: var(--accent-blue);
   padding: 1px 6px;
   border-radius: 3px;
@@ -655,14 +1245,14 @@ body {
 
 .dag-engine-loop {
   color: var(--accent-cyan, #39d2c0);
-  background: rgba(57, 210, 192, 0.12);
-  border: 1px solid rgba(57, 210, 192, 0.4);
+  background: color-mix(in srgb, var(--accent-cyan) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-cyan) 40%, transparent);
 }
 
 .dag-engine-pipeline {
   color: var(--accent-purple, #bc8cff);
-  background: rgba(188, 140, 255, 0.12);
-  border: 1px solid rgba(188, 140, 255, 0.4);
+  background: color-mix(in srgb, var(--accent-purple) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-purple) 40%, transparent);
 }
 
 /* ═══ Phase 4 — Loop-turn telemetry card ═══ */
@@ -731,7 +1321,7 @@ body {
 
 .dag-loop-turn-chip-error {
   color: var(--accent-red, #f85149);
-  border-color: rgba(248, 81, 73, 0.4);
+  border-color: color-mix(in srgb, var(--accent-red) 40%, transparent);
 }
 
 .dag-loop-turn-chip-dim {
@@ -751,16 +1341,16 @@ body {
   font-size: 10.5px;
   font-family: SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   color: var(--accent-green, #3fb950);
-  background: rgba(63, 185, 80, 0.08);
-  border: 1px solid rgba(63, 185, 80, 0.25);
+  background: color-mix(in srgb, var(--accent-green) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-green) 25%, transparent);
   border-radius: 4px;
   padding: 1px 6px;
 }
 
 .dag-loop-tool-error {
   color: var(--accent-red, #f85149);
-  background: rgba(248, 81, 73, 0.08);
-  border-color: rgba(248, 81, 73, 0.3);
+  background: color-mix(in srgb, var(--accent-red) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent-red) 30%, transparent);
 }
 
 /* ═══ Phase 4 — Run-chip engine tag + telemetry meta (Run Timeline) ═══ */
@@ -772,7 +1362,7 @@ body {
 
 .phase-run-chip-engine-loop {
   /* loop turns glow cyan — the single agentic loop's color */
-  filter: drop-shadow(0 0 3px rgba(57, 210, 192, 0.6));
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent-cyan) 60%, transparent));
 }
 
 /* ═══ DAG Status Bar ═══ */
@@ -792,7 +1382,7 @@ body {
 
 .dag-status-bar.active {
   border-color: var(--accent-blue);
-  box-shadow: 0 0 12px rgba(88, 166, 255, 0.1);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent-blue) 10%, transparent);
 }
 
 .dag-pipeline-name {
@@ -809,12 +1399,12 @@ body {
   height: 10px;
   border-radius: 50%;
   background: var(--accent-green);
-  box-shadow: 0 0 8px rgba(63, 185, 80, 0.6);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-green) 60%, transparent);
   animation: pulse 1.5s infinite;
 }
 
 .dag-live-badge {
-  background: rgba(63, 185, 80, 0.15);
+  background: color-mix(in srgb, var(--accent-green) 15%, transparent);
   color: var(--accent-green);
   padding: 2px 8px;
   border-radius: 4px;
@@ -837,7 +1427,7 @@ body {
 }
 
 .dag-running-badge {
-  background: rgba(88, 166, 255, 0.15);
+  background: color-mix(in srgb, var(--accent-blue) 15%, transparent);
   color: var(--accent-blue);
   padding: 2px 8px;
   border-radius: 4px;
@@ -846,7 +1436,7 @@ body {
 }
 
 .dag-completed-badge {
-  background: rgba(63, 185, 80, 0.12);
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
   color: var(--accent-green);
   padding: 2px 8px;
   border-radius: 4px;
@@ -855,7 +1445,7 @@ body {
 }
 
 .dag-pending-badge {
-  background: rgba(110, 118, 129, 0.15);
+  background: color-mix(in srgb, var(--text-muted) 15%, transparent);
   color: var(--text-secondary);
   padding: 2px 8px;
   border-radius: 4px;
@@ -864,7 +1454,7 @@ body {
 }
 
 .dag-failed-badge {
-  background: rgba(248, 81, 73, 0.15);
+  background: color-mix(in srgb, var(--accent-red) 15%, transparent);
   color: var(--accent-red);
   padding: 2px 8px;
   border-radius: 4px;
@@ -886,7 +1476,7 @@ body {
   margin-bottom: 16px;
 }
 
-.dag-empty h3 {
+.dag-empty h2 {
   font-size: 18px;
   color: var(--text-primary);
   margin-bottom: 8px;
@@ -1060,14 +1650,47 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ═══ Responsive ═══ */
-@media (max-width: 768px) {
-  .nav { width: 60px; }
-  .nav-title, .nav-link, .nav-footer { display: none; }
-  .nav-header { justify-content: center; padding: 16px; }
-  .main { margin-left: 60px; padding: 20px; }
+@media (max-width: 900px) {
+  /* The rail becomes an off-canvas drawer toggled from the top bar.
+     It used to be `.nav { width: 60px }` with the links, titles and footer all
+     `display: none` — a 60px strip of empty chrome with no navigation in it, so
+     every destination past the current one had to be reached by editing the URL.
+     `visibility` (not just `transform`) because a drawer that is off-screen but
+     still tabbable is a focus trap with extra steps. */
+  .nav {
+    position: fixed;
+    top: var(--topbar-height);
+    bottom: 0;
+    left: 0;
+    height: auto;
+    width: min(88vw, var(--nav-width));
+    transform: translateX(-100%);
+    visibility: hidden;
+    /* `visibility` is NOT transitioned alongside the transform. On open it
+       would still compute to `hidden` for the first frames, and focus() on a
+       control inside a hidden subtree silently does nothing — so the drawer
+       opened without focus in it. Instead it flips to `visible` instantly on
+       open (no delay) and only on CLOSE waits for the slide-out to finish,
+       which is the whole reason the delay exists. */
+    transition: transform var(--motion-base) var(--ease),
+      visibility 0s linear var(--motion-base);
+  }
+
+  .nav.open {
+    transform: none;
+    visibility: visible;
+    transition: transform var(--motion-base) var(--ease);
+  }
+
+  .topbar-menu { display: inline-flex; }
+  .topbar-title { display: none; }
+  .topbar { gap: var(--space-2); }
+  .main { padding: var(--space-5); }
+  /* The action column drops below the cards rather than squeezing to 100px. */
+  .overview-summary { grid-template-columns: 1fr; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .benchmark-stats { grid-template-columns: repeat(2, 1fr); }
-  .cost-summary { flex-direction: column; gap: 12px; }
+  .cost-summary { flex-direction: column; gap: var(--space-3); }
 }
 
 /* ═══ Run Timeline (scrubbable phase timeline) ═══ */
@@ -1140,12 +1763,16 @@ body {
 
 .phase-run-chip.active {
   border-color: var(--accent-blue);
-  background: rgba(88, 166, 255, 0.1);
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
   color: var(--text-primary);
 }
 
 .phase-run-chip.live {
-  border-color: rgba(63, 185, 80, 0.5);
+  /* The SOLID accent, not a 50% wash: a live run is a state, and a half-opacity
+     boundary measures 2.0–3.3:1 as a boundary — under the 3:1 WCAG 2.2 1.4.11
+     asks of a line that identifies a state. The palette's own green is asserted
+     at 4.5:1 on the card behind it. */
+  border-color: var(--accent-green);
 }
 
 .phase-run-chip-time {
@@ -1173,9 +1800,9 @@ body {
 }
 
 .phase-play-btn {
-  background: rgba(88, 166, 255, 0.12);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
   color: var(--accent-blue);
-  border: 1px solid rgba(88, 166, 255, 0.35);
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 35%, transparent);
   border-radius: 6px;
   padding: 4px 12px;
   font-size: 11px;
@@ -1184,8 +1811,8 @@ body {
   transition: var(--transition);
 }
 
-.phase-play-btn:hover { background: rgba(88, 166, 255, 0.22); }
-.phase-play-btn.paused { background: rgba(248, 81, 73, 0.12); color: var(--accent-red); border-color: rgba(248, 81, 73, 0.35); }
+.phase-play-btn:hover { background: color-mix(in srgb, var(--accent-blue) 22%, transparent); }
+.phase-play-btn.paused { background: color-mix(in srgb, var(--accent-red) 12%, transparent); color: var(--accent-red); border-color: color-mix(in srgb, var(--accent-red) 35%, transparent); }
 
 .phase-time-label {
   font-size: 11px;
@@ -1226,7 +1853,7 @@ body {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  color: #fff;
+  color: var(--text-on-accent);
   cursor: pointer;
   min-width: 10px;
   overflow: hidden;
@@ -1237,7 +1864,7 @@ body {
 .phase-block:hover { filter: brightness(1.15); transform: translateY(-1px); }
 
 .phase-block-pending { opacity: 0.55; }
-.phase-block-failed { outline: 1px solid rgba(248, 81, 73, 0.6); }
+.phase-block-failed { outline: 1px solid color-mix(in srgb, var(--accent-red) 60%, transparent); }
 
 .phase-block.active { z-index: 2; }
 
@@ -1245,7 +1872,9 @@ body {
 .phase-block-label {
   font-size: 9px;
   font-weight: 600;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  /* The palette's shadow, not black: a black smudge under dark text on a light
+     surface is exactly the kind of dark-only artifact light mode exposes. */
+  text-shadow: 0 1px 2px var(--shadow);
   max-width: 100%;
   overflow: hidden;
   white-space: nowrap;
@@ -1258,8 +1887,10 @@ body {
   top: -3px;
   bottom: -3px;
   width: 2px;
-  background: #f0f6fc;
-  box-shadow: 0 0 8px rgba(240, 246, 252, 0.8);
+  background: var(--text-primary);
+  /* A glow of the bar's OWN colour, so it reads as light in dark mode and as
+     depth in light mode rather than vanishing into a white background. */
+  box-shadow: 0 0 8px color-mix(in srgb, var(--text-primary) 80%, transparent);
   cursor: ew-resize;
   z-index: 3;
   transform: translateX(-1px);
@@ -1273,7 +1904,7 @@ body {
   left: 50%;
   transform: translateX(-50%);
   border: 5px solid transparent;
-  border-top: 6px solid #f0f6fc;
+  border-top: 6px solid var(--text-primary);
 }
 
 .phase-ticks {
@@ -1316,10 +1947,10 @@ body {
   margin-left: auto;
 }
 
-.phase-status-pending { background: rgba(110, 118, 129, 0.15); color: var(--text-muted); }
-.phase-status-running { background: rgba(88, 166, 255, 0.15); color: var(--accent-blue); }
-.phase-status-completed { background: rgba(63, 185, 80, 0.15); color: var(--accent-green); }
-.phase-status-failed { background: rgba(248, 81, 73, 0.15); color: var(--accent-red); }
+.phase-status-pending { background: color-mix(in srgb, var(--text-muted) 15%, transparent); color: var(--text-muted); }
+.phase-status-running { background: color-mix(in srgb, var(--accent-blue) 15%, transparent); color: var(--accent-blue); }
+.phase-status-completed { background: color-mix(in srgb, var(--accent-green) 15%, transparent); color: var(--accent-green); }
+.phase-status-failed { background: color-mix(in srgb, var(--accent-red) 15%, transparent); color: var(--accent-red); }
 
 .phase-detail-desc {
   color: var(--text-primary);
@@ -1376,7 +2007,7 @@ body {
 .admin-refresh-btn:hover:not(:disabled) {
   border-color: var(--accent-blue);
   color: var(--accent-blue);
-  box-shadow: 0 0 8px rgba(88, 166, 255, 0.15);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-blue) 15%, transparent);
 }
 
 .admin-refresh-btn:disabled {
@@ -1392,8 +2023,8 @@ body {
 }
 
 .admin-error {
-  background: rgba(248, 81, 73, 0.1);
-  border: 1px solid rgba(248, 81, 73, 0.4);
+  background: color-mix(in srgb, var(--accent-red) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-red) 40%, transparent);
   color: var(--accent-red);
   border-radius: 8px;
   padding: 10px 14px;
@@ -1472,9 +2103,9 @@ body {
   margin-top: 2px;
 }
 
-.admin-check-pass { background: rgba(63, 185, 80, 0.15); color: var(--accent-green); }
-.admin-check-warn { background: rgba(210, 153, 34, 0.15); color: var(--accent-yellow); }
-.admin-check-fail { background: rgba(248, 81, 73, 0.15); color: var(--accent-red); }
+.admin-check-pass { background: color-mix(in srgb, var(--accent-green) 15%, transparent); color: var(--accent-green); }
+.admin-check-warn { background: color-mix(in srgb, var(--accent-yellow) 15%, transparent); color: var(--accent-yellow); }
+.admin-check-fail { background: color-mix(in srgb, var(--accent-red) 15%, transparent); color: var(--accent-red); }
 
 .admin-check-body { min-width: 0; }
 .admin-check-name {
@@ -1583,7 +2214,7 @@ body {
   gap: 14px;
   margin-top: 18px;
   padding: 20px;
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
   border: 1px solid var(--border, #333);
   border-radius: 10px;
 }
@@ -1597,7 +2228,7 @@ body {
 }
 
 .admin-input {
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--scrim);
   border: 1px solid var(--border, #333);
   color: var(--text-primary);
   border-radius: 6px;
@@ -1631,7 +2262,7 @@ body {
 }
 
 .admin-hint code {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
   padding: 1px 4px;
   border-radius: 4px;
   font-size: 10px;
@@ -1644,7 +2275,7 @@ body {
 }
 
 .admin-mini-btn {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
   border: 1px solid var(--border, #333);
   color: var(--text-primary);
   border-radius: 6px;
@@ -1776,41 +2407,41 @@ body {
   border-radius: 10px;
   font-size: 11px;
   vertical-align: middle;
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
   border: 1px solid var(--border, #333);
   color: var(--text-secondary);
 }
 
 .admin-role-admin {
-  background: rgba(63, 185, 80, 0.12);
-  border-color: rgba(63, 185, 80, 0.35);
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 35%, transparent);
   color: var(--accent-green);
 }
 
 .admin-role-operator {
-  background: rgba(210, 153, 34, 0.12);
-  border-color: rgba(210, 153, 34, 0.35);
+  background: color-mix(in srgb, var(--accent-yellow) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-yellow) 35%, transparent);
   color: var(--accent-yellow);
 }
 
 .admin-role-viewer {
-  background: rgba(120, 130, 150, 0.12);
-  border-color: rgba(120, 130, 150, 0.35);
+  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+  border-color: color-mix(in srgb, var(--text-muted) 35%, transparent);
   color: var(--text-secondary);
 }
 
 .admin-readonly-note {
   margin-top: 12px;
   padding: 10px 14px;
-  border: 1px solid rgba(210, 153, 34, 0.35);
-  background: rgba(210, 153, 34, 0.08);
+  border: 1px solid color-mix(in srgb, var(--accent-yellow) 35%, transparent);
+  background: color-mix(in srgb, var(--accent-yellow) 8%, transparent);
   border-radius: 8px;
   font-size: 12px;
   color: var(--accent-yellow);
 }
 
 .admin-readonly-note code {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
   padding: 1px 4px;
   border-radius: 4px;
   font-size: 11px;
@@ -1830,7 +2461,7 @@ body {
   padding: 8px 12px;
   border: 1px solid var(--border, #333);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--text-primary) 2%, transparent);
 }
 
 .admin-user-name {
@@ -1850,7 +2481,7 @@ body {
 }
 
 .admin-user-form select {
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--scrim);
   border: 1px solid var(--border, #333);
   color: var(--text-primary);
   border-radius: 6px;
@@ -1889,13 +2520,13 @@ body {
 .hub-tab.active {
   background: var(--accent-blue);
   border-color: var(--accent-blue);
-  color: #0d1117;
+  color: var(--bg-primary);
   font-weight: 600;
 }
 
 .hub-tab-count {
   margin-left: 6px;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--scrim);
   border-radius: 10px;
   padding: 1px 8px;
   font-size: 11px;
@@ -1903,7 +2534,7 @@ body {
 }
 
 .hub-tab.active .hub-tab-count {
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--scrim);
 }
 
 .hub-toolset-grid {
@@ -1969,9 +2600,9 @@ body {
 }
 
 .hub-chip {
-  background: rgba(88, 166, 255, 0.12);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
   color: var(--accent-blue);
-  border: 1px solid rgba(88, 166, 255, 0.25);
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 25%, transparent);
   border-radius: 6px;
   padding: 2px 8px;
   font-size: 11px;
@@ -1979,17 +2610,17 @@ body {
 }
 
 .hub-chip-pending {
-  background: rgba(217, 119, 6, 0.14);
+  background: color-mix(in srgb, var(--accent-yellow) 14%, transparent);
   color: var(--accent-warn, #d97706);
-  border: 1px dashed rgba(217, 119, 6, 0.45);
+  border: 1px dashed color-mix(in srgb, var(--accent-yellow) 45%, transparent);
 }
 
 .chat-resolve-card {
   margin: 10px 0;
   padding: 10px 14px;
   border-radius: 8px;
-  border: 1px solid rgba(88, 166, 255, 0.45);
-  background: rgba(88, 166, 255, 0.06);
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-blue) 6%, transparent);
   font-size: 13px;
 }
 
@@ -2054,8 +2685,8 @@ body {
   margin: 4px 0 12px;
   padding: 8px 12px;
   border-radius: 6px;
-  border: 1px solid rgba(217, 119, 6, 0.45);
-  background: rgba(217, 119, 6, 0.08);
+  border: 1px solid color-mix(in srgb, var(--accent-yellow) 45%, transparent);
+  background: color-mix(in srgb, var(--accent-yellow) 8%, transparent);
   color: var(--text-primary);
   font-size: 12px;
 }
@@ -2073,7 +2704,7 @@ body {
   height: 22px;
   border-radius: 12px;
   border: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--scrim);
   cursor: pointer;
   transition: var(--transition);
   flex-shrink: 0;
@@ -2100,7 +2731,7 @@ body {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #e6edf3;
+  background: var(--text-primary);
   transition: var(--transition);
 }
 
@@ -2134,7 +2765,7 @@ body {
 }
 
 .hub-platform.configured {
-  border-color: rgba(63, 185, 80, 0.4);
+  border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
 }
 
 .hub-platform-label {
@@ -2189,7 +2820,7 @@ body {
 }
 
 .hub-send-form input {
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--scrim);
   border: 1px solid var(--border);
   color: var(--text-primary);
   border-radius: 6px;
@@ -2245,7 +2876,7 @@ body {
   flex-basis: 100%;
   color: var(--text-muted);
   font-size: 11px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--scrim);
   border-radius: 6px;
   padding: 6px 8px;
   white-space: pre-wrap;
@@ -2286,7 +2917,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
-  background: #0a0e14;
+  background: var(--surface-inset);
 }
 
 .task-console-header {
@@ -2369,7 +3000,7 @@ body {
 }
 
 .task-table tbody tr.task-row-active {
-  background: rgba(88, 166, 255, 0.08);
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
   border-left: 3px solid var(--accent-blue);
 }
 
@@ -2409,17 +3040,17 @@ body {
   border-radius: 999px;
   border: 1px solid var(--border);
   color: var(--text-secondary);
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--scrim);
 }
 
 .wa-badge-paired {
-  color: #4ade80;
-  border-color: rgba(74, 222, 128, 0.4);
+  color: var(--accent-green);
+  border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
 }
 
 .wa-badge-pairing {
-  color: #fbbf24;
-  border-color: rgba(251, 191, 36, 0.4);
+  color: var(--accent-yellow);
+  border-color: color-mix(in srgb, var(--accent-yellow) 40%, transparent);
 }
 
 .wa-actions,
@@ -2442,7 +3073,7 @@ body {
 }
 
 .wa-phone-input {
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--scrim);
   border: 1px solid var(--border);
   color: var(--text-primary);
   border-radius: 6px;
@@ -2467,13 +3098,13 @@ body {
   align-items: center;
   gap: 8px;
   padding: 14px;
-  background: #fff;
+  background: var(--qr-background);
   border-radius: 10px;
   border: 1px solid var(--border);
 }
 
 .wa-qr-box .admin-hint {
-  color: #444;
+  color: var(--text-muted);
   max-width: 360px;
   text-align: center;
 }
@@ -2487,7 +3118,7 @@ body {
 
 .wa-code-box {
   padding: 14px;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--scrim);
   border: 1px dashed var(--border);
   border-radius: 10px;
   display: flex;
@@ -2505,8 +3136,8 @@ body {
 }
 
 .wa-unpair-btn {
-  border-color: rgba(239, 68, 68, 0.5);
-  color: #f87171;
+  border-color: color-mix(in srgb, var(--accent-red) 50%, transparent);
+  color: var(--accent-red);
 }
 
 /* P3 — Chat console (GUI parity with `buff chat "<prompt>"`) */
@@ -2524,7 +3155,7 @@ body {
   padding: 14px;
   max-height: 60vh;
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--scrim);
   border: 1px solid var(--border);
   border-radius: 10px;
 }
@@ -2541,8 +3172,8 @@ body {
 
 .chat-user {
   align-self: flex-end;
-  background: rgba(59, 130, 246, 0.18);
-  border-color: rgba(59, 130, 246, 0.4);
+  background: color-mix(in srgb, var(--accent-blue) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent-blue) 40%, transparent);
 }
 
 .chat-assistant {
@@ -2550,7 +3181,7 @@ body {
 }
 
 .chat-error {
-  border-color: rgba(239, 68, 68, 0.5);
+  border-color: color-mix(in srgb, var(--accent-red) 50%, transparent);
 }
 
 .chat-bubble-role {
@@ -2630,8 +3261,8 @@ body {
 }
 
 .chat-chip {
-  background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 45%, transparent);
   color: var(--text-primary);
   border-radius: 999px;
   padding: 5px 12px;
@@ -2645,7 +3276,7 @@ body {
 }
 
 .chat-chip:hover {
-  background: rgba(59, 130, 246, 0.28);
+  background: color-mix(in srgb, var(--accent-blue) 28%, transparent);
 }
 
 /* P8 — the composer: chips row + paste-offer banner + attach button. */
@@ -2665,7 +3296,7 @@ body {
 
 .chat-composer-drag {
   border-color: var(--accent-blue, #3b82f6);
-  background: rgba(59, 130, 246, 0.06);
+  background: color-mix(in srgb, var(--accent-blue) 6%, transparent);
 }
 
 .chat-attach-row {
@@ -2682,7 +3313,7 @@ body {
   padding: 3px 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(59, 130, 246, 0.08);
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
   color: var(--text-primary);
   max-width: 260px;
   overflow: hidden;
@@ -2698,7 +3329,7 @@ body {
   padding: 6px 8px;
   border: 1px dashed var(--border);
   border-radius: 8px;
-  background: rgba(250, 204, 21, 0.05);
+  background: color-mix(in srgb, var(--accent-yellow) 5%, transparent);
 }
 
 .chat-attach-btn {
@@ -2713,7 +3344,7 @@ body {
 }
 
 .chat-attach-btn:hover:not(:disabled) {
-  background: rgba(59, 130, 246, 0.12);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
 }
 
 .chat-attach-btn:disabled {
@@ -2748,7 +3379,7 @@ body {
 
 .chat-input-row textarea.chat-input-box {
   flex: 1;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--scrim);
   border: 1px solid var(--border);
   color: var(--text-primary);
   border-radius: 6px;
@@ -2778,7 +3409,7 @@ body {
   border: 1px dashed var(--border);
   border-radius: 10px;
   color: var(--text-secondary);
-  background: rgba(0, 0, 0, 0.15);
+  background: var(--scrim);
 }
 
 /* ─── Markdown renderer (Phase 1) ─────────────────────────────────────── */
@@ -2823,7 +3454,7 @@ body {
   padding: 4px 10px;
   border-left: 3px solid var(--accent-blue, #3b82f6);
   color: var(--text-secondary);
-  background: rgba(59, 130, 246, 0.08);
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
   border-radius: 0 6px 6px 0;
 }
 
@@ -2835,8 +3466,8 @@ body {
 
 .md-inline-code,
 .md-root :not(pre) > code {
-  background: rgba(127, 127, 127, 0.2);
-  border: 1px solid rgba(127, 127, 127, 0.3);
+  background: color-mix(in srgb, var(--text-muted) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-muted) 30%, transparent);
   border-radius: 4px;
   padding: 1px 5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -2858,41 +3489,41 @@ body {
 .md-code-pre code .hljs-keyword,
 .md-code-pre code .hljs-selector-tag,
 .md-code-pre code .hljs-built_in {
-  color: #c678dd;
+  color: var(--code-keyword);
 }
 
 .md-code-pre code .hljs-string,
 .md-code-pre code .hljs-attr,
 .md-code-pre code .hljs-template-tag {
-  color: #98c379;
+  color: var(--code-string);
 }
 
 .md-code-pre code .hljs-number,
 .md-code-pre code .hljs-literal,
 .md-code-pre code .hljs-symbol {
-  color: #d19a66;
+  color: var(--code-number);
 }
 
 .md-code-pre code .hljs-comment,
 .md-code-pre code .hljs-quote {
-  color: #7f848e;
+  color: var(--code-comment);
   font-style: italic;
 }
 
 .md-code-pre code .hljs-function,
 .md-code-pre code .hljs-title,
 .md-code-pre code .hljs-title.function_ {
-  color: #61afef;
+  color: var(--code-function);
 }
 
 .md-code-pre code .hljs-variable,
 .md-code-pre code .hljs-params,
 .md-code-pre code .hljs-property {
-  color: #e06c75;
+  color: var(--code-error);
 }
 
 .md-code-pre code .hljs-meta {
-  color: #abb2bf;
+  color: var(--code-text);
 }
 
 .md-code-pre code .hljs-emphasis {
@@ -2912,7 +3543,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--scrim);
 }
 
 .md-code-head {
@@ -2920,7 +3551,7 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 4px 10px;
-  background: rgba(127, 127, 127, 0.15);
+  background: color-mix(in srgb, var(--text-muted) 15%, transparent);
   border-bottom: 1px solid var(--border);
 }
 
@@ -2975,7 +3606,7 @@ body {
 }
 
 .md-table th {
-  background: rgba(127, 127, 127, 0.15);
+  background: color-mix(in srgb, var(--text-muted) 15%, transparent);
   font-weight: 600;
 }
 
@@ -3051,7 +3682,7 @@ body {
 .chat-project-input {
   flex: 1;
   min-width: 180px;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--scrim);
   border: 1px solid var(--border);
   color: var(--text-primary);
   border-radius: 6px;
@@ -3066,7 +3697,7 @@ body {
 }
 
 .chat-project-error {
-  color: #f87171;
+  color: var(--accent-red);
 }
 
 /* ─── Folder browser popover (project picker) ───────────────────────── */
@@ -3084,7 +3715,7 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 8px 24px var(--shadow);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -3134,7 +3765,7 @@ body {
 }
 
 .chat-browse-entry:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
 }
 
 .chat-browse-foot {
@@ -3167,7 +3798,7 @@ body {
 }
 
 .chat-breadcrumb:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
 }
 
 .chat-breadcrumb-sep {
@@ -3195,7 +3826,7 @@ body {
 }
 
 .chat-browse-drive:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
   border-color: var(--accent);
 }
 
@@ -3290,7 +3921,7 @@ body {
 }
 
 .chat-rail-btn:hover {
-  background: rgba(59, 130, 246, 0.12);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
 }
 
 .chat-sidebar {
@@ -3333,7 +3964,7 @@ body {
 }
 
 .chat-mini-action:hover {
-  background: rgba(59, 130, 246, 0.15);
+  background: color-mix(in srgb, var(--accent-blue) 15%, transparent);
   color: var(--text-primary);
 }
 
@@ -3431,7 +4062,7 @@ body {
   padding: 8px 10px;
   background: transparent;
   border: none;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+  border-bottom: 1px solid color-mix(in srgb, var(--text-muted) 15%, transparent);
   cursor: pointer;
   color: var(--text-primary);
 }
@@ -3442,7 +4073,7 @@ body {
 }
 
 .chat-session-item:hover {
-  background: rgba(59, 130, 246, 0.1);
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
 }
 
 .chat-session-item:hover .chat-session-actions {
@@ -3450,7 +4081,7 @@ body {
 }
 
 .chat-session-item.chat-session-active {
-  background: rgba(59, 130, 246, 0.18);
+  background: color-mix(in srgb, var(--accent-blue) 18%, transparent);
   border-left: 3px solid var(--accent-blue, #3b82f6);
 }
 
@@ -3499,7 +4130,7 @@ body {
 
 .ops-custom-row input {
   flex: 1;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--scrim);
   border: 1px solid var(--border);
   color: var(--text-primary);
   border-radius: 6px;
@@ -3519,7 +4150,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--scrim);
 }
 
 .ops-console-head {
@@ -3561,7 +4192,7 @@ body {
   padding: 14px;
   max-height: 60vh;
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--scrim);
   border: 1px solid var(--border);
   border-radius: 10px;
 }
@@ -3578,8 +4209,8 @@ body {
 
 .chat-user {
   align-self: flex-end;
-  background: rgba(59, 130, 246, 0.18);
-  border-color: rgba(59, 130, 246, 0.4);
+  background: color-mix(in srgb, var(--accent-blue) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent-blue) 40%, transparent);
 }
 
 .chat-assistant {
@@ -3587,7 +4218,7 @@ body {
 }
 
 .chat-error {
-  border-color: rgba(239, 68, 68, 0.5);
+  border-color: color-mix(in srgb, var(--accent-red) 50%, transparent);
 }
 
 .chat-bubble-role {
@@ -3667,8 +4298,8 @@ body {
 }
 
 .chat-chip {
-  background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 45%, transparent);
   color: var(--text-primary);
   border-radius: 999px;
   padding: 5px 12px;
@@ -3682,7 +4313,7 @@ body {
 }
 
 .chat-chip:hover {
-  background: rgba(59, 130, 246, 0.28);
+  background: color-mix(in srgb, var(--accent-blue) 28%, transparent);
 }
 
 /* P8 — the composer: chips row + paste-offer banner + attach button. */
@@ -3702,7 +4333,7 @@ body {
 
 .chat-composer-drag {
   border-color: var(--accent-blue, #3b82f6);
-  background: rgba(59, 130, 246, 0.06);
+  background: color-mix(in srgb, var(--accent-blue) 6%, transparent);
 }
 
 .chat-attach-row {
@@ -3719,7 +4350,7 @@ body {
   padding: 3px 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: rgba(59, 130, 246, 0.08);
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
   color: var(--text-primary);
   max-width: 260px;
   overflow: hidden;
@@ -3735,7 +4366,7 @@ body {
   padding: 6px 8px;
   border: 1px dashed var(--border);
   border-radius: 8px;
-  background: rgba(250, 204, 21, 0.05);
+  background: color-mix(in srgb, var(--accent-yellow) 5%, transparent);
 }
 
 .chat-attach-btn {
@@ -3750,7 +4381,7 @@ body {
 }
 
 .chat-attach-btn:hover:not(:disabled) {
-  background: rgba(59, 130, 246, 0.12);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
 }
 
 .chat-attach-btn:disabled {
@@ -3785,7 +4416,7 @@ body {
 
 .chat-input-row textarea.chat-input-box {
   flex: 1;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--scrim);
   border: 1px solid var(--border);
   color: var(--text-primary);
   border-radius: 6px;
@@ -3857,11 +4488,11 @@ body {
 }
 
 .chat-tool-card.chat-tool-ok {
-  border-left-color: #22c55e;
+  border-left-color: var(--accent-green);
 }
 
 .chat-tool-card.chat-tool-err {
-  border-left-color: #ef4444;
+  border-left-color: var(--accent-red);
 }
 
 .chat-tool-card.chat-tool-running {
@@ -3950,18 +4581,18 @@ body {
 
 .chat-finding-card {
   border: 1px solid var(--border);
-  border-left: 3px solid #a78bfa;
+  border-left: 3px solid var(--accent-purple);
   border-radius: 8px;
   padding: 7px 9px;
   background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
 }
 
 .chat-finding-card.chat-finding-confirmed {
-  border-left-color: #22c55e;
+  border-left-color: var(--accent-green);
 }
 
 .chat-finding-card.chat-finding-plausible {
-  border-left-color: #d29922;
+  border-left-color: var(--accent-yellow);
 }
 
 .chat-finding-head {
@@ -3995,15 +4626,15 @@ body {
 }
 
 .chat-finding-verdict-ok {
-  color: #3fb950;
-  background: #0d2818;
-  border-color: #238636;
+  color: var(--accent-green);
+  background: var(--ok-soft);
+  border-color: var(--accent-green);
 }
 
 .chat-finding-verdict-guess {
-  color: #d29922;
-  background: #3d2c00;
-  border-color: #d29922;
+  color: var(--accent-yellow);
+  background: var(--warn-soft);
+  border-color: var(--accent-yellow);
 }
 
 .chat-finding-outcome {
@@ -4035,7 +4666,7 @@ body {
   font-size: 9.5px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #58a6ff;
+  color: var(--accent-blue);
 }
 
 .chat-finding-ref {
@@ -4054,7 +4685,7 @@ body {
 .chat-finding-noevidence {
   margin-top: 5px;
   font-size: 11px;
-  color: #d29922;
+  color: var(--accent-yellow);
 }
 
 .chat-finding-source {
@@ -4075,13 +4706,13 @@ body {
  * hover tint rather than depending on source order by accident.
  */
 .chat-attach-btn-on {
-  border-color: #22c55e;
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.12);
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
 }
 
 .chat-attach-btn-on:hover:not(:disabled) {
-  background: rgba(34, 197, 94, 0.2);
+  background: color-mix(in srgb, var(--accent-green) 20%, transparent);
 }
 
 /*
@@ -4092,7 +4723,7 @@ body {
 .chat-worktree-card {
   margin-top: 8px;
   border: 1px solid var(--border);
-  border-left: 3px solid #22c55e;
+  border-left: 3px solid var(--accent-green);
   border-radius: 8px;
   padding: 8px 10px;
   background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
@@ -4126,7 +4757,7 @@ body {
 }
 
 .chat-worktree-state.chat-worktree-kept {
-  color: #22c55e;
+  color: var(--accent-green);
 }
 
 .chat-worktree-state.chat-worktree-gone {
@@ -4160,7 +4791,7 @@ body {
 .chat-refused-line {
   margin-top: 8px;
   border: 1px solid var(--border);
-  border-left: 3px solid #f85149;
+  border-left: 3px solid var(--accent-red);
   border-radius: 8px;
   padding: 7px 9px;
   font-size: 11.5px;
@@ -4187,7 +4818,7 @@ body {
 .chat-resume-card {
   margin-top: 8px;
   border: 1px solid var(--border);
-  border-left: 3px solid #a78bfa;
+  border-left: 3px solid var(--accent-purple);
   border-radius: 8px;
   padding: 8px 10px;
   background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
@@ -4221,13 +4852,13 @@ body {
 }
 
 .chat-resume-state.chat-resume-saved {
-  color: #a78bfa;
+  color: var(--accent-purple);
 }
 
 /* A record that could NOT be written is a warning, not a neutral fact: the next
  * resume will replay nothing from this run, and only this chip says so. */
 .chat-resume-state.chat-resume-unsaved {
-  color: #f59e0b;
+  color: var(--accent-yellow);
 }
 
 .chat-resume-meta {
@@ -4263,7 +4894,7 @@ body {
 /* P0.7 — plan checklist card (live, updates in place) */
 .chat-plan-card {
   border: 1px solid var(--border);
-  border-left: 3px solid #a78bfa;
+  border-left: 3px solid var(--accent-purple);
   border-radius: 8px;
   padding: 8px 10px;
   margin: 8px 0 2px;
@@ -4342,13 +4973,13 @@ body {
 }
 
 .chat-plan-step-blocked .chat-plan-step-text {
-  color: #ef4444;
+  color: var(--accent-red);
 }
 
 /* P3b — git diff card (per-file +/− sections) */
 .chat-diff-card {
   border: 1px solid var(--border);
-  border-left: 3px solid #f59e0b;
+  border-left: 3px solid var(--accent-yellow);
   border-radius: 8px;
   padding: 8px 10px;
   margin: 8px 0 2px;
@@ -4420,18 +5051,18 @@ body {
 }
 
 .chat-diff-line.diff-add {
-  color: #4ade80;
-  background: color-mix(in srgb, #22c55e 12%, transparent);
+  color: var(--accent-green);
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
 }
 
 .chat-diff-line.diff-del {
-  color: #f87171;
-  background: color-mix(in srgb, #ef4444 12%, transparent);
+  color: var(--accent-red);
+  background: color-mix(in srgb, var(--accent-red) 12%, transparent);
 }
 
 .chat-diff-line.diff-hunk {
   color: var(--text-secondary);
-  background: color-mix(in srgb, #3b82f6 10%, transparent);
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
 }
 
 /* P2 — diff card per-file accept/reject (✓/✗ toggles + commit action) */
@@ -4456,9 +5087,9 @@ body {
 }
 
 .chat-diff-toggle-on {
-  background: color-mix(in srgb, #22c55e 22%, transparent);
-  border-color: #22c55e;
-  color: #4ade80;
+  background: color-mix(in srgb, var(--accent-green) 22%, transparent);
+  border-color: var(--accent-green);
+  color: var(--accent-green);
 }
 
 .chat-diff-file-rejected {
@@ -4466,9 +5097,9 @@ body {
 }
 
 .chat-diff-file-rejected .chat-diff-toggle {
-  background: color-mix(in srgb, #ef4444 18%, transparent);
-  border-color: #ef4444;
-  color: #f87171;
+  background: color-mix(in srgb, var(--accent-red) 18%, transparent);
+  border-color: var(--accent-red);
+  color: var(--accent-red);
 }
 
 .chat-diff-actions {
@@ -4521,18 +5152,18 @@ body {
 
 .chat-result-card {
   border: 1px solid var(--border);
-  border-left: 3px solid #6e7681;
+  border-left: 3px solid var(--text-muted);
   border-radius: 8px;
   padding: 8px 10px;
   background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
 }
 
 .chat-result-pass {
-  border-left-color: #22c55e;
+  border-left-color: var(--accent-green);
 }
 
 .chat-result-fail {
-  border-left-color: #ef4444;
+  border-left-color: var(--accent-red);
 }
 
 .chat-result-head {
@@ -4582,7 +5213,7 @@ body {
 
 .chat-deploy-card {
   border: 1px solid var(--border);
-  border-left: 3px solid #22d3ee;
+  border-left: 3px solid var(--accent-cyan);
   border-radius: 8px;
   padding: 8px 10px;
   background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
@@ -4634,11 +5265,11 @@ body {
 }
 
 .chat-task-ok {
-  border-left-color: #22c55e;
+  border-left-color: var(--accent-green);
 }
 
 .chat-task-err {
-  border-left-color: #ef4444;
+  border-left-color: var(--accent-red);
 }
 
 .chat-task-head {
@@ -4713,7 +5344,7 @@ body {
 }
 
 .chat-task-log-stderr {
-  color: #f87171;
+  color: var(--accent-red);
 }
 
 .chat-task-log-system {
@@ -4735,7 +5366,7 @@ body {
 }
 
 .chat-task-log-sep-stderr {
-  color: #f87171;
+  color: var(--accent-red);
 }
 
 .chat-task-log-sep-system {
@@ -4745,7 +5376,7 @@ body {
 /* P6a — /learn skill draft preview card (accept / edit / reject) */
 .chat-draft-card {
   border: 1px solid var(--border);
-  border-left: 3px solid #bc8cff;
+  border-left: 3px solid var(--accent-purple);
   border-radius: 8px;
   padding: 10px 12px;
   margin: 8px 0 2px;
@@ -4753,11 +5384,11 @@ body {
 }
 
 .chat-draft-card.chat-draft-saved {
-  border-left-color: #4ade80;
+  border-left-color: var(--accent-green);
 }
 
 .chat-draft-card.chat-draft-rejected {
-  border-left-color: #6e7681;
+  border-left-color: var(--text-muted);
   opacity: 0.75;
 }
 
@@ -5450,8 +6081,8 @@ body {
 
 .hub-remove-btn {
   background: transparent;
-  border: 1px solid rgba(224, 49, 49, 0.5);
-  color: #e03131;
+  border: 1px solid color-mix(in srgb, var(--accent-red) 50%, transparent);
+  color: var(--accent-red);
   border-radius: 6px;
   padding: 4px 10px;
   font-size: 12px;
@@ -5459,7 +6090,7 @@ body {
 }
 
 .hub-remove-btn:hover {
-  background: rgba(224, 49, 49, 0.1);
+  background: color-mix(in srgb, var(--accent-red) 10%, transparent);
 }
 
 /* Platform setup docs link + hint */
@@ -5469,28 +6100,28 @@ body {
   padding: 2px 6px;
   border-radius: 4px;
   color: var(--accent-blue, #58a6ff);
-  border: 1px solid rgba(88, 166, 255, 0.3);
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 30%, transparent);
 }
 
 .platform-docs-link:hover {
-  background: rgba(88, 166, 255, 0.1);
+  background: color-mix(in srgb, var(--accent-blue) 10%, transparent);
 }
 
 .platform-setup-hint {
   font-size: 12px;
   color: var(--text-secondary, #8b949e);
   padding: 4px 8px;
-  background: rgba(88, 166, 255, 0.06);
+  background: color-mix(in srgb, var(--accent-blue) 6%, transparent);
   border-radius: 4px;
-  border-left: 2px solid rgba(88, 166, 255, 0.3);
+  border-left: 2px solid color-mix(in srgb, var(--accent-blue) 30%, transparent);
   line-height: 1.4;
 }
 
 /* Getting Started wizard */
 .wizard-start-btn {
-  background: rgba(56, 189, 148, 0.15);
-  border: 1px solid rgba(56, 189, 148, 0.4);
-  color: #38bd94;
+  background: color-mix(in srgb, var(--accent-cyan) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-cyan) 40%, transparent);
+  color: var(--accent-cyan);
   border-radius: 6px;
   padding: 2px 8px;
   font-size: 11px;
@@ -5499,13 +6130,13 @@ body {
 }
 
 .wizard-start-btn:hover {
-  background: rgba(56, 189, 148, 0.25);
+  background: color-mix(in srgb, var(--accent-cyan) 25%, transparent);
 }
 
 .wizard-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5520,7 +6151,7 @@ body {
   max-width: 90vw;
   max-height: 80vh;
   overflow-y: auto;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 16px 48px var(--shadow);
 }
 
 .wizard-header {
@@ -5593,9 +6224,11 @@ body {
 }
 
 .wizard-step-dot.active {
-  background: rgba(88, 166, 255, 0.2);
+  /* "Which step am I on" is carried by this dot alone, so its boundary is the
+     solid accent rather than a 50% wash (2.0–3.3:1 as measured). */
+  background: color-mix(in srgb, var(--accent-blue) 20%, transparent);
   color: var(--accent-blue, #58a6ff);
-  border-color: rgba(88, 166, 255, 0.5);
+  border-color: var(--accent-blue);
 }
 
 .wizard-verify-status {
@@ -5608,15 +6241,15 @@ body {
 }
 
 .wizard-verify-status.ok {
-  background: rgba(56, 189, 148, 0.1);
-  color: #38bd94;
-  border: 1px solid rgba(56, 189, 148, 0.3);
+  background: color-mix(in srgb, var(--accent-cyan) 10%, transparent);
+  color: var(--accent-cyan);
+  border: 1px solid color-mix(in srgb, var(--accent-cyan) 30%, transparent);
 }
 
 .wizard-verify-status.err {
-  background: rgba(224, 49, 49, 0.1);
-  color: #e03131;
-  border: 1px solid rgba(224, 49, 49, 0.3);
+  background: color-mix(in srgb, var(--accent-red) 10%, transparent);
+  color: var(--accent-red);
+  border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
 }
 
 .wizard-test-section {
@@ -5702,8 +6335,10 @@ body {
 }
 
 .platforms-filter-btn.active {
-  background: rgba(88, 166, 255, 0.15);
-  border-color: rgba(88, 166, 255, 0.4);
+  /* The selected filter is identified by the boundary, so the boundary is solid
+     — a 40% tint measured 1.8–2.4:1 and was not a state anyone could see. */
+  background: color-mix(in srgb, var(--accent-blue) 15%, transparent);
+  border-color: var(--accent-blue);
   color: var(--accent-blue, #58a6ff);
 }
 
@@ -5726,8 +6361,8 @@ body {
 }
 
 .platform-card.configured {
-  border-color: rgba(56, 189, 148, 0.3);
-  background: rgba(56, 189, 148, 0.04);
+  border-color: color-mix(in srgb, var(--accent-cyan) 30%, transparent);
+  background: color-mix(in srgb, var(--accent-cyan) 4%, transparent);
 }
 
 .platform-card-head {
@@ -5777,8 +6412,8 @@ body {
 }
 
 .platform-var-chip.set {
-  background: rgba(56, 189, 148, 0.12);
-  color: #38bd94;
+  background: color-mix(in srgb, var(--accent-cyan) 12%, transparent);
+  color: var(--accent-cyan);
 }
 
 .platform-card-actions {
@@ -5789,7 +6424,7 @@ body {
 
 .platform-card-badge {
   font-size: 12px;
-  color: #38bd94;
+  color: var(--accent-cyan);
   font-weight: 500;
 }
 
@@ -5799,9 +6434,9 @@ body {
   color: var(--text-secondary, #8b949e);
   line-height: 1.4;
   padding: 6px 8px;
-  background: rgba(88, 166, 255, 0.06);
+  background: color-mix(in srgb, var(--accent-blue) 6%, transparent);
   border-radius: 4px;
-  border-left: 2px solid rgba(88, 166, 255, 0.3);
+  border-left: 2px solid color-mix(in srgb, var(--accent-blue) 30%, transparent);
 }
 
 .platforms-cli-hint {
@@ -5822,9 +6457,9 @@ body {
 
 /* P6e — provenance chip (🧠 bundled ships with the product) */
 .hub-chip-bundled {
-  background: rgba(188, 140, 255, 0.18) !important;
+  background: color-mix(in srgb, var(--accent-purple) 18%, transparent) !important;
   color: var(--accent-purple, #bc8cff) !important;
-  border: 1px solid rgba(188, 140, 255, 0.4);
+  border: 1px solid color-mix(in srgb, var(--accent-purple) 40%, transparent);
 }
 
 /* P6d — marketplace import surface (search + install/uninstall) */
@@ -5857,9 +6492,9 @@ body {
 }
 
 .hub-mini-btn:hover {
-  border-color: rgba(224, 49, 49, 0.5);
-  color: #e03131;
-  background: rgba(224, 49, 49, 0.08);
+  border-color: color-mix(in srgb, var(--accent-red) 50%, transparent);
+  color: var(--accent-red);
+  background: color-mix(in srgb, var(--accent-red) 8%, transparent);
 }
 
 .hub-mini-btn:disabled {
@@ -5869,12 +6504,15 @@ body {
 
 /* P0.1 — ask_user clarifying-question card */
 .chat-chip-selected {
-  background: rgba(59, 130, 246, 0.45) !important;
-  border-color: rgba(59, 130, 246, 0.9) !important;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5);
+  background: color-mix(in srgb, var(--accent-blue) 45%, transparent) !important;
+  border-color: color-mix(in srgb, var(--accent-blue) 90%, transparent) !important;
+  /* 90%, not 50%: the outer ring used to be the half-opacity layer of the same
+     selection cue the border draws, so it was the one part of it that fell below
+     3:1 — decoration that looked like a state. */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-blue) 90%, transparent);
 }
 .chat-question-card {
-  border-color: rgba(234, 179, 8, 0.5);
+  border-color: color-mix(in srgb, var(--accent-yellow) 50%, transparent);
 }
 .chat-question-card .chat-chip {
   max-width: none;
@@ -5892,7 +6530,7 @@ body {
 }
 .timeline-bar {
   height: 6px;
-  background: #21262d;
+  background: var(--bg-secondary);
   border-radius: 3px;
   overflow: hidden;
   width: 100%;
@@ -5906,13 +6544,13 @@ body {
   transition: width 0.3s ease;
 }
 .timeline-bar-fill.probe {
-  background: #58a6ff;
+  background: var(--accent-blue);
 }
 .timeline-bar-fill.verify {
-  background: #3fb950;
+  background: var(--accent-green);
 }
 .timeline-bar-fill.use {
-  background: #d29922;
+  background: var(--accent-yellow);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -5998,7 +6636,7 @@ body {
 
 .bedrock-auth-option.selected {
   border-color: var(--accent-blue, #58a6ff);
-  background: rgba(88, 166, 255, 0.08);
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
 }
 
 .bedrock-auth-option strong {
@@ -6089,7 +6727,7 @@ body {
 
 .bedrock-family-card.selected {
   border-color: var(--accent-blue, #58a6ff);
-  background: rgba(88, 166, 255, 0.08);
+  background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
 }
 
 .bedrock-family-card input[type="checkbox"] {
@@ -6142,7 +6780,7 @@ body {
   width: 28px;
   height: 28px;
   background: var(--accent-blue, #58a6ff);
-  color: #fff;
+  color: var(--text-on-accent);
   border-radius: 50%;
   font-weight: 700;
   font-size: 14px;
@@ -6189,11 +6827,11 @@ body {
 }
 
 .bedrock-probe-card.bedrock-probe-accessible {
-  border-color: rgba(56, 189, 148, 0.3);
+  border-color: color-mix(in srgb, var(--accent-cyan) 30%, transparent);
 }
 
 .bedrock-probe-card.bedrock-probe-permission-denied {
-  border-color: rgba(210, 153, 34, 0.3);
+  border-color: color-mix(in srgb, var(--accent-yellow) 30%, transparent);
 }
 
 .bedrock-probe-id {
@@ -6215,8 +6853,8 @@ body {
 .bedrock-probe-action {
   margin-top: 16px;
   padding: 12px;
-  background: rgba(210, 153, 34, 0.08);
-  border: 1px solid rgba(210, 153, 34, 0.3);
+  background: color-mix(in srgb, var(--accent-yellow) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-yellow) 30%, transparent);
   border-radius: 6px;
   display: flex;
   align-items: center;
@@ -6278,15 +6916,15 @@ body {
 }
 
 .contact-row:hover {
-  background: rgba(88, 166, 255, 0.04);
+  background: color-mix(in srgb, var(--accent-blue) 4%, transparent);
 }
 
 .contact-row.status-pending {
-  background: rgba(210, 153, 34, 0.04);
+  background: color-mix(in srgb, var(--accent-yellow) 4%, transparent);
 }
 
 .contact-row.status-rejected {
-  background: rgba(218, 54, 51, 0.04);
+  background: color-mix(in srgb, var(--accent-red) 4%, transparent);
 }
 
 .contact-name {
@@ -6325,30 +6963,30 @@ body {
 }
 
 .contact-status-badge.approved {
-  background: rgba(56, 189, 148, 0.15);
-  color: #38bd94;
+  background: color-mix(in srgb, var(--accent-cyan) 15%, transparent);
+  color: var(--accent-cyan);
 }
 
 .contact-status-badge.pending {
-  background: rgba(210, 153, 34, 0.15);
-  color: #d29922;
+  background: color-mix(in srgb, var(--accent-yellow) 15%, transparent);
+  color: var(--accent-yellow);
 }
 
 .contact-status-badge.rejected {
-  background: rgba(218, 54, 51, 0.15);
-  color: #da3633;
+  background: color-mix(in srgb, var(--accent-red) 15%, transparent);
+  color: var(--accent-red);
 }
 
 .contact-approve-btn {
-  color: #38bd94;
+  color: var(--accent-cyan);
 }
 
 .contact-reject-btn {
-  color: #d29922;
+  color: var(--accent-yellow);
 }
 
 .contact-delete-btn {
-  color: #da3633;
+  color: var(--accent-red);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -6385,11 +7023,11 @@ body {
 }
 
 .platform-config-row:hover {
-  background: rgba(88, 166, 255, 0.04);
+  background: color-mix(in srgb, var(--accent-blue) 4%, transparent);
 }
 
 .platform-config-row.configured {
-  background: rgba(56, 189, 148, 0.03);
+  background: color-mix(in srgb, var(--accent-cyan) 3%, transparent);
 }
 
 .platform-config-name {
@@ -6478,18 +7116,18 @@ body {
 }
 
 .onboarding-stat.pending {
-  background: rgba(210, 153, 34, 0.15);
-  color: #d29922;
+  background: color-mix(in srgb, var(--accent-yellow) 15%, transparent);
+  color: var(--accent-yellow);
 }
 
 .onboarding-stat.approved {
-  background: rgba(56, 189, 148, 0.15);
-  color: #38bd94;
+  background: color-mix(in srgb, var(--accent-cyan) 15%, transparent);
+  color: var(--accent-cyan);
 }
 
 .onboarding-stat.rejected {
-  background: rgba(218, 54, 51, 0.15);
-  color: #da3633;
+  background: color-mix(in srgb, var(--accent-red) 15%, transparent);
+  color: var(--accent-red);
 }
 
 .onboarding-steps {
@@ -6513,7 +7151,7 @@ body {
   width: 24px;
   height: 24px;
   background: var(--accent-blue, #58a6ff);
-  color: #fff;
+  color: var(--text-on-accent);
   border-radius: 50%;
   font-weight: 700;
   font-size: 12px;
@@ -6526,4 +7164,189 @@ body {
   border-radius: 4px;
   font-size: 12px;
   color: var(--accent-blue, #58a6ff);
+}
+
+
+/* ═══ Appearance switcher ═══════════════════════════════════════════════════
+   Palette, mode, text size and the accessibility switch.
+
+   Sizing goes through --font-scale and --target-min, so the control that turns
+   on bigger text is itself affected by bigger text — otherwise the one person
+   who needs it most is the one who cannot comfortably use it. */
+.theme-switcher {
+  position: relative;
+}
+
+/* .theme-trigger's own shape is defined with .topbar-action in the shell
+   section: it lives on the chrome, like Refresh, and is drawn the same way. */
+
+.theme-panel {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: var(--z-palette);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 268px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: var(--space-4);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-3);
+  /* The panel is layered over a surface the user is still reading, so it needs
+     its own text colour rather than inheriting the chrome's. */
+  text-align: left;
+}
+
+/* The trigger lives in the top bar now, so the panel drops downward from it and
+   the sidebar case (open upward) is gone rather than left as dead CSS. */
+
+.theme-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+}
+
+.theme-group-label {
+  padding: 0 0 var(--space-1);
+  color: var(--text-muted);
+  font-size: calc(10px * var(--font-scale));
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--target-min);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: calc(12px * var(--font-scale));
+  cursor: pointer;
+}
+
+.theme-option:hover {
+  background: var(--bg-hover);
+}
+
+/* The input is hidden, not removed: it keeps native radio semantics, arrow-key
+   navigation and the checked state, while the visible proxy shows focus. */
+.theme-option input,
+.theme-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.theme-swatch {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+}
+
+.theme-option input:checked ~ .theme-option-label {
+  font-weight: 700;
+}
+
+.theme-option input:checked ~ .theme-swatch {
+  box-shadow: 0 0 0 2px var(--border-hover);
+}
+
+/* Focus must be visible on the row, not on the 1px input it actually sits on. */
+.theme-option input:focus-visible ~ .theme-option-label {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: var(--radius-xs);
+}
+
+.theme-switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--target-min);
+  border-radius: var(--radius-sm);
+  font-size: calc(12px * var(--font-scale));
+  cursor: pointer;
+}
+
+.theme-switch input:focus-visible ~ .theme-switch-track {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.theme-switch-track {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-full);
+  transition: var(--transition);
+}
+
+.theme-switch-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  background: var(--text-muted);
+  border-radius: var(--radius-full);
+  transition: var(--transition);
+}
+
+.theme-switch input:checked ~ .theme-switch-track {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+
+.theme-switch input:checked ~ .theme-switch-track::after {
+  left: 17px;
+  background: var(--text-on-accent);
+}
+
+.theme-hint {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: calc(11px * var(--font-scale));
+  line-height: 1.45;
+}
+
+.theme-reset {
+  align-self: flex-start;
+  min-height: var(--target-min);
+  padding: 0 var(--space-3);
+  background: transparent;
+  color: var(--accent-blue);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: calc(11px * var(--font-scale));
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.theme-reset:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
+}
+
+.theme-trigger:focus-visible,
+.theme-reset:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }

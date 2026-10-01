@@ -24,6 +24,7 @@ import type { HubChannelPolicy, HubContact, HubData, HubToolset } from '../types
 import WhatsAppPanel from './WhatsAppPanel';
 import { PlatformConfigSection } from './PlatformConfigSection';
 import { maskSenderId } from '../mask';
+import PageHeader from './PageHeader';
 
 type HubTab = 'tools' | 'channels' | 'artifacts' | 'skills' | 'conversations' | 'subagents';
 
@@ -63,6 +64,119 @@ interface PendingToggle {
   kind: 'toolset' | 'skill';
   name: string;
   enabled: boolean;
+}
+
+/* ── Standalone conversation export ─────────────────────────────────────────
+ *
+ * `exportConversationPDF` opens a NEW window and writes a document into it.
+ * That document has no stylesheet, so a colour written as `var(--bg-card)`
+ * resolves to NOTHING there and the bubbles paint transparent. The export
+ * therefore builds its OWN palette at export time: the live theme's tokens,
+ * resolved to concrete colours, with CSS system colours as the fallback when a
+ * token is absent (a test runtime, a stripped build). No colour literals live
+ * here — the rule the rest of the components follow.
+ */
+
+/** The concrete colours the exported document paints with. */
+export interface ConversationExportPalette {
+  canvas: string;
+  text: string;
+  muted: string;
+  userBubble: string;
+  onUserBubble: string;
+  agentBubble: string;
+}
+
+/**
+ * Resolve the current theme into the export palette.
+ *
+ * Fallback values are CSS SYSTEM COLOURS, not hex: the browser guarantees they
+ * exist, they follow the user's own OS theme, and they keep this module free of
+ * the literals `token-coverage.test.ts` forbids.
+ */
+export function readConversationExportPalette(
+  root?: HTMLElement,
+): ConversationExportPalette {
+  const el = root ?? (typeof document !== 'undefined' ? document.documentElement : null);
+  const read = (token: string, fallback: string): string => {
+    if (!el || typeof getComputedStyle !== 'function') return fallback;
+    return getComputedStyle(el).getPropertyValue(token).trim() || fallback;
+  };
+  return {
+    canvas: read('--bg-primary', 'Canvas'),
+    text: read('--text-primary', 'CanvasText'),
+    muted: read('--text-muted', 'GrayText'),
+    userBubble: read('--accent-blue', 'Highlight'),
+    onUserBubble: read('--text-on-accent', 'HighlightText'),
+    agentBubble: read('--bg-card', 'ButtonFace'),
+  };
+}
+
+/** Escape text interpolated into the exported document (content, names, …). */
+export function escapeExportHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Build the printable, self-contained HTML for one conversation.
+ *
+ * Kept pure and exported so the "the export carries no dashboard tokens" rule
+ * is asserted directly, rather than only observed by eye in a browser.
+ */
+export function buildConversationExportHtml(
+  conv: {
+    displayName: string;
+    platform: string;
+    messageCount: number;
+    messages: Array<{ role: string; content: string; ts: number }>;
+  },
+  palette: ConversationExportPalette,
+  exportedAt: Date = new Date(),
+): string {
+  const name = escapeExportHtml(conv.displayName);
+  const platform = escapeExportHtml(conv.platform);
+  const body = conv.messages
+    .map((m) => {
+      const isUser = m.role === 'user';
+      const role = isUser ? 'user' : 'assistant';
+      const label = escapeExportHtml(isUser ? conv.displayName : 'Agent');
+      return `<div class="msg msg-${role}">
+  <div class="bubble bubble-${role}">${escapeExportHtml(m.content)}</div>
+  <div class="timestamp">${label} · ${escapeExportHtml(new Date(m.ts).toLocaleString())}</div>
+</div>`;
+    })
+    .join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Conversation with ${name}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; background: ${palette.canvas}; color: ${palette.text}; line-height: 1.6; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .meta { color: ${palette.muted}; font-size: 13px; margin-bottom: 20px; }
+  .msg { margin-bottom: 16px; }
+  .msg-user { text-align: right; }
+  .msg-assistant { text-align: left; }
+  .bubble { display: inline-block; max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 14px; white-space: pre-wrap; word-break: break-word; text-align: left; }
+  .bubble-user { background: ${palette.userBubble}; color: ${palette.onUserBubble}; border-bottom-right-radius: 4px; }
+  .bubble-assistant { background: ${palette.agentBubble}; color: ${palette.text}; border-bottom-left-radius: 4px; }
+  .timestamp { font-size: 11px; color: ${palette.muted}; margin-top: 2px; }
+  @media print { body { margin: 0; } }
+</style>
+</head>
+<body>
+<h1>Conversation with ${name}</h1>
+<div class="meta">Platform: ${platform} · ${conv.messageCount} messages · Exported: ${escapeExportHtml(exportedAt.toLocaleString())}</div>
+${body}
+</body>
+</html>`;
 }
 
 export default function AgentHub() {
@@ -291,38 +405,12 @@ export default function AgentHub() {
     e.stopPropagation();
     const displayName = c.contactName || c.channelId;
     const messages = c.messages ?? [];
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Conversation with ${displayName}</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; line-height: 1.6; }
-  h1 { font-size: 20px; margin-bottom: 4px; }
-  .meta { color: #666; font-size: 13px; margin-bottom: 20px; }
-  .msg { margin-bottom: 16px; }
-  .msg-user { text-align: right; }
-  .msg-assistant { text-align: left; }
-  .bubble { display: inline-block; max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 14px; white-space: pre-wrap; word-break: break-word; text-align: left; }
-  .bubble-user { background: #007bff; color: #fff; border-bottom-right-radius: 4px; }
-  .bubble-assistant { background: #f0f0f0; color: #1a1a1a; border-bottom-left-radius: 4px; }
-  .timestamp { font-size: 11px; color: #999; margin-top: 2px; }
-  @media print { body { margin: 0; } }
-</style>
-</head>
-<body>
-<h1>Conversation with ${displayName}</h1>
-<div class="meta">Platform: ${c.platform} · ${c.messageCount} messages · Exported: ${new Date().toLocaleString()}</div>
-${messages.map((m) => {
-  const role = m.role === 'user' ? 'user' : 'assistant';
-  const label = m.role === 'user' ? displayName : 'Agent';
-  return `<div class="msg msg-${role}">
-  <div class="bubble bubble-${role}">${m.content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
-  <div class="timestamp">${label} · ${new Date(m.ts).toLocaleString()}</div>
-</div>`;
-}).join('\n')}
-</body>
-</html>`;
+    // The document opens in a blank window with no stylesheet, so the palette is
+    // resolved to concrete colours here rather than referenced as tokens.
+    const html = buildConversationExportHtml(
+      { displayName, platform: c.platform, messageCount: c.messageCount, messages },
+      readConversationExportPalette(),
+    );
     const w = window.open('', '_blank');
     if (w) {
       w.document.write(html);
@@ -821,7 +909,7 @@ ${messages.map((m) => {
   if (loading) {
     return (
       <div className="admin-header">
-        <h2 className="section-title">🧰 Agent Hub</h2>
+        <PageHeader icon="🧰" title="Agent Hub" />
         <div className="loading-state"><div className="loading-spinner" /><p>Loading hub…</p></div>
       </div>
     );
@@ -832,14 +920,19 @@ ${messages.map((m) => {
   return (
     <>
       <div className="admin-header">
-        <h2 className="section-title">
-          🧰 Agent Hub
-          {userName ? (
-            <span className={`admin-role-badge admin-role-${role || 'viewer'}`}>
-              {userName} · {role || 'viewer'}
-            </span>
-          ) : null}
-        </h2>
+        <PageHeader
+          icon="🧰"
+          title={
+            <>
+              Agent Hub
+              {userName ? (
+                <span className={`admin-role-badge admin-role-${role || 'viewer'}`}>
+                  {' '}{userName} · {role || 'viewer'}
+                </span>
+              ) : null}
+            </>
+          }
+        />
         <div className="admin-header-actions">
           <button className="admin-refresh-btn" onClick={() => void refresh()} disabled={refreshing}>
             {refreshing ? '⏳ Refreshing…' : '🔄 Refresh'}
@@ -861,11 +954,11 @@ ${messages.map((m) => {
       {/* ── Auth banner (only when a toggle was attempted) ───────────────── */}
       {needsAuth ? (
         <div className="admin-header">
-          <h3 className="section-subtitle">
+          <h2 className="section-subtitle">
             {!authStatus?.configured
               ? `🔐 Set up admin access to ${pendingToggle.enabled ? 'enable' : 'disable'} '${pendingToggle.name}'`
               : `🔐 Log in to ${pendingToggle.enabled ? 'enable' : 'disable'} '${pendingToggle.name}'`}
-          </h3>
+          </h2>
           <form className="admin-gate-form" onSubmit={authStatus?.configured ? handleLogin : handleSetup}>
             <label>
               <span>Username</span>
@@ -1016,7 +1109,7 @@ ${messages.map((m) => {
             </div>
           </div>
 
-          <h3 className="section-subtitle">📮 Delivery ledger (guaranteed delivery)</h3>
+          <h2 className="section-subtitle">📮 Delivery ledger (guaranteed delivery)</h2>
           {data.channels.delivery.recent.length > 0 ? (
             <div className="admin-table-wrapper">
               <table className="admin-table">
@@ -1056,7 +1149,7 @@ ${messages.map((m) => {
             <div className="empty-state">Delivery ledger is empty — every gateway send has gone through.</div>
           )}
 
-          <h3 className="section-subtitle">📥 Inbox (received messages)</h3>
+          <h2 className="section-subtitle">📥 Inbox (received messages)</h2>
           {data.channels.inbox.recent.length > 0 ? (
             <div className="admin-table-wrapper">
               <table className="admin-table">
@@ -1104,10 +1197,10 @@ ${messages.map((m) => {
             {data.channels.inbox.attachmentFailed ?? 0} attachment(s) could not be read.
           </p>
 
-          <h3 className="section-subtitle">🔌 Platform transports</h3>
+          <h2 className="section-subtitle">🔌 Platform transports</h2>
           <PlatformConfigSection canWrite={canWrite} sessionExpired={sessionExpired} mode="table" />
 
-          <h3 className="section-subtitle">🔗 Channel aliases (buff gateway status)</h3>
+          <h2 className="section-subtitle">🔗 Channel aliases (buff gateway status)</h2>
           {data.channels.aliases.length > 0 ? (
             <div className="hub-alias-list">
               {data.channels.aliases.map((a) => (
@@ -1138,9 +1231,9 @@ ${messages.map((m) => {
             style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}
             onClick={() => setPermissionsExpanded(!permissionsExpanded)}
           >
-            <h3 className="section-subtitle" style={{ margin: 0 }}>
+            <h2 className="section-subtitle" style={{ margin: 0 }}>
               {permissionsExpanded ? '▼' : '▶'} 🔐 Permissions — who can TRIGGER the agent
-            </h3>
+            </h2>
           </div>
           <p className="admin-hint" style={{ marginBottom: permissionsExpanded ? 10 : 0 }}>
             This list controls <strong>who may trigger the agent</strong> when they message you on each
@@ -1301,7 +1394,7 @@ ${messages.map((m) => {
           </div>
 
           </>) : null}
-          <h3 className="section-subtitle" style={{ marginTop: 22 }}>📇 Telegram User Onboarding</h3>
+          <h2 className="section-subtitle" style={{ marginTop: 22 }}>📇 Telegram User Onboarding</h2>
           <div className="onboarding-summary">
             <p className="admin-hint" style={{ marginBottom: 12 }}>
               Users who message your bot are auto-registered here. Approve them to enable outbound messaging.
@@ -1337,7 +1430,7 @@ ${messages.map((m) => {
             </a>
           </div>
 
-          <h3 className="section-subtitle" style={{ marginTop: 22 }}>📊 Status recipients</h3>
+          <h2 className="section-subtitle" style={{ marginTop: 22 }}>📊 Status recipients</h2>
           <p className="admin-hint">
             Contacts/groups that ALWAYS receive the pipeline completion summary, whoever triggered it.
             Use a contact name, number, or <code>platform:channelId</code> — e.g.{' '}
@@ -1386,7 +1479,7 @@ ${messages.map((m) => {
             <div className={`admin-row-msg${policyMsg.kind === 'err' ? ' admin-row-msg-err' : ''}`}>{policyMsg.text}</div>
           ) : null}
 
-          <h3 className="section-subtitle">📤 Test a channel (buff gateway send)</h3>
+          <h2 className="section-subtitle">📤 Test a channel (buff gateway send)</h2>
           <form className="hub-send-form" onSubmit={(e) => void handleSendMessage(e)}>
             <label className="hub-send-target">
               <span className="admin-hint">Target — an alias or platform:channelId</span>
@@ -1422,7 +1515,7 @@ ${messages.map((m) => {
             platform's env token set (e.g. <code>BUFF_SMTP_HOST</code>). Requires admin or operator.
           </p>
 
-          <h3 className="section-subtitle">🟢 WhatsApp bridge (buff whatsapp pair)</h3>
+          <h2 className="section-subtitle">🟢 WhatsApp bridge (buff whatsapp pair)</h2>
           <WhatsAppPanel authed={authed} canWrite={canWrite} sessionExpired={sessionExpired} reveal={revealIds} />
         </div>
       ) : null}
@@ -1493,7 +1586,7 @@ ${messages.map((m) => {
                         const pct = Math.round((c.messageCount / maxCount) * 100);
                         return (
                           <div key={i} style={{ display: 'flex', alignItems: 'center', marginBottom: 6, fontSize: 13 }}>
-                            <span style={{ width: 24, textAlign: 'center', fontWeight: 600, color: i < 3 ? '#f59e0b' : 'var(--muted)' }}>
+                            <span style={{ width: 24, textAlign: 'center', fontWeight: 600, color: i < 3 ? 'var(--accent-yellow)' : 'var(--muted)' }}>
                               {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`}
                             </span>
                             <span style={{ flex: 1, marginLeft: 8 }}>
@@ -1501,7 +1594,7 @@ ${messages.map((m) => {
                             </span>
                             <span style={{ width: 60, textAlign: 'right', fontWeight: 600 }}>{c.messageCount}</span>
                             <div style={{ width: 100, height: 8, background: 'var(--border)', borderRadius: 4, marginLeft: 8 }}>
-                              <div style={{ width: `${pct}%`, height: '100%', background: '#3b82f6', borderRadius: 4 }} />
+                              <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent-blue)', borderRadius: 4 }} />
                             </div>
                           </div>
                         );
@@ -1522,7 +1615,7 @@ ${messages.map((m) => {
                         return (
                           <div key={hour} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                             <div
-                              style={{ width: '100%', height: h, background: hour >= 9 && hour <= 21 ? '#3b82f6' : '#6b7280', borderRadius: 2 }}
+                              style={{ width: '100%', height: h, background: hour >= 9 && hour <= 21 ? 'var(--accent-blue)' : 'var(--text-muted)', borderRadius: 2 }}
                               title={`${hour}:00 — ${count} messages`}
                             />
                           </div>
@@ -1566,7 +1659,7 @@ ${messages.map((m) => {
                         return (
                           <div key={date} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                             <div
-                              style={{ width: '100%', height: h, background: '#10b981', borderRadius: 2 }}
+                              style={{ width: '100%', height: h, background: 'var(--accent-green)', borderRadius: 2 }}
                               title={`${date}: ${count} messages`}
                             />
                           </div>
@@ -1582,7 +1675,7 @@ ${messages.map((m) => {
               ) : null}
             </>
           )}
-          <h3 className="section-subtitle">💬 Per-contact chat history</h3>
+          <h2 className="section-subtitle">💬 Per-contact chat history</h2>
           <p className="admin-hint">Conversation history is stored per-contact and survives gateway restarts. Messages older than 7 days are auto-pruned. Click a conversation to expand the full chat thread.</p>
           {convList.length > 0 || convLoading ? (
             <>
@@ -1595,7 +1688,7 @@ ${messages.map((m) => {
                       key={tag}
                       type="button"
                       onClick={() => setTagFilter(tagFilter === tag ? '' : tag)}
-                      style={{ padding: '2px 10px', borderRadius: 12, fontSize: 11, cursor: 'pointer', border: `1px solid ${tagFilter === tag ? '#3b82f6' : 'var(--border)'}`, background: tagFilter === tag ? '#3b82f620' : 'transparent', color: tagFilter === tag ? '#3b82f6' : 'var(--muted)' }}
+                      style={{ padding: '2px 10px', borderRadius: 12, fontSize: 11, cursor: 'pointer', border: `1px solid ${tagFilter === tag ? 'var(--accent-blue)' : 'var(--border)'}`, background: tagFilter === tag ? 'color-mix(in srgb, var(--accent-blue) 13%, transparent)' : 'transparent', color: tagFilter === tag ? 'var(--accent-blue)' : 'var(--muted)' }}
                     >
                       🏷️ {tag}
                     </button>
@@ -1624,7 +1717,7 @@ ${messages.map((m) => {
                     className="admin-refresh-btn"
                     disabled={exporting}
                     onClick={() => void handleBulkExport()}
-                    style={{ fontSize: 12, padding: '4px 10px', background: '#3b82f6', color: '#fff', border: 'none' }}
+                    style={{ fontSize: 12, padding: '4px 10px', background: 'var(--accent-blue)', color: 'var(--text-on-accent)', border: 'none' }}
                   >
                     {exporting ? '⏳ Exporting…' : `📦 Export ${selectedConvs.size} as ZIP`}
                   </button>
@@ -1659,7 +1752,7 @@ ${messages.map((m) => {
                       <div
                         className="hub-card"
                         key={c.key}
-                        style={{ cursor: 'pointer', borderLeft: `3px solid ${c.platform === 'whatsapp' ? '#25d366' : c.platform === 'telegram' ? '#0088cc' : '#6c757d'}`, opacity: selectedConvs.size > 0 && !isSelected ? 0.5 : 1, transition: 'opacity 0.2s' }}
+                        style={{ cursor: 'pointer', borderLeft: `3px solid ${c.platform === 'whatsapp' ? '#25d366' : c.platform === 'telegram' ? '#0088cc' : 'var(--text-muted)'}`, opacity: selectedConvs.size > 0 && !isSelected ? 0.5 : 1, transition: 'opacity 0.2s' }}
                         onClick={() => setExpandedConv(isExpanded ? null : c.key)}
                       >
                         <div className="hub-card-top">
@@ -1675,7 +1768,7 @@ ${messages.map((m) => {
                               <span className="hub-card-name">
                               {c.platform === 'whatsapp' ? '📱' : c.platform === 'telegram' ? '✈️' : '💬'} {displayName}
                             </span>
-                            <span className="hub-card-id">{phone && <span style={{ color: 'var(--text-secondary, #8b949e)', marginRight: 6 }}>{phone}</span>}{c.platform} · {ageStr}</span>
+                            <span className="hub-card-id">{phone && <span style={{ color: 'var(--text-secondary, var(--text-secondary))', marginRight: 6 }}>{phone}</span>}{c.platform} · {ageStr}</span>
                           </div>
                           </div>
                           <div className="hub-card-actions" style={{ gap: 6 }}>
@@ -1706,26 +1799,26 @@ ${messages.map((m) => {
                               disabled={clearingConv === c.key}
                               onClick={handleClear}
                               title="Clear conversation history"
-                              style={{ color: '#ef4444' }}
+                              style={{ color: 'var(--accent-red)' }}
                             >
                               🗑️
                             </button>
                             <span style={{ fontSize: 18, transition: 'transform 0.2s', transform: isExpanded ? 'rotate(180deg)' : 'none' }}>▼</span>
                           </div>
                         </div>
-                        <p className="hub-card-desc" style={{ fontStyle: 'italic', color: 'var(--text-muted, #6e7681)' }}>
-                          <span style={{ color: 'var(--text-primary, #e6edf3)', fontWeight: 500 }}>Last message:</span>{' '}
+                        <p className="hub-card-desc" style={{ fontStyle: 'italic', color: 'var(--text-muted, var(--text-muted))' }}>
+                          <span style={{ color: 'var(--text-primary, var(--text-primary))', fontWeight: 500 }}>Last message:</span>{' '}
                           {c.lastUserMessage.slice(0, 120)}{c.lastUserMessage.length > 120 ? '…' : ''}
                         </p>
                         {/* Tags */}
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
                           {(c.tags ?? []).map((tag) => (
-                            <span key={tag} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: '2px 8px', borderRadius: 12, fontSize: 11, background: '#3b82f620', color: '#3b82f6', border: '1px solid #3b82f640' }}>
+                            <span key={tag} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: '2px 8px', borderRadius: 12, fontSize: 11, background: 'color-mix(in srgb, var(--accent-blue) 13%, transparent)', color: 'var(--accent-blue)', border: '1px solid color-mix(in srgb, var(--accent-blue) 25%, transparent)' }}>
                               🏷️ {tag}
                               <button
                                 type="button"
                                 onClick={(e) => { e.stopPropagation(); void handleRemoveTag(c.key, tag); }}
-                                style={{ background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', padding: 0, fontSize: 12, lineHeight: 1 }}
+                                style={{ background: 'none', border: 'none', color: 'var(--accent-blue)', cursor: 'pointer', padding: 0, fontSize: 12, lineHeight: 1 }}
                               >
                                 ×
                               </button>
@@ -1770,8 +1863,8 @@ ${messages.map((m) => {
                                   maxWidth: '80%',
                                   padding: '8px 12px',
                                   borderRadius: 12,
-                                  backgroundColor: m.role === 'user' ? '#007bff' : 'var(--bg-card, #1a1f2e)',
-                                  color: m.role === 'user' ? '#fff' : 'var(--text-primary, #e6edf3)',
+                                  backgroundColor: m.role === 'user' ? 'var(--accent-blue)' : 'var(--bg-card, var(--bg-card))',
+                                  color: m.role === 'user' ? 'var(--text-on-accent)' : 'var(--text-primary, var(--text-primary))',
                                   fontSize: 13,
                                   lineHeight: 1.5,
                                   whiteSpace: 'pre-wrap',
@@ -1790,7 +1883,7 @@ ${messages.map((m) => {
                                 <div style={{
                                   padding: '8px 16px',
                                   borderRadius: 12,
-                                  backgroundColor: 'var(--bg-card, #1a1f2e)',
+                                  backgroundColor: 'var(--bg-card, var(--bg-card))',
                                   fontSize: 13,
                                   display: 'flex',
                                   alignItems: 'center',
@@ -1903,7 +1996,7 @@ ${messages.map((m) => {
             </div>
           </div>
 
-          <h3 className="section-subtitle">📚 Compiled skills (SkillStore — matched at plan time)</h3>
+          <h2 className="section-subtitle">📚 Compiled skills (SkillStore — matched at plan time)</h2>
           {data.skills.compiled.length > 0 ? (
             <div className="hub-session-list">
               {data.skills.compiled.map((s) => (
@@ -1945,7 +2038,7 @@ ${messages.map((m) => {
             <div className="empty-state">No compiled skills.</div>
           )}
 
-          <h3 className="section-subtitle">🌍 Hub skills (installed SKILL.md)</h3>
+          <h2 className="section-subtitle">🌍 Hub skills (installed SKILL.md)</h2>
           {data.skills.hub.length > 0 ? (
             <div className="hub-session-list">
               {data.skills.hub.map((s) => (
@@ -1995,7 +2088,7 @@ ${messages.map((m) => {
           {/* P6d — marketplace import surface: search every configured registry
               and install into .agents/skills/ (sandboxed + checksum-verified).
               The repo stays private — this READS other people's registries. */}
-          <h3 className="section-subtitle">🛒 Marketplace (community skills)</h3>
+          <h2 className="section-subtitle">🛒 Marketplace (community skills)</h2>
           <form className="hub-market-search" onSubmit={searchMarket}>
             <input
               type="text"

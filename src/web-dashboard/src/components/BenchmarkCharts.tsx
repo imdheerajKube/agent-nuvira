@@ -1,5 +1,6 @@
 import type { DashboardData } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell } from 'recharts';
+import PageHeader from './PageHeader';
 
 interface BenchmarkChartsProps {
   data: DashboardData | null;
@@ -17,7 +18,13 @@ function formatPercent(value: number | undefined): string {
 
 export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
   if (!data) {
-    return <div className="loading-state"><p>Loading benchmark data...</p></div>;
+    // Header kept in the loading branch, so the page still says what it is.
+    return (
+      <>
+        <PageHeader icon="📈" title="Benchmark Results" />
+        <div className="loading-state"><p>Loading benchmark data...</p></div>
+      </>
+    );
   }
 
   const { benchmarks, evals } = data;
@@ -51,7 +58,7 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
 
   return (
     <>
-      <h2 className="section-title">📈 Benchmark Results</h2>
+      <PageHeader icon="📈" title="Benchmark Results" />
 
       {/* Latest Run */}
       <div className="benchmark-latest">
@@ -87,21 +94,21 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
       {/* Pass Rate Chart */}
       {passRateData.length > 1 && (
         <>
-          <h3 className="section-subtitle">Pass Rate by Model</h3>
+          <h2 className="section-subtitle">Pass Rate by Model</h2>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={passRateData} margin={{ top: 20, right: 20, left: 10, bottom: 40 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                <XAxis dataKey="name" tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} />
-                <YAxis domain={[0, 100]} tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} tickFormatter={(v) => v + '%'} />
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} tickFormatter={(v) => v + '%'} />
                 <Tooltip
-                  contentStyle={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8 }}
-                  labelStyle={{ color: '#e6edf3' }}
+                  contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}
+                  labelStyle={{ color: 'var(--text-primary)' }}
                   formatter={(value: number) => [value + '%', 'Pass Rate']}
                 />
                 <Bar dataKey="passRate" radius={[4, 4, 0, 0]}>
                   {passRateData.map((entry, i) => (
-                    <Cell key={i} fill={entry.passRate >= 80 ? '#3fb950' : entry.passRate >= 50 ? '#d29922' : '#f85149'} fillOpacity={0.8} />
+                    <Cell key={i} fillOpacity={0.8} style={{ fill: entry.passRate >= 80 ? 'var(--accent-green)' : entry.passRate >= 50 ? 'var(--accent-yellow)' : 'var(--accent-red)' }} />
                   ))}
                 </Bar>
               </BarChart>
@@ -109,37 +116,37 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
           </div>
 
           {/* Latency Chart */}
-          <h3 className="section-subtitle">Latency by Model</h3>
+          <h2 className="section-subtitle">Latency by Model</h2>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={passRateData} margin={{ top: 20, right: 20, left: 10, bottom: 40 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                <XAxis dataKey="name" tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} />
-                <YAxis tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} tickFormatter={(v) => v + 'ms'} />
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => v + 'ms'} />
                 <Tooltip
-                  contentStyle={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8 }}
-                  labelStyle={{ color: '#e6edf3' }}
+                  contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}
+                  labelStyle={{ color: 'var(--text-primary)' }}
                   formatter={(value: number) => [value + 'ms', 'Latency']}
                 />
-                <Bar dataKey="latency" fill="#d29922" radius={[4, 4, 0, 0]} fillOpacity={0.8} />
+                <Bar dataKey="latency" radius={[4, 4, 0, 0]} fillOpacity={0.8} fill="var(--accent-yellow)" style={{ fill: 'var(--accent-yellow)' }} />
               </BarChart>
             </ResponsiveContainer>
           </div>
 
           {/* Cost Chart */}
-          <h3 className="section-subtitle">Cost by Model</h3>
+          <h2 className="section-subtitle">Cost by Model</h2>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={passRateData} margin={{ top: 20, right: 20, left: 10, bottom: 40 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                <XAxis dataKey="name" tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} />
-                <YAxis tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} tickFormatter={(v) => '$' + v.toFixed(6)} />
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => '$' + v.toFixed(6)} />
                 <Tooltip
-                  contentStyle={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8 }}
-                  labelStyle={{ color: '#e6edf3' }}
+                  contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}
+                  labelStyle={{ color: 'var(--text-primary)' }}
                   formatter={(value: number) => ['$' + value.toFixed(6), 'Cost']}
                 />
-                <Bar dataKey="cost" fill="#bc8cff" radius={[4, 4, 0, 0]} fillOpacity={0.8} />
+                <Bar dataKey="cost" radius={[4, 4, 0, 0]} fillOpacity={0.8} fill="var(--accent-purple)" style={{ fill: 'var(--accent-purple)' }} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -147,8 +154,8 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
       )}
 
       {/* ═══ Evaluation Framework Section ═══ */}
-      <h2 className="section-title" style={{ marginTop: 32 }}>🎯 Agent Evaluation</h2>
-      <p className="section-hint" style={{ color: '#8b949e', fontSize: 12, marginBottom: 16 }}>
+      <h2 className="section-subtitle">🎯 Agent Evaluation</h2>
+      <p className="section-hint" style={{ color: 'var(--text-secondary)', fontSize: 12, marginBottom: 16 }}>
         End-to-end coding tasks run through the full agent pipeline — measures if the agent is actually improving.
       </p>
 
@@ -190,21 +197,21 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
       {/* Eval Composite Score Chart */}
       {evalChartData.length > 1 && (
         <>
-          <h3 className="section-subtitle">Composite Score by Model</h3>
+          <h2 className="section-subtitle">Composite Score by Model</h2>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={evalChartData} margin={{ top: 20, right: 20, left: 10, bottom: 40 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                <XAxis dataKey="name" tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} />
-                <YAxis domain={[0, 100]} tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} tickFormatter={(v) => v + '%'} />
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} tickFormatter={(v) => v + '%'} />
                 <Tooltip
-                  contentStyle={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8 }}
-                  labelStyle={{ color: '#e6edf3' }}
+                  contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}
+                  labelStyle={{ color: 'var(--text-primary)' }}
                   formatter={(value: number) => [value + '%', 'Composite Score']}
                 />
                 <Bar dataKey="score" radius={[4, 4, 0, 0]}>
                   {evalChartData.map((entry, i) => (
-                    <Cell key={i} fill={entry.score >= 80 ? '#3fb950' : entry.score >= 50 ? '#d29922' : '#f85149'} fillOpacity={0.8} />
+                    <Cell key={i} fillOpacity={0.8} style={{ fill: entry.score >= 80 ? 'var(--accent-green)' : entry.score >= 50 ? 'var(--accent-yellow)' : 'var(--accent-red)' }} />
                   ))}
                 </Bar>
               </BarChart>
@@ -212,22 +219,22 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
           </div>
 
           {/* Eval Metrics Breakdown Chart */}
-          <h3 className="section-subtitle">Metric Breakdown (completion / tests / recovery / token efficiency)</h3>
+          <h2 className="section-subtitle">Metric Breakdown (completion / tests / recovery / token efficiency)</h2>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={evalChartData} margin={{ top: 20, right: 20, left: 10, bottom: 40 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                <XAxis dataKey="name" tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} />
-                <YAxis domain={[0, 100]} tick={{ fill: '#8b949e', fontSize: 11 }} axisLine={{ stroke: '#30363d' }} tickFormatter={(v) => v + '%'} />
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} tickFormatter={(v) => v + '%'} />
                 <Tooltip
-                  contentStyle={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8 }}
-                  labelStyle={{ color: '#e6edf3' }}
+                  contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}
+                  labelStyle={{ color: 'var(--text-primary)' }}
                 />
-                <Legend wrapperStyle={{ color: '#8b949e' }} />
-                <Bar dataKey="completion" name="Completion" fill="#3fb950" radius={[4, 4, 0, 0]} fillOpacity={0.8} />
-                <Bar dataKey="tests" name="Tests" fill="#58a6ff" radius={[4, 4, 0, 0]} fillOpacity={0.8} />
-                <Bar dataKey="recovery" name="Recovery" fill="#d29922" radius={[4, 4, 0, 0]} fillOpacity={0.8} />
-                <Bar dataKey="efficiency" name="Token Eff." fill="#bc8cff" radius={[4, 4, 0, 0]} fillOpacity={0.8} />
+                <Legend />
+                <Bar dataKey="completion" name="Completion" radius={[4, 4, 0, 0]} fillOpacity={0.8} fill="var(--accent-green)" style={{ fill: 'var(--accent-green)' }} />
+                <Bar dataKey="tests" name="Tests" radius={[4, 4, 0, 0]} fillOpacity={0.8} fill="var(--accent-blue)" style={{ fill: 'var(--accent-blue)' }} />
+                <Bar dataKey="recovery" name="Recovery" radius={[4, 4, 0, 0]} fillOpacity={0.8} fill="var(--accent-yellow)" style={{ fill: 'var(--accent-yellow)' }} />
+                <Bar dataKey="efficiency" name="Token Eff." radius={[4, 4, 0, 0]} fillOpacity={0.8} fill="var(--accent-purple)" style={{ fill: 'var(--accent-purple)' }} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -235,7 +242,7 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
       )}
 
       {/* Eval Run History */}
-      <h3 className="section-subtitle">Eval Run History</h3>
+      <h2 className="section-subtitle">Eval Run History</h2>
       <div className="benchmark-list">
         {evalRuns.length === 0 ? (
           <div className="empty-state">No eval runs yet. Run <code>buff eval run</code> to start.</div>
@@ -257,7 +264,7 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
       </div>
 
       {/* Run History */}
-      <h3 className="section-subtitle">Run History</h3>
+      <h2 className="section-subtitle">Run History</h2>
       <div className="benchmark-list">
         {runs.length === 0 ? (
           <div className="empty-state">No benchmark runs yet. Run <code>buff benchmark</code> to start.</div>

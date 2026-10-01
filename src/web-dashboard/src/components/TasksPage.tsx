@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardAPI } from '../api';
 import type { TaskLogLine, TaskRecord, TaskStatus } from '../types';
+import PageHeader from './PageHeader';
 
 interface AuthState {
   configured: boolean;
@@ -178,7 +179,7 @@ export default function TasksPage() {
   if (!auth) {
     return (
       <div className="panel">
-        <h2 className="panel-title">🚀 Command Console</h2>
+        <PageHeader icon="🚀" title="Command Console" />
         <div className="loading-state">Loading…</div>
       </div>
     );
@@ -187,7 +188,7 @@ export default function TasksPage() {
   if (!auth.authenticated) {
     return (
       <div className="panel">
-        <h2 className="panel-title">🚀 Command Console</h2>
+        <PageHeader icon="🚀" title="Command Console" />
         <div className="empty-state">
           <p>
             <strong>Log in to run tasks.</strong> The console executes commands on this machine, so it needs an
@@ -207,7 +208,7 @@ export default function TasksPage() {
 
   return (
     <div className="panel">
-      <h2 className="panel-title">🚀 Command Console</h2>
+        <PageHeader icon="🚀" title="Command Console" />
       <p className="admin-subtitle">
         Run any agent-nuvira command — the same CLI, executed by the dashboard. Messaging, skills, tools, eval,
         memory, traces and more.

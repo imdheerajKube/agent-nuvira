@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { dashboardAPI } from '../api';
 import type { TraceEntry, TraceFinding, TraceStep } from '../types';
+import PageHeader from './PageHeader';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -50,12 +51,12 @@ function fmtTokens(n: number | undefined): string {
  */
 function outcomeBadge(outcome: TraceEntry['outcome']): { text: string; color: string; bg: string; border: string } | null {
   if (!outcome) return null;
-  const base = { bg: '#0d1117', border: '#30363d' };
+  const base = { bg: 'var(--bg-primary)', border: 'var(--border)' };
   if (outcome.unverifiedClaim) {
-    return { text: '⚠️ unverified claim — said it acted, but no tool ran', color: '#d29922', bg: '#3d2c00', border: '#d29922' };
+    return { text: '⚠️ unverified claim — said it acted, but no tool ran', color: 'var(--accent-yellow)', bg: 'var(--warn-soft)', border: 'var(--accent-yellow)' };
   }
   if (outcome.unfulfilledPromise) {
-    return { text: '⚠️ unfulfilled promise — announced an action it never performed', color: '#d29922', bg: '#3d2c00', border: '#d29922' };
+    return { text: '⚠️ unfulfilled promise — announced an action it never performed', color: 'var(--accent-yellow)', bg: 'var(--warn-soft)', border: 'var(--accent-yellow)' };
   }
   // G1 + G2 — edit honesty. A claimed fix that nothing verified outranks the
   // generic "acted" badge: `success` only means a reply was generated, and a
@@ -63,24 +64,24 @@ function outcomeBadge(outcome: TraceEntry['outcome']): { text: string; color: st
   if (outcome.unverifiedEditClaim) {
     return {
       text: '⚠️ unverified edit claim — asserted a fix, but nothing verified it',
-      color: '#d29922', bg: '#3d2c00', border: '#d29922',
+      color: 'var(--accent-yellow)', bg: 'var(--warn-soft)', border: 'var(--accent-yellow)',
     };
   }
   if (outcome.unverifiedEdit) {
     return {
       text: `⚠️ unverified edit — ${outcome.tools?.length ?? 0} tool(s), no test/typecheck/browser run`,
-      color: '#d29922', bg: '#3d2c00', border: '#d29922',
+      color: 'var(--accent-yellow)', bg: 'var(--warn-soft)', border: 'var(--accent-yellow)',
     };
   }
   if (outcome.kind === 'acted') {
     return {
       text: outcome.delivered ? '✅ action performed — message sent' : `🔧 acted — ${outcome.tools?.length ?? 0} tool(s)`,
-      color: '#3fb950', bg: '#0d2818', border: '#238636',
+      color: 'var(--accent-green)', bg: 'var(--ok-soft)', border: 'var(--accent-green)',
     };
   }
-  if (outcome.kind === 'answered') return { text: '💬 answered — no action taken', color: '#8b949e', ...base };
-  if (outcome.kind === 'cancelled') return { text: '⏹ cancelled', color: '#8b949e', ...base };
-  return { text: '❌ generation failed', color: '#f85149', bg: '#2d0f0f', border: '#f85149' };
+  if (outcome.kind === 'answered') return { text: '💬 answered — no action taken', color: 'var(--text-secondary)', ...base };
+  if (outcome.kind === 'cancelled') return { text: '⏹ cancelled', color: 'var(--text-secondary)', ...base };
+  return { text: '❌ generation failed', color: 'var(--accent-red)', bg: 'var(--danger-soft)', border: 'var(--accent-red)' };
 }
 
 /**
@@ -108,48 +109,48 @@ function FindingRow({ finding }: { finding: TraceFinding }) {
   const confirmed = finding.verdict === 'CONFIRMED' && evidence.length > 0;
   return (
     <div style={{
-      background: '#0d1117', border: '1px solid #21262d',
-      borderLeft: `3px solid ${confirmed ? '#238636' : '#d29922'}`,
+      background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
+      borderLeft: `3px solid ${confirmed ? 'var(--accent-green)' : 'var(--accent-yellow)'}`,
       borderRadius: 8, padding: '8px 12px', marginBottom: 8,
     }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <span style={{ fontSize: 13 }}>{confirmed ? '✅' : '🔎'}</span>
-        <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: '#e6edf3' }}>{finding.claim}</span>
+        <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: 'var(--text-primary)' }}>{finding.claim}</span>
         <span style={{
           fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em', padding: '1px 7px',
           borderRadius: 10, border: '1px solid',
-          color: confirmed ? '#3fb950' : '#d29922',
-          background: confirmed ? '#0d2818' : '#3d2c00',
-          borderColor: confirmed ? '#238636' : '#d29922',
+          color: confirmed ? 'var(--accent-green)' : 'var(--accent-yellow)',
+          background: confirmed ? 'var(--ok-soft)' : 'var(--warn-soft)',
+          borderColor: confirmed ? 'var(--accent-green)' : 'var(--accent-yellow)',
         }}>
           {confirmed ? 'CONFIRMED' : 'PLAUSIBLE'}
         </span>
       </div>
       {finding.outcome ? (
-        <div style={{ marginTop: 3, fontSize: 11.5, color: '#8b949e' }}>{finding.outcome}</div>
+        <div style={{ marginTop: 3, fontSize: 11.5, color: 'var(--text-secondary)' }}>{finding.outcome}</div>
       ) : null}
       {evidence.length > 0 ? (
         <ul style={{ listStyle: 'none', margin: '5px 0 0', padding: 0 }}>
           {evidence.map((e, i) => (
-            <li key={i} style={{ fontSize: 11, color: '#8b949e', marginBottom: 3 }}>
+            <li key={i} style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 3 }}>
               <span style={{
                 fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '0.04em',
-                color: '#58a6ff', marginRight: 5,
+                color: 'var(--accent-blue)', marginRight: 5,
               }}>
                 {e.kind}
               </span>
-              <span style={{ color: '#c9d1d9', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>{e.ref}</span>
+              <span style={{ color: 'var(--text-secondary)', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>{e.ref}</span>
               {e.detail ? <span style={{ marginLeft: 5 }}>({e.detail})</span> : null}
             </li>
           ))}
         </ul>
       ) : (
-        <div style={{ marginTop: 5, fontSize: 11, color: '#d29922' }}>
+        <div style={{ marginTop: 5, fontSize: 11, color: 'var(--accent-yellow)' }}>
           no evidence — reported as PLAUSIBLE, not verified
         </div>
       )}
       {finding.source ? (
-        <div style={{ marginTop: 4, fontSize: 10, color: '#6e7681' }}>source: {finding.source}</div>
+        <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>source: {finding.source}</div>
       ) : null}
     </div>
   );
@@ -160,14 +161,15 @@ function SectionCard({ icon, title, subtitle, children }: {
 }) {
   return (
     <div style={{
-      background: '#161b22', borderRadius: 12,
-      border: '1px solid #21262d', padding: '18px 20px', marginBottom: 16,
+      background: 'var(--bg-card)', borderRadius: 12,
+      border: '1px solid var(--border-light)', padding: '18px 20px', marginBottom: 16,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
         <span style={{ fontSize: 20 }}>{icon}</span>
-        <h3 style={{ fontSize: 15, fontWeight: 600, color: '#e6edf3', margin: 0 }}>{title}</h3>
+        {/* h2: a SectionCard IS a section of the page, whose title is the h1. */}
+        <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>{title}</h2>
       </div>
-      {subtitle && <p style={{ fontSize: 12, color: '#8b949e', margin: '2px 0 12px 0' }}>{subtitle}</p>}
+      {subtitle && <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '2px 0 12px 0' }}>{subtitle}</p>}
       {!subtitle && <div style={{ height: 6 }} />}
       {children}
     </div>
@@ -177,24 +179,24 @@ function SectionCard({ icon, title, subtitle, children }: {
 function EmptyNote() {
   return (
     <div style={{
-      background: '#0d1117', border: '1px dashed #30363d', borderRadius: 10,
-      padding: '18px 20px', color: '#8b949e', fontSize: 13, textAlign: 'center',
+      background: 'var(--bg-primary)', border: '1px dashed var(--border)', borderRadius: 10,
+      padding: '18px 20px', color: 'var(--text-secondary)', fontSize: 13, textAlign: 'center',
     }}>
-      🔍 No reasoning traces yet — every LLM call in a <code style={{ color: '#58a6ff' }}>buff execute</code> pipeline
-      is recorded to <code style={{ color: '#58a6ff' }}>reasoning-traces.json</code>. Run a pipeline, then replay
-      it here or with <code style={{ color: '#58a6ff' }}>buff trace replay &lt;id&gt;</code>.
+      🔍 No reasoning traces yet — every LLM call in a <code style={{ color: 'var(--accent-blue)' }}>buff execute</code> pipeline
+      is recorded to <code style={{ color: 'var(--accent-blue)' }}>reasoning-traces.json</code>. Run a pipeline, then replay
+      it here or with <code style={{ color: 'var(--accent-blue)' }}>buff trace replay &lt;id&gt;</code>.
     </div>
   );
 }
 
 function StepRow({ step }: { step: TraceStep }) {
   const [open, setOpen] = useState(false);
-  const statusColor = step.success ? '#3fb950' : '#f85149';
+  const statusColor = step.success ? 'var(--accent-green)' : 'var(--accent-red)';
   const statusLabel = step.success ? 'ok' : 'failed';
 
   return (
     <div style={{
-      background: '#0d1117', border: '1px solid #21262d', borderRadius: 8,
+      background: 'var(--bg-primary)', border: '1px solid var(--border-light)', borderRadius: 8,
       marginBottom: 8, overflow: 'hidden',
     }}>
       <button
@@ -207,22 +209,22 @@ function StepRow({ step }: { step: TraceStep }) {
       >
         <span style={{ width: 26, fontSize: 16 }}>{agentIcon(step.agentType)}</span>
         <span style={{
-          width: 130, fontSize: 12, fontWeight: 600, color: '#e6edf3',
+          width: 130, fontSize: 12, fontWeight: 600, color: 'var(--text-primary)',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }} title={step.agentType}>
           {step.agentType}
         </span>
         <span style={{
-          flex: 1, fontSize: 12, color: '#8b949e', fontFamily: "'SFMono-Regular', Consolas, monospace",
+          flex: 1, fontSize: 12, color: 'var(--text-secondary)', fontFamily: "'SFMono-Regular', Consolas, monospace",
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }} title={`${step.provider}/${step.model}`}>
           {providerIcon(step.provider)} {step.provider}/{step.model}
         </span>
-        <span style={{ width: 70, fontSize: 11, color: '#6e7681', textAlign: 'right' }}>
+        <span style={{ width: 70, fontSize: 11, color: 'var(--text-muted)', textAlign: 'right' }}>
           {fmtDuration(step.latencyMs)}
         </span>
         <span style={{
-          width: 86, fontSize: 11, color: '#6e7681', fontFamily: "'SFMono-Regular', Consolas, monospace", textAlign: 'right',
+          width: 86, fontSize: 11, color: 'var(--text-muted)', fontFamily: "'SFMono-Regular', Consolas, monospace", textAlign: 'right',
         }}>
           {fmtTokens(step.inputTokens)}→{fmtTokens(step.outputTokens)} tok
         </span>
@@ -232,36 +234,36 @@ function StepRow({ step }: { step: TraceStep }) {
         <span style={{ width: 22, fontSize: 11, textAlign: 'right' }}>
           {step.escalated ? <span title="Repair escalated to a stronger routed model (v1.60.4)">🚀</span> : ''}
         </span>
-        <span style={{ fontSize: 11, color: '#6e7681' }}>{open ? '▾' : '▸'}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{open ? '▾' : '▸'}</span>
       </button>
 
       {open && (
         <div style={{ padding: '0 14px 12px 50px', fontSize: 12 }}>
           {step.taskId && (
-            <div style={{ color: '#6e7681', marginBottom: 4 }}>
-              Task: <span style={{ color: '#8b949e', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>{step.taskId}</span>
+            <div style={{ color: 'var(--text-muted)', marginBottom: 4 }}>
+              Task: <span style={{ color: 'var(--text-secondary)', fontFamily: "'SFMono-Regular', Consolas, monospace" }}>{step.taskId}</span>
             </div>
           )}
           {step.description && (
-            <div style={{ color: '#8b949e', marginBottom: 6 }}>{step.description}</div>
+            <div style={{ color: 'var(--text-secondary)', marginBottom: 6 }}>{step.description}</div>
           )}
           {step.routing && (
             <div style={{ marginBottom: 6 }}>
               <span style={{
                 fontSize: 10, padding: '1px 8px', borderRadius: 10,
-                background: step.escalated ? '#3d2c00' : '#1c2128',
-                border: step.escalated ? '1px solid #d29922' : '1px solid #58a6ff',
-                color: step.escalated ? '#d29922' : '#58a6ff',
+                background: step.escalated ? 'var(--warn-soft)' : 'var(--bg-tertiary)',
+                border: step.escalated ? '1px solid var(--accent-yellow)' : '1px solid var(--accent-blue)',
+                color: step.escalated ? 'var(--accent-yellow)' : 'var(--accent-blue)',
               }}>
                 {step.escalated ? '🚀 escalated auto → ' : '🤖 auto → '}{step.routing.provider}/{step.routing.model} · score {step.routing.score.toFixed(3)} · {step.routing.complexity}
               </span>
               {step.escalated && (
-                <div style={{ color: '#d29922', marginTop: 4, fontSize: 11 }}>
+                <div style={{ color: 'var(--accent-yellow)', marginTop: 4, fontSize: 11 }}>
                   Repair escalated to a stronger routed model (next complexity level).
                 </div>
               )}
               {step.routing.explanation && (
-                <div style={{ color: '#6e7681', marginTop: 4, fontSize: 11 }}>
+                <div style={{ color: 'var(--text-muted)', marginTop: 4, fontSize: 11 }}>
                   {step.routing.explanation}
                 </div>
               )}
@@ -269,37 +271,37 @@ function StepRow({ step }: { step: TraceStep }) {
           )}
           {step.layers && (
             <div style={{
-              marginBottom: 6, fontSize: 11, color: '#6e7681',
+              marginBottom: 6, fontSize: 11, color: 'var(--text-muted)',
               fontFamily: "'SFMono-Regular', Consolas, monospace",
             }}>
-              <span style={{ color: '#58a6ff' }}>sys</span> {step.layers.systemChars}c/#{step.layers.systemDigest} ·{' '}
-              <span style={{ color: '#7ee787' }}>ctx</span> {step.layers.contextChars}c/#{step.layers.contextDigest} ·{' '}
-              <span style={{ color: '#d29922' }}>vol</span> {step.layers.volatileChars}c/#{step.layers.volatileDigest}
-              <div style={{ color: '#484f58', marginTop: 2 }}>
-                a constant <span style={{ color: '#58a6ff' }}>sys</span> digest across steps ⇒ the stable layer is prompt-cacheable
+              <span style={{ color: 'var(--accent-blue)' }}>sys</span> {step.layers.systemChars}c/#{step.layers.systemDigest} ·{' '}
+              <span style={{ color: 'var(--accent-green)' }}>ctx</span> {step.layers.contextChars}c/#{step.layers.contextDigest} ·{' '}
+              <span style={{ color: 'var(--accent-yellow)' }}>vol</span> {step.layers.volatileChars}c/#{step.layers.volatileDigest}
+              <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>
+                a constant <span style={{ color: 'var(--accent-blue)' }}>sys</span> digest across steps ⇒ the stable layer is prompt-cacheable
               </div>
             </div>
           )}
           {step.error && (
-            <div style={{ color: '#f85149', marginBottom: 6 }}>⚠️ {step.error.slice(0, 300)}</div>
+            <div style={{ color: 'var(--accent-red)', marginBottom: 6 }}>⚠️ {step.error.slice(0, 300)}</div>
           )}
-          <div style={{ color: '#6e7681', margin: '6px 0 3px 0' }}>
+          <div style={{ color: 'var(--text-muted)', margin: '6px 0 3px 0' }}>
             Prompt <span style={{ fontFamily: "'SFMono-Regular', Consolas, monospace" }}>#{step.promptDigest}</span> · {step.promptPreview.length}+ chars:
           </div>
           <pre style={{
-            background: '#161b22', border: '1px solid #21262d', borderRadius: 6,
-            padding: 8, margin: 0, color: '#8b949e', whiteSpace: 'pre-wrap',
+            background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 6,
+            padding: 8, margin: 0, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap',
             wordBreak: 'break-word', maxHeight: 180, overflowY: 'auto',
             fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 11,
           }}>
             {step.promptPreview.slice(0, 900)}
           </pre>
-          <div style={{ color: '#6e7681', margin: '8px 0 3px 0' }}>
+          <div style={{ color: 'var(--text-muted)', margin: '8px 0 3px 0' }}>
             Response ({fmtTokens(step.responseLength)} chars):
           </div>
           <pre style={{
-            background: '#161b22', border: '1px solid #21262d', borderRadius: 6,
-            padding: 8, margin: 0, color: '#c9d1d9', whiteSpace: 'pre-wrap',
+            background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 6,
+            padding: 8, margin: 0, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap',
             wordBreak: 'break-word', maxHeight: 240, overflowY: 'auto',
             fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 11,
           }}>
@@ -339,7 +341,7 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
       subtitle={trace.goal}
     >
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-        <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#0d1117', border: '1px solid #30363d', color: '#8b949e' }}>
+        <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
           🕓 {timeAgo(trace.startedAt)}
         </span>
         {(() => {
@@ -351,24 +353,24 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
             </span>
           );
         })()}
-        <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#0d1117', border: '1px solid #30363d', color: '#8b949e' }}>
+        <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
           ⏱ {fmtDuration(trace.durationMs)}
         </span>
-        <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#0d1117', border: '1px solid #30363d', color: '#8b949e' }}>
+        <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
           🔢 {steps?.length ?? '?'} call(s)
         </span>
         {steps && steps.some((s) => s.escalated) && (
-          <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#3d2c00', border: '1px solid #d29922', color: '#d29922' }}>
+          <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: 'var(--warn-soft)', border: '1px solid var(--accent-yellow)', color: 'var(--accent-yellow)' }}>
             🚀 {steps.filter((s) => s.escalated).length} escalated repair(s)
           </span>
         )}
         {trace.totalTokens !== undefined && (
-          <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#0d1117', border: '1px solid #30363d', color: '#8b949e' }}>
+          <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
             🧮 {fmtTokens(trace.totalTokens)} tok
           </span>
         )}
         {trace.findings && trace.findings.length > 0 && (
-          <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: '#0d1117', border: '1px solid #30363d', color: '#8b949e' }}>
+          <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
             {`🔎 ${findingsSummary(trace.findings)}`}
           </span>
         )}
@@ -379,7 +381,7 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
           would let a CONFIRMED claim and a PLAUSIBLE guess read the same. */}
       {trace.findings && trace.findings.length > 0 ? (
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 12, color: '#8b949e', marginBottom: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
             {`🔎 Findings — ${findingsSummary(trace.findings)}`}
           </div>
           {trace.findings.map((finding, i) => (
@@ -390,12 +392,12 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
 
       {trace.systemPrompt && (
         <details style={{ marginBottom: 12 }}>
-          <summary style={{ cursor: 'pointer', fontSize: 12, color: '#58a6ff' }}>
+          <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--accent-blue)' }}>
             🧬 System prompt — stable layer ({trace.systemPromptChars ?? trace.systemPrompt.length} chars)
           </summary>
           <pre style={{
-            background: '#161b22', border: '1px solid #21262d', borderRadius: 6,
-            padding: 10, margin: '8px 0 0 0', color: '#8b949e', whiteSpace: 'pre-wrap',
+            background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 6,
+            padding: 10, margin: '8px 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap',
             wordBreak: 'break-word', maxHeight: 320, overflowY: 'auto',
             fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 11,
           }}>
@@ -405,15 +407,15 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
       )}
 
       {error && (
-        <div style={{ color: '#f85149', fontSize: 12, marginBottom: 10 }}>
+        <div style={{ color: 'var(--accent-red)', fontSize: 12, marginBottom: 10 }}>
           Could not load trace steps (trace may have been deleted).
         </div>
       )}
       {steps === null && !error && (
-        <div style={{ color: '#8b949e', fontSize: 12 }}>Loading steps…</div>
+        <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Loading steps…</div>
       )}
       {steps && steps.length === 0 && (
-        <div style={{ color: '#8b949e', fontSize: 12 }}>No LLM calls recorded in this trace.</div>
+        <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>No LLM calls recorded in this trace.</div>
       )}
       {steps && steps.map((step) => <StepRow key={step.seq} step={step} />)}
     </SectionCard>
@@ -429,7 +431,7 @@ function TraceList({ traces }: { traces: TraceEntry[] }) {
         <button
           onClick={() => setSelected(null)}
           style={{
-            background: '#21262d', border: '1px solid #30363d', color: '#e6edf3',
+            background: 'var(--bg-hover)', border: '1px solid var(--border)', color: 'var(--text-primary)',
             borderRadius: 8, padding: '6px 14px', fontSize: 12, cursor: 'pointer',
             marginBottom: 12,
           }}
@@ -451,39 +453,39 @@ function TraceList({ traces }: { traces: TraceEntry[] }) {
             key={trace.id}
             onClick={() => setSelected(trace)}
             style={{
-              width: '100%', background: '#0d1117', border: '1px solid #21262d',
+              width: '100%', background: 'var(--bg-primary)', border: '1px solid var(--border-light)',
               borderRadius: 10, padding: '12px 16px', marginBottom: 8,
               cursor: 'pointer', textAlign: 'left', color: 'inherit',
               transition: 'border-color 0.2s, box-shadow 0.2s',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.borderColor = '#58a6ff';
-              e.currentTarget.style.boxShadow = '0 2px 10px #58a6ff22';
+              e.currentTarget.style.borderColor = 'var(--accent-blue)';
+              e.currentTarget.style.boxShadow = '0 2px 10px color-mix(in srgb, var(--accent-blue) 13%, transparent)';
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = '#21262d';
+              e.currentTarget.style.borderColor = 'var(--border-light)';
               e.currentTarget.style.boxShadow = 'none';
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
               <span>{icon}</span>
               <span style={{
-                fontSize: 11, color: '#58a6ff', fontFamily: "'SFMono-Regular', Consolas, monospace",
+                fontSize: 11, color: 'var(--accent-blue)', fontFamily: "'SFMono-Regular', Consolas, monospace",
               }}>
                 {trace.id}
               </span>
-              <span style={{ fontSize: 11, color: '#6e7681', marginLeft: 'auto' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
                 {timeAgo(trace.startedAt)}
               </span>
             </div>
-            <div style={{ fontSize: 13, color: '#e6edf3', marginBottom: 6 }}>{trace.goal}</div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, color: '#8b949e' }}>
+            <div style={{ fontSize: 13, color: 'var(--text-primary)', marginBottom: 6 }}>{trace.goal}</div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-secondary)' }}>
               <span>🔢 {trace.stepCount ?? 0} call(s)</span>
               <span>⏱ {fmtDuration(trace.durationMs)}</span>
-              {trace.failedSteps ? <span style={{ color: '#f85149' }}>❌ {trace.failedSteps} failed</span> : <span style={{ color: '#3fb950' }}>✓ all ok</span>}
+              {trace.failedSteps ? <span style={{ color: 'var(--accent-red)' }}>❌ {trace.failedSteps} failed</span> : <span style={{ color: 'var(--accent-green)' }}>✓ all ok</span>}
               {trace.totalTokens !== undefined && <span>🧮 {fmtTokens(trace.totalTokens)} tok</span>}
               {trace.findings && trace.findings.length > 0 && (
-                <span style={{ color: '#d29922' }}>
+                <span style={{ color: 'var(--accent-yellow)' }}>
                   {`🔎 ${trace.findings.filter((f) => f.verdict === 'CONFIRMED' && findingEvidence(f).length > 0).length}/${trace.findings.length} confirmed`}
                 </span>
               )}
@@ -521,25 +523,22 @@ export default function TracePanel() {
 
   return (
     <div className="panel">
-      <div style={{ marginBottom: 16 }}>
-        <h2 style={{ margin: 0, fontSize: 18, color: '#e6edf3' }}>
-          🔍 Reasoning Traces
-        </h2>
-        <p style={{ margin: '4px 0 0 0', fontSize: 12, color: '#8b949e' }}>
-          Every LLM call in each pipeline — agent × model × prompt digest × response × tokens × latency × routing snapshot (assessment P0).
-        </p>
-      </div>
+      <PageHeader
+        icon="🔍"
+        title="Reasoning Traces"
+        description="Every LLM call in each pipeline — agent × model × prompt digest × response × tokens × latency × routing snapshot (assessment P0)."
+      />
 
       {traces === null && !loadError && (
         <SectionCard icon="⏳" title="Loading…">
-          <div style={{ color: '#8b949e', fontSize: 13 }}>Fetching reasoning traces…</div>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Fetching reasoning traces…</div>
         </SectionCard>
       )}
       {loadError && traces === null && (
         <SectionCard icon="⚠️" title="Could not reach the dashboard server">
-          <div style={{ color: '#8b949e', fontSize: 13 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
             The traces endpoint is unavailable right now — retrying automatically. Run{' '}
-            <code style={{ color: '#58a6ff' }}>buff trace list</code> in the terminal to inspect traces directly.
+            <code style={{ color: 'var(--accent-blue)' }}>buff trace list</code> in the terminal to inspect traces directly.
           </div>
         </SectionCard>
       )}

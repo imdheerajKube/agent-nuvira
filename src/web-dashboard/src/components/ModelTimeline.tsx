@@ -34,6 +34,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { dashboardAPI } from '../api';
 import type { VerifyBacklogState } from '../types';
+import PageHeader from './PageHeader';
 
 /** Server-computed routing verdict, mirrored from `ModelRegistry.isUsable()`. */
 type Reachability = 'routable' | 'parked' | 'proof-expired' | 'proven-dead' | 'never-verified';
@@ -223,7 +224,7 @@ export default function ModelTimeline() {
   if (loading) {
     return (
       <div className="admin-header">
-        <h2 className="section-title">📅 Model Discovery Timeline</h2>
+        <PageHeader icon="📅" title="Model Discovery Timeline" />
         <div className="loading-state">
           <div className="loading-spinner" />
           <p>Loading timeline...</p>
@@ -235,7 +236,7 @@ export default function ModelTimeline() {
   if (error) {
     return (
       <div className="admin-header">
-        <h2 className="section-title">📅 Model Discovery Timeline</h2>
+        <PageHeader icon="📅" title="Model Discovery Timeline" />
         <div className="admin-row-msg admin-row-msg-err">{error}</div>
       </div>
     );
@@ -246,7 +247,7 @@ export default function ModelTimeline() {
   if (data && !data.counts) {
     return (
       <div className="admin-header">
-        <h2 className="section-title">📅 Model Discovery Timeline</h2>
+        <PageHeader icon="📅" title="Model Discovery Timeline" />
         <div className="admin-row-msg admin-row-msg-err">
           This dashboard server predates the reachability view. Restart it
           (<code>nuvira dashboard stop</code>, then start it again) and reload this page.
@@ -283,8 +284,8 @@ export default function ModelTimeline() {
   }
 
   const buttonStyle = (active: boolean): React.CSSProperties => ({
-    background: active ? '#238636' : '#21262d',
-    border: `1px solid ${active ? '#3fb950' : '#30363d'}`,
+    background: active ? 'var(--accent-green)' : 'var(--bg-hover)',
+    border: `1px solid ${active ? 'var(--accent-green)' : 'var(--border)'}`,
     padding: '4px 12px',
     fontSize: 12,
     cursor: 'pointer',
@@ -292,7 +293,7 @@ export default function ModelTimeline() {
 
   return (
     <div className="admin-header">
-      <h2 className="section-title">📅 Model Discovery Timeline</h2>
+        <PageHeader icon="📅" title="Model Discovery Timeline" />
       <p className="section-description">
         The registry&apos;s age profile: when each tracked model was last probed, last <em>verified</em>, and last
         used — and which ones routing can actually reach. The Models page answers &ldquo;is it usable right now&rdquo;;
@@ -305,12 +306,12 @@ export default function ModelTimeline() {
           <div className="stat-value">{data?.totalModels ?? 0}</div>
           <div className="stat-label">Tracked models</div>
         </div>
-        <div className="stat-card" style={{ borderColor: '#3fb950' }}>
-          <div className="stat-value" style={{ color: '#3fb950' }}>{counts?.routable ?? 0}</div>
+        <div className="stat-card" style={{ borderColor: 'var(--accent-green)' }}>
+          <div className="stat-value" style={{ color: 'var(--accent-green)' }}>{counts?.routable ?? 0}</div>
           <div className="stat-label">Routable now</div>
         </div>
-        <div className="stat-card" style={{ borderColor: '#8b949e' }}>
-          <div className="stat-value" style={{ color: '#8b949e' }}>{notRoutableTotal}</div>
+        <div className="stat-card" style={{ borderColor: 'var(--border-hover)' }}>
+          <div className="stat-value" style={{ color: 'var(--text-secondary)' }}>{notRoutableTotal}</div>
           <div className="stat-label">Not routable</div>
         </div>
       </div>
@@ -324,9 +325,9 @@ export default function ModelTimeline() {
             const entry = copy?.[state];
             return (
               <span key={state} title={entry?.blurb}>
-                <span style={{ color: entry?.color ?? '#8b949e' }}>■</span>{' '}
-                <span style={{ color: '#8b949e' }}>
-                  {entry?.label ?? state}: <strong style={{ color: '#e6edf3' }}>{counts[state] ?? 0}</strong>
+                <span style={{ color: entry?.color ?? 'var(--text-secondary)' }}>■</span>{' '}
+                <span style={{ color: 'var(--text-secondary)' }}>
+                  {entry?.label ?? state}: <strong style={{ color: 'var(--text-primary)' }}>{counts[state] ?? 0}</strong>
                 </span>
               </span>
             );
@@ -341,8 +342,8 @@ export default function ModelTimeline() {
       {job ? (
         <div
           style={{
-            background: '#161b22',
-            border: '1px solid #30363d',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border)',
             borderRadius: 8,
             padding: '12px 14px',
             marginBottom: 16,
@@ -350,13 +351,13 @@ export default function ModelTimeline() {
           data-testid="verify-backlog-panel"
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 600, color: '#e6edf3' }}>Work the backlog down</span>
-            <span style={{ fontSize: 11, color: '#8b949e', flex: 1, minWidth: 260 }}>
+            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Work the backlog down</span>
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)', flex: 1, minWidth: 260 }}>
               Each check is a real 1-token generation against one of your provider keys — not a listing lookup.
               A never-verified model is an <em>unknown</em>, not a broken one: a check either proves it routable or
               marks it proven dead. Runs are bounded and one at a time.
             </span>
-            <label style={{ fontSize: 11, color: '#8b949e', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
               How many
               <input
                 type="number"
@@ -368,9 +369,9 @@ export default function ModelTimeline() {
                 onChange={(e) => setCount(Number(e.target.value))}
                 style={{
                   width: 64,
-                  background: '#0d1117',
-                  color: '#e6edf3',
-                  border: '1px solid #30363d',
+                  background: 'var(--bg-primary)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
                   borderRadius: 4,
                   padding: '3px 6px',
                   fontSize: 12,
@@ -383,8 +384,8 @@ export default function ModelTimeline() {
               disabled={starting || jobRunning || !(count > 0)}
               onClick={() => void start()}
               style={{
-                background: '#238636',
-                border: '1px solid #3fb950',
+                background: 'var(--accent-green)',
+                border: '1px solid var(--accent-green)',
                 padding: '4px 12px',
                 fontSize: 12,
                 cursor: starting || jobRunning ? 'default' : 'pointer',
@@ -422,7 +423,7 @@ export default function ModelTimeline() {
               {(job.results ?? []).map((r) => (
                 <span
                   key={`${r.provider}:${r.model}`}
-                  style={{ fontSize: 11, color: '#8b949e' }}
+                  style={{ fontSize: 11, color: 'var(--text-secondary)' }}
                   title={
                     r.outcome === 'verified'
                       ? 'Proven routable — a 1-token call succeeded'
@@ -492,21 +493,21 @@ export default function ModelTimeline() {
         <button
           className="admin-refresh-btn"
           onClick={() => void fetchData()}
-          style={{ background: '#21262d', border: '1px solid #30363d', padding: '4px 12px', fontSize: 12, cursor: 'pointer' }}
+          style={{ background: 'var(--bg-hover)', border: '1px solid var(--border)', padding: '4px 12px', fontSize: 12, cursor: 'pointer' }}
         >
           🔄 Refresh
         </button>
       </div>
 
       {/* Two axes, stated once. */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 4, fontSize: 11, color: '#8b949e', flexWrap: 'wrap' }}>
-        <span><span style={{ color: '#58a6ff' }}>■</span> Probe (last seen in the provider&apos;s catalog)</span>
-        <span><span style={{ color: '#3fb950' }}>■</span> Verified (last success)</span>
-        <span><span style={{ color: '#d29922' }}>■</span> Used (last invocation)</span>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 4, fontSize: 11, color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
+        <span><span style={{ color: 'var(--accent-blue)' }}>■</span> Probe (last seen in the provider&apos;s catalog)</span>
+        <span><span style={{ color: 'var(--accent-green)' }}>■</span> Verified (last success)</span>
+        <span><span style={{ color: 'var(--accent-yellow)' }}>■</span> Used (last invocation)</span>
       </div>
-      <div style={{ marginBottom: 12, fontSize: 11, color: '#8b949e' }}>
-        <strong style={{ color: '#e6edf3' }}>Fresh</strong> means the provider still lists it.{' '}
-        <strong style={{ color: '#e6edf3' }}>Routable</strong> means a turn has been proven to work on it within{' '}
+      <div style={{ marginBottom: 12, fontSize: 11, color: 'var(--text-secondary)' }}>
+        <strong style={{ color: 'var(--text-primary)' }}>Fresh</strong> means the provider still lists it.{' '}
+        <strong style={{ color: 'var(--text-primary)' }}>Routable</strong> means a turn has been proven to work on it within{' '}
         {data?.freshDays ?? 7} days. A fresh model that was never verified is an unknown, not a failure — background
         spot-checks work through those a few at a time.
       </div>
@@ -518,12 +519,12 @@ export default function ModelTimeline() {
           return (
             <div
               key={provider}
-              style={{ background: '#161b22', borderRadius: 8, border: '1px solid #30363d', overflow: 'hidden' }}
+              style={{ background: 'var(--bg-card)', borderRadius: 8, border: '1px solid var(--border)', overflow: 'hidden' }}
             >
               <div
                 style={{
                   padding: '10px 14px',
-                  borderBottom: '1px solid #30363d',
+                  borderBottom: '1px solid var(--border)',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
@@ -532,8 +533,8 @@ export default function ModelTimeline() {
                 <span style={{ fontSize: 16 }}>
                   {provider === 'groq' ? '⚡' : provider === 'gemini' ? '🌀' : provider === 'local' ? '💻' : '🤖'}
                 </span>
-                <span style={{ fontWeight: 600, color: '#e6edf3' }}>{provider}</span>
-                <span style={{ fontSize: 12, color: '#8b949e' }}>
+                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{provider}</span>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                   ({models.length} shown · {providerRoutable} routable)
                 </span>
               </div>
@@ -542,7 +543,7 @@ export default function ModelTimeline() {
                   const now = Date.now();
                   const reach = copy?.[entry.reachability];
                   const fresh = freshnessCopy?.[entry.freshness];
-                  const color = reach?.color ?? '#8b949e';
+                  const color = reach?.color ?? 'var(--text-secondary)';
                   return (
                     <div
                       key={entry.model}
@@ -552,14 +553,14 @@ export default function ModelTimeline() {
                         alignItems: 'center',
                         gap: 12,
                         padding: '6px 0',
-                        borderBottom: '1px solid #21262d',
+                        borderBottom: '1px solid var(--border-light)',
                       }}
                     >
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div
                           style={{
                             fontSize: 13,
-                            color: '#e6edf3',
+                            color: 'var(--text-primary)',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
@@ -567,18 +568,18 @@ export default function ModelTimeline() {
                         >
                           {entry.model}
                         </div>
-                        <div style={{ fontSize: 11, color: '#8b949e', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                           <span>Probed: {formatTimeAgo(now - entry.lastProbedAt)}</span>
                           <span>Verified: {entry.lastVerifiedAt > 0 ? formatTimeAgo(now - entry.lastVerifiedAt) : 'never'}</span>
                           {entry.lastUsedAt > 0 && <span>Used: {formatTimeAgo(now - entry.lastUsedAt)}</span>}
                           {entry.latencyMs !== undefined && <span>{entry.latencyMs}ms</span>}
                           {entry.errorRate > 0 && (
-                            <span style={{ color: entry.errorRate > 0.5 ? '#f85149' : '#d29922' }}>
+                            <span style={{ color: entry.errorRate > 0.5 ? 'var(--accent-red)' : 'var(--accent-yellow)' }}>
                               err {(entry.errorRate * 100).toFixed(0)}%
                             </span>
                           )}
                           {entry.daysSinceVerify !== null && entry.daysSinceVerify > 7 && (
-                            <span style={{ color: '#d29922' }}>proof {ageDays(entry.lastVerifiedAt)} old</span>
+                            <span style={{ color: 'var(--accent-yellow)' }}>proof {ageDays(entry.lastVerifiedAt)} old</span>
                           )}
                         </div>
                       </div>
@@ -605,7 +606,7 @@ export default function ModelTimeline() {
       </div>
 
       {filteredEntries.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '40px 20px', color: '#8b949e' }}>
+        <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-secondary)' }}>
           {filter === 'routable' && entries.length > 0
             ? 'No model is routable right now — every tracked model is unverified, parked, expired or dead. The Models page shows what each provider would offer live.'
             : 'No models match the current filter'}

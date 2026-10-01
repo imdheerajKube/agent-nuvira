@@ -354,7 +354,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
       </div>
     ) : null}
     <div className="platform-config">
-      <h3 className="section-subtitle">⚙️ Platform transports (buff config gateway)</h3>
+      <h2 className="section-subtitle">⚙️ Platform transports (buff config gateway)</h2>
       {msg ? (
         <div className={`admin-row-msg${msg.kind === 'ok' ? '' : ' admin-row-msg-err'}`}>{msg.text}</div>
       ) : null}

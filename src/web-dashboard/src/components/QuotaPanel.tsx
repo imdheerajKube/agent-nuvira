@@ -121,7 +121,7 @@ export default function QuotaPanel({ authed, role }: { authed: boolean; role: st
 
   return (
     <div className="admin-quota-panel">
-      <h3 className="section-subtitle">💰 Daily Budget (routing.quota — your plan, your say)</h3>
+      <h2 className="section-subtitle">💰 Daily Budget (routing.quota — your plan, your say)</h2>
       <p className="admin-quota-note">
         Free-tier providers enforce tokens-per-day caps the API doesn't advertise — only you
         know your plan's allowance. Declare it here and the agent paces around it (parks the provider

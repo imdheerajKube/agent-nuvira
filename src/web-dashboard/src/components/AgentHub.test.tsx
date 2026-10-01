@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor, within, act } from '@testing-library/react';
-import AgentHub from './AgentHub';
+import AgentHub, { buildConversationExportHtml, readConversationExportPalette } from './AgentHub';
 import { dashboardAPI, setAdminToken } from '../api';
 import type { HubData } from '../types';
 
@@ -573,5 +573,93 @@ describe('AgentHub — Subagents live refresh', () => {
     // Nothing is running, so the interval is torn down rather than left ticking.
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
     expect(fetchHub).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ─── Standalone conversation export ──────────────────────────────────────────
+// The export opens in a NEW window with no stylesheet. The bug this guards
+// against is subtle: the document referenced the dashboard's tokens
+// (`var(--bg-card)` and friends), which do not exist there, so every bubble
+// painted transparent and the export looked unstyled. The document now bakes in
+// concrete colours, and this suite fails if a token reference ever returns.
+
+describe('AgentHub — standalone conversation export', () => {
+  const PALETTE = {
+    canvas: 'rgb(255, 255, 255)',
+    text: 'rgb(17, 17, 17)',
+    muted: 'rgb(85, 85, 85)',
+    userBubble: 'rgb(0, 90, 200)',
+    onUserBubble: 'rgb(255, 255, 255)',
+    agentBubble: 'rgb(240, 240, 240)',
+  };
+
+  it('bakes the resolved palette in and references no dashboard token', () => {
+    const html = buildConversationExportHtml(
+      {
+        displayName: 'Alex',
+        platform: 'whatsapp',
+        messageCount: 1,
+        messages: [{ role: 'user', content: 'hello', ts: 0 }],
+      },
+      PALETTE,
+      new Date(0),
+    );
+
+    // The whole point: a `var(--…)` here resolves to nothing in the blank window.
+    expect(html).not.toMatch(/var\(--/);
+    expect(html).toContain('background: rgb(0, 90, 200)');
+    expect(html).toContain('background: rgb(240, 240, 240)');
+    expect(html).toContain('color: rgb(255, 255, 255)');
+    expect(html).toContain('<!DOCTYPE html>');
+    expect(html).toContain('<style>');
+    expect(html).toContain('Conversation with Alex');
+  });
+
+  it('escapes message content and the contact name (no markup injection)', () => {
+    const html = buildConversationExportHtml(
+      {
+        displayName: '<script>alert(1)</script>',
+        platform: 'whatsapp',
+        messageCount: 1,
+        messages: [{ role: 'user', content: 'a < b & c > d', ts: 0 }],
+      },
+      PALETTE,
+      new Date(0),
+    );
+
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;');
+    expect(html).toContain('a &lt; b &amp; c &gt; d');
+  });
+
+  it('renders both roles with their own bubble class', () => {
+    const html = buildConversationExportHtml(
+      {
+        displayName: 'Alex',
+        platform: 'whatsapp',
+        messageCount: 2,
+        messages: [
+          { role: 'user', content: 'ping', ts: 0 },
+          { role: 'assistant', content: 'pong', ts: 0 },
+        ],
+      },
+      PALETTE,
+      new Date(0),
+    );
+    expect(html).toContain('class="msg msg-user"');
+    expect(html).toContain('class="msg msg-assistant"');
+    expect(html).toContain('class="bubble bubble-user"');
+    expect(html).toContain('class="bubble bubble-assistant"');
+  });
+
+  it('falls back to CSS system colours when the theme tokens are absent', () => {
+    // jsdom does not resolve custom properties, so this is exactly the "no
+    // tokens" runtime — the case where the old code painted nothing at all.
+    const palette = readConversationExportPalette(document.createElement('div'));
+    expect(palette.canvas).toBe('Canvas');
+    expect(palette.text).toBe('CanvasText');
+    expect(palette.userBubble).toBe('Highlight');
+    expect(palette.onUserBubble).toBe('HighlightText');
+    expect(palette.agentBubble).toBe('ButtonFace');
   });
 });

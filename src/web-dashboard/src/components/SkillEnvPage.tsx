@@ -17,6 +17,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
 import type { SkillEnvVarRow } from '../types';
 import { EnvVarEditor } from './EnvVarEditor';
+import PageHeader from './PageHeader';
 
 interface AuthState {
   configured: boolean;
@@ -105,7 +106,7 @@ export default function SkillEnvPage() {
 
   return (
     <div>
-      <h2 className="section-title">🔐 Skill Environment Variables</h2>
+      <PageHeader icon="🔐" title="Skill Environment Variables" />
       <div className="env-var-header">
         <span className="env-var-title">Values are masked; only names and set/unset state are shown.</span>
         <button className="admin-refresh-btn" type="button" onClick={() => void refresh()}>

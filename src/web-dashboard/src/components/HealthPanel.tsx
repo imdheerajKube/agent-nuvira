@@ -31,6 +31,7 @@ import { dashboardAPI } from '../api';
 import type { AdminCheck, AdminChecksData, DashboardData } from '../types';
 import { CheckRow, countByStatus, summarise } from './CheckRow';
 import { formatCount } from '../format';
+import PageHeader from './PageHeader';
 
 interface HealthPanelProps {
   data: DashboardData | null;
@@ -82,20 +83,20 @@ function CheckGroup({
   return (
     <section style={{ marginBottom: 18 }} data-testid={testId}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-        <h3 className="section-subtitle" style={{ margin: 0 }}>
+        <h2 className="section-subtitle" style={{ margin: 0 }}>
           {title}
-        </h3>
+        </h2>
         <span
           style={{
             fontSize: 12,
-            color: counts.fail > 0 ? '#f85149' : counts.warn > 0 ? '#d29922' : '#3fb950',
+            color: counts.fail > 0 ? 'var(--accent-red)' : counts.warn > 0 ? 'var(--accent-yellow)' : 'var(--accent-green)',
           }}
           data-testid={`${testId}-summary`}
         >
           {summarise(counts)}
         </span>
       </div>
-      <p style={{ fontSize: 11, color: '#8b949e', margin: '4px 0 10px' }}>{blurb}</p>
+      <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '4px 0 10px' }}>{blurb}</p>
       {/* An empty group is stated, not hidden: a section that silently
           disappears reads as "this category passed" when it means "the server
           returned nothing for it". */}
@@ -149,8 +150,8 @@ export default function HealthPanel({ data, connected, lastUpdated }: HealthPane
 
   return (
     <>
-      <h2 className="section-title">⚙️ System Health</h2>
-      <p className="section-description" style={{ fontSize: 12, color: '#8b949e', marginBottom: 14 }}>
+      <PageHeader icon="⚙️" title="System Health" />
+      <p className="section-description" style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 14 }}>
         The same checks <code>nuvira doctor</code> runs, executed on demand — pass / warn / fail, with the fix for
         anything that is not passing. The store counters at the bottom are how big the agent&apos;s memory files are;
         they are not a health verdict.
@@ -185,7 +186,7 @@ export default function HealthPanel({ data, connected, lastUpdated }: HealthPane
               className="health-value"
               data-testid="doctor-verdict"
               style={{
-                color: rollup.fail > 0 ? '#f85149' : rollup.warn > 0 ? '#d29922' : '#3fb950',
+                color: rollup.fail > 0 ? 'var(--accent-red)' : rollup.warn > 0 ? 'var(--accent-yellow)' : 'var(--accent-green)',
               }}
             >
               {checks ? summarise(rollup) : running ? 'running…' : '--'}
@@ -196,9 +197,9 @@ export default function HealthPanel({ data, connected, lastUpdated }: HealthPane
 
       {/* ── Doctor checks ─────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-        <h3 className="section-subtitle" style={{ margin: 0 }}>
+        <h2 className="section-subtitle" style={{ margin: 0 }}>
           Doctor Checks
-        </h3>
+        </h2>
         <button
           className="admin-refresh-btn"
           type="button"
@@ -209,7 +210,7 @@ export default function HealthPanel({ data, connected, lastUpdated }: HealthPane
           {running ? '⏳ Running…' : '↻ Run checks again'}
         </button>
         {totalProviders > 0 ? (
-          <span style={{ fontSize: 11, color: '#8b949e' }}>
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
             {configuredProviders} of {totalProviders} providers configured — per-provider detail is on the Admin tab
           </span>
         ) : null}
@@ -241,7 +242,7 @@ export default function HealthPanel({ data, connected, lastUpdated }: HealthPane
       ) : null}
 
       {/* ── Agent performance (server-computed, previously rendered nowhere) ── */}
-      <h3 className="section-subtitle">Agent Performance</h3>
+      <h2 className="section-subtitle">Agent Performance</h2>
       {agentStats ? (
         <>
           <div className="stats-grid" style={{ marginBottom: 10 }}>
@@ -265,36 +266,36 @@ export default function HealthPanel({ data, connected, lastUpdated }: HealthPane
                     gap: 12,
                     fontSize: 12,
                     padding: '4px 0',
-                    borderBottom: '1px solid #21262d',
+                    borderBottom: '1px solid var(--border-light)',
                   }}
                   data-testid={`agent-stats-${row.agent}`}
                 >
-                  <span style={{ flex: 1, color: '#e6edf3' }}>{row.agent}</span>
-                  <span style={{ color: '#8b949e' }}>{formatNumber(row.totalRuns)} runs</span>
-                  <span style={{ color: row.successRate >= 0.9 ? '#3fb950' : row.successRate >= 0.7 ? '#d29922' : '#f85149' }}>
+                  <span style={{ flex: 1, color: 'var(--text-primary)' }}>{row.agent}</span>
+                  <span style={{ color: 'var(--text-secondary)' }}>{formatNumber(row.totalRuns)} runs</span>
+                  <span style={{ color: row.successRate >= 0.9 ? 'var(--accent-green)' : row.successRate >= 0.7 ? 'var(--accent-yellow)' : 'var(--accent-red)' }}>
                     {asPercent(row.successRate)}
                   </span>
-                  <span style={{ color: '#8b949e', minWidth: 78, textAlign: 'right' }}>
+                  <span style={{ color: 'var(--text-secondary)', minWidth: 78, textAlign: 'right' }}>
                     {timeAgo(row.lastRun)}
                   </span>
                 </div>
               ))}
             </div>
           ) : (
-            <p style={{ fontSize: 11, color: '#8b949e', marginBottom: 18 }}>
+            <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 18 }}>
               No agent runs recorded yet — this fills in as agents execute.
             </p>
           )}
         </>
       ) : (
-        <p style={{ fontSize: 11, color: '#8b949e', marginBottom: 18 }}>
+        <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 18 }}>
           No agent-stats file yet. Run a task and the per-agent success rates appear here.
         </p>
       )}
 
       {/* ── Learning stores — demoted, and labelled for what they are ──────── */}
-      <h3 className="section-subtitle">Learning Stores</h3>
-      <p style={{ fontSize: 11, color: '#8b949e', margin: '4px 0 10px' }}>
+      <h2 className="section-subtitle">Learning Stores</h2>
+      <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: '4px 0 10px' }}>
         What the agent has learned into disk. Sizes, not verdicts.
       </p>
       <div className="health-grid">
@@ -329,12 +330,12 @@ export default function HealthPanel({ data, connected, lastUpdated }: HealthPane
       </div>
 
       {!data ? (
-        <p style={{ fontSize: 11, color: '#8b949e', marginTop: 10 }}>
+        <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 10 }}>
           Waiting for the first data frame from the dashboard server — the checks above do not depend on it.
         </p>
       ) : null}
 
-      <h3 className="section-subtitle">Server Info</h3>
+      <h2 className="section-subtitle">Server Info</h2>
       <div className="server-info">
         <div className="info-row">
           <span className="info-label">Stream</span>
