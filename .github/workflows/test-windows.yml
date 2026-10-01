@@ -149,6 +149,19 @@ jobs:
         env:
           CI: true
 
+      # Real (trusted) mouse and key events over CDP. Exactly as valuable on
+      # Windows as on Unix, and for a different reason: the bug that created
+      # this script only reproduced on macOS (Windows focuses a control on
+      # mouse-down, so the labelled-radio blur never fired), which is precisely
+      # why a single-platform green run cannot be trusted to mean "the panel
+      # works". The assertions themselves are engine-independent.
+      - name: Dashboard trusted input (real clicks + keys)
+        if: matrix.node-version == 22
+        run: npm run smoke:dashboard:input -- --require-chrome
+        shell: bash
+        env:
+          CI: true
+
       # The SDK example is a real consumer of the published package surface.
       # Windows matters here: path handling in the example's configs is exactly
       # where a Linux-only setup breaks.

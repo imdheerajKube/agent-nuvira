@@ -243,7 +243,12 @@ body {
 
 /* ═══ Shell — navigation rail ═══
    Sticky, not fixed: it stays in flow so the content column needs no
-   compensating margin and the two cannot drift apart. */
+   compensating margin and the two cannot drift apart.
+
+   Its own surface (--sidebar-*), not the top bar's (--chrome-*). The two are a
+   family and share a lightness direction, but the rail is a shade off so the
+   eye reads a rail beside a bar rather than one continuous slab, and so the
+   rail's ink can be asserted on all three of its backgrounds independently. */
 .nav {
   flex: none;
   position: sticky;
@@ -252,9 +257,9 @@ body {
   height: calc(100vh - var(--topbar-height));
   display: flex;
   flex-direction: column;
-  background: var(--chrome-bg);
-  color: var(--chrome-ink);
-  border-right: 1px solid var(--chrome-line);
+  background: var(--sidebar-bg);
+  color: var(--sidebar-ink);
+  border-right: 1px solid var(--sidebar-line);
   overflow-y: auto;
   z-index: var(--z-sidebar);
 }
@@ -269,38 +274,45 @@ body {
 }
 
 .nav-search {
-  padding: var(--space-3) var(--space-3) 0;
+  padding: var(--space-4) var(--space-3) var(--space-1);
 }
 
 .nav-search-input {
   width: 100%;
   min-height: var(--target-min);
   padding: 0 var(--space-3);
-  background: var(--chrome-hover);
-  color: var(--chrome-ink);
-  border: 1px solid var(--chrome-line);
+  /* Filled AND bounded: the fill groups it with the rail while the 3:1 boundary
+     (--sidebar-line-control) is what identifies it as a control, which is the
+     1.4.11 requirement the page's own --line-control cannot meet on a dark rail. */
+  background: var(--sidebar-hover);
+  color: var(--sidebar-ink);
+  border: 1px solid var(--sidebar-line-control);
   border-radius: var(--radius-md);
   font: inherit;
   font-size: calc(12px * var(--font-scale));
 }
 
-.nav-search-input::placeholder { color: var(--chrome-ink-muted); }
+.nav-search-input::placeholder { color: var(--sidebar-ink-muted); }
 
+/* The side padding is the pill's gutter: every link is inset from the rail edge,
+   so hover/active read as a rounded row rather than a full-width stripe. */
 .nav-links {
   flex: 1;
-  padding: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3) var(--space-3);
 }
 
 .nav-group { padding-top: var(--space-2); }
 
 .nav-group-title {
   margin: 0;
-  padding: var(--space-2) var(--space-4) var(--space-1);
-  color: var(--chrome-ink-muted);
+  /* Aligned to the LINK TEXT, not the pill edge: 12px gutter + 12px pill
+     padding, which is why the title does not use .nav-links' own padding. */
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  color: var(--sidebar-ink-muted);
   font-size: calc(10px * var(--font-scale));
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.7px;
+  letter-spacing: 1.2px;
 }
 
 .nav-icon {
@@ -309,41 +321,43 @@ body {
   text-align: center;
 }
 
+/* A pill: filled states rather than a left border, so the active row is a shape
+   the eye picks out of the group instead of a 3px stripe at the rail's edge. */
 .nav-link {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
   min-height: var(--target-min);
-  padding: 0 var(--space-4);
-  color: var(--chrome-ink-muted);
+  margin: 2px 0;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--sidebar-ink-muted);
   text-decoration: none;
   font-size: calc(13px * var(--font-scale));
   transition: var(--transition);
-  border-left: 3px solid transparent;
 }
 
 .nav-link:hover {
-  background: var(--chrome-hover);
-  color: var(--chrome-ink);
+  background: var(--sidebar-hover);
+  color: var(--sidebar-ink);
 }
 
 .nav-link.active {
-  background: var(--chrome-hover);
-  color: var(--chrome-ink);
-  border-left-color: var(--chrome-ink);
+  background: var(--sidebar-active);
+  color: var(--sidebar-ink);
   font-weight: 600;
 }
 
 .nav-empty {
   margin: 0;
-  padding: var(--space-3) var(--space-4);
-  color: var(--chrome-ink-muted);
+  padding: var(--space-3);
+  color: var(--sidebar-ink-muted);
   font-size: calc(12px * var(--font-scale));
 }
 
 .nav-footer {
   padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--chrome-line);
+  border-top: 1px solid var(--sidebar-line);
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -362,13 +376,13 @@ body {
 
 .status-text {
   font-size: calc(11px * var(--font-scale));
-  color: var(--chrome-ink-muted);
+  color: var(--sidebar-ink-muted);
   flex: 1;
 }
 
 .last-updated {
   font-size: calc(10px * var(--font-scale));
-  color: var(--chrome-ink-muted);
+  color: var(--sidebar-ink-muted);
 }
 
 /* ═══ Shortcuts cheatsheet (modal) ═══
@@ -514,6 +528,251 @@ body {
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+/* ═══ Help page ═══
+   A reference page, so it is measured for READING: the column is capped in
+   characters rather than pixels, and every definition list is a two-column grid
+   so terms line up down the page instead of wrapping into the prose. */
+.help-section {
+  max-width: 82ch;
+  margin-bottom: var(--space-8);
+}
+
+.help-body {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+  font-size: calc(var(--text-md) * var(--font-scale));
+  line-height: var(--leading-normal);
+}
+
+.help-steps {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--text-secondary);
+  font-size: calc(var(--text-md) * var(--font-scale));
+  line-height: var(--leading-normal);
+}
+
+.help-steps li { margin-bottom: var(--space-2); }
+
+/* The lead-in of each step is the actionable part, so it carries the emphasis. */
+.help-steps strong { color: var(--text-primary); }
+
+.help-anatomy {
+  display: grid;
+  grid-template-columns: minmax(150px, max-content) 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  font-size: calc(var(--text-md) * var(--font-scale));
+}
+
+.help-anatomy dt {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.help-anatomy dd {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: var(--leading-normal);
+}
+
+.help-group { margin-top: var(--space-3); }
+
+.help-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.help-links a {
+  color: var(--accent-blue);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: var(--transition);
+}
+
+.help-links a:hover { border-bottom-color: var(--accent-blue); }
+
+/* Two columns of shortcuts rather than one long list: the groups are independent
+   and the page is meant to be scanned, not read top to bottom. */
+.help-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-8);
+  margin-bottom: var(--space-3);
+}
+
+.help-note {
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: calc(var(--text-sm) * var(--font-scale));
+  line-height: var(--leading-normal);
+}
+
+@media (max-width: 720px) {
+  /* A two-column definition list stops being a table and starts being two
+     ragged columns, which is worse than one. */
+  .help-anatomy { grid-template-columns: 1fr; gap: var(--space-1) 0; }
+  .help-anatomy dd { margin-bottom: var(--space-2); }
+}
+
+/* ═══ Command browser (Command Console) ═══
+   The list IS a list of buttons, so each row is a real <button>: Enter and Space
+   work, it is announced as a button, and it is focusable in order. Native
+   <details> wraps the groups for the same reason — the disclosure semantics are
+   the element's, not something re-implemented with aria-* and key handlers. */
+.command-browser { margin-top: var(--space-6); }
+
+.command-browser-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.command-browser-title { margin-bottom: 0; }
+
+.command-browser-count {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: calc(var(--text-sm) * var(--font-scale));
+}
+
+.command-browser-search {
+  width: 100%;
+  margin: var(--space-3) 0;
+}
+
+.command-browser-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: calc(var(--text-md) * var(--font-scale));
+}
+
+.command-browser-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.command-group {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.command-group-summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-height: var(--target-min);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-primary);
+  font-size: calc(var(--text-md) * var(--font-scale));
+  cursor: pointer;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+.command-group-summary:hover { background: var(--bg-hover); }
+
+.command-group-summary:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.command-group-name {
+  flex: none;
+  color: var(--accent-blue);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+/* One line while collapsed, so 50 groups stay scannable; wrapping once open. */
+.command-group-description {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: calc(var(--text-sm) * var(--font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-group[open] .command-group-description { white-space: normal; }
+
+.command-group-count {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: calc(var(--text-xs) * var(--font-scale));
+}
+
+.command-list {
+  margin: 0;
+  padding: var(--space-1) 0 var(--space-2);
+  border-top: 1px solid var(--border-light);
+  list-style: none;
+}
+
+.command-item { margin: 0; padding: 0 var(--space-1); }
+
+.command-use {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  width: 100%;
+  min-height: var(--target-min);
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+
+.command-use:hover { background: var(--bg-hover); }
+
+.command-use:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(var(--focus-ring-offset) * -1);
+}
+
+.command-item-name {
+  flex: none;
+  color: var(--accent-blue);
+  font-family: var(--font-mono);
+  font-size: calc(var(--text-sm) * var(--font-scale));
+  font-weight: 600;
+}
+
+.command-item-description {
+  flex: 1;
+  min-width: 14ch;
+  color: var(--text-secondary);
+  font-size: calc(var(--text-sm) * var(--font-scale));
+}
+
+.command-item-flags {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.command-item-flags code {
+  padding: 1px var(--space-1);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: calc(var(--text-2xs) * var(--font-scale));
 }
 
 /* ═══ Sections ═══ */
@@ -7189,7 +7448,12 @@ body {
   flex-direction: column;
   gap: var(--space-4);
   width: 268px;
-  max-height: 70vh;
+  /* The space actually available BELOW the bar it drops from, not a flat 70vh.
+     At 70vh on a 757px-high window the panel clipped at 530px while its content
+     is ~630px, so the Accessibility switch and Reset were pushed past the scroll
+     edge and had to be scrolled to reach. `auto` stays as the fallback for a
+     genuinely short window. */
+  max-height: calc(100vh - var(--topbar-height) - var(--space-6));
   overflow-y: auto;
   padding: var(--space-4);
   background: var(--bg-card);

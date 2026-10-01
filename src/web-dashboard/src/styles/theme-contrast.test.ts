@@ -123,9 +123,17 @@ const TEXT_PAIRS: Array<[string, string, string]> = [
   ['--p-ok', '--p-surface', 'success text'],
   ['--p-warn', '--p-surface', 'warning text'],
   ['--p-danger', '--p-surface', 'error text'],
-  ['--p-chrome-ink', '--p-chrome', 'sidebar nav text'],
-  ['--p-chrome-ink-2', '--p-chrome', 'sidebar secondary text'],
+  ['--p-chrome-ink', '--p-chrome', 'top bar text'],
+  ['--p-chrome-ink-2', '--p-chrome', 'top bar secondary text'],
   ['--p-on-accent', '--p-accent', 'button label on an accent button'],
+  // The rail is its own surface, so a nav label needs to be legible on all
+  // three backgrounds it can land on. Idle and hovered/active are separate
+  // assertions because a palette can pass the idle one and fail the filled
+  // pill by making the pill too close to its own label.
+  ['--p-sidebar-ink', '--p-sidebar', 'rail nav text'],
+  ['--p-sidebar-ink-2', '--p-sidebar', 'rail secondary text'],
+  ['--p-sidebar-ink', '--p-sidebar-hover', 'rail nav text on a hovered pill'],
+  ['--p-sidebar-ink', '--p-sidebar-active', 'rail nav text on the active pill'],
 ];
 
 /**
@@ -137,9 +145,11 @@ const TEXT_PAIRS: Array<[string, string, string]> = [
 const REQUIRED_UI_PAIRS: Array<[string, string, string]> = [
   ['--p-focus', '--p-surface', 'focus ring on a card'],
   ['--p-focus', '--p-canvas', 'focus ring on the page'],
-  ['--p-focus-chrome', '--p-chrome', 'focus ring in the sidebar'],
+  ['--p-focus-chrome', '--p-chrome', 'focus ring in the top bar'],
+  ['--p-focus-chrome', '--p-sidebar', 'focus ring in the rail'],
   ['--p-line-control', '--p-surface', 'control boundary (input / select edge)'],
   ['--p-line-control', '--p-canvas', 'control boundary on the page'],
+  ['--p-sidebar-line-control', '--p-sidebar', 'control boundary in the rail'],
 ];
 
 /**
@@ -159,7 +169,14 @@ const REQUIRED_UI_PAIRS: Array<[string, string, string]> = [
 const DECORATIVE_PAIRS: Array<[string, string, string]> = [
   ['--p-line', '--p-surface', 'card hairline'],
   ['--p-line', '--p-canvas', 'page divider'],
-  ['--p-chrome-line', '--p-chrome', 'sidebar divider'],
+  ['--p-chrome-line', '--p-chrome', 'top bar divider'],
+  ['--p-sidebar-line', '--p-sidebar', 'rail divider'],
+  // The pills are a DISCOVERY cue ("this row is clickable"), not a state that
+  // must identify a control on its own — the active row also carries weight and
+  // a filled background — so perceptible is the right bar. It is still a bar:
+  // a pill tinted to the rail's own colour is a hover state nobody can see.
+  ['--p-sidebar-hover', '--p-sidebar', 'rail hover pill'],
+  ['--p-sidebar-active', '--p-sidebar', 'rail active pill'],
 ];
 
 const AA_TEXT = 4.5;

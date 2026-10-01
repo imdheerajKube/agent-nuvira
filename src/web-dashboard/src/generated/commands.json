@@ -1,0 +1,1949 @@
+{
+  "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
+  "regenerate": "node scripts/generate-commands-surface.mjs",
+  "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
+  "commandCount": 250,
+  "groupCount": 50,
+  "groups": [
+    {
+      "name": "admin",
+      "description": "Admin governance policy for Auto routing (P6 M6.5) — allow/deny providers & models, hard cost cap, PII privacy, unblock control",
+      "commands": [
+        {
+          "name": "admin policy",
+          "description": "Show the current governance policy + enforcement status",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "admin allow",
+          "description": "Add providers to the allow-list (empty = all providers allowed)",
+          "flags": []
+        },
+        {
+          "name": "admin deny",
+          "description": "Add providers to the deny-list (wins over the allow-list)",
+          "flags": []
+        },
+        {
+          "name": "admin allow-model",
+          "description": "Add models to the allow-list — a provider survives only if one of its candidate models is listed",
+          "flags": []
+        },
+        {
+          "name": "admin deny-model",
+          "description": "Add models to the deny-list (wins over the allow-list)",
+          "flags": []
+        },
+        {
+          "name": "admin max-cost",
+          "description": "Set the admin hard max cost per call (USD); joins routing.maxCostUsd (stricter wins)",
+          "flags": []
+        },
+        {
+          "name": "admin pii-min",
+          "description": "Set the minimum privacy score (0-1) required when a task matches a PII pattern (default 1.0 = local-only)",
+          "flags": []
+        },
+        {
+          "name": "admin unblock",
+          "description": "Control whether `nuvira models unblock` may override REGISTRY-learned blocks (false = admin-hard)",
+          "flags": []
+        },
+        {
+          "name": "admin clear",
+          "description": "Remove one governance rule (the policy becomes permissive on that field)",
+          "flags": []
+        },
+        {
+          "name": "admin role",
+          "description": "Manage RBAC roles over the admin surface (P6 M6.1 — requires admin role)",
+          "flags": []
+        },
+        {
+          "name": "admin role add",
+          "description": "Assign a role to a user (first assignment exits legacy single-user mode)",
+          "flags": []
+        },
+        {
+          "name": "admin role remove",
+          "description": "Remove a user's role assignment (if none remain, legacy permissive mode resumes)",
+          "flags": []
+        },
+        {
+          "name": "admin role list",
+          "description": "List all role assignments",
+          "flags": []
+        },
+        {
+          "name": "admin whoami",
+          "description": "Show the current identity and its effective RBAC permissions",
+          "flags": []
+        },
+        {
+          "name": "admin cron",
+          "description": "Scheduled tool invocations (J2 — cron/jobs.py)",
+          "flags": []
+        },
+        {
+          "name": "admin cron add",
+          "description": "Add a cron job: nuvira admin cron add nightly-build \"0 3 * * *\" build",
+          "flags": [
+            "--args <args>",
+            "--channel <channel>",
+            "--dry-run"
+          ]
+        },
+        {
+          "name": "admin cron list",
+          "description": "List cron jobs with schedule + next run",
+          "flags": []
+        },
+        {
+          "name": "admin cron remove",
+          "description": "Remove a cron job",
+          "flags": []
+        },
+        {
+          "name": "admin cron run",
+          "description": "Run a cron job NOW (invoke its tool immediately)",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "chat",
+      "description": "Start an interactive chat session with AI",
+      "commands": []
+    },
+    {
+      "name": "edit",
+      "description": "Edit a file using AI assistance",
+      "commands": []
+    },
+    {
+      "name": "plan",
+      "description": "Generate an implementation plan for a codebase task",
+      "commands": []
+    },
+    {
+      "name": "config",
+      "description": "Manage Nuvira configuration",
+      "commands": [
+        {
+          "name": "config set",
+          "description": "Set a configuration value",
+          "flags": []
+        },
+        {
+          "name": "config get",
+          "description": "Get a configuration value",
+          "flags": []
+        },
+        {
+          "name": "config list",
+          "description": "List all providers and their status",
+          "flags": []
+        },
+        {
+          "name": "config init",
+          "description": "Initialize configuration interactively",
+          "flags": []
+        },
+        {
+          "name": "config vault",
+          "description": "Secret vault management (Phase A1)",
+          "flags": []
+        },
+        {
+          "name": "config vault status",
+          "description": "Show the active vault tier and migration state",
+          "flags": []
+        },
+        {
+          "name": "config vault log",
+          "description": "Show recent vault access-log entries (K3 tamper-evident audit)",
+          "flags": [
+            "--limit <limit>"
+          ]
+        },
+        {
+          "name": "config vault migrate-keys",
+          "description": "Move plaintext provider API keys from buffconfig.json into the vault",
+          "flags": []
+        },
+        {
+          "name": "config gateway",
+          "description": "Manage gateway platform transports (tokens written to ~/.nuvira/.env)",
+          "flags": []
+        },
+        {
+          "name": "config gateway list",
+          "description": "Show every platform transport and its env-var status",
+          "flags": []
+        },
+        {
+          "name": "config gateway set",
+          "description": "Configure a platform transport (interactive wizard, or --set VAR=value)",
+          "flags": [
+            "--set <set>"
+          ]
+        },
+        {
+          "name": "config gateway remove",
+          "description": "Remove a platform transport from the env file",
+          "flags": [
+            "--yes"
+          ]
+        },
+        {
+          "name": "config gateway allow",
+          "description": "Allow a user/group to trigger the agent on a platform (written to gateway.policies in config)",
+          "flags": []
+        },
+        {
+          "name": "config gateway disallow",
+          "description": "Remove a user/group from the allowed list of a platform",
+          "flags": []
+        },
+        {
+          "name": "config gateway reply",
+          "description": "Set how unapproved senders are handled on a platform: polite (⛔ message) or silent (no reply)",
+          "flags": []
+        },
+        {
+          "name": "config gateway send-authority",
+          "description": "Manage who may command the agent to send to OTHER people (gateway_send). Outbound-only gate — separate from `allow` (who may trigger).",
+          "flags": []
+        },
+        {
+          "name": "config gateway notify",
+          "description": "Manage status recipients — contacts/groups that ALWAYS get pipeline completion summaries",
+          "flags": []
+        },
+        {
+          "name": "config gateway ask-user-wait",
+          "description": "Ask-and-wait for clarifying questions on messaging channels: when a turn asks the sender a question, hold it for their reply instead of assuming option 1",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "cache",
+      "description": "Manage inference cache",
+      "commands": [
+        {
+          "name": "cache stats",
+          "description": "Show cache statistics",
+          "flags": []
+        },
+        {
+          "name": "cache clear",
+          "description": "Clear all cached responses",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "models",
+      "description": "List available models from inference providers",
+      "commands": [
+        {
+          "name": "models refresh",
+          "description": "Probe providers and spot-check models, updating the Model Availability Registry",
+          "flags": [
+            "--json",
+            "--no-spot-check"
+          ]
+        },
+        {
+          "name": "models status",
+          "description": "Show the Model Availability Registry (verified / unavailable / quota-parked models)",
+          "flags": [
+            "--json",
+            "--verbose"
+          ]
+        },
+        {
+          "name": "models unblock",
+          "description": "Manually release a registry-blocked provider (escape hatch) and re-probe it against the live API",
+          "flags": [
+            "--json",
+            "--no-spot-check"
+          ]
+        },
+        {
+          "name": "models excluded",
+          "description": "Show which providers routing is currently skipping, and why (failure cooldowns, registry blocks, governance policy)",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "models staleness",
+          "description": "Show model staleness: last probe time, days since verification, and removal risk",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "models watch",
+          "description": "Run the model-registry maintenance daemon: probe + spot-check on a schedule",
+          "flags": [
+            "--interval <interval>",
+            "--no-spot-check"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "execute",
+      "description": "Run a multi-agent pipeline to accomplish a goal",
+      "commands": []
+    },
+    {
+      "name": "run",
+      "description": "Execute a shell command and show output (lightweight alternative to the full pipeline)",
+      "commands": []
+    },
+    {
+      "name": "workflow",
+      "description": "Run, manage, and share workflow templates",
+      "commands": [
+        {
+          "name": "workflow list",
+          "description": "Show available workflow templates (built-in + installed)",
+          "flags": []
+        },
+        {
+          "name": "workflow run",
+          "description": "Run a workflow template",
+          "flags": [
+            "--dry-run",
+            "--model <model>",
+            "--provider <provider>",
+            "--verbose"
+          ]
+        },
+        {
+          "name": "workflow search",
+          "description": "Search the GitHub workflow template registry",
+          "flags": [
+            "--refresh"
+          ]
+        },
+        {
+          "name": "workflow install",
+          "description": "Install a workflow template from the GitHub registry",
+          "flags": []
+        },
+        {
+          "name": "workflow publish",
+          "description": "Prepare a local workflow template for publishing to the registry",
+          "flags": []
+        },
+        {
+          "name": "workflow info",
+          "description": "Show detailed information about a registry template",
+          "flags": []
+        },
+        {
+          "name": "workflow upgrade",
+          "description": "Check for and apply template upgrades from the registry",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "whatsapp",
+      "description": "WhatsApp bridge (Baileys) — pair a personal number via QR and check status (I8)",
+      "commands": [
+        {
+          "name": "whatsapp pair",
+          "description": "Pair WhatsApp (personal number — no Meta Business account, no paid API)",
+          "flags": [
+            "--phone <phone>",
+            "--timeout <timeout>"
+          ]
+        },
+        {
+          "name": "whatsapp status",
+          "description": "Show bridge session path + pairing state",
+          "flags": []
+        },
+        {
+          "name": "whatsapp contacts",
+          "description": "List resolvable contacts (mapping file + learned) — connects briefly to learn names from live traffic",
+          "flags": [
+            "--timeout <timeout>"
+          ]
+        },
+        {
+          "name": "whatsapp contact",
+          "description": "Manage the WhatsApp contact-name mapping (send by name: nuvira gateway send whatsapp:<Name> \"message\")",
+          "flags": []
+        },
+        {
+          "name": "whatsapp contact add",
+          "description": "Map a display name to a number (E.164, no +): nuvira whatsapp contact add Name 919876543210",
+          "flags": []
+        },
+        {
+          "name": "whatsapp contact remove",
+          "description": "Remove a mapped contact name",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "plugins",
+      "description": "Manage provider plugins, agent plugins, and workflow templates",
+      "commands": [
+        {
+          "name": "plugins list",
+          "description": "List all discovered plugins and workflows",
+          "flags": []
+        },
+        {
+          "name": "plugins scan",
+          "description": "Force re-scan all plugin directories",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "learn",
+      "description": "Self-improvement system — agent stats, patterns, and optimization",
+      "commands": [
+        {
+          "name": "learn stats",
+          "description": "Show per-agent performance statistics",
+          "flags": []
+        },
+        {
+          "name": "learn patterns",
+          "description": "Show extracted coding patterns",
+          "flags": [
+            "--extract",
+            "--model <model>",
+            "--provider <provider>"
+          ]
+        },
+        {
+          "name": "learn lessons",
+          "description": "Show failure lessons — what past runs learned from mistakes",
+          "flags": [
+            "--extract",
+            "--model <model>",
+            "--provider <provider>"
+          ]
+        },
+        {
+          "name": "learn optimize",
+          "description": "Generate optimized model-to-agent routing recommendations",
+          "flags": []
+        },
+        {
+          "name": "learn status",
+          "description": "Show overall self-improvement status",
+          "flags": []
+        },
+        {
+          "name": "learn clear",
+          "description": "Reset all learning data (stats, patterns, memory)",
+          "flags": [
+            "--force"
+          ]
+        },
+        {
+          "name": "learn compare",
+          "description": "Compare benchmark results between two models",
+          "flags": [
+            "--all",
+            "--last"
+          ]
+        },
+        {
+          "name": "learn feedback",
+          "description": "Rate a trajectory or view feedback statistics",
+          "flags": [
+            "--comment <comment>",
+            "--rating <rating>",
+            "--stats",
+            "--trajectory <trajectory>"
+          ]
+        },
+        {
+          "name": "learn quality",
+          "description": "Show pattern quality and decay metrics",
+          "flags": [
+            "--details"
+          ]
+        },
+        {
+          "name": "learn gc",
+          "description": "Garbage-collect low-quality patterns",
+          "flags": [
+            "--dry-run"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "init",
+      "description": "Scaffold a new project from a template",
+      "commands": []
+    },
+    {
+      "name": "stats",
+      "description": "View usage statistics and cost tracking",
+      "commands": [
+        {
+          "name": "stats cost",
+          "description": "Show API cost tracking details",
+          "flags": [
+            "--clear"
+          ]
+        },
+        {
+          "name": "stats history",
+          "description": "Show conversation history statistics",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "history",
+      "description": "Browse and search conversation history",
+      "commands": [
+        {
+          "name": "history list",
+          "description": "Show all saved conversations",
+          "flags": [
+            "--limit <limit>"
+          ]
+        },
+        {
+          "name": "history search",
+          "description": "Search conversations by keyword or semantic similarity",
+          "flags": [
+            "--limit <limit>",
+            "--semantic"
+          ]
+        },
+        {
+          "name": "history show",
+          "description": "Show a specific conversation",
+          "flags": []
+        },
+        {
+          "name": "history clear",
+          "description": "Clear all conversation history",
+          "flags": []
+        },
+        {
+          "name": "history prune",
+          "description": "Remove conversations older than the retention period",
+          "flags": [
+            "--days <days>"
+          ]
+        },
+        {
+          "name": "history reindex",
+          "description": "Rebuild the semantic search index for all past conversations (embeds each session for vector search)",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "skill",
+      "description": "Manage and run compiled skills — reusable execution plans derived from past trajectories",
+      "commands": [
+        {
+          "name": "skill list",
+          "description": "List all compiled skills",
+          "flags": [
+            "--quality <quality>"
+          ]
+        },
+        {
+          "name": "skill show",
+          "description": "Show detailed skill definition",
+          "flags": []
+        },
+        {
+          "name": "skill run",
+          "description": "Run a skill — resolves parameters and invokes the multi-agent pipeline",
+          "flags": [
+            "--auto-route",
+            "--dry-run",
+            "--memory",
+            "--model <model>",
+            "--params <params>",
+            "--provider <provider>",
+            "--verbose"
+          ]
+        },
+        {
+          "name": "skill compile",
+          "description": "Force skill compilation from stored trajectories",
+          "flags": [
+            "--model <model>",
+            "--provider <provider>"
+          ]
+        },
+        {
+          "name": "skill search",
+          "description": "Search skills by name, tag, or description",
+          "flags": []
+        },
+        {
+          "name": "skill gc",
+          "description": "Garbage-collect low-quality skills",
+          "flags": [
+            "--dry-run"
+          ]
+        },
+        {
+          "name": "skill quality",
+          "description": "Show skill quality and decay metrics",
+          "flags": [
+            "--details"
+          ]
+        },
+        {
+          "name": "skill clear",
+          "description": "Remove all compiled skills",
+          "flags": [
+            "--force"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "skills",
+      "description": "Skills hub — search, install, update, and audit community skills (J3)",
+      "commands": [
+        {
+          "name": "skills search",
+          "description": "Search all configured skill registries (I7 P1 multi-source)",
+          "flags": [
+            "--refresh",
+            "--source <source>"
+          ]
+        },
+        {
+          "name": "skills install",
+          "description": "Install a skill from the configured registries into <project>/.agents/skills/ (sandboxed, checksummed)",
+          "flags": [
+            "--project <project>",
+            "--source <source>"
+          ]
+        },
+        {
+          "name": "skills uninstall",
+          "description": "Uninstall a skill: removes .agents/skills/<name> and its provenance record",
+          "flags": [
+            "--project <project>"
+          ]
+        },
+        {
+          "name": "skills update",
+          "description": "Update installed skills to newer registry versions (checksum-verified)",
+          "flags": [
+            "--project <project>"
+          ]
+        },
+        {
+          "name": "skills bundle",
+          "description": "P6b — skill bundles: group skills under one id and load them together (Hermes parity)",
+          "flags": [
+            "--create",
+            "--delete",
+            "--description <description>",
+            "--name <name>",
+            "--skills <skills>"
+          ]
+        },
+        {
+          "name": "skills list",
+          "description": "List installed skills with provenance (origin: registry vs local)",
+          "flags": [
+            "--origin <origin>",
+            "--project <project>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "gateway",
+      "description": "Multi-channel gateway — talk to the agent from Telegram/Discord/Slack/WhatsApp/Email/Signal (J1)",
+      "commands": [
+        {
+          "name": "gateway status",
+          "description": "Show configured adapters and reachable channels",
+          "flags": []
+        },
+        {
+          "name": "gateway send",
+          "description": "Send a message to a channel alias or platform:channelId",
+          "flags": []
+        },
+        {
+          "name": "gateway send-media",
+          "description": "Send a media file (image/video/audio/document) — type from the file extension; WhatsApp/Telegram/Discord",
+          "flags": [
+            "--caption <caption>"
+          ]
+        },
+        {
+          "name": "gateway alias",
+          "description": "Manage channel aliases",
+          "flags": []
+        },
+        {
+          "name": "gateway alias add",
+          "description": "Register an alias: nuvira gateway alias add ops slack C0123",
+          "flags": []
+        },
+        {
+          "name": "gateway alias remove",
+          "description": "Remove an alias",
+          "flags": []
+        },
+        {
+          "name": "gateway contact",
+          "description": "Manage contacts for outbound messaging (name → platform:id resolution)",
+          "flags": []
+        },
+        {
+          "name": "gateway contact list",
+          "description": "List all contacts with status, platform, and ID",
+          "flags": [
+            "--pending",
+            "--platform <platform>"
+          ]
+        },
+        {
+          "name": "gateway contact approve",
+          "description": "Approve a contact for outbound messaging",
+          "flags": [
+            "--platform <platform>"
+          ]
+        },
+        {
+          "name": "gateway contact reject",
+          "description": "Reject a contact (block outbound messages)",
+          "flags": [
+            "--platform <platform>"
+          ]
+        },
+        {
+          "name": "gateway contact delete",
+          "description": "Delete a contact permanently",
+          "flags": [
+            "--platform <platform>"
+          ]
+        },
+        {
+          "name": "gateway contact add",
+          "description": "Manually add a contact (e.g. nuvira gateway contact add Anuj telegram 616825477)",
+          "flags": [
+            "--phone <phone>"
+          ]
+        },
+        {
+          "name": "gateway delivery",
+          "description": "Show the delivery ledger (failed sends awaiting retry) and optionally drain it",
+          "flags": [
+            "--flush"
+          ]
+        },
+        {
+          "name": "gateway logs",
+          "description": "Show the structured gateway log (send failures, refused senders, pipeline outcomes)",
+          "flags": [
+            "--event <event>",
+            "--limit <limit>",
+            "--path"
+          ]
+        },
+        {
+          "name": "gateway history",
+          "description": "Manage per-contact conversation history (gateway chat memory)",
+          "flags": []
+        },
+        {
+          "name": "gateway history list",
+          "description": "List all stored conversations with last message preview",
+          "flags": [
+            "--platform <platform>"
+          ]
+        },
+        {
+          "name": "gateway history show",
+          "description": "Show conversation history for a contact (e.g. nuvira gateway history show whatsapp:918800663237)",
+          "flags": [
+            "--limit <limit>"
+          ]
+        },
+        {
+          "name": "gateway history clear",
+          "description": "Clear conversation history for a contact",
+          "flags": []
+        },
+        {
+          "name": "gateway history prune",
+          "description": "Remove conversations older than 7 days",
+          "flags": []
+        },
+        {
+          "name": "gateway start",
+          "description": "Run all configured adapters in the foreground (Ctrl-C to stop; --supervise auto-restarts on crash)",
+          "flags": [
+            "--host <host>",
+            "--no-events",
+            "--port <port>",
+            "--supervise"
+          ]
+        },
+        {
+          "name": "gateway stop",
+          "description": "Stop a running gateway gracefully (SIGTERM — from any terminal)",
+          "flags": [
+            "--port <port>"
+          ]
+        },
+        {
+          "name": "gateway setup",
+          "description": "Interactive setup wizard for a messaging platform (e.g. nuvira gateway setup telegram)",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "model",
+      "description": "Manage inference providers and models — switch, list, inspect, and recommend",
+      "commands": [
+        {
+          "name": "model list",
+          "description": "List all providers and their configuration status",
+          "flags": [
+            "--all",
+            "--json"
+          ]
+        },
+        {
+          "name": "model switch",
+          "description": "Switch active provider/model (interactive or via argument). Use `auto` for smart routing",
+          "flags": [
+            "--model <model>",
+            "--provider <provider>"
+          ]
+        },
+        {
+          "name": "model info",
+          "description": "Show current active provider and model configuration",
+          "flags": [
+            "--verbose"
+          ]
+        },
+        {
+          "name": "model recommend",
+          "description": "Show model routing recommendations",
+          "flags": []
+        },
+        {
+          "name": "model explain",
+          "description": "Explain Auto model routing — why a provider/model would be picked for a task",
+          "flags": [
+            "--agent <agent>",
+            "--json",
+            "--since <since>"
+          ]
+        },
+        {
+          "name": "model health",
+          "description": "Quick health check for the currently active provider",
+          "flags": [
+            "--provider <provider>",
+            "--verbose"
+          ]
+        },
+        {
+          "name": "model bandit",
+          "description": "Show learning-router bandit state (Thompson-sampling priors per provider × complexity bucket). Action: reset",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "model ml",
+          "description": "Show the ML task-similarity router state (learned outcomes per provider, kNN over task features). Action: reset",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "model quota",
+          "description": "Show the central quota ledger (tokens/requests per provider × model, reset windows, parked state). Actions: reset | set <provider> | clear <provider>",
+          "flags": [
+            "--cost-usd <cost_usd>",
+            "--json",
+            "--requests <requests>",
+            "--tokens <tokens>",
+            "--window-ms <window_ms>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "benchmark",
+      "description": "Run standardized model benchmarks against coding tasks",
+      "commands": [
+        {
+          "name": "benchmark run",
+          "description": "Run the benchmark suite",
+          "flags": [
+            "--budget <budget>",
+            "--format <format>",
+            "--model <model>",
+            "--provider <provider>",
+            "--routing",
+            "--tasks <tasks>"
+          ]
+        },
+        {
+          "name": "benchmark list",
+          "description": "List available benchmark tasks",
+          "flags": []
+        },
+        {
+          "name": "benchmark results",
+          "description": "Show previous benchmark results",
+          "flags": [
+            "--compare",
+            "--format <format>",
+            "--last"
+          ]
+        },
+        {
+          "name": "benchmark clear",
+          "description": "Clear all benchmark data",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "eval",
+      "description": "Run the Agent-Nuvira evaluation framework — measures if the agent is actually improving",
+      "commands": [
+        {
+          "name": "eval run",
+          "description": "Run the evaluation suite",
+          "flags": [
+            "--budget <budget>",
+            "--engine <engine>",
+            "--format <format>",
+            "--keep-workspaces",
+            "--model <model>",
+            "--pace",
+            "--provider <provider>",
+            "--routing",
+            "--suite <suite>",
+            "--tasks <tasks>"
+          ]
+        },
+        {
+          "name": "eval verify-seeds",
+          "description": "Prove every seeded bug is genuinely broken (and genuinely fixable) — no provider needed",
+          "flags": [
+            "--tasks <tasks>"
+          ]
+        },
+        {
+          "name": "eval list",
+          "description": "List available eval tasks",
+          "flags": []
+        },
+        {
+          "name": "eval results",
+          "description": "Show previous eval runs",
+          "flags": [
+            "--compare",
+            "--format <format>",
+            "--last"
+          ]
+        },
+        {
+          "name": "eval score",
+          "description": "Show the evaluation scoring rules",
+          "flags": []
+        },
+        {
+          "name": "eval clear",
+          "description": "Clear all eval data",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "sandbox",
+      "description": "Manage Docker sandbox isolation for code execution",
+      "commands": [
+        {
+          "name": "sandbox status",
+          "description": "Check Docker availability and sandbox status",
+          "flags": []
+        },
+        {
+          "name": "sandbox config",
+          "description": "Show or update sandbox configuration",
+          "flags": [
+            "--cpu <cpu>",
+            "--disable",
+            "--disk <disk>",
+            "--enable",
+            "--image <image>",
+            "--memory <memory>",
+            "--network",
+            "--timeout <timeout>"
+          ]
+        },
+        {
+          "name": "sandbox images",
+          "description": "List available pre-defined sandbox images",
+          "flags": []
+        },
+        {
+          "name": "sandbox run",
+          "description": "Run a command inside a new sandbox container",
+          "flags": [
+            "--cpu <cpu>",
+            "--image <image>",
+            "--memory <memory>",
+            "--network",
+            "--project <project>",
+            "--timeout <timeout>"
+          ]
+        },
+        {
+          "name": "sandbox cleanup",
+          "description": "Destroy all active sandbox containers",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "doctor",
+      "description": "Run diagnostic checks on all provider configurations and system health",
+      "commands": []
+    },
+    {
+      "name": "memory",
+      "description": "Manage agent memory store — compression, pruning, and optimization",
+      "commands": [
+        {
+          "name": "memory stats",
+          "description": "Show memory store statistics",
+          "flags": []
+        },
+        {
+          "name": "memory optimize",
+          "description": "Run automatic memory compression and pruning",
+          "flags": [
+            "--aggressive",
+            "--dry-run"
+          ]
+        },
+        {
+          "name": "memory prune",
+          "description": "Prune old or low-quality trajectories",
+          "flags": [
+            "--max-age <max_age>",
+            "--max-count <max_count>",
+            "--min-score <min_score>",
+            "--verbose"
+          ]
+        },
+        {
+          "name": "memory summarize",
+          "description": "Summarize old trajectories by merging similar ones",
+          "flags": [
+            "--retention <retention>",
+            "--verbose"
+          ]
+        },
+        {
+          "name": "memory info",
+          "description": "Show detailed compression analysis",
+          "flags": []
+        },
+        {
+          "name": "memory backend",
+          "description": "Show the active vector-search backend and why it was chosen",
+          "flags": [
+            "--check"
+          ]
+        },
+        {
+          "name": "memory list",
+          "description": "List all memory entries (facts, preferences, lessons, observations)",
+          "flags": [
+            "--limit <limit>",
+            "--type <type>"
+          ]
+        },
+        {
+          "name": "memory search",
+          "description": "Search memory entries by content",
+          "flags": [
+            "--limit <limit>",
+            "--type <type>"
+          ]
+        },
+        {
+          "name": "memory add",
+          "description": "Add a memory entry",
+          "flags": [
+            "--tags <tags>",
+            "--type <type>"
+          ]
+        },
+        {
+          "name": "memory delete",
+          "description": "Delete a memory entry by ID",
+          "flags": []
+        },
+        {
+          "name": "memory export",
+          "description": "Export all memories to a JSON file",
+          "flags": [
+            "--output <output>"
+          ]
+        },
+        {
+          "name": "memory import",
+          "description": "Import memories from a JSON file",
+          "flags": [
+            "--merge"
+          ]
+        },
+        {
+          "name": "memory facts",
+          "description": "Fact & preference memory (project-scoped, cross-session)",
+          "flags": []
+        },
+        {
+          "name": "memory facts list",
+          "description": "List facts, optionally for a project (git slug or cwd:<hash>)",
+          "flags": [
+            "--project <project>"
+          ]
+        },
+        {
+          "name": "memory facts add",
+          "description": "Manually store a fact for the current project",
+          "flags": [
+            "--project <project>",
+            "--tags <tags>"
+          ]
+        },
+        {
+          "name": "memory facts stats",
+          "description": "Show fact-store statistics",
+          "flags": []
+        },
+        {
+          "name": "memory clear",
+          "description": "Clear all stored trajectories and reset memory",
+          "flags": [
+            "--force"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "dashboard",
+      "description": "Launch the web-based dashboard for visualizing agent execution and system status",
+      "commands": [
+        {
+          "name": "dashboard stop",
+          "description": "Stop a running dashboard gracefully (SIGTERM — from any terminal)",
+          "flags": [
+            "--port <port>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent",
+      "description": "Scaffold and manage custom agent-nuvira agents",
+      "commands": [
+        {
+          "name": "agent create",
+          "description": "Create a new custom agent project from a template",
+          "flags": [
+            "--agent-name <agent_name>",
+            "--description <description>",
+            "--dir <dir>"
+          ]
+        },
+        {
+          "name": "agent list",
+          "description": "List all discovered custom agent plugins",
+          "flags": []
+        },
+        {
+          "name": "agent info",
+          "description": "Show details about a discovered agent plugin",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "federation",
+      "description": "Connect to and manage remote agent instances",
+      "commands": [
+        {
+          "name": "federation status",
+          "description": "Show federation connection status and configuration",
+          "flags": []
+        },
+        {
+          "name": "federation start",
+          "description": "Start the federation server (listens for incoming connections)",
+          "flags": [
+            "--auth <auth>",
+            "--daemon",
+            "--host <host>",
+            "--oidc-public-key <oidc_public_key>",
+            "--port <port>",
+            "--secret <secret>"
+          ]
+        },
+        {
+          "name": "federation connect",
+          "description": "Connect to a remote federation server",
+          "flags": [
+            "--port <port>",
+            "--secret <secret>"
+          ]
+        },
+        {
+          "name": "federation disconnect",
+          "description": "Disconnect from the remote federation server",
+          "flags": []
+        },
+        {
+          "name": "federation run",
+          "description": "Run a task on the remote federation server",
+          "flags": [
+            "--agent <agent>",
+            "--model <model>",
+            "--no-stream",
+            "--provider <provider>",
+            "--timeout <timeout>"
+          ]
+        },
+        {
+          "name": "federation health",
+          "description": "Check the health of the remote federation server",
+          "flags": []
+        },
+        {
+          "name": "federation config",
+          "description": "Show or update federation configuration",
+          "flags": [
+            "--set-port <set_port>",
+            "--set-secret <set_secret>",
+            "--show"
+          ]
+        },
+        {
+          "name": "federation a2a",
+          "description": "A2A (Agent-to-Agent) protocol — discover and connect to external A2A-compliant agents",
+          "flags": []
+        },
+        {
+          "name": "federation a2a discover",
+          "description": "Discover an A2A-compliant agent and fetch its AgentCard",
+          "flags": []
+        },
+        {
+          "name": "federation a2a start",
+          "description": "Start the A2A server (listens for incoming A2A connections)",
+          "flags": [
+            "--host <host>",
+            "--port <port>"
+          ]
+        },
+        {
+          "name": "federation a2a status",
+          "description": "Check the health and status of a remote A2A agent",
+          "flags": []
+        },
+        {
+          "name": "federation a2a run",
+          "description": "Delegate a task to a remote A2A-compliant agent",
+          "flags": [
+            "--agent <agent>",
+            "--skill <skill>",
+            "--timeout <timeout>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "team",
+      "description": "Team collaboration — shared config, git-synced memory, and review workflow",
+      "commands": [
+        {
+          "name": "team init",
+          "description": "Initialize team configuration in the working directory",
+          "flags": [
+            "--branch <branch>",
+            "--repo <repo>"
+          ]
+        },
+        {
+          "name": "team join",
+          "description": "Clone and join an existing team repository",
+          "flags": []
+        },
+        {
+          "name": "team sync",
+          "description": "Sync team memory with remote (pull latest + push local changes)",
+          "flags": []
+        },
+        {
+          "name": "team status",
+          "description": "Show team configuration and memory status",
+          "flags": []
+        },
+        {
+          "name": "team share",
+          "description": "Share local trajectories and patterns with the team",
+          "flags": []
+        },
+        {
+          "name": "team review",
+          "description": "Manage review bundles — agent PR → review → merge workflow",
+          "flags": []
+        },
+        {
+          "name": "team review list",
+          "description": "List all review bundles",
+          "flags": [
+            "--limit <limit>"
+          ]
+        },
+        {
+          "name": "team review show",
+          "description": "Show a specific review bundle with full details",
+          "flags": []
+        },
+        {
+          "name": "team review approve",
+          "description": "Approve a review bundle (sets status to approved)",
+          "flags": [
+            "--message <message>"
+          ]
+        },
+        {
+          "name": "team review request-changes",
+          "description": "Request changes on a review bundle",
+          "flags": []
+        },
+        {
+          "name": "team review reject",
+          "description": "Reject a review bundle",
+          "flags": []
+        },
+        {
+          "name": "team review merge",
+          "description": "Merge an approved review into the working directory",
+          "flags": []
+        },
+        {
+          "name": "team review create",
+          "description": "Create a review bundle from specified files",
+          "flags": [
+            "--files <files>",
+            "--model <model>",
+            "--provider <provider>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "sdk",
+      "description": "Create and manage custom agents with the Agent-Nuvira SDK",
+      "commands": [
+        {
+          "name": "sdk scaffold",
+          "description": "Generate a new custom agent project",
+          "flags": [
+            "--agent-type <agent_type>",
+            "--template <template>"
+          ]
+        },
+        {
+          "name": "sdk templates",
+          "description": "List available scaffold templates",
+          "flags": []
+        },
+        {
+          "name": "sdk info",
+          "description": "Show SDK package info and version",
+          "flags": []
+        },
+        {
+          "name": "sdk register",
+          "description": "Register a custom agent with the orchestrator",
+          "flags": [
+            "--icon <icon>",
+            "--orchestrator-path <orchestrator_path>"
+          ]
+        },
+        {
+          "name": "sdk unregister",
+          "description": "Remove a custom agent from the orchestrator",
+          "flags": [
+            "--orchestrator-path <orchestrator_path>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "provider",
+      "description": "List and check health of all inference providers",
+      "commands": [
+        {
+          "name": "provider list",
+          "description": "Show all providers with color-coded status table",
+          "flags": [
+            "--all"
+          ]
+        },
+        {
+          "name": "provider health",
+          "description": "Show detailed health checks for one or all providers",
+          "flags": [
+            "--verbose",
+            "--watch"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "security",
+      "description": "Scan code, prompts, or files for security issues",
+      "commands": [
+        {
+          "name": "security scan",
+          "description": "Scan for PII, injection attempts, or dangerous code patterns",
+          "flags": [
+            "--code",
+            "--file <file>",
+            "--generated",
+            "--json",
+            "--pii",
+            "--prompt",
+            "--stdin",
+            "--strict"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "audit",
+      "description": "Verify and export the tamper-evident (hash-chained) audit trail (P6 M6.3)",
+      "commands": [
+        {
+          "name": "audit verify",
+          "description": "Verify hash-chain integrity of audit stores (tamper detection)",
+          "flags": [
+            "--file <file>",
+            "--json"
+          ]
+        },
+        {
+          "name": "audit export",
+          "description": "Export an audit store as SIEM-friendly CEF lines",
+          "flags": [
+            "--file <file>",
+            "--out <out>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "sbom",
+      "description": "Generate and verify the CycloneDX software bill of materials (P6 M6.6)",
+      "commands": []
+    },
+    {
+      "name": "feedback",
+      "description": "Record, view, and manage user feedback on agent outputs",
+      "commands": [
+        {
+          "name": "feedback record",
+          "description": "Record feedback for a trajectory (interactive)",
+          "flags": [
+            "--comment <comment>",
+            "--negative",
+            "--neutral",
+            "--positive"
+          ]
+        },
+        {
+          "name": "feedback list",
+          "description": "Show recent feedback entries",
+          "flags": [
+            "--limit <limit>",
+            "--trajectory <trajectory>"
+          ]
+        },
+        {
+          "name": "feedback stats",
+          "description": "Show aggregated feedback statistics",
+          "flags": []
+        },
+        {
+          "name": "feedback clear",
+          "description": "Clear all feedback data",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "nlu",
+      "description": "NLU request understanding — debug intent/entity/action resolution",
+      "commands": [
+        {
+          "name": "nlu debug",
+          "description": "Debug how a request is understood (rule path + optional LLM verify)",
+          "flags": [
+            "--llm"
+          ]
+        },
+        {
+          "name": "nlu learnings",
+          "description": "Show the routing corrections learned from CONFIRMED misreadings (the agent improving itself)",
+          "flags": [
+            "--forget <forget>",
+            "--json"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "intent",
+      "description": "Plain-English → CLI routing — resolve an ask into the exact `nuvira` command(s) to run",
+      "commands": [
+        {
+          "name": "intent resolve",
+          "description": "Resolve a plain-English ask (e.g. \"stop the dashboard\", \"add Rahul to whatsapp\") into CLI commands",
+          "flags": [
+            "--json",
+            "--semantic"
+          ]
+        },
+        {
+          "name": "intent eval",
+          "description": "Score deterministic vs semantic matching over a labeled ask corpus (novel phrasings included)",
+          "flags": [
+            "--json"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "code-map",
+      "description": "Project symbol map — functions, classes, methods with line numbers (AST engine)",
+      "commands": []
+    },
+    {
+      "name": "tools",
+      "description": "Inspect the agent tool registry (pipeline + experience tools)",
+      "commands": [
+        {
+          "name": "tools list",
+          "description": "List every registered tool (the H1 tool-calling surface)",
+          "flags": []
+        },
+        {
+          "name": "tools show",
+          "description": "Show a tool's description and input schema",
+          "flags": []
+        },
+        {
+          "name": "tools toolsets",
+          "description": "List toolset groups (capability gating) with enabled state; enable/disable a group",
+          "flags": [
+            "--disable <disable>",
+            "--enable <enable>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "parity",
+      "description": "Surface-parity harness — prove the same experience on chat, execute, dashboard, gateway and subagents",
+      "commands": [
+        {
+          "name": "parity surfaces",
+          "description": "Compare the surface registry against the real import graph",
+          "flags": []
+        },
+        {
+          "name": "parity debt",
+          "description": "Check the anti-silo debt ratchet (observed surface debt must equal the frozen list)",
+          "flags": []
+        },
+        {
+          "name": "parity matrix",
+          "description": "Show every capability × surface and any unproven `supported` claim",
+          "flags": []
+        },
+        {
+          "name": "parity faults",
+          "description": "List the declared faults the harness can inject, and what each one proves",
+          "flags": []
+        },
+        {
+          "name": "parity run",
+          "description": "Drive all five surfaces through the real harness and report the verdict",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "session",
+      "description": "Project-scoped session continuity (debug surface — `continue` is the primary path)",
+      "commands": [
+        {
+          "name": "session list",
+          "description": "List recent sessions, optionally filtered by project + time range",
+          "flags": [
+            "--limit <limit>",
+            "--project <project>",
+            "--since <since>"
+          ]
+        },
+        {
+          "name": "session summarize",
+          "description": "Show summary + metadata for one session (transcript: nuvira history show)",
+          "flags": []
+        },
+        {
+          "name": "session resume",
+          "description": "Run D1 auto-recall for a project and print the recall card",
+          "flags": [
+            "--project <project>",
+            "--since <since>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "marketplace",
+      "description": "Browse and install community plugins and workflow templates",
+      "commands": [
+        {
+          "name": "marketplace browse",
+          "description": "Browse all available marketplace items",
+          "flags": [
+            "--plugins",
+            "--refresh",
+            "--workflows"
+          ]
+        },
+        {
+          "name": "marketplace search",
+          "description": "Search across plugins and workflow templates",
+          "flags": []
+        },
+        {
+          "name": "marketplace install",
+          "description": "Install a workflow template from the registry",
+          "flags": []
+        },
+        {
+          "name": "marketplace info",
+          "description": "Show detailed information about a marketplace item",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "mcp",
+      "description": "Manage MCP (Model Context Protocol) server connections",
+      "commands": [
+        {
+          "name": "mcp list",
+          "description": "List all discovered MCP servers and their tools",
+          "flags": []
+        },
+        {
+          "name": "mcp connect",
+          "description": "Connect to an MCP server",
+          "flags": [
+            "--all"
+          ]
+        },
+        {
+          "name": "mcp call",
+          "description": "Call a tool on an MCP server",
+          "flags": [
+            "--args <args>",
+            "--server <server>"
+          ]
+        },
+        {
+          "name": "mcp info",
+          "description": "Show detailed information for an MCP server",
+          "flags": []
+        },
+        {
+          "name": "mcp refresh",
+          "description": "Re-discover and reconnect to all MCP servers",
+          "flags": []
+        },
+        {
+          "name": "mcp catalog",
+          "description": "List the curated MCP server catalog (vetted, exact-version pins)",
+          "flags": [
+            "--search <search>"
+          ]
+        },
+        {
+          "name": "mcp install",
+          "description": "Install a vetted MCP server from the catalog (writes ~/.nuvira/mcp/<name>.json)",
+          "flags": [
+            "--env <env>"
+          ]
+        },
+        {
+          "name": "mcp uninstall",
+          "description": "Remove an installed MCP server config",
+          "flags": []
+        },
+        {
+          "name": "mcp serve",
+          "description": "Expose the agent's H1 tools as an MCP server over stdio (MCP clients / IDEs / other agents can connect)",
+          "flags": [
+            "--with <with>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ci",
+      "description": "Headless CI/CD mode — structured JSON output and exit codes for pipelines",
+      "commands": [
+        {
+          "name": "ci execute",
+          "description": "Execute a goal and emit JSON result (exit 0 = success, 1 = failure)",
+          "flags": [
+            "--context-limit <context_limit>",
+            "--context-prune <context_prune>",
+            "--github-annotations",
+            "--memory",
+            "--model <model>",
+            "--planner-model <planner_model>",
+            "--provider <provider>",
+            "--reviewer-model <reviewer_model>",
+            "--sandbox",
+            "--timeout <timeout>",
+            "--writer-model <writer_model>"
+          ]
+        },
+        {
+          "name": "ci check",
+          "description": "Run a gate check (exit 0 = pass, 1 = fail) — minimal output, ideal for workflow gates",
+          "flags": [
+            "--model <model>",
+            "--provider <provider>",
+            "--verbose"
+          ]
+        },
+        {
+          "name": "ci review",
+          "description": "Review one or more files and emit JSON findings",
+          "flags": [
+            "--context <context>",
+            "--format <format>",
+            "--model <model>",
+            "--provider <provider>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "publish",
+      "description": "Autonomous publish workflow — version, build, publish to npm & GitHub",
+      "commands": []
+    },
+    {
+      "name": "credentials",
+      "description": "Store GitHub/npm release credentials so the agent can release without re-entering them",
+      "commands": [
+        {
+          "name": "credentials status",
+          "description": "Show which release credentials are available, and where each came from",
+          "flags": []
+        },
+        {
+          "name": "credentials set",
+          "description": "Store a credential in the nuvira credential store",
+          "flags": [
+            "--stdin",
+            "--value <value>"
+          ]
+        },
+        {
+          "name": "credentials forget",
+          "description": "Delete a stored credential",
+          "flags": []
+        },
+        {
+          "name": "credentials verify",
+          "description": "Check the stored GitHub and npm tokens against the live services",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "bedrock",
+      "description": "AWS Bedrock setup and management (dedicated onboarding for Bedrock)",
+      "commands": [
+        {
+          "name": "bedrock setup",
+          "description": "Interactive wizard to configure AWS Bedrock (credentials, region, model access)",
+          "flags": []
+        },
+        {
+          "name": "bedrock status",
+          "description": "Show current Bedrock configuration and connectivity status",
+          "flags": []
+        },
+        {
+          "name": "bedrock test",
+          "description": "Probe Bedrock models and test inference",
+          "flags": [
+            "--region <region>"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "phase",
+      "description": "Phase-wise project scope execution — multi-goal pipelines",
+      "commands": [
+        {
+          "name": "phase create",
+          "description": "Create a new phase scope with ordered goals",
+          "flags": [
+            "--output <output>"
+          ]
+        },
+        {
+          "name": "phase execute",
+          "description": "Execute a phase scope from start to finish",
+          "flags": [
+            "--dry-run",
+            "--model <model>",
+            "--non-interactive",
+            "--provider <provider>",
+            "--skip-tests",
+            "--verbose"
+          ]
+        },
+        {
+          "name": "phase resume",
+          "description": "Resume a saved phase scope from where it left off",
+          "flags": [
+            "--model <model>",
+            "--provider <provider>",
+            "--skip-tests",
+            "--verbose"
+          ]
+        },
+        {
+          "name": "phase status",
+          "description": "Show progress of a phase scope",
+          "flags": []
+        },
+        {
+          "name": "phase delete",
+          "description": "Delete a saved phase scope",
+          "flags": []
+        },
+        {
+          "name": "phase list",
+          "description": "List all saved phase scopes",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "retrieval",
+      "description": "Vector retrieval — token-efficient context via local embeddings",
+      "commands": [
+        {
+          "name": "retrieval stats",
+          "description": "Show token-savings transparency (how many tokens retrieval saved)",
+          "flags": []
+        },
+        {
+          "name": "retrieval index",
+          "description": "Index a repo/file into the retrieval store (chunks embedded locally)",
+          "flags": []
+        },
+        {
+          "name": "retrieval query",
+          "description": "Semantic search over the indexed repo (top-k chunks)",
+          "flags": []
+        },
+        {
+          "name": "retrieval clear",
+          "description": "Clear the retrieval index and token-savings stats",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "trace",
+      "description": "Inspect and replay per-step reasoning traces (every LLM call in a pipeline)",
+      "commands": [
+        {
+          "name": "trace list",
+          "description": "Show recent traces",
+          "flags": [
+            "--limit <limit>"
+          ]
+        },
+        {
+          "name": "trace show",
+          "description": "Show a single trace (goal, timing, step summary)",
+          "flags": []
+        },
+        {
+          "name": "trace replay",
+          "description": "Step-by-step replay of a trace — every LLM call with prompt digest, model, tokens, latency, and routing",
+          "flags": [
+            "--full"
+          ]
+        },
+        {
+          "name": "trace clear",
+          "description": "Delete all stored traces",
+          "flags": []
+        }
+      ]
+    }
+  ]
+}

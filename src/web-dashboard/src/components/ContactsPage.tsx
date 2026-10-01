@@ -308,8 +308,13 @@ export default function ContactsPage() {
                 )}
               </div>
               <div className="hub-send-form">
+                {/* Named per platform, not just "sender": this control is
+                    repeated once per platform, and five identical anonymous
+                    boxes are five identical box names to a screen reader — so
+                    the name has to say WHICH platform's list is being edited. */}
                 <input
                   type="text"
+                  aria-label={`Allowed sender for ${p}`}
                   value={sendInputs[p] ?? ''}
                   onChange={(e) => setSendInputs((s) => ({ ...s, [p]: e.target.value }))}
                   placeholder="sender id, or Allow-All"

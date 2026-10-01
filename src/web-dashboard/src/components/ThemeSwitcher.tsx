@@ -87,10 +87,21 @@ export default function ThemeSwitcher() {
       className="theme-switcher"
       ref={wrapperRef}
       onBlur={(event) => {
-        // Tabbing past the last control should dismiss the panel. relatedTarget
-        // is null when focus leaves the document entirely (e.g. the window lost
-        // focus), which is also a reasonable time to close.
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+        // Tabbing past the last control should dismiss the panel — but ONLY a
+        // real hand-off counts. A null relatedTarget must NOT close it.
+        //
+        // Chrome on macOS does not focus a form control on mouse-down, so
+        // clicking one of these labels blurs the auto-focused input to <body>
+        // with relatedTarget null — BEFORE the click/change that carries the
+        // choice. Closing here unmounts the label mid-interaction, so mouseup
+        // lands on a detached node and the radio never changes: the panel just
+        // vanishes and nothing is selected. (Found only with real trusted input;
+        // a synthetic .click() on the input skips the whole blur path.)
+        //
+        // Outside-click and Esc still close the panel, so ignoring a null
+        // relatedTarget cannot strand it open.
+        const next = event.relatedTarget as Node | null;
+        if (next && !event.currentTarget.contains(next)) setOpen(false);
       }}
     >
       <button

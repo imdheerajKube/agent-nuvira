@@ -15,6 +15,7 @@ import { Link } from 'react-router-dom';
 import { dashboardAPI } from '../api';
 import type { TaskLogLine, TaskRecord, TaskStatus } from '../types';
 import PageHeader from './PageHeader';
+import CommandBrowser from './CommandBrowser';
 
 interface AuthState {
   configured: boolean;
@@ -93,6 +94,7 @@ export default function TasksPage() {
   const [autoScroll, setAutoScroll] = useState(true);
 
   const logEndRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const subRef = useRef<(() => void) | null>(null);
 
   const refreshHistory = useCallback(async () => {
@@ -163,6 +165,20 @@ export default function TasksPage() {
     await dashboardAPI.cancelTask(id);
   }, []);
 
+  /**
+   * Put a browsed command in the run box and hand focus to it.
+   *
+   * The trailing space is deliberate: every one of these commands takes an
+   * argument or a flag next, so inserting `eval run` without it means the first
+   * character the user types lands inside the command name. Focus follows, so
+   * the next keystroke goes where the user is already looking.
+   */
+  const pickCommand = useCallback((name: string) => {
+    setCommand(`${name} `);
+    setError('');
+    inputRef.current?.focus();
+  }, []);
+
   const showHistory = useCallback(
     async (id: string) => {
       const r = await dashboardAPI.getTask(id);
@@ -222,6 +238,7 @@ export default function TasksPage() {
         }}
       >
         <input
+          ref={inputRef}
           className="admin-input task-cmd-input"
           placeholder="eval run --task smoke-test   ·   gateway status   ·   skill list   ·   memory stats"
           value={command}
@@ -248,6 +265,10 @@ export default function TasksPage() {
       <p className="task-hint">
         Long-running commands stream their output live. Runs are capped at the chosen timeout and can be cancelled.
       </p>
+
+      {/* Sits directly under the box it fills in, because that is the whole
+          interaction: find a command, and it appears here ready to run. */}
+      <CommandBrowser onPick={pickCommand} />
 
       {active && (
         <div className="task-console-wrap">
@@ -281,7 +302,9 @@ export default function TasksPage() {
         </div>
       )}
 
-      <h3 className="task-history-title">History</h3>
+      {/* h2, not h3: the page title is the h1 and this is a top-level section
+          of it. As an h3 it skipped a level for anyone navigating by heading. */}
+      <h2 className="task-history-title">History</h2>
       {history.length === 0 ? (
         <div className="empty-state">No tasks yet — run your first command above.</div>
       ) : (

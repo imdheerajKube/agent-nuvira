@@ -26,13 +26,29 @@
  * would hang and the test/CI timeout fails loudly instead of writing docs.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..');
 const DOC_PATH = join(repoRoot, 'docs', 'COMMANDS_SURFACE.md');
+
+/**
+ * The same surface, as data, for the dashboard's Command Console picker.
+ *
+ * WHY A SECOND OUTPUT FROM ONE GENERATOR. The console lets a user browse
+ * commands by group and insert one into the run box. Hand-typing those commands
+ * into a component would create a second list that describes commands which no
+ * longer exist — the exact drift this script exists to prevent, reintroduced in
+ * the UI. Emitting from the live tree means the picker CANNOT offer a command
+ * the CLI does not expose, and `--check` guards both outputs together.
+ *
+ * It lives inside the dashboard source so it is bundled: an installed package
+ * then carries the catalogue, with no file to ship alongside it and no runtime
+ * fetch that can 404.
+ */
+const CATALOG_PATH = join(repoRoot, 'src', 'web-dashboard', 'src', 'generated', 'commands.json');
 const CHECK = process.argv.includes('--check');
 
 // Guard rails: never let a doc-generation run kick off discovery or the
@@ -55,10 +71,17 @@ usage see the curated [COMMANDS.md](./COMMANDS.md).
 
 `;
 
-/** Recursively walk a commander command node into renderable rows. */
-function walk(cmd, prefix, rows) {
+/**
+ * Recursively walk a commander command node into renderable rows.
+ *
+ * `entries` collects the same walk as structured data (path / description /
+ * flags), so the doc and the dashboard catalogue are two renderings of ONE
+ * traversal rather than two traversals that can disagree.
+ */
+function walk(cmd, prefix, rows, entries) {
   const name = prefix === '' ? cmd.name() : `${prefix} ${cmd.name()}`;
-  const aliases = cmd.aliases().length > 0 ? ` (aliases: ${cmd.aliases().map((a) => `\`${a}\``).join(', ')})` : '';
+  const aliasList = cmd.aliases();
+  const aliases = aliasList.length > 0 ? ` (aliases: ${aliasList.map((a) => `\`${a}\``).join(', ')})` : '';
   const description = (cmd.description() || '').trim();
   rows.push({ name, aliases, description });
 
@@ -70,14 +93,68 @@ function walk(cmd, prefix, rows) {
     .sort((a, b) => a.localeCompare(b));
   if (opts.length > 0) rows.push({ optionLine: opts.join(', '), name });
 
+  entries.push({ path: name.split(' '), description, aliases: aliasList, flags: opts });
+
   for (const sub of cmd.commands ?? []) {
-    walk(sub, name, rows);
+    walk(sub, name, rows, entries);
   }
+}
+
+/**
+ * The catalogue the Command Console renders, grouped by top-level command.
+ *
+ * Grouped by the FIRST path token rather than by a curated category: that
+ * grouping already exists in the CLI, it is what `--help` shows, and inventing
+ * a second taxonomy would be one more thing to keep in sync. Deterministic by
+ * construction (registration order, no timestamps) so `--check` can compare it.
+ */
+function renderCatalog(program) {
+  const rows = [];
+  const entries = [];
+  walk(program, '', rows, entries);
+
+  // path[0] is the PROGRAM (`nuvira`), not a command: the console runs the CLI
+  // as `node dist/index.js <args>`, so what a user types omits that prefix
+  // entirely. So the group is path[1] and a row's name is everything after the
+  // program name — which is also why a freshly pasted name runs as-is.
+  const ownRows = entries.filter((entry) => entry.path.length >= 2);
+
+  const groups = [];
+  const byName = new Map();
+  for (const entry of ownRows) {
+    const root = entry.path[1];
+    let group = byName.get(root);
+    if (!group) {
+      // A group's blurb is its top-level command's description, so the picker
+      // can label a group without a second table of prose to keep in sync.
+      group = { name: root, description: entry.path.length === 2 ? entry.description : '', commands: [] };
+      byName.set(root, group);
+      groups.push(group);
+    }
+    // The top-level command is the group heading; only its children are rows.
+    if (entry.path.length === 2) continue;
+    group.commands.push({
+      name: entry.path.slice(1).join(' '),
+      description: entry.description,
+      flags: entry.flags,
+    });
+  }
+
+  const commandCount = ownRows.length - groups.length;
+  const catalog = {
+    source: 'src/cli/cli-program.ts (createCLI) — do not edit by hand',
+    regenerate: 'node scripts/generate-commands-surface.mjs',
+    prefixNote: 'Names omit the program name: the console runs `node dist/index.js <name>`.',
+    commandCount,
+    groupCount: groups.length,
+    groups,
+  };
+  return JSON.stringify(catalog, null, 2) + '\n';
 }
 
 function renderDoc(program) {
   const rows = [];
-  walk(program, '', rows);
+  walk(program, '', rows, []);
 
   const lines = [header];
   let inOptions = false;
@@ -137,8 +214,23 @@ async function main() {
   }
 
   const doc = renderDoc(program);
+  const catalog = renderCatalog(program);
 
   if (CHECK) {
+    let catalogCurrent;
+    try {
+      catalogCurrent = readFileSync(CATALOG_PATH, 'utf-8').replace(/\r\n/g, '\n');
+    } catch {
+      console.error(`✗ ${CATALOG_PATH} missing — run: node scripts/generate-commands-surface.mjs`);
+      process.exit(1);
+    }
+    if (catalogCurrent !== catalog) {
+      console.error('✗ the dashboard command catalogue drifted from the live CLI tree.');
+      console.error('  The Command Console picker would offer commands that do not exist.');
+      console.error('  Fix: node scripts/generate-commands-surface.mjs && git add ' + CATALOG_PATH);
+      process.exit(1);
+    }
+
     let current;
     try {
       // Normalise CRLF. A Windows checkout (core.autocrlf=true, and there is no
@@ -161,8 +253,14 @@ async function main() {
   }
 
   writeFileSync(DOC_PATH, doc, 'utf-8');
+  mkdirSync(dirname(CATALOG_PATH), { recursive: true });
+  writeFileSync(CATALOG_PATH, catalog, 'utf-8');
   const commandCount = (doc.match(/^### /gm) ?? []).length;
+  const catalogData = JSON.parse(catalog);
   console.log(`✓ Wrote ${DOC_PATH} (${commandCount} command sections).`);
+  console.log(
+    `✓ Wrote ${CATALOG_PATH} (${catalogData.commandCount} commands in ${catalogData.groupCount} groups).`,
+  );
 }
 
 main();

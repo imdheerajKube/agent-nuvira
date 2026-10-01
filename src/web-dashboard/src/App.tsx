@@ -4,6 +4,7 @@ import { dashboardAPI } from './api';
 import type { DashboardData } from './types';
 import Layout from './components/Layout';
 import Overview from './components/Overview';
+import HelpPage from './components/HelpPage';
 import DAGView from './components/DAGView';
 import CostDashboard from './components/CostDashboard';
 import BenchmarkCharts from './components/BenchmarkCharts';
@@ -141,6 +142,11 @@ export default function App() {
           element={<HealthPanel data={data} connected={connected} lastUpdated={lastUpdated} />}
         />
         <Route path="/admin" element={<AdminPanel />} />
+        {/* Help is a destination, not a modal: it is the page a user reads
+            before they know which of the other tabs they want, and it derives
+            its contents from the same constants the shell and the cheatsheet
+            use, so it cannot describe a shortcut or a page that is gone. */}
+        <Route path="/help" element={<HelpPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

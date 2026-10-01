@@ -141,6 +141,17 @@ html[data-palette='enterprise'][data-mode='light'] {
   --p-chrome-ink-2: #c3d7f2;
   --p-chrome-hover: #154a86;
   --p-chrome-line: #1d407a;
+  /* Rail — its own surface, a shade off the top bar rather than a copy of it. */
+  --p-sidebar: #04203f;
+  --p-sidebar-ink: #ffffff;
+  --p-sidebar-ink-2: #bccfe6;
+  --p-sidebar-hover: #123a68;
+  --p-sidebar-active: #17457c;
+  --p-sidebar-line: #1b4272;
+  /* The rail's own control boundary. The page's --p-line-control is tuned
+     against a light canvas and only reaches 2.9:1 on a dark rail, which is the
+     1.4.11 failure this token exists to avoid. */
+  --p-sidebar-line-control: #5b83bd;
   --p-ok: #1c7038;
   --p-ok-soft: #e3f2e7;
   --p-warn: #8a5600;
@@ -192,6 +203,13 @@ html[data-palette='enterprise'][data-mode='dark'] {
   --p-chrome-ink-2: #b6c9e4;
   --p-chrome-hover: #123c74;
   --p-chrome-line: #1c3766;
+  --p-sidebar: #04122b;
+  --p-sidebar-ink: #eef4fd;
+  --p-sidebar-ink-2: #aebdd6;
+  --p-sidebar-hover: #0f2c55;
+  --p-sidebar-active: #143565;
+  --p-sidebar-line: #1a3562;
+  --p-sidebar-line-control: #6d8cbe;
   --p-ok: #55c877;
   --p-ok-soft: #14301f;
   --p-warn: #e3ab4c;
@@ -234,6 +252,13 @@ html[data-palette='neutral'][data-mode='light'] {
   --p-chrome-ink-2: #b9c2cd;
   --p-chrome-hover: #35414f;
   --p-chrome-line: #3a4552;
+  --p-sidebar: #131a24;
+  --p-sidebar-ink: #f2f5f8;
+  --p-sidebar-ink-2: #b4bec8;
+  --p-sidebar-hover: #25313f;
+  --p-sidebar-active: #2b3846;
+  --p-sidebar-line: #2f3b49;
+  --p-sidebar-line-control: #7a8794;
   --p-ok: #1a7f37;
   --p-ok-soft: #dafbe1;
   --p-warn: #8a5a00;
@@ -273,6 +298,15 @@ html[data-palette='neutral'][data-mode='dark'] {
   --p-chrome-ink-2: #adb6c0;
   --p-chrome-hover: #161b22;
   --p-chrome-line: #30363d;
+  /* The top bar is already near-black here, so the rail is tinted the other
+     way — the GitHub-dark canvas — which still reads as a distinct surface. */
+  --p-sidebar: #0d1117;
+  --p-sidebar-ink: #e6edf3;
+  --p-sidebar-ink-2: #aeb7c1;
+  --p-sidebar-hover: #222a35;
+  --p-sidebar-active: #2a323d;
+  --p-sidebar-line: #2a3340;
+  --p-sidebar-line-control: #768390;
   --p-ok: #56d364;
   --p-ok-soft: #132f1c;
   --p-warn: #e3b341;
@@ -314,6 +348,15 @@ html[data-palette='pastel'][data-mode='light'] {
   --p-chrome-ink-2: #44598b;
   --p-chrome-hover: #c9dbf1;
   --p-chrome-line: #b7cbe6;
+  /* The one LIGHT chrome: the rail deepens the tint instead of darkening, so
+     the palette keeps its pastel identity. */
+  --p-sidebar: #cfe0f4;
+  --p-sidebar-ink: #1f3a66;
+  --p-sidebar-ink-2: #3d5482;
+  --p-sidebar-hover: #a9c6e8;
+  --p-sidebar-active: #9dbde2;
+  --p-sidebar-line: #adc4e2;
+  --p-sidebar-line-control: #5a6f9c;
   --p-ok: #23704a;
   --p-ok-soft: #dff2e7;
   --p-warn: #8a5a12;
@@ -356,6 +399,13 @@ html[data-palette='pastel'][data-mode='dark'] {
   --p-chrome-ink-2: #b3bad4;
   --p-chrome-hover: #262c45;
   --p-chrome-line: #333a58;
+  --p-sidebar: #0d0f1c;
+  --p-sidebar-ink: #e8ebf7;
+  --p-sidebar-ink-2: #b0b7d2;
+  --p-sidebar-hover: #20253c;
+  --p-sidebar-active: #252b45;
+  --p-sidebar-line: #2e3450;
+  --p-sidebar-line-control: #8b98c4;
   --p-ok: #6fd39c;
   --p-ok-soft: #12301f;
   --p-warn: #e5b567;
@@ -397,6 +447,13 @@ html[data-palette='executive'][data-mode='light'] {
   --p-chrome-ink-2: #bcc1bd;
   --p-chrome-hover: #343a3c;
   --p-chrome-line: #3b4143;
+  --p-sidebar: #171b1c;
+  --p-sidebar-ink: #f2f3f1;
+  --p-sidebar-ink-2: #b9bfba;
+  --p-sidebar-hover: #2a3033;
+  --p-sidebar-active: #31383b;
+  --p-sidebar-line: #333a3c;
+  --p-sidebar-line-control: #838b86;
   --p-ok: #2c6b45;
   --p-ok-soft: #e0f0e6;
   --p-warn: #7d5a12;
@@ -436,6 +493,13 @@ html[data-palette='executive'][data-mode='dark'] {
   --p-chrome-ink-2: #b0b7b3;
   --p-chrome-hover: #242927;
   --p-chrome-line: #2f3634;
+  --p-sidebar: #0a0d0c;
+  --p-sidebar-ink: #e9ece9;
+  --p-sidebar-ink-2: #adb4b0;
+  --p-sidebar-hover: #232a27;
+  --p-sidebar-active: #2a312d;
+  --p-sidebar-line: #2a312e;
+  --p-sidebar-line-control: #7d8783;
   --p-ok: #6ecf95;
   --p-ok-soft: #16301f;
   --p-warn: #dfb45f;
@@ -479,6 +543,15 @@ html[data-palette='contrast'][data-mode='light'] {
   --p-chrome-ink-2: #ffffff;
   --p-chrome-hover: #2b2b2b;
   --p-chrome-line: #767676;
+  /* Deliberately NOT tinted. This palette exists for maximum legibility, so the
+     rail keeps pure black and is separated by its border and its pills. */
+  --p-sidebar: #000000;
+  --p-sidebar-ink: #ffffff;
+  --p-sidebar-ink-2: #ffffff;
+  --p-sidebar-hover: #2b2b2b;
+  --p-sidebar-active: #3a3a3a;
+  --p-sidebar-line: #767676;
+  --p-sidebar-line-control: #767676;
   --p-ok: #0a5c23;
   --p-ok-soft: #ddf0e2;
   --p-warn: #6b4300;
@@ -518,6 +591,13 @@ html[data-palette='contrast'][data-mode='dark'] {
   --p-chrome-ink-2: #f0f0f0;
   --p-chrome-hover: #2b2b2b;
   --p-chrome-line: #8f8f8f;
+  --p-sidebar: #000000;
+  --p-sidebar-ink: #ffffff;
+  --p-sidebar-ink-2: #f0f0f0;
+  --p-sidebar-hover: #2b2b2b;
+  --p-sidebar-active: #3a3a3a;
+  --p-sidebar-line: #8f8f8f;
+  --p-sidebar-line-control: #8f8f8f;
   --p-ok: #7ef29a;
   --p-ok-soft: #062b11;
   --p-warn: #ffd166;
@@ -601,12 +681,27 @@ html[data-palette='contrast'][data-mode='dark'] {
   --bg-input: var(--p-input);
   --bg: var(--p-canvas);
 
-  /* Chrome (sidebar + top bar) */
+  /* Chrome (top bar) */
   --chrome-bg: var(--p-chrome);
   --chrome-ink: var(--p-chrome-ink);
   --chrome-ink-muted: var(--p-chrome-ink-2);
   --chrome-hover: var(--p-chrome-hover);
   --chrome-line: var(--p-chrome-line);
+
+  /* Navigation rail. Split out from --chrome-* because the rail is a SECOND
+     surface, not the top bar repeated: the two share a family and a lightness
+     direction, but the rail is a shade off so the eye reads a rail and a bar
+     rather than one continuous slab. Every ink/background pair a nav label can
+     land on — idle, hovered, active — is asserted by theme-contrast.test.ts,
+     which is why these are primitives and not color-mix() derivations: a mix
+     would sit outside the reach of the guard that measures it. */
+  --sidebar-bg: var(--p-sidebar);
+  --sidebar-ink: var(--p-sidebar-ink);
+  --sidebar-ink-muted: var(--p-sidebar-ink-2);
+  --sidebar-hover: var(--p-sidebar-hover);
+  --sidebar-active: var(--p-sidebar-active);
+  --sidebar-line: var(--p-sidebar-line);
+  --sidebar-line-control: var(--p-sidebar-line-control);
 
   --shadow: var(--p-shadow);
 

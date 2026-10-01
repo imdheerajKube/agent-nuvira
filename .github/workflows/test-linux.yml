@@ -168,6 +168,21 @@ jobs:
         env:
           CI: true
 
+      # The walk above drives the page with events the harness creates itself,
+      # which cannot reproduce a BROWSER DEFAULT ACTION. A `<label>` forwarding
+      # its click to a visually-hidden radio is exactly that, and it broke the
+      # Appearance panel for every real mouse user while ~850 jsdom tests (which
+      # click the input directly) and the walk both stayed green. This step
+      # sends trusted Input.dispatchMouseEvent/KeyEvent over CDP: it must be
+      # able to open the panel, choose a mode, choose a palette, flip the
+      # accessibility switch and reset — all with real clicks — and the rail
+      # must still be its own surface with a visible active pill.
+      - name: Dashboard trusted input (real clicks + keys)
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
+        run: npm run smoke:dashboard:input -- --require-chrome
+        env:
+          CI: true
+
   # Bun latest — validates the full root suite under the Bun runtime (M4).
   # Bun can run vitest via bunx; the tsc typecheck is part of the gate so a
   # Bun-specific resolution regression is caught the same way Node catches it.
