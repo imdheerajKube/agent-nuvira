@@ -19,6 +19,7 @@
 | **🔧 SDK** | [`docs/AGENT_SDK.md`](./docs/AGENT_SDK.md) | `@agent-nuvira/sdk` — build, test and register custom agents: install, full agent contract, the ten testing helpers, scaffolding, and what depth the SDK offers |
 | **💻 VS Code Extension** | [`docs/VSCODE_EXTENSION.md`](./docs/VSCODE_EXTENSION.md) | The editor surface — all 13 commands mapped to the CLI verb they run, settings, keybindings, the three language-model tools, the programmatic API, and what depth it offers |
 | **🧪 Tests** | [`tests/README.md`](./tests/README.md) | Test suite overview — 1,830+ tests across 55 files, organized by module |
+| **📋 Capability Ledger** | [`docs/CAPABILITY_LEDGER.md`](./docs/CAPABILITY_LEDGER.md) | Honest status of every capability — real, partial, approximation, or not built — with the evidence for each |
 | **📦 SDK package README** | [`src/agent-sdk/README.md`](./src/agent-sdk/README.md) | The npm package landing page for `@agent-nuvira/sdk` (the fuller guide is `docs/AGENT_SDK.md` above) |
 | **🔌 MCP Examples** | [`examples/mcp/README.md`](./examples/mcp/README.md) | MCP server configuration examples (filesystem, GitHub, Exa) |
 
@@ -119,6 +120,30 @@ node scripts/verify-commands.mjs   # every surface command must actually resolve
 match the live tree, and every command must appear somewhere in the curated
 `docs/COMMANDS.md`. Forgetting the curated doc is a test failure, not a silent
 drift.
+
+---
+
+## Changing the provider wire — the golden fixture guard
+
+Every other test asserts on a RESPONSE (what the engine did). The provider wire
+is the one contract that is asserted on the REQUEST — the exact bytes the core
+loop puts on the provider wire: message ordering, `tool_calls` / `tool`-result
+serialization, tool schemas, model/temperature/max_tokens. Nothing else catches a
+change to that shape, which is why it is pinned in golden fixtures under
+`tests/fixtures/provider-wire/`.
+
+The capture runs the REAL loop against the REAL adapter pointed at a loopback
+recorder — no network, no model, no test seam in production code. When a wire
+change is INTENDED:
+
+```bash
+npm run build:cli            # the check imports the built module
+npm run docs:wire:update     # rewrite the golden fixtures
+git diff tests/fixtures/provider-wire/   # review the diff — this review IS the guard
+```
+
+`npm run docs:wire:check` (run in CI) fails with the exact JSON path that drifted
+(e.g. `$[0].messages[2].tool_calls[0].function.name`).
 
 ---
 
