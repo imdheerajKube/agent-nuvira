@@ -181,6 +181,13 @@ export class ReasonerAgent extends Agent {
           assessmentLines.push(`Key files: ${assessment.keyFiles.join(', ')}`);
         }
         promptParts.push(...assessmentLines);
+
+        // The cross-session memory block (recent asks in this project, composed
+        // by the SAME composer the loop engine uses). Advisory history, already
+        // self-labelled as such — the reasoner must not read it as a status.
+        if (assessment.crossSessionMemory) {
+          promptParts.push('', assessment.crossSessionMemory);
+        }
       }
 
       // Inject file tree if available

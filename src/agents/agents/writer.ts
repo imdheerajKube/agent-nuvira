@@ -94,10 +94,6 @@ INCORRECT (do NOT use these):
     conventions.push('This is a greenfield project — create files from scratch. No need to preserve existing code style.');
   }
 
-  if (conventions.length > 0) {
-    return `${base}\n\n## Project Conventions\n${conventions.join('\n')}`;
-  }
-
   // The durable hand-off — work an earlier attempt in this project started and
   // did not finish, with the artifacts already on disk and the ones still
   // missing. Appended to the SYSTEM prompt (not the task line) so it is present
@@ -105,7 +101,16 @@ INCORRECT (do NOT use these):
   // retried step is told not to redo what already landed.
   const handoff = assessment?.openHandoffs ? `\n\n${assessment.openHandoffs}` : '';
 
-  return `${base}${handoff}`;
+  // The cross-session memory block (recent asks in this project, composed by the
+  // SAME composer the loop engine uses). Advisory history, already self-labelled,
+  // so it adds no heading; absent for a project with no recorded sessions.
+  const crossSession = assessment?.crossSessionMemory ? `\n\n${assessment.crossSessionMemory}` : '';
+
+  if (conventions.length > 0) {
+    return `${base}\n\n## Project Conventions\n${conventions.join('\n')}${handoff}${crossSession}`;
+  }
+
+  return `${base}${handoff}${crossSession}`;
 }
 
 const WRITER_SYSTEM_PROMPT = buildWriterSystemPrompt();

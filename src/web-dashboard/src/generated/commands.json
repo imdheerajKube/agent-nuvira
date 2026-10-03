@@ -2,8 +2,8 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 250,
-  "groupCount": 50,
+  "commandCount": 256,
+  "groupCount": 51,
   "groups": [
     {
       "name": "admin",
@@ -226,6 +226,30 @@
           "name": "config gateway ask-user-wait",
           "description": "Ask-and-wait for clarifying questions on messaging channels: when a turn asks the sender a question, hold it for their reply instead of assuming option 1",
           "flags": []
+        },
+        {
+          "name": "config service",
+          "description": "Manage third-party service keys (image/video/search/vision/speech) in ~/.nuvira/.env",
+          "flags": []
+        },
+        {
+          "name": "config service list",
+          "description": "Show every service backend and its env-var status",
+          "flags": []
+        },
+        {
+          "name": "config service set",
+          "description": "Set a service key: config service set <serviceId> <ENV_VAR> <value> (or --set VAR=value)",
+          "flags": [
+            "--set <set>"
+          ]
+        },
+        {
+          "name": "config service unset",
+          "description": "Remove a service key (all vars, or one with [varName]) from the env file",
+          "flags": [
+            "--yes"
+          ]
         }
       ]
     },
@@ -240,8 +264,10 @@
         },
         {
           "name": "cache clear",
-          "description": "Clear all cached responses",
-          "flags": []
+          "description": "Clear cached responses — all of them, or one workspace (project folder)",
+          "flags": [
+            "--unscoped"
+          ]
         }
       ]
     },
@@ -1942,6 +1968,25 @@
           "name": "trace clear",
           "description": "Delete all stored traces",
           "flags": []
+        }
+      ]
+    },
+    {
+      "name": "continuity",
+      "description": "Session continuity — what is stored, and how to forget it",
+      "commands": [
+        {
+          "name": "continuity list",
+          "description": "Show the continuity switches, stored sessions, and the semantic recall index",
+          "flags": []
+        },
+        {
+          "name": "continuity clear",
+          "description": "Forget stored continuity data (no flags = both sessions and recall)",
+          "flags": [
+            "--recall",
+            "--sessions"
+          ]
         }
       ]
     }

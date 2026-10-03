@@ -67,6 +67,19 @@ jobs:
       - name: Build project
         run: npm run build
 
+      # The command surface has ONE source of truth (`src/cli/cli-program.ts`)
+      # and TWO generated artifacts: `docs/COMMANDS_SURFACE.md` and the
+      # dashboard's `commands.json` picker catalogue. A command added, renamed,
+      # or removed without regenerating leaves the docs — and the picker —
+      # describing a CLI that no longer exists. This is the drift guard: it
+      # regenerates from the BUILT tree and diffs both outputs. It runs on the
+      # one platform-agnostic combo, right after the build it depends on.
+      - name: Command registry in sync (surface doc + dashboard catalogue)
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22'
+        run: npm run docs:commands:check
+        env:
+          NO_COLOR: '1'
+
       # Every command in the documented surface must be RUNNABLE, not merely
       # registered. The generated surface proves a command EXISTS in the
       # commander tree; this executes each one with `nuvira <cmd> --help` so a

@@ -69,6 +69,7 @@ import { CredentialsCommand } from './credentials.js';
 import { PhaseCommand } from './phase.js';
 import { RetrievalCommand } from './retrieval.js';
 import { TraceCommand } from './trace.js';
+import { ContinuityCommand } from './continuity.js';
 import { BedrockCommand } from './bedrock.js';
 import { NluCommand } from './nlu.js';
 import { IntentCommand } from './intent.js';
@@ -283,6 +284,9 @@ export function createCLI(): Command {
   // Register Trace command (P0 reasoning-trace capture + replay)
   const traceCmd = new TraceCommand();
   program.addCommand(traceCmd.create());
+
+  // Register Continuity command (session snapshots + semantic recall: inspect/forget)
+  program.addCommand(new ContinuityCommand().create());
 
   // Default action: a root `-t/--task` runs the task; otherwise show help.
   program.action(async (options?: { task?: string }) => {

@@ -161,11 +161,15 @@ Your job is to implement the requested changes by iteratively reading files, mak
     // what is already on disk and what is still owed.
     const handoff = assessment?.openHandoffs ? `\n\n${assessment.openHandoffs}` : '';
 
+    // The cross-session memory block (recent asks in this project), from the
+    // same composer the loop engine uses. Advisory history, self-labelled.
+    const crossSession = assessment?.crossSessionMemory ? `\n\n${assessment.crossSessionMemory}` : '';
+
     if (conventions.length > 0) {
-      return `${base}\n\n## Project Conventions\n${conventions.join('\n')}${handoff}`;
+      return `${base}\n\n## Project Conventions\n${conventions.join('\n')}${handoff}${crossSession}`;
     }
 
-    return `${base}${handoff}`;
+    return `${base}${handoff}${crossSession}`;
   }
 
   protected buildUserPrompt(context: AgentContext): string {
