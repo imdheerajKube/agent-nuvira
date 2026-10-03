@@ -127,6 +127,10 @@ docs/demos/nuvira-commands-all.cast
 # re-derive the whole P-list from inline comments. Tracked, every claim in it is
 # checkable against its pinned test.
 !docs/TOOL_TRUTHFULNESS_TRACKER.md
+# The honest capability/stub ledger. Published (not acknowledged) because its
+# whole value is that a reader can check each claim against the code; an
+# untracked ledger would be a claim no fresh clone can verify.
+!docs/CAPABILITY_LEDGER.md
 # These three were cited from CODE (`@see …` / "see the G18 entry in …") while
 # being ignored by `*.md`, so on a fresh clone those citations pointed at nothing
 # — the same failure that lost the tracker above. `scripts/check-doc-citations.mjs`

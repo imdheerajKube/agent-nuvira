@@ -121,6 +121,16 @@ jobs:
         env:
           NO_COLOR: '1'
 
+      # Request-side drift guard: the exact provider-wire bytes (message
+      # ordering, tool_call / tool-result serialization, model params) must
+      # still match the committed golden fixtures. Windows is a useful second
+      # check of the JSON serialization path.
+      - name: Provider wire matches its golden fixtures
+        run: npm run docs:wire:check
+        shell: bash
+        env:
+          NO_COLOR: '1'
+
       # Registered != runnable. Executes every documented command with
       # `nuvira <cmd> --help` so a command that only resolves in the docs fails
       # in CI instead of for a user. Windows matters most here: argv/path
