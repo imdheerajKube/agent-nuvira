@@ -1,0 +1,17 @@
+{
+  "case": "plain-generate",
+  "proves": "The non-tool generate() path sends this body shape (single user message, no tools); the plan/reasoner single-shot calls depend on it.",
+  "requests": [
+    {
+      "max_tokens": 4096,
+      "messages": [
+        {
+          "content": "Say hello.",
+          "role": "user"
+        }
+      ],
+      "model": "wire-stub-model",
+      "temperature": 0.7
+    }
+  ]
+}

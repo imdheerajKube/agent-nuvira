@@ -42,6 +42,7 @@ chat/execute request.
 | Allow a number to trigger the agent | `nuvira config gateway allow whatsapp user 919876543210` |
 | Add a send-by-name WhatsApp contact | `nuvira whatsapp contact add Alex 919876543210` |
 | List/switch AI models | `nuvira models list` · `nuvira model switch` |
+| Open the website (capabilities/docs) | `nuvira website` |
 | See what changed / debug | `nuvira stats` · `nuvira trace list` · `nuvira admin policy` |
 
 ### First run — expect it to be slow, and expect the model list to be incomplete
@@ -447,6 +448,20 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira config get defaultProvider
   nuvira config init                          # interactive defaults (already set? shows them)
   ```
+
+### 4.1b The website — capabilities, commands, docs, setup
+
+- **Objective:** Open the Agent-Nuvira website, where the capabilities, the full command
+  reference, the architecture and the setup guides live.
+- **Command:** `nuvira website [site|docs] [--url]`
+- **Examples:**
+  ```bash
+  nuvira website                 # open https://www.agent-nuvira.com in your browser
+  nuvira website docs            # open the documentation site directly
+  nuvira website --url           # print the URL only (headless / scripts)
+  ```
+- **First-timer detail:** `--url` prints the link and opens nothing, so it is safe in CI or over
+  SSH where no browser is running.
 
 ### 4.2b Third-party service keys (image / video / search / vision / speech)
 
@@ -1366,6 +1381,7 @@ nuvira trace         reasoning-trace capture/replay
 nuvira continuity    session snapshots + semantic recall (list/clear)
 nuvira bedrock       AWS Bedrock onboarding (setup/status/test)
 nuvira credentials   release tokens (status/set/forget/verify)
+nuvira website       open the project site (capabilities/commands/docs/setup)
 ```
 
 ---

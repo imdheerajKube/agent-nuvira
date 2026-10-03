@@ -20,6 +20,7 @@ import { registerDagHandlers } from '../observability/dag-bridge.js';
 import { debugLogDir, debugLoggingEnabled, debugLogsForSession, type DebugLogRecord } from '../observability/debug-log.js';
 import { scrubSecrets } from '../gateway/gateway-log.js';
 import { resolveBuffConfigDir, resolveBuffConfigPath, resolveNuviraHome } from '../config/paths.js';
+import { createRequire } from 'node:module';
 import { loadEnv } from '../utils/env.js';
 import { ConfigManager } from '../config/manager.js';
 import { runAllChecks, type CheckResult, type HealthStatus } from '../cli/doctor.js';
@@ -97,11 +98,18 @@ import type { GatewayContact } from '../gateway/contacts.js';
 import {
   applyEnvToProcess,
   configurablePlatforms,
+  envVarState,
   platformConfigStatus,
   platformEnvVarMeta,
   redactValue,
   writeEnvFile,
 } from '../gateway/platform-config.js';
+import {
+  SERVICE_CATALOG,
+  getServiceDefinition,
+  type ServiceDefinition,
+} from '../config/service-catalog.js';
+import { probeService } from '../config/service-probe.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -1216,7 +1224,7 @@ interface DashboardTrace {
    * announced-but-never-performed action never reads as work in progress.
    */
   outcome?: {
-    kind: 'answered' | 'acted' | 'failed' | 'cancelled';
+    kind: 'answered' | 'acted' | 'failed' | 'cancelled' | 'incomplete';
     tools?: string[];
     delivered?: boolean;
     unverifiedClaim?: boolean;
@@ -1225,6 +1233,8 @@ interface DashboardTrace {
     unverifiedEdit?: boolean;
     /** The answer asserted a code change nothing verified. */
     unverifiedEditClaim?: boolean;
+    /** A build command FAILED and the answer nonetheless claimed success. */
+    unverifiedBuildClaim?: boolean;
     /** The request asked for an authored deliverable and no file was written. */
     undeliveredArtifact?: boolean;
   };
@@ -1966,6 +1976,69 @@ function readBenchmarkData(): Record<string, unknown> {
   };
 }
 
+/**
+ * The ACTIVE vector-search backend ('json' | 'faiss-ivf' | 'faiss-native').
+ *
+ * `memory.backend` in this payload is the memory PROVIDER tier ('local'; Mem0
+ * is an optional provider) — a different axis from how semantic search is
+ * indexed, which is what the user actually asks about. Resolved the same way
+ * the runtime resolves it: env VECTOR_BACKEND → config memory.vectorBackend →
+ * default 'faiss'. The read MUST be synchronous (readMemoryData builds the
+ * /api payload synchronously), so native detection is a module-presence check;
+ * the CLI's `nuvira memory backend --check` runs the full smoke test.
+ */
+let vectorBackendNameCache: string | null = null;
+function resolveVectorBackendName(): string {
+  if (vectorBackendNameCache) return vectorBackendNameCache;
+  let preferred: 'json' | 'faiss' = 'faiss';
+  try {
+    const env = envBuff('VECTOR_BACKEND');
+    if (env === 'json') preferred = 'json';
+    else if (env === 'faiss' || env === 'auto') preferred = 'faiss';
+    else {
+      const cfg = readJSON<{ memory?: { vectorBackend?: string } }>(resolveBuffConfigPath());
+      if (cfg?.memory?.vectorBackend === 'json') preferred = 'json';
+    }
+  } catch {
+    // fall through to the 'faiss' default
+  }
+  if (preferred === 'json') return (vectorBackendNameCache = 'json');
+  try {
+    const req = createRequire(import.meta.url);
+    const native = req('@faiss-node/native');
+    const mod = native?.default ?? native;
+    if (mod && typeof mod.FaissIndex === 'function') return (vectorBackendNameCache = 'faiss-native');
+  } catch {
+    // native not installed/built — the pure-JS IVF tier handles it
+  }
+  return (vectorBackendNameCache = 'faiss-ivf');
+}
+
+/**
+ * Per-namespace vector counts, read straight from `vectors*.json`. The default
+ * namespace (`vectors.json`) only holds trajectory/session vectors — facts,
+ * repo chunks and the model registry each live in their own file — so a small
+ * "default" number is corpus size, not a broken index. Sorted largest-first.
+ */
+function readVectorNamespaces(): Array<{ name: string; entries: number }> {
+  try {
+    const out: Array<{ name: string; entries: number }> = [];
+    for (const file of readdirSync(MEMORY_DIR)) {
+      const m = /^vectors(?:-(.+))?\.json$/.exec(file);
+      if (!m) continue;
+      try {
+        const d = readJSON<{ entries?: Record<string, unknown> }>(join(MEMORY_DIR, file));
+        out.push({ name: m[1] || 'default', entries: d?.entries ? Object.keys(d.entries).length : 0 });
+      } catch {
+        // Unreadable index → skip; one bad file must not blank the panel.
+      }
+    }
+    return out.sort((a, b) => b.entries - a.entries || a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+}
+
 function readMemoryData(): Record<string, unknown> {
   const data = readJSON<{ trajectories: Record<string, unknown> }>(
     join(MEMORY_DIR, 'trajectories.json'),
@@ -2015,6 +2088,13 @@ function readMemoryData(): Record<string, unknown> {
     facts,
     recall,
     backend: 'local', // memory.backend tier (F1 Mem0 is an optional provider — local is the default)
+    // The vector SEARCH backend — how semantic search is indexed (distinct from
+    // the provider tier above). Shown on the Memory panel so the FAISS question
+    // has an answer in the UI, not just in `nuvira memory backend`.
+    vectorBackend: resolveVectorBackendName(),
+    // Per-namespace entry counts so the panel can show where the vectors
+    // actually are (default = trajectories/sessions, facts, repo, …).
+    vectorNamespaces: readVectorNamespaces(),
   };
 }
 
@@ -2967,6 +3047,28 @@ const PROVIDER_ENV_VARS: Record<string, string> = {
  * detected the same way the CLI sees it: env override > vault ref > config
  * plaintext > none (local providers are keyless by design).
  */
+/**
+ * The directory a dashboard chat turn runs in when the user attached nothing.
+ *
+ * `dashboard.cwd` (set on the Admin page or with `nuvira config set
+ * dashboard.cwd`) makes the fallback EXPLICIT. Returning `undefined` means
+ * "unconfigured", which is the case the chat guard refuses to guess in — the two
+ * outcomes are deliberately different, so an operator who wants the legacy
+ * behaviour has to say so by setting a directory rather than by doing nothing.
+ * A configured path that no longer exists is treated as unconfigured, never as a
+ * silent pass-through to `process.cwd()`.
+ */
+function resolveDashboardCwd(configManager?: ConfigManager): string | undefined {
+  try {
+    const configured = (configManager ?? new ConfigManager()).getAll().dashboard?.cwd;
+    if (typeof configured !== 'string' || !configured.trim()) return undefined;
+    const dir = resolve(configured.trim());
+    return existsSync(dir) && statSync(dir).isDirectory() ? dir : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function summarizeProvider(type: string, configManager: ConfigManager): AdminProviderSummary {
   const c = (configManager.getAll().providers || {})[type] as ProviderConfig & { apiKeys?: string[] } | undefined;
   const envVar = PROVIDER_ENV_VARS[type];
@@ -3004,6 +3106,66 @@ function summarizeProvider(type: string, configManager: ConfigManager): AdminPro
 function buildAdminProviderSummary(configManager: ConfigManager): AdminProviderSummary[] {
   const providers = configManager.getAll().providers || {};
   return Object.keys(providers).map((type) => summarizeProvider(type, configManager));
+}
+
+// ─── Service-provider configuration (image / video / search / vision / speech) ─
+
+/** One env var row of a service in the admin services payload. */
+interface AdminServiceEnvVarRow {
+  varName: string;
+  prompt: string;
+  secret: boolean;
+  set: boolean;
+  /** Full value for admin/operator readers; redacted (or '') otherwise. */
+  value: string;
+}
+
+/** A third-party service row (keys masked for non-admin readers). */
+interface AdminServiceRow {
+  id: string;
+  label: string;
+  capability: string;
+  icon: string;
+  description: string;
+  keyless: boolean;
+  free: boolean;
+  /** Every REQUIRED var is set (a keyless service is always usable). */
+  configured: boolean;
+  docsUrl?: string;
+  sharedNote?: string;
+  envVars: AdminServiceEnvVarRow[];
+}
+
+/**
+ * Build one service row from the catalog. `envVarState` reads the credential
+ * env file first (so a value written by the dashboard shows configured before
+ * any restart), then the process env. Values are only returned in full to a
+ * caller allowed to write credentials; everyone else gets a redaction.
+ */
+function buildServiceRow(def: ServiceDefinition, canReadValues: boolean): AdminServiceRow {
+  const envVars: AdminServiceEnvVarRow[] = def.envVars.map((v) => {
+    const st = envVarState(v.varName);
+    return {
+      varName: v.varName,
+      prompt: v.prompt,
+      secret: v.secret,
+      set: st.set,
+      value: canReadValues ? st.value : st.set ? redactValue(st.value) : '',
+    };
+  });
+  return {
+    id: def.id,
+    label: def.label,
+    capability: def.capability,
+    icon: def.icon,
+    description: def.description,
+    keyless: def.keyless,
+    free: def.free,
+    configured: def.keyless || envVars.every((v) => v.set),
+    docsUrl: def.docsUrl,
+    sharedNote: def.sharedNote,
+    envVars,
+  };
 }
 
 /** Run ALL state checks — the dashboard command-runner payload. */
@@ -4940,6 +5102,129 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // ── Response cache, by workspace ────────────────────────────────────────
+  // An answer is a statement about a DIRECTORY, so the cache is grouped and
+  // cleared per workspace. Reads need a SESSION (the listing carries prompt
+  // previews — conversation content, unlike the config the open admin reads
+  // expose); clearing needs routing.operate.
+  if (pathname === '/api/admin/cache' && req.method === 'GET') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      const { getCache } = await import('../context/cache.js');
+      const workspaces = await getCache().listByWorkspace();
+      writeJson(res, 200, {
+        ok: true,
+        workspaces,
+        total: workspaces.reduce((sum, w) => sum + w.count, 0),
+      });
+    })();
+    return;
+  }
+
+  if (pathname === '/api/admin/cache/clear' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot clear the response cache (requires admin or operator).` });
+        return;
+      }
+      const body = await readJsonBody(req);
+      if (!body) {
+        writeJson(res, 400, { ok: false, error: 'Invalid JSON body.' });
+        return;
+      }
+      // `null` = the answers produced with no workspace. An absent key is a
+      // mistake, not "the null bucket" — say so rather than clearing the wrong set.
+      if (!('scope' in body)) {
+        writeJson(res, 400, { ok: false, error: 'Expected { scope: string | null }.' });
+        return;
+      }
+      const raw = (body as { scope?: unknown }).scope;
+      if (raw !== null && (typeof raw !== 'string' || !raw.trim())) {
+        writeJson(res, 400, { ok: false, error: 'scope must be a directory path or null.' });
+        return;
+      }
+      const scope = raw === null ? null : resolve(raw as string);
+      const { getCache } = await import('../context/cache.js');
+      const removed = await getCache().clearWorkspace(scope);
+      writeJson(res, 200, { ok: true, removed, scope });
+    })();
+    return;
+  }
+
+  // ── Dashboard workspace (`dashboard.cwd`) ───────────────────────────────
+  // The directory an UNATTACHED chat turn runs in. Reads are open (the chat
+  // picker shows it); writes need routing.operate, the same capability that
+  // gates attaching a project. A configured path is validated to exist — a
+  // stale value would silently re-open the accidental-cwd hole this closes.
+  if (pathname === '/api/admin/workspace' && req.method === 'GET') {
+    const configManager = new ConfigManager();
+    const configured = configManager.getAll().dashboard?.cwd ?? null;
+    const effective = resolveDashboardCwd(configManager) ?? null;
+    writeJson(res, 200, {
+      ok: true,
+      configured,
+      effective,
+      // The process cwd is what an unconfigured dashboard falls back to — shown
+      // so an operator can see WHY the guard fires.
+      processCwd: process.cwd(),
+      configuredValid: configured !== null && effective !== null,
+    });
+    return;
+  }
+
+  if (pathname === '/api/admin/workspace' && req.method === 'PUT') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot change the dashboard workspace (requires admin or operator).` });
+        return;
+      }
+      const body = await readJsonBody(req);
+      if (!body) {
+        writeJson(res, 400, { ok: false, error: 'Invalid JSON body.' });
+        return;
+      }
+      const configManager = new ConfigManager();
+      // An explicit empty value CLEARS the setting (back to "ask for a folder").
+      if (typeof body.cwd === 'string' && !body.cwd.trim()) {
+        configManager.save({ dashboard: { cwd: undefined } } as never);
+        writeJson(res, 200, { ok: true, configured: null, effective: null, processCwd: process.cwd(), configuredValid: false });
+        return;
+      }
+      if (typeof body.cwd !== 'string') {
+        writeJson(res, 400, { ok: false, error: 'Expected { cwd: string } (empty string clears it).' });
+        return;
+      }
+      const target = resolve(body.cwd.trim());
+      if (!existsSync(target) || !statSync(target).isDirectory()) {
+        writeJson(res, 400, { ok: false, error: `Not a readable directory: ${body.cwd.trim()}` });
+        return;
+      }
+      configManager.save({ dashboard: { cwd: target } } as never);
+      writeJson(res, 200, {
+        ok: true,
+        configured: target,
+        effective: resolveDashboardCwd(configManager) ?? null,
+        processCwd: process.cwd(),
+        configuredValid: true,
+      });
+    })();
+    return;
+  }
+
   // ── Session 36: user-declared daily budget (routing.quota + cost cap) ──
   // Same config the CLI writes (`nuvira model quota set`) — dashboard is a
   // parallel GUI, never a fork. Reads are open (like checks/catalog); writes
@@ -5728,6 +6013,140 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // ── Service-provider API keys (image / video / search / vision / speech) ──
+  // These are the THIRD-PARTY services the agent calls directly, as opposed to
+  // the LLM providers configured above. Values live in the same 0600 credential
+  // env file (`~/.nuvira/.env`) the platform config writes, read at startup by
+  // loadEnv() and hot-applied to this process — so a save here is honored by
+  // the tool path on the next call, never a cosmetic setting.
+
+  // GET /api/admin/services — list every service with per-var status. Any
+  // authenticated session may read; values are full only for credential.write.
+  if (pathname === '/api/admin/services' && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    const canReadValues = roleCan(session.role, 'credential.write');
+    writeJson(res, 200, {
+      ok: true,
+      services: SERVICE_CATALOG.map((d) => buildServiceRow(d, canReadValues)),
+    });
+    return;
+  }
+
+  const serviceMatch = /^\/api\/admin\/services\/([a-z0-9-]+)$/.exec(pathname);
+
+  // PUT /api/admin/services/:id — write the service's env values (blank = remove).
+  if (serviceMatch && req.method === 'PUT') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'credential.write')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot configure service keys (requires admin).` });
+        return;
+      }
+      const def = getServiceDefinition(serviceMatch[1]);
+      if (!def) {
+        writeJson(res, 404, { ok: false, error: `Unknown service '${serviceMatch[1]}'.` });
+        return;
+      }
+      if (def.envVars.length === 0) {
+        writeJson(res, 400, { ok: false, error: `${def.label} is keyless — there is nothing to configure.` });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const values = (body?.values ?? {}) as Record<string, unknown>;
+      const allowed = new Set(def.envVars.map((v) => v.varName));
+      const updates: Record<string, string> = {};
+      const removes: string[] = [];
+      for (const [key, value] of Object.entries(values)) {
+        if (!allowed.has(key)) {
+          writeJson(res, 400, { ok: false, error: `Unknown env var '${key}' for ${def.label}.` });
+          return;
+        }
+        if (typeof value !== 'string') continue;
+        const trimmed = value.trim();
+        if (trimmed === '') removes.push(key);
+        else updates[key] = trimmed;
+      }
+      if (Object.keys(updates).length === 0 && removes.length === 0) {
+        writeJson(res, 400, { ok: false, error: 'Provide at least one value.' });
+        return;
+      }
+      writeEnvFile(updates, removes);
+      applyEnvToProcess(updates, removes);
+      writeJson(res, 200, {
+        ok: true,
+        wrote: Object.keys(updates),
+        removed: removes,
+        service: buildServiceRow(def, true),
+      });
+    })();
+    return;
+  }
+
+  // DELETE /api/admin/services/:id — remove every env var of the service.
+  if (serviceMatch && req.method === 'DELETE') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'credential.write')) {
+      writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot configure service keys (requires admin).` });
+      return;
+    }
+    const def = getServiceDefinition(serviceMatch[1]);
+    if (!def) {
+      writeJson(res, 404, { ok: false, error: `Unknown service '${serviceMatch[1]}'.` });
+      return;
+    }
+    const keys = def.envVars.map((v) => v.varName);
+    if (keys.length > 0) {
+      writeEnvFile({}, keys);
+      applyEnvToProcess({}, keys);
+    }
+    writeJson(res, 200, { ok: true, removed: keys, service: buildServiceRow(def, true) });
+    return;
+  }
+
+  // POST /api/admin/services/:id/test — probe the configured backend.
+  const serviceTestMatch = /^\/api\/admin\/services\/([a-z0-9-]+)\/test$/.exec(pathname);
+  if (serviceTestMatch && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'credential.write')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot test service keys (requires admin).` });
+        return;
+      }
+      const def = getServiceDefinition(serviceTestMatch[1]);
+      if (!def) {
+        writeJson(res, 404, { ok: false, error: `Unknown service '${serviceTestMatch[1]}'.` });
+        return;
+      }
+      // A probe is only meaningful once the required vars are present.
+      const missing = def.envVars.filter((v) => def.requiresAllVars && !envVarState(v.varName).set);
+      if (missing.length > 0) {
+        writeJson(res, 200, { ok: false, error: `Not configured yet — set ${missing.map((m) => m.varName).join(', ')} first.` });
+        return;
+      }
+      const values: Record<string, string> = {};
+      for (const v of def.envVars) values[v.varName] = envVarState(v.varName).value;
+      const result = await probeService(def, values);
+      writeJson(res, 200, { ok: result.ok, detail: result.detail });
+    })();
+    return;
+  }
+
   // ── Bedrock onboarding endpoints ────────────────────────────────────────
   // GET /api/bedrock/status — current Bedrock config status
   if (pathname === '/api/bedrock/status' && req.method === 'GET') {
@@ -5860,10 +6279,19 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot view projects.` });
       return;
     }
-    const projects = [...recentProjects]
-      .map((p) => ({ path: p, name: basename(p) || p, kind: 'recent' as const }))
-      .filter((p) => existsSync(p.path) && statSync(p.path).isDirectory());
-    writeJson(res, 200, { ok: true, projects });
+    // The configured default workspace is surfaced as `kind: 'cwd'` so the
+    // picker can show where an unattached turn would land — the directory that
+    // used to be invisible until the agent reported on the wrong folder.
+    const configuredCwd = resolveDashboardCwd();
+    const projects = [
+      ...(configuredCwd
+        ? [{ path: configuredCwd, name: basename(configuredCwd) || configuredCwd, kind: 'cwd' as const }]
+        : []),
+      ...[...recentProjects]
+        .map((p) => ({ path: p, name: basename(p) || p, kind: 'recent' as const }))
+        .filter((p) => existsSync(p.path) && statSync(p.path).isDirectory()),
+    ];
+    writeJson(res, 200, { ok: true, projects, configuredCwd: configuredCwd ?? null });
     return;
   }
 
@@ -6263,6 +6691,93 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // GET /api/continuity — the stored session snapshots + the semantic recall
+  // index, and the EFFECTIVE on/off state of both continuity switches. Same auth
+  // as the chat session sidebar: this is local memory the chat surface owns.
+  if (pathname === '/api/continuity' && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot view continuity data.` });
+      return;
+    }
+    void (async () => {
+      const { listSessionSnapshots, resolveSessionStore } = await import('../learning/session-store.js');
+      const { listRecallEntries, resolveSessionRecall } = await import('../learning/session-recall.js');
+      const cm = new ConfigManager();
+      const sessions = listSessionSnapshots().map((s) => ({
+        id: s.id,
+        goal: s.goal,
+        cwd: s.cwd,
+        savedAt: s.savedAt,
+        open: s.open,
+        steps: s.accumulators.steps,
+        successfulTools: s.accumulators.successfulTools.length,
+        mutatedPaths: s.accumulators.mutatedPaths,
+        messages: s.messages.length,
+      }));
+      const recall = listRecallEntries().map((e) => ({
+        id: e.id,
+        projectPath: e.projectPath,
+        goal: e.goal,
+        outcome: e.outcome,
+        savedAt: e.savedAt,
+      }));
+      writeJson(res, 200, {
+        ok: true,
+        sessions,
+        recall,
+        toggles: {
+          sessionStore: resolveSessionStore({ configManager: cm }),
+          sessionRecall: resolveSessionRecall({ configManager: cm }),
+        },
+      });
+    })();
+    return;
+  }
+
+  // POST /api/continuity/clear — forget stored continuity data. Body:
+  //   { target: 'sessions' | 'recall' }      — clear all of one kind
+  //   { target: 'session' | 'recall-entry', id } — clear one entry
+  if (pathname === '/api/continuity/clear' && req.method === 'POST') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot change continuity data.` });
+      return;
+    }
+    void (async () => {
+      const body = await readJsonBody(req);
+      const target = typeof body?.target === 'string' ? body.target : '';
+      const id = typeof body?.id === 'string' ? body.id : undefined;
+      let removed = 0;
+      if (target === 'sessions') {
+        const { listSessionSnapshots, clearSession } = await import('../learning/session-store.js');
+        for (const s of listSessionSnapshots()) if (clearSession(s.id)) removed += 1;
+      } else if (target === 'recall') {
+        const { clearSessionRecallIndex } = await import('../learning/session-recall.js');
+        if (clearSessionRecallIndex()) removed = 1;
+      } else if (target === 'session' && id) {
+        const { clearSession } = await import('../learning/session-store.js');
+        if (clearSession(id)) removed = 1;
+      } else if (target === 'recall-entry' && id) {
+        const { removeRecallEntry } = await import('../learning/session-recall.js');
+        if (removeRecallEntry(id)) removed = 1;
+      } else {
+        writeJson(res, 400, { ok: false, error: "Expected { target: 'sessions'|'recall'|'session'|'recall-entry', id? }." });
+        return;
+      }
+      writeJson(res, 200, { ok: true, removed });
+    })();
+    return;
+  }
+
   // POST /api/chat/resolve — resolve a plain-English ask into the CLI
   // command(s) the intent router would run (the dashboard twin of
   // `nuvira intent resolve`). The Chat UI calls this BEFORE sending to the
@@ -6355,10 +6870,48 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // describing the codebase. Cache misses rebuild automatically.
       let projectContext: string | undefined;
       let projectPath: string | undefined;
-      if (typeof body?.projectPath === 'string' && body.projectPath.trim()) {
-        projectPath = body.projectPath.trim();
-        const bundle = getProjectBundle(projectPath);
+      const attachedPath =
+        typeof body?.projectPath === 'string' && body.projectPath.trim()
+          ? body.projectPath.trim()
+          : undefined;
+      /**
+       * The workspace for this turn, in priority order: the folder the user
+       * ATTACHED, then the operator-configured `dashboard.cwd`, and otherwise
+       * NOTHING.
+       *
+       * "Nothing" is the important case. The turn used to fall back to the
+       * dashboard server's own working directory, so a service started from the
+       * home folder answered "assess this project" by listing `~` and describing
+       * whatever unrelated checkout it found there — a confident answer about a
+       * project nobody mentioned (reported as "it went to kuttaaddon"). The
+       * guard below turns that into a request for a folder.
+       */
+      const configuredCwd = resolveDashboardCwd();
+      const effectiveProjectPath = attachedPath ?? configuredCwd;
+      if (effectiveProjectPath) {
+        projectPath = effectiveProjectPath;
+        const bundle = getProjectBundle(effectiveProjectPath);
         if (bundle) projectContext = formatProjectText(bundle);
+      }
+      // No workspace and no configured default: an ask that names a project, or
+      // that produces/consumes files, gets a folder request instead of an answer
+      // about the wrong tree. General chat is unaffected.
+      if (!effectiveProjectPath) {
+        const { needsProjectAttachment, projectAttachmentPrompt, projectAttachmentFollowups } =
+          await import('./workspace-guard.js');
+        if (needsProjectAttachment(message)) {
+          writeJson(res, 200, {
+            ok: true,
+            sessionId,
+            content: projectAttachmentPrompt(),
+            followups: projectAttachmentFollowups(),
+            provider: null,
+            model: null,
+            generationFailed: false,
+            needsProject: true,
+          });
+          return;
+        }
       }
       // P4 — the dashboard's Cancel button aborts the POST fetch: the server
       // sees the request close and cancels the in-flight turn (the engine

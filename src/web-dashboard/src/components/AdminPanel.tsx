@@ -22,15 +22,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
 import QuotaPanel from './QuotaPanel';
+import ServiceProvidersPanel from './ServiceProvidersPanel';
 // The check row is shared with the System tab, which shows the same doctor
 // checks under their real name — one renderer, so the two cannot drift.
 import { CheckRow } from './CheckRow';
 import PageHeader from './PageHeader';
 import type {
+  AdminCachePayload,
   AdminCatalogProvider,
   AdminChecksData,
   AdminProviderSummary,
   AdminUser,
+  AdminWorkspace,
 } from '../types';
 
 const KEY_SOURCE_LABEL: Record<string, string> = {
@@ -73,6 +76,17 @@ export default function AdminPanel() {
   const [newUserName, setNewUserName] = useState('');
   const [newUserPass, setNewUserPass] = useState('');
   const [newUserRole, setNewUserRole] = useState('viewer');
+  // Workspace (`dashboard.cwd`) — the directory an unattached chat turn runs
+  // in. Lives here, beside the provider configuration, because it is the same
+  // kind of setting: server-side configuration the dashboard reads.
+  const [workspace, setWorkspace] = useState<AdminWorkspace | null>(null);
+  const [workspaceInput, setWorkspaceInput] = useState('');
+  const [workspaceMsg, setWorkspaceMsg] = useState<string | null>(null);
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  // Response cache, grouped by the workspace each answer is about.
+  const [cache, setCache] = useState<AdminCachePayload | null>(null);
+  const [cacheMsg, setCacheMsg] = useState<string | null>(null);
+  const [cacheBusy, setCacheBusy] = useState<string | null>(null);
   // Provider editor
   const [catalog, setCatalog] = useState<AdminCatalogProvider[]>([]);
   const [drafts, setDrafts] = useState<Record<string, ProviderDraft>>({});
@@ -103,6 +117,68 @@ export default function AdminPanel() {
     if (r.ok && r.users) setUsers(r.users);
   }, []);
 
+  const loadWorkspace = useCallback(async () => {
+    const w = await dashboardAPI.fetchAdminWorkspace();
+    if (!w) return;
+    setWorkspace(w);
+    setWorkspaceInput(w.configured ?? '');
+  }, []);
+
+  const loadCache = useCallback(async () => {
+    const c = await dashboardAPI.fetchAdminCache();
+    if (c) setCache(c);
+  }, []);
+
+  /**
+   * Drop ONE workspace's cached answers. Per project on purpose: clearing
+   * everything to fix one stale folder would throw away answers that are still
+   * correct — and the next ask would pay for them again.
+   */
+  const clearCache = async (scope: string | null) => {
+    setCacheBusy(scope ?? '__none__');
+    setCacheMsg(null);
+    const r = await dashboardAPI.clearAdminCache(scope);
+    if (r.ok) {
+      setCacheMsg(
+        `✅ Cleared ${r.removed ?? 0} cached answer(s) for ${scope ?? 'the no-workspace bucket'}.`,
+      );
+      void loadCache();
+    } else if (r.unauthorized) {
+      sessionExpired();
+      setCacheMsg(`❌ ${r.error || 'Session expired — log in again.'}`);
+    } else {
+      setCacheMsg(`❌ ${r.error || 'Could not clear the cache.'}`);
+    }
+    setCacheBusy(null);
+  };
+
+  /**
+   * Save the workspace. An empty box clears it — which restores the
+   * ask-for-a-folder behaviour, so the message says so rather than reporting a
+   * silent success.
+   */
+  const saveWorkspace = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setWorkspaceBusy(true);
+    setWorkspaceMsg(null);
+    const r = await dashboardAPI.saveAdminWorkspace(workspaceInput.trim());
+    if (r.ok && r.workspace) {
+      setWorkspace(r.workspace);
+      setWorkspaceInput(r.workspace.configured ?? '');
+      setWorkspaceMsg(
+        r.workspace.effective
+          ? `✅ Unattached chat turns now run in ${r.workspace.effective}`
+          : '✅ Cleared — unattached project asks will ask you to attach a folder.',
+      );
+    } else if (r.unauthorized) {
+      sessionExpired();
+      setWorkspaceMsg(`❌ ${r.error || 'Session expired — log in again.'}`);
+    } else {
+      setWorkspaceMsg(`❌ ${r.error || 'Could not save the workspace.'}`);
+    }
+    setWorkspaceBusy(false);
+  };
+
   useEffect(() => {
     let alive = true;
     dashboardAPI.fetchAdminAuthStatus().then((s) => {
@@ -121,14 +197,18 @@ export default function AdminPanel() {
         void refresh();
         void loadCatalog();
         void loadUsers();
+        void loadWorkspace();
+        void loadCache();
       } else {
         setLoading(false);
       }
     });
     return () => { alive = false; };
-  }, [refresh, loadCatalog, loadUsers]);
+  }, [refresh, loadCatalog, loadUsers, loadWorkspace, loadCache]);
 
   const isAdmin = role === 'admin';
+  /** routing.operate — the capability the workspace write requires. */
+  const canOperate = role === 'admin' || role === 'operator';
 
   const sessionExpired = () => {
     setAuthed(false);
@@ -156,6 +236,8 @@ export default function AdminPanel() {
       void refresh();
       void loadCatalog();
       void loadUsers();
+      void loadWorkspace();
+      void loadCache();
     } else {
       setAuthError(r.error || 'Login failed.');
     }
@@ -594,17 +676,48 @@ export default function AdminPanel() {
             </div>
           </div>
 
-          <h2 className="section-subtitle">⚙️ System Checks (buff doctor)</h2>
-          <div className="admin-check-list">
-            {data.system.map((c) => <CheckRow key={c.name} check={c} />)}
-          </div>
-
-          <h2 className="section-subtitle">🏥 Enterprise Self-Check (doctor --enterprise)</h2>
-          <div className="admin-check-list">
-            {data.enterprise.length > 0
-              ? data.enterprise.map((c) => <CheckRow key={c.name} check={c} />)
-              : <div className="empty-state">No enterprise checks returned.</div>}
-          </div>
+          {isAdmin ? (
+            <>
+              <h2 className="section-subtitle">👥 Dashboard Users (role.manage)</h2>
+              <div className="admin-users-list">
+                {users.map((u) => (
+                  <div className="admin-user-row" key={u.user}>
+                    <span className="admin-user-name">{u.user}</span>
+                    <span className={`admin-role-badge admin-role-${u.role}`}>{u.role}</span>
+                    <span className="admin-user-since">since {new Date(u.createdAt).toLocaleDateString()}</span>
+                    {u.user !== userName ? (
+                      <button className="admin-mini-btn admin-mini-danger" onClick={() => void removeUser(u.user)}>🗑 Remove user</button>
+                    ) : (
+                      <span className="admin-hint">you</span>
+                    )}
+                  </div>
+                ))}
+                {users.length === 0 ? <div className="empty-state">No dashboard users yet.</div> : null}
+              </div>
+              <form className="admin-gate-form admin-user-form" onSubmit={addUser}>
+                <label>
+                  <span>Username</span>
+                  <input type="text" value={newUserName} onChange={(e) => setNewUserName(e.target.value)} autoComplete="off" />
+                </label>
+                <label>
+                  <span>Password (min 8 chars)</span>
+                  <input type="password" value={newUserPass} onChange={(e) => setNewUserPass(e.target.value)} autoComplete="new-password" />
+                </label>
+                <label>
+                  <span>Role</span>
+                  <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value)}>
+                    <option value="viewer">viewer — read-only</option>
+                    <option value="operator">operator — read-only in the dashboard today</option>
+                    <option value="admin">admin — full control</option>
+                  </select>
+                </label>
+                {usersMsg ? <div className="admin-row-msg">{usersMsg}</div> : null}
+                <button className="admin-refresh-btn" type="submit" disabled={!newUserName || !newUserPass}>
+                  ➕ Add user
+                </button>
+              </form>
+            </>
+          ) : null}
 
           <h2 className="section-subtitle">🔑 Provider Configuration (keys masked)</h2>
           <div className="admin-table-wrapper">
@@ -737,50 +850,135 @@ export default function AdminPanel() {
             </div>
           ) : null}
 
+          {/*
+           * Workspace — the directory an UNATTACHED chat turn runs in.
+           *
+           * It sits in the configuration layer rather than the chat window
+           * because it is a SERVER setting: it decides where a turn lands when
+           * the user attached nothing, which is exactly the case that used to
+           * silently scan the server's own folder.
+           */}
+          <h2 className="section-subtitle">📁 Workspace (chat turns with no attached folder)</h2>
+          <p className="admin-hint">
+            A chat turn runs against a directory. An attached folder always wins; with none attached,
+            this is where the turn lands. Leave it empty and an ask that needs a project — an
+            assessment, a file, an image — asks you to attach a folder instead of scanning the
+            server&apos;s own working directory.
+          </p>
+          <form className="admin-gate-form" onSubmit={saveWorkspace}>
+            <label>
+              <span>Working directory</span>
+              <input
+                type="text"
+                value={workspaceInput}
+                onChange={(e) => setWorkspaceInput(e.target.value)}
+                placeholder="/Users/you/Documents/my-project"
+                disabled={workspaceBusy || !authed || !canOperate}
+              />
+            </label>
+            {workspace ? (
+              <p className="admin-hint">
+                {workspace.effective ? (
+                  <>Effective: <code>{workspace.effective}</code></>
+                ) : (
+                  <>Not set — unattached project asks will ask for a folder (server cwd: <code>{workspace.processCwd}</code>)</>
+                )}
+                {workspace.configured && !workspace.configuredValid
+                  ? ' ⚠️ The saved path no longer exists and is being ignored.'
+                  : ''}
+              </p>
+            ) : null}
+            {workspaceMsg ? <div className="admin-row-msg">{workspaceMsg}</div> : null}
+            {/* A viewer reads the effective path but gets no unusable control. */}
+            {canOperate ? (
+              <button className="admin-refresh-btn" type="submit" disabled={workspaceBusy || !authed}>
+                {workspaceBusy ? '⏳ Saving…' : '💾 Save workspace'}
+              </button>
+            ) : (
+              <span className="admin-hint">🔒 Changing the workspace requires admin or operator.</span>
+            )}
+          </form>
+
+          {/*
+           * Response cache, by workspace.
+           *
+           * A cached answer is a statement about the folder it was produced for,
+           * so when a project changes and an ask replays an old answer the fix is
+           * to clear THAT project — not the whole cache, which would throw away
+           * answers that are still correct.
+           */}
+          <h2 className="section-subtitle">🧠 Response Cache (answers by workspace)</h2>
+          <p className="admin-hint">
+            The cache is keyed by the folder an answer was produced in. If a project has changed and an
+            ask replays an old answer, clear that project — every other project keeps its cached answers.
+          </p>
+          {cacheMsg ? <div className="admin-row-msg">{cacheMsg}</div> : null}
+          {cache && cache.workspaces.length > 0 ? (
+            <div className="admin-table-wrapper">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Workspace</th>
+                    <th>Answers</th>
+                    <th>Newest</th>
+                    <th>Models</th>
+                    <th>Sample</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {cache.workspaces.map((w) => (
+                    <tr key={w.scope ?? '__none__'}>
+                      <td className="admin-provider-type">
+                        {w.scope ? <code>{w.scope}</code> : <em>no workspace attached</em>}
+                      </td>
+                      <td>{w.count}</td>
+                      <td className="admin-hint">{new Date(w.newestAt).toLocaleString()}</td>
+                      <td className="admin-hint">
+                        {w.models.slice(0, 2).join(', ')}
+                        {w.models.length > 2 ? ` +${w.models.length - 2}` : ''}
+                      </td>
+                      <td className="admin-hint">{w.samples[0]?.prompt ?? ''}</td>
+                      <td>
+                        <button
+                          className="admin-refresh-btn"
+                          type="button"
+                          disabled={cacheBusy !== null || !canOperate}
+                          onClick={() => void clearCache(w.scope)}
+                        >
+                          {cacheBusy === (w.scope ?? '__none__') ? '⏳ …' : '🗑 Clear'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="empty-state">No cached answers — every turn reached a model.</div>
+          )}
+          {cache && cache.total > 0 ? (
+            <p className="admin-hint">
+              {cache.total} cached answer{cache.total === 1 ? '' : 's'} across{' '}
+              {cache.workspaces.length} workspace{cache.workspaces.length === 1 ? '' : 's'}.
+            </p>
+          ) : null}
+
+          <ServiceProvidersPanel authed={authed} role={role || 'viewer'} />
+
           <QuotaPanel authed={authed} role={role || 'viewer'} />
 
-          {isAdmin ? (
-            <>
-              <h2 className="section-subtitle">👥 Dashboard Users (role.manage)</h2>
-              <div className="admin-users-list">
-                {users.map((u) => (
-                  <div className="admin-user-row" key={u.user}>
-                    <span className="admin-user-name">{u.user}</span>
-                    <span className={`admin-role-badge admin-role-${u.role}`}>{u.role}</span>
-                    <span className="admin-user-since">since {new Date(u.createdAt).toLocaleDateString()}</span>
-                    {u.user !== userName ? (
-                      <button className="admin-mini-btn admin-mini-danger" onClick={() => void removeUser(u.user)}>🗑 Remove user</button>
-                    ) : (
-                      <span className="admin-hint">you</span>
-                    )}
-                  </div>
-                ))}
-                {users.length === 0 ? <div className="empty-state">No dashboard users yet.</div> : null}
-              </div>
-              <form className="admin-gate-form admin-user-form" onSubmit={addUser}>
-                <label>
-                  <span>Username</span>
-                  <input type="text" value={newUserName} onChange={(e) => setNewUserName(e.target.value)} autoComplete="off" />
-                </label>
-                <label>
-                  <span>Password (min 8 chars)</span>
-                  <input type="password" value={newUserPass} onChange={(e) => setNewUserPass(e.target.value)} autoComplete="new-password" />
-                </label>
-                <label>
-                  <span>Role</span>
-                  <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value)}>
-                    <option value="viewer">viewer — read-only</option>
-                    <option value="operator">operator — read-only in the dashboard today</option>
-                    <option value="admin">admin — full control</option>
-                  </select>
-                </label>
-                {usersMsg ? <div className="admin-row-msg">{usersMsg}</div> : null}
-                <button className="admin-refresh-btn" type="submit" disabled={!newUserName || !newUserPass}>
-                  ➕ Add user
-                </button>
-              </form>
-            </>
-          ) : null}
+          <h2 className="section-subtitle">⚙️ System Checks (buff doctor)</h2>
+          <div className="admin-check-list">
+            {data.system.map((c) => <CheckRow key={c.name} check={c} />)}
+          </div>
+
+          <h2 className="section-subtitle">🏥 Enterprise Self-Check (doctor --enterprise)</h2>
+          <div className="admin-check-list">
+            {data.enterprise.length > 0
+              ? data.enterprise.map((c) => <CheckRow key={c.name} check={c} />)
+              : <div className="empty-state">No enterprise checks returned.</div>}
+          </div>
         </>
       ) : loading ? (
         <div className="loading-state"><div className="loading-spinner" /><p>Running all state checks…</p></div>

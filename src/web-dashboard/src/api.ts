@@ -2,14 +2,19 @@ import { parseJsonOrNull } from './jsonOrNull';
 import type { ExecutionEntry } from './components/ExecutionHistory';
 import type {
   AdminAuthStatus,
+  AdminCachePayload,
   AdminCatalog,
   AdminCatalogProvider,
   AdminChecksData,
   AdminLoginResult,
   AdminQuotaConfig,
   AdminQuotaPayload,
+  AdminServiceProbeResult,
+  AdminServiceWriteResult,
+  AdminServicesResult,
   AdminTestResult,
   AdminUsersResult,
+  AdminWorkspace,
   AdminWriteResult,
   BedrockStatus,
   DashboardData,
@@ -26,6 +31,7 @@ import type {
   TaskStatus,
   SkillEnvVarRow,
   ProcessEnvVarRow,
+  ContinuityData,
   VerifyBacklogState,
   ResumeOutcome,
   TraceEntry,
@@ -104,7 +110,8 @@ function isResumeOutcome(value: unknown): value is ResumeOutcome {
     typeof r.replayed === 'number' &&
     typeof r.modelCalls === 'number' &&
     typeof r.saved === 'boolean' &&
-    typeof r.notice === 'string'
+    typeof r.notice === 'string' &&
+    (r.callsAvoided === undefined || typeof r.callsAvoided === 'number')
   );
 }
 
@@ -649,6 +656,119 @@ export class DashboardAPI {
     const d = (r.data ?? {}) as AdminTestResult;
     if (r.status === 200) return d;
     return { ok: false, error: d.error || 'Test failed.', unauthorized: r.status === 401 };
+  }
+
+  /**
+   * The dashboard's workspace (`dashboard.cwd`) — the directory an UNATTACHED
+   * chat turn runs in. Read is authed; the picker shows it so where a turn
+   * would land is never invisible. `effective === null` means "unconfigured",
+   * which is the case where the chat asks the user to attach a folder.
+   */
+  async fetchAdminWorkspace(): Promise<AdminWorkspace | null> {
+    const r = await this.sendAdminRequest('/api/admin/workspace', 'GET');
+    if (!r) return null;
+    const d = (r.data ?? {}) as Partial<AdminWorkspace> & { ok?: boolean };
+    if (r.status !== 200 || d.ok !== true) return null;
+    return {
+      configured: typeof d.configured === 'string' ? d.configured : null,
+      effective: typeof d.effective === 'string' ? d.effective : null,
+      processCwd: typeof d.processCwd === 'string' ? d.processCwd : '',
+      configuredValid: d.configuredValid === true,
+    };
+  }
+
+  /**
+   * Set (or clear) the dashboard workspace (authed — routing.operate).
+   * An empty string clears it, restoring the ask-for-a-folder behaviour.
+   */
+  async saveAdminWorkspace(cwd: string): Promise<{ ok: boolean; workspace?: AdminWorkspace; error?: string; unauthorized?: boolean; forbidden?: boolean }> {
+    const r = await this.sendAdminRequest('/api/admin/workspace', 'PUT', { cwd });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as Partial<AdminWorkspace> & { ok?: boolean; error?: string };
+    if (r.status === 200 && d.ok === true) {
+      return {
+        ok: true,
+        workspace: {
+          configured: typeof d.configured === 'string' ? d.configured : null,
+          effective: typeof d.effective === 'string' ? d.effective : null,
+          processCwd: typeof d.processCwd === 'string' ? d.processCwd : '',
+          configuredValid: d.configuredValid === true,
+        },
+      };
+    }
+    return { ok: false, error: d.error || 'Save failed.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  /**
+   * The response cache, grouped by the workspace each answer is about
+   * (authed — the listing carries prompt previews). Answers for one project can
+   * go stale (you changed the files) while another project's stay valid, so the
+   * dashboard shows and clears them per folder.
+   */
+  async fetchAdminCache(): Promise<AdminCachePayload | null> {
+    const r = await this.sendAdminRequest('/api/admin/cache', 'GET');
+    if (!r) return null;
+    const d = r.data as AdminCachePayload | null;
+    if (!d || d.ok !== true || !Array.isArray(d.workspaces)) return null;
+    return d;
+  }
+
+  /**
+   * Drop one workspace's cached answers (authed — routing.operate/admin).
+   * `null` targets the answers produced with no workspace attached.
+   */
+  async clearAdminCache(scope: string | null): Promise<{ ok: boolean; removed?: number; error?: string; unauthorized?: boolean; forbidden?: boolean }> {
+    const r = await this.sendAdminRequest('/api/admin/cache/clear', 'POST', { scope });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; removed?: number; error?: string };
+    if (r.status === 200 && d.ok) return { ok: true, removed: d.removed ?? 0 };
+    return { ok: false, error: d.error || 'Could not clear the cache.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  /**
+   * The third-party SERVICE keys the agent consumes (image / video / search /
+   * vision / speech) — separate from LLM providers. Read is authed.
+   */
+  async fetchAdminServices(): Promise<AdminServicesResult | null> {
+    const r = await this.sendAdminRequest('/api/admin/services', 'GET');
+    if (!r) return null;
+    const d = r.data as AdminServicesResult | null;
+    if (!d || d.ok !== true || !Array.isArray(d.services)) return null;
+    return d;
+  }
+
+  /**
+   * Write a service's env values (authed — credential.write/admin). Mirrors a
+   * `~/.nuvira/.env` edit; loaded by loadEnv() at startup and hot-applied to
+   * the running process.
+   */
+  async saveService(id: string, values: Record<string, string>): Promise<AdminServiceWriteResult> {
+    const r = await this.sendAdminRequest(`/api/admin/services/${encodeURIComponent(id)}`, 'PUT', { values });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminServiceWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Save failed.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  /**
+   * Probe a service's configured backend (authed — credential.write/admin).
+   * Tests the SAVED key(s), so save first to test a new value.
+   */
+  async testService(id: string): Promise<AdminServiceProbeResult> {
+    const r = await this.sendAdminRequest(`/api/admin/services/${encodeURIComponent(id)}/test`, 'POST');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminServiceProbeResult;
+    if (r.status === 200) return d;
+    return { ok: false, error: d.error || 'Test failed.' };
+  }
+
+  /** Remove a service's env values (authed — credential.write/admin). */
+  async removeService(id: string): Promise<AdminServiceWriteResult> {
+    const r = await this.sendAdminRequest(`/api/admin/services/${encodeURIComponent(id)}`, 'DELETE');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminServiceWriteResult;
+    if (r.status === 200 && d.ok) return d;
+    return { ok: false, error: d.error || 'Remove failed.', unauthorized: r.status === 401, forbidden: r.status === 403 };
   }
 
   /** The user-declared budget (routing.quota + cost cap). Read is open. */
@@ -1384,6 +1504,12 @@ export class DashboardAPI {
         generationFailed: boolean;
         retryQueued?: boolean;
         /**
+         * The turn did NOT run: no project folder is attached, and the ask needs
+         * one. `content` is the request for a folder — rendered as a prompt, not
+         * an answer, and with no Retry (re-sending unchanged fails the same way).
+         */
+        needsProject?: boolean;
+        /**
          * WS5 (#27) — the turn REFUSED to run, so `content` is the reason rather
          * than an answer. Distinct from `generationFailed` on purpose: the GUI uses
          * it to suppress the Retry affordance, because the same ask in the same
@@ -1445,6 +1571,7 @@ export class DashboardAPI {
           model: typeof d.model === 'string' ? d.model : null,
           generationFailed: d.generationFailed === true,
           retryQueued: d.retryQueued === true,
+          ...(d.needsProject === true ? { needsProject: true } : {}),
           ...(d.refused === true ? { refused: true } : {}),
           ...(isWorktreeOutcome(d.worktree) ? { worktree: d.worktree } : {}),
           ...(isResumeOutcome(d.resume) ? { resume: d.resume } : {}),
@@ -1869,6 +1996,46 @@ export class DashboardAPI {
       return data?.vars ?? [];
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * The stored continuity data: session snapshots + the semantic recall index +
+   * the effective switch state. Null when the server predates the endpoint.
+   */
+  async fetchContinuity(): Promise<ContinuityData | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/continuity`, { headers: { ...authHeaders() } });
+      const data = (await parseJsonOrNull(res)) as ({ ok?: boolean } & Partial<ContinuityData>) | null;
+      if (!data || data.ok !== true) return null;
+      return {
+        sessions: data.sessions ?? [],
+        recall: data.recall ?? [],
+        toggles: data.toggles ?? { sessionStore: false, sessionRecall: false },
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Forget stored continuity data. `target` clears a whole kind, or one entry
+   * when an `id` is given. Returns how many records were removed.
+   */
+  async clearContinuity(
+    target: 'sessions' | 'recall' | 'session' | 'recall-entry',
+    id?: string,
+  ): Promise<{ ok: boolean; removed?: number; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/continuity/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ target, ...(id ? { id } : {}) }),
+      });
+      const data = (await res.json()) as { ok?: boolean; removed?: number; error?: string };
+      return { ok: data.ok === true, removed: data.removed, error: data.error };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 

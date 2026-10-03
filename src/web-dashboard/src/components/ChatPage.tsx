@@ -85,6 +85,13 @@ interface ChatMessage {
    * fail the same way.
    */
   refused?: boolean;
+  /**
+   * The turn did not run because no project folder is attached and the ask needs
+   * one. `content` is the request for a folder, so it is rendered as a PROMPT
+   * (with the attach controls right above it) rather than an answer — and it is
+   * never offered a Retry, since re-sending unchanged fails the same way.
+   */
+  needsProject?: boolean;
   /** P2 — a CLI command run as an inline execution card (the ⚡ Run path). */
   task?: TaskRunView;
 }
@@ -880,6 +887,11 @@ function ResumeCard({ resume }: { resume: ResumeOutcome }) {
       <div className="chat-resume-meta">
         <span>{resume.replayed} step{resume.replayed === 1 ? '' : 's'} replayed</span>
         <span>{resume.modelCalls} model call{resume.modelCalls === 1 ? '' : 's'} made</span>
+        {typeof resume.callsAvoided === 'number' && resume.callsAvoided > 0 && (
+          <span className="chat-resume-saved-calls" title="model calls the resume did not re-pay for">
+            {resume.callsAvoided} model call{resume.callsAvoided === 1 ? '' : 's'} saved
+          </span>
+        )}
         <code className="chat-resume-id" title="the checkpoint record this run used">{resume.id}</code>
       </div>
       <div className="chat-resume-note">{resume.notice}</div>
@@ -1048,6 +1060,10 @@ export default function ChatPage() {
     multiSelect: boolean;
   } | null>(null);
   const [questionSel, setQuestionSel] = useState<Set<number>>(new Set());
+  // C1 — the "type my own answer" field. The agent offers 2–4 choices, but the
+  // user's real answer is sometimes none of them; the `custom` value is already
+  // accepted by the server and threaded into the tool result.
+  const [questionCustom, setQuestionCustom] = useState('');
 
   useEffect(() => {
     void dashboardAPI.fetchAdminAuthStatus().then((s) => {
@@ -1605,6 +1621,7 @@ export default function ChatPage() {
             worktree: r.worktree,
             resume: r.resume,
             refused: r.refused,
+            needsProject: r.needsProject,
             // P2 — extract artifact cards from the answer TEXT (diff/result/
             // deploy blocks the model wrote directly, beyond the live events).
             artifacts: extractArtifacts(replyContent),
@@ -1826,6 +1843,8 @@ export default function ChatPage() {
       const q = pendingQuestion;
       if (!q) return;
       setPendingQuestion(null);
+      setQuestionCustom('');
+      setQuestionSel(new Set());
       const r = await dashboardAPI.chatRespond(sessionIdRef.current, q.questionId, selection);
       if (!r.ok) {
         setError(r.error || 'The question could not be answered — try sending your message again.');
@@ -1836,16 +1855,24 @@ export default function ChatPage() {
 
   const submitQuestion = useCallback(() => {
     if (!pendingQuestion) return;
+    const typed = questionCustom.trim();
     const idx = pendingQuestion.multiSelect ? [...questionSel] : [...questionSel][0];
     if (pendingQuestion.multiSelect) {
-      void answerQuestion({ index: [...questionSel] });
+      // Selected choices AND/OR a typed answer — a custom answer alone is valid.
+      void answerQuestion({
+        index: [...questionSel],
+        ...(typed ? { custom: typed } : {}),
+      });
+    } else if (typed) {
+      // A typed answer is the answer — no option index.
+      void answerQuestion({ index: -1, custom: typed });
     } else if (idx !== undefined) {
       void answerQuestion({ index: idx });
     } else {
       // No selection — skip (agent proceeds on best judgment).
       void answerQuestion({ index: -1 });
     }
-  }, [pendingQuestion, questionSel, answerQuestion]);
+  }, [pendingQuestion, questionSel, questionCustom, answerQuestion]);
 
   const skipQuestion = useCallback(() => {
     if (!pendingQuestion) return;
@@ -1944,6 +1971,21 @@ export default function ChatPage() {
               <div className="chat-project-pick">
                 <span className="chat-project-icon">📁</span>
                 <span className="chat-project-hint">Select Project Folder</span>
+                {/*
+                 * Where an UNATTACHED turn would land. Shown because it is the
+                 * fact whose absence made an answer about an unrelated folder
+                 * look like the agent ignoring the one the user attached — and
+                 * whose presence tells the user the ask will be refused, before
+                 * they send it.
+                 */}
+                {projectPick.find((p) => p.kind === 'cwd') ? (
+                  <span
+                    className="chat-project-cwd"
+                    title="Working directory used when no folder is attached"
+                  >
+                    ⚙️ {projectPick.find((p) => p.kind === 'cwd')!.path}
+                  </span>
+                ) : null}
                 {projectPick.length > 0 ? (
                   <span className="chat-project-chips">
                     {projectPick.filter((p) => p.kind !== 'cwd').slice(0, 3).map((p) => (
@@ -2246,6 +2288,11 @@ export default function ChatPage() {
                       was written, and the reason is above.
                     </div>
                   ) : null}
+                  {m.role === 'assistant' && m.needsProject ? (
+                    <div className="chat-refused-line">
+                      📁 Nothing was run — attach a project folder above, then send the message again.
+                    </div>
+                  ) : null}
                   {m.role === 'assistant' && m.worktree ? (
                     <WorktreeCard worktree={m.worktree} />
                   ) : null}
@@ -2397,9 +2444,22 @@ export default function ChatPage() {
                   </button>
                 ))}
               </div>
+              <input
+                className="chat-question-custom"
+                type="text"
+                placeholder="✏️ Or type your own answer…"
+                value={questionCustom}
+                onChange={(e) => setQuestionCustom(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    submitQuestion();
+                  }
+                }}
+              />
               <div className="chat-resolve-foot">
                 <button className="admin-refresh-btn" type="button" onClick={submitQuestion}>
-                  {pendingQuestion.multiSelect ? 'Submit' : 'Choose'}
+                  {questionCustom.trim() ? 'Send answer' : pendingQuestion.multiSelect ? 'Submit' : 'Choose'}
                 </button>
                 <button className="admin-mini-btn" type="button" onClick={skipQuestion}>
                   Skip — best judgment

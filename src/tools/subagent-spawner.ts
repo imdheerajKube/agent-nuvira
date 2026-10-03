@@ -148,6 +148,8 @@ export interface SubagentState {
   unverifiedEdit?: boolean;
   /** G1/G2 — the child's answer claimed a code change no verification backed. */
   unverifiedEditClaim?: boolean;
+  /** A3 Part 2 — the child's build FAILED and its answer still claimed success. */
+  unverifiedBuildClaim?: boolean;
   /** LLM calls made */
   llmCalls: number;
   /** Tokens used */
@@ -235,6 +237,12 @@ export interface SubagentResult {
   unverifiedEdit?: boolean;
   /** G1/G2 — the child's answer claimed a code change no verification backed. */
   unverifiedEditClaim?: boolean;
+  /**
+   * A3 Part 2 — the child's build FAILED and its answer still claimed success,
+   * carried across the fork like `unverifiedEditClaim` so a delegated
+   * build-debug run cannot report a success its own ledger contradicts.
+   */
+  unverifiedBuildClaim?: boolean;
 }
 
 // ─── Subagent Manager ─────────────────────────────────────────────────────
@@ -579,6 +587,7 @@ export class SubagentManager extends EventEmitter {
         // so `undefined` here means "not claimed", and never `false`.
         if (msg.unverifiedEdit === true) state.unverifiedEdit = true;
         if (msg.unverifiedEditClaim === true) state.unverifiedEditClaim = true;
+        if (msg.unverifiedBuildClaim === true) state.unverifiedBuildClaim = true;
         this.recordIdentity(state, msg);
         this.saveState(state);
         break;
@@ -677,6 +686,7 @@ export class SubagentManager extends EventEmitter {
       ...(state.resume ? { resume: state.resume } : {}),
       ...(state.unverifiedEdit ? { unverifiedEdit: true } : {}),
       ...(state.unverifiedEditClaim ? { unverifiedEditClaim: true } : {}),
+      ...(state.unverifiedBuildClaim ? { unverifiedBuildClaim: true } : {}),
       ...(state.worktree && state.worktreeBase && state.worktreeDiff
         ? {
             worktree: {

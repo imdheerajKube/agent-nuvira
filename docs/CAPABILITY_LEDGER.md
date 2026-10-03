@@ -55,7 +55,8 @@
 
 | Capability | Depth | Evidence / limit |
 |---|---|---|
-| CLI (chat/execute/plan/…) | ✅ | `cli/cli-program.ts`, 308 command sections |
+| CLI (chat/execute/plan/…) | ✅ | `cli/cli-program.ts`, 309 command sections |
+| In-product path to the website (capabilities/docs) | ✅ | `nuvira website` (CLI) + a 🌐 Website link in the dashboard topbar |
 | Web dashboard | ✅ | `web-dashboard/` (72 routes) |
 | Multi-channel gateway | ✅ | `gateway/` (16 modules, WhatsApp bridge) |
 | Surface-parity harness (5 surfaces) | ✅ | `parity/` + `nuvira parity` |
@@ -70,7 +71,8 @@
 | Capability | Depth | Evidence / limit |
 |---|---|---|
 | Unit/component suite | ✅ | 458 test files; ~5,516 passing (root) + ~1,015 (dashboard) |
-| Golden provider-wire fixtures (REQUEST-side drift) | ✅ | `src/parity/wire-fixtures.ts` + `tests/fixtures/provider-wire/` |
+| Golden provider-wire fixtures (REQUEST-side drift) | ✅ | `src/parity/wire-fixtures.ts` + `tests/fixtures/provider-wire/` — 4 cases: tool-call roundtrip, plain turn, **streaming tool-call** (dashboard typewriter).
+| Streaming / plain `generate()` wire shapes pinned | ✅ | `streaming-tool-call.json` (stream:true + stream_options.include_usage), `plain-generate.json` |
 | Command-surface drift guard | ✅ | `docs:commands:check` in CI |
 | Deterministic mock/loopback provider | ✅ | `parity/drivers.ts` stub + wire recorder |
 | CI green on every commit | 🟡 | linux/mac/windows workflows exist; not independently confirmed green at every commit |

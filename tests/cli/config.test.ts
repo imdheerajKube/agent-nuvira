@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -290,6 +290,79 @@ describe('ConfigCommand set — M2.5 context preflight windows', () => {
   });
 });
 
+describe('ConfigCommand set — modality.image backend (BYOK)', () => {
+  beforeEach(() => {
+    saved = null;
+    configState = { defaultProvider: 'local', providers: {} } as BuffConfig;
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sets modality.image.provider', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'modality.image.provider', 'gemini');
+    expect(saved?.modality?.image?.provider).toBe('gemini');
+  });
+
+  it('merges modality.image.model into an existing provider choice (additive)', () => {
+    configState.modality = { image: { provider: 'gemini' } };
+    const cmd = makeCommand();
+    runSet(cmd, 'modality.image.model', 'gemini-2.5-flash-image');
+    expect(saved?.modality?.image?.provider).toBe('gemini');
+    expect(saved?.modality?.image?.model).toBe('gemini-2.5-flash-image');
+  });
+
+  it('rejects an unknown modality.image field', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cmd = makeCommand();
+    runSet(cmd, 'modality.image.nonsense', 'x');
+    expect(saved).toBeNull();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown modality.image config key'));
+  });
+});
+
+describe('ConfigCommand set — dashboard.cwd (workspace for unattached chat turns)', () => {
+  beforeEach(() => {
+    saved = null;
+    configState = { defaultProvider: 'local', providers: {} } as BuffConfig;
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('stores an EXISTING directory as an absolute path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'buff-cwd-ok-'));
+    try {
+      runSet(makeCommand(), 'dashboard.cwd', dir);
+      expect(saved?.dashboard?.cwd).toBe(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a path that is not a directory (never writes a broken fallback)', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    runSet(makeCommand(), 'dashboard.cwd', '/no/such/dir-xyz-123');
+    // NOT saved: a typo here would re-open the accidental-cwd hole this setting
+    // exists to close, so it must fail loudly instead of being persisted.
+    expect(saved).toBeNull();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('existing directory'));
+  });
+
+  it('clears the setting with dashboard.cwd.clear', () => {
+    configState.dashboard = { cwd: '/tmp' };
+    runSet(makeCommand(), 'dashboard.cwd.clear', 'true');
+    expect(saved?.dashboard?.cwd).toBeUndefined();
+  });
+});
+
 describe('ConfigCommand gateway — validated-sender policies (allow/disallow/reply)', () => {
   // Hermetic RBAC: an empty BUFF_CONFIG_DIR role file → legacy single-user
   // mode → guardRbacAction('gateway.manage') is permissive, so the command
@@ -430,5 +503,82 @@ describe('ConfigCommand gateway — validated-sender policies (allow/disallow/re
     expect(saved).toBeNull();
     runGateway(cmd, ['reply', 'whatsapp', 'loud']);
     expect(saved).toBeNull();
+  });
+});
+
+describe('ConfigCommand service — third-party service keys (dashboard parity)', () => {
+  // Hermetic: a temp env file + an empty config dir (legacy RBAC → the
+  // credential.write guard is permissive). Values land in NUVIRA_ENV_FILE.
+  let dir: string;
+  let originalConfigDir: string | undefined;
+  let originalEnvFile: string | undefined;
+  let originalActAs: string | undefined;
+  const TOUCHED = ['BRAVE_SEARCH_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_CSE_API_KEY', 'GOOGLE_CSE_ID'];
+
+  function envFilePath(): string {
+    return process.env.NUVIRA_ENV_FILE as string;
+  }
+
+  function runService(args: string[]): void {
+    const cmd = new ConfigCommand();
+    const cli = new Command();
+    cli.addCommand(cmd.create());
+    cli.parse(['node', 'buff', 'config', 'service', ...args]);
+  }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'buff-svc-cli-'));
+    originalConfigDir = process.env.NUVIRA_CONFIG_DIR;
+    originalEnvFile = process.env.NUVIRA_ENV_FILE;
+    originalActAs = process.env.NUVIRA_ACT_AS;
+    process.env.NUVIRA_CONFIG_DIR = dir;
+    process.env.NUVIRA_ENV_FILE = join(dir, 'test.env');
+    delete process.env.NUVIRA_ACT_AS;
+    for (const k of TOUCHED) delete process.env[k];
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+    else process.env.NUVIRA_CONFIG_DIR = originalConfigDir;
+    if (originalEnvFile === undefined) delete process.env.NUVIRA_ENV_FILE;
+    else process.env.NUVIRA_ENV_FILE = originalEnvFile;
+    if (originalActAs === undefined) delete process.env.NUVIRA_ACT_AS;
+    else process.env.NUVIRA_ACT_AS = originalActAs;
+    for (const k of TOUCHED) delete process.env[k];
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('sets one env var for a service (positional form)', () => {
+    runService(['set', 'search-brave', 'BRAVE_SEARCH_API_KEY', 'brave-key-123']);
+    expect(readFileSync(envFilePath(), 'utf-8')).toContain('BRAVE_SEARCH_API_KEY=brave-key-123');
+  });
+
+  it('sets via --set and rejects unknown service ids and env vars', () => {
+    runService(['set', 'image-gemini', '--set', 'GEMINI_API_KEY=gkey']);
+    expect(readFileSync(envFilePath(), 'utf-8')).toContain('GEMINI_API_KEY=gkey');
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    runService(['set', 'not-a-service', 'X', 'y']);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown service'));
+    runService(['set', 'search-brave', 'NOT_A_VAR', 'y']);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown env var'));
+  });
+
+  it('unset removes one var (--yes) and leaves the service\'s others intact', () => {
+    runService(['set', 'search-google-cse', '--set', 'GOOGLE_CSE_API_KEY=k', '--set', 'GOOGLE_CSE_ID=cx']);
+    runService(['unset', 'search-google-cse', 'GOOGLE_CSE_API_KEY', '--yes']);
+    const content = readFileSync(envFilePath(), 'utf-8');
+    expect(content).not.toContain('GOOGLE_CSE_API_KEY');
+    expect(content).toContain('GOOGLE_CSE_ID=cx');
+  });
+
+  it('treats a keyless service as a no-op instead of writing', () => {
+    runService(['set', 'image-pollinations', 'X', 'y']);
+    // No env file is created for a keyless backend.
+    expect(() => readFileSync(envFilePath(), 'utf-8')).toThrow();
   });
 });

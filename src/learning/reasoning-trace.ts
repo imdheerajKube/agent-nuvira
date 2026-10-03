@@ -100,12 +100,17 @@ export interface TraceStep {
  */
 export interface TraceOutcome {
   /**
-   * `answered`  — a text reply only (no tool ran);
-   * `acted`     — at least one tool executed successfully;
-   * `failed`    — generation failed (no usable answer);
-   * `cancelled` — the turn was cancelled by the user.
+   * `answered`   — a text reply only (no tool ran);
+   * `acted`      — at least one tool executed successfully;
+   * `failed`     — generation failed (no usable answer);
+   * `cancelled`  — the turn was cancelled by the user;
+   * `incomplete` — the turn ended WITHOUT concluding the work it claimed: a
+   *                 promised/unverified action that no tool performed, a build
+   *                 the run observed FAIL (see `unverifiedBuildClaim`), or a
+   *                 requested deliverable that was never written. It is not a
+   *                 success, and unlike `failed` there IS work to continue from.
    */
-  kind: 'answered' | 'acted' | 'failed' | 'cancelled';
+  kind: 'answered' | 'acted' | 'failed' | 'cancelled' | 'incomplete';
   /** Names of the tools that actually executed this turn (in order). */
   tools?: string[];
   /** True when a delivery tool (`gateway_send`) ran and reported success. */
@@ -136,6 +141,14 @@ export interface TraceOutcome {
    * `unverifiedClaim` — the honesty flag for a false "I have fixed it".
    */
   unverifiedEditClaim?: boolean;
+  /**
+   * A3 Part 2 — True when a BUILD command the run executed FAILED, no later
+   * build succeeded, and the answer nonetheless asserted the artifact came out
+   * good (see `detectFailedBuildSuccessClaim`). This is the strongest form of
+   * the false-success defect: the run holds its own counter-evidence, so the
+   * trace marks the turn `incomplete` rather than `acted`.
+   */
+  unverifiedBuildClaim?: boolean;
   /**
    * G13b — True when the request asked for an AUTHORED deliverable to be
    * PRODUCED and the turn wrote NOTHING to disk (see
@@ -603,22 +616,45 @@ export function buildTraceOutcome(input: {
   unfulfilledPromise?: boolean;
   unverifiedEdit?: boolean;
   unverifiedEditClaim?: boolean;
+  unverifiedBuildClaim?: boolean;
   undeliveredArtifact?: boolean;
 }): TraceOutcome {
   const tools = [...(input.tools ?? [])];
   if (input.cancelled) return { kind: 'cancelled', tools };
   if (input.generationFailed) return { kind: 'failed', tools };
   const delivered = tools.includes('gateway_send');
+  // A turn that CLAIMED work it did not do — or that was asked for a deliverable
+  // and produced none — did not conclude. It is `incomplete`, and it must NOT be
+  // a success: the live Aukat_check runs reported `success: true` for turns whose
+  // outcome was `cancelled`, so nothing downstream offered to continue them.
+  const incomplete = Boolean(
+    input.undeliveredArtifact ||
+      input.unfulfilledPromise ||
+      input.unverifiedActionClaim ||
+      input.unverifiedBuildClaim,
+  );
   return {
-    kind: tools.length > 0 ? 'acted' : 'answered',
+    kind: incomplete ? 'incomplete' : tools.length > 0 ? 'acted' : 'answered',
     tools,
     ...(delivered ? { delivered: true } : {}),
     ...(input.unverifiedActionClaim ? { unverifiedClaim: true } : {}),
     ...(input.unfulfilledPromise ? { unfulfilledPromise: true } : {}),
     ...(input.unverifiedEdit ? { unverifiedEdit: true } : {}),
     ...(input.unverifiedEditClaim ? { unverifiedEditClaim: true } : {}),
+    ...(input.unverifiedBuildClaim ? { unverifiedBuildClaim: true } : {}),
     ...(input.undeliveredArtifact ? { undeliveredArtifact: true } : {}),
   };
+}
+
+/**
+ * Did this turn actually succeed? `cancelled`, `failed` and `incomplete` are NOT
+ * successes. Callers used to pass `!generationFailed`, which let a cancelled turn
+ * record `success: true` while its outcome read `cancelled`; every surface then
+ * treated an unfinished run as finished.
+ */
+export function traceOutcomeSucceeded(outcome: TraceOutcome | undefined): boolean {
+  if (!outcome) return true;
+  return outcome.kind !== 'failed' && outcome.kind !== 'cancelled' && outcome.kind !== 'incomplete';
 }
 
 /** Get one trace by id (null when missing). */

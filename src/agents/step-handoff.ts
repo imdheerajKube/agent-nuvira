@@ -129,6 +129,13 @@ export const MAX_ENTRIES = 120;
 /** Cap on the injected block — it rides in prompts, so it stays short. */
 export const MAX_BLOCK_CHARS = 1_600;
 
+/**
+ * How long a refused/failed attempt stays worth surfacing. A step with no
+ * declared artifacts is only "outstanding" while its failure is recent; an
+ * ancient refusal is history, not a blocker.
+ */
+export const MAX_ATTEMPT_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
 /** Built-in artifacts a plan may name without the planner declaring them. */
 const DELIVERABLE_EXTENSIONS = [
   '.nvda-addon', '.zip', '.wheel', '.whl', '.vsix', '.tar.gz', '.tgz', '.jar', '.epub',
@@ -351,18 +358,55 @@ export function loadStepHandoff(
  * A hand-off whose `remaining` is empty is finished — it is filtered out here so
  * a completed step is never presented as outstanding.
  */
+/**
+ * Is a step with NO declared artifacts still outstanding?
+ *
+ * WHY THIS CASE EXISTS (the live Aukat_check ledger): the only entry for that
+ * project was `…Aukat_check\0txt:c32b0bf58c29`, `declared: []`, with TEN recorded
+ * `refused` attempts — the same `run_terminal` command gated over and over. The
+ * old rule dropped every `declared: []` entry, so the ledger recorded ten
+ * refusals and the agent was told about none of them. The work was not "a missing
+ * file"; it was "a command that keeps being refused", and that is exactly what
+ * the next run needed to know.
+ */
+function hasUnfinishedAttempt(handoff: StepHandoff, now: number): boolean {
+  if (handoff.declared.length > 0) return false;
+  const last = handoff.attempts[handoff.attempts.length - 1];
+  if (!last) return false;
+  if (last.kind !== 'refused' && last.kind !== 'failed') return false;
+  if (now - last.at > MAX_ATTEMPT_AGE_MS) return false;
+  // A REFUSAL is describable outstanding work on its own: the gate asked, the
+  // command never ran, and the next run needs to know that. A single vague
+  // FAILURE with nothing declared is not ("think about the design" is a note,
+  // not a step) — but a step that has failed MORE THAN ONCE is, because the
+  // repeat is the signal that the approach is not working.
+  return last.kind === 'refused' || handoff.attempts.length >= 2;
+}
+
+/**
+ * Every hand-off for a project that still has work left, newest first.
+ *
+ * Project-scoped rather than goal-scoped on purpose: this is what lets a
+ * REWORDED ask resume. The caller asked the same thing of the same project, so
+ * the outstanding work is found by project, not by matching sentences.
+ *
+ * "Outstanding" has two honest shapes, and BOTH are returned:
+ *   1. a declared artifact that is still missing (`remaining.length > 0`), and
+ *   2. a step with no declared artifacts that was REFUSED recently, or has
+ *      failed more than once — the repeated-refusal case above.
+ * A hand-off that is finished on both counts is filtered out, so a completed
+ * step is never presented as outstanding.
+ */
 export function loadOpenHandoffs(projectPath: string, options: { limit?: number } = {}): StepHandoff[] {
   const key = normalizeProjectPath(projectPath);
+  const now = Date.now();
   const data = readFileSafe();
   const open: StepHandoff[] = [];
   for (const [k, value] of Object.entries(data.entries)) {
     if (!k.startsWith(`${key}\u0000`)) continue;
     const reconciled = reconcileHandoff(value);
-    // "Open" means a declared artifact is still missing — the only honest test.
-    if (reconciled.remaining.length === 0) continue;
-    // A step with nothing declared and no recorded attempt is not outstanding
-    // work we can describe; it would only add prompt weight.
-    if (reconciled.declared.length === 0) continue;
+    const missingArtifact = reconciled.remaining.length > 0;
+    if (!missingArtifact && !hasUnfinishedAttempt(reconciled, now)) continue;
     open.push(reconciled);
   }
   open.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -411,7 +455,11 @@ function providerOf(route: string): string {
  * that behaviour, so it is stated rather than implied.
  */
 export function formatHandoffs(handoffs: readonly StepHandoff[], now: number = Date.now()): string {
-  const open = handoffs.filter((h) => h.remaining.length > 0);
+  // Both shapes of outstanding work (missing artifact, or a repeatedly refused
+  // step with nothing declared) are rendered — see `loadOpenHandoffs`.
+  const open = handoffs.filter(
+    (h) => h.remaining.length > 0 || hasUnfinishedAttempt(h, now),
+  );
   if (open.length === 0) return '';
 
   const lines: string[] = [
@@ -427,7 +475,16 @@ export function formatHandoffs(handoffs: readonly StepHandoff[], now: number = D
       // width and truncate every path to `…`.
       lines.push(`  ✅ already on disk (do NOT redo): ${h.landed.map((p) => shorten(p)).join(', ')}`);
     }
-    lines.push(`  ⬜ still missing: ${h.remaining.map((p) => shorten(p)).join(', ')}`);
+    if (h.remaining.length > 0) {
+      lines.push(`  ⬜ still missing: ${h.remaining.map((p) => shorten(p)).join(', ')}`);
+    } else if (h.attempts.length > 0) {
+      // No declared artifact: the outstanding fact is the ATTEMPT itself — a
+      // step whose command keeps being refused. Naming the count is what turns
+      // "it failed again" into "this approach has not worked N times".
+      const refused = h.attempts.filter((a) => a.kind === 'refused').length;
+      const noun = refused === h.attempts.length ? 'refused' : 'attempted';
+      lines.push(`  ⬜ no artifact declared — this step has been ${noun} ${h.attempts.length}×`);
+    }
     const last = h.attempts[h.attempts.length - 1];
     if (last) {
       const age = relativeAge(last.at, now);

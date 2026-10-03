@@ -70,6 +70,7 @@ import { PhaseCommand } from './phase.js';
 import { RetrievalCommand } from './retrieval.js';
 import { TraceCommand } from './trace.js';
 import { ContinuityCommand } from './continuity.js';
+import { WebsiteCommand } from './website.js';
 import { BedrockCommand } from './bedrock.js';
 import { NluCommand } from './nlu.js';
 import { IntentCommand } from './intent.js';
@@ -287,6 +288,9 @@ export function createCLI(): Command {
 
   // Register Continuity command (session snapshots + semantic recall: inspect/forget)
   program.addCommand(new ContinuityCommand().create());
+
+  // Register Website command (open the project site — capabilities/docs/setup)
+  program.addCommand(new WebsiteCommand().create());
 
   // Default action: a root `-t/--task` runs the task; otherwise show help.
   program.action(async (options?: { task?: string }) => {

@@ -22,7 +22,7 @@
 import { Command } from 'commander';
 import { execSync } from 'node:child_process';
 import { formatCount } from '../utils/format.js';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveNuviraHome } from '../config/paths.js';
@@ -875,6 +875,51 @@ export async function runSystemChecks(configManager: ConfigManager): Promise<Che
       status: 'warn',
       message: 'Fact store unavailable',
       detail: 'Fact memory is degraded (non-critical) — the agent still works.',
+    });
+  }
+
+  // 2d. Vector index — the active search backend + how many vectors exist
+  // across namespaces. One line answers "is FAISS working, and does it hold
+  // anything": the backend name is how semantic search is indexed, and the
+  // per-namespace split makes a small corpus read as small rather than broken.
+  try {
+    const { getVectorStore } = await import('../memory/vector-store.js');
+    const backend = await getVectorStore().backendName();
+    const namespaces: Array<{ name: string; entries: number }> = [];
+    if (existsSync(memoryDir)) {
+      for (const f of readdirSync(memoryDir)) {
+        const m = /^vectors(?:-(.+))?\.json$/.exec(f);
+        if (!m) continue;
+        try {
+          const d = JSON.parse(readFileSync(join(memoryDir, f), 'utf-8')) as { entries?: Record<string, unknown> };
+          namespaces.push({ name: m[1] || 'default', entries: d?.entries ? Object.keys(d.entries).length : 0 });
+        } catch {
+          // Unreadable index file → skip it; never fail doctor over one file.
+        }
+      }
+    }
+    namespaces.sort((a, b) => b.entries - a.entries);
+    const total = namespaces.reduce((s, n) => s + n.entries, 0);
+    const backendLabel = backend === 'faiss-native'
+      ? 'native FAISS'
+      : backend === 'faiss-ivf'
+        ? 'FAISS-style IVF-flat ANN'
+        : 'exact flat cosine (JSON)';
+    checks.push({
+      name: 'Vector Index',
+      status: total > 0 ? 'pass' : 'warn',
+      message: `${backend} (${backendLabel}) · ${total} vector(s) across ${namespaces.length} namespace(s)`,
+      detail: namespaces.length > 0
+        ? namespaces.map((n) => `${n.name}: ${n.entries}`).join(' · ')
+        : 'No vectors yet — they accumulate from successful trajectories, extracted facts and repo retrieval.',
+      fix: total === 0 ? `Check the backend with \`${getCliName()} memory backend --check\`` : undefined,
+    });
+  } catch {
+    checks.push({
+      name: 'Vector Index',
+      status: 'warn',
+      message: 'Vector store unavailable',
+      detail: 'Semantic search is degraded (non-critical) — keyword search still works.',
     });
   }
 

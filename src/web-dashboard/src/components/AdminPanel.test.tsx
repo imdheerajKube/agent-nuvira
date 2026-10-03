@@ -13,7 +13,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import AdminPanel from './AdminPanel';
 import { dashboardAPI, setAdminToken } from '../api';
-import type { AdminChecksData } from '../types';
+import type { AdminChecksData, AdminServiceRow } from '../types';
 
 const VALID_PAYLOAD: AdminChecksData = {
   system: [
@@ -37,16 +37,53 @@ const CATALOG = [
   { id: 'gemini', label: 'Google Gemini', icon: '🔷', envVar: 'GEMINI_API_KEY', keyless: false },
 ];
 
+/** Service-provider rows for the new admin section (image + search). */
+const SERVICES: AdminServiceRow[] = [
+  {
+    id: 'image-gemini',
+    label: 'Google Gemini / Imagen (Nano Banana)',
+    capability: 'image',
+    icon: '🔷',
+    description: 'Nano-Banana image generation.',
+    keyless: false,
+    free: false,
+    configured: false,
+    envVars: [{ varName: 'GEMINI_API_KEY', prompt: 'Google AI Studio API key', secret: true, set: false, value: '' }],
+  },
+  {
+    id: 'search-brave',
+    label: 'Brave Search',
+    capability: 'search',
+    icon: '🦁',
+    description: 'Independent web index.',
+    keyless: false,
+    free: false,
+    configured: false,
+    envVars: [{ varName: 'BRAVE_SEARCH_API_KEY', prompt: 'Brave Search subscription token', secret: true, set: false, value: '' }],
+  },
+];
+
 /** Authed status — the panel reaches the editor. */
 function mockAuthedStatus(role: string = 'admin'): ReturnType<typeof vi.spyOn> {
   return vi.spyOn(dashboardAPI, 'fetchAdminAuthStatus').mockResolvedValue({ configured: true, authenticated: true, user: 'admin', role });
 }
 
 /** The editor's data endpoints (checks + catalog) — NEVER touches the status mock. */
-function mockServerData(payload: AdminChecksData = VALID_PAYLOAD): { checks: ReturnType<typeof vi.spyOn>; catalog: ReturnType<typeof vi.spyOn> } {
+function mockServerData(payload: AdminChecksData = VALID_PAYLOAD): { checks: ReturnType<typeof vi.spyOn>; catalog: ReturnType<typeof vi.spyOn>; services: ReturnType<typeof vi.spyOn> } {
   const checks = vi.spyOn(dashboardAPI, 'fetchAdminChecks').mockResolvedValue(payload);
   const catalog = vi.spyOn(dashboardAPI, 'fetchAdminCatalog').mockResolvedValue(CATALOG);
-  return { checks, catalog };
+  const services = vi.spyOn(dashboardAPI, 'fetchAdminServices').mockResolvedValue({ ok: true, services: SERVICES });
+  // The workspace read runs on every authed mount; mock it so the panel never
+  // attempts a real request in a test.
+  vi.spyOn(dashboardAPI, 'fetchAdminWorkspace').mockResolvedValue({
+    configured: null,
+    effective: null,
+    processCwd: '/Users/tester',
+    configuredValid: false,
+  });
+  // The cache listing is authed too. Empty by default; the cache tests override.
+  vi.spyOn(dashboardAPI, 'fetchAdminCache').mockResolvedValue({ ok: true, total: 0, workspaces: [] });
+  return { checks, catalog, services };
 }
 
 /** Full authed server: status + data. */
@@ -247,6 +284,39 @@ describe('AdminPanel', () => {
     expect(await screen.findByText(/Session expired — log in again/)).toBeTruthy();
   });
 
+  // ─── Service Provider API keys (Admin) ──────────────────────────────────
+
+  it('renders the Service Provider API Keys section and saves a service key', async () => {
+    mockAuthedServer();
+    const save = vi.spyOn(dashboardAPI, 'saveService').mockResolvedValue({
+      ok: true,
+      service: {
+        ...SERVICES[0],
+        configured: true,
+        envVars: [{ ...SERVICES[0].envVars[0], set: true, value: '••••' }],
+      },
+    });
+    render(<AdminPanel />);
+    await screen.findByText(/Service Provider API Keys/);
+
+    const input = screen.getByLabelText('image-gemini GEMINI_API_KEY');
+    fireEvent.change(input, { target: { value: 'gkey-123' } });
+    // The service row's own Save button (first button in its <tr>).
+    const saveBtn = input.closest('tr')!.querySelector('button');
+    fireEvent.click(saveBtn!);
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith('image-gemini', { GEMINI_API_KEY: 'gkey-123' }));
+    expect(await screen.findByText(/Saved — the agent will use it/)).toBeTruthy();
+  });
+
+  it('renders the service section read-only for a viewer', async () => {
+    mockAuthedServer();
+    vi.spyOn(dashboardAPI, 'fetchAdminAuthStatus').mockResolvedValue({ configured: true, authenticated: true, user: 'view', role: 'viewer' });
+    render(<AdminPanel />);
+    await screen.findByText(/Service Provider API Keys/);
+    expect(screen.queryByLabelText('image-gemini GEMINI_API_KEY')).toBeNull();
+  });
+
   // ─── RBAC roles (Session 19) ────────────────────────────────────────────
 
   it('shows the role badge and hides the editor for a VIEWER session (read-only note)', async () => {
@@ -332,5 +402,151 @@ describe('AdminPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /🚪 Log out/ }));
     await waitFor(() => expect(logout).toHaveBeenCalled());
     expect(await screen.findByRole('button', { name: /Log in/ })).toBeTruthy();
+  });
+
+  // ─── Workspace (dashboard.cwd) ───────────────────────────────────────────
+
+  it('shows where an unattached turn would run, and says so when unset', async () => {
+    mockAuthedServer();
+    render(<AdminPanel />);
+    await screen.findByText(/Workspace/);
+
+    // Unset is a REAL answer here, not an empty box: it is the state in which
+    // the chat asks for a folder instead of scanning the server's own cwd.
+    expect(
+      await screen.findByText(/unattached project asks will ask for a folder/i),
+    ).toBeTruthy();
+    // The server's own cwd is named, so an operator can see what "unset" means.
+    expect(screen.getByText('/Users/tester')).toBeTruthy();
+  });
+
+  it('saves a workspace and reports the effective directory', async () => {
+    mockAuthedServer();
+    const save = vi.spyOn(dashboardAPI, 'saveAdminWorkspace').mockResolvedValue({
+      ok: true,
+      workspace: {
+        configured: '/tmp/proj',
+        effective: '/tmp/proj',
+        processCwd: '/Users/tester',
+        configuredValid: true,
+      },
+    });
+    render(<AdminPanel />);
+    await screen.findByText(/Workspace/);
+
+    fireEvent.change(screen.getByPlaceholderText('/Users/you/Documents/my-project'), {
+      target: { value: '/tmp/proj' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save workspace/ }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith('/tmp/proj'));
+    expect(await screen.findByText(/now run in \/tmp\/proj/)).toBeTruthy();
+  });
+
+  it('reports a rejected workspace path instead of pretending it saved', async () => {
+    mockAuthedServer();
+    vi.spyOn(dashboardAPI, 'saveAdminWorkspace').mockResolvedValue({
+      ok: false,
+      error: 'Not a readable directory: /nope',
+    });
+    render(<AdminPanel />);
+    await screen.findByText(/Workspace/);
+
+    fireEvent.change(screen.getByPlaceholderText('/Users/you/Documents/my-project'), {
+      target: { value: '/nope' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save workspace/ }));
+
+    expect(await screen.findByText(/Not a readable directory/)).toBeTruthy();
+  });
+
+  // ─── Response cache, by workspace ────────────────────────────────────────
+
+  it('shows which folder each cached answer came from', async () => {
+    mockAuthedServer();
+    vi.spyOn(dashboardAPI, 'fetchAdminCache').mockResolvedValue({
+      ok: true,
+      total: 3,
+      workspaces: [
+        {
+          scope: '/Users/tester/code/agent-nuvira',
+          count: 2,
+          newestAt: 1_700_000_000_000,
+          oldestAt: 1_699_000_000_000,
+          providers: ['gemini'],
+          models: ['gemini-flash'],
+          samples: [{ prompt: "what's the current status of this project", model: 'gemini-flash', provider: 'gemini', at: 1_700_000_000_000 }],
+        },
+        {
+          scope: null,
+          count: 1,
+          newestAt: 1_698_000_000_000,
+          oldestAt: 1_698_000_000_000,
+          providers: ['gemini'],
+          models: ['gemini-flash'],
+          samples: [{ prompt: 'what is 2 + 2', model: 'gemini-flash', provider: 'gemini', at: 1_698_000_000_000 }],
+        },
+      ],
+    });
+
+    render(<AdminPanel />);
+    await screen.findByText(/Response Cache/);
+
+    // The FOLDER is the point of the list — an entry you cannot attribute is an
+    // entry you cannot decide to clear.
+    expect(await screen.findByText('/Users/tester/code/agent-nuvira')).toBeTruthy();
+    expect(screen.getByText('no workspace attached')).toBeTruthy();
+    expect(screen.getAllByText(/what's the current status of this project/).length).toBeGreaterThan(0);
+  });
+
+  it('clears ONE workspace and reports how many answers went', async () => {
+    mockAuthedServer();
+    vi.spyOn(dashboardAPI, 'fetchAdminCache').mockResolvedValue({
+      ok: true,
+      total: 2,
+      workspaces: [
+        {
+          scope: '/repo',
+          count: 2,
+          newestAt: 1_700_000_000_000,
+          oldestAt: 1_700_000_000_000,
+          providers: ['gemini'],
+          models: ['gemini-flash'],
+          samples: [{ prompt: 'status', model: 'gemini-flash', provider: 'gemini', at: 1_700_000_000_000 }],
+        },
+      ],
+    });
+    const clear = vi.spyOn(dashboardAPI, 'clearAdminCache').mockResolvedValue({ ok: true, removed: 2 });
+
+    render(<AdminPanel />);
+    await screen.findByText('/repo');
+    fireEvent.click(screen.getByRole('button', { name: /🗑 Clear/ }));
+
+    await waitFor(() => expect(clear).toHaveBeenCalledWith('/repo'));
+    expect(await screen.findByText(/Cleared 2 cached answer\(s\) for \/repo/)).toBeTruthy();
+  });
+
+  it('a viewer cannot clear the cache (the control is disabled)', async () => {
+    mockAuthedServer();
+    mockAuthedStatus('viewer');
+    vi.spyOn(dashboardAPI, 'fetchAdminCache').mockResolvedValue({
+      ok: true,
+      total: 1,
+      workspaces: [
+        {
+          scope: '/repo',
+          count: 1,
+          newestAt: 1_700_000_000_000,
+          oldestAt: 1_700_000_000_000,
+          providers: ['gemini'],
+          models: ['gemini-flash'],
+          samples: [{ prompt: 'status', model: 'gemini-flash', provider: 'gemini', at: 1_700_000_000_000 }],
+        },
+      ],
+    });
+
+    render(<AdminPanel />);
+    await screen.findByText('/repo');
+    expect((screen.getByRole('button', { name: /🗑 Clear/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

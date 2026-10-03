@@ -333,6 +333,36 @@ export interface ProcessEnvVarRow {
   warning?: string;
 }
 
+/** One stored session snapshot (a transcript that survives process death). */
+export interface ContinuitySessionRow {
+  id: string;
+  goal: string;
+  cwd: string;
+  savedAt: number;
+  /** False once the turn ended cleanly — a closed transcript is history only. */
+  open: boolean;
+  steps: number;
+  successfulTools: number;
+  mutatedPaths: string[];
+  messages: number;
+}
+
+/** One indexed past ask in the semantic recall index. */
+export interface ContinuityRecallRow {
+  id: string;
+  projectPath: string;
+  goal: string;
+  outcome: string;
+  savedAt: number;
+}
+
+/** What the dashboard's Continuity view reads (and can forget). */
+export interface ContinuityData {
+  sessions: ContinuitySessionRow[];
+  recall: ContinuityRecallRow[];
+  toggles: { sessionStore: boolean; sessionRecall: boolean };
+}
+
 export interface HistoryData {
   total: number;
   recent: HistorySession[];
@@ -399,6 +429,14 @@ export interface MemoryData {
   recall?: { total: number; today: number; last7d: number; byProject?: Record<string, number> };
   /** G2: active memory backend tier (F1 Mem0 is an optional provider; local = default). */
   backend?: string;
+  /** Active vector-search backend: 'json' | 'faiss-ivf' | 'faiss-native'. */
+  vectorBackend?: string;
+  /**
+   * Per-namespace vector entry counts — default (trajectories/sessions),
+   * facts, repo, model-registry. Makes a low default count read as corpus
+   * size rather than a broken index.
+   */
+  vectorNamespaces?: Array<{ name: string; entries: number }>;
 }
 
 export interface AgentPerfStats {
@@ -846,6 +884,13 @@ export interface ResumeOutcome {
   id: string;
   replayed: number;
   modelCalls: number;
+  /**
+   * Phase 5 — the CONTINUATION SAVING as a first-class number: model calls the
+   * resumed turn did NOT pay for (equal to `replayed` by construction). Optional
+   * so an older record/report still parses; the savings line rides in `notice`
+   * regardless.
+   */
+  callsAvoided?: number;
   /** False when the record could not be written (the turn still happened). */
   saved: boolean;
   /** The operator-facing line the surface composed (see `closeResume`). */
@@ -924,7 +969,7 @@ export interface TraceEntry {
    * change that was never verified from one that was.
    */
   outcome?: {
-    kind: 'answered' | 'acted' | 'failed' | 'cancelled';
+    kind: 'answered' | 'acted' | 'failed' | 'cancelled' | 'incomplete';
     tools?: string[];
     delivered?: boolean;
     unverifiedClaim?: boolean;
@@ -933,6 +978,10 @@ export interface TraceEntry {
     unverifiedEdit?: boolean;
     /** The answer asserted a code change that no verification backed. */
     unverifiedEditClaim?: boolean;
+    /** A build command FAILED and the answer nonetheless claimed success. */
+    unverifiedBuildClaim?: boolean;
+    /** The request asked for an authored deliverable and no file was written. */
+    undeliveredArtifact?: boolean;
   };
   /**
    * WS1 — the findings this run recorded, in call order, with the verdicts the
@@ -985,6 +1034,53 @@ export interface AdminChecksData {
 }
 
 // ─── Admin write surface (Session 18 — user-id + password control layer) ───
+
+/**
+ * The dashboard's working directory (`dashboard.cwd`).
+ *
+ * Chat turns run against a directory. An attached folder always wins; with
+ * none attached, `effective` is where the turn would land. `null` means
+ * unconfigured — the chat then ASKS for a folder instead of guessing, so the
+ * server's own `processCwd` is shown alongside to make the fallback visible.
+ */
+export interface AdminWorkspace {
+  /** The configured value as stored (may point at a missing directory). */
+  configured: string | null;
+  /** The value actually used — null when unset or unusable. */
+  effective: string | null;
+  /** The server process's cwd, shown so an operator sees what `null` would mean. */
+  processCwd: string;
+  /** True when a configured path exists and is a directory. */
+  configuredValid: boolean;
+}
+
+/**
+ * One workspace's cached answers.
+ *
+ * An answer is a statement about a DIRECTORY, so the response cache is scoped
+ * and cleared per project. A stale answer is always "the answers for THIS
+ * project are out of date" — never "the cache is out of date" — so the listing
+ * is grouped by folder and clearable one project at a time.
+ */
+export interface AdminCacheWorkspace {
+  /** Absolute directory, or null for answers produced with no workspace. */
+  scope: string | null;
+  count: number;
+  /** Newest / oldest entry, epoch ms. */
+  newestAt: number;
+  oldestAt: number;
+  providers: string[];
+  models: string[];
+  /** A bounded sample of what is cached, newest first. */
+  samples: Array<{ prompt: string; model: string; provider: string; at: number }>;
+}
+
+/** GET /api/admin/cache. */
+export interface AdminCachePayload {
+  ok: true;
+  workspaces: AdminCacheWorkspace[];
+  total: number;
+}
 
 /** Whether the admin write surface is configured and this session is authed. */
 export interface AdminAuthStatus {
@@ -1091,6 +1187,59 @@ export interface AdminQuotaPayload {
   quota?: Record<string, AdminQuotaLimit | null>;
   costUsd?: number | null;
   clearProvider?: string;
+}
+
+/** One env var row of a third-party service (Service Provider Configuration). */
+export interface AdminServiceEnvVar {
+  varName: string;
+  prompt: string;
+  secret: boolean;
+  /** Whether a value is currently effective (env file or process env). */
+  set: boolean;
+  /** Current value — full for admin/operator, redacted for other readers. */
+  value: string;
+}
+
+/** One third-party service the agent consumes (GET /api/admin/services). */
+export interface AdminServiceRow {
+  id: string;
+  label: string;
+  capability: string;
+  icon: string;
+  description: string;
+  keyless: boolean;
+  free: boolean;
+  /** Every REQUIRED env var is set (keyless services are always configured). */
+  configured: boolean;
+  docsUrl?: string;
+  sharedNote?: string;
+  envVars: AdminServiceEnvVar[];
+}
+
+/** GET /api/admin/services result. */
+export interface AdminServicesResult {
+  ok: boolean;
+  services: AdminServiceRow[];
+  error?: string;
+}
+
+/** POST /api/admin/services/:id/test result — a reachability probe. */
+export interface AdminServiceProbeResult {
+  ok: boolean;
+  /** Human-readable outcome, e.g. "Reachable (HTTP 200)". */
+  detail?: string;
+  error?: string;
+}
+
+/** PUT /api/admin/services/:id result — the updated row. */
+export interface AdminServiceWriteResult {
+  ok: boolean;
+  service?: AdminServiceRow;
+  wrote?: string[];
+  removed?: string[];
+  error?: string;
+  unauthorized?: boolean;
+  forbidden?: boolean;
 }
 
 export interface DashboardData {

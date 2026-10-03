@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import ThemeSwitcher from './ThemeSwitcher';
+import AccountMenu from './AccountMenu';
 import KeyboardHelp, { GO_TARGETS, isTypingTarget } from './KeyboardHelp';
 // The navigation MODEL lives outside the shell: the Help page lists it too, and
 // a page should not have to import the shell to describe where things are.
@@ -183,6 +184,19 @@ export default function Layout({
             <span aria-hidden="true">⌨️</span> Shortcuts
           </button>
           <ThemeSwitcher />
+          {/* The project site: capabilities, command reference, setup guides.
+              A first-time user should be able to reach the "what can this do"
+              answer without leaving the product or finding a README. */}
+          <a
+            className="topbar-action"
+            href="https://www.agent-nuvira.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Agent-Nuvira website — capabilities, commands, docs, setup"
+          >
+            <span aria-hidden="true">🌐</span> Website
+          </a>
+          <AccountMenu />
         </div>
       </header>
 

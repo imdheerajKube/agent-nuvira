@@ -110,6 +110,7 @@ async function main(): Promise<void> {
       // work: the honesty flags live in this process and nowhere else.
       ...(outcome.unverifiedEdit ? { unverifiedEdit: true } : {}),
       ...(outcome.unverifiedEditClaim ? { unverifiedEditClaim: true } : {}),
+      ...(outcome.unverifiedBuildClaim ? { unverifiedBuildClaim: true } : {}),
     });
     process.exit(0);
   } catch (err) {

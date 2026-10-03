@@ -2,6 +2,208 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.3.9 — the provider wire is pinned, answers are scoped to a workspace, and the capabilities are stated honestly
+
+### Added: a golden provider-wire harness — the request side is now guarded
+
+Every other test in this repo asserts on a RESPONSE (what the engine did). Nothing pinned the
+REQUEST — the exact bytes the core loop puts on the provider wire: message ordering, the
+`tool_calls` / `tool`-result serialization, the tool schemas, and the model/temperature/max_tokens
+params. That is the one contract that can change shape and land silently, because no other test
+looks at it.
+
+- **New `src/parity/wire-fixtures.ts`** runs the REAL loop against the REAL `GroqAdapter` pointed at
+a loopback recorder — no network, no model, and no test seam in production code (the seam is
+configuration, exactly like the surface-parity harness). It captures the requests and diffs them
+against committed golden fixtures in `tests/fixtures/provider-wire/`.
+- **Four pinned cases:** `tool-call-roundtrip` (assistant `tool_calls` + the `tool`-role result with
+`tool_call_id`, in order), `plain-turn` (tool-less native-tool-calling body), `streaming-tool-call`
+(`stream:true` + `stream_options.include_usage` — the dashboard answer typewriter depends on this
+exact shape), and `plain-generate` (the non-tool `generate()` body the single-shot plan/reasoner
+calls use).
+- **The diff names the exact JSON path that drifted** (e.g. `$[0].messages[2].tool_calls[0].function.name`),
+not two JSON blobs. Verified non-vacuously: corrupting one value fails the check.
+- **`npm run docs:wire:check` / `docs:wire:update`**, `scripts/check-provider-wire.mjs`, a vitest
+guard, and CI steps on Linux and Windows. Adopted from claw-code's mock parity harness, reimplemented
+for this repo's loop and wire.
+
+### Added: `nuvira website`, and a Website link in the dashboard
+
+The capabilities, the full command reference, the architecture and the setup guides live at
+**www.agent-nuvira.com**, and a user who just installed the CLI had no reason to know that. Now:
+
+- **`nuvira website`** opens the site in the default browser; **`nuvira website docs`** opens the
+documentation directly; **`nuvira website --url`** prints the link and opens nothing (safe in CI or
+over SSH). A machine with no browser launcher still prints the URL, so it is never a dead end.
+- **A 🌐 Website link in the dashboard topbar**, next to the other controls, so the "what can this
+do" answer is reachable without leaving the product.
+- The dashboard's own auto-open and this command now share one launcher (`src/utils/open-url.ts`), so
+they cannot disagree about how a URL is opened.
+
+### Added: `docs/CAPABILITY_LEDGER.md` — an honest status of every capability
+
+Modeled on claw-code's `PARITY.md`: every capability is marked ✅ real / 🟡 partial / ⚪ approximation
+/ ⛔ not built, with the evidence for each, and the genuine gaps are named plainly (LSP and notebook
+editing are absent; MCP's long tail is unverified; ACP/Zed is a discoverability alias; the desktop
+app is a plan). Published and un-ignored so every claim is checkable on a fresh clone — an ambition
+is never mistaken for a working feature.
+
+### Changed
+
+- The `execute` continuity flags (`--session-store` / `--session-recall`) and the `nuvira continuity`
+inspect/forget command are documented in the curated command reference; the generated surface is
+regenerated and drift-guarded.
+
+### Added: the response cache is visible and clearable per workspace
+
+Once answers are scoped to the folder they are about, staleness becomes a PER-PROJECT fact:
+if a project changed and an ask replays an old answer, only THAT project's answers are
+wrong. Clearing everything to fix one folder would throw away answers that are still
+correct — and pay to re-derive them.
+
+- **Cache entries record the workspace they belong to** (and a bounded prompt preview), so
+  a cached answer can be attributed to a folder instead of being an anonymous hash.
+- **New Admin section, "🧠 Response Cache (answers by workspace)"**: each folder with its
+  answer count, models, newest timestamp and a sample prompt, with a per-workspace **Clear**
+  button. Answers produced with no folder attached are their own bucket
+  (`no workspace attached`), which is exactly the set that used to be replayed across projects.
+- **New endpoints** `GET /api/admin/cache` (authed — prompt previews are conversation
+  content, unlike the open config reads) and `POST /api/admin/cache/clear`
+  (`routing.operate`). Clearing is exact-match on the directory, so clearing `/repo` never
+  touches `/repo/sub`.
+- **A cache hit now records the workspace in the session debug log** (`cache.hit` carries
+  `scope`), so a replayed turn can be told from a real one after the fact.
+
+### Fixed: an answer about the wrong project (response-cache scope), and "assess this project" on an unattached chat
+
+A cluster of reports that all read as "the agent ignored the folder I attached": two
+nearly-identical prompts behaved differently, one of them describing an unrelated
+`kuttaaddon` checkout, and a folder that looked attached was not the one being read.
+There were two independent causes.
+
+- **The response cache was directory-blind** (`src/context/cache.ts`). Its key was
+  `provider:model:prompt` — the workspace was not in it — so an answer produced while
+  no folder was attached (running in the dashboard's own directory) was replayed for
+  the SAME wording forever: `"what's the current status of this project?"` returned the
+  earlier report about a different tree, while a differently-worded ask ("assess this
+  project") missed the cache and correctly worked on the attached folder. The key now
+  includes the turn's workspace (`src/cli/chat.ts` passes the same directory the tools
+  run in), so a cached answer is a statement about exactly one directory.
+- **An unattached chat no longer inherits the server's own directory.** A turn with no
+  project attached used to run in the dashboard process's cwd, so "assess this project"
+  listed whatever sat in the home folder and reported on it. Now an ask that names a
+  project or produces files (an assessment, an image, a file) gets a request to attach a
+  folder instead of an answer about the wrong tree (`src/web-dashboard/workspace-guard.ts`);
+  ordinary chat is unaffected. The chat bar always shows where an unattached turn would
+  land.
+- **New `dashboard.cwd`** — set the workspace in **Admin → Provider Configuration →
+  Workspace**, or `nuvira config set dashboard.cwd <dir>` (validated to exist; an empty
+  value clears it). A configured workspace is an explicit choice, so the turn runs there
+  without asking.
+- **Fixed: `modality.image.*` (and `dashboard.*`) never actually persisted.**
+  `ConfigManager.save()`/load merged a whitelist of top-level keys that did not include
+  `modality`, so `nuvira config set modality.image.provider gemini` printed a success
+  line and `generate_image` kept auto-selecting — the documented "appears to save and
+  appear to load while doing neither" class. Both keys now merge per subkey on load and
+  save.
+
+### Added: artifact producers (the Artifacts tab was always empty)
+
+The artifact plumbing existed end to end — the `{artifact, result}` payload contract, the
+per-session store, the dashboard tab — but **no built-in tool ever emitted a payload**, so
+the tab read 0 no matter what a turn produced. Tools that return prose the model must read
+verbatim cannot wrap their whole result in JSON, so `recordArtifact`
+(`src/tools/artifact-append.ts`) lets them register the deliverable directly: `write_file`
+records the file it wrote, `generate_image` and `speak` record the media, and `run_cli`
+records its captured output as a log under the memory dir. No sink (the CLI, a bare tool
+run) is a no-op, and a failing sink never breaks the producer.
+
+### Added: top-right account control, and full sender ids for admins
+
+Two complaints from using the Agent Hub in anger, both about being unable to see something the dashboard already knew.
+
+- **The shell now has an account control in the top-right** (`AccountMenu.tsx`), where every other site puts it. Signed out it shows "👤 Sign in" and opens the login form (or the first-run admin setup); signed in it names the account and role and offers Log out. It reads the same `/api/admin/auth-status` and calls the same login/setup/logout routes as the Admin page, so the two cannot disagree.
+- **Sender ids are no longer masked for admin/operator by default.** The reveal control moved out of the Channels tab into the Agent Hub header (it applies to every tab — the same id appears in Channels, Conversations and the WhatsApp bridge), and defaults ON for the roles that need to reference a number while investigating. Viewers keep the masked view; anyone can hide the ids again.
+- **A named conversation with no extractable phone now shows its raw channel id** instead of only the contact name — the reference you need to look the thread up.
+
+### Added: bring-your-own-key image generation and web search
+
+The README advertised "Adaptive Modality Routing" — config-driven image/audio/video providers that
+needed no code changes. None of it existed: no code read a `modality.*` key, `config set
+modality.image.replicate.*` was rejected as an unknown key, and the only image backends were the free
+Pollinations endpoint and a local ComfyUI URL. This makes the promise real for the two capabilities
+that matter most, and corrects the documentation to match what ships.
+
+- **Image generation is now data-driven** (`src/tools/modality/image-providers.ts`): a registry of
+  backends — Google Gemini/Imagen ("Nano Banana", `GEMINI_API_KEY`), OpenAI DALL·E/gpt-image
+  (`OPENAI_API_KEY`), Stability AI (`STABILITY_API_KEY`), local ComfyUI/Stable Diffusion
+  (`BUFF_IMAGE_API_URL`), and the free keyless Pollinations fallback. `generate_image` runs the first
+  backend whose key is configured (pin one with `modality.image.provider`); a configured backend that
+  fails at request time degrades to Pollinations instead of failing the tool.
+- **Web search is pluggable** (`src/tools/web-research.ts`): Brave (`BRAVE_SEARCH_API_KEY`), Serper
+  (`SERPER_API_KEY`), Tavily (`TAVILY_API_KEY`), Google Custom Search (`GOOGLE_CSE_API_KEY` +
+  `GOOGLE_CSE_ID`), self-hosted SearXNG, and the keyless DuckDuckGo fallback. A keyed backend that
+  returns nothing falls back to DuckDuckGo, so `web_search` never silently returns empty.
+- **New config surface**: `agent-nuvira config set modality.image.provider|model`, with `modality`
+  added to the config schema.
+- **`STABILITY_API_KEY` and the search-provider keys join `PROVIDER_ENV_BLOCKLIST`** so they are never
+  handed to a skill sandbox.
+- **README corrected**: the modality section now documents only the backends that exist; the fictional
+  `modality.image.replicate.*` / `modality.tts.azure.*` examples are gone.
+
+### Added: Service Provider API Key Configuration in Admin
+
+Provider Configuration hands us MODELS; the third-party SERVICES the agent calls directly — image,
+video, web search, page reading, vision and speech — had no home. They do now, as their own Admin
+section, and every row is a real env var the tool path reads.
+
+- **New Admin section** (`src/web-dashboard/src/components/ServiceProvidersPanel.tsx`) between Provider
+  Configuration and the daily budget, grouped by capability: image (Gemini/Imagen "Nano Banana",
+  OpenAI DALL·E/gpt-image, Stability, local ComfyUI, free Pollinations), video (FAL), search (Brave,
+  Serper, Tavily, Google CSE, self-hosted SearXNG, keyless DuckDuckGo) plus Jina Reader, vision
+  (Gemini/OpenAI) and speech (ElevenLabs, OpenAI TTS, local NeuTTS).
+- **Admin sections reordered** to User Management → Provider Configuration → Service Provider API Keys
+  → Daily budget/quota, with the doctor checks below them.
+- **Real, not cosmetic**: values are written to the same 0600 credential env file (`~/.nuvira/.env`) the
+  platform config uses, loaded by `loadEnv()` at startup and hot-applied to the running process, so a
+  saved key is honored by the tool path. The catalog is the single source of truth
+  (`src/config/service-catalog.ts`) and is tied to the image/search registries by test, so a backend
+  cannot be advertised without a code path that reads its key.
+- **New endpoints** `GET/PUT/DELETE /api/admin/services[...]` (writes require admin/`credential.write`;
+  secret values are redacted for other roles). `FAL_KEY`, `ELEVENLABS_API_KEY`, `JINA_API_KEY` and
+  `NEUTTS_API_KEY` join `PROVIDER_ENV_BLOCKLIST`.
+
+### Validated: FAISS is wired correctly — the "2 entries" reading is corpus size, not a failure
+
+Reviewed the vector-store design against the installed backend. The dashboard's "2" is the count of
+entries in the DEFAULT namespace (`~/.nuvira/memory/vectors.json`, read by the server health payload),
+not the size of a FAISS index — other namespaces hold `vectors-repo.json` (243) and
+`vectors-model-registry.json` (1). The default namespace is written only by successful trajectory saves
+and session indexing, so two entries is expected on a lightly-used profile. Design confirmed: config
+`memory.vectorBackend` `auto`/`faiss` selects the FAISS-style backend (native `@faiss-node/native` when
+installed and built — verified usable on this machine — otherwise the pure-JS IVF-flat backend), and
+JSON is the shared on-disk store plus the fallback; the exact path is used at ≤512 entries, IVF above
+it. No behavior change.
+
+### Added: service test connection, CLI parity, and the vector backend in doctor + on-screen
+
+Three follow-ups that finish the service-key surface.
+
+- **Test connection** (`src/config/service-probe.ts`): a per-service `🔌 Test` button (and
+  `POST /api/admin/services/:id/test`) makes the smallest real request the backend allows — 2xx = reachable,
+  401/403 = key rejected, network failure = reported, not thrown. Tests the SAVED key, so save first.
+- **CLI parity** (`nuvira config service set|list|unset`): `config service set search-brave
+  BRAVE_SEARCH_API_KEY <value>` (or `--set VAR=value`, or an interactive prompt) writes the same
+  `~/.nuvira/.env`, so the CLI and the dashboard stay parallel. Guarded by `credential.write`.
+- **The FAISS answer is now in the UI**: the Memory panel and Overview show the active VECTOR backend
+  (`faiss-native` / `faiss-ivf` / `json`) separately from the memory provider tier, instead of the
+  provider-tier "local" that looked like an answer to a different question.
+- **`nuvira doctor` reports it as one line**: a `Vector Index` system check gives the backend plus the
+  total vector count across namespaces (detail lists each namespace), so the FAISS state is checkable
+  without opening the dashboard.
+- **Memory panel breaks vectors down by namespace**: default (trajectories/sessions) vs facts vs repo,
+  so the small default count reads as corpus size rather than a broken index.
+
 ## v3.3.8 — the Appearance panel works with a real mouse, and the dashboard explains itself
 
 ### Fixed: the Appearance panel ignored every real click

@@ -241,6 +241,99 @@ body {
   cursor: progress;
 }
 
+/* ═══ Shell — account control (top right) ═══
+   The conventional place for "who am I signed in as": an anchor for the menu,
+   with the panel itself absolutely positioned so opening it never reflows the
+   bar. The panel's own surface is --bg-card, not the chrome family, because it
+   floats OVER page content rather than sitting on the bar. */
+.topbar-account {
+  position: relative;
+  flex: none;
+}
+
+.topbar-account-menu {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 40;
+  min-width: 15rem;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+}
+
+.topbar-account-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: calc(13px * var(--font-scale));
+  font-weight: 600;
+}
+
+.topbar-account-title {
+  margin: 0;
+  font-size: calc(13px * var(--font-scale));
+  font-weight: 600;
+}
+
+.topbar-account-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: calc(11px * var(--font-scale));
+}
+
+.topbar-account-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.topbar-account-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: calc(11px * var(--font-scale));
+  color: var(--text-muted);
+}
+
+.topbar-account-form input {
+  min-height: var(--target-min);
+  padding: 0 var(--space-2);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: calc(13px * var(--font-scale));
+}
+
+.topbar-account-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--target-min);
+  padding: 0 var(--space-2);
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: calc(12px * var(--font-scale));
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.topbar-account-item:hover {
+  background: var(--chrome-hover);
+}
+
 /* ═══ Shell — navigation rail ═══
    Sticky, not fixed: it stays in flow so the content column needs no
    compensating margin and the two cannot drift apart.
@@ -1411,6 +1504,13 @@ body {
 
 .memory-project { flex: 1; font-weight: 500; }
 .memory-count { min-width: 50px; text-align: right; color: var(--text-secondary); }
+
+.memory-namespace-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 10px 0;
+  line-height: 1.5;
+}
 
 /* ═══ System Health ═══ */
 .health-grid {
@@ -2689,6 +2789,38 @@ body {
   max-width: 320px;
 }
 
+/* ─── Service provider API keys (image/video/search/vision/speech) ─────── */
+.service-providers-panel {
+  margin-top: 18px;
+}
+
+.service-providers-group {
+  margin-bottom: 18px;
+}
+
+.service-env-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.service-env-label {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.service-env-label code {
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.service-env-label .admin-hint {
+  font-size: 11px;
+}
+
 /* ─── RBAC role layer (Session 19) ──────────────────────────────────────── */
 .admin-role-badge {
   display: inline-block;
@@ -3961,6 +4093,18 @@ body {
 
 .chat-project-hint {
   color: var(--text-secondary);
+}
+
+/* Where an unattached turn would run. Muted but present: it is a fact the user
+   should be able to check, not a warning competing with the real controls. */
+.chat-project-cwd {
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  font-size: calc(11px * var(--font-scale));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 22rem;
 }
 
 .chat-project-chips {
@@ -6808,6 +6952,21 @@ body {
   max-width: none;
   white-space: normal;
   text-align: left;
+}
+/* C1 — the "type your own answer" field on a clarifying-question card. */
+.chat-question-custom {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  background: var(--bg-input, rgba(0, 0, 0, 0.2));
+  color: var(--text-primary, inherit);
+  font: inherit;
+}
+.chat-question-custom:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent-blue) 90%, transparent);
 }
 
 /* ═══ Model Discovery Timeline ═══ */

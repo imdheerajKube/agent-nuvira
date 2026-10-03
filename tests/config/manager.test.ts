@@ -80,6 +80,47 @@ describe('ConfigManager', () => {
       expect(config.routing?.nuviraSidecar?.image).toBe('ghcr.io/berriai/litellm:main-stable');
     });
 
+    it('reads back modality and dashboard settings (the top-level whitelist class)', () => {
+      const configDir = join(testDir, 'test-modality-dashboard');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({
+          modality: { image: { provider: 'gemini', model: 'gemini-2.5-flash-image' } },
+          dashboard: { cwd: '/tmp/some-project' },
+        }),
+        'utf-8',
+      );
+
+      const manager = new ConfigManager(configDir);
+
+      // LOAD — both must survive the merge. They used to be dropped by the
+      // top-level whitelist, so `nuvira config set modality.image.provider`
+      // printed a success line and `generate_image` kept auto-selecting: the
+      // setting appeared to save AND appeared to load while doing neither.
+      expect(manager.getAll().modality?.image?.provider).toBe('gemini');
+      expect(manager.getAll().modality?.image?.model).toBe('gemini-2.5-flash-image');
+      expect(manager.getAll().dashboard?.cwd).toBe('/tmp/some-project');
+
+      // SAVE — a partial write merges per subkey, so setting the model keeps the
+      // provider, and an unrelated key (dashboard) is untouched.
+      manager.save({ modality: { image: { model: 'other-model' } } });
+      const written = JSON.parse(readFileSync(join(configDir, 'buffconfig.json'), 'utf-8')) as {
+        modality: { image: { provider?: string; model?: string } };
+        dashboard: { cwd?: string };
+      };
+      expect(written.modality.image.provider).toBe('gemini');
+      expect(written.modality.image.model).toBe('other-model');
+      expect(written.dashboard.cwd).toBe('/tmp/some-project');
+
+      // Clearing the workspace removes the key rather than writing a null.
+      manager.save({ dashboard: { cwd: undefined } });
+      const cleared = JSON.parse(readFileSync(join(configDir, 'buffconfig.json'), 'utf-8')) as {
+        dashboard?: { cwd?: string };
+      };
+      expect(cleared.dashboard?.cwd).toBeUndefined();
+    });
+
     it('should merge config file with defaults', () => {
       const configDir = join(testDir, 'test-b');
       mkdirSync(configDir, { recursive: true });

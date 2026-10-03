@@ -489,10 +489,15 @@ export default function AgentHub() {
   /** Build a display label for a conversation card: Name (phone) or just phone. */
   const convDisplayLabel = (c: NonNullable<HubData['conversations']['recent']>[0]): { name: string; phone: string } => {
     const phone = extractPhone(c.channelId);
+    // The raw channel id is the fallback label for a NON-WhatsApp conversation
+    // (telegram/email): without it a named contact's thread showed a name and no
+    // address at all, which is exactly the reference an admin needs to look the
+    // conversation up. `showId` still masks it unless reveal is on.
+    const raw = showId(c.channelId);
     if (c.contactName) {
-      return { name: c.contactName, phone };
+      return { name: c.contactName, phone: phone || raw };
     }
-    return { name: phone || showId(c.channelId), phone: '' };
+    return { name: phone || raw, phone: '' };
   };
 
   /**
@@ -549,6 +554,20 @@ export default function AgentHub() {
 
   /** routing.operate — admin or operator may toggle capabilities. */
   const canWrite = authed && (role === 'admin' || role === 'operator');
+
+  /**
+   * Reveal the unmasked sender ids by DEFAULT for an authenticated admin or
+   * operator — the role the reveal exists for. The `ref` means this runs once:
+   * a user who deliberately hides them again is not overruled on the next
+   * auth-status poll. Viewers keep the masked view (the toggle is disabled).
+   */
+  const revealDefaultedRef = useRef(false);
+  useEffect(() => {
+    if (canWrite && !revealDefaultedRef.current) {
+      revealDefaultedRef.current = true;
+      setRevealIds(true);
+    }
+  }, [canWrite]);
 
   /** P6d — search the marketplace (reads OTHER registries; the repo stays private). */
   const searchMarket = async (e?: React.FormEvent) => {
@@ -934,6 +953,21 @@ export default function AgentHub() {
           }
         />
         <div className="admin-header-actions">
+          {/* Global privacy control — it belongs to the WHOLE hub, not one tab:
+              the same masked id appears in Channels, Conversations and the
+              WhatsApp bridge, and an admin investigating a thread had to switch
+              tabs to unmask it. Default ON for admin/operator (they are the ones
+              who need to reference a number); a viewer cannot reveal. */}
+          <label className="hub-reveal-toggle">
+            <input
+              type="checkbox"
+              checked={revealIds}
+              onChange={(e) => setRevealIds(e.target.checked)}
+              disabled={!canWrite}
+            />
+            Show full ids
+          </label>
+          {!canWrite ? <span className="admin-hint">🔒 admins/operators only</span> : null}
           <button className="admin-refresh-btn" onClick={() => void refresh()} disabled={refreshing}>
             {refreshing ? '⏳ Refreshing…' : '🔄 Refresh'}
           </button>
@@ -1078,18 +1112,6 @@ export default function AgentHub() {
       {/* ── Channels tab ─────────────────────────────────────────────────── */}
       {tab === 'channels' && data ? (
         <div role="tabpanel">
-          <div className="hub-reveal-row">
-            <label className="hub-reveal-toggle">
-              <input
-                type="checkbox"
-                checked={revealIds}
-                onChange={(e) => setRevealIds(e.target.checked)}
-                disabled={!canWrite}
-              />
-              Show full sender ids <span className="admin-hint">(masks phone numbers by default)</span>
-            </label>
-            {!canWrite ? <span className="admin-hint">— admins and operators only</span> : null}
-          </div>
           <div className="admin-summary-grid">
             <div className="admin-summary-card">
               <div className="admin-summary-value">{data.channels.delivery.pending}</div>

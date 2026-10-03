@@ -107,4 +107,33 @@ describe('chat response-cache key', () => {
     await getCache().set('q', 'a', 'm', 'p');
     expect(existsSync(join(dir, 'cache.json'))).toBe(true);
   });
+
+  /**
+   * The reported defect: same prompt answered in a DIFFERENT project replayed the
+   * first project's answer. "What's the current status of this project?" was
+   * answered while no folder was attached (cwd = the dashboard server's own,
+   * which held an unrelated checkout) and every later ask of that exact wording
+   * replayed that report — while a differently-worded ask ("assess this
+   * project") missed the cache and correctly worked on the attached folder.
+   */
+  it('scopes an answer to the WORKSPACE it was produced in', async () => {
+    const cache = getCache();
+    const ask = "what's the current status of this project";
+    await cache.set(ask, 'answer about some other folder', 'm', 'p', undefined, '/Users/me');
+
+    // A different workspace MUST miss — this is the cross-project replay.
+    expect(await cache.get(ask, 'm', 'p', '/Users/me/Documents/anuj_voice')).toBeNull();
+    // The workspace it was produced in still hits.
+    expect(await cache.get(ask, 'm', 'p', '/Users/me')).toBe('answer about some other folder');
+  });
+
+  it('keeps unscoped entries out of every workspace', async () => {
+    const cache = getCache();
+    await cache.set('q', 'no-workspace answer', 'm', 'p');
+
+    // An unscoped answer is about no directory, so an attached project must not
+    // inherit it — that inheritance is exactly the defect.
+    expect(await cache.get('q', 'm', 'p', '/some/project')).toBeNull();
+    expect(await cache.get('q', 'm', 'p')).toBe('no-workspace answer');
+  });
 });

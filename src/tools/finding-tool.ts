@@ -11,6 +11,11 @@
  * typing "CONFIRMED" is the false-success defect with a nicer name — so the
  * parameter does not exist. `confirmFinding` promotes to CONFIRMED only when at
  * least one non-blank evidence reference was supplied, and refuses otherwise
+ * with the reason attached. When the loop supplies its action ledger
+ * (`ctx.executedActions`), a second gate checks that a `command`/`file`
+ * reference corresponds to something the turn actually did
+ * (`enforceEvidenceProvenance`), demoting a citation that never happened to
+ * PLAUSIBLE rather than letting it pass as fact.
  * with the reason attached.
  *
  * WHAT THE MODEL SEES BACK is the rendered finding (`describeFinding`), including
@@ -35,6 +40,7 @@ import { z } from 'zod';
 import {
   confirmFinding,
   describeFinding,
+  enforceEvidenceProvenance,
   plausibleFinding,
   toWire,
   type Evidence,
@@ -98,7 +104,7 @@ export type FindingToolArgs = z.infer<typeof findingSchema>;
  */
 export function recordFinding(
   args: FindingToolArgs,
-  ctx?: Pick<ToolContext, 'emit'>,
+  ctx?: Pick<ToolContext, 'emit' | 'executedActions'>,
 ): { finding: Finding; text: string } | { error: string } {
   const claim = String(args?.claim ?? '').trim();
   const outcome = String(args?.outcome ?? '').trim();
@@ -127,11 +133,20 @@ export function recordFinding(
     [],
     { outcome },
   );
-  const finding = promotion.promoted
+  let finding = promotion.promoted
     ? promotion.finding
     : promotion.reason
       ? { ...promotion.finding, outcome: `${outcome} — ${promotion.reason}` }
       : promotion.finding;
+
+  // PROVENANCE, not just presence. `confirmFinding` promotes on the PRESENCE of
+  // a non-blank reference; this checks the reference against what the turn
+  // actually did. Run only when the loop supplied its action ledger — a direct
+  // call or a bare test context cannot distinguish "nothing ran" from "no
+  // ledger", so it must not demote on the strength of an empty list.
+  if (ctx?.executedActions) {
+    finding = enforceEvidenceProvenance(finding, ctx.executedActions).finding;
+  }
 
   // Best-effort: a listener that is not there (a direct tool call, a test) must
   // never break the tool, exactly like `plan_todo`'s snapshot emit.

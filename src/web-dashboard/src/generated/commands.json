@@ -3,7 +3,7 @@
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
   "commandCount": 256,
-  "groupCount": 51,
+  "groupCount": 52,
   "groups": [
     {
       "name": "admin",
@@ -1989,6 +1989,11 @@
           ]
         }
       ]
+    },
+    {
+      "name": "website",
+      "description": "Open the Agent-Nuvira website — capabilities, commands, docs, setup",
+      "commands": []
     }
   ]
 }

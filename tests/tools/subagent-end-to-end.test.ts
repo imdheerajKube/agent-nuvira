@@ -73,6 +73,13 @@ let generateDelayMs = 0;
  * child, so it is only armed for the duration of one spawn.
  */
 let jsonWriteFirst = false;
+/**
+ * A3 Part 2 — make the stub answer the FIRST `/api/generate` call with a
+ * JSON-transport `run_terminal` build command (a command that really fails in an
+ * empty workspace) and the SECOND with a success claim, so a forked child can be
+ * caught certifying a build its own ledger saw FAIL.
+ */
+let jsonBuildFirst = false;
 let generateCalls = 0;
 
 /** Poll until `pred()` holds, so a test can synchronise with a forked child. */
@@ -97,17 +104,30 @@ beforeAll(async () => {
       if (req.url === '/api/tags') return json({ models: [{ name: 'test-model' }] });
       if (req.url === '/api/generate') {
         generateCalls += 1;
-        const body =
-          jsonWriteFirst && generateCalls === 1
-            ? {
-                // `confirm:true` because `write_file` is state-changing and would
-                // otherwise be declined — the gate under test is the VERIFICATION
-                // one, and it needs a write that really happened.
-                response:
-                  'Writing the note.\n{"tool":"write_file","arguments":{"path":"out.txt","content":"hi","confirm":true}}',
-                done: true,
-              }
-            : { response: 'REAL-SUBAGENT-ANSWER', done: true };
+        let body: { response: string; done: boolean };
+        if (jsonBuildFirst && generateCalls === 1) {
+          // `make` with no Makefile is a build command that really fails (and it
+          // is recognised by `isBuildCommand`). `confirm:true` because
+          // `run_terminal` is state-changing and would otherwise be declined.
+          body = {
+            response:
+              'Building.\n{"tool":"run_terminal","arguments":{"command":"make","confirm":true}}',
+            done: true,
+          };
+        } else if (jsonBuildFirst && generateCalls === 2) {
+          body = { response: 'The build succeeded.', done: true };
+        } else if (jsonWriteFirst && generateCalls === 1) {
+          // `confirm:true` because `write_file` is state-changing and would
+          // otherwise be declined — the gate under test is the VERIFICATION
+          // one, and it needs a write that really happened.
+          body = {
+            response:
+              'Writing the note.\n{"tool":"write_file","arguments":{"path":"out.txt","content":"hi","confirm":true}}',
+            done: true,
+          };
+        } else {
+          body = { response: 'REAL-SUBAGENT-ANSWER', done: true };
+        }
         const reply = () => json(body);
         if (generateDelayMs > 0) return void setTimeout(reply, generateDelayMs);
         return reply();
@@ -772,4 +792,92 @@ describe('G1 — the child applies the same verification gate as the in-process 
       rmSync(workDir, { recursive: true, force: true });
     }
   }, 90_000);
+});
+
+describe('A3 Part 2 — a forked child that certifies a FAILED build is flagged', () => {
+  it("carries the child's unverified-build verdict across the FORK", async () => {
+    // The child runs a build command that really fails (its own ledger records
+    // `ok:false`), then answers that the build succeeded. The in-process honesty
+    // detector (`detectFailedBuildSuccessClaim`, imported — never reimplemented)
+    // must fire in the child, and the flag must arrive on the parent's result.
+    const workDir = mkdtempSync(join(testHome.value, 'build-fork-'));
+    // A forked child resolves its loader (`tsx` in a source run) from ITS cwd.
+    symlinkSync(join(process.cwd(), 'node_modules'), join(workDir, 'node_modules'), 'dir');
+    const configDir = mkdtempSync(join(testHome.value, 'config-'));
+    const mgr = getSubagentManager();
+    jsonBuildFirst = true;
+    generateCalls = 0;
+    try {
+      const state = await mgr.spawn({
+        goal: 'build the project',
+        provider: 'local',
+        model: 'test-model',
+        tools: ['run_terminal'],
+        cwd: workDir,
+        env: { OLLAMA_HOST: baseUrl, NUVIRA_CONFIG_DIR: configDir },
+      });
+      const result = await mgr.waitForCompletion(state.id, 60_000);
+
+      expect(result.success, `expected success, got: ${result.error ?? ''}\n${result.log.join('\n')}`).toBe(
+        true,
+      );
+      // The build really ran (and really failed): a `make` with no Makefile.
+      expect(result.toolCalls).toBeGreaterThanOrEqual(1);
+      // The parent knows, recorded from the child's frame rather than inferred
+      // from the prose.
+      expect(result.unverifiedBuildClaim).toBe(true);
+      expect(mgr.getState(state.id)?.unverifiedBuildClaim).toBe(true);
+    } finally {
+      jsonBuildFirst = false;
+      generateCalls = 0;
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  }, 90_000);
+});
+
+// ─── Phase 4b/4c — a resumed child rehydrates its prior conversation ─────────
+
+describe('Phase 4b/4c — a resumed child rehydrates the conversation it left', () => {
+  it('feeds a dead child`s OPEN session back into the new run', async () => {
+    const workDir = mkdtempSync(join(testHome.value, 'sess-'));
+    const memDir = mkdtempSync(join(testHome.value, 'mem-'));
+    const prevMem = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = memDir;
+    try {
+      const { openSession } = await import('../../src/learning/session-store.js');
+      const store = openSession({ goal: 'read the note', cwd: workDir });
+      // Deliberately left OPEN — this is a child that died mid-task.
+      store.save(
+        [
+          { role: 'system', content: 'stale child prompt' },
+          { role: 'user', content: 'read the note' },
+          { role: 'assistant', content: 'PRIOR-CHILD-MARKER' },
+        ],
+        { steps: 1, successfulTools: ['read_file'], mutatedPaths: [] },
+      );
+
+      const calls: ToolMessage[][] = [];
+      const outcome = await runSubagent(
+        { goal: 'read the note', tools: ['read_file'], cwd: workDir, resume: true },
+        {
+          createProvider: async () => ({
+            provider: scriptedProvider((m) => calls.push([...m])),
+            type: 'scripted',
+          }),
+          runTool: async () => 'NOTE-CONTENTS',
+        },
+      );
+
+      expect(outcome.result).toBe('ANSWER-AFTER-TOOL');
+      // The dead child's conversation is present…
+      expect(calls[0].some((m) => m.content.includes('PRIOR-CHILD-MARKER'))).toBe(true);
+      // …and the stored (stale) head was replaced by a fresh one.
+      expect(calls[0].some((m) => m.content.includes('stale child prompt'))).toBe(false);
+    } finally {
+      if (prevMem === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+      else process.env.NUVIRA_MEMORY_DIR = prevMem;
+      rmSync(workDir, { recursive: true, force: true });
+      rmSync(memDir, { recursive: true, force: true });
+    }
+  });
 });

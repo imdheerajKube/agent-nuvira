@@ -149,14 +149,17 @@ describe('buildTraceOutcome', () => {
     expect(o.kind).toBe('acted');
     expect(o.delivered).toBeUndefined();
   });
-  it('carries the unverified-claim flag', () => {
+  // A3 — a turn that CLAIMED an action it did not perform, or promised work it
+  // did not deliver, is `incomplete`, not `answered`: it did not conclude, and
+  // it must not be recorded as a success. The flags still ride along.
+  it('carries the unverified-claim flag (and is incomplete)', () => {
     const o = buildTraceOutcome({ tools: [], unverifiedActionClaim: true });
-    expect(o.kind).toBe('answered');
+    expect(o.kind).toBe('incomplete');
     expect(o.unverifiedClaim).toBe(true);
   });
-  it('carries the unfulfilled-promise flag', () => {
+  it('carries the unfulfilled-promise flag (and is incomplete)', () => {
     const o = buildTraceOutcome({ tools: [], unfulfilledPromise: true });
-    expect(o.kind).toBe('answered');
+    expect(o.kind).toBe('incomplete');
     expect(o.unfulfilledPromise).toBe(true);
   });
   it('failed / cancelled win over tool list', () => {

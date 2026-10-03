@@ -1,5 +1,7 @@
 import { Command } from 'commander';
 import inquirer from 'inquirer';
+import { existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { BaseCommand, getCliName } from './commands.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
@@ -13,6 +15,11 @@ import {
   PLATFORM_ENV_VARS,
   type Platform,
 } from '../gateway/channel-directory.js';
+import {
+  SERVICE_CATALOG,
+  getServiceDefinition,
+  servicesByCapability,
+} from '../config/service-catalog.js';
 import {
   applyEnvToProcess,
   configurablePlatforms,
@@ -56,6 +63,7 @@ export class ConfigCommand extends BaseCommand {
       .addCommand(this.createInitCommand())
       .addCommand(this.createVaultCommand())
       .addCommand(this.createGatewayCommand())
+      .addCommand(this.createServiceCommand())
       .action(() => {
         // Show current config when no subcommand is given
         this.displayConfig();
@@ -665,8 +673,35 @@ export class ConfigCommand extends BaseCommand {
       this.configManager.save({
         routing: { gatewayTelemetry: { ...existing, [field]: typedValue } },
       } as Partial<BuffConfig>);
+    } else if (parts.length === 3 && parts[0] === 'modality' && parts[1] === 'image') {
+      // modality.image.provider | modality.image.model | modality.image.baseUrl
+      // — which backend `generate_image` uses (gemini | openai | stability |
+      // comfyui | pollinations). The API KEY itself comes from env or the
+      // provider config, never from here.
+      const field = parts[2];
+      if (field !== 'provider' && field !== 'model' && field !== 'baseUrl') {
+        logger.error(`Unknown modality.image config key: ${field}. Valid keys: provider, model, baseUrl`);
+        return;
+      }
+      const existing = config.modality?.image || {};
+      this.configManager.save({
+        modality: { image: { ...existing, [field]: value } },
+      } as Partial<BuffConfig>);
+    } else if (key === 'dashboard.cwd') {
+      // The directory dashboard chat turns run in when no project is attached.
+      // Validated to EXIST and be a directory: a typo here would otherwise make
+      // every unattached turn fall back to the server's own cwd — the exact
+      // accident this setting exists to remove.
+      const target = resolve(value.trim());
+      if (!value.trim() || !existsSync(target) || !statSync(target).isDirectory()) {
+        logger.error(`dashboard.cwd must be an existing directory (got: ${value}).`);
+        return;
+      }
+      this.configManager.save({ dashboard: { cwd: target } } as Partial<BuffConfig>);
+    } else if (key === 'dashboard.cwd.clear') {
+      this.configManager.save({ dashboard: { cwd: undefined } } as Partial<BuffConfig>);
     } else {
-      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled\n  routing.compression.enabled  (M4.4, DEFAULT FALSE)\n  routing.gatewayTelemetry.enabled  (M7.4, DEFAULT FALSE)`);
+      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  modality.image.provider\n  modality.image.model\n  dashboard.cwd "<dir>"  (working dir for unattached dashboard chat turns)\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled\n  routing.compression.enabled  (M4.4, DEFAULT FALSE)\n  routing.gatewayTelemetry.enabled  (M7.4, DEFAULT FALSE)`);
       return;
     }
 
@@ -1146,5 +1181,170 @@ export class ConfigCommand extends BaseCommand {
     writeEnvFile({}, keys);
     applyEnvToProcess({}, keys);
     logger.success(`Removed ${platform} transport config.`);
+  }
+
+  // ─── Third-party services (`${getCliName()} config service`) ─────────────
+
+  /**
+   * Service-provider API keys (image / video / search / vision / speech).
+   * These are the same env vars the dashboard's Service Provider API Key
+   * Configuration section writes — the CLI is never deprecated, so one command
+   * configures a backend for both surfaces. Values land in ~/.nuvira/.env.
+   */
+  private createServiceCommand(): Command {
+    const collect = (value: string, previous: string[]): string[] => previous.concat([value]);
+    return new Command('service')
+      .description('Manage third-party service keys (image/video/search/vision/speech) in ~/.nuvira/.env')
+      .addCommand(
+        new Command('list')
+          .description('Show every service backend and its env-var status')
+          .action(() => this.listServices()),
+      )
+      .addCommand(
+        new Command('set')
+          .description('Set a service key: config service set <serviceId> <ENV_VAR> <value> (or --set VAR=value)')
+          .argument('<serviceId>', 'Service id (e.g. image-gemini, search-brave)')
+          .argument('[varName]', 'Env var name for the service (e.g. BRAVE_SEARCH_API_KEY)')
+          .argument('[value]', 'Value for that env var')
+          .option('--set <var=value>', 'Set a specific env var (repeatable)', collect, [])
+          .action((serviceId: string, varName: string | undefined, value: string | undefined, opts: { set?: string[] }) =>
+            void this.setService(serviceId, varName, value, opts),
+          ),
+      )
+      .addCommand(
+        new Command('unset')
+          .description('Remove a service key (all vars, or one with [varName]) from the env file')
+          .argument('<serviceId>', 'Service id')
+          .argument('[varName]', 'Remove only this env var')
+          .option('--yes', 'Skip confirmation')
+          .action((serviceId: string, varName: string | undefined, opts: { yes?: boolean }) =>
+            void this.unsetService(serviceId, varName, opts),
+          ),
+      );
+  }
+
+  private listServices(): void {
+    logger.info('Service provider keys (values live in ~/.nuvira/.env or env vars):');
+    for (const group of servicesByCapability()) {
+      console.log(`\n  ${group.label}`);
+      for (const svc of group.services) {
+        const vars = svc.envVars.map((v) => envVarState(v.varName));
+        const configured = svc.keyless || vars.every((v) => v.set);
+        console.log(`    ${configured ? '✅' : '❌'}  ${svc.label} (${svc.id})`);
+        for (const v of vars) {
+          console.log(`         ${v.varName}=${v.set ? redactValue(v.value) : '<unset>'}`);
+        }
+        if (svc.keyless && svc.envVars.length === 0) console.log('         (no key needed — always available)');
+      }
+    }
+    console.log('');
+    console.log(`Configure one with: ${getCliName()} config service set <serviceId>`);
+  }
+
+  private async setService(
+    serviceId: string,
+    varName: string | undefined,
+    value: string | undefined,
+    opts: { set?: string[] },
+  ): Promise<void> {
+    const def = getServiceDefinition(serviceId);
+    if (!def) {
+      logger.error(`Unknown service '${serviceId}'. Known ids: ${SERVICE_CATALOG.map((s) => s.id).join(', ')}`);
+      return;
+    }
+    if (def.envVars.length === 0) {
+      logger.info(`${def.label} is keyless — there is nothing to configure.`);
+      return;
+    }
+    if (!guardRbacAction('credential.write')) return;
+
+    const allowed = new Set(def.envVars.map((v) => v.varName));
+    const values: Record<string, string> = {};
+    for (const kv of opts.set ?? []) {
+      const eq = kv.indexOf('=');
+      if (eq === -1) {
+        logger.error(`--set expects VAR=value, got '${kv}'`);
+        return;
+      }
+      const name = kv.slice(0, eq).trim();
+      if (!allowed.has(name)) {
+        logger.error(`Unknown env var '${name}' for ${def.label}. Valid: ${[...allowed].join(', ')}`);
+        return;
+      }
+      values[name] = kv.slice(eq + 1).trim();
+    }
+    if (varName !== undefined) {
+      if (!allowed.has(varName)) {
+        logger.error(`Unknown env var '${varName}' for ${def.label}. Valid: ${[...allowed].join(', ')}`);
+        return;
+      }
+      if (value === undefined) {
+        logger.error(`Missing value: ${getCliName()} config service set ${serviceId} ${varName} <value>`);
+        return;
+      }
+      values[varName] = value.trim();
+    }
+
+    if (Object.keys(values).length === 0) {
+      if (!process.stdin.isTTY) {
+        logger.error(`No value given. Use: ${getCliName()} config service set ${serviceId} <ENV_VAR> <value>`);
+        return;
+      }
+      const answers = (await inquirer.prompt(
+        def.envVars.map((v) => ({
+          type: v.secret ? 'password' : 'input',
+          name: v.varName,
+          message: `${v.prompt}${envVarState(v.varName).set ? ' (enter = keep current)' : ''}:`,
+        })),
+      )) as Record<string, string>;
+      for (const v of def.envVars) {
+        const answer = answers[v.varName];
+        if (typeof answer === 'string' && answer.trim().length > 0) values[v.varName] = answer.trim();
+      }
+    }
+
+    if (Object.keys(values).length === 0) {
+      logger.info('No changes.');
+      return;
+    }
+    const { wrote } = writeEnvFile(values);
+    applyEnvToProcess(values);
+    logger.success(`Saved ${wrote.join(', ')} → ${envFilePath()}`);
+    logger.info(`The agent will use ${def.label} on its next call.`);
+  }
+
+  private async unsetService(serviceId: string, varName: string | undefined, opts: { yes?: boolean }): Promise<void> {
+    const def = getServiceDefinition(serviceId);
+    if (!def) {
+      logger.error(`Unknown service '${serviceId}'. Known ids: ${SERVICE_CATALOG.map((s) => s.id).join(', ')}`);
+      return;
+    }
+    if (!guardRbacAction('credential.write')) return;
+    const allowed = new Set(def.envVars.map((v) => v.varName));
+    if (varName !== undefined && !allowed.has(varName)) {
+      logger.error(`Unknown env var '${varName}' for ${def.label}. Valid: ${[...allowed].join(', ')}`);
+      return;
+    }
+    const keys = varName !== undefined ? [varName] : def.envVars.map((v) => v.varName);
+    if (keys.length === 0) {
+      logger.info(`${def.label} is keyless — nothing to remove.`);
+      return;
+    }
+    if (!keys.some((k) => envVarState(k).set)) {
+      logger.info(`Nothing to remove — ${def.label} has no configured values.`);
+      return;
+    }
+    if (!opts.yes && process.stdin.isTTY) {
+      const { confirm } = await inquirer.prompt<{ confirm: boolean }>([
+        { type: 'confirm', name: 'confirm', message: `Remove ${def.label} config (${keys.join(', ')}) from ${envFilePath()}?`, default: false },
+      ]);
+      if (!confirm) {
+        logger.info('Aborted.');
+        return;
+      }
+    }
+    writeEnvFile({}, keys);
+    applyEnvToProcess({}, keys);
+    logger.success(`Removed ${keys.join(', ')}.`);
   }
 }

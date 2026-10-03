@@ -1,0 +1,273 @@
+{
+  "case": "streaming-tool-call",
+  "proves": "The streaming path sends stream:true and stream_options.include_usage with this body — the dashboard typewriter depends on it.",
+  "requests": [
+    {
+      "max_tokens": 4096,
+      "messages": [
+        {
+          "content": "You are a coding agent. Use the tools to complete the task.",
+          "role": "system"
+        },
+        {
+          "content": "Read package.json and report the version.",
+          "role": "user"
+        }
+      ],
+      "model": "wire-stub-model",
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "temperature": 0.7,
+      "tools": [
+        {
+          "function": {
+            "description": "Read files with line numbers. Pass `path` for one file (offset/limit for large files) OR `paths` to read several in one call — batching is one step instead of many. Each file gets its own line count and a continuation offset when truncated. Use to open the actual contents of files code_search or glob located — never guess what a file contains.",
+            "name": "read_file",
+            "parameters": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "default": 2000,
+                  "description": "Max lines to read (single-file form; default 2000).",
+                  "maximum": 2000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "offset": {
+                  "default": 1,
+                  "description": "First line number to read (single-file form; 1-based). Continue a truncated read by passing the next line.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "path": {
+                  "description": "Path to a single file to read, relative to the workspace root (e.g. \"src/server.ts\"). Absolute paths outside the workspace and \"..\" traversal are denied. Prefer `paths` to read several files in one call.",
+                  "type": "string"
+                },
+                "paths": {
+                  "description": "Several files to read in ONE call — each entry a path or { path, offset, limit }. Reads share a bounded character budget; each file gets its own line count and a continuation offset when truncated, and one bad path never discards the rest. Prefer this over many read_file calls.",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "limit": {
+                            "maximum": 2000,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "offset": {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "path": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "path"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "offset",
+                "limit"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "function"
+        },
+        {
+          "function": {
+            "description": "Run a shell command in the workspace and see its REAL output — typecheck, a single test file, a build, git diff/status. Use to verify code by actual invocation: run, read the failure, edit, re-run. Verify-class commands (tests/typecheck/build/git-readonly) run directly; state-changing commands need confirm:true after the user approves via ask_user. Destructive/system commands (sudo, git push, rm -rf at dangerous targets, ...) are denied outright.",
+            "name": "run_terminal",
+            "parameters": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "description": "The shell command to run in the workspace — e.g. \"npx vitest run tests/foo.test.ts\", \"npx tsc --noEmit\", \"npm run build\", \"git diff --stat\". Read-only verify commands run directly. Recoverable workspace commands (dependency installs, mkdir/touch/cp/mv, git add, npm init) also run directly when the request authorized the work; every other state-changing command needs confirm:true after the user approves via ask_user. Destructive/system commands are denied outright.",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "confirm": {
+                  "default": false,
+                  "description": "Set true ONLY after the user explicitly confirmed a command you initiated. Required for state-changing commands outside the recoverable workspace set (network fetches, arbitrary code, global installs, anything that leaves the machine).",
+                  "type": "boolean"
+                },
+                "timeout_ms": {
+                  "description": "Timeout in ms (default 120000).",
+                  "maximum": 300000,
+                  "minimum": 1000,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "command",
+                "confirm"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "max_tokens": 4096,
+      "messages": [
+        {
+          "content": "You are a coding agent. Use the tools to complete the task.",
+          "role": "system"
+        },
+        {
+          "content": "Read package.json and report the version.",
+          "role": "user"
+        },
+        {
+          "content": null,
+          "role": "assistant",
+          "tool_calls": [
+            {
+              "function": {
+                "arguments": "{\"path\":\"package.json\"}",
+                "name": "read_file"
+              },
+              "id": "wire_call_1",
+              "type": "function"
+            }
+          ]
+        },
+        {
+          "content": "{\n  \"name\": \"agent-nuvira\",\n  \"version\": \"3.3.8\"\n}",
+          "role": "tool",
+          "tool_call_id": "wire_call_1"
+        }
+      ],
+      "model": "wire-stub-model",
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "temperature": 0.7,
+      "tools": [
+        {
+          "function": {
+            "description": "Read files with line numbers. Pass `path` for one file (offset/limit for large files) OR `paths` to read several in one call — batching is one step instead of many. Each file gets its own line count and a continuation offset when truncated. Use to open the actual contents of files code_search or glob located — never guess what a file contains.",
+            "name": "read_file",
+            "parameters": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "default": 2000,
+                  "description": "Max lines to read (single-file form; default 2000).",
+                  "maximum": 2000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "offset": {
+                  "default": 1,
+                  "description": "First line number to read (single-file form; 1-based). Continue a truncated read by passing the next line.",
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "path": {
+                  "description": "Path to a single file to read, relative to the workspace root (e.g. \"src/server.ts\"). Absolute paths outside the workspace and \"..\" traversal are denied. Prefer `paths` to read several files in one call.",
+                  "type": "string"
+                },
+                "paths": {
+                  "description": "Several files to read in ONE call — each entry a path or { path, offset, limit }. Reads share a bounded character budget; each file gets its own line count and a continuation offset when truncated, and one bad path never discards the rest. Prefer this over many read_file calls.",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "limit": {
+                            "maximum": 2000,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "offset": {
+                            "maximum": 9007199254740991,
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          "path": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "path"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "offset",
+                "limit"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "function"
+        },
+        {
+          "function": {
+            "description": "Run a shell command in the workspace and see its REAL output — typecheck, a single test file, a build, git diff/status. Use to verify code by actual invocation: run, read the failure, edit, re-run. Verify-class commands (tests/typecheck/build/git-readonly) run directly; state-changing commands need confirm:true after the user approves via ask_user. Destructive/system commands (sudo, git push, rm -rf at dangerous targets, ...) are denied outright.",
+            "name": "run_terminal",
+            "parameters": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "description": "The shell command to run in the workspace — e.g. \"npx vitest run tests/foo.test.ts\", \"npx tsc --noEmit\", \"npm run build\", \"git diff --stat\". Read-only verify commands run directly. Recoverable workspace commands (dependency installs, mkdir/touch/cp/mv, git add, npm init) also run directly when the request authorized the work; every other state-changing command needs confirm:true after the user approves via ask_user. Destructive/system commands are denied outright.",
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "confirm": {
+                  "default": false,
+                  "description": "Set true ONLY after the user explicitly confirmed a command you initiated. Required for state-changing commands outside the recoverable workspace set (network fetches, arbitrary code, global installs, anything that leaves the machine).",
+                  "type": "boolean"
+                },
+                "timeout_ms": {
+                  "description": "Timeout in ms (default 120000).",
+                  "maximum": 300000,
+                  "minimum": 1000,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "command",
+                "confirm"
+              ],
+              "type": "object"
+            }
+          },
+          "type": "function"
+        }
+      ]
+    }
+  ]
+}

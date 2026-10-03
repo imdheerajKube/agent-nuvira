@@ -37,6 +37,8 @@ import type { ToolContext } from './registry.js';
 import { maskSenderId } from '../utils/mask.js';
 import { decideStateChange } from '../learning/autonomy-policy.js';
 import { envelopeCoversAction } from '../learning/intent-envelope.js';
+import { applyProjectEnvironment, guardCommandEnvironment } from '../utils/project-env.js';
+import { formatEffectVerdict, isBuildCommand, verifyBuildEffect } from '../utils/effect-verification.js';
 
 /** Cap on how much terminal output is fed back to the model. */
 const MAX_OUTPUT_CHARS = 6000;
@@ -346,6 +348,27 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
       `Tell the user, and suggest the safe alternative (or that they run it themselves).`
     );
   }
+  // ── Project interpreter canonicalization + pre-run environment guard ──────
+  // The live Aukat_check failure: a build ran against an interpreter that did
+  // NOT have the project's own dependencies (PyQt6), produced a broken bundle,
+  // and still reported success. Before running, pin this project's virtualenv
+  // and refuse the two mistakes that caused it — installing Python packages
+  // outside the project env, and building/running against an interpreter that
+  // is missing the declared dependencies. See src/utils/project-env.ts.
+  let runEnv: Record<string, string | undefined> | undefined;
+  let envNote = '';
+  const envVerdict = guardCommandEnvironment(command, ctx.cwd || process.cwd());
+  if (envVerdict.action === 'refuse') {
+    return (
+      `Error: run_terminal: ${envVerdict.reason}. ${envVerdict.hint} ` +
+      `(Guard: NUVIRA_ENV_GUARD=off bypasses this if the project genuinely uses a system interpreter.)`
+    );
+  }
+  if (envVerdict.action === 'proceed' && envVerdict.venv) {
+    runEnv = applyProjectEnvironment({ ...process.env }, envVerdict.venv);
+    if (envVerdict.note) envNote = `\n🔒 ${envVerdict.note}`;
+  }
+
   // ── G16: the gate consults the request before it consults the model ───────
   // A recoverable workspace command (dependency install, mkdir/cp/mv, git add)
   // on a run that authorized the work is the build's own setup, not a surprise
@@ -391,24 +414,55 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
   }
 
   const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1000, Math.floor(args.timeout_ms ?? DEFAULT_TIMEOUT_MS)));
-  const output = await execCommand(command, ctx.cwd, timeoutMs);
-  if (!decidedAutonomously) return output;
+  const startedAt = Date.now();
+  const output = await execCommand(command, ctx.cwd, timeoutMs, runEnv);
+
+  // ── A1: effect verification — a BUILD is not done until its artifact is
+  // OBSERVED to launch. The live Aukat_check run reported "successfully built
+  // and functional" for a bundle that crashed on import; exit code 0 is not
+  // proof. Only a build whose artifact crashes turns the whole command into a
+  // failure (with the launch stderr), so the model cannot keep narrating success.
+  let effectNote = '';
+  if (!output.startsWith('Error:') && isBuildCommand(command)) {
+    const verdict = await verifyBuildEffect(command, ctx.cwd || process.cwd(), {
+      sinceMs: startedAt,
+      ...(runEnv ? { env: runEnv } : {}),
+    });
+    if (verdict.status === 'failed') {
+      return (
+        `Error: run_terminal: \`${maskSenderId(command)}\` exited 0, but ` +
+        `${formatEffectVerdict(verdict)} Fix the artifact and re-run the build — do NOT ` +
+        `report this as working. (NUVIRA_EFFECT_VERIFY=off disables this launch check.)`
+      );
+    }
+    if (verdict.status === 'verified') effectNote = `\n${formatEffectVerdict(verdict)}`;
+  }
+
+  if (!decidedAutonomously) return output + effectNote + envNote;
   // Reported, never silent — a judgment call the user cannot see is
   // indistinguishable from a bug.
   return (
-    `${output}\n💡 Ran without asking: ${autonomyReason}. State what you ran in your answer — ` +
-    'do not ask for permission to do work the user already asked for.'
+    `${output}${effectNote}\n💡 Ran without asking: ${autonomyReason}. State what you ran in your answer — ` +
+    'do not ask for permission to do work the user already asked for.' +
+    envNote
   );
 }
 
 /** Spawn the command (shell-interpreted — pipes, &&, substitutions work). */
-function execCommand(command: string, cwd: string | undefined, timeoutMs: number): Promise<string> {
+function execCommand(
+  command: string,
+  cwd: string | undefined,
+  timeoutMs: number,
+  envOverride?: Record<string, string | undefined>,
+): Promise<string> {
   return new Promise((resolve) => {
     // On Windows, use Git Bash for cross-platform shell commands (pwd, touch, etc.)
     const shellOptions: Record<string, unknown> = {
       cwd: cwd || process.cwd(),
       shell: true,
-      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', CI: '1' },
+      // A pinned project venv (`envOverride`) wins for PATH/VIRTUAL_ENV; the
+      // color/CI flags are always enforced on top so output stays parseable.
+      env: { ...(envOverride ?? process.env), FORCE_COLOR: '0', NO_COLOR: '1', CI: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     };

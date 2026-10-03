@@ -264,7 +264,8 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
           </div>
         </div>
         <p className="memory-health-status">
-          Backend: <code>{memory.backend || 'local'}</code>
+          Memory tier: <code>{memory.backend || 'local'}</code>
+          {' · '}Vector index: <code>{memory.vectorBackend || 'unknown'}</code>
           {memory.recall?.last7d ? ` · ${memory.recall.last7d} recall(s) this week` : ' · no recalls yet'}
         </p>
       </div>

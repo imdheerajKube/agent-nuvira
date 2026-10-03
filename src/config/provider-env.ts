@@ -20,7 +20,8 @@
  * badge and the enforcement honest.
  *
  * The set is intentionally explicit rather than pattern-matched
- * (`/^[A-Z_]*API_KEY$/` would wrongly block a skill's own `STABILITY_API_KEY`).
+ * (`/^[A-Z_]*API_KEY$/` would wrongly block a skill's own custom key, e.g.
+ * `MY_SERVICE_API_KEY`).
  */
 
 /** Provider env vars that must NEVER be handed to a skill execution. */
@@ -42,6 +43,22 @@ export const PROVIDER_ENV_BLOCKLIST: ReadonlySet<string> = new Set([
   'BEDROCK_ACCESS_KEY',
   'BEDROCK_SECRET_KEY',
   'NUVIRA_API_KEY', // Don't pass the agent's own key
+  // Modality + web-research providers (image-generation and search BYOK).
+  // These are agent-level provider credentials now, not a skill's own key, so
+  // they must never be handed to (or stored by) a skill sandbox either.
+  'STABILITY_API_KEY',
+  'BRAVE_SEARCH_API_KEY',
+  'BRAVE_API_KEY',
+  'SERPER_API_KEY',
+  'TAVILY_API_KEY',
+  'GOOGLE_CSE_API_KEY',
+  // Other agent-consumed services (video / speech / page-reading) — same rule:
+  // these are the agent's credentials, never a skill's, so a skill sandbox must
+  // not receive them either.
+  'FAL_KEY',
+  'ELEVENLABS_API_KEY',
+  'JINA_API_KEY',
+  'NEUTTS_API_KEY',
 ]);
 
 /**
@@ -69,7 +86,7 @@ export function isProviderEnvBlocked(varName: string): boolean {
  * only removes things that look like secrets, and it is applied to the
  * AUTOMATIC `process.env` passthrough ONLY — a value the caller passed
  * explicitly (a skill's own declared `required_environment_variables`) is
- * always allowed, so a skill can still receive its own `STABILITY_API_KEY`.
+ * always allowed, so a skill can still receive its own declared key.
  */
 const SENSITIVE_ENV_PATTERNS: readonly RegExp[] = [
   /_(API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIALS?)$/i,

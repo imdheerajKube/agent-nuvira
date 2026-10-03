@@ -21,6 +21,10 @@ import { join, relative, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { formatWorkingState, getWorkingState } from '../learning/working-state.js';
 import { handoffBlockFor } from './step-handoff.js';
+// P5 (scoped) — the ONE cross-session-memory composer, shared with the loop
+// engine (`tools/loop-project-context.ts`). The orchestrator reads the same block
+// the loop shows, so the two engines cannot drift in what a project's history says.
+import { formatCrossSessionMemorySync } from '../learning/context-assembly.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -83,6 +87,14 @@ export interface ProjectAssessment {
    * per-STEP and disk-verified (what this step still owes).
    */
   openHandoffs?: string;
+  /**
+   * P5 (scoped) — the cross-session memory block for this project (recent asks,
+   * and where the deployment asked, semantically similar past asks), rendered by
+   * the SAME composer the loop engine uses (`learning/context-assembly.ts`).
+   * Advisory history only — never a status. Undefined for a project with no
+   * recorded sessions, so it adds no prompt weight.
+   */
+  crossSessionMemory?: string;
 }
 
 // ─── Project Assessment ─────────────────────────────────────────────────────
@@ -154,6 +166,15 @@ export function assessProject(workingDirectory: string): ProjectAssessment {
     assessment.openHandoffs = handoffBlockFor(workingDirectory) || undefined;
   } catch {
     // Best-effort — a hand-off read must never break assessment.
+  }
+
+  // P5 (scoped) — the cross-session memory block (the deterministic digest),
+  // from the SAME composer the loop engine uses. Deterministic and synchronous,
+  // so it costs no embedding round-trip here; absent for a pristine project.
+  try {
+    assessment.crossSessionMemory = formatCrossSessionMemorySync(workingDirectory) || undefined;
+  } catch {
+    // Best-effort — a digest read must never break assessment.
   }
 
   return assessment;
@@ -345,6 +366,12 @@ export function assemblePrompt(
   // The unfinished-work hand-off (already self-labelled and self-bounded).
   if (projectAssessment.openHandoffs) {
     contextParts.push(`\n${projectAssessment.openHandoffs}`);
+  }
+
+  // P5 (scoped) — the cross-session memory block (already self-labelled as
+  // history, not a status, by the shared composer).
+  if (projectAssessment.crossSessionMemory) {
+    contextParts.push(`\n${projectAssessment.crossSessionMemory}`);
   }
 
   if (contextParts.length > 0) {

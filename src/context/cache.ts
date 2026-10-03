@@ -27,10 +27,50 @@ interface CacheEntry {
   provider: string;
   createdAt: number;
   ttl: number;
+  /**
+   * The WORKSPACE this answer is about (an absolute directory), or absent for an
+   * answer produced with none. Stored as well as hashed into the key so the
+   * dashboard can answer "where did this come from?" and clear one project's
+   * answers without touching another's.
+   */
+  scope?: string;
+  /**
+   * The first ~80 chars of the prompt, for the dashboard's cache list. The key
+   * is a one-way hash, so without this the UI could only say "N entries" — a
+   * count nobody can act on. Truncated on purpose: the list exists to identify an
+   * entry, not to keep a second copy of the conversation.
+   */
+  promptPreview?: string;
 }
 
 interface CacheData {
   entries: Record<string, CacheEntry>;
+}
+
+/** How many prompt previews a workspace summary carries (newest first). */
+const PREVIEW_LIMIT = 80;
+const SAMPLE_LIMIT = 5;
+
+/**
+ * One workspace's cached answers, as the dashboard lists them.
+ *
+ * Grouped by DIRECTORY because that is the unit the cache is now scoped to: a
+ * stale answer is always "the answers for THIS project are out of date", never
+ * "the cache is out of date", so clearing has to be per project or it cannot be
+ * used at all.
+ */
+export interface CacheWorkspaceSummary {
+  /** Absolute directory, or null for answers produced with no workspace. */
+  scope: string | null;
+  count: number;
+  /** Newest / oldest entry, epoch ms. */
+  newestAt: number;
+  oldestAt: number;
+  /** Distinct providers / models represented (sorted). */
+  providers: string[];
+  models: string[];
+  /** A bounded sample of what is cached, newest first. */
+  samples: Array<{ prompt: string; model: string; provider: string; at: number }>;
 }
 
 function ensureDir(): void {
@@ -70,11 +110,18 @@ function pruneExpired(data: CacheData): void {
 }
 
 /**
- * Generate a cache key from the prompt and options
+ * Generate a cache key from the prompt and options.
+ *
+ * `scope` is the WORKSPACE the answer belongs to (an absolute directory). It is
+ * part of the key because an answer is a statement about a directory: without
+ * it, "what's the current status of this project?" asked in project B replayed
+ * the answer produced in project A — the same words, a confident report about a
+ * tree the user was not looking at. The scope is optional so a caller with no
+ * workspace (a pure question) keeps the old, unscoped key.
  */
-function generateKey(prompt: string, model: string, provider: string): string {
+function generateKey(prompt: string, model: string, provider: string, scope?: string): string {
   const hash = createHash('sha256')
-    .update(`${provider}:${model}:${prompt}`)
+    .update(`${provider}:${model}:${scope ? `${scope}:` : ''}${prompt}`)
     .digest('hex');
   return hash;
 }
@@ -87,9 +134,9 @@ export class InferenceCache {
   /**
    * Get cached response if available and not expired
    */
-  async get(prompt: string, model: string, provider: string): Promise<string | null> {
+  async get(prompt: string, model: string, provider: string, scope?: string): Promise<string | null> {
     const data = readCache();
-    const key = generateKey(prompt, model, provider);
+    const key = generateKey(prompt, model, provider, scope);
     const entry = data.entries[key];
 
     if (!entry) return null;
@@ -113,11 +160,13 @@ export class InferenceCache {
     response: string,
     model: string,
     provider: string,
-    ttl: number = 3600
+    ttl: number = 3600,
+    /** The workspace this answer is about (see generateKey). */
+    scope?: string
   ): Promise<void> {
     const data = readCache();
     pruneExpired(data); // Clean up expired entries before writing
-    const key = generateKey(prompt, model, provider);
+    const key = generateKey(prompt, model, provider, scope);
 
     data.entries[key] = {
       response,
@@ -125,9 +174,76 @@ export class InferenceCache {
       provider,
       createdAt: Math.floor(Date.now() / 1000),
       ttl,
+      ...(scope ? { scope } : {}),
+      ...(prompt ? { promptPreview: prompt.slice(0, PREVIEW_LIMIT) } : {}),
     };
 
     writeCache(data);
+  }
+
+  /**
+   * Every workspace with cached answers, largest first.
+   *
+   * Expired entries are pruned (and the prune persisted) before grouping, so the
+   * list can never offer to clear answers that would already miss.
+   */
+  async listByWorkspace(): Promise<CacheWorkspaceSummary[]> {
+    const data = readCache();
+    const before = Object.keys(data.entries).length;
+    pruneExpired(data);
+    if (Object.keys(data.entries).length !== before) writeCache(data);
+
+    const byScope = new Map<string | null, CacheEntry[]>();
+    for (const entry of Object.values(data.entries)) {
+      const key = typeof entry.scope === 'string' && entry.scope ? entry.scope : null;
+      const list = byScope.get(key);
+      if (list) list.push(entry);
+      else byScope.set(key, [entry]);
+    }
+
+    const summaries: CacheWorkspaceSummary[] = [];
+    for (const [scope, entries] of byScope) {
+      const sorted = [...entries].sort((a, b) => b.createdAt - a.createdAt);
+      summaries.push({
+        scope,
+        count: entries.length,
+        newestAt: (sorted[0]?.createdAt ?? 0) * 1000,
+        oldestAt: (sorted[sorted.length - 1]?.createdAt ?? 0) * 1000,
+        providers: [...new Set(entries.map((e) => e.provider))].sort(),
+        models: [...new Set(entries.map((e) => e.model))].sort(),
+        samples: sorted.slice(0, SAMPLE_LIMIT).map((e) => ({
+          prompt: e.promptPreview ?? '(prompt not recorded)',
+          model: e.model,
+          provider: e.provider,
+          at: e.createdAt * 1000,
+        })),
+      });
+    }
+
+    // Largest bucket first, then newest — the order an operator scans in.
+    return summaries.sort((a, b) => b.count - a.count || b.newestAt - a.newestAt);
+  }
+
+  /**
+   * Remove one workspace's cached answers. Returns how many entries went.
+   *
+   * `null` targets the answers produced with NO workspace — the entries that
+   * predate scoping, and the ones most likely to be the stale report that
+   * started this. Exact-match on the scope string: a parent directory is a
+   * different workspace, so clearing `/repo` never clears `/repo/sub`.
+   */
+  async clearWorkspace(scope: string | null): Promise<number> {
+    const data = readCache();
+    let removed = 0;
+    for (const [key, entry] of Object.entries(data.entries)) {
+      const entryScope = typeof entry.scope === 'string' && entry.scope ? entry.scope : null;
+      if (entryScope === scope) {
+        delete data.entries[key];
+        removed += 1;
+      }
+    }
+    if (removed > 0) writeCache(data);
+    return removed;
   }
 
   /**

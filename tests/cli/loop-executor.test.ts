@@ -486,3 +486,134 @@ describe('loop executor — pinned-provider failover (config fallback chain)', (
     expect(result.provider).toBe('pinned');
   });
 });
+
+/**
+ * Phase 4b/4c — SESSION REHYDRATION across a process death.
+ *
+ * A run that died mid-turn leaves an OPEN session snapshot. The next run with
+ * `--resume` picks the conversation up: the prior work is already in the thread,
+ * so it is neither re-run nor re-paid. A run with no request must NOT touch the
+ * store at all.
+ */
+describe('loop executor — session rehydration (Phase 4b/4c)', () => {
+  let memDir = '';
+  const envBackup: Record<string, string | undefined> = {};
+
+  beforeEach(async () => {
+    vi.resetModules();
+    envBackup.NUVIRA_MEMORY_DIR = process.env.NUVIRA_MEMORY_DIR;
+    envBackup.NUVIRA_RESUME = process.env.NUVIRA_RESUME;
+    delete process.env.NUVIRA_RESUME;
+    memDir = mkdtempSync(join(tmpdir(), 'buff-session-'));
+    process.env.NUVIRA_MEMORY_DIR = memDir;
+  });
+  afterEach(() => {
+    if (envBackup.NUVIRA_MEMORY_DIR === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = envBackup.NUVIRA_MEMORY_DIR;
+    if (envBackup.NUVIRA_RESUME === undefined) delete process.env.NUVIRA_RESUME;
+    else process.env.NUVIRA_RESUME = envBackup.NUVIRA_RESUME;
+    rmSync(memDir, { recursive: true, force: true });
+    vi.doUnmock('../../src/cli/router.js');
+    vi.resetModules();
+  });
+
+  it('rehydrates the thread a dead process left OPEN', async () => {
+    const { openSession } = await import('../../src/learning/session-store.js');
+    const goal = 'continue building the widget';
+    const cwd = process.cwd();
+    const store = openSession({ goal, cwd });
+    // Deliberately NOT finished: this is the transcript of a turn that died.
+    store.save(
+      [
+        { role: 'system', content: 'stale system prompt' },
+        { role: 'user', content: goal },
+        { role: 'assistant', content: 'PRIOR-WORK-MARKER' },
+      ],
+      { steps: 1, successfulTools: ['write_file'], mutatedPaths: ['widget.ts'] },
+    );
+
+    let seen: readonly ToolMessage[] = [];
+    const provider: InferenceProvider = {
+      name: 'Scripted',
+      async generate(): Promise<string> {
+        return 'done';
+      },
+      async generateTools(messages: ToolMessage[]): Promise<ToolCallResponse> {
+        seen = messages;
+        return { content: 'done', toolCalls: [] };
+      },
+    } as unknown as InferenceProvider;
+    vi.doMock('../../src/cli/router.js', () => ({
+      resolveProvider: () => ({ type: 'scripted', provider }),
+    }));
+
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const result = await runLoopExecutor(goal, new ConfigManager(), {
+      provider: 'scripted',
+      skipProjectContext: true,
+      skipSkillHint: true,
+      quiet: true,
+      resume: true,
+    });
+
+    expect(result.generationFailed).toBe(false);
+    // The dead run's conversation is present…
+    expect(seen.some((m) => m.content.includes('PRIOR-WORK-MARKER'))).toBe(true);
+    // …while the stored (stale) head was replaced by a fresh one.
+    expect(seen.some((m) => m.content.includes('stale system prompt'))).toBe(false);
+  });
+
+  it('rehydrates an OPEN session BY DEFAULT, and `sessionStore: false` turns it off', async () => {
+    const { openSession } = await import('../../src/learning/session-store.js');
+    const goal = 'a totally ordinary ask';
+    /** Seed an OPEN session for this ask, carrying a marker we can look for. */
+    const seed = (marker: string): void => {
+      const store = openSession({ goal, cwd: process.cwd() });
+      store.save(
+        [{ role: 'system', content: 'stale' }, { role: 'user', content: goal }, { role: 'assistant', content: marker }],
+        { steps: 1, successfulTools: [], mutatedPaths: [] },
+      );
+    };
+
+    let seen: readonly ToolMessage[] = [];
+    const provider: InferenceProvider = {
+      name: 'Scripted',
+      async generate(): Promise<string> {
+        return 'ok';
+      },
+      async generateTools(messages: ToolMessage[]): Promise<ToolCallResponse> {
+        seen = messages;
+        return { content: 'ok', toolCalls: [] };
+      },
+    } as unknown as InferenceProvider;
+    vi.doMock('../../src/cli/router.js', () => ({
+      resolveProvider: () => ({ type: 'scripted', provider }),
+    }));
+
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+
+    // Default: continuity is ON — an open matching session is picked up.
+    seed('DEFAULT-MARKER');
+    const first = await runLoopExecutor(goal, new ConfigManager(), {
+      provider: 'scripted',
+      skipProjectContext: true,
+      skipSkillHint: true,
+      quiet: true,
+    });
+    expect(first.generationFailed).toBe(false);
+    expect(seen.some((m) => m.content.includes('DEFAULT-MARKER'))).toBe(true);
+
+    // Disabled: the store is not consulted, so a NEW open session is ignored.
+    seen = [];
+    seed('OFF-MARKER');
+    const second = await runLoopExecutor(goal, new ConfigManager(), {
+      provider: 'scripted',
+      skipProjectContext: true,
+      skipSkillHint: true,
+      quiet: true,
+      sessionStore: false,
+    });
+    expect(second.generationFailed).toBe(false);
+    expect(seen.some((m) => m.content.includes('OFF-MARKER'))).toBe(false);
+  });
+});

@@ -116,16 +116,17 @@ This table highlights core capabilities for quick machine parsing and comparison
 - **📌 Persistent project memory** — facts, preferences, and trajectories are stored per project and recalled automatically in later sessions; memory is pluggable (local by default, external backends optional)
 - **🔌 First-Class MCP Integration** — seamlessly connect to Jira, Slack, PostgreSQL, GitHub Issues, and file systems using standard Model Context Protocol servers with SSE transport
 - **👥 Real-Time Team Collaboration** — share context, synchronized vector indices, custom agents, and review pipelines across your engineering team via Git-synced config and memory
-- **🎨 Adaptive Modality Routing** — intelligent routing for image/audio/video with failover across backends. **Data-driven providers** — add new providers via config, no code changes required. Image: ComfyUI (free) → Pollinations (free) → DALL-E (paid) → Stability (paid). TTS: OpenAI TTS (paid) → ElevenLabs (paid). Video: FAL (paid) → Runway (paid). Transcription: OpenAI Whisper (paid). Users can add custom providers:
+- **🎨 Bring-your-own-key modality & search backends** — image generation, web search, TTS, and transcription each run on the first backend you configure, with a free keyless fallback. Set an API key as an environment variable (or the dashboard Admin panel) and it is picked up automatically:
   ```bash
-  # Add Replicate for image generation
-  nuvira config set modality.image.replicate.apiKey=r8_xxxxx
-  nuvira config set modality.image.replicate.baseUrl=https://api.replicate.com/v1
-  nuvira config set modality.image.replicate.models="stability-ai/sdxl"
-  
-  # Add Azure TTS
-  nuvira config set modality.tts.azure.apiKey=xxxxx
-  nuvira config set modality.tts.azure.region=eastus
+  # Image generation — Gemini/Imagen ("Nano Banana"), OpenAI DALL·E, Stability,
+  # local ComfyUI, or the free Pollinations fallback
+  export GEMINI_API_KEY=AIzaSy...            # or OPENAI_API_KEY / STABILITY_API_KEY
+  agent-nuvira config set modality.image.provider gemini
+  agent-nuvira config set modality.image.model gemini-2.5-flash-image
+
+  # Web search — Brave / Serper / Tavily / Google Custom Search, else SearXNG
+  # or the keyless DuckDuckGo fallback
+  export BRAVE_SEARCH_API_KEY=...            # or SERPER_API_KEY / TAVILY_API_KEY
   ```
 - **🖥️ Runs anywhere** — zero native dependencies, tested on macOS / Windows / Linux (3,806 tests), no server, no telemetry, no subscriptions, and bring-your-own-keys for every provider. For the reasoning behind the architecture, see [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md). For benchmark results, see [docs/benchmarks/INDEX.md](docs/benchmarks/INDEX.md)
 
@@ -696,50 +697,56 @@ GEMINI_API_KEY=AIzaSyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-### Modality Providers (Image/Audio/Video)
+### Modality & Search Providers (bring your own key)
 
-Agent-Nuvira routes image generation, TTS, video, and transcription to the best available backend. Built-in providers are automatically detected from environment variables. You can add custom providers via config:
+Image generation, web search, TTS, transcription, and vision each use optional backends. A backend is selected from the API keys / endpoints you configure; when nothing is configured the free keyless default runs. Keys may be set as environment variables (shell, `<config dir>/.env`, or the dashboard Admin panel).
+
+#### Image generation
+
+`generate_image` runs the first AVAILABLE backend in this order — a configured API key wins over the free fallback, and `modality.image.provider` pins one explicitly:
+
+| # | Provider | Env var | Notes |
+|---|----------|---------|-------|
+| 1 | Google Gemini / Imagen ("Nano Banana") | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | `modality.image.model` (default `gemini-2.5-flash-image`); an `imagen-*` id uses the `:predict` endpoint |
+| 2 | OpenAI (DALL·E / gpt-image) | `OPENAI_API_KEY` | default model `gpt-image-1` |
+| 3 | Stability AI | `STABILITY_API_KEY` | Stable Image Core |
+| 4 | Local ComfyUI / Stable Diffusion | `BUFF_IMAGE_API_URL` | `POST {prompt,width,height}` → image bytes |
+| 5 | Pollinations.ai | — | free, keyless; always the fallback |
 
 ```bash
-# Add Replicate for image generation
-agent-nuvira config set modality.image.replicate.apiKey=r8_xxxxx
-agent-nuvira config set modality.image.replicate.baseUrl=https://api.replicate.com/v1
-agent-nuvira config set modality.image.replicate.models='["stability-ai/sdxl", "black-forest-labs/flux-schnell"]'
-agent-nuvira config set modality.image.replicate.costPerUnit=0.003
-agent-nuvira config set modality.image.replicate.quality=0.9
+# Use a hosted backend (its API key must be set in the environment)
+export GEMINI_API_KEY=AIzaSy...              # or OPENAI_API_KEY / STABILITY_API_KEY
+agent-nuvira config set modality.image.provider gemini
+agent-nuvira config set modality.image.model gemini-2.5-flash-image
 
-# Add Azure TTS
-agent-nuvira config set modality.tts.azure.apiKey=xxxxx
-agent-nuvira config set modality.tts.azure.baseUrl=https://eastus.tts.speech.microsoft.com
-agent-nuvira config set modality.tts.azure.endpoint='/cognitiveservices/v1'
-agent-nuvira config set modality.tts.azure.models='["en-US-AriaNeural", "en-US-JennyNeural"]'
-
-# Add custom video provider
-agent-nuvira config set modality.video.myprovider.apiKey=xxxxx
-agent-nuvira config set modality.video.myprovider.baseUrl=https://api.myprovider.com/v1
-agent-nuvira config set modality.video.myprovider.models='["model-1"]'
+# Or point at a local ComfyUI / Stable Diffusion server
+export BUFF_IMAGE_API_URL=http://localhost:7860/sdapi/v1/txt2img
 ```
 
-**Built-in providers (auto-detected from env vars):**
+A backend that is configured but fails at request time falls back to the free Pollinations endpoint, so an image request still succeeds.
 
-| Modality | Provider | Env Var | Cost | Quality |
-|----------|----------|---------|------|----------|
-| Image | Pollinations.ai | None (free) | Free | 0.7 |
-| Image | DALL-E 3 | `OPENAI_API_KEY` | $0.04/image | 0.95 |
-| Image | Stability AI | `STABILITY_API_KEY` | $0.002/gen | 0.85 |
-| Image | ComfyUI (local) | `BUFF_IMAGE_API_URL` | Free | 0.9 |
-| TTS | OpenAI TTS | `OPENAI_API_KEY` | $15/1M chars | 0.9 |
-| TTS | ElevenLabs | `ELEVENLABS_API_KEY` | $30/1M chars | 0.95 |
-| Video | FAL AI | `FAL_KEY` | $0.05/video | 0.85 |
-| Video | Runway ML | `RUNWAY_API_KEY` | $0.10/video | 0.95 |
-| Transcription | OpenAI Whisper | `OPENAI_API_KEY` | $0.006/min | 0.95 |
+#### Web search
 
-**How routing works:**
+`web_search` runs the first AVAILABLE backend: an explicit `tools.toolsets.web.provider` (config file), else the first provider whose key is set, else a self-hosted SearXNG, else the keyless DuckDuckGo HTML fallback.
 
-1. Score all available providers by: cost (35%), quality (30%), speed (20%), availability (15%)
-2. Try best provider first
-3. On failure, automatically failover to next best provider
-4. Continue until success or all providers exhausted
+| Provider | Env var |
+|----------|---------|
+| Brave Search | `BRAVE_SEARCH_API_KEY` |
+| Serper.dev | `SERPER_API_KEY` |
+| Tavily | `TAVILY_API_KEY` |
+| Google Custom Search | `GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_ID` |
+| SearXNG (self-hosted) | `SEARXNG_URL` |
+| DuckDuckGo (keyless fallback) | — |
+
+#### Other modalities
+
+| Modality | Provider | Requirement |
+|----------|----------|-------------|
+| TTS | edge-tts or Piper (local, free) | binary on `PATH` |
+| TTS (streaming) | OpenAI / ElevenLabs | `OPENAI_API_KEY` / `ELEVENLABS_API_KEY` |
+| Transcription | whisper.cpp / whisper-cli (local, free) | binary on `PATH` |
+| Vision (`describe_image`) | Ollama llava/llama3.2-vision, or Gemini | local Ollama, or `GEMINI_API_KEY` |
+| Video | FAL AI | `FAL_KEY` |
 
 ---
 

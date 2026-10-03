@@ -102,6 +102,13 @@ const GENERIC_SKILL_TAGS = new Set([
   'planning', 'roadmap', 'assessment', 'audit', 'quality', 'review',
   'analysis', 'process', 'workflow', 'recommendations', 'gaps', 'strategy',
   'methodology', 'checklist', 'template', 'guide', 'framework', 'report',
+  // C4 — `packaging` is how work is DELIVERED, not a domain. Measured live
+  // (2026-10-02): the goal "Fix the macOS hotkey permission and packaging
+  // defects … changing app behavior" matched `electron-app` on its `packaging`
+  // tag ALONE and injected Electron methodology into a PyQt6 bundle fix. The
+  // skill's real domain (`electron`) is unaffected: a goal that actually names
+  // Electron still matches on the name word.
+  'packaging',
 ]);
 
 /** Cap on hub SKILL.md body text injected into the prompt (chars). */

@@ -28,10 +28,12 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ToolContext } from './registry.js';
+import { recordArtifact } from './artifact-append.js';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { resolveAsk } from '../commands/intent-router.js';
 import { decideCliIntentConfirmation, RECOVERABLE_CLI_INTENTS } from '../learning/autonomy-policy.js';
 import { envelopeCoversAction } from '../learning/intent-envelope.js';
@@ -87,6 +89,28 @@ export function splitCommand(command: string): string[] {
   }
   if (cur) args.push(cur);
   return args;
+}
+
+/**
+ * Persist one command's output as a log file under the memory dir.
+ *
+ * run_cli's deliverable is its OUTPUT, which has no file of its own — so the
+ * artifact tab could never show one. Writing the captured output to a real log
+ * file gives the artifact a path (and therefore a preview) without touching the
+ * user's workspace. Best-effort: any failure just means no artifact.
+ */
+function writeCliLog(command: string, body: string): string | undefined {
+  try {
+    const memory = envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
+    const dir = join(memory, 'cli-logs');
+    mkdirSync(dir, { recursive: true });
+    const slug = command.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'cli';
+    const file = join(dir, `${Date.now()}-${slug}.log`);
+    writeFileSync(file, `$ ${command}\n\n${body}\n`, 'utf-8');
+    return file;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -213,6 +237,20 @@ export async function runCliTool(args: unknown, ctx: ToolContext): Promise<strin
     child.on('exit', (code) => {
       clearTimeout(timer);
       const body = (out || err).trim().slice(0, MAX_OUTPUT_CHARS);
+      // I3 — the output is the deliverable. Only when a sink exists (the
+      // dashboard/CLI chat session) so a unit test or a bare run writes no
+      // files. A command with nothing to say registers nothing.
+      if (ctx.artifacts && body) {
+        const logPath = writeCliLog(command, body);
+        if (logPath) {
+          recordArtifact(ctx.artifacts, {
+            kind: 'log',
+            title: `cli: ${command.slice(0, 70)}`,
+            path: logPath,
+            mime: 'text/plain',
+          });
+        }
+      }
       const masked = maskSenderId(body);
       const status = code === 0 ? '✅ succeeded' : `❌ failed (exit ${code ?? '?'})`;
       const body2 =

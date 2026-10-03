@@ -6,18 +6,27 @@
  * page's text to ground its answers — the single biggest "understanding"
  * capability agent-nuvira was missing (capability gap #3, 🔴 MAJOR).
  *
- * Backends (all OSS/free, zero cost to the user — the I-series rule):
- * - **DuckDuckGo HTML** (no key) — default `searchWeb` backend.
- * - **SearXNG** (self-host, OSS) — opt-in JSON endpoint when the user has one.
- * - **Jina Reader** (free tier) — page-to-markdown for `readWebPage`; falls
- *   back to a plain fetch + naive HTML→text strip when unconfigured.
+ * Search backends — bring your own key (BYOK) or use the keyless default:
+ * - **DuckDuckGo HTML** (no key) — the always-available fallback.
+ * - **SearXNG** (self-host, OSS) — opt-in JSON endpoint (`SEARXNG_URL`).
+ * - **Brave Search** (`BRAVE_SEARCH_API_KEY`) — paid, high quality.
+ * - **Serper.dev** (`SERPER_API_KEY`) — paid Google SERP proxy.
+ * - **Tavily** (`TAVILY_API_KEY`) — paid, LLM-optimised.
+ * - **Google Custom Search** (`GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_ID`).
  *
- * Availability gating: DDG needs no config so
- * `isWebSearchAvailable()` is true by default; SearXNG/Jina are opt-in via
- * env. Every fetch carries a timeout + a real browser UA (robots-aware);
- * results are cached in `context/cache.ts` (provider=`web`) so repeated
- * queries never hit the network twice. `fetchFn` is injectable for the
- * mocked-fetch tests (no network in tests).
+ * Which backend runs is resolved by {@link resolveSearchProvider}: an explicit
+ * `provider` option wins, then the first backend whose key is configured (in
+ * {@link SEARCH_BACKEND_PRIORITY} order), then SearXNG, then DuckDuckGo. When a
+ * keyed backend returns nothing (or errors) the call degrades to DuckDuckGo so
+ * `web_search` never returns empty just because one provider is down.
+ *
+ * Page reading: **Jina Reader** (free tier, `JINA_API_KEY`) for page-to-markdown;
+ * falls back to a plain fetch + naive HTML→text strip when unconfigured.
+ *
+ * Every fetch carries a timeout + a real browser UA (robots-aware); results are
+ * cached in `context/cache.ts` (provider=`web`) so repeated queries never hit
+ * the network twice. `fetchFn` is injectable for the mocked-fetch tests (no
+ * network in tests).
  */
 
 import { getCache } from '../context/cache.js';
@@ -32,9 +41,23 @@ export interface WebSearchResult {
   snippet: string;
 }
 
+/** A concrete search backend id. */
+export type SearchProvider =
+  | 'brave'
+  | 'serper'
+  | 'tavily'
+  | 'google-cse'
+  | 'searxng'
+  | 'duckduckgo';
+
 export interface WebSearchOptions {
   /** Max hits to return (default 5). */
   maxResults?: number;
+  /**
+   * Explicit backend override. When omitted the first AVAILABLE backend in
+   * {@link SEARCH_BACKEND_PRIORITY} order is used. Unknown values are ignored.
+   */
+  provider?: string;
   /** SearXNG self-hosted JSON endpoint, e.g. http://localhost:8888/search. */
   searxngUrl?: string;
   /** Injectable fetch (tests stub it; defaults to global fetch). */
@@ -59,6 +82,131 @@ const BROWSER_UA =
 const DEFAULT_SEARCH_TTL = 6 * 3600; // 6h — search results drift slowly
 const DEFAULT_PAGE_TTL = 24 * 3600; // 24h — page text is stable
 
+// ─── Backend catalog ────────────────────────────────────────────────────────
+
+/**
+ * A search backend descriptor. `keyEnvVars` lists every env var that can carry
+ * the credential (first set wins); plain names are checked alongside the
+ * `NUVIRA_`/`BUFF_` prefixed forms so both a bare export and the nuvira-style
+ * override work.
+ */
+interface SearchBackend {
+  id: SearchProvider;
+  label: string;
+  /** Env vars that can supply the key (empty = keyless). */
+  keyEnvVars: string[];
+  /** Extra required env var (e.g. Google CSE also needs the engine id). */
+  extraEnvVars?: string[];
+  /** True when an API key is required. */
+  requiresKey: boolean;
+  /** Cost note for diagnostics. */
+  free: boolean;
+}
+
+/** The catalog — single source of backend metadata. */
+export const SEARCH_BACKENDS: Record<SearchProvider, SearchBackend> = {
+  brave: {
+    id: 'brave',
+    label: 'Brave Search',
+    keyEnvVars: ['BRAVE_SEARCH_API_KEY', 'BRAVE_API_KEY'],
+    requiresKey: true,
+    free: false,
+  },
+  serper: {
+    id: 'serper',
+    label: 'Serper.dev',
+    keyEnvVars: ['SERPER_API_KEY'],
+    requiresKey: true,
+    free: false,
+  },
+  tavily: {
+    id: 'tavily',
+    label: 'Tavily',
+    keyEnvVars: ['TAVILY_API_KEY'],
+    requiresKey: true,
+    free: false,
+  },
+  'google-cse': {
+    id: 'google-cse',
+    label: 'Google Custom Search',
+    keyEnvVars: ['GOOGLE_CSE_API_KEY', 'GOOGLE_API_KEY'],
+    extraEnvVars: ['GOOGLE_CSE_ID', 'GOOGLE_CSE_CX'],
+    requiresKey: true,
+    free: false,
+  },
+  searxng: {
+    id: 'searxng',
+    label: 'SearXNG (self-hosted)',
+    keyEnvVars: [],
+    requiresKey: false,
+    free: true,
+  },
+  duckduckgo: {
+    id: 'duckduckgo',
+    label: 'DuckDuckGo (keyless)',
+    keyEnvVars: [],
+    requiresKey: false,
+    free: true,
+  },
+};
+
+/**
+ * Auto-selection order when no explicit provider is configured. A user who set
+ * several keys gets the highest-quality one; `searxng` and `duckduckgo` are the
+ * keyless tail so a search always works.
+ */
+export const SEARCH_BACKEND_PRIORITY: readonly SearchProvider[] = [
+  'brave',
+  'serper',
+  'tavily',
+  'google-cse',
+  'searxng',
+  'duckduckgo',
+];
+
+/** Read the first non-empty value among names (prefixed + plain). */
+function keyFromEnv(names: string[]): string | undefined {
+  for (const name of names) {
+    const value = (envBuff(name) ?? process.env[name])?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+/** Resolve the effective SearXNG endpoint (explicit option or env). */
+function searxngEndpoint(options: WebSearchOptions): string | undefined {
+  return options.searxngUrl || envBuff('SEARXNG_URL');
+}
+
+/** Is a specific backend usable right now (key/endpoint present)? */
+export function isBackendAvailable(provider: SearchProvider, options: WebSearchOptions = {}): boolean {
+  const backend = SEARCH_BACKENDS[provider];
+  if (!backend) return false;
+  if (provider === 'duckduckgo') return true;
+  if (provider === 'searxng') return Boolean(searxngEndpoint(options));
+  if (!keyFromEnv(backend.keyEnvVars)) return false;
+  if (backend.extraEnvVars && !keyFromEnv(backend.extraEnvVars)) return false;
+  return true;
+}
+
+/**
+ * Which backend will actually run. Explicit `provider` (when known) wins, then
+ * the first available backend in priority order. Never throws.
+ */
+export function resolveSearchProvider(options: WebSearchOptions = {}): SearchProvider {
+  const explicit = options.provider as SearchProvider | undefined;
+  if (explicit && SEARCH_BACKENDS[explicit]) return explicit;
+  for (const id of SEARCH_BACKEND_PRIORITY) {
+    if (isBackendAvailable(id, options)) return id;
+  }
+  return 'duckduckgo';
+}
+
+/** Every backend id with a configured key/endpoint (for CLI + dashboard). */
+export function availableSearchBackends(options: WebSearchOptions = {}): SearchProvider[] {
+  return SEARCH_BACKEND_PRIORITY.filter((id) => isBackendAvailable(id, options));
+}
+
 // ─── Fetch helper ───────────────────────────────────────────────────────────
 
 /** fetch with timeout + browser UA. Aborts via AbortSignal.timeout when free. */
@@ -76,7 +224,7 @@ async function fetchWithTimeout(
       signal: controller.signal,
       headers: {
         'User-Agent': BROWSER_UA,
-        Accept: 'text/html,application/xhtml+xml,text/plain,*/*;q=0.8',
+        Accept: 'text/html,application/xhtml+xml,application/json,text/plain,*/*;q=0.8',
         ...(init.headers || {}),
       },
     });
@@ -137,25 +285,216 @@ export function parseSearxngJson(json: unknown, maxResults: number): WebSearchRe
     .map((r) => ({ title: r.title as string, url: r.url as string, snippet: (r.content || '').trim() }));
 }
 
+// ─── Hosted-backend JSON parsers (one per provider shape) ───────────────────
+
+/** Shared cleanup: strip tags/entities from a provider snippet. */
+function cleanSnippet(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return stripTags(decodeEntities(value)).trim();
+}
+
+/** Brave Search `{ web: { results: [{ title, url, description }] } }`. */
+export function parseBraveJson(json: unknown, maxResults: number): WebSearchResult[] {
+  const arr = (json as { web?: { results?: Array<{ title?: string; url?: string; description?: string }> } })?.web?.results;
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((r) => r && r.title && r.url)
+    .slice(0, maxResults)
+    .map((r) => ({ title: cleanSnippet(r.title), url: r.url as string, snippet: cleanSnippet(r.description) }));
+}
+
+/** Serper.dev `{ organic: [{ title, link, snippet }] }`. */
+export function parseSerperJson(json: unknown, maxResults: number): WebSearchResult[] {
+  const arr = (json as { organic?: Array<{ title?: string; link?: string; snippet?: string }> })?.organic;
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((r) => r && r.title && r.link)
+    .slice(0, maxResults)
+    .map((r) => ({ title: cleanSnippet(r.title), url: r.link as string, snippet: cleanSnippet(r.snippet) }));
+}
+
+/** Tavily `{ results: [{ title, url, content }] }`. */
+export function parseTavilyJson(json: unknown, maxResults: number): WebSearchResult[] {
+  const arr = (json as { results?: Array<{ title?: string; url?: string; content?: string }> })?.results;
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((r) => r && r.title && r.url)
+    .slice(0, maxResults)
+    .map((r) => ({ title: cleanSnippet(r.title), url: r.url as string, snippet: cleanSnippet(r.content) }));
+}
+
+/** Google Custom Search `{ items: [{ title, link, snippet }] }`. */
+export function parseGoogleCseJson(json: unknown, maxResults: number): WebSearchResult[] {
+  const arr = (json as { items?: Array<{ title?: string; link?: string; snippet?: string }> })?.items;
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((r) => r && r.title && r.link)
+    .slice(0, maxResults)
+    .map((r) => ({ title: cleanSnippet(r.title), url: r.link as string, snippet: cleanSnippet(r.snippet) }));
+}
+
+// ─── Backend runners ────────────────────────────────────────────────────────
+
+/** DuckDuckGo HTML lite (no key). */
+async function runDuckDuckGo(
+  query: string,
+  maxResults: number,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<WebSearchResult[]> {
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const res = await fetchWithTimeout(url, {}, timeoutMs, fetchFn);
+  if (!res.ok) return [];
+  return parseDuckDuckGoHtml(await res.text(), maxResults);
+}
+
+/** SearXNG self-hosted JSON endpoint. */
+async function runSearxng(
+  query: string,
+  maxResults: number,
+  endpoint: string,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<WebSearchResult[]> {
+  const url = `${endpoint.replace(/\/$/, '')}/search?q=${encodeURIComponent(query)}&format=json`;
+  const res = await fetchWithTimeout(url, {}, timeoutMs, fetchFn);
+  if (!res.ok) return [];
+  return parseSearxngJson(await res.json(), maxResults);
+}
+
+/** Brave Search API (`X-Subscription-Token`). */
+async function runBrave(
+  query: string,
+  maxResults: number,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<WebSearchResult[]> {
+  const key = keyFromEnv(SEARCH_BACKENDS.brave.keyEnvVars);
+  if (!key) return [];
+  const count = Math.min(maxResults, 20);
+  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`;
+  const res = await fetchWithTimeout(
+    url,
+    { headers: { 'X-Subscription-Token': key, Accept: 'application/json' } },
+    timeoutMs,
+    fetchFn,
+  );
+  if (!res.ok) return [];
+  return parseBraveJson(await res.json(), maxResults);
+}
+
+/** Serper.dev Google SERP proxy (`X-API-KEY`, POST {q}). */
+async function runSerper(
+  query: string,
+  maxResults: number,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<WebSearchResult[]> {
+  const key = keyFromEnv(SEARCH_BACKENDS.serper.keyEnvVars);
+  if (!key) return [];
+  const res = await fetchWithTimeout(
+    'https://google.serper.dev/search',
+    {
+      method: 'POST',
+      headers: { 'X-API-KEY': key, 'content-type': 'application/json' },
+      body: JSON.stringify({ q: query, num: maxResults }),
+    },
+    timeoutMs,
+    fetchFn,
+  );
+  if (!res.ok) return [];
+  return parseSerperJson(await res.json(), maxResults);
+}
+
+/** Tavily (`Authorization: Bearer`, POST {query}). */
+async function runTavily(
+  query: string,
+  maxResults: number,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<WebSearchResult[]> {
+  const key = keyFromEnv(SEARCH_BACKENDS.tavily.keyEnvVars);
+  if (!key) return [];
+  const res = await fetchWithTimeout(
+    'https://api.tavily.com/search',
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ query, max_results: maxResults, search_depth: 'basic' }),
+    },
+    timeoutMs,
+    fetchFn,
+  );
+  if (!res.ok) return [];
+  return parseTavilyJson(await res.json(), maxResults);
+}
+
+/** Google Custom Search JSON API (`key` + `cx`). */
+async function runGoogleCse(
+  query: string,
+  maxResults: number,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<WebSearchResult[]> {
+  const key = keyFromEnv(SEARCH_BACKENDS['google-cse'].keyEnvVars);
+  const cx = keyFromEnv(SEARCH_BACKENDS['google-cse'].extraEnvVars ?? []);
+  if (!key || !cx) return [];
+  const num = Math.min(maxResults, 10);
+  const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(key)}&cx=${encodeURIComponent(cx)}&q=${encodeURIComponent(query)}&num=${num}`;
+  const res = await fetchWithTimeout(url, {}, timeoutMs, fetchFn);
+  if (!res.ok) return [];
+  return parseGoogleCseJson(await res.json(), maxResults);
+}
+
+/** Dispatch a query to one concrete backend. */
+async function runBackend(
+  provider: SearchProvider,
+  query: string,
+  options: WebSearchOptions,
+  fetchFn: typeof fetch,
+  timeoutMs: number,
+): Promise<WebSearchResult[]> {
+  const maxResults = options.maxResults ?? 5;
+  switch (provider) {
+    case 'brave':
+      return runBrave(query, maxResults, timeoutMs, fetchFn);
+    case 'serper':
+      return runSerper(query, maxResults, timeoutMs, fetchFn);
+    case 'tavily':
+      return runTavily(query, maxResults, timeoutMs, fetchFn);
+    case 'google-cse':
+      return runGoogleCse(query, maxResults, timeoutMs, fetchFn);
+    case 'searxng': {
+      const endpoint = searxngEndpoint(options);
+      if (!endpoint) return [];
+      return runSearxng(query, maxResults, endpoint, timeoutMs, fetchFn);
+    }
+    case 'duckduckgo':
+    default:
+      return runDuckDuckGo(query, maxResults, timeoutMs, fetchFn);
+  }
+}
+
 // ─── searchWeb ──────────────────────────────────────────────────────────────
 
 /**
- * Search the web. Preferred backend: SearXNG when `searxngUrl` is configured;
- * otherwise DuckDuckGo HTML (no key). Results cached in context/cache.ts
- * (provider=`web`) keyed by backend+query.
+ * Search the web. Backend: an explicit `provider` option, else the first
+ * AVAILABLE backend in priority order (Brave → Serper → Tavily → Google CSE →
+ * SearXNG → DuckDuckGo). When a keyed backend yields nothing, the query is
+ * retried once on the keyless DuckDuckGo fallback. Results cached in
+ * context/cache.ts (provider=`web`) keyed by backend+query.
  */
 export async function searchWeb(
   query: string,
   options: WebSearchOptions = {},
 ): Promise<WebSearchResult[]> {
   const fetchFn = options.fetchFn || globalThis.fetch.bind(globalThis);
-  const maxResults = options.maxResults ?? 5;
   const timeoutMs = options.timeoutMs ?? 15_000;
+  const provider = resolveSearchProvider(options);
 
   const cache = getCache();
-  const backend = options.searxngUrl ? 'searxng' : 'duckduckgo';
-  const cacheKey = `${backend}:${query}`;
-  const cached = await cache.get(cacheKey, 'web', backend);
+  const cacheKey = `${provider}:${query}`;
+  const cached = await cache.get(cacheKey, 'web', provider);
   if (cached) {
     try {
       return JSON.parse(cached) as WebSearchResult[];
@@ -164,27 +503,17 @@ export async function searchWeb(
 
   let results: WebSearchResult[] = [];
   try {
-    if (options.searxngUrl) {
-      const url = `${options.searxngUrl.replace(/\/$/, '')}/search?q=${encodeURIComponent(query)}&format=json`;
-      const res = await fetchWithTimeout(url, {}, timeoutMs, fetchFn);
-      if (res.ok) {
-        const json: unknown = await res.json();
-        results = parseSearxngJson(json, maxResults);
-      }
-    }
-    if (results.length === 0) {
-      const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-      const res = await fetchWithTimeout(url, {}, timeoutMs, fetchFn);
-      if (res.ok) {
-        const html = await res.text();
-        results = parseDuckDuckGoHtml(html, maxResults);
-      }
+    results = await runBackend(provider, query, options, fetchFn, timeoutMs);
+    // Keyed backend down or empty → degrade to the keyless fallback so a
+    // `web_search` never silently returns nothing because one provider failed.
+    if (results.length === 0 && provider !== 'duckduckgo') {
+      results = await runDuckDuckGo(query, options.maxResults ?? 5, timeoutMs, fetchFn);
     }
   } catch {
     return []; // network failure → empty, never throw into the tool loop
   }
 
-  await cache.set(cacheKey, JSON.stringify(results), 'web', backend, DEFAULT_SEARCH_TTL);
+  await cache.set(cacheKey, JSON.stringify(results), 'web', provider, DEFAULT_SEARCH_TTL);
   return results;
 }
 

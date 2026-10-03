@@ -128,6 +128,30 @@ describe('findLoopSkillMatch — compiled store + hub catalog', () => {
     expect(hasRealGoalEvidence('plan the phases for the migration', roadmap)).toBe(true);
   });
 
+  it('does not match electron-app on a generic `packaging` tag (C4)', async () => {
+    const { hasRealGoalEvidence } = await loadHint();
+    const electronApp = {
+      name: 'electron-app',
+      tags: ['electron', 'desktop', 'app', 'ipc', 'packaging'],
+      goalPattern: 'electron desktop app main process renderer IPC auto-update native modules packaging',
+      description:
+        'Build an Electron desktop application: main process, renderer process, IPC communication, auto-updates, and native modules.',
+    };
+    // Live false positive (2026-10-02): a PyQt6 bundle fix matched electron-app
+    // on the single generic tag `packaging` and injected Electron methodology
+    // into a macOS packaging turn.
+    expect(
+      hasRealGoalEvidence(
+        'Fix the macOS hotkey permission and packaging defects in this project, changing app behavior as little as possible.',
+        electronApp,
+      ),
+    ).toBe(false);
+    // Real Electron intent is unaffected — the domain name word still matches.
+    expect(
+      hasRealGoalEvidence('build an electron desktop app with IPC and auto-update support', electronApp),
+    ).toBe(true);
+  });
+
   /**
    * A TARGET PLATFORM is a constraint on the work, not evidence for a
    * methodology.

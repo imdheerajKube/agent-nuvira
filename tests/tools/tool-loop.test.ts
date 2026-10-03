@@ -1661,3 +1661,50 @@ describe('WS4 tool hooks — the veto, and what it must NOT touch', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('Phase 4c — onStep step-boundary snapshot', () => {
+  it('reports the live thread + accumulators once per step that ran tools', async () => {
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'a.ts' } }] },
+        { content: '', toolCalls: [{ id: 'c2', name: 'list_dir', arguments: { path: '.' } }] },
+        { content: 'Done.', toolCalls: [] },
+      ],
+      async (name) => `${name} ok`,
+    );
+    const seen: Array<{ steps: number; threadLen: number; tools: string[] }> = [];
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'go' }],
+      context: ctx,
+      deps,
+      onStep: (s) => seen.push({ steps: s.steps, threadLen: s.thread.length, tools: [...s.successfulTools] }),
+    });
+
+    expect(result.content).toBe('Done.');
+    // Two tool-bearing steps; the final answer step has no tool boundary.
+    expect(seen.length).toBe(2);
+    expect(seen[0].tools).toContain('read_file');
+    expect(seen[1].tools).toContain('list_dir');
+    // The thread GROWS as tool results land, so the second snapshot is larger.
+    expect(seen[1].threadLen).toBeGreaterThan(seen[0].threadLen);
+  });
+
+  it('a throwing onStep never breaks the turn', async () => {
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'list_dir', arguments: { path: '.' } }] },
+        { content: 'Done.', toolCalls: [] },
+      ],
+      async () => 'ok',
+    );
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'go' }],
+      context: ctx,
+      deps,
+      onStep: () => {
+        throw new Error('snapshot blew up');
+      },
+    });
+    expect(result.content).toBe('Done.');
+  });
+});

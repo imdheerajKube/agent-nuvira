@@ -197,8 +197,20 @@ export async function startWireRecorder(
         }
         const callIndex = requests.length;
         requests.push(body);
+        const answer = respond(body, callIndex);
+        // A `{ __sse: [...] }` marker means the case is exercising the STREAMING
+        // path (the dashboard typewriter), so answer as a server-sent-event body
+        // exactly the way an OpenAI-compatible provider does.
+        if (answer && typeof answer === 'object' && Array.isArray((answer as { __sse?: unknown }).__sse)) {
+          res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+          const lines = ((answer as { __sse: Array<Record<string, unknown>> }).__sse)
+            .map((chunk) => `data: ${JSON.stringify({ choices: [chunk] })}\n\n`)
+            .join('');
+          res.end(`${lines}data: [DONE]\n\n`);
+          return;
+        }
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify(respond(body, callIndex)));
+        res.end(JSON.stringify(answer));
         return;
       }
       res.writeHead(404, { 'content-type': 'application/json' });
@@ -359,6 +371,94 @@ export async function captureCoreLoopRequests(): Promise<WireFixture[]> {
       case: 'plain-turn',
       proves:
         'A tool-less turn still sends the full tool schema set (native tool-calling) with this body shape; model/temperature/max_tokens drift shows up here.',
+      requests: recorder.requests().map((r) => normalizeWireRequest(r)),
+    });
+  }
+
+  // Case 3 — the STREAMING tool-calling wire (the dashboard answer typewriter).
+  // It adds `stream: true` and `stream_options.include_usage`, and that shape is
+  // exactly the one the dashboard depends on — a change here silently breaks the
+  // typewriter, which no response-side test catches.
+  {
+    const recorder = await startWireRecorder((body) => {
+      const messages = Array.isArray(body.messages) ? (body.messages as Array<{ role?: string }>) : [];
+      const toolAlreadyRan = messages.some((m) => m?.role === 'tool');
+      // Streaming responses are SSE, not JSON — the recorder's responder returns
+      // a marker the server turns into an SSE body below.
+      return toolAlreadyRan
+        ? { __sse: [{ delta: { content: 'The version is 3.3.8.' } }, { delta: {}, finish_reason: 'stop' }] }
+        : {
+            __sse: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'wire_call_1',
+                      type: 'function',
+                      function: { name: 'read_file', arguments: '{"path":"package.json"}' },
+                    },
+                  ],
+                },
+              },
+              { delta: {}, finish_reason: 'tool_calls' },
+            ],
+          };
+    });
+    const adapter = new GroqAdapter({
+      apiKey: 'wire-stub-key',
+      model: 'wire-stub-model',
+      baseUrl: recorder.baseUrl,
+    });
+    const context: ToolContext = {
+      configManager: {},
+      cwd: process.cwd(),
+      authorizationRequest: 'Read package.json and report the version.',
+    };
+    const deps: ToolLoopDeps = {
+      callModel: async (messages: ToolMessage[], tools: ToolJsonSchema[], onToken?: (t: string) => void) =>
+        (await adapter.generateToolsStream!(messages, tools, undefined, onToken ?? (() => {}))) as StepResponse,
+      executeTool: async () => '{\n  "name": "agent-nuvira",\n  "version": "3.3.8"\n}',
+      onEvent: () => {},
+    };
+    try {
+      await runToolLoop({
+        messages: caseMessages(),
+        context,
+        deps,
+        tools: CASE_TOOL_NAMES,
+        maxSteps: 4,
+        requireVerification: false,
+        requireDeliverable: false,
+      });
+    } finally {
+      await recorder.close();
+    }
+    out.push({
+      case: 'streaming-tool-call',
+      proves:
+        'The streaming path sends stream:true and stream_options.include_usage with this body — the dashboard typewriter depends on it.',
+      requests: recorder.requests().map((r) => normalizeWireRequest(r)),
+    });
+  }
+
+  // Case 4 — the plain `generate()` wire (non-tool path used by single-shot
+  // calls and the plan/reasoner prompts). Pins the messages-only body shape.
+  {
+    const recorder = await startWireRecorder(() => ({
+      choices: [{ message: { content: 'Hello.' } }],
+    }));
+    const adapter = new GroqAdapter({
+      apiKey: 'wire-stub-key',
+      model: 'wire-stub-model',
+      baseUrl: recorder.baseUrl,
+    });
+    await adapter.generate('Say hello.');
+    await recorder.close();
+    out.push({
+      case: 'plain-generate',
+      proves:
+        'The non-tool generate() path sends this body shape (single user message, no tools); the plan/reasoner single-shot calls depend on it.',
       requests: recorder.requests().map((r) => normalizeWireRequest(r)),
     });
   }

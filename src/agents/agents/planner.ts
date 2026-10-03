@@ -10,6 +10,7 @@
 
 import { Agent, type AgentContext, type AgentResult, type TaskStep } from '../agent.js';
 import type { LLMCallFn } from '../agent.js';
+import { assessPlanQuality } from '../plan-quality.js';
 
 const PLANNER_SYSTEM_PROMPT = [
   'You are a senior software architect. Your job is to decompose a user\'s goal into a detailed, ordered execution plan.',
@@ -433,6 +434,20 @@ export class PlannerAgent extends Agent {
               .map((d) => ({ agentType: d.agentType, prompt: d.prompt, files: d.files }))
           : undefined;
 
+        // v1.62.4 — PRESERVE the declared artifacts. The planner PROMPT has
+        // always asked for `expectedFiles` on writer steps ("the engine verifies
+        // the writer touched them"), but the parser dropped the field, so the
+        // artifact check the prompt promises never had a declaration to check.
+        // A step that names its deliverable in prose but declares nothing is
+        // exactly the shape Part 1/Part 2 exist to catch, so accept the field
+        // (validated to non-empty strings) when the model emits it.
+        const rawExpected = (step as { expectedFiles?: unknown }).expectedFiles;
+        const expectedFiles = Array.isArray(rawExpected)
+          ? rawExpected
+              .filter((f): f is string => typeof f === 'string' && f.trim().length > 0)
+              .map((f) => f.trim())
+          : undefined;
+
         plan.push({
           id,
           description: String(step.description),
@@ -441,6 +456,7 @@ export class PlannerAgent extends Agent {
           complexity,
           status: 'pending',
           ...(delegation && delegation.length > 0 ? { delegation } : {}),
+          ...(expectedFiles && expectedFiles.length > 0 ? { expectedFiles } : {}),
         });
       }
 
@@ -496,6 +512,34 @@ export class PlannerAgent extends Agent {
             `Goal mentions: ${goalTokens.slice(0, 8).join(', ')}... ` +
             'None of the planned steps reference these terms. Re-plan steps that directly implement the user\'s goal.',
         };
+      }
+
+      // ── G5 — plan-quality assessment (deterministic) ──────────────────────
+      // A weak planner can emit a self-dependency (which would deadlock its own
+      // step), a dependency on a non-existent step, a cycle, a repeated step, or
+      // a producing step that names a deliverable but declares no expectedFiles.
+      // The ONLY correction applied here is dropping self-dependencies (an
+      // unambiguous bug); everything else is recorded as an advisory, because a
+      // dangling/cyclic dependency can also mean a genuinely missing step and
+      // must not be silently papered over.
+      const quality = assessPlanQuality(
+        plan.map((s) => ({
+          id: s.id,
+          description: s.description,
+          agentType: s.agentType,
+          dependsOn: s.dependsOn,
+          expectedFiles: s.expectedFiles,
+        })),
+      );
+      if (quality.issues.some((i) => i.kind === 'self-dependency')) {
+        const fixed = new Map(quality.steps.map((s) => [s.id, s.dependsOn]));
+        for (const s of plan) {
+          const deps = fixed.get(s.id);
+          if (deps) s.dependsOn = deps;
+        }
+      }
+      if (quality.advisories.length > 0) {
+        this.report(context, 'decided', `Plan advisories:\n${quality.advisories.join('\n')}`);
       }
 
       // Store the parsed plan directly in the shared context for the orchestrator

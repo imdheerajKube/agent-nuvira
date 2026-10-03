@@ -110,6 +110,43 @@ export function extractToolArtifact(text: string): { artifact: ToolArtifact; res
 }
 
 /**
+ * A deliverable a PRODUCER describes: everything a tool knows about what it
+ * made, with the bookkeeping fields optional (filled by `recordArtifact`).
+ */
+export type ArtifactDraft = Omit<ToolArtifact, 'id' | 'createdAt' | 'source'> & {
+  id?: string;
+  createdAt?: number;
+  source?: ToolArtifact['source'];
+};
+
+/**
+ * Record a deliverable directly on the session's artifact sink.
+ *
+ * The `{artifact, result}` payload contract works for a tool that can wrap its
+ * whole result, but most tools return prose the model must read verbatim
+ * (`write_file: created 'src/x.ts' (412 chars).`) — rewriting those into JSON
+ * just to register a deliverable would change every caller's output. This is
+ * the other half: a tool that ALREADY has the deliverable (the path it wrote,
+ * the file it generated) hands it over directly and returns its text unchanged.
+ *
+ * No-op without a sink (the CLI, a unit test, a pure run) and never throws —
+ * exactly the guarantees the payload path makes.
+ */
+export function recordArtifact(sink: ArtifactSink | undefined, artifact: ArtifactDraft): void {
+  if (!sink) return;
+  try {
+    sink.push({
+      ...artifact,
+      id: artifact.id ?? randomUUID(),
+      source: artifact.source ?? 'tool',
+      createdAt: artifact.createdAt ?? Date.now(),
+    });
+  } catch {
+    /* best-effort — persistence must never break the tool that produced it */
+  }
+}
+
+/**
  * Append an extracted artifact to the sink and return the CLEAN result text.
  * A non-payload result is returned unchanged. This is the tool-loop hook.
  */

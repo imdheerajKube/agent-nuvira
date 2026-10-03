@@ -49,6 +49,18 @@ import {
   type OpenResume,
   type ResumeOutcome,
 } from '../learning/step-checkpoint.js';
+// Phase 4b/4c — the PERSISTENT SESSION STORE. Opened only when this run opted
+// into a record (resume / `--checkpoint`); an ordinary run never touches it. It
+// snapshots the live thread at each step boundary and, on an explicit resume,
+// rehydrates the conversation a dead process left behind.
+import {
+  findResumableSessionFor,
+  formatSessionResume,
+  openSession,
+  rehydrateThread,
+  resolveSessionStore,
+  type SessionStore,
+} from '../learning/session-store.js';
 import { noteServedRoute } from '../tools/loop-route-feed.js';
 import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
 import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
@@ -62,7 +74,11 @@ import {
 } from '../learning/provider-fallback.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
-import { deliverablesNamedIn, recordStepHandoff } from '../agents/step-handoff.js';
+import { deliverablesNamedIn, formatHandoffs, recordStepHandoff } from '../agents/step-handoff.js';
+import { recordSessionTurn } from '../learning/session-digest.js';
+// Phase 4 follow-on — semantic recall index (default ON; resolvable off).
+import { indexSessionTurn, resolveSessionRecall } from '../learning/session-recall.js';
+import { isVerificationTool } from '../tools/edit-verification.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile } from '../learning/model-harness.js';
 import { hasCredentials } from '../learning/model-selection.js';
@@ -75,6 +91,7 @@ import {
   recordTraceEvent,
   recordTraceFindings,
   buildTraceOutcome,
+  traceOutcomeSucceeded,
 } from '../learning/reasoning-trace.js';
 import type { LoopTraceEvent } from '../tools/tool-loop.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
@@ -237,6 +254,30 @@ export interface LoopExecutorOptions {
    */
   resume?: string | boolean;
   /**
+   * A2 — `--checkpoint` on the LOOP arm. The flag asks to LEAVE A RESUME POINT
+   * even though this run is not resuming anything: the record is opened and
+   * written forward so a crash / quota kill / Ctrl+C mid-run can be continued.
+   *
+   * Why it exists: `nuvira execute "…" --checkpoint` was inert on this engine.
+   * The loop opened its record only on an explicit resume, so a run invoked with
+   * `--checkpoint` — which the CLI advertises as "save a resume-able checkpoint"
+   * — left NOTHING to resume from (observed live: no `checkpoints/steps/` entry
+   * after a checkpointed run). The flag now means on both engines what it says.
+   */
+  checkpoint?: boolean;
+  /**
+   * Continuity (default ON, `memory.sessionStore`). Persist this turn's
+   * conversation across process death and rehydrate a matching OPEN one. `false`
+   * (or `--no-session-store`) turns it off.
+   */
+  sessionStore?: boolean;
+  /**
+   * Continuity (default ON, `memory.sessionRecall`). Index this ask for semantic
+   * recall and surface similar past asks. `false` (or `--no-session-recall`)
+   * turns it off.
+   */
+  sessionRecall?: boolean;
+  /**
    * G18 — echo each tool RESULT (first line, bounded) under the call line.
    * Previously even `-v` printed only the call (`⚙ edit_file({path: …})`) and
    * never what came back, so a live run could not distinguish "the gate applied
@@ -318,16 +359,36 @@ export async function runLoopExecutor(
    * original tree is not isolated, it is confused.
    */
   const turnCwd = worktree?.dir ?? projectDir;
+  // A2 — a resume request OR an explicit `--checkpoint` opens the record. The
+  // difference is what the request carries: `--checkpoint` alone opens the
+  // record for THIS ask with nothing to replay (writing it forward is the point),
+  // while `--resume` also replays unchanged steps. An ordinary run still touches
+  // nothing (no read, no write, no directory created).
+  // A2 — a resume request OR an explicit `--checkpoint` opens the record. The
+  // difference is what the request carries: `--checkpoint` alone opens the
+  // record for THIS ask with nothing to replay (writing it forward is the point,
+  // `replay: false`), while `--resume` also replays unchanged steps. An ordinary
+  // call still touches nothing — B4's default-on policy belongs to the `execute`
+  // COMMAND (see execute.ts), not to this primitive, so the parity surfaces that
+  // drive this function directly stay byte-identical.
   const resumeRequest = resolveResumeRequest({ resume: opts.resume });
-  // Opened only when a resume was asked for: an ordinary run never touches the
-  // record store (no read, no write, no directory created).
-  const resume: OpenResume | null = resumeRequest
-    ? openResume({ goal, cwd: turnCwd, resume: resumeRequest })
+  const openRequest = resumeRequest ?? (opts.checkpoint ? {} : undefined);
+  const resume: OpenResume | null = openRequest
+    ? openResume({ goal, cwd: turnCwd, resume: openRequest, replay: resumeRequest !== undefined })
     : null;
   if (worktree && !opts.quiet) logger.info(worktreeNotice(worktree));
   // WS5 — what the RECORD holds, said before the run. The outcome is reported by
   // `finishResult` below, where the counts are real (see `StepReplay.openNotice`).
   if (resume && !opts.quiet) logger.info(resume.ledger.openNotice());
+  // Phase 4b/4c — the session store. DEFAULT ON (like checkpointing): a run
+  // snapshots its live thread at each step boundary so a process that dies
+  // mid-turn leaves a conversation the next one can pick up. A user turns it off
+  // with `memory.sessionStore=false`, `NUVIRA_SESSION_STORE=0`, or
+  // `--no-session-store` (resolved with flags > env > config > default).
+  const sessionStoreOn = resolveSessionStore({ flag: opts.sessionStore, configManager });
+  const session: SessionStore | null = sessionStoreOn ? openSession({ goal, cwd: turnCwd }) : null;
+  // Phase 4 follow-on — semantic recall, also DEFAULT ON.
+  const sessionRecallOn = resolveSessionRecall({ flag: opts.sessionRecall, configManager });
   /**
    * Attach this run's isolation and resume outcomes to whatever it returns.
    *
@@ -635,7 +696,7 @@ export async function runLoopExecutor(
   let projectContext: string | undefined;
   if (!opts.skipProjectContext) {
     try {
-      const built = await buildLoopProjectContext(turnCwd);
+      const built = await buildLoopProjectContext(turnCwd, { goal, sessionRecall: sessionRecallOn });
       if (built) projectContext = built;
     } catch {
       projectContext = undefined; // best-effort — never breaks the turn
@@ -666,11 +727,30 @@ export async function runLoopExecutor(
   const { runToolLoop } = await import('../tools/tool-loop.js');
   const { getTool, TOOL_CONTRACT_JSON } = await import('../tools/registry.js');
 
-  const thread: ToolMessage[] = [
+  const head: ToolMessage[] = [
     { role: 'system', content: buildExecuteLoopSystemPrompt(TOOL_CONTRACT_JSON) + skillHint },
     ...(projectContext ? [{ role: 'user' as const, content: `[Project context]\n${projectContext}` }] : []),
-    { role: 'user', content: goal },
   ];
+  let thread: ToolMessage[] = [...head, { role: 'user', content: goal }];
+
+  // Phase 4c — REHYDRATE on an explicit resume. A session snapshot left OPEN by
+  // a process that died mid-turn is replayed as the conversation the loop starts
+  // from: the dead run's completed steps are already IN the thread, so they are
+  // neither re-run nor re-paid. The stored head (system prompt + project context)
+  // is replaced by this run's FRESH head — the contract is current, the history
+  // is intact. Only OPEN sessions qualify (a finished transcript is history).
+  // Best-effort: a corrupt/missing snapshot is a cold start, exactly as before.
+  if (sessionStoreOn) {
+    try {
+      const prior = findResumableSessionFor(goal, turnCwd);
+      if (prior) {
+        thread = rehydrateThread(head, prior);
+        if (!opts.quiet) logger.info(formatSessionResume(prior));
+      }
+    } catch {
+      // Best-effort — a rehydration failure must never break the turn.
+    }
+  }
 
   const loadedExtraTools = new Set<string>();
   const erroredTools: string[] = [];
@@ -770,6 +850,15 @@ export async function runLoopExecutor(
     };
 
     let lastErr: unknown;
+    // ── G1 — SAME-STEP HAND-OFF ──────────────────────────────────────────────
+    // The candidate walk runs per STEP (callModel is the loop's per-step model
+    // call), so a candidate that fails mid-step is followed, in THIS SAME step,
+    // by another candidate reading the SAME thread. Until now the freshly
+    // recorded hand-off was only visible on the NEXT context build, so the next
+    // candidate continued the thread but was not told what the ask's deliverable
+    // still owed. Seed the next candidate's messages with the just-written
+    // hand-off so "another model takes over" also means "and knows what is left".
+    let nextMessages = messages;
     for (const cand of walk) {
       if (abort?.aborted) break;
       const key = pairKey(cand.provider, cand.model);
@@ -803,7 +892,7 @@ export async function runLoopExecutor(
         // answering "which model are you?" about a model that stopped serving
         // it several steps earlier.
         servedRoute = noteServedRoute(servedRoute, servedRouteFrom(route));
-        const resp = await tryOnce(prov, mdl, messages, schemas, abort);
+        const resp = await tryOnce(prov, mdl, nextMessages, schemas, abort);
         // ── ANSWER-QUALITY GATE ──────────────────────────────────────────
         // A reply that is the model's own REASONING, or its narration of the
         // tool contract, is not a deliverable — and it never THROWS, so this
@@ -894,7 +983,7 @@ export async function runLoopExecutor(
         // named — reconciled against the filesystem on every later read, so the
         // incoming model is told what is genuinely still outstanding.
         try {
-          recordStepHandoff({
+          const handoff = recordStepHandoff({
             projectPath: turnCwd,
             goal,
             stepDescription: goal,
@@ -903,6 +992,13 @@ export async function runLoopExecutor(
             kind: qualityKind ? 'quality' : 'failed',
             reason: err instanceof Error ? err.message : String(err),
           });
+          // G1 — carry the RECORDED state (reconciled against disk) into the
+          // next candidate of this same step. Bounded to one block, based on the
+          // ORIGINAL messages so repeated failures replace rather than stack.
+          // `formatHandoffs` returns '' when the step has nothing outstanding,
+          // so a failure with no deliverable adds no prompt weight.
+          const note = formatHandoffs([handoff]);
+          if (note) nextMessages = [...messages, { role: 'user', content: note }];
         } catch {
           // Best-effort — a hand-off write must never mask the generation error.
         }
@@ -947,6 +1043,26 @@ export async function runLoopExecutor(
       // WS5 (#27) — the resume ledger, when this run was asked to resume.
       // Omitted otherwise, so an ordinary run never consults it.
       ...(resume ? { resume: resume.ledger } : {}),
+      // Phase 4c — snapshot the conversation at every step boundary, so a
+      // process death mid-turn leaves a resumable session behind. Omitted on an
+      // ordinary run, which is then byte-identical to before.
+      ...(session
+        ? {
+            onStep: (step: {
+              thread: readonly ToolMessage[];
+              steps: number;
+              successfulTools: readonly string[];
+              mutatedPaths: readonly string[];
+            }) => {
+              session.save(step.thread, {
+                steps: step.steps,
+                successfulTools: [...step.successfulTools],
+                mutatedPaths: [...step.mutatedPaths],
+                ...(erroredTools.length > 0 ? { erroredTools: [...erroredTools] } : {}),
+              });
+            },
+          }
+        : {}),
       onToken: opts.onToken,
       signal: opts.signal,
       context: {
@@ -1061,20 +1177,59 @@ export async function runLoopExecutor(
     // paths record: a declined call, an unverified edit, an unsatisfied
     // deliverable and a dropped promise are all facts about the turn, and the
     // outcome is what the Trace tab reads instead of "the model answered".
-    endTrace(
-      traceId,
-      !result.generationFailed,
-      buildTraceOutcome({
-        generationFailed: result.generationFailed,
-        cancelled: result.cancelled,
-        tools: result.successfulToolCalls ?? result.toolCalls,
-        unverifiedActionClaim: result.unverifiedActionClaim,
-        unfulfilledPromise: result.unfulfilledPromise,
-        unverifiedEdit: result.unverifiedEdit,
-        unverifiedEditClaim: result.unverifiedEditClaim,
-        undeliveredArtifact: result.undeliveredArtifact,
-      }),
-    );
+    const loopOutcome = buildTraceOutcome({
+      generationFailed: result.generationFailed,
+      cancelled: result.cancelled,
+      tools: result.successfulToolCalls ?? result.toolCalls,
+      unverifiedActionClaim: result.unverifiedActionClaim,
+      unfulfilledPromise: result.unfulfilledPromise,
+      unverifiedEdit: result.unverifiedEdit,
+      unverifiedEditClaim: result.unverifiedEditClaim,
+      unverifiedBuildClaim: result.unverifiedBuildClaim,
+      undeliveredArtifact: result.undeliveredArtifact,
+    });
+    // A cancelled / failed / incomplete run is NOT a success (A3).
+    endTrace(traceId, traceOutcomeSucceeded(loopOutcome), loopOutcome);
+
+    // Phase 4 / G6 — the DETERMINISTIC cross-session memory: record what this
+    // ask DID and how it ended, so a later session in this project inherits
+    // history (not a status). Advisory only — completion still derives from disk
+    // (see session-digest.ts for why this is not an LLM summary). Best-effort.
+    try {
+      recordSessionTurn({
+        projectPath: turnCwd,
+        goal,
+        outcome: loopOutcome.kind,
+        tools: toolOutcomes.filter((t) => t.ok).map((t) => t.tool),
+        verified: toolOutcomes.some((t) => t.ok && isVerificationTool(t.tool)),
+      });
+    } catch {
+      // Best-effort — a digest write must never break a turn.
+    }
+
+    // Phase 4 follow-on — index this ask for SEMANTIC recall. A no-op unless
+    // `NUVIRA_SESSION_RECALL` is on (so an ordinary run pays nothing), and
+    // best-effort even then: a recall index write must never break a turn.
+    try {
+      await indexSessionTurn(
+        { projectPath: turnCwd, goal, outcome: loopOutcome.kind },
+        { enabled: sessionRecallOn },
+      );
+    } catch {
+      // Best-effort — omit on failure.
+    }
+
+    // Phase 4b/4c — a turn that reached a CLEAN end closes its session: the
+    // transcript becomes history, so a later reworded re-ask rehydrates nothing
+    // and starts fresh (the work is done). A failed or cancelled turn stays OPEN
+    // on disk and remains resumable. Best-effort.
+    if (session && result.generationFailed !== true && result.cancelled !== true) {
+      try {
+        session.finish();
+      } catch {
+        // Best-effort — closing a session must never break the turn.
+      }
+    }
 
     // WS1 (#23) — persist the run's findings on its trace too, so a `nuvira
     // execute` turn's verdicts are auditable from the Trace tab exactly like a

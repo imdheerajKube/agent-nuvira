@@ -24,7 +24,8 @@
 
 import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { join, parse, resolve } from 'node:path';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -161,6 +162,36 @@ export function detectRegressionSignal(userMessage: string): boolean {
 }
 
 // ─── API ────────────────────────────────────────────────────────────────────
+
+/**
+ * Is this directory a PROJECT the ledger may speak for?
+ *
+ * The ledger block is injected as "carried from previous turns in THIS project",
+ * which is a claim about a workspace. Two directories can never honestly make
+ * that claim:
+ *  - the HOME directory — a container of unrelated checkouts, not a project;
+ *  - a filesystem ROOT — the same reason, and nothing to edit there.
+ *
+ * This fixes a real, reported defect. With no folder attached, a dashboard turn
+ * ran in the server process's own cwd; when that was `$HOME`, the home
+ * directory's ledger — whose `filesTouched` had accumulated edits under
+ * `~/Documents/kuttaaddon` — was injected as THIS project's working state. Asked
+ * "what's the state of this project?", the agent answered by describing that NVDA
+ * add-on, a project the user never mentioned, and it was right to: the block it
+ * was handed said those files were this project's. The ledger was accurate; the
+ * DIRECTORY was not a project, so the claim was false.
+ */
+export function isProjectLedgerDir(dir: string): boolean {
+  try {
+    const abs = resolve(dir);
+    if (abs === resolve(homedir())) return false;
+    if (abs === parse(abs).root) return false;
+    return true;
+  } catch {
+    // An unresolvable path is not evidence either way — keep the old behavior.
+    return true;
+  }
+}
 
 /** Read one project's state (null when nothing has been recorded). */
 export function getWorkingState(projectPath: string): ProjectWorkingState | null {

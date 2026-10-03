@@ -299,6 +299,18 @@ describe('doctor --enterprise (P7 M7.1)', () => {
     expect(factCheck!.message).toMatch(/fact\(s\)/);
   }, 60_000);
 
+  it('runSystemChecks reports the vector backend + entry counts as one line', async () => {
+    const { ConfigManager } = await import('../../src/config/manager.js');
+    const cm = new ConfigManager();
+    const { system } = await runAllChecks(cm);
+    const check = system.find((c) => c.name === 'Vector Index');
+    expect(check).toBeDefined();
+    expect(['pass', 'warn', 'fail']).toContain(check!.status);
+    // The backend name the dashboard Cache/Memory panels and `memory backend` agree on.
+    expect(check!.message).toMatch(/(faiss-native|faiss-ivf|json)/);
+    expect(check!.message).toMatch(/vector\(s\) across \d+ namespace\(s\)/);
+  }, 60_000);
+
   it('runAllChecks (dashboard command-runner shared core) returns both system and enterprise arrays', async () => {
     // The dashboard's /api/admin/checks calls this SAME function as
     // `nuvira doctor` — one source. A ConfigManager with no config must not

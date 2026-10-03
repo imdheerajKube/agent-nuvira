@@ -156,6 +156,133 @@ describe('I3 image generation', () => {
   });
 });
 
+// ─── I3b image providers (BYOK) ─────────────────────────────────────────────
+
+import {
+  resolveImageProvider,
+  availableImageProviders,
+} from '../../src/tools/modality/image-providers.js';
+
+/** Env vars the image registry reads — cleared so tests stay hermetic. */
+const IMAGE_KEY_ENVS = [
+  'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENAI_API_KEY', 'STABILITY_API_KEY',
+  'NUVIRA_GEMINI_API_KEY', 'BUFF_GEMINI_API_KEY',
+  'NUVIRA_OPENAI_API_KEY', 'BUFF_OPENAI_API_KEY',
+  'NUVIRA_STABILITY_API_KEY', 'BUFF_STABILITY_API_KEY',
+  'NUVIRA_IMAGE_API_URL', 'BUFF_IMAGE_API_URL', 'IMAGE_API_URL',
+];
+function clearImageEnv(): void {
+  for (const k of IMAGE_KEY_ENVS) delete process.env[k];
+}
+
+describe('I3b image providers (BYOK)', () => {
+  afterEach(() => {
+    clearImageEnv();
+    vi.restoreAllMocks();
+  });
+
+  it('auto-selects the first keyed provider (Gemini outranks the free fallback)', () => {
+    clearImageEnv();
+    process.env.GEMINI_API_KEY = 'g';
+    expect(resolveImageProvider()).toBe('gemini');
+    clearImageEnv();
+    process.env.OPENAI_API_KEY = 'o';
+    expect(resolveImageProvider()).toBe('openai');
+    clearImageEnv();
+    process.env.STABILITY_API_KEY = 's';
+    expect(resolveImageProvider()).toBe('stability');
+  });
+
+  it('an explicit provider id wins over auto-detection', () => {
+    clearImageEnv();
+    process.env.GEMINI_API_KEY = 'g';
+    expect(resolveImageProvider('stability')).toBe('stability');
+    expect(resolveImageProvider('not-a-provider')).toBe('gemini');
+  });
+
+  it('generates via Imagen (:predict) when the model is an imagen-* id', async () => {
+    clearImageEnv();
+    process.env.GEMINI_API_KEY = 'g';
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ predictions: [{ bytesBase64Encoded: Buffer.from('IMAGEN').toString('base64'), mimeType: 'image/png' }] }),
+    } as unknown as Response));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await generateImage('an imagen test', { model: 'imagen-3.0-generate-002' });
+    expect(result.ok).toBe(true);
+    expect(readFileSync(result.file!)).toEqual(Buffer.from('IMAGEN'));
+    expect(fetchMock.mock.calls[0][0]).toContain('imagen-3.0-generate-002:predict');
+  });
+
+  it('generates via a Gemini image model (generateContent inlineData)', async () => {
+    clearImageEnv();
+    process.env.GEMINI_API_KEY = 'g';
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ inlineData: { data: Buffer.from('NANO').toString('base64'), mimeType: 'image/png' } }] } }],
+      }),
+    } as unknown as Response));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await generateImage('nano banana prompt');
+    expect(result.ok).toBe(true);
+    expect(readFileSync(result.file!)).toEqual(Buffer.from('NANO'));
+    expect(fetchMock.mock.calls[0][0]).toContain(':generateContent');
+  });
+
+  it('generates via OpenAI and sends the Bearer key', async () => {
+    clearImageEnv();
+    process.env.OPENAI_API_KEY = 'o';
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ data: [{ b64_json: Buffer.from('DALLE').toString('base64') }] }),
+    } as unknown as Response));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await generateImage('a dall-e prompt', { provider: 'openai' });
+    expect(result.ok).toBe(true);
+    expect(readFileSync(result.file!)).toEqual(Buffer.from('DALLE'));
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer o');
+    expect(fetchMock.mock.calls[0][0]).toContain('api.openai.com/v1/images/generations');
+  });
+
+  it('generates via Stability when it returns raw image bytes', async () => {
+    clearImageEnv();
+    process.env.STABILITY_API_KEY = 's';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        headers: { get: () => 'image/png' },
+        arrayBuffer: async () => Buffer.from('STABILITY'),
+      } as unknown as Response)),
+    );
+    const result = await generateImage('stability prompt', { provider: 'stability' });
+    expect(result.ok).toBe(true);
+    expect(readFileSync(result.file!)).toEqual(Buffer.from('STABILITY'));
+  });
+
+  it('falls back to Pollinations when the configured keyed backend fails', async () => {
+    clearImageEnv();
+    process.env.OPENAI_API_KEY = 'o';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+      .mockResolvedValueOnce({ ok: true, arrayBuffer: async () => Buffer.from('FREE') } as unknown as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await generateImage('fallback prompt');
+    expect(result.ok).toBe(true);
+    expect(readFileSync(result.file!)).toEqual(Buffer.from('FREE'));
+    expect(fetchMock.mock.calls[1][0] as string).toContain('image.pollinations.ai');
+  });
+
+  it('availableImageProviders always includes the free fallback', () => {
+    clearImageEnv();
+    expect(availableImageProviders()).toEqual(['pollinations']);
+    process.env.GEMINI_API_KEY = 'g';
+    expect(availableImageProviders()).toContain('gemini');
+  });
+});
+
 // ─── I4 voice ───────────────────────────────────────────────────────────────
 
 import {

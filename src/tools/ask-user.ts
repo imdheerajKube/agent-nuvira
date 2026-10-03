@@ -12,6 +12,12 @@ import { logger } from '../utils/logger.js';
 import type { AskUserAnswer, AskUserChoice } from './registry.js';
 
 /**
+ * C1 — the label of the "type my own answer" choice appended to every ask_user
+ * list. Exported so surfaces and tests agree on the exact wording.
+ */
+export const OTHER_CHOICE_LABEL = '✏️ Other — type my own answer';
+
+/**
  * Render an in-loop clarification.
  *
  * NON-INTERACTIVE SAFETY: with no TTY there is nobody to press a key, and
@@ -62,13 +68,22 @@ export async function renderAskUser(
     };
   }
 
+  // C1 — the model offers 2–4 choices, but the user's real answer is sometimes
+  // none of them. Without this the only ways out were picking a wrong option or
+  // Skip; the `custom` field was plumbed end-to-end (AskUserAnswer.custom →
+  // registry → dashboard `chatRespond`) yet no surface ever let a human type one.
+  const other: AskUserChoice = {
+    label: OTHER_CHOICE_LABEL,
+    description: 'type an answer that is not in the list',
+  };
+
   const prompt = multiSelect
     ? {
         type: 'checkbox' as const,
         name: 'answer',
         message: 'Select all that apply (space to toggle, Enter to confirm):',
         prefix: '🔀',
-        choices: choices.map((c) => ({ name: c.label, value: c.label })),
+        choices: [...choices, other].map((c) => ({ name: c.label, value: c.label })),
         pageSize: 8,
       }
     : {
@@ -76,20 +91,54 @@ export async function renderAskUser(
         name: 'answer',
         message: 'Choose one:',
         prefix: '🔀',
-        choices: choices.map((c) => ({
+        choices: [...choices, other].map((c) => ({
           name: c.description ? `${c.label} — ${c.description}` : c.label,
           value: c.label,
         })),
-        pageSize: 8,
+        pageSize: 9,
       };
 
   const { answer } = await inquirer.prompt<{ answer: string | string[] }>(prompt);
-
   console.log('');
-  const labels = Array.isArray(answer) ? answer : [answer];
+
+  // Single-select "Other": ask for the free text and return it as the answer.
+  if (!multiSelect && answer === OTHER_CHOICE_LABEL) {
+    const typed = await promptForCustomText();
+    if (!typed) {
+      // An empty entry is a decline, not an answer of "other").
+      return { answer: '', index: -1 };
+    }
+    return { answer: typed, index: -1, custom: typed };
+  }
+
+  const labels = (Array.isArray(answer) ? answer : [answer]).filter((l) => l !== OTHER_CHOICE_LABEL);
   const indices = labels.map((label) => choices.findIndex((c) => c.label === label));
+  // Multi-select "Other": the typed text joins the selection.
+  let custom: string | undefined;
+  if (multiSelect && (Array.isArray(answer) ? answer : [answer]).includes(OTHER_CHOICE_LABEL)) {
+    custom = await promptForCustomText();
+  }
+  const finalLabels = custom ? [...labels, custom] : labels;
   return {
-    answer,
+    answer: multiSelect ? finalLabels : finalLabels[0] ?? '',
     index: multiSelect ? indices : indices[0] ?? -1,
+    ...(custom ? { custom } : {}),
   };
+}
+
+/** Ask for the free-text answer behind the "Other" choice. */
+async function promptForCustomText(): Promise<string> {
+  try {
+    const { text } = await inquirer.prompt<{ text: string }>([
+      {
+        type: 'input',
+        name: 'text',
+        message: 'Type your answer (Enter to skip):',
+        prefix: '✏️',
+      },
+    ]);
+    return String(text ?? '').trim();
+  } catch {
+    return '';
+  }
 }

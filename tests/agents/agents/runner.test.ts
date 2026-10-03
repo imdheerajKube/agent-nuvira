@@ -1088,6 +1088,37 @@ describe('RunnerAgent', () => {
       expect(detectInstallPlan(tmpDir).tool).toBe('pip');
     });
 
+    it('prefers poetry for a pyproject.toml with a [tool.poetry] table', () => {
+      writeFileSync(
+        join(tmpDir, 'pyproject.toml'),
+        '[tool.poetry]\nname = "demo"\n\n[tool.poetry.dependencies]\npython = "^3.11"\nrequests = "^2.31"\n',
+        'utf-8',
+      );
+      const plan = detectInstallPlan(tmpDir);
+      expect(plan.tool).toBe('poetry');
+      expect(plan.command).toBe('poetry install');
+    });
+
+    it('prefers poetry when a poetry.lock exists', () => {
+      writeFileSync(join(tmpDir, 'pyproject.toml'), '[project]\nname = "demo"\n', 'utf-8');
+      writeFileSync(join(tmpDir, 'poetry.lock'), '# generated\n', 'utf-8');
+      expect(detectInstallPlan(tmpDir).tool).toBe('poetry');
+    });
+
+    it('detects pipenv for a Pipfile (Ahead of requirements.txt)', () => {
+      writeFileSync(join(tmpDir, 'Pipfile'), '[packages]\nrequests = "*"\n', 'utf-8');
+      writeFileSync(join(tmpDir, 'requirements.txt'), 'requests\n', 'utf-8');
+      const plan = detectInstallPlan(tmpDir);
+      expect(plan.tool).toBe('pipenv');
+      expect(plan.command).toBe('pipenv install');
+      expect(plan.manifest).toBe('Pipfile');
+    });
+
+    it('does not treat a plain [project] pyproject.toml as poetry', () => {
+      writeFileSync(join(tmpDir, 'pyproject.toml'), '[project]\nname = "demo"\ndependencies = ["requests"]\n', 'utf-8');
+      expect(detectInstallPlan(tmpDir).tool).toBe('pip');
+    });
+
     it('detects bundle for Gemfile', () => {
       writeFileSync(join(tmpDir, 'Gemfile'), 'source "https://rubygems.org"', 'utf-8');
       const plan = detectInstallPlan(tmpDir);
@@ -1187,6 +1218,70 @@ describe('RunnerAgent', () => {
       } finally {
         spy.mockRestore();
       }
+    });
+  });
+
+  // ─── Environment Guard (C2) ────────────────────────────────────────────
+  //
+  // The pipeline runner is the second place a Python command executes (the
+  // chat loop's run_terminal is the first). It must apply the SAME pre-run
+  // guard: a project that declares dependencies but has no virtualenv must not
+  // get its packages installed into the system interpreter — the live
+  // Aukat_check failure.
+
+  describe('environment guard', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = mkdtempSync(join(tmpdir(), 'buff-runner-guard-'));
+    });
+
+    afterEach(() => {
+      rmSync(tmpDir, { recursive: true, force: true });
+      delete process.env.NUVIRA_ENV_GUARD;
+    });
+
+    it('refuses a Python install that names an interpreter outside the project venv', async () => {
+      writeFileSync(join(tmpDir, 'requirements.txt'), 'requests\n', 'utf-8');
+      const ctx = makeContext({
+        workingDirectory: tmpDir,
+        taskPlan: [
+          { id: 'step-1', description: 'Run: /usr/local/bin/python3 -m pip install requests', agentType: 'runner', dependsOn: [], status: 'running' },
+        ],
+      });
+
+      const result = await runner.execute(ctx, async () => '');
+      expect(result.success).toBe(false);
+      expect(result.summary).toContain('Environment guard blocked');
+      expect(String(result.error)).toContain('virtualenv');
+      // Nothing ran — no runResult was recorded.
+      expect(ctx.metadata['runResult']).toBeUndefined();
+    });
+
+    it('refuses a --user install (never the project env)', async () => {
+      const ctx = makeContext({
+        workingDirectory: tmpDir,
+        taskPlan: [
+          { id: 'step-1', description: 'Run: pip install --user requests', agentType: 'runner', dependsOn: [], status: 'running' },
+        ],
+      });
+
+      const result = await runner.execute(ctx, async () => '');
+      expect(result.success).toBe(false);
+      expect(String(result.error)).toContain('virtualenv');
+    });
+
+    it('lets a non-Python command through untouched', async () => {
+      const ctx = makeContext({
+        workingDirectory: tmpDir,
+        taskPlan: [
+          { id: 'step-1', description: 'Run: echo guard_passthrough', agentType: 'runner', dependsOn: [], status: 'running' },
+        ],
+      });
+
+      const result = await runner.execute(ctx, async () => '');
+      expect(result.success).toBe(true);
+      expect(result.details).toContain('guard_passthrough');
     });
   });
 

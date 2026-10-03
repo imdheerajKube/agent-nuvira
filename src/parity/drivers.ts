@@ -631,6 +631,22 @@ async function withToolHooks(
   }
 }
 
+/**
+ * B4 — the ENV the `execute` COMMAND reads to opt out of its default checkpoint.
+ *
+ * Checkpointing is default-ON for `nuvira execute` (a rollout policy on the
+ * command, so an interrupted run leaves something to continue from), but the
+ * surfaces this harness drives through the shared loop primitive do NOT open a
+ * record on an ordinary turn. The parity comparison is about CAPABILITY, so the
+ * command default is pinned OFF for the whole run: left on, the `cli-execute`
+ * driver would report `resume.saved: true` while the four primitive surfaces
+ * report `false`, and every row would measure a policy default instead of the
+ * behaviour under test. An explicit `--resume` still works — it resolves through
+ * `NUVIRA_RESUME` (`RESUME_ENABLE_ENV`), which the envelope sets per scenario —
+ * so the `partial-resume` probe is unaffected. Restored in `dispose()`.
+ */
+const CHECKPOINT_ENABLE_ENV = 'NUVIRA_CHECKPOINT';
+
 // ─── The turn envelope (WS5: isolation and resume) ──────────────────────────
 
 /**
@@ -1526,6 +1542,10 @@ export async function createParityHarness(): Promise<ParityHarness> {
     // WS6 (#28) — same rule: the harness DECLARES a fault per scenario, so a
     // declaration inherited from the shell must not arm one for every scenario.
     fault: process.env[FAULT_ENV],
+    // B4 — the `execute` command's rollout default, pinned off for the run (see
+    // CHECKPOINT_ENABLE_ENV). A value inherited from the shell must not decide
+    // whether every row compares a command default or a capability.
+    checkpoint: process.env[CHECKPOINT_ENABLE_ENV],
   };
   process.env.NUVIRA_CONFIG_DIR = workspace.configDir;
   process.env.NUVIRA_MEMORY_DIR = workspace.memoryDir;
@@ -1543,6 +1563,12 @@ export async function createParityHarness(): Promise<ParityHarness> {
   // WS6 (#28) — and no fault, until a scenario declares one.
   delete process.env[FAULT_ENV];
   resetFaultInjector();
+  // B4 — checkpointing is a COMMAND default, not a surface capability, so it is
+  // off for the duration (restored in `dispose()`). Without this the `cli-execute`
+  // driver — the only one that drives the real command's own path — reports a
+  // saved resume point that no other surface has, and every row reads as a
+  // divergence about policy rather than about the behaviour under test.
+  process.env[CHECKPOINT_ENABLE_ENV] = 'off';
   // The legacy aliases would otherwise win on the modules that check them, and
   // point half the run back at the developer's real profile.
   delete process.env.BUFF_CONFIG_DIR;
@@ -1610,6 +1636,8 @@ export async function createParityHarness(): Promise<ParityHarness> {
       else process.env[RESUME_ENABLE_ENV] = previous.resume;
       if (previous.fault === undefined) delete process.env[FAULT_ENV];
       else process.env[FAULT_ENV] = previous.fault;
+      if (previous.checkpoint === undefined) delete process.env[CHECKPOINT_ENABLE_ENV];
+      else process.env[CHECKPOINT_ENABLE_ENV] = previous.checkpoint;
       resetFaultInjector();
       // Tear the LAST surface's provider down too: a test file that runs several
       // parity runs in a row would otherwise inherit the first one's provider,
