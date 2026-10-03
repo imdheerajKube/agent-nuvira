@@ -191,6 +191,24 @@ Manage status recipients — contacts/groups that ALWAYS get pipeline completion
 
 Ask-and-wait for clarifying questions on messaging channels: when a turn asks the sender a question, hold it for their reply instead of assuming option 1
 
+### `nuvira config service`
+
+Manage third-party service keys (image/video/search/vision/speech) in ~/.nuvira/.env
+
+### `nuvira config service list`
+
+Show every service backend and its env-var status
+
+### `nuvira config service set`
+
+Set a service key: config service set <serviceId> <ENV_VAR> <value> (or --set VAR=value)
+
+   - flags: `--set <set>`
+### `nuvira config service unset`
+
+Remove a service key (all vars, or one with [varName]) from the env file
+
+   - flags: `--yes`
 ### `nuvira cache`
 
 Manage inference cache
@@ -201,8 +219,9 @@ Show cache statistics
 
 ### `nuvira cache clear`
 
-Clear all cached responses
+Clear cached responses — all of them, or one workspace (project folder)
 
+   - flags: `--unscoped`
 ### `nuvira models`
 
 List available models from inference providers
@@ -242,7 +261,7 @@ Run the model-registry maintenance daemon: probe + spot-check on a schedule
 
 Run a multi-agent pipeline to accomplish a goal
 
-   - flags: `--auto-branch, --auto-route, --checkpoint, --checkpoint-list, --context-limit <context_limit>, --context-prune <context_prune>, --dry-run, --engine <engine>, --gatherer-model <gatherer_model>, --json-events, --keep-worktree, --max-repairs <max_repairs>, --memory, --memory-clear, --memory-stats, --model <model>, --no-tool-calling, --plan-mode <plan_mode>, --planner-model <planner_model>, --provider <provider>, --repair-fallback-models <repair_fallback_models>, --repair-mode <repair_mode>, --resume [resume], --review, --reviewer-model <reviewer_model>, --sandbox, --skip-tests, --tool-calling, --verbose, --worktree, --writer-model <writer_model>`
+   - flags: `--auto-branch, --auto-route, --checkpoint, --checkpoint-list, --context-limit <context_limit>, --context-prune <context_prune>, --dry-run, --engine <engine>, --gatherer-model <gatherer_model>, --json-events, --keep-worktree, --max-repairs <max_repairs>, --memory, --memory-clear, --memory-stats, --model <model>, --no-session-recall, --no-session-store, --no-tool-calling, --plan-mode <plan_mode>, --planner-model <planner_model>, --provider <provider>, --repair-fallback-models <repair_fallback_models>, --repair-mode <repair_mode>, --resume [resume], --review, --reviewer-model <reviewer_model>, --sandbox, --session-recall, --session-store, --skip-tests, --tool-calling, --verbose, --worktree, --writer-model <writer_model>`
 ### `nuvira run`
 
 Execute a shell command and show output (lightweight alternative to the full pipeline)
@@ -1350,6 +1369,19 @@ Step-by-step replay of a trace — every LLM call with prompt digest, model, tok
 
 Delete all stored traces
 
+### `nuvira continuity`
+
+Session continuity — what is stored, and how to forget it
+
+### `nuvira continuity list`
+
+Show the continuity switches, stored sessions, and the semantic recall index
+
+### `nuvira continuity clear`
+
+Forget stored continuity data (no flags = both sessions and recall)
+
+   - flags: `--recall, --sessions`
 ---
 
-*437 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*448 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

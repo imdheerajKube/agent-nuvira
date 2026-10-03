@@ -110,6 +110,17 @@ jobs:
         run: npm run build
         shell: bash
 
+      # The generated surface doc + the dashboard's commands.json picker are
+      # derived from the live command tree; a command added or renamed without
+      # regenerating leaves both stale. Windows is a useful second check of the
+      # generator's path handling (it imports dist via a file URL, which used to
+      # throw on a bare `D:\...` path).
+      - name: Command registry in sync (surface doc + dashboard catalogue)
+        run: npm run docs:commands:check
+        shell: bash
+        env:
+          NO_COLOR: '1'
+
       # Registered != runnable. Executes every documented command with
       # `nuvira <cmd> --help` so a command that only resolves in the docs fails
       # in CI instead of for a user. Windows matters most here: argv/path

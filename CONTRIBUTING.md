@@ -90,6 +90,38 @@ chore: bump version to v1.17.0
 
 ---
 
+## Adding or changing a CLI command — the central registry
+
+The CLI surface has ONE source of truth and two derived artifacts. When you add,
+rename, or change a command, keep all three in step:
+
+| Artifact | Role |
+|---|---|
+| `src/cli/cli-program.ts` (`createCLI`) | **Source of truth** — every command class is registered here |
+| `docs/COMMANDS_SURFACE.md` | **Generated** from the live command tree — the authoritative list of what EXISTS |
+| `src/web-dashboard/src/generated/commands.json` | **Generated** — the dashboard Command Console picker catalogue (bundled) |
+| `docs/COMMANDS.md` | **Curated prose** — objective + command + copy-pasteable example per entry (hand-maintained) |
+
+The generator emits BOTH the surface doc and the dashboard catalogue from one
+traversal, so they cannot disagree. After adding a command (and a class in
+`src/cli/` that extends `BaseCommand`, registered in `cli-program.ts`):
+
+```bash
+npm run build:cli          # the generator imports the BUILT dist/cli/cli-program.js
+npm run docs:commands      # regenerate COMMANDS_SURFACE.md + commands.json
+# then hand-update docs/COMMANDS.md (objective + example), and add its row to the appendix
+npm run docs:commands:check   # CI drift guard: exit 1 if the surface or catalogue is stale
+npm run build:dashboard       # rebuild the bundle so the picker picks up the new catalogue
+node scripts/verify-commands.mjs   # every surface command must actually resolve (`--help`)
+```
+
+`tests/docs/commands-surface.test.ts` enforces both: the generated surface must
+match the live tree, and every command must appear somewhere in the curated
+`docs/COMMANDS.md`. Forgetting the curated doc is a test failure, not a silent
+drift.
+
+---
+
 ## What to Contribute
 
 | Area | Ideas | Skill Level |

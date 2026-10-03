@@ -377,14 +377,21 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ### 3.2 Multi-agent pipeline execution
 
 - **Objective:** Run the full planner→gatherer→writer→reviewer pipeline on a goal.
-- **Command:** `nuvira execute "<goal>" [-p <provider>] [-m <model>] [--planner-model …] [--dry-run] [--review] [--memory] [--checkpoint] [--resume]`
+- **Command:** `nuvira execute "<goal>" [-p <provider>] [-m <model>] [--planner-model …] [--dry-run] [--review] [--memory] [--checkpoint] [--resume] [--session-store] [--session-recall]`
 - **Examples:**
   ```bash
   nuvira execute "add a login page to the API"
   nuvira execute "fix the flaky test" --review --memory
   nuvira execute "refactor auth" --dry-run          # plan only, don't write files
   nuvira execute "migrate to v2" --checkpoint       # save progress for --resume later
+  nuvira execute "finish the refactor" --session-store   # persist the conversation across process death
+  nuvira execute "keep going" --no-session-recall        # skip semantic recall of past asks
   ```
+- **Continuity flags (default ON):** `--session-store` persists the live conversation at every step
+  so a killed process can resume, and `--session-recall` surfaces semantically similar past asks.
+  Both are ON unless you turn them off (`--no-session-store` / `--no-session-recall`, the
+  `NUVIRA_SESSION_STORE` / `NUVIRA_SESSION_RECALL` env vars, or `memory.sessionStore` /
+  `memory.sessionRecall` in config). See §12.13 to inspect or forget what they store.
 
 ### 3.3 AI-assisted file edit
 
@@ -439,6 +446,21 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira config set defaultProvider groq
   nuvira config get defaultProvider
   nuvira config init                          # interactive defaults (already set? shows them)
+  ```
+
+### 4.2b Third-party service keys (image / video / search / vision / speech)
+
+- **Objective:** Configure the service backends the agent calls directly — Nano Banana / DALL·E /
+  Stability image generation, FAL video, Brave / Serper / Tavily / Google CSE / SearXNG search, Jina
+  page reading, vision and TTS — writing their keys to `~/.nuvira/.env`. The same keys are editable in
+  the dashboard's Admin → Service Provider API Keys section.
+- **Command:** `nuvira config service list` · `nuvira config service set <serviceId> [ENV_VAR] [value] [--set VAR=value]` · `nuvira config service unset <serviceId> [ENV_VAR]`
+- **Examples:**
+  ```bash
+  nuvira config service list                                          # every backend + env status
+  nuvira config service set search-brave BRAVE_SEARCH_API_KEY bsa_…   # one key
+  nuvira config service set image-gemini --set GEMINI_API_KEY=AIza…   # Nano Banana
+  nuvira config service unset search-brave BRAVE_SEARCH_API_KEY --yes
   ```
 
 ### 4.3 Secret vault
@@ -715,6 +737,26 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ---
 
 ## 7. Learning, memory & feedback
+
+### 7.0 Continuity store — inspect and forget what the agent remembers
+
+- **Objective:** See the continuity switches, the session snapshots kept across process death, and
+  the semantic recall index — and forget any of it. Continuity is **default ON**, so this is the
+  transparency + erasure surface for a feature that writes to your home directory.
+- **Command:** `nuvira continuity list` · `nuvira continuity clear [--sessions] [--recall]`
+- **Examples:**
+  ```bash
+  nuvira continuity list                 # effective switches + stored sessions + recall index
+  nuvira continuity clear                # forget BOTH sessions and recall (no flags = both)
+  nuvira continuity clear --sessions     # only the session snapshots
+  nuvira continuity clear --recall       # only the semantic recall index
+  ```
+- **First-timer detail:** `list` reports the **effective** switch state through the same resolvers the
+  engine uses, so it cannot disagree with what a run actually does. An **OPEN** snapshot is a turn
+  that did not finish (resumable); a **closed** one ran to a clean end and is history — kept for you
+  to read, never replayed. The switches themselves live in config (`memory.sessionStore` /
+  `memory.sessionRecall`), the environment (`NUVIRA_SESSION_STORE` / `NUVIRA_SESSION_RECALL`), and
+  the per-run `execute` flags; the dashboard's Memory page shows the same view with Forget buttons.
 
 ### 7.1 Self-improvement (learn)
 
@@ -1240,13 +1282,21 @@ nuvira models excluded         # show what routing is skipping, and WHY
 
 ### 13.1 Inference cache
 
-- **Objective:** Show or clear cached inference responses.
-- **Command:** `nuvira cache stats` · `nuvira cache clear`
+- **Objective:** Show or clear cached inference responses. Answers are cached per WORKSPACE
+  (the project folder they are about), so `stats` names each folder and `clear` can drop one:
+  when a project changes and an ask replays an old answer, only that project's answers are stale,
+  and clearing everything would discard answers that are still correct.
+- **Command:** `nuvira cache stats` · `nuvira cache clear [workspace] [--unscoped]`
 - **Examples:**
   ```bash
-  nuvira cache stats
-  nuvira cache clear
+  nuvira cache stats                # entries by provider AND by project folder
+  nuvira cache clear ~/code/my-app  # drop only that project's cached answers
+  nuvira cache clear --unscoped     # answers cached with no folder attached
+  nuvira cache clear                # everything
   ```
+- **First-timer detail:** a low `clear <workspace>` count is not a failure — the folder you named
+  is matched EXACTLY, so a parent directory never clears a subdirectory's answers. The dashboard's
+  **Admin → Response Cache** section lists the same buckets with a Clear button.
 
 ### 13.2 Docker sandbox
 
@@ -1313,6 +1363,9 @@ nuvira publish       autonomous version/build/publish
 nuvira phase         multi-goal phase scopes
 nuvira retrieval     vector retrieval (index/query/stats/clear)
 nuvira trace         reasoning-trace capture/replay
+nuvira continuity    session snapshots + semantic recall (list/clear)
+nuvira bedrock       AWS Bedrock onboarding (setup/status/test)
+nuvira credentials   release tokens (status/set/forget/verify)
 ```
 
 ---

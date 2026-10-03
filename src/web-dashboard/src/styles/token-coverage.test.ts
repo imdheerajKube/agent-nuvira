@@ -66,7 +66,33 @@ interface Literal {
 
 /** Ranges covered by a `var(...)`, so fallbacks inside them are skipped. */
 function varRanges(value: string): Array<[number, number]> {
-  return [...value.matchAll(/var\([^()]*\)/g)].map((m) => [m.index, m.index + m[0].length]);
+  // A balanced-paren scan, not `/var\([^()]*\)/`: a fallback may itself contain
+  // parentheses — `var(--bg-input, rgba(0, 0, 0, 0.2))` is the case that exposed
+  // this — and `[^()]*` stops at the first `(`, so the whole range went
+  // unrecognised and its fallback was reported as a literal. That contradicted
+  // the exemption documented above, which covers `var(--token, <fallback>)`
+  // whatever the fallback is spelled like.
+  const ranges: Array<[number, number]> = [];
+  const re = /var\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(value)) !== null) {
+    const start = m.index;
+    let depth = 0;
+    let i = start + 3; // the opening '(' of `var(`
+    for (; i < value.length; i++) {
+      if (value[i] === '(') depth++;
+      else if (value[i] === ')') {
+        depth--;
+        if (depth === 0) {
+          i++;
+          break;
+        }
+      }
+    }
+    ranges.push([start, i]);
+    re.lastIndex = i;
+  }
+  return ranges;
 }
 
 function findLiterals(css: string): Literal[] {
@@ -83,6 +109,8 @@ function findLiterals(css: string): Literal[] {
     }
 
     for (const rgb of value.matchAll(/rgba?\([^)]*\)/g)) {
+      const at = rgb.index;
+      if (ranges.some(([from, to]) => at >= from && at < to)) continue;
       found.push({ property, value: rgb[0] });
     }
   }
