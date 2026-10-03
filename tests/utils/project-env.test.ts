@@ -234,7 +234,10 @@ describe('ensureProjectVenv — C3 install sandbox', () => {
     const venv = ensureProjectVenv(root);
     expect(venv).not.toBeNull();
     expect(venv?.dir).toBe(join(root, '.venv'));
-    expect(existsSync(join(root, '.venv', 'bin', 'python'))).toBe(true);
+    // The layout is platform-specific (`Scripts/python.exe` on Windows,
+    // `bin/python` on POSIX) — assert on the interpreter the module discovered,
+    // not a hardcoded POSIX path.
+    expect(existsSync(venv!.python)).toBe(true);
     // Pinned for the rest of the run — a follow-up lookup is the same object.
     expect(getPinnedProjectVenv(root)?.dir).toBe(venv?.dir);
   });

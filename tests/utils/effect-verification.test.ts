@@ -34,6 +34,16 @@ function makeExecutable(path: string): void {
   chmodSync(path, 0o755);
 }
 
+/**
+ * The artifact a build writes into `dist/`. Windows artifacts are `name.exe`
+ * (the platform's executability rule keys on the extension there, not the
+ * mode bits), POSIX ones are bare `name`.
+ */
+const ARTIFACT_EXT = process.platform === 'win32' ? '.exe' : '';
+function artifact(root: string, name: string): string {
+  return join(root, 'dist', `${name}${ARTIFACT_EXT}`);
+}
+
 beforeEach(() => {
   delete process.env.NUVIRA_EFFECT_VERIFY;
 });
@@ -83,8 +93,8 @@ describe('findLaunchCandidates', () => {
     const root = tmp();
     mkdirSync(join(root, 'dist'), { recursive: true });
     writeFileSync(join(root, 'AukatCheck.spec'), "a = BUNDLE(coll, name='AukatCheck.app')\n");
-    makeExecutable(join(root, 'dist', 'AukatCheck'));
-    const stale = join(root, 'dist', 'OldBuild');
+    makeExecutable(artifact(root, 'AukatCheck'));
+    const stale = artifact(root, 'OldBuild');
     makeExecutable(stale);
     // Age the stale artifact so it falls outside the build window.
     const old = new Date(Date.now() - 100_000);
@@ -92,9 +102,9 @@ describe('findLaunchCandidates', () => {
 
     const candidates = findLaunchCandidates('pyinstaller AukatCheck.spec', root, Date.now() - 1000);
     const paths = candidates.map((c) => c.path);
-    expect(paths).toContain(join(root, 'dist', 'AukatCheck'));
+    expect(paths).toContain(artifact(root, 'AukatCheck'));
     // The stale artifact was NOT written in this build window.
-    expect(paths).not.toContain(join(root, 'dist', 'OldBuild'));
+    expect(paths).not.toContain(artifact(root, 'OldBuild'));
   });
 
   it('does not treat a non-executable file as a candidate', () => {
@@ -120,7 +130,7 @@ describe('verifyBuildEffect', () => {
     const root = tmp();
     mkdirSync(join(root, 'dist'), { recursive: true });
     writeFileSync(join(root, 'AukatCheck.spec'), "a = BUNDLE(coll, name='AukatCheck.app')\n");
-    makeExecutable(join(root, 'dist', 'AukatCheck'));
+    makeExecutable(artifact(root, 'AukatCheck'));
     const launch = async (): Promise<LaunchResult> => ({
       ok: true, exitCode: null, timedOut: true, stderr: '', reason: '',
     });
@@ -132,7 +142,7 @@ describe('verifyBuildEffect', () => {
     const root = tmp();
     mkdirSync(join(root, 'dist'), { recursive: true });
     writeFileSync(join(root, 'AukatCheck.spec'), "a = BUNDLE(coll, name='AukatCheck.app')\n");
-    makeExecutable(join(root, 'dist', 'AukatCheck'));
+    makeExecutable(artifact(root, 'AukatCheck'));
     const launch = async (): Promise<LaunchResult> => ({
       ok: false,
       exitCode: 1,

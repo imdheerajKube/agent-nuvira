@@ -2,7 +2,13 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## v3.3.9 — the provider wire is pinned, answers are scoped to a workspace, and the capabilities are stated honestly
+## v3.3.10 — the provider wire is pinned, answers are scoped to a workspace, and the capabilities are stated honestly
+
+> v3.3.9 was tagged but never reached the registry: npm accepted the publish and
+then wedged the version in staging (`E409 Cannot publish over previously staged
+version`, npm/cli#9889 — no user-side way to clear it). This release carries the
+same content plus the cross-platform test fixes below, and is the one that
+actually ships.
 
 ### Added: a golden provider-wire harness — the request side is now guarded
 
@@ -53,6 +59,14 @@ is never mistaken for a working feature.
 - The `execute` continuity flags (`--session-store` / `--session-recall`) and the `nuvira continuity`
 inspect/forget command are documented in the curated command reference; the generated surface is
 regenerated and drift-guarded.
+
+### Fixed: the new build/venv tests were POSIX-only
+
+The effect-verification and project-venv suites assumed a POSIX artifact layout
+(a bare executable in `dist/`, an interpreter at `.venv/bin/python`) and failed on
+Windows, where a build writes `name.exe` and a venv puts its interpreter in
+`Scripts/`. Both suites now assert on the platform's own layout, so the release
+gate is green on Linux and Windows alike.
 
 ### Added: the response cache is visible and clearable per workspace
 
