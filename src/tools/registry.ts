@@ -29,6 +29,7 @@ import { z, toJSONSchema, type ZodType } from 'zod';
 import { ACTION_BY_INTENT } from '../nlu/actions.js';
 import { detectPermissionSeeking, IRREVERSIBLE_ACTION_RE } from '../learning/autonomy-policy.js';
 import { createFindingTool } from './finding-tool.js';
+import { recordArtifact } from './artifact-append.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -203,6 +204,15 @@ export interface ToolContext {
    * (tests, non-tiered callers) simply never extend the schema set.
    */
   loadedExtraTools?: Set<string>;
+  /**
+   * The actions this turn actually PERFORMED, as the loop observed them
+   * (successes and failures alike), appended per tool call. Gives a tool that
+   * reports a claim the reality its own prose cannot be: `finding` uses it to
+   * refuse a CONFIRMED verdict built on a command or path that never happened
+   * (see `enforceEvidenceProvenance` in `src/findings/verdicts.ts`). Optional —
+   * a direct call or a bare test context simply skips the provenance check.
+   */
+  executedActions?: import('../findings/verdicts.js').ExecutedAction[];
 }
 
 /** A clarify-style choice. */
@@ -449,11 +459,15 @@ const browserSchema = z.object({
   timeout_ms: z.number().int().min(500).max(120000).default(15000).optional().describe('Navigation/timeout in ms'),
 });
 
-/** I3 — generate_image tool args: free image generation. */
+/** I3 — generate_image tool args: bring-your-own-key image generation. */
 const imageGenSchema = z.object({
   prompt: z.string().min(1).describe('The image description'),
   width: z.number().int().min(64).max(2048).default(1024).optional().describe('Image width (default 1024)'),
   height: z.number().int().min(64).max(2048).default(1024).optional().describe('Image height (default 1024)'),
+  provider: z
+    .enum(['gemini', 'openai', 'stability', 'comfyui', 'pollinations'])
+    .optional()
+    .describe('Optional backend override: gemini (Imagen/Nano Banana), openai (DALL-E/gpt-image), stability, comfyui (local), or pollinations (free). Defaults to the first backend whose API key is configured.'),
 });
 
 /** I4 — voice tools: TTS + transcription (optional installs). */
@@ -744,7 +758,7 @@ registerTool({
 
 registerTool({
   name: 'ask_user',
-  description: 'Ask the user a clarifying question with 2–4 choices (multi-select optional). Use when a request is ambiguous or missing information.',
+  description: 'Ask the user a clarifying question with 2–4 choices (multi-select optional). Every surface also offers the user a free-text "Other" answer, so a reply may be their own words instead of one of your choices. Use when a request is ambiguous or missing information.',
   category: 'experience',
   inputSchema: askUserSchema,
   // NOT a dispenser: the tool result is the user's ANSWER, which the model
@@ -1000,16 +1014,19 @@ registerTool(createFindingTool());
 
 registerTool({
   name: 'web_search',
-  description: 'Search the web for a query, returning title/url/snippet hits (DuckDuckGo free tier or a configured SearXNG). Use to ground answers in current information.',
+  description: 'Search the web for a query, returning title/url/snippet hits. Uses the first available backend: a configured Brave/Serper/Tavily/Google-CSE key, a self-hosted SearXNG, or the keyless DuckDuckGo fallback. Set the backend with `tools.toolsets.web.provider` or an API-key env var. Use to ground answers in current information.',
   category: 'workflow',
   inputSchema: webSearchSchema,
   endsAgentStep: false,
-  run: async (args) => {
+  run: async (args, ctx) => {
     const { query, max_results } = webSearchSchema.parse(args);
     const { searchWeb } = await import('./web-research.js');
-    // Self-hosted SearXNG opt-in via env (free/OSS); unset → DuckDuckGo.
+    // Backend selection: an explicit `tools.toolsets.web.provider` wins, else
+    // the first backend with a configured key (Brave/Serper/Tavily/Google CSE),
+    // else SearXNG, else the keyless DuckDuckGo default.
     const searxngUrl = envBuff('SEARXNG_URL');
-    const results = await searchWeb(query, { maxResults: max_results, searxngUrl });
+    const provider = ctx?.configManager?.getAll?.()?.tools?.toolsets?.web?.provider;
+    const results = await searchWeb(query, { maxResults: max_results, searxngUrl, provider });
     if (results.length === 0) {
       return `web_search: no results for "${query}" (backend unavailable or network error).`;
     }
@@ -1057,7 +1074,7 @@ registerTool({
 
 registerTool({
   name: 'generate_image',
-  description: 'Generate an image from a text prompt (Pollinations.ai free endpoint, or a local Stable Diffusion/ComfyUI via BUFF_IMAGE_API_URL). The image is saved to the sandbox images/ dir and the path is returned. When running in a gateway context (WhatsApp/Telegram/etc.), the image is automatically sent back to the originating channel.',
+  description: 'Generate an image from a text prompt using a bring-your-own-key backend: Google Gemini/Imagen (GEMINI_API_KEY), OpenAI DALL-E/gpt-image (OPENAI_API_KEY), Stability AI (STABILITY_API_KEY), a local ComfyUI/Stable Diffusion (BUFF_IMAGE_API_URL), or the free keyless Pollinations.ai fallback. The first backend whose key is configured wins (override with `modality.image.provider`), and a failing backend falls back to Pollinations. The image is saved to the sandbox images/ dir and the path is returned. When running in a gateway context (WhatsApp/Telegram/etc.), the image is automatically sent back to the originating channel.',
   category: 'workflow',
   inputSchema: imageGenSchema,
   endsAgentStep: false,
@@ -1065,13 +1082,26 @@ registerTool({
     const parsed = imageGenSchema.parse(args);
     const { generateImage, isImageGenAvailable } = await import('./modality/image-gen.js');
     if (!isImageGenAvailable()) return 'generate_image: unavailable (no image backend configured).';
+    // Config (`modality.image.*`) supplies the default backend/model; an
+    // explicit tool arg overrides it.
+    const modality = ctx?.configManager?.getAll?.()?.modality?.image ?? {};
     const result = await generateImage(parsed.prompt, {
       width: parsed.width,
       height: parsed.height,
       apiUrl: envBuff('IMAGE_API_URL'),
+      provider: parsed.provider ?? modality.provider,
+      model: modality.model,
     });
     if (!result.ok) return `generate_image: failed — ${result.error}`;
     const file = result.file!;
+    // I3 — the generated image is a deliverable: register it so the dashboard's
+    // Artifacts tab can show (and re-open) what this turn produced.
+    recordArtifact(ctx?.artifacts, {
+      kind: 'media',
+      title: `image: ${parsed.prompt.slice(0, 60)}`,
+      path: file,
+      mime: 'image/png',
+    });
     const delivered = await tryAutoDeliver(file, parsed.prompt, ctx, 'image');
     return `generate_image: saved to ${file}${delivered}`;
   },
@@ -1089,6 +1119,12 @@ registerTool({
     const result = await speak(parsed.text, { voice: parsed.voice });
     if (!result.ok) return `speak: failed — ${result.error}`;
     const file = result.file!;
+    recordArtifact(ctx?.artifacts, {
+      kind: 'media',
+      title: `speech: ${parsed.text.slice(0, 60)}`,
+      path: file,
+      mime: 'audio/mpeg',
+    });
     const delivered = await tryAutoDeliver(file, parsed.text, ctx, 'audio');
     return `speak: saved to ${file}${delivered}`;
   },
@@ -1292,6 +1328,9 @@ export {
   buildFollowupContinuationPrompt,
   isFollowupContinuation,
   isSuggestedFollowup,
+  withContinuationFollowups,
+  CONTINUE_PROMPT,
+  RETRY_PROMPT,
 } from './followup-utils.js';
 
 // ─── Tool run implementations (deferred imports to avoid cycles) ────────────

@@ -29,6 +29,12 @@ function makeData(overrides: {
       facts: { total: 310, byProject: { 'acme-api': 200, 'acme-web': 110 } },
       recall: { total: 96, today: 7, last7d: 33 },
       backend: 'local',
+      vectorBackend: 'faiss-native',
+      vectorNamespaces: [
+        { name: 'repo', entries: 243 },
+        { name: 'default', entries: 2 },
+        { name: 'facts', entries: 310 },
+      ],
       ...overrides.memory,
     },
     health: { patterns: 58, feedback: 21, ...overrides.health },
@@ -72,6 +78,34 @@ describe('MemoryPanel', () => {
     // Recall is the direct evidence the agent has re-used past project work.
     expect(screen.getByText(/33 recall\(s\) this week, 7 today/)).toBeTruthy();
     expect(screen.getByText('local')).toBeTruthy();
+  });
+
+  it('shows the vector-search backend, distinct from the memory tier', () => {
+    render(<MemoryPanel data={makeData()} />);
+    // The FAISS question answered in the UI: which index actually runs, not the
+    // provider tier ('local').
+    expect(screen.getByText('faiss-native')).toBeTruthy();
+    expect(screen.getByText(/native FAISS/)).toBeTruthy();
+  });
+
+  it('renders an unknown vector backend without crashing', () => {
+    render(<MemoryPanel data={makeData({ memory: { vectorBackend: undefined } })} />);
+    expect(screen.getByText('unknown')).toBeTruthy();
+  });
+
+  it('breaks vectors down by namespace so a low default count reads as corpus size', () => {
+    render(<MemoryPanel data={makeData()} />);
+    expect(screen.getByText('Vector Index by Namespace')).toBeTruthy();
+    expect(screen.getByText('repo')).toBeTruthy();
+    expect(screen.getByText('243 vector(s)')).toBeTruthy();
+    expect(screen.getByText('facts')).toBeTruthy();
+    expect(screen.getByText('310 vector(s)')).toBeTruthy();
+    expect(screen.getByText('2 vector(s)')).toBeTruthy();
+  });
+
+  it('omits the namespace section when no counts are reported', () => {
+    render(<MemoryPanel data={makeData({ memory: { vectorNamespaces: [] } })} />);
+    expect(screen.queryByText('Vector Index by Namespace')).toBeNull();
   });
 
   it('says so plainly when nothing has been recalled yet', () => {

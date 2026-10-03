@@ -261,6 +261,162 @@ export function enforceVerdicts(
 }
 
 /**
+ * One action the RUN actually performed, as the loop observed it.
+ *
+ * Supplied to the gate so a finding's evidence can be checked against reality:
+ * a `command` evidence ref is only as good as the command that really ran, and
+ * a `file` ref only as good as the path that was really read or written. This is
+ * the fact a finding's own prose cannot be.
+ */
+export interface ExecutedAction {
+  /** The tool that ran (e.g. `run_terminal`, `read_file`). */
+  tool: string;
+  /** The shell command, for an exec tool. */
+  command?: string;
+  /** The path, for a file tool. */
+  path?: string;
+  /** Whether the tool reported success. Provenance does not require success —
+   * a failing command is real evidence about a failure — but a caller may use it. */
+  ok: boolean;
+}
+
+/** The outcome of checking a finding's evidence against the run's actions. */
+export interface ProvenanceResult {
+  /** The finding AFTER the check (demoted, and with fabricated refs dropped). */
+  finding: Finding;
+  /** Evidence refs that could NOT be corroborated by any executed action. */
+  unproven: Array<{ kind: EvidenceKind; ref: string; reason: string }>;
+  /** True when the finding was demoted to PLAUSIBLE because NOTHING it cited was corroborated. */
+  demoted: boolean;
+}
+
+/** Normalize a command for comparison: trim, drop a `$`/backtick wrapper, collapse whitespace. */
+function normCommand(text: string): string {
+  return text
+    .trim()
+    .replace(/^\$\s*/, '')
+    .replace(/^`+|`+$/g, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+/**
+ * Does a cited command correspond to a command that really ran?
+ *
+ * Deliberately tolerant about formatting (whitespace, `$`, backticks) and about
+ * a wrapper — a model may cite `npm test` for `npm test -- --run`, and both are
+ * the same check. Deliberately INTOLERANT about content: a command whose tokens
+ * differ (`pyinstaller --clean -y x.spec` vs the `pyinstaller x.spec` that
+ * actually ran) matches neither direction and is refused. Provenance is not
+ * adjudicating whether the command SUCCEEDED — only whether it happened.
+ */
+function commandsMatch(ref: string, executed: string): boolean {
+  const a = normCommand(ref);
+  const b = normCommand(executed);
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+/** Normalize a path: strip a `./`, unify separators, drop trailing slashes. */
+function normPath(text: string): string {
+  return text
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .replace(/\/+$/, '');
+}
+
+/** Does a cited path correspond to a path that was really read or written? */
+function pathsMatch(ref: string, executed: string): boolean {
+  const a = normPath(ref);
+  const b = normPath(executed);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  // Absolute vs relative of the same file — compare on a segment boundary so
+  // `b.py` never matches `other-b.py`.
+  return b.endsWith('/' + a) || a.endsWith('/' + b);
+}
+
+/**
+ * Check a CONFIRMED finding's evidence against the actions the run actually
+ * performed, and demote it when none of its checkable evidence is real.
+ *
+ * WHY THIS EXISTS. `confirmFinding` promotes on the PRESENCE of a non-blank
+ * evidence ref, not its PROVENANCE — so a model that cannot type `CONFIRMED` can
+ * still type a `command` ref for a command it never ran and have the finding
+ * recorded as fact. That is the live failure this closes: a turn whose build
+ * command FAILED (exit 1) and which then recorded a `CONFIRMED` finding citing
+ * `pyinstaller --clean -y AukatCheck.spec` — a command that appears nowhere in
+ * the run. See `docs/ISSUE_false-success_model-vs-framework.md`.
+ *
+ * RULES:
+ *   - only CONFIRMED findings are checked; a PLAUSIBLE one is already honest;
+ *   - only `command` and `file` refs are checkable — a `quote`/`observation`
+ *     cannot be mechanically corroborated and is left alone (a residual, named
+ *     in the docs);
+ *   - an unproven ref is DROPPED from the finding (the gate never keeps evidence
+ *     it could not verify);
+ *   - if the finding had checkable evidence and NONE of it was corroborated, the
+ *     finding is demoted to PLAUSIBLE with the refs and the reason in its
+ *     outcome, so the report reads honestly rather than silently.
+ *
+ * Pure and deterministic — the caller supplies the actions, so this needs no
+ * filesystem or run context of its own.
+ */
+export function enforceEvidenceProvenance(
+  finding: Finding,
+  actions: readonly ExecutedAction[],
+): ProvenanceResult {
+  if (finding.verdict !== 'CONFIRMED') return { finding, unproven: [], demoted: false };
+
+  const usable = evidenceOf(finding);
+  const checkable = usable.filter((e) => e.kind === 'command' || e.kind === 'file');
+  if (checkable.length === 0) return { finding, unproven: [], demoted: false };
+
+  const unproven: ProvenanceResult['unproven'] = [];
+  const kept: Evidence[] = [];
+  let corroborated = 0;
+
+  for (const evidence of usable) {
+    if (evidence.kind !== 'command' && evidence.kind !== 'file') {
+      kept.push(evidence);
+      continue;
+    }
+    const hit =
+      evidence.kind === 'command'
+        ? actions.some((a) => a.command !== undefined && commandsMatch(evidence.ref, a.command))
+        : actions.some((a) => a.path !== undefined && pathsMatch(evidence.ref, a.path));
+    if (hit) {
+      corroborated += 1;
+      kept.push(evidence);
+    } else {
+      unproven.push({
+        kind: evidence.kind,
+        ref: evidence.ref,
+        reason:
+          evidence.kind === 'command'
+            ? 'no command matching this reference was executed this turn'
+            : 'no file read or written this turn matches this reference',
+      });
+    }
+  }
+
+  if (corroborated === 0) {
+    const cited = unproven.map((u) => `${u.kind} ${JSON.stringify(u.ref)}`).join(', ');
+    const reason = `evidence not corroborated — ${cited} (${unproven[0]!.reason})`;
+    return {
+      finding: { ...demoteFinding(finding, reason), evidence: kept },
+      unproven,
+      demoted: true,
+    };
+  }
+
+  // At least one checkable ref is real: the finding stands, but the refs that
+  // could not be corroborated are stripped rather than kept on a CONFIRMED claim.
+  return { finding: { ...finding, evidence: kept }, unproven, demoted: false };
+}
+
+/**
  * Claims carrying a CONFIRMED verdict and no usable evidence.
  *
  * The assertion form of `enforceVerdicts`, for a caller that would rather fail

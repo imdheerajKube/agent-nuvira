@@ -389,6 +389,28 @@ describe('write_file — create / overwrite (confirmation-gated)', () => {
     expect(content).toContain('export const x = 1;');
   });
 
+  it('records the written file as a session artifact (the Artifacts-tab producer)', async () => {
+    const { dir, ctx } = makeWorkspace();
+    const pushed: Array<{ kind: string; title: string; path: string; sizeBytes?: number }> = [];
+    const withSink: ToolContext = { ...ctx, artifacts: { push: (a) => { pushed.push(a); } } };
+
+    await runWriteFile({ path: 'reports/out.md', content: '# hello\n', confirm: true }, withSink);
+
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0].kind).toBe('file');
+    expect(pushed[0].title).toBe(`reports${sep}out.md`);
+    expect(pushed[0].path).toBe(join(dir, 'reports', 'out.md'));
+    expect(pushed[0].sizeBytes).toBeGreaterThan(0);
+  });
+
+  it('writes with no artifact sink (the CLI, a bare tool run) without failing', async () => {
+    const { ctx } = makeWorkspace();
+    // `ctx.artifacts` is absent for every surface that has no session store —
+    // the record must be a no-op there, never an error.
+    const out = await runWriteFile({ path: 'no-sink.txt', content: 'x', confirm: true }, ctx);
+    expect(out).toContain('created');
+  });
+
   it('overwrites an existing file', async () => {
     const { dir, ctx } = makeWorkspace();
     await runWriteFile({ path: 'README.md', content: '# replaced\n', confirm: true }, ctx);

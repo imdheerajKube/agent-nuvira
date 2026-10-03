@@ -1934,6 +1934,15 @@ export class GatewayRegistry {
           '\n\n⚠️ Note: I described what I was about to do, but I did not actually carry it out yet. ' +
           'Reply "go ahead" and I will do it now.';
       }
+      // A3 Part 2 — BUILD HONESTY: the run's own evidence says the build FAILED,
+      // yet the reply reports success. Say so plainly rather than let a stale or
+      // missing artifact read as a finished one.
+      if (answer.unverifiedBuildClaim) {
+        logger.warn('gateway: build command failed but answer claimed success — appending correction');
+        content +=
+          '\n\n⚠️ Heads-up: a build command failed here and no later build succeeded, so I could not ' +
+          'confirm the build actually worked — please treat it as unverified and ask me to try again.';
+      }
       // v1.8x audit — LAST-RESORT sender guard: a reply that is pure
       // tool-contract confusion ("I'm sorry, but the provided example call to
       // suggest_followups is incomplete…") is internal scaffolding leaking to

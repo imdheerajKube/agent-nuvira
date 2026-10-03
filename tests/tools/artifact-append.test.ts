@@ -15,9 +15,65 @@ import {
   extractToolArtifact,
   appendToolArtifact,
   readArtifactPreview,
+  recordArtifact,
 } from '../../src/tools/artifact-append.js';
 import type { ArtifactSink } from '../../src/tools/artifact-types.js';
 import { runToolLoop, type ToolLoopDeps, type StepResponse } from '../../src/tools/tool-loop.js';
+
+/**
+ * recordArtifact — the DIRECT sink path.
+ *
+ * The `{artifact, result}` payload swaps a tool's whole result for JSON. Tools
+ * that return prose the model must read verbatim (`write_file: created 'x'`,
+ * `generate_image: saved to …`) cannot do that, so they hand over the
+ * deliverable themselves. These tests pin the contract that made that safe: the
+ * bookkeeping fields are filled, a missing sink is a no-op, and a failing sink
+ * can never break the tool that produced the artifact.
+ */
+describe('recordArtifact — direct sink', () => {
+  it('fills id / source / createdAt and forwards the producer\'s fields', () => {
+    const pushed: Array<{ kind: string; id: string; source: string; createdAt: number; title: string }> = [];
+    recordArtifact({ push: (a) => pushed.push(a as never) }, {
+      kind: 'file',
+      title: 'src/app.ts',
+      path: '/repo/src/app.ts',
+      sizeBytes: 42,
+    });
+
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0].kind).toBe('file');
+    expect(pushed[0].title).toBe('src/app.ts');
+    expect(pushed[0].id).toBeTruthy();
+    expect(pushed[0].source).toBe('tool');
+    expect(pushed[0].createdAt).toBeGreaterThan(0);
+  });
+
+  it('is a no-op with no sink (the CLI, a bare tool run)', () => {
+    expect(() => recordArtifact(undefined, { kind: 'file', title: 'x', path: '/x' })).not.toThrow();
+  });
+
+  it('never breaks the producer when the sink throws', () => {
+    const sink = {
+      push: () => {
+        throw new Error('disk full');
+      },
+    };
+    expect(() => recordArtifact(sink, { kind: 'file', title: 'x', path: '/x' })).not.toThrow();
+  });
+
+  it('honours an explicit id / source when the producer supplies one', () => {
+    const pushed: Array<{ id: string; source: string }> = [];
+    recordArtifact({ push: (a) => pushed.push(a as never) }, {
+      kind: 'media',
+      title: 'logo',
+      path: '/tmp/logo.png',
+      id: 'fixed-id',
+      source: 'agent',
+    });
+    expect(pushed[0].id).toBe('fixed-id');
+    expect(pushed[0].source).toBe('agent');
+  });
+});
 
 describe('extractToolArtifact — payload parsing', () => {
   it('parses a clean {artifact, result} payload and normalizes it', () => {

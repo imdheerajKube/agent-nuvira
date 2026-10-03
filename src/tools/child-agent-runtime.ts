@@ -30,6 +30,7 @@ import { ProviderFactory } from '../inference/factory.js';
 import type { InferenceProvider, ToolCallResponse, ToolMessage, ToolSchema } from '../inference/interface.js';
 import { resolveAdapterDefault } from '../learning/model-selection.js';
 import { SubagentRefusalError } from './subagent-refusal.js';
+import { fenceUntrustedToolOutput } from './untrusted-content.js';
 import { getTool, toolJsonSchemas, TOOL_CONTRACT_JSON, type ToolContext } from './registry.js';
 // WS1 — the finding tool's bus event; forwarded to the parent as its own frame.
 import { FINDING_EVENT } from './finding-tool.js';
@@ -71,6 +72,18 @@ import {
   type ResumeOutcome,
   type StepReplay,
 } from '../learning/step-checkpoint.js';
+// Phase 4b/4c — the child's PERSISTENT SESSION STORE. Opened on the same gate as
+// its resume ledger: a delegated run asked to resume snapshots its live thread at
+// each iteration boundary, so a subagent process that dies mid-task leaves a
+// conversation the orchestrator's next run can pick up (the parent already
+// checkpoints task-level state; this adds the per-task conversation layer).
+import {
+  findResumableSessionFor,
+  openSession,
+  rehydrateThread,
+  resolveSessionStore,
+  type SessionStore,
+} from '../learning/session-store.js';
 // G1 — the verification gate, in the CHILD's own engine. `write_file`/`edit_file`
 // are mutations (`edit-verification.ts`), so an in-process turn that writes one
 // gets one bounded nudge before it can answer and reports the residual honestly.
@@ -88,6 +101,9 @@ import {
   verificationNudgeFor,
   type ToolCallEvidence,
 } from './edit-verification.js';
+// A3 — the provenance ledger's shape. Type-only, so it is erased at runtime and
+// this process pulls in nothing new to record what its tools actually did.
+import type { ExecutedAction } from '../findings/verdicts.js';
 
 export interface SubagentRuntimeConfig {
   /** The task the subagent must complete. */
@@ -168,6 +184,13 @@ export interface SubagentRuntimeResult {
    * unverified rather than read as an observed result.
    */
   unverifiedEditClaim?: boolean;
+  /**
+   * A3 Part 2 — a BUILD command ran and FAILED this run, no later build
+   * succeeded, and the answer still asserted the artifact came out good. The
+   * child's own flag, carried across the fork like `unverifiedEditClaim`, so a
+   * delegated build-debug run cannot report a success its own ledger contradicts.
+   */
+  unverifiedBuildClaim?: boolean;
 }
 
 /**
@@ -213,6 +236,23 @@ function buildSystemPrompt(
     'no preamble, no instructions to the user.',
   );
   return lines.join('\n');
+}
+
+/**
+ * P1 — the ambient project context (+ hand-off) a subagent inherits from its
+ * working directory. Mirrors the loop engine exactly (`buildLoopProjectContext`)
+ * and is best-effort: any failure returns '' so a context read can never break a
+ * delegated run, and a clean/empty project adds no prompt weight beyond the
+ * bounded snapshot. Lazy-imported so a plain (no-tools) completion does not pay
+ * for the tree/git walk until it is actually useful.
+ */
+async function subagentContextBlock(cwd: string | undefined): Promise<string> {
+  try {
+    const { buildLoopProjectContext } = await import('./loop-project-context.js');
+    return await buildLoopProjectContext(cwd ?? process.cwd());
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -353,6 +393,13 @@ export async function runSubagent(
     send({ type: 'progress', phase: 'resume', resume: outcome });
     return { ...out, resume: outcome };
   };
+  // Phase 4b/4c — the child's session store. DEFAULT ON (like the parent), so a
+  // subagent that dies mid-task leaves a conversation its re-run can pick up;
+  // `NUVIRA_SESSION_STORE=0` (or the config key) turns it off.
+  const sessionStoreOn = resolveSessionStore();
+  const session: SessionStore | null = sessionStoreOn
+    ? openSession({ goal: config.goal, cwd: resumeCwd })
+    : null;
 
   // A backend that cannot be reached is a refusal, not an empty result.
   const available = await provider.isAvailable().catch(() => false);
@@ -409,6 +456,8 @@ export async function runSubagent(
       debug: debugLog,
       otel: otelSpan,
       resume: resume?.ledger ?? null,
+      session,
+      sessionResume: sessionStoreOn,
     }).catch(failWithEvidence);
     finishDebugLog({
       llmCalls: out.llmCalls,
@@ -428,8 +477,10 @@ export async function runSubagent(
   }
 
   // ── Plain completion (no tools) ───────────────────────────────────────────
+  const ctxBlock = await subagentContextBlock(config.cwd);
   const prompt = [
     buildSystemPrompt(config, []),
+    ...(ctxBlock ? ['', `[Project context]\n${ctxBlock}`] : []),
     '',
     `Task: ${config.goal}`,
   ].join('\n');
@@ -554,6 +605,14 @@ interface LoopHooks {
    * resume that changes the goal replays nothing.
    */
   resume?: StepReplay | null;
+  /**
+   * Phase 4b/4c — the child's session store, when it was asked to resume. The
+   * thread is snapshotted per iteration so a child process that dies mid-task
+   * leaves a resumable conversation (see `learning/session-store.ts`).
+   */
+  session?: SessionStore | null;
+  /** Phase 4c — whether an explicit resume was requested (rehydration gate). */
+  sessionResume?: boolean;
 }
 
 async function runToolLoop(
@@ -570,10 +629,28 @@ async function runToolLoop(
     parameters: t.parameters,
   }));
 
-  const messages: ToolMessage[] = [
+  // P1 — the same ambient project context the chat/execute loops inject, so a
+  // delegated run is not context-blind. `buildLoopProjectContext` also carries
+  // the durable hand-off block, so a subagent continues unfinished work in its
+  // working directory instead of rediscovering it. Best-effort: '' adds nothing.
+  const ctxBlock = await subagentContextBlock(config.cwd);
+  const head: ToolMessage[] = [
     { role: 'system', content: buildSystemPrompt(config, allowed, transport) },
-    { role: 'user', content: config.goal },
+    ...(ctxBlock ? [{ role: 'user' as const, content: `[Project context]\n${ctxBlock}` }] : []),
   ];
+  let messages: ToolMessage[] = [...head, { role: 'user', content: config.goal }];
+
+  // Phase 4c — rehydrate a conversation a DEAD child left OPEN (only on an
+  // explicit resume, and only for the same task). The fresh head replaces the
+  // stored one; the child's prior work stays in the thread, so it is not re-run.
+  if (loop.sessionResume) {
+    try {
+      const prior = findResumableSessionFor(config.goal, config.cwd ?? process.cwd());
+      if (prior) messages = rehydrateThread(head, prior);
+    } catch {
+      // Best-effort — a rehydration failure is a cold start, not a broken run.
+    }
+  }
 
   const model = loop.model;
   const base = { provider: type, ...(model ? { model } : {}), transport } as const;
@@ -587,6 +664,10 @@ async function runToolLoop(
   const successfulToolCalls: string[] = [];
   const mutatedPaths: string[] = [];
   const verificationEvidence: ToolCallEvidence[] = [];
+  // A3 — the actions this run really performed, shared with the tools so a
+  // `finding`'s evidence can be checked for provenance, and read at the end for
+  // the build-honesty flag (see `finish`).
+  const executedActions: ExecutedAction[] = [];
   // Bounded exactly once, like the in-process gate (`verificationNudges < 1`).
   let verificationNudges = 0;
   // The iteration ceiling is the loop's `loop.maxIterations` plus one for each
@@ -605,7 +686,10 @@ async function runToolLoop(
   // a file that was never written. Imported lazily for the same reason
   // `extractFallbackToolCalls` is: `tool-loop.ts` pulls in the registry and the
   // event bus.
-  const { classifyToolRefusal } = await import('./tool-loop.js');
+  const { classifyToolRefusal, detectFailedBuildSuccessClaim } = await import('./tool-loop.js');
+  // A3 Part 2 — the build-honesty detector is the in-process loop's own (imported,
+  // never reimplemented), so a delegated run that watched a build FAIL and then
+  // reported success is flagged across the fork exactly as an in-process turn is.
 
   /**
    * Finish the loop, annotating the result with the honesty flags.
@@ -621,6 +705,17 @@ async function runToolLoop(
     if (activity.needsVerification) out.unverifiedEdit = true;
     if (detectUnverifiedEditClaim(result, activity.mutations, activity.verifications)) {
       out.unverifiedEditClaim = true;
+    }
+    // A3 Part 2 — a build that failed while the answer claims success.
+    if (detectFailedBuildSuccessClaim(result, executedActions)) {
+      out.unverifiedBuildClaim = true;
+    }
+    // Phase 4b/4c — the child reached an end, so its session transcript is
+    // HISTORY: close it so it is not rehydrated as if work remained. Best-effort.
+    try {
+      loop.session?.finish();
+    } catch {
+      // Best-effort.
     }
     return out;
   };
@@ -786,7 +881,7 @@ async function runToolLoop(
               const finding = data as { verdict?: string; claim?: string };
               loop.debug?.event('finding', `${finding?.verdict ?? '?'} ${finding?.claim ?? ''}`);
             }
-          }),
+          }, executedActions),
         );
         toolCalls += 1;
         // The same convention the main loop and the tool registry use: a tool
@@ -798,6 +893,19 @@ async function runToolLoop(
         // reason `classifyToolRefusal` is consulted here rather than the prefix
         // alone. `ok` stays the parent-facing outcome (unchanged wire shape).
         const ranOk = ok && classifyToolRefusal(output) === null;
+        // A3 — the provenance ledger (see `finish`). A REFUSED call never
+        // performed its command, so it is not evidence that a citation is real;
+        // an executed-but-failed call IS.
+        if (classifyToolRefusal(output) === null) {
+          const command = (call.arguments as { command?: unknown } | undefined)?.command;
+          const path = (call.arguments as { path?: unknown; file_path?: unknown; file?: unknown } | undefined);
+          const p = path?.path ?? path?.file_path ?? path?.file;
+          const cmd = typeof command === 'string' && command.trim() ? command.trim() : undefined;
+          const target = typeof p === 'string' && p.trim() ? p.trim() : undefined;
+          if (cmd !== undefined || target !== undefined) {
+            executedActions.push({ tool: call.name, ok, ...(cmd ? { command: cmd } : {}), ...(target ? { path: target } : {}) });
+          }
+        }
         if (ranOk) {
           successfulToolCalls.push(call.name);
           if (isMutationTool(call.name)) {
@@ -836,7 +944,11 @@ async function runToolLoop(
         for (const problem of outcomeHooks.problems) {
           loop.send({ type: 'progress', phase: 'hook_problem', problem });
         }
-        messages.push({ role: 'tool', content: output, toolCallId: call.id });
+        // P3 — fence UNTRUSTED external content as DATA, exactly as the
+        // in-process loop does (imported helper, never re-worded). The raw
+        // `output` still feeds the provenance ledger and the outcome hooks
+        // above; only what re-enters the MODEL's context is fenced.
+        messages.push({ role: 'tool', content: fenceUntrustedToolOutput(call.name, output), toolCallId: call.id });
       } catch (err) {
         // The injected `runTool` override can throw where the registry's own
         // executor would have returned an `Error:` result — both are a failure
@@ -863,6 +975,22 @@ async function runToolLoop(
         toolSpan?.end({ ok: false, message: 'tool outcome was never reported' });
       }
     }
+
+    // Phase 4c — STEP BOUNDARY. This iteration's tool results are now IN the
+    // thread, so a child process that dies on the NEXT iteration leaves a record
+    // of everything through this one. Best-effort: a snapshot write can never
+    // break the child (a no-op when the child was not asked to resume).
+    if (loop.session) {
+      try {
+        loop.session.save(messages, {
+          steps: iteration + 1,
+          successfulTools: successfulToolCalls,
+          mutatedPaths,
+        });
+      } catch {
+        // Best-effort.
+      }
+    }
   }
 
   return finish('Subagent stopped: reached its iteration ceiling before finishing.', true);
@@ -879,6 +1007,7 @@ async function executeTool(
   args: Record<string, unknown>,
   override?: (name: string, args: Record<string, unknown>) => Promise<string>,
   emit?: (event: string, data: unknown) => void,
+  executedActions?: ExecutedAction[],
 ): Promise<string> {
   // WS6 (#28) — a DECLARED fault, injected before every path (including an
   // injected `runTool`), so a fault declared for a turn reaches a FORKED CHILD the
@@ -893,11 +1022,15 @@ async function executeTool(
   const ctx: ToolContext = {
     configManager: new ConfigManager(),
     cwd: config.cwd ?? process.cwd(),
+    // A3 — the provenance ledger (see `finish`).
+    executedActions,
     // A tool that reports through the bus (the finding tool emits
     // `finding:recorded`) needs a sink on this side of the fork; the caller
     // forwards it as a frame. Absent for a direct/test invocation, exactly like
     // the other optional context fields.
     ...(emit ? { emit } : {}),
+    // A3 — the provenance ledger (see `finish`). Absent for a direct/test call.
+    ...(executedActions ? { executedActions } : {}),
   };
   try {
     const out = await tool.run(args as never, ctx);

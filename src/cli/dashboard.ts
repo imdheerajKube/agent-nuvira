@@ -25,6 +25,7 @@
 import { Command } from 'commander';
 import { envBuff } from '../config/paths';
 import { spawn, execSync } from 'node:child_process';
+import { openInBrowser } from '../utils/open-url.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -511,24 +512,12 @@ function stopProcessHint(): string {
 
   /**
    * Open the browser to the dashboard URL.
-   * Uses the platform-specific command (open, xdg-open, start).
+   * Delegates to the shared platform-aware launcher (`utils/open-url.ts`), so
+   * the dashboard and the `website` command cannot disagree about how a URL is
+   * opened.
    */
   private openBrowser(url: string): void {
-    const platform = process.platform;
-    const isWindows = platform === 'win32';
-    const cmd = isWindows ? 'start' : platform === 'darwin' ? 'open' : 'xdg-open';
-
-    try {
-      // Windows 'start' is a shell built-in, not an executable — needs shell: true
-      // Syntax on Windows: start "" "http://..." (first arg is window title)
-      const args = isWindows ? ['', url] : [url];
-      const child = spawn(cmd, args, {
-        stdio: 'ignore',
-        detached: true,
-        shell: isWindows,
-      });
-      child.unref();
-    } catch {
+    if (!openInBrowser(url)) {
       logger.warn(`Could not auto-open browser. Open manually: ${url}`);
     }
   }

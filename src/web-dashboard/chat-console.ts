@@ -140,6 +140,8 @@ export interface ChatEngine {
     undeliveredArtifact?: boolean;
     /** True when the answer closed on a promise the turn never carried out. */
     unfulfilledPromise?: boolean;
+    /** A3 Part 2 — a build ran, failed, and the answer claimed it worked. */
+    unverifiedBuildClaim?: boolean;
     provider?: string;
     model?: string;
     /**
@@ -931,6 +933,13 @@ export class ChatConsole {
         honestContent +=
           '\n\n⚠️ Note: this request asked for a written deliverable, but no file was written — ' +
           'the text above is the answer, not the artifact. Say "save it to a file" and I will write it now.';
+      }
+      // A3 Part 2 — the build-honesty case: the run saw the build fail, so a
+      // bubble that reports success is contradicted by the turn's own evidence.
+      if (answer.unverifiedBuildClaim) {
+        honestContent +=
+          '\n\n⚠️ Heads-up: a build command failed here and no later build succeeded, so I could not ' +
+          'confirm the build actually worked — please treat it as unverified and ask me to try again.';
       }
       return {
         ok: true,

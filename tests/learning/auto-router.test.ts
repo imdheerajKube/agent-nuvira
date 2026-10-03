@@ -368,6 +368,22 @@ describe('analyzeTaskProfile', () => {
     expect(architecture.escalationTarget).toBe('gemini');
   });
 
+  it('treats a build-debug/fix ask as verification-bearing (C4)', () => {
+    // Live (2026-10-02): a "the build is broken, it crashes with
+    // ModuleNotFoundError, fix the build" ask is DEBUGGING — and a fix is not
+    // done until it is observed to work, so it must carry the verification
+    // profile (reasoning/reliability weights up, cost/speed down) rather than
+    // routing a failed build to a fast model that certifies it as working.
+    const profile = analyzeTaskProfile(
+      'The app build is broken and crashes with ModuleNotFoundError: No module named PyQt6. Fix the build.',
+    );
+    expect(profile.intent).toBe('debugging');
+    expect(profile.requiresVerification).toBe(true);
+    expect(profile.escalationTarget).toBe('openrouter');
+    // A generic engineering fix keeps the label but is no longer unverified.
+    expect(analyzeTaskProfile('fix the failing test in auth.ts').requiresVerification).toBe(true);
+  });
+
   it('keeps planning tasks lightweight by default', () => {
     const profile = analyzeTaskProfile('outline the authentication architecture');
     expect(profile.intent).toBe('planning');
@@ -1431,6 +1447,120 @@ describe('AutoModelRouter.resolve hard constraints', () => {
     });
     expect(decision.provider).toBeTruthy();
     expect(decision.ranked.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─── C4 — verification/build-debug model-tier floor ─────────────────────────
+
+/**
+ * A build-debug/verification ask is not done until the fix is OBSERVED to work,
+ * so it needs a model strong enough to observe — not merely a weight nudge. The
+ * live failure: `gemini-3.1-flash-lite` certified a FAILED build as working.
+ */
+describe('C4 — verification reasoning floor', () => {
+  // Same mock shape the governance tests use: getAll() for pricing/governance,
+  // getProviderConfig() so resolveModel can see a configured pin.
+  function makeConfig(providers: Record<string, { model?: string }> = {}) {
+    return {
+      getAll: vi.fn(() => ({ pricing: {}, routing: {}, providers })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn((p: string) => ({ config: providers[p] || {} })),
+    } as any;
+  }
+
+  it('penalizes STACKED fast-tier markers, so flash-lite falls below a single flash', () => {
+    const router = new AutoModelRouter();
+    const flash = router.getModelCapabilities('gemini', 'gemini-3.1-flash');
+    const flashLite = router.getModelCapabilities('gemini', 'gemini-3.1-flash-lite');
+    // One fast-tier word, two fast-tier words — the stacked id is weaker.
+    expect(flashLite.reasoning).toBeLessThan(flash.reasoning);
+    // …and below the C4 floor, while a single-flash id stays above it.
+    expect(flashLite.reasoning).toBeLessThan(0.7);
+    expect(flash.reasoning).toBeGreaterThanOrEqual(0.7);
+  });
+
+  it('eliminates a fast-lite served model for a build-debug ask and serves the strong provider', () => {
+    const configManager = makeConfig({
+      gemini: { model: 'gemini-3.1-flash-lite' },
+      openrouter: { model: 'openai/gpt-4o' },
+    });
+    const decision = new AutoModelRouter().resolve(
+      'writer',
+      'The app build is broken; it crashes with ModuleNotFoundError. Fix the build.',
+      { allowedProviders: ['gemini', 'openrouter'] },
+      configManager,
+    );
+    // gemini's served model is the fast tier → floored out; openrouter survives.
+    expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(false);
+    expect(decision.provider).toBe('openrouter');
+  });
+
+  it('does NOT apply the floor to a plain coding ask (a fast model is still allowed)', () => {
+    // The floor is scoped to effect-observing intents — a simple edit is not one.
+    const configManager = makeConfig({ gemini: { model: 'gemini-3.1-flash-lite' } });
+    const decision = new AutoModelRouter().resolve(
+      'writer',
+      'implement a login form',
+      { allowedProviders: ['gemini'] },
+      configManager,
+    );
+    expect(decision.provider).toBe('gemini');
+    expect(decision.ranked.length).toBe(1);
+  });
+
+  it('falls back (never dead-ends) when the floor would eliminate every provider', () => {
+    const configManager = makeConfig({ gemini: { model: 'gemini-3.1-flash-lite' } });
+    const decision = new AutoModelRouter().resolve(
+      'writer',
+      'fix the build',
+      { allowedProviders: ['gemini'] },
+      configManager,
+    );
+    expect(decision.provider).toBe('gemini');
+    expect(decision.ranked.length).toBe(1);
+  });
+});
+
+// ─── G5 — planning reasoning floor ─────────────────────────────────────────
+
+/**
+ * The planner is the highest-leverage agent: a weak planner's dependency graph
+ * is inherited by every downstream step. So a `planner` call (taskType `plan`)
+ * gets a reasoning floor even when the goal text reads as ordinary coding.
+ */
+describe('G5 — planning reasoning floor', () => {
+  function makeConfig(providers: Record<string, { model?: string }> = {}) {
+    return {
+      getAll: vi.fn(() => ({ pricing: {}, routing: {}, providers })),
+      hasRequiredCredentials: vi.fn(() => true),
+      getProviderConfig: vi.fn((p: string) => ({ config: providers[p] || {} })),
+    } as any;
+  }
+
+  it('floors a fast-lite served model for the planner and serves the strong provider', () => {
+    const configManager = makeConfig({
+      gemini: { model: 'gemini-3.1-flash-lite' },
+      openrouter: { model: 'openai/gpt-4o' },
+    });
+    const decision = new AutoModelRouter().resolve(
+      'planner',
+      'implement a login form',
+      { allowedProviders: ['gemini', 'openrouter'] },
+      configManager,
+    );
+    expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(false);
+    expect(decision.provider).toBe('openrouter');
+  });
+
+  it('does NOT floor the same goal for a non-planner agent (writer keeps the fast model)', () => {
+    const configManager = makeConfig({ gemini: { model: 'gemini-3.1-flash-lite' } });
+    const decision = new AutoModelRouter().resolve(
+      'writer',
+      'implement a login form',
+      { allowedProviders: ['gemini'] },
+      configManager,
+    );
+    expect(decision.provider).toBe('gemini');
   });
 });
 

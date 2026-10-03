@@ -122,6 +122,28 @@ export const PROCESS_ENV_VARS: readonly ProcessEnvVarSpec[] = [
     cliEquivalent: 'nuvira chat --resume [id]',
   },
   {
+    name: 'NUVIRA_SESSION_STORE',
+    label: 'Keep continuity across a crash',
+    group: 'turn',
+    kind: 'flag',
+    rule: 'truthy',
+    description:
+      'Snapshot each turn\u2019s conversation at every step to ~/.nuvira/memory/sessions/, so a killed or crashed turn can be picked up by the next one. A turn that finishes cleanly is closed and never resumed.',
+    unsetMeans: 'Continuity is ON (the default). This switch turns it off.',
+    cliEquivalent: 'nuvira execute --no-session-store  ·  memory.sessionStore in buffconfig.json',
+  },
+  {
+    name: 'NUVIRA_SESSION_RECALL',
+    label: 'Recall similar past asks',
+    group: 'turn',
+    kind: 'flag',
+    rule: 'truthy',
+    description:
+      'Index each finished ask and, at the start of a new one, surface the semantically closest past asks in this project. History only — never a claim that the work is done.',
+    unsetMeans: 'Semantic recall is ON (the default). This switch turns it off.',
+    cliEquivalent: 'nuvira execute --no-session-recall  ·  memory.sessionRecall in buffconfig.json',
+  },
+  {
     name: 'NUVIRA_STRICT_MODEL',
     label: 'Refuse model substitution',
     group: 'turn',

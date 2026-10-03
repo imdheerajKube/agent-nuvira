@@ -1382,6 +1382,11 @@ Show the continuity switches, stored sessions, and the semantic recall index
 Forget stored continuity data (no flags = both sessions and recall)
 
    - flags: `--recall, --sessions`
+### `nuvira website`
+
+Open the Agent-Nuvira website — capabilities, commands, docs, setup
+
+   - flags: `--url`
 ---
 
-*448 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*450 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

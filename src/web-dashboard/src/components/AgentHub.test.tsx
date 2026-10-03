@@ -299,7 +299,7 @@ describe('AgentHub', () => {
     return card as HTMLElement;
   }
 
-  it('Permissions: adding a verified user shows the MASKED id (no name, no full number)', async () => {
+  it('Permissions: adding a verified user shows the sender id (not the personal name) and an UNSAVED marker', async () => {
     mockReads();
     render(<AgentHub />);
     await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
@@ -308,20 +308,23 @@ describe('AgentHub', () => {
     expandPermissions();
 
     const card = whatsappCard();
+    // An authenticated admin sees full ids by default (the reveal control is on
+    // for the role that needs to reference a number), so wait for that state
+    // before editing — otherwise this would assert against the pre-auth render.
+    await waitFor(() => expect(within(card).getAllByText(/\+919876543210/).length).toBeGreaterThan(0));
+
     fireEvent.change(within(card).getByPlaceholderText('Name (optional)'), { target: { value: 'Sam' } });
     fireEvent.change(within(card).getByPlaceholderText('Contact no / sender id, or Allow-All'), { target: { value: '+919999999999' } });
     fireEvent.click(within(card).getByRole('button', { name: /\+ User/ }));
 
-    // The new chip shows the MASKED sender id with an UNSAVED marker (NOT
-    // "pending" — that word is reserved for a Contact's approval status, and
-    // reusing it here made unsaved edits look like a vanished approval) — the
-    // personal name and the full number must NOT appear anywhere.
-    expect(within(card).getByText(/\+91\*+.*· unsaved/)).toBeTruthy();
+    // The new chip shows the sender id with an UNSAVED marker (NOT "pending" —
+    // that word is reserved for a Contact's approval status, and reusing it here
+    // made unsaved edits look like a vanished approval). The NAME is not shown:
+    // it only reaches the saved-contacts list once the edit is actually saved.
+    expect(within(card).getByText(/\+919999999999.*· unsaved/)).toBeTruthy();
     expect(screen.queryByText('Sam')).toBeNull();
-    expect(screen.queryByText('+919999999999')).toBeNull();
-    expect(screen.queryByText('919999999999')).toBeNull();
-    // The other saved users stay visible (masked too, no unsaved marker).
-    expect(within(card).getAllByText(/91\*\*\*/).length).toBeGreaterThan(0);
+    // The other saved users stay visible.
+    expect(within(card).getAllByText(/\+919876543210/).length).toBeGreaterThan(0);
   });
 
   it('Permissions: adding a user shows the UNSAVED banner until Save is pressed', async () => {
@@ -351,7 +354,7 @@ describe('AgentHub', () => {
     await waitFor(() => expect(screen.queryByText(/Unsaved changes/)).toBeNull());
   });
 
-  it('privacy: sender ids are masked by default; the admin toggle reveals full ids', async () => {
+  it('privacy: an admin/operator sees full ids by default and can hide them again', async () => {
     mockReads();
     render(<AgentHub />);
     await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
@@ -362,25 +365,29 @@ describe('AgentHub', () => {
     // (a collapsed panel would make "not found" pass vacuously).
     expandPermissions();
 
-    // Masked by default — the full fixture number never appears.
-    expect(screen.queryByText('+919876543210')).toBeNull();
-    expect(screen.getAllByText(/\+91\*\*\*/).length).toBeGreaterThan(0);
+    // Default ON for admin/operator: the full ids render (both fixture ids).
+    await waitFor(() => expect(screen.getAllByText(/\+919876543210/).length).toBeGreaterThan(0));
+    expect(screen.getAllByText(/919999999999/).length).toBeGreaterThan(0);
 
-    // Flip the admin-only toggle → full ids render (both fixture ids show).
-    fireEvent.click(screen.getByRole('checkbox', { name: /Show full sender ids/ }));
-    expect(screen.getAllByText('+919876543210').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('919999999999').length).toBeGreaterThan(0);
+    // Hiding them again masks — the privacy choice is still the user's.
+    fireEvent.click(screen.getByRole('checkbox', { name: /Show full ids/ }));
+    expect(screen.queryByText(/\+919876543210/)).toBeNull();
+    expect(screen.getAllByText(/\+91\*\*\*/).length).toBeGreaterThan(0);
   });
 
-  it('privacy: a viewer cannot toggle full sender ids', async () => {
+  it('privacy: a viewer always sees masked ids and cannot toggle them', async () => {
     mockReads(HUB, { configured: true, authenticated: true, role: 'viewer' });
     render(<AgentHub />);
     await waitFor(() => expect(screen.getByRole('tab', { name: /Tools/ })).toBeTruthy());
     fireEvent.click(screen.getByRole('tab', { name: /Channels/ }));
     await waitFor(() => expect(screen.getByText(/Delivery ledger/)).toBeTruthy());
+    expandPermissions();
 
-    const toggle = screen.getByRole('checkbox', { name: /Show full sender ids/ }) as HTMLInputElement;
+    const toggle = screen.getByRole('checkbox', { name: /Show full ids/ }) as HTMLInputElement;
     expect(toggle.disabled).toBe(true);
+    // …and the id really is masked, not merely un-toggleable.
+    expect(screen.queryByText(/\+919876543210/)).toBeNull();
+    expect(screen.getAllByText(/\+91\*\*\*/).length).toBeGreaterThan(0);
   });
 
   it('Permissions: removing ONE verified user keeps the rest of the saved list', async () => {
@@ -394,13 +401,15 @@ describe('AgentHub', () => {
     expandPermissions();
 
     const card = whatsappCard();
-    // All ids render MASKED — remove the chip whose masked id is 91***.
-    const maskedRows = within(card).getAllByText(/91\*\*\*/);
-    const row = maskedRows[maskedRows.length - 1].closest('.hub-alias-row') as HTMLElement;
+    // Admin reveals by default — remove the last full fixture id.
+    await waitFor(() => expect(within(card).getAllByText(/919999999999/).length).toBeGreaterThan(0));
+    const rows = within(card).getAllByText(/919999999999/);
+    const row = rows[rows.length - 1].closest('.hub-alias-row') as HTMLElement;
     fireEvent.click(within(row).getByRole('button', { name: '✕' }));
 
-    // The removed id is gone; at least one masked id remains.
-    expect(within(card).queryByText(/\+91\*\*\*/)).toBeTruthy();
+    // The removed id is gone; the other saved id remains.
+    expect(within(card).queryByText(/919999999999/)).toBeNull();
+    expect(within(card).getByText(/\+919876543210/)).toBeTruthy();
   });
 
   it('switches tabs — Channels shows the delivery ledger, Skills shows skills', async () => {

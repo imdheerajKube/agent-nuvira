@@ -34,6 +34,13 @@ import { getSandboxConfig } from '../../sandbox/types.js';
 import { referenceDocsFor } from '../reference-docs.js';
 import { detectNoOpCommand } from '../artifact-verification.js';
 import {
+  applyProjectEnvironment,
+  ensureProjectVenv,
+  getPinnedProjectVenv,
+  guardCommandEnvironment,
+  isPythonInstallCommand,
+} from '../../utils/project-env.js';
+import {
   isKnownSystemTool,
   manualInstallSteps,
   promptToolInstall,
@@ -55,6 +62,21 @@ const MAX_DEP_INSTALL_RETRIES = 1;
 
 /** Timeout for installing a missing package-manager tool itself (10 min) */
 const TOOL_INSTALL_TIMEOUT_MS = 600_000;
+
+/**
+ * Does `pyproject.toml` declare the project as poetry-managed? (A `[tool.poetry]`
+ * table.) Used so `detectInstallPlan` picks `poetry install` over a bare pip
+ * install that would populate the wrong environment.
+ */
+function pyprojectUsesPoetry(workingDir: string): boolean {
+  const pyproject = join(workingDir, 'pyproject.toml');
+  if (!existsSync(pyproject)) return false;
+  try {
+    return /^\s*\[tool\.poetry(?:\]|\.)/m.test(readFileSync(pyproject, 'utf-8'));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Result of running a command, stored in context.metadata.runResult.
@@ -478,7 +500,16 @@ export class RunnerAgent extends Agent {
       return { tool: 'npm', command: 'npm install --no-audit --no-fund', manifest: 'package.json' };
     }
 
-    // Python
+    // Python — poetry and pipenv own the project env when their manifests are
+    // present, so they are checked before bare pip (a poetry/pipenv project
+    // also tends to have a pyproject.toml/requirements.txt, and running pip
+    // directly would install OUTSIDE the env the project actually uses).
+    if (existsSync(join(workingDir, 'poetry.lock')) || pyprojectUsesPoetry(workingDir)) {
+      return { tool: 'poetry', command: 'poetry install', manifest: 'pyproject.toml' };
+    }
+    if (existsSync(join(workingDir, 'Pipfile'))) {
+      return { tool: 'pipenv', command: 'pipenv install', manifest: 'Pipfile' };
+    }
     if (existsSync(join(workingDir, 'requirements.txt'))) {
       return { tool: 'pip', command: 'pip install -r requirements.txt', manifest: 'requirements.txt' };
     }
@@ -551,6 +582,15 @@ export class RunnerAgent extends Agent {
       }
       // yarn / pnpm are installed via npm (which we just ensured exists)
       return this.runInstallCommand(`npm install -g ${tool}`, process.cwd());
+    }
+
+    // ── poetry / pipenv (project env managers) ───────────────────────────
+    if (tool === 'poetry' || tool === 'pipenv') {
+      // Both ship as Python packages; bootstrap them into whichever interpreter
+      // this project uses (the pinned venv, once applyProjectEnvironment has
+      // put it on PATH) rather than assuming a global one exists.
+      const python = this.commandExists('python3') ? 'python3' : 'python';
+      return this.runInstallCommand(`${python} -m pip install ${tool}`, process.cwd(), this.projectEnv(process.cwd()));
     }
 
     // ── pip ──────────────────────────────────────────────────────────────
@@ -812,12 +852,27 @@ export class RunnerAgent extends Agent {
   /**
    * Run an install command and return its outcome.
    */
-  private runInstallCommand(command: string, cwd: string): DependencyInstallResult {
+  private runInstallCommand(
+    command: string,
+    cwd: string,
+    env?: Record<string, string | undefined>,
+  ): DependencyInstallResult {
+    // ── C3: never install project Python packages into the global interpreter.
+    // The auto-install path reaches here without passing through the guard, so
+    // if this is a Python package install and no project venv is pinned, create
+    // one and land the install there. (Non-Python installs — npm/brew/cargo —
+    // are unaffected: they have no interpreter to pollute.)
+    let effectiveEnv = env;
+    if (!effectiveEnv && isPythonInstallCommand(command)) {
+      const venv = ensureProjectVenv(cwd);
+      if (venv) effectiveEnv = applyProjectEnvironment({ ...process.env }, venv);
+    }
     const result = runShellSync(command, {
       cwd,
       timeoutMs: TOOL_INSTALL_TIMEOUT_MS,
       maxBuffer: 2 * 1024 * 1024,
       source: 'runner',
+      ...(effectiveEnv ? { env: effectiveEnv } : {}),
     });
     if (result.success) {
       return { success: true, command, toolInstalled: true, message: `Installed via: ${command}` };
@@ -917,7 +972,11 @@ export class RunnerAgent extends Agent {
         // Tool was installed — retry the actual install command (normalize
         // `pip` → `pip3` first — after ensurepip on macOS only the versioned
         // binary may exist on PATH).
-        const attempt = this.runInstallCommand(this.normalizeInterpreter(plan.command), workingDir);
+        const attempt = this.runInstallCommand(
+          this.normalizeInterpreter(plan.command),
+          workingDir,
+          this.projectEnv(workingDir),
+        );
         return {
           success: attempt.success,
           command: plan.command,
@@ -938,8 +997,14 @@ export class RunnerAgent extends Agent {
     }
 
     // ── Tool exists — just run the install command (normalized: macOS has
-    //    `pip3`, not `pip`, so `pip install -r …` would otherwise 127).
-    const attempt = this.runInstallCommand(this.normalizeInterpreter(plan.command), workingDir);
+    //    `pip3`, not `pip`, so `pip install -r …` would otherwise 127). The
+    //    project's pinned venv is applied so the install lands in the project
+    //    env, never the system interpreter.
+    const attempt = this.runInstallCommand(
+      this.normalizeInterpreter(plan.command),
+      workingDir,
+      this.projectEnv(workingDir),
+    );
     return {
       success: attempt.success,
       command: plan.command,
@@ -947,6 +1012,16 @@ export class RunnerAgent extends Agent {
       toolInstalled: false,
       message: attempt.success ? undefined : attempt.message,
     };
+  }
+
+  /**
+   * The pinned project environment (PATH + VIRTUAL_ENV) for `dir`, or undefined
+   * when the directory has no project virtualenv. Shared by the command path and
+   * the dependency-install path so both use the SAME interpreter.
+   */
+  private projectEnv(dir: string): Record<string, string | undefined> | undefined {
+    const venv = getPinnedProjectVenv(dir);
+    return venv ? applyProjectEnvironment({ ...process.env }, venv) : undefined;
   }
 
   private async executeOnHost(
@@ -957,6 +1032,27 @@ export class RunnerAgent extends Agent {
   ): Promise<AgentResult> {
     // (Command was already normalized at the execute() choke point — retries
     // here simply carry the normalized command forward.)
+
+    // ── Project interpreter guard (C2) ────────────────────────────────
+    // The pipeline runner is the OTHER place a Python command executes (the
+    // chat loop's run_terminal is the first). Apply the same guard before it
+    // spawns: pin this project's virtualenv, refuse a package install that
+    // would mutate an interpreter OUTSIDE it, and refuse a build/run against
+    // an interpreter missing the declared dependencies — the exact mistakes
+    // that produced the live Aukat_check "success" for a bundle missing PyQt6.
+    // See src/utils/project-env.ts.
+    const envVerdict = guardCommandEnvironment(command, context.workingDirectory);
+    if (envVerdict.action === 'refuse') {
+      return {
+        success: false,
+        summary: `❌ Environment guard blocked: ${command}`,
+        error: `${envVerdict.reason}. ${envVerdict.hint} (Guard: NUVIRA_ENV_GUARD=off bypasses this.)`,
+      };
+    }
+    const shellEnv =
+      envVerdict.action === 'proceed' && envVerdict.venv
+        ? applyProjectEnvironment({ ...process.env }, envVerdict.venv)
+        : undefined;
 
     // Validate the command before executing
     const validation = this.isCommandAvailable(command, context.workingDirectory);
@@ -1000,6 +1096,7 @@ export class RunnerAgent extends Agent {
       timeoutMs,
       maxBuffer: 1024 * 1024,
       source: 'runner',
+      ...(shellEnv ? { env: shellEnv } : {}),
     });
     const exitCode = shellResult.exitCode;
     const stdout = shellResult.stdout.trim();

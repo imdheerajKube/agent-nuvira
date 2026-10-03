@@ -691,6 +691,52 @@ describe('PlannerAgent', () => {
     });
   });
 
+  // ─── G5 — declared artifacts + plan-quality correction ─────────────────
+  describe('plan quality (G5)', () => {
+    const baseContext = (goal: string) => ({
+      goal,
+      workingDirectory: '/test',
+      taskPlan: [],
+      artifacts: [],
+      conversations: [],
+      fileChanges: [],
+      metadata: {},
+    }) as any;
+
+    it('preserves expectedFiles declared by the model (they were dropped before)', async () => {
+      const context = baseContext('create the addon manifest');
+      const mockLLM = async () => JSON.stringify([
+        {
+          id: 's1',
+          description: 'Create manifest.ini for the addon',
+          agentType: 'writer',
+          dependsOn: [],
+          expectedFiles: ['manifest.ini'],
+        },
+      ]);
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(true);
+      expect(context.taskPlan[0].expectedFiles).toEqual(['manifest.ini']);
+    });
+
+    it('drops a self-dependency (which would deadlock its own step)', async () => {
+      const context = baseContext('create the addon manifest');
+      const mockLLM = async () => JSON.stringify([
+        {
+          id: 's1',
+          description: 'Create manifest.ini for the addon',
+          agentType: 'writer',
+          dependsOn: ['s1'],
+        },
+      ]);
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(true);
+      expect(context.taskPlan[0].dependsOn).toEqual([]);
+    });
+  });
+
   describe('metadata', () => {
     it('should have correct name and description', () => {
       expect(planner.name).toBe('Planner');

@@ -37,6 +37,7 @@
 
 import { chmod, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { recordArtifact } from './artifact-append.js';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { formatUnifiedDiff } from './unified-diff.js';
 import type { ToolContext } from './registry.js';
@@ -796,6 +797,16 @@ export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promi
   } catch (err) {
     return `write_file: write failed on '${gated.rel}': ${(err as Error).message}`;
   }
+  // I3 — a written file IS a deliverable. Record it on the session's artifact
+  // store (when the surface has one) so the dashboard's Artifacts tab shows what
+  // this turn actually produced instead of always reading 0. Best-effort by
+  // construction: the sink is optional and `push` never throws.
+  recordArtifact(ctx.artifacts, {
+    kind: 'file',
+    title: gated.rel,
+    path: gated.abs,
+    sizeBytes: Buffer.byteLength(args.content, 'utf-8'),
+  });
   const outcome = `write_file: ${existed ? 'overwrote' : 'created'} '${gated.rel}' (${args.content.length} chars).`;
   if (!decidedAutonomously) return outcome;
   // Reported, never silent: the model must tell the user what it decided, or

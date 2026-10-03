@@ -50,6 +50,7 @@ import {
   type ProseUnit,
 } from './long-form-plan.js';
 import { buildCompositePlan, type CompositePlan } from './composite-plan.js';
+import { runLiveFanout } from './fanout-scheduler.js';
 import {
   assembleDocument,
   countWords,
@@ -1576,9 +1577,47 @@ export class Orchestrator {
             message: `Running ${parallelGroup.length} independent tasks in parallel`, 
           }, 'orchestrator');
         }
-        await Promise.all(parallelGroup.map(({ task, strategy }) =>
-          this.executeSingleTask(task, vault, options, agentResults, contextFiles, defaultCallLLM, strategy)
-        ));
+        // G3 — LIVE fan-out. The old `Promise.all` over a fixed batch left a
+        // task that a just-finished sibling UNBLOCKED sitting idle until every
+        // other sibling settled. `runLiveFanout` re-polls the runnable set as
+        // each task settles and promotes newly unblocked, non-exclusive work
+        // into the same batch while a lane is free. Default concurrency = the
+        // initial group size, so the first wave is unchanged.
+        const parallelStrategyById = new Map(parallelGroup.map(({ task, strategy }) => [task.id, strategy]));
+        const isExclusiveTask = (task: TaskStep): boolean =>
+          exclusiveAgentTypes.includes(task.agentType) ||
+          this.getExecutionStrategy(task, routingContext).runSerially;
+        const fanout = await runLiveFanout<TaskStep>({
+          initial: parallelGroup.map(({ task }) => task),
+          poll: () => vault.getRunnableTasks(),
+          isExclusive: isExclusiveTask,
+          run: (task) =>
+            this.executeSingleTask(
+              task,
+              vault,
+              options,
+              agentResults,
+              contextFiles,
+              defaultCallLLM,
+              parallelStrategyById.get(task.id) ?? this.getExecutionStrategy(task, routingContext),
+            ),
+          // A promoted task missed the up-front "mark running" sweep above, so
+          // the live board would show it pending until it finished. Mark it as
+          // it is admitted (idempotent for the initial wave).
+          onAdmit: (task) => vault.updateTaskStatus(task.id, 'running'),
+        });
+        if (fanout.promoted.length > 0) {
+          if (options.verbose) {
+            logger.info(
+              `   ⚡ ${fanout.promoted.length} newly unblocked task(s) promoted into the same batch`,
+            );
+          }
+          this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+            agentType: 'orchestrator',
+            stage: 'parallel',
+            message: `Filled freed lane(s) with ${fanout.promoted.length} newly unblocked task(s)`,
+          }, 'orchestrator');
+        }
       }
 
       for (const { task, strategy } of serialGroup) {

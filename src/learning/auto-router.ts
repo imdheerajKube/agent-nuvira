@@ -611,6 +611,38 @@ export const ESCALATION_WIN_RATE_FLOOR = 0.55;
  */
 export const CREATIVE_MIN_REASONING = 0.4;
 
+/**
+ * C4 — build-debug / verification asks need a model strong enough to OBSERVE the
+ * fix, not just describe it. The live failure (2026-10-02): a "fix the build /
+ * it crashes on launch" ask routed to `gemini-3.1-flash-lite`, which then
+ * certified a FAILED build as working. Provider escalation alone did not help,
+ * because it depends on the escalated provider being available; what was
+ * missing is a MODEL-level floor. Hard-eliminate models whose SERVED-model
+ * reasoning falls below this score for the effect-observing intents
+ * (`debugging`, `verification`).
+ *
+ * Calibrated against `getModelCapabilities`' served-model evidence:
+ *   - `gemini-3.1-flash-lite` ≈ 0.65 (flash + lite, stacked) → eliminated;
+ *   - a single `-flash` id ≈ 0.75, openrouter's llama-3.1-8b default ≈ 0.75,
+ *     groq's llama-3.3-70b ≈ 0.80 → kept.
+ * Never a dead-end: if the floor would eliminate every provider, the existing
+ * benign fallback restores the full ranking (a weak candidate beats none).
+ */
+export const VERIFICATION_MIN_REASONING = 0.7;
+
+/**
+ * G5 — the PLANNER needs a strong-reasoning model. A weak planner produces a
+ * poor dependency graph (false serialization, missing independent branches, no
+ * declared artifacts), and every downstream step inherits that plan — so the
+ * plan is the highest-leverage place to spend reasoning. Applied when the task
+ * type is `plan` (agentType `planner`) or the intent is `planning`, judged on
+ * the SERVED model like the C4 floor, with the same never-dead-end fallback.
+ *
+ * Same 0.7 calibration as `VERIFICATION_MIN_REASONING`: a single `-flash` id and
+ * an 8B-default (≈0.75) clear it; a stacked fast-lite id (≈0.65) does not.
+ */
+export const PLANNING_MIN_REASONING = 0.7;
+
 // ── DEFAULT_PROFILES: built-in overrides + catalog-sourced defaults ─────────
 // The 6 built-in profiles have fine-tuned values. ALL other catalog providers
 // get their profiles DYNAMICALLY from the catalog's capability metadata, so
@@ -1034,7 +1066,14 @@ export function analyzeTaskProfile(taskDescription: string): TaskProfile {
   if (/debug|bug|error|fix|trace/.test(text)) {
     return {
       intent: 'debugging',
-      requiresVerification: false,
+      // C4 — a debug/build-fix task is not done until the fix is OBSERVED to
+      // work (the same invariant A1 enforces for builds), so it carries the
+      // verification profile: reasoning/reliability weights rise and cost/speed
+      // fall. Measured live (2026-10-02): a "fix the build / crashes on launch"
+      // ask routed to a fast flash-lite model that then certified a failed build
+      // as working — the quality pressure belongs on this intent.
+      requiresVerification: true,
+      escalationTarget: 'openrouter',
       notes: ['debugging task detected'],
     };
   }
@@ -1161,11 +1200,16 @@ export class AutoModelRouter {
     let reasoningAdj = 0;
     let speedAdj = 0;
 
-    // Parameter-size evidence.
+    // Parameter-size evidence. The >=60B boost is deliberately large enough to
+    // lift a genuine 70B model on a WEAK provider baseline (local 0.30 + 0.45 =
+    // 0.75) over the C4 verification reasoning floor — otherwise a capable local
+    // 70B model would be dropped for a build-debug ask while a cloud fast-lite
+    // model slips through. It never affects SCORING (this method feeds the
+    // constraint gate only), just who is eligible.
     const params = /(\d+(?:\.\d+)?)b(?:\b|-|$)/.exec(m);
     if (params) {
       const b = parseFloat(params[1]);
-      if (b >= 60) reasoningAdj += 0.25;
+      if (b >= 60) reasoningAdj += 0.45;
       else if (b >= 30) reasoningAdj += 0.15;
       else if (b >= 12) reasoningAdj += 0.05;
       else if (b <= 4) {
@@ -1174,12 +1218,18 @@ export class AutoModelRouter {
       }
     }
 
-    // Tier-word evidence.
+    // Tier-word evidence. A fast-tier word LOWERS reasoning and RAISES speed;
+    // STACKED fast-tier markers are penalized PER WORD, so `gemini-3.1-flash-lite`
+    // (flash + lite) lands below the C4 verification reasoning floor while a
+    // single `-flash` id stays above it. This stacked-token penalty is what makes
+    // "don't serve a flash-lite model for a build-debug ask" expressible as a
+    // reasoning floor rather than a brittle id denylist.
     const SLOW_TIER = /\b(large|max|opus|pro|ultra|frontier)\b/;
-    const FAST_TIER = /\b(mini|tiny|small|nano|lite|instant|flash|turbo|haiku)\b/;
+    const FAST_TIER = /\b(mini|tiny|small|nano|lite|instant|flash|turbo|haiku)\b/g;
     if (SLOW_TIER.test(m)) reasoningAdj += 0.15;
-    if (FAST_TIER.test(m)) {
-      reasoningAdj -= 0.1;
+    const fastTierHits = m.match(FAST_TIER)?.length ?? 0;
+    if (fastTierHits > 0) {
+      reasoningAdj -= 0.1 * fastTierHits;
       speedAdj += 0.15;
     }
 
@@ -1364,14 +1414,23 @@ export class AutoModelRouter {
     const taskProfile = options.taskIntentHint
       ? { ...analyzedProfile, intent: options.taskIntentHint }
       : analyzedProfile;
-    // S5: creative/writing tasks need QUALITY — enforce a reasoning floor so a
-    // 4-bit local model (reasoning 0.30) can never serve an essay/poem/letter.
-    // The floor is a hard elimination (like the per-call minReasoning option),
-    // but derived from the task intent rather than a manual config.
+    // S5/C4: creative/writing tasks need QUALITY (a 4-bit local model must never
+    // serve an essay/poem/letter), and a build-debug/verification ask needs a
+    // model strong enough to actually OBSERVE the fix (a fast/lite model must
+    // never certify a failed build as working). Both are a hard reasoning floor
+    // (like the per-call minReasoning option) derived from the task INTENT
+    // rather than a manual config. Scoped to `creative` and to the
+    // effect-observing intents (`debugging`, `verification`) — a design or
+    // migration ask keeps its weight boost but no floor, so e.g. a privacy-first
+    // user can still route an architecture task to local.
     const effectiveMinReasoning =
       taskProfile.intent === 'creative'
         ? Math.max(options.minReasoning ?? 0, CREATIVE_MIN_REASONING)
-        : options.minReasoning;
+        : taskProfile.intent === 'debugging' || taskProfile.intent === 'verification'
+          ? Math.max(options.minReasoning ?? 0, VERIFICATION_MIN_REASONING)
+          : taskType === 'plan' || taskProfile.intent === 'planning'
+            ? Math.max(options.minReasoning ?? 0, PLANNING_MIN_REASONING)
+            : options.minReasoning;
     const mode = options.preferenceMode || 'balanced';
     let weights = computeWeights(complexity, mode, options.weights);
 

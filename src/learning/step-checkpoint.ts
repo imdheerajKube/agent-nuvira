@@ -35,10 +35,10 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { checkpointIdFor } from '../agents/checkpoint-store.js';
+import { checkpointIdFor, goalsLookSame } from '../agents/checkpoint-store.js';
 import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import type { ToolCallResponse } from '../inference/interface.js';
 
@@ -49,6 +49,8 @@ export const RESUME_ENABLE_ENV = 'NUVIRA_RESUME';
 const CHANGED_REASON = 'its input changed';
 const EMPTY_REASON = 'the recorded step was an empty provider response';
 const MISSING_REASON = 'not in the record';
+/** B4 — a checkpoint-only run does not replay, so every step reports this. */
+const NOT_REQUESTED_REASON = 'replay was not requested (checkpoint only)';
 
 /** ─── Requests ─────────────────────────────────────────────────────────────── */
 
@@ -168,6 +170,55 @@ function writeRecord(file: StepRecordFile): boolean {
   }
 }
 
+/** Read a record's metadata without trusting its steps (null when missing/corrupt). */
+function readRecordMeta(id: string): { goal: string; cwd: string; savedAt: number } | null {
+  try {
+    const path = recordPath(id);
+    if (!existsSync(path)) return null;
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<StepRecordFile>;
+    if (!parsed || typeof parsed.goal !== 'string' || typeof parsed.cwd !== 'string') return null;
+    return { goal: parsed.goal, cwd: parsed.cwd, savedAt: typeof parsed.savedAt === 'number' ? parsed.savedAt : 0 };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * B3 — the record id for this ask, in this directory, possibly WORDED DIFFERENTLY.
+ *
+ * `checkpointIdFor` hashes the literal goal, so "fix the hotkey" and "hotkey
+ * still not working" are two unrelated ids and the second ask cannot find the
+ * first's record — the reworded-ask miss the pipeline arm already solves with
+ * `findRelatedCheckpointFor` / `goalsLookSame`. The loop's replay ledger had no
+ * equivalent, so a reworded `--resume` replayed nothing.
+ *
+ * Order of preference: the EXACT id (a record we know is this ask), then the
+ * newest record in this directory whose goal `goalsLookSame` (the same ask,
+ * worded differently). A record for a DIFFERENT ask is never returned — the
+ * caller would otherwise replay answers to questions it never asked.
+ */
+export function resolveRecordIdFor(goal: string, cwd: string): string {
+  const exact = checkpointIdFor(goal, cwd);
+  if (existsSync(recordPath(exact))) return exact;
+  const wanted = cwd.replace(/[\\/]+$/, '');
+  let best: { id: string; savedAt: number } | null = null;
+  try {
+    for (const file of readdirSync(stepsDir())) {
+      if (!file.endsWith('.json')) continue;
+      const id = file.slice(0, -'.json'.length);
+      if (id === exact) continue;
+      const meta = readRecordMeta(id);
+      if (!meta) continue;
+      if (meta.cwd.replace(/[\\/]+$/, '') !== wanted) continue;
+      if (!goalsLookSame(meta.goal, goal)) continue;
+      if (!best || meta.savedAt > best.savedAt) best = { id, savedAt: meta.savedAt };
+    }
+  } catch {
+    return exact;
+  }
+  return best?.id ?? exact;
+}
+
 /** ─── The ledger ───────────────────────────────────────────────────────────── */
 
 /**
@@ -197,6 +248,14 @@ interface LedgerState {
   modelCalls: number;
   /** Why a step missed, counted by reason, in the order they were first seen. */
   misses: Map<string, number>;
+  /**
+   * B4 — whether recorded steps may be REUSED this run.
+   *
+   * `false` is the checkpoint-only mode: the run WRITES a resume point but
+   * replays nothing, so default-on checkpointing can never serve a stale answer
+   * by accident. Replay stays opt-in (`--resume` / `NUVIRA_RESUME`).
+   */
+  replayEnabled: boolean;
   /** The record this run will write: replayed entries carried forward, plus new. */
   staged: Map<string, StepEntry>;
 }
@@ -223,8 +282,25 @@ export interface OpenResume {
 /**
  * Open the record for this ask, reading it once (a record is not re-read per step).
  */
-export function openResume(input: { goal: string; cwd: string; resume: ResumeRequest }): OpenResume {
-  const id = input.resume.id?.trim() || checkpointIdFor(input.goal, input.cwd);
+export function openResume(input: {
+  goal: string;
+  cwd: string;
+  resume: ResumeRequest;
+  /**
+   * B4 — reuse recorded steps (default true). `false` = checkpoint-only: write a
+   * resume point without replaying anything, which is what makes default-on
+   * checkpointing safe. A caller that only wants to LEAVE a record passes false.
+   */
+  replay?: boolean;
+}): OpenResume {
+  const replayEnabled = input.replay !== false;
+  // B3 — an explicit id is honoured exactly; otherwise resolve the record for
+  // this ask HERE, matching a reworded version of the same ask too. A
+  // checkpoint-only run does NOT go looking for a reworded record: it is
+  // writing forward, not resuming, so it uses this ask's own id.
+  const id =
+    input.resume.id?.trim() ||
+    (replayEnabled ? resolveRecordIdFor(input.goal, input.cwd) : checkpointIdFor(input.goal, input.cwd));
   const prior = readRecord(id);
   const state: LedgerState = {
     id,
@@ -234,12 +310,21 @@ export function openResume(input: { goal: string; cwd: string; resume: ResumeReq
     replayed: 0,
     modelCalls: 0,
     misses: new Map(),
-    staged: new Map(),
+    replayEnabled,
+    // Checkpoint-only: seed the staged map with what the record already holds so
+    // `closeResume` MERGES this run's steps into it instead of replacing a
+    // usable record with only the latest run's work.
+    staged: replayEnabled ? new Map() : new Map(prior.map((entry) => [entry.key, entry])),
   };
   const byKey = new Map(prior.map((entry) => [entry.key, entry]));
 
   const ledger: StepReplay = {
     replay(key, digest) {
+      if (!state.replayEnabled) {
+        // Checkpoint-only: nothing is reused this run (see `replayEnabled`).
+        countMiss(state, NOT_REQUESTED_REASON);
+        return null;
+      }
       const entry = byKey.get(key);
       if (!entry) {
         countMiss(state, MISSING_REASON);
@@ -264,6 +349,11 @@ export function openResume(input: { goal: string; cwd: string; resume: ResumeReq
       state.staged.set(key, { key, digest, response });
     },
     openNotice() {
+      if (!state.replayEnabled) {
+        return state.loaded > 0
+          ? `💾 checkpointing this run — the existing record (${state.loaded} step(s)) will be updated`
+          : '💾 checkpointing this run — a resume point will be written for this ask';
+      }
       return state.loaded > 0
         ? `↩️  resumed: ${state.loaded} recorded step(s) loaded — a step replays only when its whole input is unchanged`
         : '↩️ no record for this ask in this directory yet — this run will write one';
@@ -284,6 +374,13 @@ export interface ResumeOutcome {
   replayed: number;
   /** Model calls the RESUMED run still made (0 = every step came from the record). */
   modelCalls: number;
+  /**
+   * Phase 5 — the CONTINUATION SAVING, stated as a first-class number: each
+   * replayed step is one model call the resumed run did NOT pay for. Equal to
+   * `replayed` by construction, but named so a surface can report the saving
+   * without knowing that identity.
+   */
+  callsAvoided: number;
   /** False when the record could not be written (the run itself still happened). */
   saved: boolean;
   /** The operator-facing line: the counts, and why nothing replayed when it didn't. */
@@ -302,7 +399,7 @@ export function closeResume(resume: OpenResume, input: { goal: string; cwd: stri
   const state = STATES.get(resume.ledger);
   if (!state) {
     const notice = '↩️  resume probe: replayed 0, made 0 model call(s)';
-    return { id: resume.id, replayed: 0, modelCalls: 0, saved: false, notice };
+    return { id: resume.id, replayed: 0, modelCalls: 0, callsAvoided: 0, saved: false, notice };
   }
   const steps = [...state.staged.values()];
   let saved: boolean;
@@ -320,8 +417,12 @@ export function closeResume(resume: OpenResume, input: { goal: string; cwd: stri
     });
   }
 
+  const avoided =
+    state.replayed > 0
+      ? ` — ${state.replayed} model call(s) REUSED from the record (not re-paid)`
+      : '';
   const lines = [
-    `↩️  resume probe: replayed ${state.replayed}, made ${state.modelCalls} model call(s)`,
+    `↩️  resume probe: replayed ${state.replayed}, made ${state.modelCalls} model call(s)${avoided}`,
   ];
   if (state.replayed === 0 && state.misses.size > 0) {
     const reasons = [...state.misses.entries()].map(([reason, count]) => `${reason} (${count})`);
@@ -334,6 +435,7 @@ export function closeResume(resume: OpenResume, input: { goal: string; cwd: stri
     id: state.id,
     replayed: state.replayed,
     modelCalls: state.modelCalls,
+    callsAvoided: state.replayed,
     saved,
     notice: lines.join('\n'),
   };

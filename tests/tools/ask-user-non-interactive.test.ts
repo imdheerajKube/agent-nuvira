@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const inquirerPrompt = vi.hoisted(() => vi.fn());
 vi.mock('inquirer', () => ({ default: { prompt: inquirerPrompt } }));
 
-import { renderAskUser } from '../../src/tools/ask-user.js';
+import { renderAskUser, OTHER_CHOICE_LABEL } from '../../src/tools/ask-user.js';
 
 const CHOICES = [
   { label: 'Update implementation', description: 'Replace the current logic' },
@@ -116,6 +116,41 @@ describe('renderAskUser — interactive (TTY)', () => {
     expect(answer.answer).toBe('Cancel');
     expect(answer.index).toBe(1);
     // An interactive answer carries no \"no user\" notice.
+    expect(answer.custom).toBeUndefined();
+  });
+
+  // C1 — the user's real answer is sometimes none of the offered choices.
+  it('offers an "Other" choice and returns the typed answer as custom', async () => {
+    // 1st prompt: the user picks "Other"; 2nd: they type their answer.
+    inquirerPrompt
+      .mockResolvedValueOnce({ answer: OTHER_CHOICE_LABEL })
+      .mockResolvedValueOnce({ text: '  Use SQLite instead  ' });
+
+    const answer = await renderAskUser('Which store?', CHOICES, false);
+
+    expect(answer.answer).toBe('Use SQLite instead');
+    expect(answer.custom).toBe('Use SQLite instead');
+    // A custom answer is not one of the choices — no index.
+    expect(answer.index).toBe(-1);
+  });
+
+  it('includes the Other choice in the list it renders', async () => {
+    inquirerPrompt.mockResolvedValue({ answer: 'Cancel' });
+    await renderAskUser('Apply this change?', CHOICES, false);
+
+    const firstCall = inquirerPrompt.mock.calls[0]?.[0] as { choices?: Array<{ value?: string }> };
+    const values = (firstCall?.choices ?? []).map((c) => c.value);
+    expect(values).toContain(OTHER_CHOICE_LABEL);
+  });
+
+  it('treats an empty Other entry as a decline, not a blank answer', async () => {
+    inquirerPrompt
+      .mockResolvedValueOnce({ answer: OTHER_CHOICE_LABEL })
+      .mockResolvedValueOnce({ text: '   ' });
+
+    const answer = await renderAskUser('Which store?', CHOICES, false);
+
+    expect(answer.index).toBe(-1);
     expect(answer.custom).toBeUndefined();
   });
 });

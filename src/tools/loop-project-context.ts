@@ -32,6 +32,9 @@ import { join } from 'node:path';
 import { buildGitStateDigest } from './git-digest.js';
 import { assessProject } from '../agents/prompt-assembly.js';
 import { handoffBlockFor } from '../agents/step-handoff.js';
+import { describeProjectInterpreter } from '../utils/project-env.js';
+import { formatWorkingState, getWorkingState } from '../learning/working-state.js';
+import { formatCrossSessionMemory } from '../learning/context-assembly.js';
 
 /** Hard budget: the tree block is truncated to this many lines (~1.5K tokens). */
 const MAX_TREE_LINES = 60;
@@ -124,7 +127,10 @@ export function walkBoundedTree(dir: string): string[] {
  *   ## File tree — bounded BFS walk, honestly truncated
  *   ## Git state — branch, dirty files, recent commits
  */
-export async function buildLoopProjectContext(dir: string): Promise<string> {
+export async function buildLoopProjectContext(
+  dir: string,
+  opts: { goal?: string; sessionRecall?: boolean } = {},
+): Promise<string> {
   try {
     if (!looksLikeProject(dir)) return '';
 
@@ -143,6 +149,47 @@ export async function buildLoopProjectContext(dir: string): Promise<string> {
       lines.push('## Project', `- path: ${dir}`, `- ${bits.join('; ')}`);
     } catch {
       lines.push('## Project', `- path: ${dir}`);
+    }
+
+    // ── Pinned project interpreter ──
+    // States WHICH interpreter this project runs under, so the model does not
+    // re-derive it (or build against the system Python) on every turn. The
+    // live Aukat_check failure was exactly that guess going wrong.
+    try {
+      const interpreter = describeProjectInterpreter(dir);
+      if (interpreter) lines.push(`- ${interpreter}`);
+    } catch {
+      // Best-effort — omit on failure.
+    }
+
+    // ── Cross-turn working state (parity with the orchestrator path) ──
+    // The SAME deterministic ledger `prompt-assembly` injects, so the loop stops
+    // re-deriving what previous turns already established in this project (files
+    // changed, outstanding verification debt, user-reported regressions). This
+    // closes the drift where the orchestrator remembered across turns and the
+    // loop did not. Self-labelled and self-bounded; omits itself when empty.
+    try {
+      const workingState = formatWorkingState(getWorkingState(dir));
+      if (workingState) lines.push(workingState);
+    } catch {
+      // Working-state read is best-effort — omit on failure.
+    }
+
+    // ── Cross-session memory (the ONE composer, shared with the orchestrator) ──
+    // RECENT asks (the deterministic digest) plus, only when the deployment asks
+    // for it, semantically similar PAST asks. Advisory only: the block is
+    // self-labelled history, not a status, so an old "completed" line can never
+    // be read as proof the current work is done (completion still derives from
+    // disk). Delegated to `context-assembly.ts` so this block is byte-identical
+    // wherever it is shown (see the orchestrator's assessment).
+    try {
+      const memory = await formatCrossSessionMemory(dir, {
+        goal: opts.goal,
+        ...(opts.sessionRecall === undefined ? {} : { sessionRecall: opts.sessionRecall }),
+      });
+      if (memory) lines.push(memory);
+    } catch {
+      // Best-effort — omit on failure.
     }
 
     // ── Unfinished work from earlier attempts in this project ──

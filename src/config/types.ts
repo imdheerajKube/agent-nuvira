@@ -120,6 +120,20 @@ export interface MemoryConfig {
    *   - `json` — exact flat cosine scan (the original behavior).
    */
   vectorBackend?: 'auto' | 'faiss' | 'json';
+  /**
+   * Persist session transcripts across process death (default: true). On, a run
+   * snapshots its conversation at each step boundary to
+   * `~/.nuvira/memory/sessions/`, so a killed/crashed turn can be picked up by
+   * the next one; a completed turn is closed and never resumed. Set false to
+   * turn it off. Also `NUVIRA_SESSION_STORE=0` / `--no-session-store`.
+   */
+  sessionStore?: boolean;
+  /**
+   * Index finished asks for SEMANTIC recall and surface similar PAST asks
+   * (default: true). Advisory history only — never a status. Set false to turn
+   * it off. Also `NUVIRA_SESSION_RECALL=0` / `--no-session-recall`.
+   */
+  sessionRecall?: boolean;
 }
 
 /**
@@ -478,6 +492,16 @@ export interface BuffConfig {
    */
   skills?: SkillsConfig;
   /**
+   * Modality backend selection (image generation, and future audio/video).
+   * Absent = auto-select the first backend whose API key is configured.
+   */
+  modality?: ModalityConfig;
+  /**
+   * Dashboard runtime settings. Managed via the Admin page's Workspace field
+   * or `nuvira config set dashboard.cwd <dir>`.
+   */
+  dashboard?: DashboardConfig;
+  /**
    * Gateway per-platform inbound policies (who may trigger the agent). Managed
    * via `nuvira config gateway allow/disallow/reply` or the dashboard Permissions
    * page; merged over env in GatewayRegistry (env < config < explicit options).
@@ -547,6 +571,47 @@ export interface SkillsConfig {
    * override (or the built-in default) is used.
    */
   registries?: string[];
+}
+
+/**
+ * Modality configuration — backend selection for image generation (and, in
+ * future, audio/video). `modality.image.provider` pins a specific backend
+ * (gemini | openai | stability | comfyui | pollinations); when unset the first
+ * backend whose API key is configured is used. `modality.image.model` overrides
+ * the provider's default model, and `modality.image.baseUrl` overrides an
+ * endpoint where a provider supports one. Set via
+ * `nuvira config set modality.image.provider <id>` or directly in
+ * .nuviraconfig.json.
+ */
+export interface ModalityConfig {
+  image?: {
+    /** Backend id: gemini | openai | stability | comfyui | pollinations. */
+    provider?: string;
+    /** Provider-specific model override. */
+    model?: string;
+    /** Optional endpoint override (e.g. a self-hosted gateway). */
+    baseUrl?: string;
+  };
+}
+
+/**
+ * Dashboard runtime settings.
+ *
+ * The dashboard's chat turns run against a DIRECTORY. When the user has
+ * attached a project the turn is scoped to it; when they have not, the turn
+ * used to inherit the dashboard server process's own working directory — which
+ * for a service started from the home folder meant "assess this project"
+ * assessed whatever happened to be in `~`. `dashboard.cwd` makes that fallback
+ * explicit and configurable instead of accidental: set it to a project root and
+ * an unintended folder can never be scanned again.
+ */
+export interface DashboardConfig {
+  /**
+   * Directory dashboard chat turns run in when no project is attached.
+   * Absolute path; must exist. Absent = the server process's own cwd (the
+   * legacy behaviour, and the reason the ask-to-attach guard exists).
+   */
+  cwd?: string;
 }
 
 /**

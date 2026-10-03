@@ -68,8 +68,8 @@ import {
   isToolCallingUnsupported,
   stripToolCallArtifacts,
 } from '../inference/tool-call-utils.js';
-import { beginTrace, endTrace, recordStep, recordTraceEvent, recordTraceFindings, buildTraceOutcome } from '../learning/reasoning-trace.js';
-import { recordWorkingState, getWorkingState, formatWorkingState } from '../learning/working-state.js';
+import { beginTrace, endTrace, recordStep, recordTraceEvent, recordTraceFindings, buildTraceOutcome, traceOutcomeSucceeded } from '../learning/reasoning-trace.js';
+import { recordWorkingState, getWorkingState, formatWorkingState, isProjectLedgerDir } from '../learning/working-state.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile, shouldSkipNativeTools } from '../learning/model-harness.js';
 import { resolveAdapterDefault, hasCredentials } from '../learning/model-selection.js';
@@ -102,6 +102,7 @@ import { debugLogNotice, sessionDebugLog } from '../observability/debug-log.js';
 import {
   buildFollowupContinuationPrompt,
   isSuggestedFollowup,
+  withContinuationFollowups,
   type FollowupSuggestion,
 } from '../tools/followup-utils.js';
 // S2/S3 — the shared tool-call reliability helpers (salvage failed_generation,
@@ -687,6 +688,12 @@ export class ChatCommand extends BaseCommand {
    * artifact does not exist, so no surface may read it as finished work.
    */
   undeliveredArtifact?: boolean;
+  /**
+   * A3 Part 2 — a BUILD command ran and FAILED this turn, no later build
+   * succeeded, and the answer still asserted the artifact came out good.
+   * Surfaces must not present such a turn as finished work.
+   */
+  unverifiedBuildClaim?: boolean;
   provider?: string;
   model?: string;
   /**
@@ -842,6 +849,7 @@ export class ChatCommand extends BaseCommand {
       unverifiedActionClaim: answer.unverifiedActionClaim,
       unfulfilledPromise: answer.unfulfilledPromise,
       undeliveredArtifact: answer.undeliveredArtifact,
+      unverifiedBuildClaim: answer.unverifiedBuildClaim,
       // WS1 — the findings this turn recorded (empty when it recorded none).
       findings: answer.findings ?? [],
       provider: type,
@@ -1463,6 +1471,8 @@ export class ChatCommand extends BaseCommand {
     unfulfilledPromise?: boolean;
     /** G13b — asked for an authored file and wrote none (see the gate). */
     undeliveredArtifact?: boolean;
+    /** A3 Part 2 — a build ran, failed, and the answer claimed it worked. */
+    unverifiedBuildClaim?: boolean;
     /**
      * R2 — the tool transport this turn travelled on (`native` / `json` /
      * `none`), as the loop reported it. Absent only when no loop ran (a cache
@@ -1503,12 +1513,26 @@ export class ChatCommand extends BaseCommand {
       goal: message,
     });
 
+    /**
+     * The workspace this turn is ABOUT: the attached project when one was given,
+     * else this process's own cwd — the same directory `projectDir`/`turnCwd`
+     * below resolve to, computed HERE because the response cache needs it.
+     *
+     * Without it in the cache key, an answer was reused across projects: "what's
+     * the current status of this project?" asked in project B replayed the report
+     * generated in project A, and because the replayed text is a confident,
+     * well-formed answer about a real tree, it read as the agent ignoring the
+     * attached folder. Scoping the key makes every cached answer a statement
+     * about one directory.
+     */
+    const turnScope = ctxOverrides?.projectPath || process.cwd();
+
     // Cache check first (same as the legacy path).
     const cache = getCache();
     const cacheModel = this.cacheModelFor(session);
     if (cacheEnabled) {
       try {
-        const cachedResult = await cache.get(message, cacheModel, session.type);
+        const cachedResult = await cache.get(message, cacheModel, session.type, turnScope);
         if (cachedResult) {
           // NOTE: the cached answer is NOT printed here — the caller prints
           // content AFTER runChatAnswer returns (answer-first ordering). A
@@ -1519,7 +1543,10 @@ export class ChatCommand extends BaseCommand {
           this.memoryNoteTurn(message, cachedResult);
           // WS2 — a cache replay reached no model, so the log says exactly that
           // rather than borrowing an attribution from a turn that did not run.
-          debugLog?.event('cache.hit', { chars: cachedResult.length });
+          // The workspace the replayed answer belongs to is recorded with the hit:
+          // a cache replay does no work, so "which project is this answer about?"
+          // is the one fact needed to tell a replay from a real turn.
+          debugLog?.event('cache.hit', { chars: cachedResult.length, scope: turnScope });
           const cacheNotice = debugLogNotice(ctxOverrides?.debugSurface ?? 'cli-chat', debugLog?.write() ?? null);
           if (cacheNotice) logger.info(cacheNotice);
           return { content: cachedResult };
@@ -1552,7 +1579,10 @@ export class ChatCommand extends BaseCommand {
      */
     const report =
       ctxOverrides?.onProgress ?? ((line: string): void => void logger.info(line));
-    const projectDir = ctxOverrides?.projectPath || process.cwd();
+    // Same directory the cache key above is scoped to (see `turnScope`) — one
+    // resolution per turn, so the cached answer and the work cannot disagree
+    // about which project the turn belongs to.
+    const projectDir = turnScope;
     const isolationRequest = resolveIsolationRequest({
       worktree: ctxOverrides?.worktree,
       keepWorktree: ctxOverrides?.keepWorktree,
@@ -1704,8 +1734,16 @@ export class ChatCommand extends BaseCommand {
     // what previous turns already established. This is the fix for the
     // calculator session's core drift (it re-diagnosed the same root cause six
     // times, then undid its own earlier fixes).
+    // G4 — the ledger is a claim about a PROJECT, so it is only read for a
+    // directory that can honestly be one. A home directory (or a filesystem
+    // root) is a container of unrelated checkouts: injecting its ledger as
+    // "THIS project's" working state is how "what's the state of this project?"
+    // came back describing an NVDA add-on nobody had mentioned. See
+    // isProjectLedgerDir.
     const workingStatePath = turnCwd;
-    const workingStateBlock = formatWorkingState(getWorkingState(workingStatePath));
+    const workingStateBlock = isProjectLedgerDir(workingStatePath)
+      ? formatWorkingState(getWorkingState(workingStatePath))
+      : '';
 
     // Session 3 — channel/format policy lives in the STABLE layer. It is
     // identical on every message, so keeping it here makes the system prompt
@@ -2040,23 +2078,24 @@ export class ChatCommand extends BaseCommand {
     // Record WHAT HAPPENED, not just "the model answered": a hallucinated
     // "I have sent it" (no tool ran) must be visible as an unverified claim in
     // the Trace tab instead of looking like a real delivery.
-    endTrace(
-      chatTraceId,
-      !result.generationFailed,
-      buildTraceOutcome({
-        generationFailed: result.generationFailed,
-        cancelled: result.cancelled,
-        // What actually RAN successfully, not what was attempted: a failed
-        // `gateway_send` must not make the trace read
-        // "✅ action performed — message sent".
-        tools: result.successfulToolCalls ?? result.toolCalls,
-        unverifiedActionClaim: result.unverifiedActionClaim,
-        unfulfilledPromise: result.unfulfilledPromise,
-        unverifiedEdit: result.unverifiedEdit,
-        unverifiedEditClaim: result.unverifiedEditClaim,
-        undeliveredArtifact: result.undeliveredArtifact,
-      }),
-    );
+    const chatOutcome = buildTraceOutcome({
+      generationFailed: result.generationFailed,
+      cancelled: result.cancelled,
+      // What actually RAN successfully, not what was attempted: a failed
+      // `gateway_send` must not make the trace read
+      // "✅ action performed — message sent".
+      tools: result.successfulToolCalls ?? result.toolCalls,
+      unverifiedActionClaim: result.unverifiedActionClaim,
+      unfulfilledPromise: result.unfulfilledPromise,
+      unverifiedEdit: result.unverifiedEdit,
+      unverifiedEditClaim: result.unverifiedEditClaim,
+      undeliveredArtifact: result.undeliveredArtifact,
+      unverifiedBuildClaim: result.unverifiedBuildClaim,
+    });
+    // A cancelled / failed / incomplete turn is NOT a success. `!generationFailed`
+    // used to let a cancelled run record `success: true` while its outcome said
+    // `cancelled`, so nothing downstream offered to continue it.
+    endTrace(chatTraceId, traceOutcomeSucceeded(chatOutcome), chatOutcome);
 
     // WS1 (#23) — persist the turn's findings (claim, outcome, evidence and the
     // gate's verdict) on the trace, so the verdicts can be audited from the
@@ -2073,13 +2112,19 @@ export class ChatCommand extends BaseCommand {
       const verified = activity.some(
         (t) => t === 'run_terminal' || t === 'test' || t === 'browser' || t === 'run_cli',
       );
-      recordWorkingState(workingStatePath, {
-        filesTouched: [...touchedFiles],
-        toolsUsed: activity,
-        verified,
-        unverifiedEdit: result.unverifiedEdit === true,
-        userMessage: message,
-      });
+      // …and it is only WRITTEN for a real project, so a home-directory turn
+      // stops growing a ledger that no future turn may honestly use. (The same
+      // guard as the read above — read and write must agree on what a project is,
+      // or the block would be empty forever while the file kept accumulating.)
+      if (isProjectLedgerDir(workingStatePath)) {
+        recordWorkingState(workingStatePath, {
+          filesTouched: [...touchedFiles],
+          toolsUsed: activity,
+          verified,
+          unverifiedEdit: result.unverifiedEdit === true,
+          userMessage: message,
+        });
+      }
     } catch {
       // Best-effort.
     }
@@ -2111,6 +2156,13 @@ export class ChatCommand extends BaseCommand {
           '   ⚠️  This request asked for a written deliverable, but NO file was written this turn — the text above is the answer, not the artifact.',
         );
       }
+      // A3 Part 2 — the build-honesty warning: the run's OWN evidence says the
+      // build failed, so the success prose above is contradicted by the turn.
+      if (result.unverifiedBuildClaim) {
+        logger.warn(
+          '   ⚠️  A build command FAILED this turn and no later build succeeded, but the reply reports success — treat the build as UNVERIFIED.',
+        );
+      }
     } catch {
       // Best-effort.
     }
@@ -2128,7 +2180,7 @@ export class ChatCommand extends BaseCommand {
           // on success), so a weak model's reply is never replayed as a strong
           // model's. `cacheModel` is the pre-flight fallback for the paths that
           // never resolve one (e.g. a cached-hit turn).
-          await cache.set(message, result.content, this.cacheModelFor(session) || cacheModel, session.type);
+          await cache.set(message, result.content, this.cacheModelFor(session) || cacheModel, session.type, undefined, turnScope);
         } catch {
           // Best-effort.
         }
@@ -2193,16 +2245,34 @@ export class ChatCommand extends BaseCommand {
       await flushSpans();
     }
 
+    // A4 — an unfinished turn (cancelled, or an outcome that did not conclude)
+    // offers the way back in: Continue / Retry, on top of the model's own
+    // suggestions. A concluded turn is left exactly as it was.
+    const chatOutcomeForFollowups = buildTraceOutcome({
+      generationFailed: result.generationFailed,
+      cancelled: result.cancelled,
+      tools: result.successfulToolCalls ?? result.toolCalls,
+      unverifiedActionClaim: result.unverifiedActionClaim,
+      unfulfilledPromise: result.unfulfilledPromise,
+      undeliveredArtifact: result.undeliveredArtifact,
+      unverifiedBuildClaim: result.unverifiedBuildClaim,
+    });
+    const chatFollowups = withContinuationFollowups(result.followups, {
+      unfinished: !traceOutcomeSucceeded(chatOutcomeForFollowups),
+      hadTools: (result.successfulToolCalls ?? result.toolCalls ?? []).length > 0,
+    });
+
     return finish({
       content: stripToolCallArtifacts(result.content),
       generationFailed: result.generationFailed,
       cancelled: result.cancelled,
       bounded: result.bounded,
-      followups: result.followups,
+      followups: chatFollowups,
       toolCalls: result.toolCalls,
       unverifiedActionClaim: result.unverifiedActionClaim,
       unfulfilledPromise: result.unfulfilledPromise,
       undeliveredArtifact: result.undeliveredArtifact,
+      unverifiedBuildClaim: result.unverifiedBuildClaim,
       // R2 — the transport this turn travelled on (interactive REPL path).
       transport: result.transport,
       // WS1 — the findings this turn recorded, with their verdicts.

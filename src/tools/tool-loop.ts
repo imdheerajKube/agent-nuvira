@@ -17,6 +17,10 @@
  */
 
 import { getTool, toolJsonSchemas, type ToolContext, type ToolJsonSchema } from './registry.js';
+import type { ExecutedAction } from '../findings/verdicts.js';
+// A1 — build-command recognition, shared with effect verification so "a build"
+// means the same thing to both the launch check and the honesty guard.
+import { isBuildCommand } from '../utils/effect-verification.js';
 // WS3 (#25) — the turn's span tree. Null-safe throughout: with export off every
 // helper below is a no-op and no span object is ever built.
 import { TOOL_SPAN_PREFIX, withSpanActive, type SpanHandle } from '../observability/otel.js';
@@ -72,6 +76,7 @@ import {
 } from './edit-verification.js';
 import { effectiveToolJsonSchemas, coreToolJsonSchemas, isToolEnabled, toolsetForTool } from './toolsets.js';
 import { deliverablesNamedIn, recordStepHandoff } from '../agents/step-handoff.js';
+import { fenceUntrustedToolOutput } from './untrusted-content.js';
 import type { TraceEvent, TraceGateName } from '../learning/reasoning-trace.js';
 
 /**
@@ -92,6 +97,28 @@ function mutatedPathOf(args: unknown): string | undefined {
   const a = args as { path?: unknown; file_path?: unknown; file?: unknown } | undefined;
   const p = a?.path ?? a?.file_path ?? a?.file;
   return typeof p === 'string' && p.trim() ? p.trim() : undefined;
+}
+
+/**
+ * Append what a tool call actually did to the turn's provenance ledger.
+ *
+ * Only the two things a finding may cite and a machine can check are recorded:
+ * the shell `command` a call ran, and the `path` a file call touched. A call
+ * that named neither (a plan, a follow-up, a search) contributes nothing, and a
+ * value that is present but blank is treated as absent — the same standard the
+ * finding gate applies to an evidence reference.
+ */
+function recordExecutedAction(
+  ledger: ExecutedAction[],
+  tool: string,
+  args: unknown,
+  ok: boolean,
+): void {
+  const a = args as { command?: unknown } | undefined;
+  const command = typeof a?.command === 'string' && a.command.trim() ? a.command.trim() : undefined;
+  const path = mutatedPathOf(args);
+  if (command === undefined && path === undefined) return;
+  ledger.push({ tool, ok, ...(command ? { command } : {}), ...(path ? { path } : {}) });
 }
 
 /**
@@ -396,6 +423,23 @@ export interface ToolLoopOptions {
    */
   onTraceEvent?: (event: LoopTraceEvent) => void;
   /**
+   * Phase 4c — STEP-BOUNDARY SNAPSHOT sink, called once per completed step AFTER
+   * that step's tool results are in the thread. The live thread and the honest
+   * accumulators are handed over so a caller can persist a resumable session
+   * snapshot (see `learning/session-store.ts`); a process that dies on the next
+   * step still leaves a record through this one.
+   *
+   * Additive and optional: omitted, the loop is byte-identical to before. The
+   * callback is invoked inside a try/catch, so a failing writer cannot break the
+   * turn. The thread is the loop's OWN array — a caller must copy, not mutate.
+   */
+  onStep?: (step: {
+    thread: readonly ToolMessage[];
+    steps: number;
+    successfulTools: readonly string[];
+    mutatedPaths: readonly string[];
+  }) => void;
+  /**
    * Bounded auto-continuation budget (default: 2). A turn that dies MID-WAY —
    * the provider walk exhausted every candidate at step N, or the step bound
    * was reached while the model still had work to do — is RESUMED rather than
@@ -551,6 +595,17 @@ export interface ToolLoopResult {
    * trace flags it.
    */
   unverifiedEditClaim?: boolean;
+  /**
+   * A3 PART 2 — HONESTY FLAG — a BUILD command ran this turn and FAILED, no
+   * later build succeeded, and the answer nonetheless asserts the artifact came
+   * out good ("successfully rebuilt", "launches without crashing"). Found live:
+   * `pyinstaller AukatCheck.spec` exited 1, the model opened the STALE app and
+   * reported success. Distinct from `unverifiedEditClaim` (a code edit nothing
+   * observed): here the run observed the build, observed it FAIL, and the prose
+   * contradicts the run's own evidence. The caller must not present such a turn
+   * as done; the trace records it and the outcome is `incomplete`.
+   */
+  unverifiedBuildClaim?: boolean;
   /**
    * R2 — which transport carried this turn's tool calls (`native` / `json` /
    * `none`), as reported by the caller's own model-call seam. Absent when the
@@ -814,6 +869,13 @@ export interface ToolLoopProgress {
   /** Session 4 — successful verification calls (args + result) to judge relevance. */
   verificationEvidence: ToolCallEvidence[];
   /**
+   * The actions this turn actually PERFORMED, in execution order (success and
+   * failure alike), shared with the tools so the `finding` gate can check a
+   * citation's provenance, and read at the end of the turn for the honesty
+   * flags (a failed build plus a success claim — see `unverifiedBuildClaim`).
+   */
+  executedActions: ExecutedAction[];
+  /**
    * Stage 2 — the live run trace, handed out so the caller can report the
    * turn's own behaviour as NUMBERS (how many questions reached the user, how
    * many repeated). A live object, snapshotted at the end of the turn — every
@@ -940,9 +1002,16 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   const traceKey = isTraceKey(context.planStore) ? (context.planStore as object) : undefined;
   const runTrace: RunTrace = traceKey ? runTraceFor(traceKey) : new RunTrace();
   progress.runTrace = runTrace;
+  // WS1/A3 — the actions this turn actually PERFORMED, in execution order.
+  // Shared on the one context object every tool call receives, and appended in
+  // `runOne` as each call finishes BEFORE the next call in the same step runs,
+  // so a `finding` in the same step can check its cited command/path against
+  // what really happened (see `enforceEvidenceProvenance`).
+  const executedActions: ExecutedAction[] = progress.executedActions;
   const ctx: ToolContext = {
     ...context,
     followups: context.followups || sink,
+    executedActions,
     writesAuthorized: authorization,
     // The RAW text too, not only the file-shaped verdict: each gated tool needs
     // the evidence its own question requires (does the request name this file?
@@ -1694,6 +1763,13 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // The SAME outcome convention the loop uses everywhere else (`Error:`
         // prefix), so the span cannot report a success the result did not have.
         const toolOk = !resultText.startsWith('Error:');
+        // Record what this call REALLY did, for evidence provenance. A call the
+        // loop REFUSED never performed its command/path, so it is not evidence
+        // that a claim's citation is real; an executed-but-failed call IS (a
+        // failing command is real evidence about a failure).
+        if (classifyToolRefusal(resultText) === null) {
+          recordExecutedAction(executedActions, call.name, call.arguments, toolOk);
+        }
         ctx.emit?.('tool:called', {
           id: call.id,
           tool: call.name,
@@ -1844,6 +1920,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         }
       }
       let resultText = executed[i];
+      // P3 — fence EXTERNAL content (web pages/search hits) as DATA, so a page
+      // cannot smuggle instructions into the context. Local tool output is
+      // untouched, and a tool's own failure text is left as it is.
+      resultText = fenceUntrustedToolOutput(call.name, resultText);
       // P3c — on error/denial, append the deterministic fallback hint for
       // this tool (advisory — the model still decides; never on success).
       const hint = fallbackHintForTool(call.name, resultText);
@@ -1870,14 +1950,34 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         result: previewToolResult(rawResult),
         ok: ranOk,
         ...(durationMs !== undefined ? { durationMs } : {}),
-      });
-      thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
+      });      thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
     }
 
     // Tiered exposure: after EVERY executed tool call, union any newly
     // loaded toolset schemas into the live set so the NEXT model step can
     // call them natively (tool_search load → loadedExtraTools → here).
     mergeLoadedTools();
+
+    // Phase 4c — STEP BOUNDARY. The step's tool results are now IN the thread,
+    // so this is the first point at which the turn's work is fully reflected in
+    // the conversation. A caller persisting a session snapshot (Phase 4b) is
+    // handed the live thread + the honest accumulators HERE, so a process that
+    // dies on the NEXT step leaves a record of everything through this one.
+    //
+    // Best-effort by contract: a snapshot writer that throws must never break
+    // the loop it observes (same rule as `onTraceEvent`).
+    if (opts.onStep) {
+      try {
+        opts.onStep({
+          thread,
+          steps,
+          successfulTools: progress.successfulToolCalls,
+          mutatedPaths: progress.mutatedPaths,
+        });
+      } catch {
+        // Best-effort — a snapshot failure is not the turn's failure.
+      }
+    }
 
     // P4 — cancellation during/after tool execution: do NOT request another
     // model step on a cancelled turn (the user already walked away).
@@ -2164,6 +2264,74 @@ export function detectUnfulfilledIntentPromise(content: string): boolean {
   return false;
 }
 
+// ─── Build honesty (A3 Part 2) ──────────────────────────────────────────────
+/**
+ * Past-tense sentences that ASSERT a BUILD, or its artifact, came out good.
+ * Deliberately about a build/artifact and not about tests or edits: "all tests
+ * pass" and "I fixed the parser" are other guards' territory, and widening the
+ * claim set is how a guard starts crying wolf.
+ */
+const BUILD_SUCCESS_CLAIM_RE: readonly RegExp[] = [
+  /\b(?:successfully\s+)?(?:re-?built|recompiled|repackaged)\b/i,
+  /\b(?:built|compiled|packaged|bundled|produced|generated)\s+(?:successfully|cleanly|without\s+(?:errors?|issues?|warnings?))\b/i,
+  /\bsuccessfully\s+(?:built|compiled|packaged|bundled|generated|rebuilt|launched)\b/i,
+  /\b(?:the\s+)?(?:build|rebuild|compilation|compile|packaging|bundle|bundling)\s+(?:succeeded|passed|completed\s+successfully|is\s+(?:green|clean|successful|complete|done))\b/i,
+  /\b(?:launches?|starts?|runs?|boots?)\s+(?:without\s+(?:crash\w*|errors?|issues?|problems?)|successfully|fine|correctly|smoothly|cleanly)\b/i,
+  /\b(?:the\s+)?(?:app|application|binary|artifact|build|bundle|executable|program|tool)\s+(?:now\s+)?(?:works|launches|runs|starts|boots|is\s+(?:working|fixed|rebuilt|functional|up\s+and\s+running|complete))\b/i,
+];
+
+/**
+ * A sentence that NEGATES or qualifies a build result is not a success claim.
+ *
+ * Distinct from `NON_CLAIM_CONTEXT_RE` (tuned for delivery promises) because
+ * "without errors" / "without crashing" are POSITIVE phrasings that a blanket
+ * `error`/`crash` block would wrongly reject — the alternation requires the
+ * literal "with … errors", which "without errors" does not contain.
+ */
+const BUILD_NEGATIVE_RE =
+  /\b(?:not|n't|never|unable|cannot|can't|couldn't|didn't|doesn't|hadn't|hasn't|fail(?:ed|s|ure)?|broke|broken|refus(?:e|ed|es)|with\s+(?:\d+\s+)?(?:errors?|warnings?|failures?|issues?))\b/i;
+
+/**
+ * True when the turn's OWN evidence contradicts its prose: a build command it
+ * ran FAILED, no later build succeeded, and the answer still asserts the
+ * artifact came out good.
+ *
+ * The live failure this closes (Aukat_check, 2026-10-02): `pyinstaller
+ * AukatCheck.spec` exited 1 (stale `dist/`), the model opened the OLD app and
+ * reported "The app is now successfully built and functional." The run knew the
+ * build failed; the answer said otherwise; nothing compared the two.
+ *
+ * Conservative by construction, so an honest turn is never flagged:
+ *   - only BUILD commands count (`isBuildCommand`), the same set the effect
+ *     check uses — a failing `npm test` from a code edit is unaffected;
+ *   - a build that succeeded AFTER the last failure is a real recovery, and no
+ *     flag fires (the evidence now supports the claim);
+ *   - the claim must be a completed, positive assertion — a negation, a
+ *     condition, a future tense or a question is skipped, sentence by sentence.
+ */
+export function detectFailedBuildSuccessClaim(
+  content: string,
+  actions: readonly ExecutedAction[],
+): boolean {
+  const text = (content || '').trim();
+  if (!text) return false;
+  const builds = actions.filter((a) => typeof a.command === 'string' && isBuildCommand(a.command));
+  if (builds.length === 0) return false;
+  const lastFailure = builds.map((a) => a.ok).lastIndexOf(false);
+  if (lastFailure === -1) return false;
+  // A successful build after the last failure IS the verification the claim
+  // needs; the turn did recover.
+  if (builds.slice(lastFailure + 1).some((a) => a.ok)) return false;
+  const sentences = text.split(/(?<=[.!?。！？])\s+|\n+/);
+  for (const sentence of sentences) {
+    const s = sentence.trim();
+    if (!s) continue;
+    if (NON_CLAIM_CONTEXT_RE.test(s) || BUILD_NEGATIVE_RE.test(s)) continue;
+    if (BUILD_SUCCESS_CLAIM_RE.some((re) => re.test(s))) return true;
+  }
+  return false;
+}
+
 /**
  * Public entry point. Runs the loop, then annotates the result with the
  * honest-answer flags so every surface (CLI, dashboard, gateway, trace) can
@@ -2245,6 +2413,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     deliveryConfirmed: false,
     mutatedPaths: [],
     verificationEvidence: [],
+    executedActions: [],
   };
   const result = await runToolLoopInner(opts, progress);
   // R2 — relay the transport the caller's seam reported. Attached on EVERY
@@ -2261,6 +2430,13 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     // the honesty correction.
     if (detectUnverifiedDeliveryClaim(result.content, result.successfulToolCalls)) {
       result.unverifiedActionClaim = true;
+    }
+    // A3 PART 2 — BUILD HONESTY. The run's OWN ledger says a build command
+    // FAILED and no later build succeeded; if the answer still asserts the
+    // artifact came out good, it contradicts the evidence in the same turn.
+    // Gated on the ledger, not on configuration: an honest turn is unaffected.
+    if (detectFailedBuildSuccessClaim(result.content, progress.executedActions)) {
+      result.unverifiedBuildClaim = true;
     }
     // Residual dangling promise: the bounded nudge either got the action
     // carried out (then a tool succeeded and this cannot fire) or it did not.

@@ -31,12 +31,33 @@ vi.mock('node:os', () => ({
 import {
   parseDuckDuckGoHtml,
   parseSearxngJson,
+  parseBraveJson,
+  parseSerperJson,
+  parseTavilyJson,
+  parseGoogleCseJson,
   searchWeb,
   readWebPage,
   isWebSearchAvailable,
   isAllowedReadUrl,
+  resolveSearchProvider,
+  availableSearchBackends,
+  isBackendAvailable,
 } from '../../src/tools/web-research.js';
 import { getCache } from '../../src/context/cache.js';
+
+// Every env var a search backend can read (prefixed + plain). Cleared between
+// tests so a developer's real keys never change the default-backend result.
+const SEARCH_KEY_ENVS = [
+  'NUVIRA_BRAVE_SEARCH_API_KEY', 'BUFF_BRAVE_SEARCH_API_KEY', 'BRAVE_SEARCH_API_KEY', 'BRAVE_API_KEY',
+  'NUVIRA_SERPER_API_KEY', 'BUFF_SERPER_API_KEY', 'SERPER_API_KEY',
+  'NUVIRA_TAVILY_API_KEY', 'BUFF_TAVILY_API_KEY', 'TAVILY_API_KEY',
+  'NUVIRA_GOOGLE_CSE_API_KEY', 'BUFF_GOOGLE_CSE_API_KEY', 'GOOGLE_CSE_API_KEY', 'GOOGLE_API_KEY',
+  'NUVIRA_GOOGLE_CSE_ID', 'BUFF_GOOGLE_CSE_ID', 'GOOGLE_CSE_ID', 'GOOGLE_CSE_CX',
+  'NUVIRA_SEARXNG_URL', 'BUFF_SEARXNG_URL', 'SEARXNG_URL',
+];
+function clearSearchEnv(): void {
+  for (const k of SEARCH_KEY_ENVS) delete process.env[k];
+}
 
 const DDG_HTML = `
 <html><body>
@@ -115,12 +136,14 @@ describe('web-research — searchWeb (mocked fetch)', () => {
   const realFetch = globalThis.fetch;
 
   beforeEach(() => {
+    clearSearchEnv();
     fetchMock.mockReset();
     globalThis.fetch = fetchMock as unknown as typeof fetch;
   });
 
   afterEach(() => {
     globalThis.fetch = realFetch;
+    clearSearchEnv();
     vi.restoreAllMocks();
   });
 
@@ -164,6 +187,103 @@ describe('web-research — searchWeb (mocked fetch)', () => {
     expect(second).toEqual(first);
     expect(fetchMock.mock.calls.length).toBe(callsAfterFirst); // no new fetch
     await getCache().clear();
+  });
+});
+
+describe('web-research — hosted backends (BYOK)', () => {
+  const fetchMock = vi.fn();
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    clearSearchEnv();
+    fetchMock.mockReset();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+  });
+
+  afterEach(async () => {
+    globalThis.fetch = realFetch;
+    clearSearchEnv();
+    vi.restoreAllMocks();
+    await getCache().clear();
+  });
+
+  it('parses Brave web results', () => {
+    const results = parseBraveJson(
+      { web: { results: [{ title: 'Brave <b>Hit</b>', url: 'https://b.dev', description: 'a snippet' }, { url: 'https://no-title' }] } },
+      5,
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual({ title: 'Brave Hit', url: 'https://b.dev', snippet: 'a snippet' });
+  });
+
+  it('parses Serper organic results', () => {
+    const results = parseSerperJson({ organic: [{ title: 'S', link: 'https://s.dev', snippet: 'snip' }] }, 5);
+    expect(results[0]).toEqual({ title: 'S', url: 'https://s.dev', snippet: 'snip' });
+  });
+
+  it('parses Tavily results', () => {
+    const results = parseTavilyJson({ results: [{ title: 'T', url: 'https://t.dev', content: 'body' }] }, 5);
+    expect(results[0]).toEqual({ title: 'T', url: 'https://t.dev', snippet: 'body' });
+  });
+
+  it('parses Google Custom Search items', () => {
+    const results = parseGoogleCseJson({ items: [{ title: 'G', link: 'https://g.dev', snippet: 'gs' }] }, 5);
+    expect(results[0]).toEqual({ title: 'G', url: 'https://g.dev', snippet: 'gs' });
+  });
+
+  it('auto-selects Brave and sends X-Subscription-Token', async () => {
+    process.env.BRAVE_SEARCH_API_KEY = 'brave-key';
+    expect(resolveSearchProvider()).toBe('brave');
+    fetchMock.mockResolvedValue(
+      fakeResponse(JSON.stringify({ web: { results: [{ title: 'Hit', url: 'https://hit.dev', description: 'd' }] } }), true, 'application/json'),
+    );
+    const results = await searchWeb('brave-query', { fetchFn: fetchMock });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('api.search.brave.com/res/v1/web/search'),
+      expect.objectContaining({ headers: expect.objectContaining({ 'X-Subscription-Token': 'brave-key' }) }),
+    );
+    expect(results[0].url).toBe('https://hit.dev');
+  });
+
+  it('selects Serper / Tavily / Google CSE by their own key', () => {
+    process.env.SERPER_API_KEY = 's';
+    expect(resolveSearchProvider()).toBe('serper');
+    clearSearchEnv();
+    process.env.TAVILY_API_KEY = 't';
+    expect(resolveSearchProvider()).toBe('tavily');
+    clearSearchEnv();
+    process.env.GOOGLE_CSE_API_KEY = 'g';
+    process.env.GOOGLE_CSE_ID = 'cx';
+    expect(resolveSearchProvider()).toBe('google-cse');
+  });
+
+  it('Google CSE needs BOTH the key and the engine id', () => {
+    process.env.GOOGLE_CSE_API_KEY = 'g';
+    expect(isBackendAvailable('google-cse')).toBe(false);
+  });
+
+  it('an explicit provider option overrides auto-selection', () => {
+    process.env.BRAVE_SEARCH_API_KEY = 'brave-key';
+    expect(resolveSearchProvider({ provider: 'duckduckgo' })).toBe('duckduckgo');
+    expect(resolveSearchProvider({ provider: 'not-a-backend' })).toBe('brave');
+  });
+
+  it('falls back to DuckDuckGo when a keyed backend returns nothing', async () => {
+    process.env.SERPER_API_KEY = 's';
+    fetchMock
+      .mockResolvedValueOnce(fakeResponse(JSON.stringify({ organic: [] }), true, 'application/json'))
+      .mockResolvedValueOnce(fakeResponse(DDG_HTML));
+    const results = await searchWeb('fallback-q', { fetchFn: fetchMock });
+    expect(results.length).toBeGreaterThan(0);
+    expect(fetchMock.mock.calls[1][0]).toContain('html.duckduckgo.com');
+  });
+
+  it('availableSearchBackends lists keyed providers plus the keyless tail', () => {
+    process.env.TAVILY_API_KEY = 't';
+    const list = availableSearchBackends();
+    expect(list).toContain('tavily');
+    expect(list).toContain('duckduckgo');
+    expect(list).not.toContain('brave');
   });
 });
 

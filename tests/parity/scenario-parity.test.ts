@@ -69,6 +69,14 @@ import { RESUME_ENABLE_ENV, resolveResumeRequest } from '../../src/learning/step
 const previousIsolationEnv = process.env[WORKTREE_ENABLE_ENV];
 const previousResumeEnv = process.env[RESUME_ENABLE_ENV];
 
+// B4 made checkpointing default-ON for the `execute` COMMAND. That is a policy
+// default, not a surface capability, so the HARNESS ITSELF pins it off while it
+// drives the surfaces (`src/parity/drivers.ts`, `createParityHarness`) — which is
+// what keeps every row here a statement about CAPABILITY, and what stops
+// `nuvira parity run` from reporting the default as a divergence. The
+// `partial-resume` case declares its resume through `NUVIRA_RESUME`, which the
+// pin does not touch.
+
 // ─── 1. The runner's rules ─────────────────────────────────────────────────
 
 const SCENARIO: ParityScenario = { id: 'runner-rules', message: 'hello', answer: 'ok' };

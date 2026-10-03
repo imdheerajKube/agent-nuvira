@@ -299,6 +299,28 @@ export class ConfigManager {
           };
         }
 
+        // Modality backend selection (`modality.image.*`). Merged per-subkey so
+        // `nuvira config set modality.image.provider` — or the dashboard's
+        // workspace/providers UI — is READ BACK. Without this block the setting
+        // saved to the file and was silently dropped on load: the CLI printed a
+        // success line and the agent kept auto-selecting. Same whitelisting
+        // class as the gateway block below.
+        if (userConfig.modality) {
+          config.modality = {
+            ...(config.modality || {}),
+            ...userConfig.modality,
+            image: { ...(config.modality?.image || {}), ...(userConfig.modality.image || {}) },
+          };
+        }
+
+        // Dashboard runtime settings — the directory an unattached chat turn
+        // runs in (`dashboard.cwd`). Persisted and loaded like every other
+        // top-level key; a dropped value here would put the accidental-cwd
+        // fallback back without anyone noticing.
+        if (userConfig.dashboard) {
+          config.dashboard = { ...(config.dashboard || {}), ...userConfig.dashboard };
+        }
+
         // Merge gateway config. The gate is `userConfig.gateway` (any key), not
         // `policies || statusRecipients`: a file carrying ONLY another gateway
         // setting (askUserWait, askUserTimeoutMs) must still load.
@@ -649,6 +671,23 @@ export class ConfigManager {
         ...(config.skills.disabled !== undefined ? { disabled: config.skills.disabled } : {}),
         ...(config.skills.registries !== undefined ? { registries: config.skills.registries } : {}),
       };
+    }
+
+    if (config.modality) {
+      // Per-subkey merge: provider / model / baseUrl are set independently, so a
+      // later `config set modality.image.model` must not clear the provider.
+      this.config.modality = {
+        ...(this.config.modality || {}),
+        ...config.modality,
+        image: { ...(this.config.modality?.image || {}), ...(config.modality.image || {}) },
+      };
+    }
+
+    if (config.dashboard) {
+      // `dashboard: { cwd: undefined }` CLEARS the setting — JSON.stringify drops
+      // the undefined, so the key leaves the file (the same "explicit empty
+      // clears" convention baseUrl/model follow).
+      this.config.dashboard = { ...(this.config.dashboard || {}), ...config.dashboard };
     }
 
     if (config.gateway) {

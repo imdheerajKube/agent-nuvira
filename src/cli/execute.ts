@@ -16,7 +16,7 @@
  */
 
 import { createInterface } from 'node:readline';
-import { resolveNuviraHome } from '../config/paths';
+import { envBuff, resolveNuviraHome } from '../config/paths';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -126,6 +126,16 @@ interface ExecuteOptions {
    * `checkpointIdFor(goal, cwd)`, so the flag cannot mean two different runs.
    */
   resume?: string | boolean;
+  /**
+   * Persist this turn's conversation across process death (default ON;
+   * `memory.sessionStore` / `NUVIRA_SESSION_STORE`). `--no-session-store` = false.
+   */
+  sessionStore?: boolean;
+  /**
+   * Semantic recall of past asks (default ON; `memory.sessionRecall` /
+   * `NUVIRA_SESSION_RECALL`). `--no-session-recall` = false.
+   */
+  sessionRecall?: boolean;
   /**
    * WS5 (#27) — run the goal in its own git worktree of the project and report
    * the diff against the base commit. REFUSES (a failed run, never an unisolated
@@ -290,6 +300,22 @@ export function checkpointOptions(
   };
 }
 
+/**
+ * B4 — is checkpointing enabled for this `execute` run?
+ *
+ * On by default; off when the deployment sets `NUVIRA_CHECKPOINT=off`
+ * (0/false/no). An explicit `--checkpoint` or `--resume` always wins over the
+ * opt-out, so the flags keep meaning what they say.
+ */
+export function checkpointingEnabled(
+  checkpoint: boolean | undefined,
+  resume: string | boolean | undefined,
+): boolean {
+  if (checkpoint === true || resume !== undefined) return true;
+  const raw = (envBuff('CHECKPOINT') ?? '').trim().toLowerCase();
+  return !(raw === 'off' || raw === '0' || raw === 'false' || raw === 'no');
+}
+
 /** A parsed action result from the post-execution prompt */
 interface PostExecutionAction {
   type: 'continue' | 'switch-model' | 'history' | 'exit' | 'retry-fix' | 'followup';
@@ -359,6 +385,13 @@ export class ExecuteCommand extends BaseCommand {
       .option('--engine <mode>', 'Execution engine: auto | loop | pipeline (default: auto — loop for strong models, pipeline for local/weak tier)')
       .option('--plan-mode <mode>', 'Planning depth: light | heavy (default: light — heavy forces the reasoner→planner front-matter for large greenfield builds)')
       .option('--checkpoint', 'Save a resume-able checkpoint after every task batch (in ~/.nuvira/memory/checkpoints/)', false)
+      // Continuity switches — DEFAULT ON (like checkpointing), so a fresh install
+      // gets continuity and an operator opts OUT. Both are omitted when absent
+      // (no `false` default), so config/env can decide.
+      .option('--session-store', 'Persist this turn`s conversation across process death and rehydrate a matching unfinished one (default: on)')
+      .option('--no-session-store', 'Do NOT persist sessions or rehydrate unfinished ones')
+      .option('--session-recall', 'Index finished asks and surface semantically similar past asks (default: on)')
+      .option('--no-session-recall', 'Do NOT index or recall past sessions')
       // NO `false` DEFAULT here (or on the two below), and that is the point: a
       // `false` commander invented for an untyped flag is an explicit DECLINE, and
       // an explicit decline outranks the environment — which would make
@@ -394,6 +427,8 @@ export class ExecuteCommand extends BaseCommand {
         autoRoute?: boolean;
         checkpoint?: boolean;
         resume?: string | boolean;
+        sessionStore?: boolean;
+        sessionRecall?: boolean;
         worktree?: boolean;
         keepWorktree?: boolean;
         checkpointList?: boolean;
@@ -1855,6 +1890,19 @@ export class ExecuteCommand extends BaseCommand {
         ...(options.worktree === undefined ? {} : { worktree: options.worktree }),
         ...(options.keepWorktree === undefined ? {} : { keepWorktree: options.keepWorktree }),
         ...(options.resume === undefined ? {} : { resume: options.resume }),
+        // A2 + B4 — `--checkpoint` must leave a resume point on the loop arm too,
+        // and checkpointing is DEFAULT-ON for `execute`: an interrupted run
+        // (quota kill / Ctrl+C) must leave something to continue from, which is
+        // the "it recreates the entire process" report. The policy lives HERE,
+        // on the command, so the executor primitive stays byte-identical for the
+        // parity surfaces. REPLAY is not implied — the executor opens the record
+        // with `replay: false` unless `--resume` was given, so a default run
+        // never serves a stale answer. `NUVIRA_CHECKPOINT=off` opts out.
+        ...(checkpointingEnabled(options.checkpoint, options.resume) ? { checkpoint: true } : {}),
+        // Continuity switches. Absent ⇒ the executor resolves them from env then
+        // config (both default ON), so these flags are a pure override.
+        ...(options.sessionStore === undefined ? {} : { sessionStore: options.sessionStore }),
+        ...(options.sessionRecall === undefined ? {} : { sessionRecall: options.sessionRecall }),
         quiet: !!options.jsonEvents,
         // G18 — `-v` echoes each tool's result (first line) under its call, so a
         // live run shows what came BACK, not only what was attempted. Without

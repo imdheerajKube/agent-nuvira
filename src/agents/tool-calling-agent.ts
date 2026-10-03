@@ -24,6 +24,7 @@ import { spawnSync } from 'node:child_process';
 
 import { Agent, type AgentContext, type AgentResult, type FileChange, type LLMCallFn } from './agent.js';
 import { logger } from '../utils/logger.js';
+import { applyProjectEnvironment, guardCommandEnvironment } from '../utils/project-env.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -241,12 +242,30 @@ function createRunCommandTool(): AgentTool {
     },
     async execute(args, context): Promise<ToolResult> {
       try {
+        // ── Project interpreter guard (C2) ──────────────────────────────
+        // This is a pipeline agent's terminal path too — the same pre-run
+        // guard the chat loop and the RunnerAgent apply. Pin the project venv
+        // and refuse an install/build that would use the wrong interpreter, so
+        // a tool-calling agent cannot reproduce the Aukat_check failure.
+        const envVerdict = guardCommandEnvironment(args.command, context.workingDirectory);
+        if (envVerdict.action === 'refuse') {
+          return {
+            success: false,
+            output: '',
+            error: `${envVerdict.reason}. ${envVerdict.hint} (Guard: NUVIRA_ENV_GUARD=off bypasses this.)`,
+          };
+        }
         const timeout = (args.timeout || 30) * 1000;
+        const env =
+          envVerdict.action === 'proceed' && envVerdict.venv
+            ? applyProjectEnvironment({ ...process.env }, envVerdict.venv)
+            : process.env;
         const result = spawnSync('bash', ['-c', args.command], {
           cwd: context.workingDirectory,
           encoding: 'utf-8',
           timeout,
           stdio: ['pipe', 'pipe', 'pipe'],
+          env,
         });
 
         const output = [

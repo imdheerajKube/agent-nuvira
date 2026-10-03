@@ -71,6 +71,13 @@ export interface RunShellOptions {
   emitEvents?: boolean;
   /** Source label for emitted events (default: 'shell'). */
   source?: string;
+  /**
+   * Environment overrides merged OVER the inherited process environment
+   * (execa's default `extendEnv`). Used to apply a project's pinned virtualenv
+   * (PATH/VIRTUAL_ENV) to every subprocess the pipeline runner spawns, so a
+   * bare `python`/`pip` resolves to the project env. See project-env.ts.
+   */
+  env?: Record<string, string | undefined>;
 }
 
 /** Result of a `runShell` / `runShellSync` call. */
@@ -129,6 +136,7 @@ export async function runShell(command: string, options: RunShellOptions = {}): 
       reject: false,
       signal: options.signal,
       windowsHide: true,
+      ...(options.env ? { env: options.env } : {}),
     });
 
     if (options.onChunk && subprocess.all) {
@@ -208,6 +216,7 @@ export function runShellSync(command: string, options: RunShellOptions = {}): Ru
       all: true,
       reject: false,
       windowsHide: true,
+      ...(options.env ? { env: options.env } : {}),
     });
     stdout = result.stdout ?? '';
     stderr = result.stderr ?? '';

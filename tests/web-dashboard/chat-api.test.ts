@@ -201,14 +201,40 @@ let viewerToken = '';
 let engine: FakeEngine;
 let console_: ChatConsole;
 
+/**
+ * The fixture project every chat turn in this suite runs against.
+ *
+ * A chat turn needs a WORKSPACE. With no folder attached the dashboard now asks
+ * the user to attach one instead of running the turn in the server process's own
+ * directory (that fallback made "assess this project" report on whatever folder
+ * happened to sit there). These tests are about the API surface — streaming,
+ * retries, sessions, artifacts — not about that guard, so the harness stands in
+ * for a user who has attached their project, exactly as the GUI sends it.
+ *
+ * A test that wants the UNATTACHED path says so explicitly with
+ * `projectPath: null` (see the no-context case and the guard's own tests) — the
+ * key's presence is the signal, so an omitted key means "the user attached
+ * something", which is the ordinary case.
+ */
+const CHAT_PROJECT = join(testDir, 'chat-project');
+mkdirSync(CHAT_PROJECT, { recursive: true });
+
 function authedFetch(path: string, method = 'GET', body?: unknown, tok = token): Promise<Response> {
+  const payload =
+    path === '/api/chat' &&
+    method === 'POST' &&
+    body !== null &&
+    typeof body === 'object' &&
+    !('projectPath' in (body as Record<string, unknown>))
+      ? { ...(body as Record<string, unknown>), projectPath: CHAT_PROJECT }
+      : body;
   return fetch(`${baseUrl}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
       ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: payload !== undefined ? JSON.stringify(payload) : undefined,
   });
 }
 
@@ -850,11 +876,42 @@ describe('/api/projects — P3 project attach', () => {
     expect(opts?.projectContext).toContain('lib.ts');
     expect(opts?.projectContext).toContain('helper');
 
-    // Without projectPath, no context is injected.
-    const plain = await authedFetch('/api/chat', 'POST', { sessionId: 'proj-sess-2', message: 'hi' });
+    // Without projectPath, no context is injected. `null` is the EXPLICIT
+    // "nothing attached" signal (the harness attaches a fixture project for any
+    // chat turn whose body omits the key).
+    const plain = await authedFetch('/api/chat', 'POST', { sessionId: 'proj-sess-2', message: 'hi', projectPath: null });
     expect(plain.status).toBe(200);
     const plainCall = engine.calls.find((c) => c.message === 'hi');
     expect((plainCall?.opts as { projectContext?: string } | undefined)?.projectContext).toBeUndefined();
+  });
+
+  it('asks for a project folder instead of guessing one when nothing is attached', async () => {
+    const before = engine.calls.length;
+    const res = await authedFetch('/api/chat', 'POST', {
+      sessionId: 'guard-sess',
+      message: 'assess this project',
+      projectPath: null,
+    });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { ok: boolean; needsProject?: boolean; content: string; followups: unknown[] };
+    expect(d.ok).toBe(true);
+    expect(d.needsProject).toBe(true);
+    expect(d.content).toMatch(/folder/i);
+    // The turn must NOT reach the engine. Running it would be the original bug:
+    // an answer about whatever directory the server happened to sit in.
+    expect(engine.calls.length).toBe(before);
+  });
+
+  it('lets an ordinary question through with nothing attached', async () => {
+    const res = await authedFetch('/api/chat', 'POST', {
+      sessionId: 'guard-2',
+      message: 'what is 2 + 2',
+      projectPath: null,
+    });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { needsProject?: boolean };
+    expect(d.needsProject).toBeUndefined();
+    expect(engine.calls.some((c) => c.message === 'what is 2 + 2')).toBe(true);
   });
 
   describe('P6d — /api/skills/marketplace (the private-repo-safe import surface)', () => {
@@ -1149,6 +1206,9 @@ describe('/api/projects — P3 project attach', () => {
         sessionId: 'attach-cap-size',
         message: 'big',
         attachments: [{ name: 'huge.txt', content: 'x'.repeat(310_000), kind: 'file' }],
+        // Measured against the ATTACHMENT budget alone: an attached project's
+        // own snapshot would add to this length and make the cap unfalsifiable.
+        projectPath: null,
       });
       expect(res.status).toBe(200);
       const call = engine.calls.find((c) => c.message === 'big');

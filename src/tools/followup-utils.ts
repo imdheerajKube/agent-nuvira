@@ -109,6 +109,72 @@ export function normalizeFollowups(
 }
 
 /**
+ * A4 — the CONTINUATION affordance.
+ *
+ * WHY THIS EXISTS: A1/A3 make a run RECORD honestly that it did not conclude
+ * (`outcome.kind === 'incomplete'` / `cancelled`). That record is only useful if
+ * the user can ACT on it. Live, an interrupted or cancelled turn ended with
+ * nothing to click — the work simply stopped, and the only way back in was to
+ * re-type the whole ask (which restarted it). These two chips are the path back:
+ *
+ *   ▶ Continue where it stopped  — resume the unfinished work, not a restart
+ *   🔁 Retry this step           — re-attempt the step that failed
+ *
+ * Both are ordinary followups (they become the next message when clicked), so
+ * they ride the existing continuation-marker machinery and no new UI is needed.
+ */
+export interface ContinuationInput {
+  /** The run did not conclude (outcome `incomplete` or `cancelled`). */
+  unfinished?: boolean;
+  /** At least one tool ran — so there is a step to retry. */
+  hadTools?: boolean;
+}
+
+/** The prompt behind the "Continue" chip — resumption, explicitly not a restart. */
+export const CONTINUE_PROMPT =
+  'Continue where the previous turn stopped. Do NOT restart the work that is already done — ' +
+  're-read the current state of the files/artifacts first, then finish the remaining steps.';
+
+/** The prompt behind the "Retry" chip. */
+export const RETRY_PROMPT =
+  'Retry the step that did not complete in the previous turn. Keep the same goal, but change ' +
+  'the approach to fix the failure that stopped it.';
+
+/** Is this followup already a continuation/retry affordance? */
+function looksLikeContinuation(f: FollowupSuggestion): boolean {
+  const text = `${f.label ?? ''} ${f.prompt}`.toLowerCase();
+  return /\bcontinue\b|\bretry\b|\bresume\b|where (?:it|you|we) (?:stopped|left off)\b/.test(text);
+}
+
+/**
+ * Ensure an unfinished run offers a way to continue or retry.
+ *
+ * Returns the model's followups UNCHANGED for a concluded run (so nothing is
+ * added to a turn that finished — the affordance must mean something). For an
+ * unfinished run it prepends "Continue" and, when a tool actually ran, appends
+ * "Retry", keeping the model's own suggestions in between, and respecting the
+ * same MAX_FOLLOWUPS cap every surface already applies.
+ */
+export function withContinuationFollowups(
+  followups: readonly FollowupSuggestion[] | undefined | null,
+  input: ContinuationInput,
+): FollowupSuggestion[] {
+  const base = [...(followups ?? [])];
+  if (!input.unfinished) return base;
+  if (base.some(looksLikeContinuation)) return base;
+
+  const continuation: FollowupSuggestion[] = [
+    { label: '▶ Continue where it stopped', prompt: CONTINUE_PROMPT },
+  ];
+  if (input.hadTools) {
+    continuation.push({ label: '🔁 Retry this step', prompt: RETRY_PROMPT });
+  }
+  // The affordance outranks the model's suggestions for the one remaining slot.
+  const room = Math.max(0, MAX_FOLLOWUPS - continuation.length);
+  return [...continuation, ...base.slice(0, room)];
+}
+
+/**
  * The machine-readable continuation marker prepended to a message the user
  * produced by CLICKING a previously suggested followup. Without it a clicked
  * followup arrives as an unrelated one-liner ("add a day in Hanoi") and the

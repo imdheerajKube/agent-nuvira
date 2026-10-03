@@ -58,6 +58,15 @@ function outcomeBadge(outcome: TraceEntry['outcome']): { text: string; color: st
   if (outcome.unfulfilledPromise) {
     return { text: '⚠️ unfulfilled promise — announced an action it never performed', color: 'var(--accent-yellow)', bg: 'var(--warn-soft)', border: 'var(--accent-yellow)' };
   }
+  // A3 Part 2 — BUILD honesty. The run's own evidence says the build failed, so
+  // a success claim is contradicted by the turn itself; this outranks the edit
+  // badges because it is not an absence of verification but evidence AGAINST.
+  if (outcome.unverifiedBuildClaim) {
+    return {
+      text: '⚠️ unverified build claim — a build failed but the reply reported success',
+      color: 'var(--accent-yellow)', bg: 'var(--warn-soft)', border: 'var(--accent-yellow)',
+    };
+  }
   // G1 + G2 — edit honesty. A claimed fix that nothing verified outranks the
   // generic "acted" badge: `success` only means a reply was generated, and a
   // botched edit_file is not evidence the change works.
@@ -80,6 +89,12 @@ function outcomeBadge(outcome: TraceEntry['outcome']): { text: string; color: st
     };
   }
   if (outcome.kind === 'answered') return { text: '💬 answered — no action taken', color: 'var(--text-secondary)', ...base };
+  if (outcome.kind === 'incomplete') {
+    return {
+      text: '⏳ incomplete — ended with work still outstanding',
+      color: 'var(--accent-yellow)', bg: 'var(--warn-soft)', border: 'var(--accent-yellow)',
+    };
+  }
   if (outcome.kind === 'cancelled') return { text: '⏹ cancelled', color: 'var(--text-secondary)', ...base };
   return { text: '❌ generation failed', color: 'var(--accent-red)', bg: 'var(--danger-soft)', border: 'var(--accent-red)' };
 }
