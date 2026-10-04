@@ -2,7 +2,11 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## Unreleased — an inert turn is not a success, a repair keeps its capability, and free models bill $0
+## v3.3.11 — reasoning effort under max, an honest dashboard, and a chat that survives navigation
+
+> `max` now raises how hard a verified model thinks, not only which model answers; the dashboard
+lands on Overview, keeps chat alive across tabs and reloads, and stops gating prose asks; and the
+model and provider counts agree across the Overview, Timeline and Models tabs.
 
 ### Fixed: a workspace-directed turn that did nothing was reported as done
 
