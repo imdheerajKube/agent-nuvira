@@ -124,7 +124,10 @@
           },
           "type": "function"
         }
-      ]
+      ],
+      "usage": {
+        "include": true
+      }
     },
     {
       "max_tokens": 4096,
@@ -267,7 +270,10 @@
           },
           "type": "function"
         }
-      ]
+      ],
+      "usage": {
+        "include": true
+      }
     }
   ]
 }

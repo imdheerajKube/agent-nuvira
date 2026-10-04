@@ -4,8 +4,18 @@ import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
+import { getModelRegistry } from '../learning/model-registry.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
 import { attachHttpContext } from './http-error.js';
+import {
+  resolveReasoningRequest,
+  withReasoningFallback,
+  ambientReasoningEffort,
+  reasoningShapeForProvider,
+  reasoningRequestBody,
+  SHAPE_DEFAULT_PARAM,
+  type ReasoningRequest,
+} from './reasoning-effort.js';
 import {
   toGeminiContents,
   toGeminiFunctionDeclarations,
@@ -30,6 +40,24 @@ type GeminiToolResponseShape = import('./native-tools.js').GeminiToolResponse;
 /** Flatten a thread's text content for cost metering (best-effort estimate). */
 function promptDigest(messages: ToolMessage[]): string {
   return messages.map((m) => m.content).filter(Boolean).join('\n');
+}
+
+/**
+ * Merge a thinking-budget fragment into a Gemini request body. Gemini nests the
+ * control under `generationConfig.thinkingConfig`, so the flat fragment is
+ * placed there rather than at the top level. Returns the body unchanged when
+ * there is nothing to add. (Default-deny means this only fires for a model the
+ * registry verified accepts it — e.g. a 2.5-class model, not 2.0.)
+ */
+function applyGeminiThinking(
+  body: Record<string, unknown>,
+  reasoningBody: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!reasoningBody || Object.keys(reasoningBody).length === 0) return body;
+  const thinkingConfig = reasoningBody.thinkingConfig;
+  if (!thinkingConfig) return body;
+  const generationConfig = (body.generationConfig as Record<string, unknown>) || {};
+  return { ...body, generationConfig: { ...generationConfig, thinkingConfig } };
 }
 
 /**
@@ -64,6 +92,17 @@ export class GeminiAdapter implements InferenceProvider {
     this.config = config;
   }
 
+  /** Resolve the request-side reasoning parameter (default-deny). See reasoning-effort.ts. */
+  private reasoningRequest(model: string, options?: InferenceOptions): ReasoningRequest | undefined {
+    if (options?.reasoningProbe) {
+      const shape = reasoningShapeForProvider('gemini');
+      if (!shape) return undefined;
+      const param = SHAPE_DEFAULT_PARAM[shape];
+      return { body: reasoningRequestBody({ param, shape }, 'low'), param, shape };
+    }
+    return resolveReasoningRequest('gemini', model, options?.reasoningEffort ?? ambientReasoningEffort(), getModelRegistry());
+  }
+
   async generate(prompt: string, options?: InferenceOptions): Promise<string> {
     const apiKey = this.config.apiKey;
     if (!apiKey) {
@@ -71,6 +110,22 @@ export class GeminiAdapter implements InferenceProvider {
     }
 
     const model = options?.model || requireAdapterModel('gemini', this.config.model);
+    return withReasoningFallback({
+      provider: 'gemini',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => this.generateOnce(prompt, model, apiKey, options, reasoningBody),
+    });
+  }
+
+  private async generateOnce(
+    prompt: string,
+    model: string,
+    apiKey: string,
+    options: InferenceOptions | undefined,
+    reasoningBody: Record<string, unknown>,
+  ): Promise<string> {
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
     const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 8192;
 
@@ -81,13 +136,18 @@ export class GeminiAdapter implements InferenceProvider {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature,
-          maxOutputTokens: maxTokens,
-        },
-      }),
+      body: JSON.stringify(
+        applyGeminiThinking(
+          {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature,
+              maxOutputTokens: maxTokens,
+            },
+          },
+          reasoningBody,
+        ),
+      ),
     });
 
     if (!response.ok) {
@@ -119,6 +179,23 @@ export class GeminiAdapter implements InferenceProvider {
     }
 
     const model = options?.model || requireAdapterModel('gemini', this.config.model);
+    return withReasoningFallback({
+      provider: 'gemini',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => this.generateStreamOnce(prompt, model, apiKey, options, onToken, reasoningBody),
+    });
+  }
+
+  private async generateStreamOnce(
+    prompt: string,
+    model: string,
+    apiKey: string,
+    options: InferenceOptions | undefined,
+    onToken: (token: string) => void,
+    reasoningBody: Record<string, unknown>,
+  ): Promise<string> {
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
     const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 8192;
 
@@ -130,13 +207,18 @@ export class GeminiAdapter implements InferenceProvider {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature,
-          maxOutputTokens: maxTokens,
-        },
-      }),
+      body: JSON.stringify(
+        applyGeminiThinking(
+          {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature,
+              maxOutputTokens: maxTokens,
+            },
+          },
+          reasoningBody,
+        ),
+      ),
     });
 
     if (!response.ok) {
@@ -223,18 +305,38 @@ export class GeminiAdapter implements InferenceProvider {
       throw new Error('Google Gemini API key is not configured. Set GEMINI_API_KEY env var.');
     }
     const model = options?.model || requireAdapterModel('gemini', this.config.model);
+    return withReasoningFallback({
+      provider: 'gemini',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => this.generateToolsOnce(messages, tools, model, apiKey, options, reasoningBody),
+    });
+  }
+
+  private async generateToolsOnce(
+    messages: ToolMessage[],
+    tools: ToolSchema[],
+    model: string,
+    apiKey: string,
+    options: InferenceOptions | undefined,
+    reasoningBody: Record<string, unknown>,
+  ): Promise<ToolCallResponse> {
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
     const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 8192;
 
     const { systemInstruction, contents } = toGeminiContents(messages);
-    const body: Record<string, unknown> = {
-      contents,
-      tools: toGeminiFunctionDeclarations(tools),
-      generationConfig: {
-        temperature,
-        maxOutputTokens: maxTokens,
+    const body: Record<string, unknown> = applyGeminiThinking(
+      {
+        contents,
+        tools: toGeminiFunctionDeclarations(tools),
+        generationConfig: {
+          temperature,
+          maxOutputTokens: maxTokens,
+        },
       },
-    };
+      reasoningBody,
+    );
     if (systemInstruction) body.systemInstruction = systemInstruction;
 
     logger.debug(`Gemini: Tool-calling with model=${model}, tools=${tools.length}`);
@@ -280,18 +382,39 @@ export class GeminiAdapter implements InferenceProvider {
       throw new Error('Google Gemini API key is not configured. Set GEMINI_API_KEY env var.');
     }
     const model = options?.model || requireAdapterModel('gemini', this.config.model);
+    return withReasoningFallback({
+      provider: 'gemini',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => this.generateToolsStreamOnce(messages, tools, model, apiKey, options, onToken, reasoningBody),
+    });
+  }
+
+  private async generateToolsStreamOnce(
+    messages: ToolMessage[],
+    tools: ToolSchema[],
+    model: string,
+    apiKey: string,
+    options: InferenceOptions | undefined,
+    onToken: (token: string) => void,
+    reasoningBody: Record<string, unknown>,
+  ): Promise<ToolCallResponse> {
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
     const maxTokens = options?.maxTokens ?? this.config.maxTokens ?? 8192;
 
     const { systemInstruction, contents } = toGeminiContents(messages);
-    const body: Record<string, unknown> = {
-      contents,
-      tools: toGeminiFunctionDeclarations(tools),
-      generationConfig: {
-        temperature,
-        maxOutputTokens: maxTokens,
+    const body: Record<string, unknown> = applyGeminiThinking(
+      {
+        contents,
+        tools: toGeminiFunctionDeclarations(tools),
+        generationConfig: {
+          temperature,
+          maxOutputTokens: maxTokens,
+        },
       },
-    };
+      reasoningBody,
+    );
     if (systemInstruction) body.systemInstruction = systemInstruction;
 
     logger.debug(`Gemini: Streaming tool-calling with model=${model}, tools=${tools.length}`);

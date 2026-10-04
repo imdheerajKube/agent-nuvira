@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GeminiAdapter } from '../../src/inference/gemini-adapter.js';
-import { resetModelRegistry } from '../../src/learning/model-registry.js';
+import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -302,6 +302,29 @@ describe('GeminiAdapter', () => {
       const adapter = new GeminiAdapter({});
       const info = adapter.getInfo();
       expect(info).toContain('❌ Missing API key');
+    });
+  });
+
+  describe('reasoning effort — nested thinkingConfig, default-deny', () => {
+    const geminiOk = { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }) };
+
+    it('omits thinkingConfig when support is unverified', async () => {
+      mockFetch.mockResolvedValueOnce(geminiOk);
+      const adapter = new GeminiAdapter(baseConfig);
+      await adapter.generate('hi', { reasoningEffort: 'high' });
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.generationConfig.thinkingConfig).toBeUndefined();
+    });
+
+    it('nests thinkingConfig under generationConfig when verified', async () => {
+      getModelRegistry().markReasoningSupported('gemini', 'gemini-2.5-flash', 'thinkingConfig', 'gemini-thinking', 'advertised');
+      mockFetch.mockResolvedValueOnce(geminiOk);
+      const adapter = new GeminiAdapter(baseConfig);
+      await adapter.generate('hi', { reasoningEffort: 'high' });
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.generationConfig.thinkingConfig).toMatchObject({ thinkingBudget: expect.any(Number) });
+      // Still a valid Gemini body alongside the thinking control.
+      expect(body.generationConfig.maxOutputTokens).toBe(4096);
     });
   });
 });

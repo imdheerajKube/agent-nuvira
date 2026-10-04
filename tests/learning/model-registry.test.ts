@@ -1245,3 +1245,54 @@ describe('ModelRegistry — M2.2 wire-token metering (measured cost inputs)', ()
     expect(registry.getMeasuredUsage('nim')).toBeUndefined();
   });
 });
+
+describe('ModelRegistry — learned reasoning-parameter support', () => {
+  it('is undefined by default (default-deny)', () => {
+    const registry = new ModelRegistry();
+    registry.markListed('groq', ['openai/gpt-oss-120b']);
+    expect(registry.getReasoningCapability('groq', 'openai/gpt-oss-120b')).toBeUndefined();
+  });
+
+  it('records probed support and reads it back', () => {
+    const registry = new ModelRegistry();
+    registry.markReasoningSupported('groq', 'openai/gpt-oss-120b', 'reasoning_effort', 'openai-reasoning-effort', 'probed');
+    expect(registry.getReasoningCapability('groq', 'openai/gpt-oss-120b')).toMatchObject({
+      supported: true,
+      param: 'reasoning_effort',
+      source: 'probed',
+    });
+  });
+
+  it('records a rejection as learned-unsupported', () => {
+    const registry = new ModelRegistry();
+    registry.markReasoningUnsupported('groq', 'allam-2-7b', 'reasoning_effort');
+    expect(registry.getReasoningCapability('groq', 'allam-2-7b')).toMatchObject({
+      supported: false,
+      source: 'learned-unsupported',
+    });
+  });
+
+  it('survives a re-verify (reasoning support is model metadata)', () => {
+    const registry = new ModelRegistry();
+    registry.markReasoningSupported('deepseek', 'deepseek-chat', 'reasoning_effort', 'openai-reasoning-effort', 'advertised');
+    registry.markVerified('deepseek', 'deepseek-chat', 'spot-check');
+    expect(registry.getReasoningCapability('deepseek', 'deepseek-chat')?.supported).toBe(true);
+    expect(registry.getEntry('deepseek', 'deepseek-chat')?.status).toBe('verified');
+  });
+
+  it('markListed learns advertised support from supported_parameters', () => {
+    const registry = new ModelRegistry();
+    registry.markListed('openrouter', [{ id: 'vendor/reasoner', name: 'r', provider: 'openrouter', supportedParameters: ['tools', 'reasoning'] }]);
+    expect(registry.getReasoningCapability('openrouter', 'vendor/reasoner')).toMatchObject({ supported: true, source: 'advertised' });
+  });
+
+  it('a learned rejection OUTRANKS a later advertised claim', () => {
+    const registry = new ModelRegistry();
+    registry.markReasoningUnsupported('openrouter', 'vendor/flaky', 'reasoning_effort');
+    registry.markListed('openrouter', [{ id: 'vendor/flaky', name: 'f', provider: 'openrouter', supportedParameters: ['reasoning'] }]);
+    expect(registry.getReasoningCapability('openrouter', 'vendor/flaky')).toMatchObject({
+      supported: false,
+      source: 'learned-unsupported',
+    });
+  });
+});

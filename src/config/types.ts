@@ -680,10 +680,70 @@ export interface ToolHookConfig {
 }
 
 /**
+ * How much EXTRA reasoning to ask a model for, in provider-neutral terms.
+ *
+ * This is INTENT, not a wire value. Each adapter translates it into whatever
+ * its provider actually accepts (`reasoning_effort` for the OpenAI-compatible
+ * family, an extended-thinking budget for Anthropic, a thinking budget for
+ * Gemini). A provider that has no such knob simply ignores it — the value is
+ * always optional and never required for a call to succeed.
+ *
+ * Defined here (the config layer) rather than in the inference layer so both
+ * the capability policy and the adapters can name it without an import cycle.
+ */
+export type ReasoningEffort = 'low' | 'medium' | 'high';
+
+/**
+ * The family of wire parameter used to request extra reasoning. The shape is a
+ * property of the PROVIDER (how it spells the knob), while whether a given
+ * MODEL accepts it is a separate, learned fact (see ModelRegistryEntry.
+ * reasoningCapability).
+ */
+export type ReasoningShape = 'openai-reasoning-effort' | 'anthropic-thinking' | 'gemini-thinking';
+
+/**
+ * What we have LEARNED about whether one provider × model accepts a
+ * reasoning-effort parameter. Absent/`supported:false` means "do not send it"
+ * (default-deny): the knob is only ever emitted against positive evidence.
+ */
+export interface ReasoningCapability {
+  supported: boolean;
+  /** The exact wire parameter name (e.g. `reasoning_effort`, `thinking`). */
+  param: string;
+  /** The wire family, so a caller knows how to build the value. */
+  shape: ReasoningShape;
+  /** Epoch ms the capability was last established. */
+  verifiedAt: number;
+  /**
+   * How we learned it: the provider ADVERTISED it, a PROBE confirmed it, or a
+   * rejected request taught us it is NOT supported (`learned-unsupported`).
+   */
+  source: 'advertised' | 'probed' | 'learned-unsupported';
+}
+
+/**
  * Inference options passed to each generation call
  * Note: provider is string to allow plugin-based providers
  */
 export interface InferenceOptions {
+  /**
+   * Request additional reasoning depth from the model, in provider-neutral
+   * terms. Set by the routing layer when the capability mode calls for it
+   * (`max` → `high`); applied by an adapter ONLY when the registry has verified
+   * that the provider × model accepts the corresponding parameter, and retried
+   * WITHOUT the parameter if the provider rejects it. Absent → never sent, so
+   * the default path is byte-identical to before. See
+   * `src/inference/reasoning-effort.ts`.
+   */
+  reasoningEffort?: ReasoningEffort;
+  /**
+   * INTERNAL — probe mode. When true, the adapter emits its provider's
+   * reasoning parameter UNCONDITIONALLY (bypassing the default-deny registry
+   * gate) so a probe can establish whether the model accepts it. The registry
+   * is updated from the outcome. Never set by routing; only the model probe
+   * sets it. See src/inference/model-probe.ts.
+   */
+  reasoningProbe?: boolean;
   model?: string;
   temperature?: number;
   maxTokens?: number;

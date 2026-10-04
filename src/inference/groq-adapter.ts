@@ -7,6 +7,16 @@ import { attachHttpContext } from './http-error.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
+import { getModelRegistry } from '../learning/model-registry.js';
+import {
+  resolveReasoningRequest,
+  withReasoningFallback,
+  ambientReasoningEffort,
+  reasoningShapeForProvider,
+  reasoningRequestBody,
+  SHAPE_DEFAULT_PARAM,
+  type ReasoningRequest,
+} from './reasoning-effort.js';
 
 /**
  * Default Groq endpoint. `providers.groq.baseUrl` overrides it — the same
@@ -91,6 +101,17 @@ export class GroqAdapter implements InferenceProvider {
     this.baseUrl = (config.baseUrl || GROQ_DEFAULT_BASE_URL).replace(/\/+$/, '');
   }
 
+  /** Resolve the request-side reasoning parameter (default-deny). See reasoning-effort.ts. */
+  private reasoningRequest(model: string, options?: InferenceOptions): ReasoningRequest | undefined {
+    if (options?.reasoningProbe) {
+      const shape = reasoningShapeForProvider('groq');
+      if (!shape) return undefined;
+      const param = SHAPE_DEFAULT_PARAM[shape];
+      return { body: reasoningRequestBody({ param, shape }, 'low'), param, shape };
+    }
+    return resolveReasoningRequest('groq', model, options?.reasoningEffort ?? ambientReasoningEffort(), getModelRegistry());
+  }
+
   async generate(prompt: string, options?: InferenceOptions): Promise<string> {
     // M2.3: options.apiKey overrides the configured key (multi-account rotation).
     const apiKey = options?.apiKey || this.config.apiKey;
@@ -99,6 +120,22 @@ export class GroqAdapter implements InferenceProvider {
     }
 
     const model = options?.model || requireAdapterModel('groq', this.config.model);
+    return withReasoningFallback({
+      provider: 'groq',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => this.generateOnce(prompt, model, apiKey, options, reasoningBody),
+    });
+  }
+
+  private async generateOnce(
+    prompt: string,
+    model: string,
+    apiKey: string,
+    options: InferenceOptions | undefined,
+    reasoningBody: Record<string, unknown>,
+  ): Promise<string> {
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
     const maxTokens = Math.min(
       options?.maxTokens ?? this.config.maxTokens ?? 4096,
@@ -118,6 +155,7 @@ export class GroqAdapter implements InferenceProvider {
         messages: [{ role: 'user', content: prompt }],
         temperature,
         max_tokens: maxTokens,
+        ...reasoningBody,
       }),
     });
 
@@ -157,7 +195,12 @@ export class GroqAdapter implements InferenceProvider {
     const apiKey = options?.apiKey || this.config.apiKey;
     if (!apiKey) throw new Error('Groq API key is not configured. Set GROQ_API_KEY env var.');
     const model = options?.model || requireAdapterModel('groq', this.config.model);
-    return chatCompletionsWithTools({
+    return withReasoningFallback({
+      provider: 'groq',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => chatCompletionsWithTools({
       baseUrl: this.baseUrl,
       headers: { 'Authorization': `Bearer ${apiKey}` },
       model,
@@ -175,6 +218,8 @@ export class GroqAdapter implements InferenceProvider {
           // Non-critical.
         }
       },
+      reasoningBody,
+      }),
     });
   }
 
@@ -192,7 +237,12 @@ export class GroqAdapter implements InferenceProvider {
     if (!apiKey) throw new Error('Groq API key is not configured. Set GROQ_API_KEY env var.');
     const model = options?.model || requireAdapterModel('groq', this.config.model);
 
-    return chatCompletionsWithToolsStream(
+    return withReasoningFallback({
+      provider: 'groq',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => chatCompletionsWithToolsStream(
       {
         baseUrl: this.baseUrl,
         headers: { 'Authorization': `Bearer ${apiKey}` },
@@ -212,9 +262,11 @@ export class GroqAdapter implements InferenceProvider {
             // Non-critical.
           }
         },
+        reasoningBody,
       },
       onToken,
-    );
+    ),
+    });
   }
 
   async generateStream(
@@ -240,15 +292,22 @@ export class GroqAdapter implements InferenceProvider {
     // M2.2: capture the endpoint-reported usage from the final SSE chunk
     // (OpenAI stream_options.include_usage convention) for measured cost.
     let streamUsage: { promptTokens?: number; completionTokens?: number } | undefined;
-    const fullContent = await streamCompletion(
-      `${this.baseUrl}/chat/completions`,
-      { 'Authorization': `Bearer ${apiKey}` },
-      { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens },
-      onToken,
-      (u) => {
-        streamUsage = u;
-      },
-    );
+    const fullContent = await withReasoningFallback({
+      provider: 'groq',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) =>
+        streamCompletion(
+          `${this.baseUrl}/chat/completions`,
+          { 'Authorization': `Bearer ${apiKey}` },
+          { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens, ...reasoningBody },
+          onToken,
+          (u) => {
+            streamUsage = u;
+          },
+        ),
+    });
 
     // Track cost for streaming response
     try {

@@ -142,14 +142,41 @@ const BAND_ORDER: Record<CapabilityBand, number> = { low: 0, medium: 1, high: 2 
  * Candidate order is preserved, so this only ever NARROWS the health ranking —
  * it can never invent a preference the health ordering did not already hold.
  */
+/**
+ * The candidates whose capability band is at least `requestedModel`'s — WITHOUT
+ * the non-dead-end fallback. May be empty (that emptiness is meaningful: "none
+ * of these is as capable as what was asked", which is exactly the downgrade
+ * signal verify-on-demand keys on). Order preserved.
+ */
+export function filterAtLeastCapability(
+  requestedModel: string | undefined,
+  candidates: readonly string[],
+): string[] {
+  const wantRank = BAND_ORDER[capabilityBand(estimateModelCapability(requestedModel))];
+  return candidates.filter((m) => BAND_ORDER[capabilityBand(estimateModelCapability(m))] >= wantRank);
+}
+
+/**
+ * Filter a HEALTH-ORDERED candidate list down to the models that are at least
+ * as capable as `requestedModel` (same band or higher), preserving the input
+ * order.
+ *
+ * The purpose is narrow and deliberate: when a DEAD pin must be repaired, the
+ * replacement must not silently drop a capability band. If the health-first
+ * candidate is in a lower band than the request, the at-least-as-capable
+ * candidates are the honest set to choose from; if NO candidate reaches the
+ * requested band (the provider simply has nothing comparable — `allam-2-7b`
+ * while every strong sibling is rate-limited), the FULL list is returned so the
+ * repair still makes the best attempt and never dead-ends.
+ *
+ * Candidate order is preserved, so this only ever NARROWS the health ranking —
+ * it can never invent a preference the health ordering did not already hold.
+ */
 export function nonDowngradeCandidates(
   requestedModel: string | undefined,
   candidates: readonly string[],
 ): string[] {
   if (candidates.length === 0) return [];
-  const wantRank = BAND_ORDER[capabilityBand(estimateModelCapability(requestedModel))];
-  const atLeast = candidates.filter(
-    (m) => BAND_ORDER[capabilityBand(estimateModelCapability(m))] >= wantRank,
-  );
+  const atLeast = filterAtLeastCapability(requestedModel, candidates);
   return atLeast.length > 0 ? atLeast : [...candidates];
 }

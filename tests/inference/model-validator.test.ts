@@ -375,3 +375,75 @@ describe('resolveWorkingModel', () => {
     }
   });
 });
+
+describe('verify-on-demand (max mode)', () => {
+  let registryTempDir: string;
+  let originalMemoryDir: string | undefined;
+
+  beforeEach(() => {
+    clearModelListCache();
+    registryTempDir = mkdtempSync(join(tmpdir(), 'buff-val-vod-'));
+    originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    process.env.NUVIRA_MEMORY_DIR = registryTempDir;
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    if (originalMemoryDir === undefined) {
+      delete process.env.NUVIRA_MEMORY_DIR;
+    } else {
+      process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
+    }
+    rmSync(registryTempDir, { recursive: true, force: true });
+  });
+
+  it('proves an unverified strong model instead of downgrading to a weak verified one', async () => {
+    const registry = getModelRegistry();
+    registry.markVerified('groq', 'allam-2-7b', 'telemetry', 100); // only a weak model verified
+    const provider = makeProvider([]);
+
+    const result = await resolveWorkingModel(provider, 'groq', 'qwen/qwen3.8-27b', false, true);
+
+    expect(result).toBe('qwen/qwen3.8-27b');
+    expect(provider.generate).toHaveBeenCalledTimes(1);
+    expect(registry.getEntry('groq', 'qwen/qwen3.8-27b')?.status).toBe('verified');
+  });
+
+  it('does NOT probe when a comparable verified model already exists (no downgrade to avoid)', async () => {
+    const registry = getModelRegistry();
+    registry.markVerified('groq', 'qwen/qwen3.8-27b', 'telemetry', 100);
+    const provider = makeProvider([]);
+    // Requested model is verified-usable → fast path, no probe.
+    const result = await resolveWorkingModel(provider, 'groq', 'qwen/qwen3.8-27b', false, true);
+    expect(result).toBe('qwen/qwen3.8-27b');
+    expect(provider.generate).not.toHaveBeenCalled();
+  });
+
+  it('a rejected probe marks the model unavailable and repairs to a verified sibling', async () => {
+    const registry = getModelRegistry();
+    registry.markVerified('groq', 'allam-2-7b', 'telemetry', 100);
+    const provider = makeProvider([]);
+    (provider.generate as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('Groq API error (404): model not found'),
+    );
+
+    const result = await resolveWorkingModel(provider, 'groq', 'qwen/qwen3.8-27b', false, true);
+
+    expect(result).toBe('allam-2-7b');
+    expect(registry.getEntry('groq', 'qwen/qwen3.8-27b')?.status).toBe('unavailable');
+  });
+
+  it('verifyOnDemand off (default) never probes — balanced stays byte-identical', async () => {
+    const registry = getModelRegistry();
+    registry.markVerified('groq', 'allam-2-7b', 'telemetry', 100);
+    const provider = makeProvider([]);
+
+    const result = await resolveWorkingModel(provider, 'groq', 'qwen/qwen3.8-27b');
+
+    // No probe with verifyOnDemand off: the empty live list means the desired
+    // model is kept (existing step-4 behavior), and generate is never called.
+    expect(result).toBe('qwen/qwen3.8-27b');
+    expect(provider.generate).not.toHaveBeenCalled();
+  });
+});

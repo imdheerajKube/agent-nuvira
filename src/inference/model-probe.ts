@@ -29,6 +29,12 @@ import { classifyFallbackError, type FallbackErrorType } from '../learning/provi
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { CATALOG_PROVIDER_IDS, isCatalogKeyless } from './provider-catalog.js';
 import { isNonChatModel } from './model-catalog.js';
+import { estimateModelCapability, isHighCapabilityModel } from '../learning/model-capability.js';
+import {
+  reasoningShapeForProvider,
+  isReasoningParamRejection,
+  SHAPE_DEFAULT_PARAM,
+} from './reasoning-effort.js';
 import { logger } from '../utils/logger.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -167,6 +173,12 @@ export async function spotCheckModel(
     void result;
     const latencyMs = Date.now() - startedAt;
     registry.markVerified(providerType, model, 'spot-check', latencyMs, 'spot-check');
+    // Having proved the model SERVES, learn whether it accepts a reasoning
+    // parameter — but only for a strong model (where the knob matters and the
+    // extra request is worth it). Best-effort: never affects the verify result.
+    if (isHighCapabilityModel(model)) {
+      await probeReasoningSupport(providerType, model, provider);
+    }
     return 'verified';
   } catch (err) {
     const type = classifyFallbackError(err);
@@ -195,6 +207,52 @@ export async function spotCheckModel(
     // blip never flips a good model to unavailable.
     logger.debug(`Model probe: ${providerType}/${model} transient error (${type}) — ignored`);
     return 'error';
+  }
+}
+
+/**
+ * Establish whether a provider × model ACTUALLY accepts a reasoning parameter,
+ * by sending one tiny generation with it (probe mode bypasses default-deny) and
+ * recording the outcome. This is how a provider that does NOT advertise its
+ * supported parameters (Groq, DeepSeek, …) gets the same learned truth
+ * OpenRouter gets from its `/models` metadata — so the `max` knob works for
+ * every strong model, not only the ones that self-describe.
+ *
+ * Conservative by design:
+ *   - a SUCCESS records `supported` (the model accepted it),
+ *   - a parameter REJECTION records `learned-unsupported`,
+ *   - anything else (rate-limit, network, generic error) learns NOTHING and
+ *     leaves the pair unknown ⇒ the knob stays inert (default-deny).
+ * Already-known pairs are skipped, so this runs at most once per model.
+ * Never throws.
+ */
+export async function probeReasoningSupport(
+  providerType: string,
+  model: string,
+  provider: InferenceProvider,
+): Promise<void> {
+  const registry = getModelRegistry();
+  if (registry.getReasoningCapability(providerType, model)) return;
+  const shape = reasoningShapeForProvider(providerType);
+  if (!shape) return;
+  const param = SHAPE_DEFAULT_PARAM[shape];
+  try {
+    await withTimeout(
+      provider.generate(SPOT_CHECK_PROMPT, {
+        model,
+        maxTokens: 1,
+        temperature: 0,
+        reasoningEffort: 'low',
+        reasoningProbe: true,
+      }),
+      SPOT_CHECK_TIMEOUT_MS,
+    );
+    registry.markReasoningSupported(providerType, model, param, shape, 'probed');
+  } catch (err) {
+    if (isReasoningParamRejection(err, param)) {
+      registry.markReasoningUnsupported(providerType, model, param);
+    }
+    // Otherwise: transient / provider-level — learn nothing (stay default-deny).
   }
 }
 
@@ -379,7 +437,14 @@ function rankProbeCandidates(ids: string[]): string[] {
   const score = (id: string): number => {
     // Shared non-chat classifier (safety/embedding/speech/image/video) — one
     // source of truth with the registry's preferred-model ranking.
-    let s = isNonChatModel(id) ? 100 : 0;
+    if (isNonChatModel(id)) return 100;
+    // CAPABILITY FIRST — the probe's spot-check budget is small (a handful of
+    // models per provider per pass), and the registry GAP is that strong models
+    // go unverified while cheap ones get verified, so the router substitutes
+    // DOWN. Spending the budget on the most capable chat models first is what
+    // keeps a strong model landed in the registry for `max` to route to.
+    let s = (1 - estimateModelCapability(id)) * 10;
+    // Still deprioritize preview/experimental ids (less stable to verify).
     if (/(preview|exp$|latest)/.test(id)) s += 10;
     return s;
   };

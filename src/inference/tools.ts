@@ -102,6 +102,12 @@ export async function chatCompletionsWithTools(opts: {
    * endpoint-reported usage when the streaming path captured it (M2.2).
    */
   onCost?: (promptText: string, contentText: string, usage?: { promptTokens?: number; completionTokens?: number; costUsd?: number }) => void;
+  /**
+   * Request-side reasoning fragment (e.g. `{ reasoning_effort: 'high' }`),
+   * merged into the request body last. Resolved and gated by the adapter via
+   * reasoning-effort.ts (default-deny); absent → body is byte-identical.
+   */
+  reasoningBody?: Record<string, unknown>;
 }): Promise<ToolCallResponse> {
   const temperature = opts.temperature ?? 0.7;
   const maxTokens = opts.maxTokens ?? 4096;
@@ -119,6 +125,7 @@ export async function chatCompletionsWithTools(opts: {
         type: 'function',
         function: { name: t.name, description: t.description, parameters: t.parameters },
       })),
+      ...(opts.reasoningBody || {}),
     }),
     signal: opts.signal ?? AbortSignal.timeout(opts.timeoutMs ?? 30_000),
   });
@@ -237,6 +244,7 @@ export async function chatCompletionsWithToolsStream(
       // OpenRouter only reports `usage.cost` for streams when explicitly asked;
       // providers that don't understand this field ignore it.
       usage: { include: true },
+      ...(opts.reasoningBody || {}),
     }),
     // P4 — external cancellation (the dashboard Cancel button). The streaming
     // path historically had no timeout; an explicit signal is the ONLY way to

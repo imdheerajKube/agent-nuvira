@@ -33,6 +33,16 @@ import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 import { buildConversationKey, cacheReasoning } from '../learning/reasoning-cache.js';
 import { getCatalogProvider } from './provider-catalog.js';
+import { getModelRegistry } from '../learning/model-registry.js';
+import {
+  resolveReasoningRequest,
+  withReasoningFallback,
+  ambientReasoningEffort,
+  reasoningShapeForProvider,
+  reasoningRequestBody,
+  SHAPE_DEFAULT_PARAM,
+  type ReasoningRequest,
+} from './reasoning-effort.js';
 
 /** Metadata that differentiates one OpenAI-compatible provider from another. */
 export interface OpenAICompatMeta {
@@ -185,6 +195,29 @@ export class OpenAICompatAdapter implements InferenceProvider {
   private baseUrl: string;
   private meta: OpenAICompatMeta;
 
+  /**
+   * Resolve the request-side reasoning parameter for this call, or undefined.
+   * Explicit `options.reasoningEffort` wins; otherwise the ambient capability
+   * mode (env). DEFAULT-DENY via the registry — see reasoning-effort.ts.
+   */
+  private reasoningRequest(model: string, options?: InferenceOptions): ReasoningRequest | undefined {
+    if (options?.reasoningProbe) return this.probeReasoningRequest();
+    return resolveReasoningRequest(
+      this.meta.providerId,
+      model,
+      options?.reasoningEffort ?? ambientReasoningEffort(),
+      getModelRegistry(),
+    );
+  }
+
+  /** Unconditional (gate-bypassing) request used ONLY by the model probe. */
+  private probeReasoningRequest(): ReasoningRequest | undefined {
+    const shape = reasoningShapeForProvider(this.meta.providerId);
+    if (!shape) return undefined;
+    const param = SHAPE_DEFAULT_PARAM[shape];
+    return { body: reasoningRequestBody({ param, shape }, 'low'), param, shape };
+  }
+
   constructor(config: ProviderConfig, meta: OpenAICompatMeta) {
     this.config = config;
     this.meta = meta;
@@ -197,6 +230,21 @@ export class OpenAICompatAdapter implements InferenceProvider {
 
   async generate(prompt: string, options?: InferenceOptions): Promise<string> {
     const model = options?.model || this.config.model || 'default';
+    return withReasoningFallback({
+      provider: this.meta.providerId,
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (extra) => this.generateOnce(prompt, model, options, extra),
+    });
+  }
+
+  private async generateOnce(
+    prompt: string,
+    model: string,
+    options: InferenceOptions | undefined,
+    reasoningBody: Record<string, unknown>,
+  ): Promise<string> {
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
     const maxTokens = compatMaxTokens(model, options?.maxTokens, this.config.maxTokens);
 
@@ -216,6 +264,7 @@ export class OpenAICompatAdapter implements InferenceProvider {
         messages: buildMessages(prompt, options),
         temperature,
         max_tokens: maxTokens,
+        ...reasoningBody,
       }),
       // A dead endpoint should fail fast and let the shared failover walk move
       // on — never hang a pipeline for minutes. 30s generous cap; callers with
@@ -272,7 +321,12 @@ export class OpenAICompatAdapter implements InferenceProvider {
       ...extraHeaders(this.config),
       ...buildAuthHeaders(this.meta, this.config, options?.apiKey),
     };
-    return chatCompletionsWithTools({
+    return withReasoningFallback({
+      provider: this.meta.providerId,
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => chatCompletionsWithTools({
       // Azure deployments live at /openai/deployments/{model}/chat/completions
       // (chatUrl handles the meta.azureDeployments shape — the shared helper's
       // plain /chat/completions path would 404 there).
@@ -296,6 +350,8 @@ export class OpenAICompatAdapter implements InferenceProvider {
           // Non-critical.
         }
       },
+      reasoningBody,
+      }),
     });
   }
 
@@ -314,7 +370,12 @@ export class OpenAICompatAdapter implements InferenceProvider {
       ...buildAuthHeaders(this.meta, this.config, options?.apiKey),
     };
 
-    return chatCompletionsWithToolsStream({
+    return withReasoningFallback({
+      provider: this.meta.providerId,
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => chatCompletionsWithToolsStream({
         // Azure deployments live at /openai/deployments/{model}/chat/completions
         // (chatUrl handles the meta.azureDeployments shape).
         baseUrl: this.baseUrl,
@@ -336,9 +397,11 @@ export class OpenAICompatAdapter implements InferenceProvider {
             // Non-critical.
           }
         },
+        reasoningBody,
       },
       onToken,
-    );
+    ),
+    });
   }
 
   async generateStream(
@@ -366,18 +429,25 @@ export class OpenAICompatAdapter implements InferenceProvider {
     let streamUsage: { promptTokens?: number; completionTokens?: number } | undefined;
     const reasoningChunks: string[] = [];
     const conversationKey = buildConversationKey([{ role: 'user', content: prompt }]);
-    const fullContent = await streamCompletion(
-      chatUrl(this.baseUrl, model, this.meta),
-      headers,
-      { model, messages: buildMessages(prompt, options), temperature, max_tokens: maxTokens },
-      onToken,
-      (u) => {
-        streamUsage = u;
-      },
-      (r) => {
-        reasoningChunks.push(r);
-      },
-    );
+    const fullContent = await withReasoningFallback({
+      provider: this.meta.providerId,
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) =>
+        streamCompletion(
+          chatUrl(this.baseUrl, model, this.meta),
+          headers,
+          { model, messages: buildMessages(prompt, options), temperature, max_tokens: maxTokens, ...reasoningBody },
+          onToken,
+          (u) => {
+            streamUsage = u;
+          },
+          (r) => {
+            reasoningChunks.push(r);
+          },
+        ),
+    });
 
     // Best-effort: persist the reasoning for M4.2 replay on a later retry.
     if (reasoningChunks.length > 0) {

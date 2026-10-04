@@ -5,6 +5,16 @@ import { streamCompletion } from './sse.js';
 import { chatCompletionsWithTools, chatCompletionsWithToolsStream } from './tools.js';
 import { getModelTags } from './model-catalog.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
+import { getModelRegistry } from '../learning/model-registry.js';
+import {
+  resolveReasoningRequest,
+  withReasoningFallback,
+  ambientReasoningEffort,
+  reasoningShapeForProvider,
+  reasoningRequestBody,
+  SHAPE_DEFAULT_PARAM,
+  type ReasoningRequest,
+} from './reasoning-effort.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -69,6 +79,17 @@ export class OpenRouterAdapter implements InferenceProvider {
   readonly name = 'OpenRouter';
   private config: ProviderConfig;
 
+  /** Resolve the request-side reasoning parameter (default-deny). See reasoning-effort.ts. */
+  private reasoningRequest(model: string, options?: InferenceOptions): ReasoningRequest | undefined {
+    if (options?.reasoningProbe) {
+      const shape = reasoningShapeForProvider('openrouter');
+      if (!shape) return undefined;
+      const param = SHAPE_DEFAULT_PARAM[shape];
+      return { body: reasoningRequestBody({ param, shape }, 'low'), param, shape };
+    }
+    return resolveReasoningRequest('openrouter', model, options?.reasoningEffort ?? ambientReasoningEffort(), getModelRegistry());
+  }
+
   constructor(config: ProviderConfig) {
     this.config = config;
   }
@@ -80,6 +101,22 @@ export class OpenRouterAdapter implements InferenceProvider {
     }
 
     const model = options?.model || this.config.model || 'mistralai/mistral-7b-instruct';
+    return withReasoningFallback({
+      provider: 'openrouter',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => this.generateOnce(prompt, model, apiKey, options, reasoningBody),
+    });
+  }
+
+  private async generateOnce(
+    prompt: string,
+    model: string,
+    apiKey: string,
+    options: InferenceOptions | undefined,
+    reasoningBody: Record<string, unknown>,
+  ): Promise<string> {
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
     const maxTokens = Math.min(
       options?.maxTokens ?? this.config.maxTokens ?? 4096,
@@ -101,6 +138,7 @@ export class OpenRouterAdapter implements InferenceProvider {
         messages: [{ role: 'user', content: prompt }],
         temperature,
         max_tokens: maxTokens,
+        ...reasoningBody,
       }),
     });
 
@@ -142,7 +180,12 @@ export class OpenRouterAdapter implements InferenceProvider {
     const apiKey = this.config.apiKey;
     if (!apiKey) throw new Error('OpenRouter API key is not configured. Set OPENROUTER_API_KEY env var.');
     const model = options?.model || this.config.model || 'mistralai/mistral-7b-instruct';
-    return chatCompletionsWithTools({
+    return withReasoningFallback({
+      provider: 'openrouter',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => chatCompletionsWithTools({
       baseUrl: OPENROUTER_BASE_URL,
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -167,6 +210,8 @@ export class OpenRouterAdapter implements InferenceProvider {
           // Non-critical.
         }
       },
+      reasoningBody,
+      }),
     });
   }
 
@@ -183,7 +228,12 @@ export class OpenRouterAdapter implements InferenceProvider {
     const apiKey = this.config.apiKey;
     if (!apiKey) throw new Error('OpenRouter API key is not configured. Set OPENROUTER_API_KEY env var.');
     const model = options?.model || this.config.model || 'mistralai/mistral-7b-instruct';
-    return chatCompletionsWithToolsStream(
+    return withReasoningFallback({
+      provider: 'openrouter',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => chatCompletionsWithToolsStream(
       {
         baseUrl: OPENROUTER_BASE_URL,
         headers: {
@@ -209,9 +259,11 @@ export class OpenRouterAdapter implements InferenceProvider {
             // Non-critical.
           }
         },
+        reasoningBody,
       },
       onToken,
-    );
+    ),
+    });
   }
 
   async generateStream(
@@ -240,17 +292,24 @@ export class OpenRouterAdapter implements InferenceProvider {
     let streamUsage: { promptTokens: number; completionTokens: number; costUsd?: number } | undefined;
 
     // OpenRouter uses OpenAI-compatible streaming SSE, same as Groq/NIM
-    const fullContent = await streamCompletion(
-      `${OPENROUTER_BASE_URL}/chat/completions`,
-      {
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': 'https://github.com/buff-cli/buff',
-        'X-Title': 'Buff CLI',
-      },
-      { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens, usage: { include: true } },
-      onToken,
-      (u) => { streamUsage = u; },
-    );
+    const fullContent = await withReasoningFallback({
+      provider: 'openrouter',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) =>
+        streamCompletion(
+          `${OPENROUTER_BASE_URL}/chat/completions`,
+          {
+            'Authorization': `Bearer ${apiKey}`,
+            'HTTP-Referer': 'https://github.com/buff-cli/buff',
+            'X-Title': 'Buff CLI',
+          },
+          { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens, usage: { include: true }, ...reasoningBody },
+          onToken,
+          (u) => { streamUsage = u; },
+        ),
+    });
 
     // Track cost for streaming response — measured usage + reported cost when
     // the stream carried them, estimate otherwise.
@@ -281,19 +340,37 @@ export class OpenRouterAdapter implements InferenceProvider {
       // OpenRouter's /models exposes each model's `context_length` — carry it
       // so the registry records the LIVE advertised window for preflight.
       const data = (await response.json()) as {
-        data: Array<{ id: string; name?: string; description?: string; context_length?: number }>;
+        data: Array<{
+          id: string;
+          name?: string;
+          description?: string;
+          context_length?: number;
+          /** OpenRouter advertises the request parameters each model accepts. */
+          supported_parameters?: string[];
+        }>;
       };
-      return (data.data || []).map((m: { id: string; name?: string; description?: string; context_length?: number }) => {
-        const ctx = typeof m.context_length === 'number' && m.context_length > 0 ? m.context_length : undefined;
-        return {
-          id: m.id,
-          name: m.name || m.id,
-          provider: 'openrouter',
-          description: m.description,
-          tags: getModelTags(m.id),
-          ...(ctx !== undefined ? { contextWindowTokens: ctx } : {}),
-        };
-      });
+      return (data.data || []).map(
+        (m: {
+          id: string;
+          name?: string;
+          description?: string;
+          context_length?: number;
+          supported_parameters?: string[];
+        }) => {
+          const ctx = typeof m.context_length === 'number' && m.context_length > 0 ? m.context_length : undefined;
+          return {
+            id: m.id,
+            name: m.name || m.id,
+            provider: 'openrouter',
+            description: m.description,
+            tags: getModelTags(m.id),
+            ...(ctx !== undefined ? { contextWindowTokens: ctx } : {}),
+            // Carried so the registry can learn reasoning-parameter support from
+            // the provider's own declaration (no probe / guess needed).
+            ...(Array.isArray(m.supported_parameters) ? { supportedParameters: m.supported_parameters } : {}),
+          };
+        },
+      );
     } catch {
       return [];
     }

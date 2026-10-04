@@ -3,11 +3,23 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OpenRouterAdapter } from '../../src/inference/openrouter-adapter.js';
-import { resetModelRegistry } from '../../src/learning/model-registry.js';
+import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
 import { getCostTracker } from '../../src/learning/cost-tracker.js';
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
+
+/** Wrap SSE data lines into a Response with a readable body (live-style stream). */
+function sseResponse(...lines: string[]): Response {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const line of lines) controller.enqueue(encoder.encode(`${line}\n`));
+      controller.close();
+    },
+  });
+  return { ok: true, status: 200, headers: new Headers(), body, text: async () => '' } as unknown as Response;
+}
 
 // ─── Hermetic storage isolation ──────────────────────────────────────────────
 // Every generate() flows through cost-tracker → model-registry telemetry.
@@ -154,6 +166,66 @@ describe('OpenRouterAdapter', () => {
       expect(entry.costReported).toBe(true);
     });
 
+    it('records measured usage and the provider-reported cost on a STREAMED answer', async () => {
+      // Live-style stream: content deltas, then the final usage chunk OpenRouter
+      // emits when the request asks for it — carrying the exact billed cost.
+      mockFetch.mockResolvedValueOnce(
+        sseResponse(
+          'data: {"choices":[{"delta":{"role":"assistant","content":"hi"}}]}',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+          'data: {"usage":{"prompt_tokens":321,"completion_tokens":45,"cost":0.00214}}',
+          'data: [DONE]',
+        ),
+      );
+
+      const tokens: string[] = [];
+      const full = await new OpenRouterAdapter(baseConfig).generateStream(
+        'hello',
+        { model: 'anthropic/claude-3.5-sonnet' },
+        (t) => tokens.push(t),
+      );
+      expect(full).toBe('hi');
+      expect(tokens).toEqual(['hi']);
+
+      // The stream request explicitly opted into streamed usage/cost.
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body) as { usage?: unknown };
+      expect(body.usage).toEqual({ include: true });
+
+      const entry = lastOpenRouterEntry();
+      expect(entry.model).toBe('anthropic/claude-3.5-sonnet');
+      // Measured wire tokens — not a length estimate.
+      expect(entry.measured).toBe(true);
+      expect(entry.inputTokens).toBe(321);
+      expect(entry.outputTokens).toBe(45);
+      // Provider-reported cost, recorded verbatim and flagged.
+      expect(entry.costUsd).toBe(0.00214);
+      expect(entry.costReported).toBe(true);
+    });
+
+    it('STREAMED usage without a cost is measured but not reported (locally priced)', async () => {
+      mockFetch.mockResolvedValueOnce(
+        sseResponse(
+          'data: {"choices":[{"delta":{"role":"assistant","content":"ok"}}]}',
+          'data: {"usage":{"prompt_tokens":1000,"completion_tokens":1000}}',
+          'data: [DONE]',
+        ),
+      );
+
+      await new OpenRouterAdapter(baseConfig).generateStream(
+        'hello',
+        { model: 'anthropic/claude-3.5-sonnet' },
+        () => {},
+      );
+
+      const entry = lastOpenRouterEntry();
+      expect(entry.measured).toBe(true);
+      expect(entry.inputTokens).toBe(1000);
+      expect(entry.outputTokens).toBe(1000);
+      // No reported cost → priced from the local table, and NOT flagged reported.
+      expect(entry.costUsd).toBeGreaterThan(0);
+      expect(entry.costReported).toBeUndefined();
+    });
+
     it('bills a :free model $0 even when usage carries no cost', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -276,6 +348,51 @@ describe('OpenRouterAdapter', () => {
       const adapter = new OpenRouterAdapter({});
       const info = adapter.getInfo();
       expect(info).toContain('❌ Missing API key');
+    });
+  });
+
+  describe('reasoning effort — default-deny + closed loop', () => {
+    it('omits reasoning_effort when the registry has not verified support', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) });
+      const adapter = new OpenRouterAdapter(baseConfig);
+      await adapter.generate('hi', { reasoningEffort: 'high' });
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.reasoning_effort).toBeUndefined();
+    });
+
+    it('sends reasoning_effort when the pair is verified', async () => {
+      getModelRegistry().markReasoningSupported(
+        'openrouter',
+        'vendor/reasoner',
+        'reasoning_effort',
+        'openai-reasoning-effort',
+        'advertised',
+      );
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) });
+      const adapter = new OpenRouterAdapter({ ...baseConfig, model: 'vendor/reasoner' });
+      await adapter.generate('hi', { model: 'vendor/reasoner', reasoningEffort: 'high' });
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.reasoning_effort).toBe('high');
+    });
+
+    it('learns unsupported and retries once WITHOUT the parameter on rejection', async () => {
+      getModelRegistry().markReasoningSupported(
+        'openrouter',
+        'vendor/reasoner',
+        'reasoning_effort',
+        'openai-reasoning-effort',
+        'advertised',
+      );
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 400, text: async () => 'unknown parameter reasoning_effort' })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) });
+      const adapter = new OpenRouterAdapter({ ...baseConfig, model: 'vendor/reasoner' });
+      const out = await adapter.generate('hi', { model: 'vendor/reasoner', reasoningEffort: 'high' });
+      expect(out).toBe('ok');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const second = JSON.parse(mockFetch.mock.calls[1][1].body);
+      expect(second.reasoning_effort).toBeUndefined();
+      expect(getModelRegistry().getReasoningCapability('openrouter', 'vendor/reasoner')).toMatchObject({ supported: false });
     });
   });
 });

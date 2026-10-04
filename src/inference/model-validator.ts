@@ -25,7 +25,7 @@ import type { InferenceProvider, ModelDescriptor } from './interface.js';
 import { logger } from '../utils/logger.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { preferredModelsFor } from '../learning/model-selection.js';
-import { nonDowngradeCandidates } from '../learning/model-capability.js';
+import { nonDowngradeCandidates, filterAtLeastCapability } from '../learning/model-capability.js';
 import { getDefaultModel } from './provider-catalog.js';
 
 // ─── Dynamic preference — never hardcoded model names ──────────────────────
@@ -95,6 +95,69 @@ function modelFallbackScore(m: ModelDescriptor): number {
   return score;
 }
 
+/** Bounded timeout for an on-demand verification spot-check (ms). */
+export const VERIFY_ON_DEMAND_TIMEOUT_MS = 20_000;
+
+/** The near-free prompt used to prove a model actually serves a request. */
+const VERIFY_PROMPT = 'Reply with the single word: ok';
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('verify-on-demand timeout')), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+/**
+ * VERIFY-ON-DEMAND — prove a requested model works instead of substituting a
+ * weaker one, when the only alternative really is a downgrade.
+ *
+ * The registry gap: a strong model that is only UNVERIFIED (never spotted) used
+ * to be replaced by the healthiest verified sibling — which a small/fast model
+ * always wins — so a `max` turn silently ran weaker than asked. A single
+ * bounded 1-token call settles it: success ⇒ `verified` (and every later route
+ * takes the sub-ms fast path); a definitive auth/permission answer ⇒
+ * `unavailable`; anything transient learns nothing (the model stays a candidate).
+ * Never throws — returns whether the model is now known to work.
+ */
+export async function verifyModelOnDemand(
+  provider: InferenceProvider,
+  providerType: string,
+  model: string,
+  timeoutMs: number = VERIFY_ON_DEMAND_TIMEOUT_MS,
+): Promise<boolean> {
+  const registry = getModelRegistry();
+  const startedAt = Date.now();
+  try {
+    await withTimeout(
+      provider.generate(VERIFY_PROMPT, { model, maxTokens: 1, temperature: 0 }),
+      timeoutMs,
+    );
+    registry.markVerified(providerType, model, 'spot-check', Date.now() - startedAt, 'verify-on-demand');
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message.slice(0, 160) : String(err).slice(0, 160);
+    if (/\b(401|403|404)\b|permission|not found|does not exist|access denied|billing|not enabled/i.test(msg)) {
+      try {
+        registry.markUnavailable(providerType, model, msg, 'spot-check', 0, 'verify-on-demand');
+      } catch {
+        // Best-effort.
+      }
+    }
+    // Transient (network/timeout/rate-limit/5xx): learn nothing.
+    return false;
+  }
+}
+
 /**
  * Validate a model against the provider's live model list and return a
  * working model:
@@ -114,6 +177,7 @@ export async function resolveWorkingModel(
   providerType: string,
   desiredModel?: string,
   announce = false,
+  verifyOnDemand = false,
 ): Promise<string> {
   const explicit = desiredModel && desiredModel !== 'default' ? desiredModel : undefined;
 
@@ -129,6 +193,25 @@ export async function resolveWorkingModel(
     // No pin: prefer a verified-working model (registry, health-ranked).
     const verified = preferredModelsFor(providerType)[0];
     if (verified) return verified;
+  }
+
+  // ── 0b. VERIFY-ON-DEMAND (max mode): proving beats downgrading ──────────
+  // When the requested model is merely UNVERIFIED (not known-dead) and the
+  // registry has NO verified model as capable as it, the alternative is a
+  // silent DOWNGRADE. Rather than accept that, prove the requested model with
+  // one bounded call. A cheap, one-time cost that lands the strong model in the
+  // registry for every later route. Skipped for a model the registry has
+  // definitively ruled out (that repair is legitimate) or when a comparable
+  // verified model already exists (no downgrade to avoid).
+  if (explicit && verifyOnDemand && !registry.isUsable(providerType, explicit)) {
+    const entry = registry.getEntry(providerType, explicit);
+    const definitivelyDead = !!entry && (entry.status === 'unavailable' || entry.quotaParkedUntil > Date.now());
+    const comparableVerified = filterAtLeastCapability(explicit, registry.getVerifiedModels(providerType));
+    if (!definitivelyDead && comparableVerified.length === 0) {
+      if (await verifyModelOnDemand(provider, providerType, explicit)) {
+        return explicit;
+      }
+    }
   }
   // A pin the registry has DEFINITIVELY ruled out (unavailable / quota-parked
   // from real telemetry or a probe) is repaired SILENTLY — the registry

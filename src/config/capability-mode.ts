@@ -28,6 +28,7 @@
  */
 
 import type { ConfigManager } from './manager.js';
+import type { ReasoningEffort } from './types.js';
 
 /** The two modes. `balanced` is the default; `max` ignores cost. */
 export type CapabilityMode = 'balanced' | 'max';
@@ -48,6 +49,14 @@ export type CapabilityMode = 'balanced' | 'max';
  * so a deployment whose only credentialed provider is weak still gets served.
  */
 export const MAX_CAPABILITY_MIN_REASONING = 0.7;
+
+/**
+ * The reasoning depth `max` requests from a routed model, when that model is
+ * verified to accept a reasoning-effort parameter. `high` is the strongest
+ * value the OpenAI-compatible family accepts, and the largest thinking budget
+ * for the native families — i.e. "as much as this model will give."
+ */
+export const MAX_CAPABILITY_REASONING_EFFORT: ReasoningEffort = 'high';
 
 /** The default when nothing is configured. */
 export const DEFAULT_CAPABILITY_MODE: CapabilityMode = 'balanced';
@@ -125,6 +134,26 @@ export interface CapabilityRoutingPolicy {
   maxCostUsd?: number;
   /** Served-model reasoning floor (0–1); candidates below it are eliminated. */
   minReasoning?: number;
+  /**
+   * Provider-neutral request for more reasoning depth, applied at the adapter
+   * boundary ONLY when the routed provider × model has been verified to accept
+   * the corresponding parameter (default-deny; see reasoning-effort.ts).
+   * `balanced` leaves this undefined (no request-side change at all); `max`
+   * asks for the strongest reasoning a model supports. This is the ceiling the
+   * routing floor alone cannot raise: a floor PICKS a strong model, this asks
+   * that model to THINK harder.
+   */
+  reasoningEffort?: ReasoningEffort;
+}
+
+/**
+ * The reasoning depth the current capability mode asks for, or `undefined`
+ * when the mode does not request one (`balanced`). Convenience over
+ * `capabilityRoutingPolicy(resolveCapabilityMode(cm))` for call sites that
+ * only need this one knob. Reading it is cheap and never throws.
+ */
+export function capabilityReasoningEffort(cm?: ConfigManager): ReasoningEffort | undefined {
+  return capabilityRoutingPolicy(resolveCapabilityMode(cm)).reasoningEffort;
 }
 
 /** The routing policy for a mode. `balanced` returns an empty object (no overrides). */
@@ -137,6 +166,10 @@ export function capabilityRoutingPolicy(mode: CapabilityMode): CapabilityRouting
       // Not just "prefer capability" — require it. A paid-but-weak model must
       // not satisfy a mode whose whole promise is "the strongest model."
       minReasoning: MAX_CAPABILITY_MIN_REASONING,
+      // And having PICKED a strong model, ask it to reason deeply. Gated
+      // per-model (default-deny) so this can never break a model that lacks the
+      // parameter. See reasoning-effort.ts.
+      reasoningEffort: MAX_CAPABILITY_REASONING_EFFORT,
     };
   }
   return {};

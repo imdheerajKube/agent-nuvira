@@ -43,6 +43,8 @@ import { homedir } from 'node:os';
 
 import { getVectorStore, type VectorStore, type VectorEntry } from '../memory/vector-store.js';
 import type { ModelDescriptor } from '../inference/interface.js';
+import type { ReasoningCapability, ReasoningShape } from '../config/types.js';
+import { reasoningCapabilityFromAdvertised } from '../inference/reasoning-effort.js';
 import { isNonChatModel } from '../inference/model-catalog.js';
 import { getQuotaLedger } from './quota-ledger.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
@@ -90,6 +92,14 @@ export interface ModelRegistryEntry {
   measuredOutputTokens?: number;
   /** How many measured calls contributed to the token EMAs. */
   measuredSamples?: number;
+  /**
+   * Learned support for a request-side reasoning parameter, keyed to this exact
+   * provider × model. Absent/`supported:false` ⇒ never send one (default-deny).
+   * Populated from the provider's own advertised parameters when it exposes
+   * them, from a probe, or from a `learned-unsupported` rejection. See
+   * `src/inference/reasoning-effort.ts`. Preserved across status changes.
+   */
+  reasoningCapability?: ReasoningCapability;
   /** Rolling error rate 0–1 (telemetry failures / calls). */
   errorRate: number;
   /**
@@ -768,6 +778,76 @@ export class ModelRegistry {
   }
 
   /**
+   * The learned reasoning-parameter support for a provider × model, or
+   * `undefined` when nothing has been established (callers treat absent as
+   * "do not send" — default-deny). Sync, sub-ms.
+   */
+  getReasoningCapability(provider: string, model: string): ReasoningCapability | undefined {
+    return this.data.entries[entryKey(provider, model)]?.reasoningCapability;
+  }
+
+  /**
+   * Record that a provider × model ACCEPTS a reasoning parameter (from the
+   * provider's advertised metadata, a successful probe, or a successful call
+   * that carried the parameter).
+   */
+  markReasoningSupported(
+    provider: string,
+    model: string,
+    param: string,
+    shape: ReasoningShape,
+    source: ReasoningCapability['source'] = 'probed',
+  ): void {
+    if (isSentinelModel(model)) return;
+    const entry = this.ensureEntry(provider, model);
+    entry.reasoningCapability = { supported: true, param, shape, verifiedAt: Date.now(), source };
+    this.persist();
+  }
+
+  /**
+   * Record that a provider × model REJECTED a reasoning parameter — positive
+   * negative evidence that stops the parameter being sent here on the next
+   * call (default-deny now has a reason to deny). Best-effort.
+   */
+  markReasoningUnsupported(provider: string, model: string, param: string): void {
+    if (isSentinelModel(model)) return;
+    const entry = this.ensureEntry(provider, model);
+    entry.reasoningCapability = {
+      supported: false,
+      param,
+      shape: entry.reasoningCapability?.shape ?? 'openai-reasoning-effort',
+      verifiedAt: Date.now(),
+      source: 'learned-unsupported',
+    };
+    this.persist();
+  }
+
+  /**
+   * Get an entry for writing, creating a neutral `unverified` one when absent —
+   * WITHOUT disturbing an existing entry's status/latency. Used by the
+   * reasoning-capability writes, which are orthogonal to availability.
+   */
+  private ensureEntry(provider: string, model: string): ModelRegistryEntry {
+    const key = entryKey(provider, model);
+    const existing = this.data.entries[key];
+    if (existing) return existing;
+    const now = Date.now();
+    const created: ModelRegistryEntry = {
+      provider,
+      model,
+      status: 'unverified' as ModelAvailabilityStatus,
+      lastVerifiedAt: 0,
+      lastProbedAt: now,
+      lastUsedAt: 0,
+      errorRate: 0,
+      quotaParkedUntil: 0,
+      source: 'telemetry' as ModelRegistrySource,
+    };
+    this.data.entries[key] = created;
+    return created;
+  }
+
+  /**
    * Resolve a WORKING model for a provider, preferring a curated known-good
    * verified model. Sync — used by the model validator's fast path.
    *
@@ -813,11 +893,20 @@ export class ModelRegistry {
       const model = typeof raw === 'string' ? raw : raw.id;
       if (isSentinelModel(model)) continue; // never track the 'default' sentinel
       const contextWindowTokens = typeof raw === 'string' ? undefined : raw.contextWindowTokens;
+      const advertisedReasoning = typeof raw === 'string' ? undefined : reasoningCapabilityFromAdvertised(raw.supportedParameters, now);
       const key = entryKey(provider, model);
       const existing = this.data.entries[key];
+      // Advertised reasoning support is PROVIDER-DECLARED metadata: learn it from
+      // the list probe so a model the provider serves with reasoning is usable at
+      // max the moment it is first seen. A prior `learned-unsupported` (a real
+      // rejection) OUTRANKS the catalog claim and is kept.
+      const reasoningCapability = existing?.reasoningCapability?.source === 'learned-unsupported'
+        ? existing.reasoningCapability
+        : advertisedReasoning ?? existing?.reasoningCapability;
       if (existing && existing.status === 'verified') {
         existing.lastProbedAt = now;
         if (contextWindowTokens && contextWindowTokens > 0) existing.contextWindowTokens = contextWindowTokens;
+        if (reasoningCapability) existing.reasoningCapability = reasoningCapability;
         continue;
       }
       this.data.entries[key] = {
@@ -837,6 +926,7 @@ export class ModelRegistry {
         partialRate: existing?.partialRate,
         partialHistory: existing?.partialHistory,
         quotaParkedUntil: existing?.quotaParkedUntil || 0,
+        reasoningCapability,
         source: 'probe',
         lastError: existing?.lastError,
         // The provider's OWN model list is authoritative about what it serves:
@@ -919,6 +1009,9 @@ export class ModelRegistry {
       // trajectory (partialHistory) survives alongside it.
       partialRate: existing?.partialRate,
       partialHistory: existing?.partialHistory,
+      // Reasoning-parameter support is model metadata, independent of the verify
+      // event — it survives a re-verify exactly like contextWindowTokens does.
+      reasoningCapability: existing?.reasoningCapability,
     };
     this.persist();
     // A GENUINE promotion (was not verified → now verified) is a state change
@@ -1028,6 +1121,7 @@ export class ModelRegistry {
       partialRate: existing?.partialRate,
       partialHistory: existing?.partialHistory,
       contextWindowTokens: existing?.contextWindowTokens,
+      reasoningCapability: existing?.reasoningCapability,
       quotaParkedUntil: Math.max(existing?.quotaParkedUntil || 0, quotaParkedUntil),
       source,
       lastError: reason,

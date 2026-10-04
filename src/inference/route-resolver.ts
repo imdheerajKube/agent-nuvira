@@ -36,6 +36,7 @@
 import type { InferenceProvider } from './interface.js';
 import { resolveWorkingModel } from './model-validator.js';
 import { getDefaultModel } from './provider-catalog.js';
+import { isMaxCapability } from '../config/capability-mode.js';
 import { logger } from '../utils/logger.js';
 import { recordRoutingDecision, type RoutingSource } from '../learning/routing-history.js';
 import { recordTraceEvent } from '../learning/reasoning-trace.js';
@@ -55,6 +56,13 @@ export interface RouteRequest {
   task?: string;
   /** Refuse to substitute; throw instead. Defaults to `NUVIRA_STRICT_MODEL=1`. */
   strict?: boolean;
+  /**
+   * `max`-mode repair: when the requested model is only UNVERIFIED and no
+   * verified model is as capable, prove the requested model with a bounded call
+   * instead of silently substituting a weaker one. Defaults to the ambient
+   * capability mode (env); callers with the config in hand pass it explicitly.
+   */
+  verifyOnDemand?: boolean;
 }
 
 export interface ResolvedRoute {
@@ -197,7 +205,13 @@ export async function resolveRoute(request: RouteRequest): Promise<ResolvedRoute
 
   let served = '';
   try {
-    served = await resolveWorkingModel(provider, providerType, request.model);
+    served = await resolveWorkingModel(
+      provider,
+      providerType,
+      request.model,
+      false,
+      request.verifyOnDemand ?? isMaxCapability(),
+    );
   } catch {
     // The validator is best-effort by contract; if it throws, a real model id is
     // still better than the 'default' sentinel reaching the API.

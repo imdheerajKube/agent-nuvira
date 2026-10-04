@@ -89,6 +89,19 @@
 - **Desktop app** is a plan, not a product.
 - **LSP / notebook editing** are genuinely absent — not stubbed, simply not
   implemented.
+- **Request-side reasoning control (`max` → `reasoningEffort`)** is wired for all
+  three provider families: the OpenAI-compatible set (`reasoning_effort`),
+  Anthropic extended thinking (`thinking.budget_tokens`, clamped to fit under
+  `max_tokens` so it can never 400 on the budget rule), and Gemini
+  (`generationConfig.thinkingConfig`). It is default-deny (emitted only for a
+  registry-verified provider × model), learned from advertised metadata / a
+  probe / a rejection, and retried-without on rejection.
+- **Verify-on-demand (registry gap)** is wired into the shared route resolver
+  (`resolveWorkingModel`): under `max`, a merely-UNVERIFIED requested model is
+  proved with one bounded call when no verified model is as capable, instead of
+  being silently replaced by a weaker one. It is one-time (the result is
+  recorded) and deemed unsafe never — a model the registry has ruled out is
+  still repaired normally.
 
 ## How to keep this honest
 

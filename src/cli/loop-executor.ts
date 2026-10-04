@@ -26,6 +26,7 @@
  */
 
 import { ConfigManager } from '../config/manager.js';
+import { capabilityReasoningEffort, isMaxCapability } from '../config/capability-mode.js';
 import { resolveProvider } from './router.js';
 import { resolveRoute, servedRouteFrom, type ServedRoute } from '../inference/route-resolver.js';
 import { debugLogNotice, sessionDebugLog } from '../observability/debug-log.js';
@@ -579,6 +580,7 @@ export async function runLoopExecutor(
         model: opts.model,
         source: 'cli',
         task: 'interactive loop (pinned provider)',
+        verifyOnDemand: isMaxCapability(configManager),
       });
       model = pinned.model;
       servedRoute = servedRouteFrom(pinned);
@@ -655,6 +657,7 @@ export async function runLoopExecutor(
               model: desired,
               source: 'cli',
               task: 'interactive loop (failover chain)',
+              verifyOnDemand: isMaxCapability(configManager),
             });
             model = route.model;
             servedRoute = servedRouteFrom(route);
@@ -775,6 +778,12 @@ export async function runLoopExecutor(
   const failedPairs = new Set<string>();
   const pairKey = (p: string, m: string): string => `${p}|${m}`;
 
+  // `max` asks the routed model to reason harder. Resolved once per turn from
+  // the capability mode (env + config file) and passed to every attempt; the
+  // adapter applies it ONLY for a model verified to accept the parameter, and
+  // retries without it on rejection (never breaks a model that lacks it).
+  const reasoningEffort = capabilityReasoningEffort(configManager);
+
   /** One generation attempt on a concrete provider × model (native → JSON). */
   const tryOnce = async (
     prov: InferenceProvider,
@@ -787,10 +796,10 @@ export async function runLoopExecutor(
       // R2 — tag the transport on the way out, the same vocabulary chat and the
       // subagent child report, so an `execute` run can be attributed too.
       if (typeof prov.generateToolsStream === 'function' && opts.onToken) {
-        const streamed = await prov.generateToolsStream(messages, schemas, { model: mdl, signal: abort }, opts.onToken);
+        const streamed = await prov.generateToolsStream(messages, schemas, { model: mdl, signal: abort, reasoningEffort }, opts.onToken);
         return { ...streamed, transport: 'native' as const };
       }
-      const native = await prov.generateTools(messages, schemas, { model: mdl, signal: abort });
+      const native = await prov.generateTools(messages, schemas, { model: mdl, signal: abort, reasoningEffort });
       return { ...native, transport: 'native' as const };
     }
     // JSON fallback transport — the shared helper the chat engine uses.
@@ -800,13 +809,13 @@ export async function runLoopExecutor(
     let raw: string;
     if (typeof prov.generateStream === 'function') {
       const chunks: string[] = [];
-      await prov.generateStream(prompt, { model: mdl, signal: abort }, (t) => {
+      await prov.generateStream(prompt, { model: mdl, signal: abort, reasoningEffort }, (t) => {
         chunks.push(t);
         opts.onToken?.(t);
       });
       raw = chunks.join('');
     } else {
-      raw = await prov.generate(prompt, { model: mdl, signal: abort });
+      raw = await prov.generate(prompt, { model: mdl, signal: abort, reasoningEffort });
     }
     const { text, calls } = extractFallbackToolCalls(raw);
     // R2 — the shared JSON fallback, named as such.
@@ -887,6 +896,7 @@ export async function runLoopExecutor(
           model: desired,
           source: 'failover',
           task: 'interactive loop (mid-turn failover)',
+          verifyOnDemand: isMaxCapability(configManager),
         });
         const mdl = route.model;
         // Flip the loop's active provider/model to the candidate that answers,

@@ -27,6 +27,7 @@ import inquirer from 'inquirer';
 
 import { ProviderFactory } from '../inference/factory.js';
 import { ConfigManager } from '../config/manager.js';
+import { capabilityReasoningEffort, isMaxCapability } from '../config/capability-mode.js';
 import type { ProviderType, InferenceOptions } from '../config/types.js';
 import { showModelPicker } from '../cli/model-picker.js';
 import { shouldPromptWeakModel, promptWeakModelChoice, type WeakModelChoice } from '../cli/weak-model-prompt.js';
@@ -2205,11 +2206,15 @@ export class Orchestrator {
         provider,
         model: requestedModel,
         source: 'orchestrator',
+        verifyOnDemand: isMaxCapability(this.configManager),
       });
       const servedModel = route.model;
       const mergedOptions = {
         ...inferenceOptions,
         model: servedModel,
+        // `max` asks the routed model to reason harder; the adapter applies it
+        // only for a model verified to accept the parameter (default-deny).
+        reasoningEffort: capabilityReasoningEffort(this.configManager),
         temperature: inferenceOptions?.temperature ?? config.temperature ?? 0.7,
         // Output cap: explicit option → configured value → the model's real
         // capability. The old flat `4096` held a 200K+ model to a small-model
@@ -3901,6 +3906,7 @@ export class Orchestrator {
               source: 'orchestrator',
               agentType: task.agentType,
               task: task.description,
+              verifyOnDemand: isMaxCapability(this.configManager),
             });
             workingModel = route.model;
           } catch {

@@ -22,7 +22,17 @@ import type { ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
 import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
 import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
+import { getModelRegistry } from '../learning/model-registry.js';
 import { attachHttpContext } from './http-error.js';
+import {
+  resolveReasoningRequest,
+  withReasoningFallback,
+  ambientReasoningEffort,
+  reasoningShapeForProvider,
+  reasoningRequestBody,
+  SHAPE_DEFAULT_PARAM,
+  type ReasoningRequest,
+} from './reasoning-effort.js';
 import {
   toAnthropicMessages,
   toAnthropicToolDefs,
@@ -32,6 +42,29 @@ import {
 
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
+
+/**
+ * Merge an extended-thinking fragment into an Anthropic request body.
+ *
+ * Anthropic REQUIRES `max_tokens > thinking.budget_tokens`, so the requested
+ * budget is CLAMPED to fit under the call's output cap rather than the cap being
+ * raised (a provider/model may not allow a bigger one). When there is no room
+ * for a meaningful budget (>= 1024), the thinking parameter is dropped — the
+ * call still runs, exactly as before. This is why Anthropic reasoning can never
+ * 400 the turn on the budget/`max_tokens` rule.
+ */
+function applyAnthropicThinking(
+  body: Record<string, unknown>,
+  reasoningBody: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!reasoningBody || Object.keys(reasoningBody).length === 0) return body;
+  const thinking = reasoningBody.thinking as { type?: string; budget_tokens?: number } | undefined;
+  if (!thinking || typeof thinking.budget_tokens !== 'number') return { ...body, ...reasoningBody };
+  const maxTokens = typeof body.max_tokens === 'number' ? body.max_tokens : 4096;
+  const budget = Math.min(thinking.budget_tokens, maxTokens - 1024);
+  if (budget < 1024) return body; // no room — skip rather than 400
+  return { ...body, thinking: { type: 'enabled', budget_tokens: budget } };
+}
 
 /**
  * Per-model max_tokens for Anthropic. Claude 3 Haiku has a 8192 limit;
@@ -126,8 +159,34 @@ export class AnthropicAdapter implements InferenceProvider {
     return headers;
   }
 
+  /** Resolve the request-side reasoning parameter (default-deny). See reasoning-effort.ts. */
+  private reasoningRequest(model: string, options?: InferenceOptions): ReasoningRequest | undefined {
+    if (options?.reasoningProbe) {
+      const shape = reasoningShapeForProvider('anthropic');
+      if (!shape) return undefined;
+      const param = SHAPE_DEFAULT_PARAM[shape];
+      return { body: reasoningRequestBody({ param, shape }, 'low'), param, shape };
+    }
+    return resolveReasoningRequest('anthropic', model, options?.reasoningEffort ?? ambientReasoningEffort(), getModelRegistry());
+  }
+
   async generate(prompt: string, options?: InferenceOptions): Promise<string> {
     const model = options?.model || this.config.model || 'default';
+    return withReasoningFallback({
+      provider: 'anthropic',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => this.generateOnce(prompt, model, options, reasoningBody),
+    });
+  }
+
+  private async generateOnce(
+    prompt: string,
+    model: string,
+    options: InferenceOptions | undefined,
+    reasoningBody: Record<string, unknown>,
+  ): Promise<string> {
     const maxTokens = Math.min(
       options?.maxTokens ?? this.config.maxTokens ?? 4096,
       anthropicModelMaxTokens(model),
@@ -139,12 +198,17 @@ export class AnthropicAdapter implements InferenceProvider {
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
       method: 'POST',
       headers: this.headers(options?.apiKey),
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        temperature,
-        messages: [{ role: 'user', content: prompt }],
-      }),
+      body: JSON.stringify(
+        applyAnthropicThinking(
+          {
+            model,
+            max_tokens: maxTokens,
+            temperature,
+            messages: [{ role: 'user', content: prompt }],
+          },
+          reasoningBody,
+        ),
+      ),
       signal: AbortSignal.timeout(this.config.timeoutMs ?? 30_000),
     });
 
@@ -186,6 +250,22 @@ export class AnthropicAdapter implements InferenceProvider {
     onToken: (token: string) => void,
   ): Promise<string> {
     const model = options?.model || this.config.model || 'default';
+    return withReasoningFallback({
+      provider: 'anthropic',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => this.generateStreamOnce(prompt, model, options, onToken, reasoningBody),
+    });
+  }
+
+  private async generateStreamOnce(
+    prompt: string,
+    model: string,
+    options: InferenceOptions | undefined,
+    onToken: (token: string) => void,
+    reasoningBody: Record<string, unknown>,
+  ): Promise<string> {
     const maxTokens = Math.min(
       options?.maxTokens ?? this.config.maxTokens ?? 4096,
       anthropicModelMaxTokens(model),
@@ -197,13 +277,18 @@ export class AnthropicAdapter implements InferenceProvider {
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
       method: 'POST',
       headers: this.headers(options?.apiKey),
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        temperature,
-        stream: true,
-        messages: [{ role: 'user', content: prompt }],
-      }),
+      body: JSON.stringify(
+        applyAnthropicThinking(
+          {
+            model,
+            max_tokens: maxTokens,
+            temperature,
+            stream: true,
+            messages: [{ role: 'user', content: prompt }],
+          },
+          reasoningBody,
+        ),
+      ),
     });
 
     if (!response.ok) {
@@ -276,6 +361,22 @@ export class AnthropicAdapter implements InferenceProvider {
     options?: InferenceOptions,
   ): Promise<ToolCallResponse> {
     const model = options?.model || this.config.model || 'default';
+    return withReasoningFallback({
+      provider: 'anthropic',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => this.generateToolsOnce(messages, tools, model, options, reasoningBody),
+    });
+  }
+
+  private async generateToolsOnce(
+    messages: ToolMessage[],
+    tools: ToolSchema[],
+    model: string,
+    options: InferenceOptions | undefined,
+    reasoningBody: Record<string, unknown>,
+  ): Promise<ToolCallResponse> {
     const maxTokens = Math.min(
       options?.maxTokens ?? this.config.maxTokens ?? 4096,
       anthropicModelMaxTokens(model),
@@ -283,13 +384,16 @@ export class AnthropicAdapter implements InferenceProvider {
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
 
     const { system, messages: wireMessages } = toAnthropicMessages(messages);
-    const body: Record<string, unknown> = {
-      model,
-      max_tokens: maxTokens,
-      temperature,
-      messages: wireMessages,
-      tools: toAnthropicToolDefs(tools),
-    };
+    const body: Record<string, unknown> = applyAnthropicThinking(
+      {
+        model,
+        max_tokens: maxTokens,
+        temperature,
+        messages: wireMessages,
+        tools: toAnthropicToolDefs(tools),
+      },
+      reasoningBody,
+    );
     if (system) body.system = system;
 
     logger.debug(`Anthropic: Tool-calling with model=${model}, tools=${tools.length} via ${this.baseUrl}`);
@@ -344,6 +448,23 @@ export class AnthropicAdapter implements InferenceProvider {
     onToken: (token: string) => void,
   ): Promise<ToolCallResponse> {
     const model = options?.model || this.config.model || 'default';
+    return withReasoningFallback({
+      provider: 'anthropic',
+      model,
+      request: this.reasoningRequest(model, options),
+      registry: getModelRegistry(),
+      run: (reasoningBody) => this.generateToolsStreamOnce(messages, tools, model, options, onToken, reasoningBody),
+    });
+  }
+
+  private async generateToolsStreamOnce(
+    messages: ToolMessage[],
+    tools: ToolSchema[],
+    model: string,
+    options: InferenceOptions | undefined,
+    onToken: (token: string) => void,
+    reasoningBody: Record<string, unknown>,
+  ): Promise<ToolCallResponse> {
     const maxTokens = Math.min(
       options?.maxTokens ?? this.config.maxTokens ?? 4096,
       anthropicModelMaxTokens(model),
@@ -351,14 +472,17 @@ export class AnthropicAdapter implements InferenceProvider {
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
 
     const { system, messages: wireMessages } = toAnthropicMessages(messages);
-    const body: Record<string, unknown> = {
-      model,
-      max_tokens: maxTokens,
-      temperature,
-      stream: true,
-      messages: wireMessages,
-      tools: toAnthropicToolDefs(tools),
-    };
+    const body: Record<string, unknown> = applyAnthropicThinking(
+      {
+        model,
+        max_tokens: maxTokens,
+        temperature,
+        stream: true,
+        messages: wireMessages,
+        tools: toAnthropicToolDefs(tools),
+      },
+      reasoningBody,
+    );
     if (system) body.system = system;
 
     logger.debug(`Anthropic: Streaming tool-calling with model=${model}, tools=${tools.length} via ${this.baseUrl}`);

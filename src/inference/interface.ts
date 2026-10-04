@@ -21,6 +21,13 @@ export interface ModelDescriptor {
    * context preflight uses the LIVE descriptor, not a static table.
    */
   contextWindowTokens?: number;
+  /**
+   * The provider's OWN advertised list of request parameters this model
+   * accepts, when the list endpoint exposes it (OpenRouter `/models`
+   * `supported_parameters`). Used to learn reasoning-parameter support from the
+   * PROVIDER rather than guessing it (see reasoning-effort.ts).
+   */
+  supportedParameters?: string[];
 }
 
 import { InferenceOptions } from '../config/types.js';
