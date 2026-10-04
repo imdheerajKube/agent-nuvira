@@ -458,6 +458,26 @@ export interface RoutingConfig {
    * served across a mode switch.
    */
   preferenceMode?: 'balanced' | 'performance-first' | 'cost-first' | 'privacy-first';
+  /**
+   * Capability mode — how much the agent spends on REASONING versus how much it
+   * saves. 'balanced' (default): the best model for complex/critical work,
+   * cheaper models for simple work, escalation on a detected stall. 'max': cost
+   * is not a concern — every turn routes to the strongest available model, paid
+   * models are always allowed, and cost ceilings are lifted. Set via
+   * `nuvira config capability <balanced|max>` or `NUVIRA_CAPABILITY_MODE`. The
+   * mode only ever widens MODEL QUALITY and AUTONOMY; every deterministic safety
+   * invariant (deny-first commands, workspace boundary, git gates) is unchanged.
+   * Resolution: env var, then this config value, then the default ('balanced').
+   */
+  capabilityMode?: 'balanced' | 'max';
+  /**
+   * When the loop's within-turn WORK DIGEST is injected on thread compaction.
+   * 'all' (default) — always keep a digest of what the turn did; 'max' — only
+   * under the `max` capability mode; 'off' — never. Set via
+   * `NUVIRA_WORK_DIGEST` or this value. Resolution: env, then config, then
+   * 'all'. See `src/config/work-digest.ts`.
+   */
+  workDigest?: 'all' | 'max' | 'off';
 }
 
 /**

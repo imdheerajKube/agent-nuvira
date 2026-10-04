@@ -54,6 +54,7 @@ const DATA: DashboardData = {
     enabled: true,
     total: 20,
     verified: 15,
+    routableNow: 11,
     unverified: 4,
     unavailable: 1,
     parked: 2,
@@ -156,7 +157,11 @@ describe('Overview — summary cards', () => {
     await screen.findByText('Models');
     // Settle the task read too, so no state update escapes the test.
     await waitFor(() => expect(screen.getByText('Completed today')).toBeTruthy());
-    expect(valueFor('Verified / routable')).toBe('15');
+    // Two DISTINCT numbers: verified (proven) and the staleness-gated subset
+    // the router can actually pick now. Reporting one under a "routable" label
+    // is the bug this split removes.
+    expect(valueFor('Verified (proven)')).toBe('15');
+    expect(valueFor('Routable now')).toBe('11');
     expect(valueFor('In the registry')).toBe('20');
     expect(valueFor('Quota-parked')).toBe('2');
   });

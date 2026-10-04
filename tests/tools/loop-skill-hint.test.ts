@@ -290,6 +290,77 @@ describe('findLoopSkillMatch — compiled store + hub catalog', () => {
     expect(hasRealGoalEvidence('make a board game with chess pieces', gameDev)).toBe(true);
   });
 
+  /**
+   * A document-FORMAT skill must not fire on the generic act of reading a
+   * document.
+   *
+   * Live false positive (2026-10-03): "read my health report - blood test
+   * report and share me findings which are concerning and what changes i should
+   * do" injected the **docx** methodology into a PDF lab-report turn. The two
+   * words that cleared the two-distinct-word bar were `read` (docx's
+   * goalPattern) and `changes` (docx's description, "tracked changes") —
+   * neither names a document format. The model then reported the PDF as a
+   * `.docx` with blank tables.
+   *
+   * Locked on the REAL bundled skill, not a synthetic copy, so a future edit to
+   * its tags/goalPattern/description is caught here rather than on a user's chat.
+   */
+  it('never activates the REAL bundled docx skill on a generic read/report goal', async () => {
+    const { hasRealGoalEvidence, isSkillActivated } = await loadHint();
+    const { docxSkill } = await import('../../src/skills/bundled-skills.js');
+    const goals = [
+      'read my health report - blood test report and share me findings which are concerning and what changes i should do to improve my health withreference to issues found in blood report.',
+      'can you read pdfs?',
+      'read this report and share findings',
+      'read this document and tell me what changes it describes',
+      // The exact hub-description false positive: `documents` + `produce` + `page`.
+      'Read the health report PDF at /tmp/report.pdf using the read_extract tool. Then produce a thorough assessment.',
+    ];
+    for (const goal of goals) {
+      expect(hasRealGoalEvidence(goal, docxSkill)).toBe(false);
+      expect(isSkillActivated(goal, docxSkill)).toBe(false);
+    }
+    // Real docx intent is unaffected — the format NAME or a domain TAG still matches.
+    expect(isSkillActivated('create a docx file for this report', docxSkill)).toBe(true);
+    expect(isSkillActivated('edit the word document and add tracked changes', docxSkill)).toBe(true);
+    expect(isSkillActivated('convert this to a .dotx template', docxSkill)).toBe(true);
+  });
+
+  /**
+   * A generic word must not activate a skill whose whole name is that word.
+   *
+   * Live false positive (2026-10-03): removing the docx match unmasked this
+   * one — the goal "read my health report - blood test report and share me
+   * findings which are concerning…" matched the **test-strategy** skill on the
+   * single name word `test` and injected a unit/integration/e2e software-
+   * testing methodology into a PDF lab-report turn. `test` is a medical noun
+   * there, not a request to test software.
+   *
+   * The rule is evidence-based, not a blunt stopword: a generic name word used
+   * as a COMPOUND-NOUN modifier ("blood test report") is dropped, while the
+   * verb use ("test the project") and the skill's own domain vocabulary
+   * (unit/integration/regression/coverage) still match. Locked on the REAL
+   * bundled skill so a future edit to its name/tags/goalPattern is caught here.
+   */
+  it('never activates the REAL bundled test-strategy on a health/lab-report goal', async () => {
+    const { hasRealGoalEvidence, isSkillActivated } = await loadHint();
+    const { testStrategySkill } = await import('../../src/skills/bundled-skills.js');
+    const healthGoals = [
+      'read my health report - blood test report and share me findings which are concerning and what changes i should do to improve my health withreference to issues found in blood report.',
+      'here is my blood test report, summarise the abnormal values',
+      'explain the results of my thyroid test report',
+    ];
+    for (const goal of healthGoals) {
+      expect(hasRealGoalEvidence(goal, testStrategySkill)).toBe(false);
+      expect(isSkillActivated(goal, testStrategySkill)).toBe(false);
+    }
+    // Real software-test intent is unaffected — the verb use, and the skill's
+    // own domain vocabulary, both still match.
+    expect(isSkillActivated('test the project and check for regressions', testStrategySkill)).toBe(true);
+    expect(isSkillActivated('run the unit and integration tests', testStrategySkill)).toBe(true);
+    expect(isSkillActivated('prove this change is safe and report coverage', testStrategySkill)).toBe(true);
+  });
+
   it('gates a hub match on its NAME, not its description prose', async () => {
     const { isSkillActivated, hasRealGoalEvidence } = await loadHint();
     // A hub match carries id/name/description only. The scorer ranks on name +
@@ -399,6 +470,38 @@ describe('buildLoopSkillHint', () => {
 });
 
 // ─── markLoopSkillUsed ──────────────────────────────────────────────────────
+
+describe('buildSkillCatalogHint — model-selected skills replace keyword injection', () => {
+  it('lists the available skills with a load instruction, so the model decides', async () => {
+    installHubSkill('zorbafier', 'Zorbafies the widget frobnicator');
+    const { buildSkillCatalogHint } = await loadHint();
+    // A high cap so the installed skill is inside the window (the bundled
+    // catalog is large; the default cap is deliberately smaller than the list).
+    const hint = await buildSkillCatalogHint(undefined, { maxSkills: 500 });
+    expect(hint).toContain('## Available skills');
+    expect(hint).toContain('zorbafier');
+    expect(hint).toContain('{"skill":"<name>"}');
+    // It is a CATALOG, not a forced recommendation — the model is told to load
+    // one only when it genuinely applies.
+    expect(hint).toMatch(/ONLY when it genuinely applies/);
+  });
+
+  it('never lists a disabled skill (the toggle is never cosmetic)', async () => {
+    installHubSkill('zorbafier', 'Zorbafies the widget frobnicator');
+    const cm = new ConfigManager(join(projectDir, 'cfg'));
+    cm.save({ skills: { disabled: ['zorbafier'] } });
+    const { buildSkillCatalogHint } = await loadHint();
+    const hint = await buildSkillCatalogHint(cm);
+    expect(hint).not.toContain('zorbafier');
+  });
+
+  it('is bounded — descriptions are capped', async () => {
+    installHubSkill('zorbafier', 'X'.repeat(2000));
+    const { buildSkillCatalogHint } = await loadHint();
+    const hint = await buildSkillCatalogHint(undefined, { descriptionChars: 80 });
+    expect(hint).toContain('…');
+  });
+});
 
 describe('markLoopSkillUsed', () => {
   it('bumps the compiled skill usage counter and never throws on hub skills', async () => {

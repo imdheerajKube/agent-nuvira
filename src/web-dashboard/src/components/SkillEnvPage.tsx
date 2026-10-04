@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
+import { useAuthVersion } from '../useAuthVersion';
 import type { SkillEnvVarRow } from '../types';
 import { EnvVarEditor } from './EnvVarEditor';
 import PageHeader from './PageHeader';
@@ -27,6 +28,7 @@ interface AuthState {
 
 export default function SkillEnvPage() {
   const [auth, setAuth] = useState<AuthState>({ configured: false, authenticated: false, role: null });
+  const authVersion = useAuthVersion();
   const [vars, setVars] = useState<SkillEnvVarRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +52,7 @@ export default function SkillEnvPage() {
       );
     });
     void refresh();
-  }, [refresh]);
+  }, [refresh, authVersion]);
 
   /**
    * Save one variable, then re-read.

@@ -48,6 +48,7 @@ import type { EvalRun, EvalTask } from '../learning/eval-framework.js';
 // WS7 (#29) — the seeded-bug benchmark: its own suite, its own verification, its
 // own scoring (found / fixed / nothing else touched).
 import { formatSeedVerification } from '../learning/seeded-bugs.js';
+import { runCapabilityParity, formatCapabilityParity } from '../learning/capability-parity.js';
 import {
   formatSeededReport,
   runSeededSuite,
@@ -95,6 +96,20 @@ export class EvalCommand extends BaseCommand {
         } else {
           await this.runEval(options || {});
         }
+      });
+
+    // ── parity ────────────────────────────────────────────────────────────
+    // The measurement half of the capability work: the SAME hard tasks run under
+    // both capability modes, so "max reasons better" is a number, not a claim.
+    command
+      .command('parity')
+      .description('Measure the capability gap: run the hard tasks under balanced AND max, then compare')
+      .option('-p, --provider <provider>', 'Provider to evaluate')
+      .option('-m, --model <model>', 'Model to evaluate')
+      .option('--tasks <ids>', 'Comma-separated task ids (default: the hard multi-step parity set)')
+      .option('--engine <engine>', 'Engine arm: loop (default) | pipeline', 'loop')
+      .action(async (options?: { provider?: string; model?: string; tasks?: string; engine?: string }) => {
+        await this.runParity(options || {});
       });
 
     // ── verify-seeds ──────────────────────────────────────────────────────
@@ -315,6 +330,64 @@ export class EvalCommand extends BaseCommand {
     logger.success(`  🏆 Best router pick: ${best.provider}/${best.model} (composite ${(best.summary.avgCompositeScore * 100).toFixed(1)}%)`);
     logger.info('  These results feed the Auto router\'s runtime stats — rerun `${getCliName()} model explain` to see adjusted scores.');
     console.log('');
+  }
+
+  /**
+   * `nuvira eval parity` — run the hard, multi-step parity tasks under BOTH
+   * capability modes and print the deltas that describe the gap (delivery,
+   * bounded-ness, interruptions, tokens, cost). Mirrors `runEval`'s provider
+   * resolution and placeholder-key guard; the only new thing is the mode sweep,
+   * which `runCapabilityParity` applies through `NUVIRA_CAPABILITY_MODE`.
+   */
+  private async runParity(options: {
+    provider?: string;
+    model?: string;
+    tasks?: string;
+    engine?: string;
+  }): Promise<void> {
+    const resolved = resolveProvider(this.configManager, options.provider);
+    const provider = resolved.provider;
+    const providerName = resolved.type;
+    const resolvedConfig = this.configManager.getProviderConfig(providerName as any).config as { apiKey?: string; model?: string };
+    let model = options.model || resolvedConfig.model || 'default';
+    if (!model || model === 'default') {
+      try {
+        const prov = ProviderFactory.createProvider(providerName as any, resolvedConfig);
+        model = await resolveDefaultModel(prov, providerName, model);
+      } catch {
+        // Best-effort — a resolvable model string is enough.
+      }
+    }
+    if (isPlaceholderApiKey(resolvedConfig.apiKey)) {
+      logger.error(
+        `  🚫 ${providerName} is pinned with a placeholder API key — the parity run would only measure auth failures. Set a real key first.`,
+      );
+      return;
+    }
+    const available = await provider.isAvailable();
+    if (!available) {
+      logger.error(`${provider.name} is not available. Check your configuration.`);
+      return;
+    }
+    const taskIds = options.tasks ? options.tasks.split(',').map((t) => t.trim()).filter(Boolean) : undefined;
+    const engine = options.engine === 'pipeline' ? 'pipeline' : 'loop';
+
+    logger.highlight(`${'═'.repeat(64)}`);
+    logger.highlight(`  🎯  Capability parity: ${providerName}/${model} (engine: ${engine})`);
+    logger.highlight(`${'═'.repeat(64)}`);
+    console.log('');
+    logger.info('  Running the hard parity tasks twice — balanced, then max. This costs real tokens.');
+    console.log('');
+
+    try {
+      const report = await runCapabilityParity({ provider, providerName, model, taskIds, engine });
+      console.log('');
+      console.log(formatCapabilityParity(report));
+      console.log('');
+      logger.info('  Read the delta column: positive composite/test/completed favors max; negative bounded/asks favors max.');
+    } catch (err) {
+      logger.error(String(err));
+    }
   }
 
   private async runEval(options: {

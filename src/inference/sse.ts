@@ -41,6 +41,12 @@ export function parseSSEReasoning(line: string): string | null {
 export interface UsageInfo {
   promptTokens: number;
   completionTokens: number;
+  /**
+   * Provider-reported cost in USD for this call, when the endpoint includes
+   * one (OpenRouter carries `usage.cost`; most others omit it). It is the most
+   * accurate value available — it reflects the account's credits/free tier.
+   */
+  costUsd?: number;
 }
 
 /**
@@ -99,7 +105,7 @@ export async function streamCompletion(
     if (data === '[DONE]') return;
     try {
       const parsed = JSON.parse(data) as {
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
+        usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
       };
       if (
         parsed?.usage &&
@@ -109,6 +115,7 @@ export async function streamCompletion(
         onUsage({
           promptTokens: parsed.usage.prompt_tokens,
           completionTokens: parsed.usage.completion_tokens,
+          ...(typeof parsed.usage.cost === 'number' ? { costUsd: parsed.usage.cost } : {}),
         });
       }
     } catch {

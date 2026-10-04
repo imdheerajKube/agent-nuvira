@@ -44,6 +44,7 @@ import {
   isAffirmativeReply,
   replyAsksTheReader,
   requestAuthorizesWrites,
+  requestForbidsWrites,
   stripTrailingPermissionSeek,
 } from '../learning/autonomy-policy.js';
 import {
@@ -57,13 +58,22 @@ import {
 import {
   detectProcessComplaint,
   isTraceKey,
+  noProgressNudge,
   repeatNudge,
+  repeatedFailureNudge,
   runTraceFor,
   RunTrace,
   type RunTraceSnapshot,
 } from '../learning/run-trace.js';
 import { wantsAuthoredArtifact } from '../learning/deliverable-class.js';
 import { normalizeFollowups, type FollowupSuggestion } from './followup-utils.js';
+// The capability mode (balanced | max) — `max` widens the loop's own reasoning
+// budget as well as routing, so "cost is not a concern" means the agent may
+// keep working through a long build instead of stopping at the default bound.
+import { isMaxCapability } from '../config/capability-mode.js';
+// The digest's scope (all | max | off) — a user-facing control over whether the
+// compaction digest is injected in every mode, only under `max`, or never.
+import { isWorkDigestEnabled } from '../config/work-digest.js';
 import {
   assessEditActivity,
   detectUnverifiedEditClaim,
@@ -97,6 +107,21 @@ function mutatedPathOf(args: unknown): string | undefined {
   const a = args as { path?: unknown; file_path?: unknown; file?: unknown } | undefined;
   const p = a?.path ?? a?.file_path ?? a?.file;
   return typeof p === 'string' && p.trim() ? p.trim() : undefined;
+}
+
+/**
+ * The ACTION signature of a failed call — what it tried to do, so the identical
+ * retry is recognizable. Prefers the shell `command`, then the file `path`,
+ * then the tool name (a call that named neither still repeats as the same tool).
+ * Used by the self-diagnosis gate (see RunTrace.repeatedFailure).
+ */
+function failureActionOf(call: { name: string; arguments?: unknown }): string {
+  const a = call.arguments as { command?: unknown; query?: unknown } | undefined;
+  const command = typeof a?.command === 'string' && a.command.trim() ? a.command.trim() : undefined;
+  if (command) return command;
+  const path = mutatedPathOf(call.arguments);
+  if (path) return path;
+  return call.name;
 }
 
 /**
@@ -390,6 +415,20 @@ export interface ToolLoopOptions {
    */
   requireVerification?: boolean;
   /**
+   * SELF-REVIEW GATE (default ON). When a SUBSTANTIAL turn (>= 6 steps) that
+   * changed files is about to end — and the verification gate has nothing to ask
+   * (i.e. the change was already observed) — the loop spends ONE bounded nudge
+   * asking the model to check its result against the ORIGINAL ask: is every part
+   * satisfied, and is every claim backed by a tool result from THIS turn?
+   *
+   * Why it is separate from the verification gate: verification answers "did you
+   * check it works", self-review answers "did you answer the WHOLE question" —
+   * the failure mode it targets is a verified, confident answer to a slightly
+   * wrong question. Bounded once and only for long turns, so a short edit turn is
+   * byte-identical. Set false to disable.
+   */
+  requireSelfReview?: boolean;
+  /**
    * G13b — DELIVERABLE GATE (default ON). When the request asks for an AUTHORED
    * deliverable to be produced ("write a 12 page story at /path/Mahagatha.md")
    * and the turn ends having written NOTHING to disk, the loop spends ONE
@@ -405,6 +444,30 @@ export interface ToolLoopOptions {
    * Set false to restore the pre-gate behaviour.
    */
   requireDeliverable?: boolean;
+  /**
+   * ZERO-ACTION GATE (default ON). When the request DIRECTS work on the
+   * workspace (a create/maintenance ask — `requestAuthorizesWrites`) and the
+   * turn is about to END having called no tool at all, the loop spends ONE
+   * bounded nudge asking the model to actually do the work, then reports the
+   * residual honestly (`ToolLoopResult.noActionTaken`).
+   *
+   * Why it exists: found live, a well-specified four-part coding ask (fix a bug,
+   * add a function, write a test, run it) ended in prose five runs out of six —
+   * "I'm sorry, but it seems you didn't…", "Based on the provided context, I'm
+   * guessing…", or the thread echoed back — with ZERO tool calls and ZERO file
+   * edits, while `generationFailed` stayed false so every surface read it as a
+   * completed turn. The existing promise/permission/deliverable gates all key on
+   * a POSITIVE shape in the reply (an announced action, a permission question, an
+   * authored-artifact noun); none of them fire on a plain non-answer, which is why
+   * the turn could end having done nothing.
+   *
+   * Deliberately narrow: it requires an asking request AND the absence of ANY
+   * successful tool call this turn (a turn that read files and answered is out of
+   * scope), it never fires on an authored-artifact ask (the deliverable gate owns
+   * those), and it never overrides an explicit "do not write". Bounded once, so a
+   * model that still does nothing ends the turn as before — but now flagged.
+   */
+  requireAction?: boolean;
   /**
    * G18 — OBSERVABILITY SINK for the loop's non-LLM facts: every tool call that
    * ran (name, args, ok/error, duration), every gate DECISION (a nudge spent,
@@ -585,6 +648,17 @@ export interface ToolLoopResult {
    * caller must never read "the story is done" from a turn that wrote no file.
    */
   undeliveredArtifact?: boolean;
+  /**
+   * ZERO-ACTION HONESTY FLAG — the request DIRECTED work on the workspace (it
+   * authorized writes) and this turn performed NONE: no tool call succeeded and
+   * no file was changed. Distinct from `undeliveredArtifact` (which is about an
+   * authored file-shaped deliverable) and from `unfulfilledPromise` (an
+   * announced action the answer then dropped): this is the residual signal for a
+   * work request answered with nothing at all. Set by the loop, never guessed
+   * by callers, and independent of the nudge being enabled — so a caller can
+   * never read "completed" from a turn whose request it did not touch.
+   */
+  noActionTaken?: boolean;
   /**
    * G2 — HONESTY FLAG — the answer ASSERTS a completed code change ("I have
    * successfully fixed…", "now fully operational") while the turn mutated the
@@ -828,10 +902,38 @@ const MAX_PARALLEL_READS = 4;
  * were well able to do (see `THINK_ONLY_ESCALATION`).
  */
 export const MAX_THINK_CONTINUES = 3;
+/**
+ * Consecutive steps that RAN tools and had NO success before the loop asks the
+ * model to diagnose the stall. This generalises {@link RunTrace.repeatedFailure}
+ * (the identical action retried): a weak model also loops by substituting a
+ * different command each step, every one failing the same underlying way — none
+ * of them repeats exactly, so the same-action gate never fires.
+ *
+ * The threshold is deliberately ABOVE the handful of distinct checks ordinary
+ * iteration tries (`npm test` → `npm run build` → `npm run lint`), so a short run
+ * of unrelated failures is left alone; only a sustained all-fail streak is a stall.
+ */
+export const NO_PROGRESS_STALL_STEPS = 4;
+/**
+ * How substantial a turn must be before the SELF-REVIEW gate may fire (see
+ * `selfReviewNudge`). Short, single-edit turns already end with an obvious
+ * result the model just looked at; a long turn is where scope drift hides, and
+ * where an extra pass earns its latency.
+ */
+export const SELF_REVIEW_MIN_STEPS = 6;
 /** Default continuations granted per turn when the option is omitted. */
 export const DEFAULT_MAX_CONTINUATIONS = 2;
 /** Default extra steps granted per continuation. */
 export const DEFAULT_CONTINUATION_STEPS = 8;
+/**
+ * `max` capability mode — the loop's longest bounded reasoning budget. The
+ * defaults above are sized to keep an ordinary turn responsive; under `max` the
+ * user has said cost is not a concern, so the same session is allowed to run a
+ * long build / many-file edit to completion instead of stopping at the default
+ * bound. Still finite: the hard cap is `maxSteps + 4 * 16` extra steps.
+ */
+export const MAX_CAPABILITY_MAX_CONTINUATIONS = 4;
+export const MAX_CAPABILITY_CONTINUATION_STEPS = 16;
 /** Pause before re-attempting a failed step (lets a transient outage clear). */
 export const CONTINUATION_DELAY_MS = 1_500;
 
@@ -900,8 +1002,18 @@ export interface ToolLoopProgress {
 async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgress): Promise<ToolLoopResult> {
   const { messages, tools: toolNames, maxSteps = 16, context, deps } = opts;
   // Bounded auto-continuation state (see ToolLoopOptions.maxContinuations).
-  const maxContinuations = Math.max(0, opts.maxContinuations ?? DEFAULT_MAX_CONTINUATIONS);
-  const continuationSteps = Math.max(1, opts.continuationSteps ?? DEFAULT_CONTINUATION_STEPS);
+  // `max` capability mode raises the DEFAULT budget (an explicit option still
+  // wins, so callers that pin a bound keep it). Read once per turn from the
+  // config, exactly like routing, so a mode change applies to the next turn.
+  const maxCapability = isMaxCapability(context.configManager);
+  const maxContinuations = Math.max(
+    0,
+    opts.maxContinuations ?? (maxCapability ? MAX_CAPABILITY_MAX_CONTINUATIONS : DEFAULT_MAX_CONTINUATIONS),
+  );
+  const continuationSteps = Math.max(
+    1,
+    opts.continuationSteps ?? (maxCapability ? MAX_CAPABILITY_CONTINUATION_STEPS : DEFAULT_CONTINUATION_STEPS),
+  );
   let continuations = 0;
   // Bounded dangling-promise nudges spent this turn (see INTENT_PROMISE_RE).
   let intentNudges = 0;
@@ -915,12 +1027,26 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // asks the model to PROCEED, this one asks it to stop REPEATING, and the two
   // fire on independent evidence.
   let repeatNudges = 0;
+  // The loop's SELF-DIAGNOSIS nudge: bounded once per turn, fired when the SAME
+  // action has failed more than once (see RunTrace.repeatedFailure). This is the
+  // capability that turns "retry the identical failing command 10 times" into
+  // "state the root cause and change the approach" — the live macOS-build turn
+  // re-issued `npx tauri build` again and again against the same missing Cargo.
+  let diagnosisNudges = 0;
+  // Stage 2 — consecutive tool-running steps with NO success (the generalized
+  // stall signal, see NO_PROGRESS_STALL_STEPS). Reset by any successful tool.
+  let failedToolSteps = 0;
+  // Stage 4 — bounded SELF-REVIEW nudge (see requireSelfReview / selfReviewNudge).
+  let selfReviewNudges = 0;
   // Bounded think-only continuation (see THINK_ONLY_ESCALATION). Counts the
   // consecutive reasoning-only steps so the loop cannot spin on them.
   let thinkContinues = 0;
   // G13b — bounded "the request asked for a file and none was written" nudges
   // (see wantsAuthoredArtifact).
   let deliverableNudges = 0;
+  // ZERO-ACTION — bounded "the request directed work and NOTHING was done"
+  // nudges (see requireAction / zeroActionGateApplies).
+  let actionNudges = 0;
   /**
    * G18 — the sink, wrapped so an observability failure can never become a
    * turn failure (a recorder that throws is a bug in the instrument, not in
@@ -1119,6 +1245,23 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   let lastContent = '';
   let bounded = false;
 
+  /**
+   * Should the SELF-REVIEW gate fire now? Returns the correction to inject, or
+   * null. Extracted so the two end-of-turn exits ask the question identically —
+   * nothing here is a function of which branch is ending.
+   */
+  const selfReviewCorrection = (): string | null => {
+    if (selfReviewNudges >= 1) return null;
+    if (opts.requireSelfReview === false) return null;
+    if (steps < SELF_REVIEW_MIN_STEPS) return null;
+    if (progress.mutatedPaths.length === 0) return null;
+    // The verification gate owns "did you check it"; self-review only runs once
+    // that question is settled, so the two can never both fire in one turn.
+    const activity = assessEditActivity(progress.successfulToolCalls, progress.verificationEvidence, progress.mutatedPaths);
+    if (activity.needsVerification) return null;
+    return selfReviewNudge(currentAsk(opts));
+  };
+
   for (;;) {
     // ── Bounded auto-continuation on the STEP BOUND ────────────────────────
     // The model still wanted to act when the budget ran out (a long build, a
@@ -1150,6 +1293,18 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       if (trimmedResult.trimmed > 0) {
         thread.length = 0;
         thread.push(...trimmedResult.thread);
+        // Keep a memory of what the turn DID after its raw outputs are gone:
+        // without this, a long turn loses the VERDICTS (did the build pass?) and
+        // re-runs work it already finished. Deterministic and bounded — the same
+        // philosophy as trimThreadBudget itself (facts, no summarizer, no drift).
+        if (isWorkDigestEnabled(context.configManager)) {
+          const digest = buildWorkDigest({
+            successfulTools: progress.successfulToolCalls,
+            mutatedPaths: progress.mutatedPaths,
+            executedActions: progress.executedActions,
+          });
+          if (digest) upsertWorkDigest(thread, digest);
+        }
         deps.onEvent?.(`   ✂️ ${trimmedResult.trimmed} old tool result(s) trimmed to fit the ${Math.round(budgetChars / 1000)}K-char context budget.`);
       }
     }
@@ -1496,6 +1651,34 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         thread.push({ role: 'user', content: repeatNudge(closing, runTrace.priorAnswer(closing)) });
         continue;
       }
+      // ── ZERO-ACTION gate (bounded, once) ────────────────────────────────
+      // The request DIRECTED work on the workspace and the turn is ending
+      // without having run a single tool: not a dropped promise, not a
+      // permission question, not an authored file — just prose where the work
+      // should be. The gates above all key on a positive shape in the reply and
+      // so miss a plain non-answer; this one keys on the REQUEST and the
+      // ABSENCE of action, which is exactly the shape that ended a fully
+      // specified four-part coding ask with nothing done. Bounded once; the
+      // residual is reported by `noActionTaken` below, whether or not the nudge
+      // is enabled.
+      if (
+        actionNudges < 1 &&
+        zeroActionGateApplies(opts, progress, schemas.length, requestText, authorization.authorized)
+      ) {
+        actionNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.('   🛠️ The request asked for work and nothing was done — telling the model to do it now.');
+        traceEvent({
+          kind: 'gate',
+          gate: 'action',
+          summary: 'the request directed work on the workspace and the turn performed none — one bounded nudge to carry it out',
+        });
+        // The non-answer must not become the delivered answer either way.
+        lastContent = '';
+        thread.push({ role: 'assistant', content: response.content });
+        thread.push({ role: 'user', content: zeroActionNudge(currentAsk(opts)) });
+        continue;
+      }
       // S1 (both exits): the MOST SUBSTANTIVE content seen wins here too —
       // a short closing step ("Sent it to her! ✅") with no tool calls must
       // not clobber the deliverable (poem/essay) the model composed in an
@@ -1552,6 +1735,22 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           role: 'user',
           content: verificationNudgeFor(ctx.cwd ?? process.cwd(), progress.mutatedPaths),
         });
+        continue;
+      }
+      // SELF-REVIEW (no-tools exit) — a substantial, already-verified turn is
+      // ending; spend ONE bounded pass to check the result against the ask.
+      const review = selfReviewCorrection();
+      if (review) {
+        selfReviewNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.('   🧭 Substantial turn ending — asking the model to review the result against the original ask.');
+        traceEvent({
+          kind: 'gate',
+          gate: 'self-review',
+          summary: 'a substantial turn that changed files reached its end — one bounded nudge to check the result against the original ask',
+        });
+        thread.push({ role: 'assistant', content: response.content });
+        thread.push({ role: 'user', content: review });
         continue;
       }
       return {
@@ -1838,6 +2037,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // What each call actually delivered (post hint/tip decoration), kept in
     // call order for the endsAgentStep exit below.
     const delivered: string[] = new Array(plans.length).fill('');
+    let stepAnySuccess = false;
     for (let i = 0; i < plans.length; i += 1) {
       const call = plans[i].call;
       const rawResult = executed[i];
@@ -1858,7 +2058,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         refusal === null &&
         !rawResult.startsWith('Error:') &&
         (!DELIVERY_TOOL_NAMES.has(call.name) || deliveryResultSucceeded(rawResult));
-      if (ranOk) progress.successfulToolCalls.push(call.name);
+      if (ranOk) {
+        progress.successfulToolCalls.push(call.name);
+        stepAnySuccess = true;
+      }
       if (call.name === 'gateway_send' && deliveryResultSucceeded(rawResult)) {
         progress.deliveryConfirmed = true;
       }
@@ -1880,6 +2083,17 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           progress.verificationEvidence.push({ tool: call.name, args: call.arguments, result: rawResult });
         }
       } else if (refusal !== null || rawResult.startsWith('Error:')) {
+        // SELF-DIAGNOSIS — record an action that RAN and FAILED (a non-zero
+        // exit, a timeout, a tool error), keyed by the action itself (the
+        // command / path). The gate below fires when the SAME action repeats:
+        // a refusal was already remembered across runs (step-handoff), but a
+        // command that RUNS and FAILS was not, so the live macOS-build turn
+        // re-issued `npx tauri build` ~10 times against the same missing Cargo
+        // and never once stopped to diagnose. Refusals are the other record
+        // below; this one is for the calls that actually executed.
+        if (refusal === null) {
+          runTrace.recordFailure(call.name, failureActionOf(call), rawResult);
+        }
         // Stage 2 — the other half of noticing a loop: the SAME refusal, twice.
         // The run records it with its reason, so a later step (or a self-report)
         // can see "blocked twice, identically" instead of rediscovering it — and
@@ -1951,6 +2165,58 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         ok: ranOk,
         ...(durationMs !== undefined ? { durationMs } : {}),
       });      thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
+    }
+
+    // Track the generalized stall: a step that RAN tools but succeeded at none
+    // of them extends the streak; any success clears it. A text-only step (no
+    // tools) leaves it as it was — the model is thinking, not failing.
+    if (plans.length > 0) failedToolSteps = stepAnySuccess ? 0 : failedToolSteps + 1;
+
+    // ── SELF-DIAGNOSIS nudge (bounded, once) ──────────────────────────────
+    // The loop's missing introspection: when the SAME action has failed more
+    // than once, re-issuing it is a loop, not progress. This is the exact
+    // shape of the live macOS-build turn — `npx tauri build` was retried ~10
+    // times against the same missing Rust/Cargo, each attempt rediscovering
+    // the same wall, and the run never stopped to ask WHY. Unlike the
+    // end-of-turn gates (permission/repeat/deliverable), which fire only when
+    // the model stops calling tools, this one must fire MID-TURN while the
+    // model is still looping on the failing call — so it is injected here,
+    // right after the step's results are in the thread, and the next model
+    // step sees it. Bounded once per turn and keyed on the action so the same
+    // repeat cannot trigger it twice.
+    if (diagnosisNudges < 1) {
+      const repeated = runTrace.repeatedFailure();
+      if (repeated && repeated.times >= 2) {
+        diagnosisNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.(
+          `   🩺 Same action failed ${repeated.times}× — asking the model to diagnose the cause instead of retrying.`,
+        );
+        traceEvent({
+          kind: 'gate',
+          gate: 'diagnosis',
+          summary:
+            `the same action failed ${repeated.times} times (${repeated.tool}: ${repeated.action.slice(0, 120)}) — ` +
+            'one bounded nudge to diagnose the root cause and change the approach',
+        });
+        thread.push({ role: 'user', content: repeatedFailureNudge(repeated) });
+      } else if (failedToolSteps >= NO_PROGRESS_STALL_STEPS) {
+        // Stage 2 — no SINGLE action repeated, but the last N steps each ran
+        // tools and none succeeded. Same diagnosis demanded, different evidence.
+        diagnosisNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.(
+          `   🩺 ${failedToolSteps} steps with no successful action — asking the model to diagnose the stall.`,
+        );
+        traceEvent({
+          kind: 'gate',
+          gate: 'diagnosis',
+          summary:
+            `${failedToolSteps} consecutive steps ran tools and none succeeded — ` +
+            'one bounded nudge to diagnose the shared cause and change the approach',
+        });
+        thread.push({ role: 'user', content: noProgressNudge(runTrace.recentFailures(3), failedToolSteps) });
+      }
     }
 
     // Tiered exposure: after EVERY executed tool call, union any newly
@@ -2087,6 +2353,42 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         });
         thread.push({ role: 'assistant', content: response.content });
         thread.push({ role: 'user', content: deliverableNudge(authorization.requestedPath) });
+        continue;
+      }
+      // ZERO-ACTION gate (concluding exit) — the same bounded pass as the
+      // no-tools exit, for a turn that concluded (suggest_followups) without
+      // ever touching the workspace a directed request asked it to change.
+      if (
+        actionNudges < 1 &&
+        zeroActionGateApplies(opts, progress, schemas.length, requestText, authorization.authorized)
+      ) {
+        actionNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.('   🛠️ The request asked for work and nothing was done — telling the model to do it now.');
+        traceEvent({
+          kind: 'gate',
+          gate: 'action',
+          summary: 'the request directed work on the workspace and the turn performed none — one bounded nudge to carry it out',
+        });
+        lastContent = '';
+        thread.push({ role: 'assistant', content: response.content });
+        thread.push({ role: 'user', content: zeroActionNudge(currentAsk(opts)) });
+        continue;
+      }
+      // SELF-REVIEW (concluding exit) — same bounded pass, placed AFTER the
+      // verification/deliverable gates so those settle their questions first.
+      const review = selfReviewCorrection();
+      if (review) {
+        selfReviewNudges += 1;
+        stepLimit += 1;
+        deps.onEvent?.('   🧭 Substantial turn ending — asking the model to review the result against the original ask.');
+        traceEvent({
+          kind: 'gate',
+          gate: 'self-review',
+          summary: 'a substantial turn that changed files reached its end — one bounded nudge to check the result against the original ask',
+        });
+        thread.push({ role: 'assistant', content: response.content });
+        thread.push({ role: 'user', content: review });
         continue;
       }
       const content = response.content.length >= lastContent.length ? response.content : lastContent;
@@ -2469,9 +2771,25 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       !result.cancelled &&
       progress.mutatedPaths.length === 0 &&
       !replyAsksTheReader(result.content) &&
+      // A request that forbade writes cannot have "failed to deliver" a file.
+      !requestForbidsWrites(lastUserText(opts.messages)) &&
       wantsAuthoredArtifact(lastUserText(opts.messages))
     ) {
       result.undeliveredArtifact = true;
+    }
+    // ZERO-ACTION honesty — a request that DIRECTED work on the workspace was
+    // answered with nothing at all: no tool succeeded, nothing was written. The
+    // flag is a function of what the turn DID, never of configuration, so a
+    // caller can never read "completed" from a turn whose request it never
+    // touched. Authored-artifact asks are left to `undeliveredArtifact` above so
+    // one turn is never reported under two names.
+    const askText = lastUserText(opts.messages);
+    if (
+      !hasProductiveAction(progress) &&
+      progress.mutatedPaths.length === 0 &&
+      requestRequiresWorkspaceAction(askText, requestAuthorizesWrites(askText).authorized)
+    ) {
+      result.noActionTaken = true;
     }
   }
   return result;
@@ -2512,7 +2830,115 @@ function deliverableGateApplies(
   if (progress.mutatedPaths.length > 0) return false;
   if (!requestText.trim()) return false;
   if (replyAsksTheReader(content)) return false;
+  // A negative instruction outranks every positive signal. "Do not write any
+  // files — answer in chat" contains a creation verb and a file-shaped noun, so
+  // without this the gate read it as an authored-artifact ask and wrote a file
+  // against the user's explicit instruction.
+  if (requestForbidsWrites(requestText)) return false;
   return wantsAuthoredArtifact(requestText);
+}
+
+/**
+ * Tools that do not count as having DONE anything on their own. `suggest_followups`
+ * concludes a turn; it produces no work, so a turn that only called it has still
+ * performed nothing the request asked for. Every other successful tool counts as
+ * an action (a read is an action), which keeps the zero-action gate conservative.
+ */
+/**
+ * A token that NAMES a file (a real source/config extension). The strongest
+ * signal that the request is about the WORKSPACE, not a chat answer.
+ */
+const REQUEST_FILE_TOKEN_RE =
+  /\b[\w./~-]+\.(?:js|mjs|cjs|ts|tsx|jsx|py|rb|go|rs|java|kt|cs|cpp|cxx|cc|c|h|hpp|json|ya?ml|toml|ini|cfg|conf|md|markdown|txt|csv|tsv|html?|css|scss|sass|less|sql|sh|bash|zsh|fish|env|lock|xml|gradle|properties|vue|svelte|php|lua|pl|swift|dart|scala)\b/i;
+/** A verb that asks for a change to the workspace. */
+const WORK_EDIT_VERB_RE =
+  /\b(?:fix|repair|refactor|edit|modify|updat|chang|add|implement|creat|writ|delet|remov|renam|rewrit|migrat|correct|debug|patch|tweak|scaffold)\w*/i;
+/** A code/workspace noun that pairs with the verb above. */
+const CODE_NOUN_RE =
+  /\b(?:file|files|function|functions|method|methods|class|classes|module|modules|script|scripts|component|components|test|tests|suite|api|endpoint|endpoints|route|routes|schema|schemas|migration|migrations|package|dependency|dependencies|import|imports|config|configuration|type|types|interface|interfaces|bug|bugs|repo|repository|codebase|project|source)\b/i;
+
+/**
+ * Does this request DIRECT work on the workspace — the precondition for the
+ * ZERO-ACTION gate?
+ *
+ * Deliberately narrower than "the request authorizes writes": the gate spends a
+ * model step, so it must only fire on an ask that genuinely needs the tools.
+ * `requestAuthorizesWrites` is true for a prose deliverable ("draft an
+ * itinerary") or a review ("assess this project"), which are correctly answered
+ * in chat — nudging those would turn one turn into two for no reason (found by
+ * the existing suite). The workspace signal is therefore explicit: the request
+ * either names a FILE, or pairs an edit verb with a code noun.
+ */
+function requestRequiresWorkspaceAction(requestText: string, authorized: boolean): boolean {
+  const text = (requestText || '').trim();
+  if (!text) return false;
+  if (!authorized) return false;
+  if (requestForbidsWrites(text)) return false;
+  if (wantsAuthoredArtifact(text)) return false;
+  if (REQUEST_FILE_TOKEN_RE.test(text)) return true;
+  return WORK_EDIT_VERB_RE.test(text) && CODE_NOUN_RE.test(text);
+}
+
+const NON_PRODUCTIVE_TOOLS: ReadonlySet<string> = new Set(['suggest_followups']);
+
+/** True when the turn performed at least one action beyond merely concluding. */
+function hasProductiveAction(progress: ToolLoopProgress): boolean {
+  return progress.successfulToolCalls.some((name) => !NON_PRODUCTIVE_TOOLS.has(name));
+}
+
+/**
+ * Does the ZERO-ACTION gate apply to this turn?
+ *
+ * Every term is an independent, checkable fact — the conjunction is what keeps
+ * the gate from firing on turns that are legitimately answer-only:
+ *
+ *   - the request AUTHORIZES writes (`authorized`) — a create/maintenance ask,
+ *     not a question (`requestAuthorizesWrites` already vetoes pure questions);
+ *   - NO tool call succeeded this turn (a turn that gathered context and then
+ *     answered is out of scope — it did something, even if it then stalled);
+ *   - NOTHING was written (`mutatedPaths` is the loop's own proof a write
+ *     landed, so a heredoc through `run_terminal` is not nudged);
+ *   - tools are actually available (a caller that exposed none cannot comply);
+ *   - the request did NOT forbid writes (a negative instruction outranks every
+ *     positive signal — see `requestForbidsWrites`);
+ *   - it is NOT an authored-artifact ask: `wantsAuthoredArtifact` requests are
+ *     the DELIVERABLE gate's job, with their own narrower message, and running
+ *     both would spend two nudges on one ask.
+ */
+function zeroActionGateApplies(
+  opts: ToolLoopOptions,
+  progress: ToolLoopProgress,
+  schemaCount: number,
+  requestText: string,
+  authorized: boolean,
+): boolean {
+  if (opts.requireAction === false) return false;
+  if (schemaCount === 0) return false;
+  if (hasProductiveAction(progress)) return false;
+  if (progress.mutatedPaths.length > 0) return false;
+  return requestRequiresWorkspaceAction(requestText, authorized);
+}
+
+/**
+ * The bounded ZERO-ACTION correction — the loop telling the model, in one step,
+ * that a directed request has not been touched yet.
+ *
+ * Names the ask (so the model cannot claim it did not know what was wanted),
+ * states plainly that nothing ran and nothing changed, and closes the two escape
+ * hatches that produced the observed non-actions: do not re-ask a request that is
+ * already specified, and do not answer a work request with a plan, an apology or
+ * a question. It still leaves a REAL blocker as a legitimate way out — the goal
+ * is the work, not compliance theatre.
+ */
+export function zeroActionNudge(ask: string): string {
+  const quoted = (ask || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+  return (
+    'Nothing has been done yet: you have not called a single tool this turn, so no file was changed and nothing was checked.' +
+    (quoted ? ` The request already asked for this work: "${quoted}".` : '') +
+    '\nYou have the tools to do it — read what you need, make the change, and run the check NOW.' +
+    ' Do NOT reply with a plan, a summary of what you would do, an apology, or a request for the user to restate or confirm' +
+    ' a request that is already complete. If something genuinely blocks you, say exactly what it is and why; otherwise do the work.'
+  );
 }
 
 /**
@@ -2702,4 +3128,98 @@ export function trimThreadBudget(
     }
   }
   return { thread: out, trimmed };
+}
+
+// ─── Within-turn work digest (the memory a trimmed thread keeps) ────────────
+// `trimThreadBudget` keeps the first 500 chars of each old tool result, but past
+// that the model loses the VERDICT of what it ran and can re-run finished work.
+// `working-state` solves this ACROSS turns; this solves it WITHIN one. It is
+// deliberately deterministic and LLM-free (facts: what changed, what commands
+// ran and whether they passed, which tools were used) — no summarizer, no
+// latency, no drift, exactly like the ledger and the budget it complements.
+
+/** Marker prefix identifying the loop's within-turn work digest message. */
+export const WORK_DIGEST_MARKER = '[work digest — your actions so far this turn]';
+
+/**
+ * Format the turn's actions so far as a bounded, model-readable digest. Returns
+ * '' when there is nothing worth saying, so a pristine turn adds no noise.
+ */
+export function buildWorkDigest(input: {
+  successfulTools: readonly string[];
+  mutatedPaths: readonly string[];
+  executedActions: readonly ExecutedAction[];
+}): string {
+  const lines: string[] = [];
+  const changed = [...new Set(input.mutatedPaths.filter(Boolean))];
+  if (changed.length > 0) {
+    const shown = changed.slice(-12);
+    lines.push(`• Files changed (${changed.length}): ${shown.join(', ')}${changed.length > shown.length ? ', …' : ''}`);
+  }
+  // Commands with their verdict, newest first, deduped by command+verdict — the
+  // single most valuable thing to retain (did the build/test pass?).
+  const cmds = input.executedActions.filter((a) => typeof a.command === 'string' && a.command.trim());
+  if (cmds.length > 0) {
+    const seen = new Set<string>();
+    const shown: string[] = [];
+    for (let i = cmds.length - 1; i >= 0 && shown.length < 8; i -= 1) {
+      const a = cmds[i];
+      const key = `${a.ok ? 'ok' : 'fail'}:${a.command}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      shown.unshift(`${a.ok ? '✅' : '❌'} ${a.command}`);
+    }
+    lines.push('• Commands run:');
+    for (const s of shown) lines.push(`  ${s}`);
+  }
+  const tools = [...new Set(input.successfulTools)];
+  if (tools.length > 0) lines.push(`• Tools used: ${tools.join(', ')}`);
+  if (lines.length === 0) return '';
+  return `${WORK_DIGEST_MARKER}\n${lines.join('\n')}`;
+}
+
+/**
+ * Insert or refresh the single work-digest message. Idempotent: a digest already
+ * in the thread is UPDATED in place, never stacked, so repeated compaction in a
+ * long turn keeps one current digest rather than accumulating stale ones. Placed
+ * just after the system prompt + first user message so it sits with the ask and
+ * survives the NEXT compaction (the tail is never trimmed).
+ */
+export function upsertWorkDigest(thread: ToolMessage[], digest: string): void {
+  const existing = thread.findIndex((m) => m.content.startsWith(WORK_DIGEST_MARKER));
+  if (existing !== -1) {
+    thread[existing] = { ...thread[existing], content: digest };
+    return;
+  }
+  let at = 0;
+  while (at < thread.length && thread[at].role === 'system') at += 1;
+  const firstUser = thread.findIndex((m) => m.role === 'user');
+  const insertAt = Math.min(thread.length, firstUser === -1 ? at : Math.max(at, firstUser + 1));
+  thread.splice(insertAt, 0, { role: 'user', content: digest });
+}
+
+/**
+ * The bounded SELF-REVIEW correction — the loop's stand-in for a reviewer who
+ * asks "is this actually what was asked for?".
+ *
+ * Fired once, only for a substantial turn that changed files and has already
+ * been verified (the verification gate owns "did you check"). Its job is
+ * orthogonal: catch a result that is verified but does not satisfy the WHOLE
+ * original ask. It demands evidence from THIS turn and forbids padding the
+ * answer with more prose — the failure mode it targets is a confident, verified
+ * answer to a slightly wrong question.
+ */
+export function selfReviewNudge(ask: string): string {
+  const quoted = (ask || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+  return (
+    'Before you finish, REVIEW your result against the ORIGINAL request' +
+    (quoted ? `: "${quoted}".` : '.') +
+    '\nAnswer these to yourself in one short pass, and fix anything that is not true:' +
+    '\n  1. Does what you produced satisfy EVERY part of that request — not just the part you found easiest?' +
+    '\n  2. Is each claim in your answer backed by a tool result from THIS turn — or is it an assumption you did not check?' +
+    '\n  3. Is anything the request asked for still missing, half-done, or done for the wrong target?' +
+    '\nIf everything is satisfied and evidenced, reply with a brief confirmation and stop.' +
+    ' If something is missing, do it NOW — or state plainly and specifically what is not done and why.' +
+    ' Do NOT restate the work in more words — verify it.'
+  );
 }

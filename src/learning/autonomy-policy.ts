@@ -317,6 +317,45 @@ export function requestAuthorizesWrites(request: string): WriteAuthorization {
 }
 
 /**
+ * An explicit instruction NOT to write anything to disk.
+ *
+ * The DELIVERABLE gate (`tool-loop.ts` G13b) exists to stop a turn that was
+ * asked to PRODUCE a file from answering in chat instead. It inferred "the user
+ * asked for a file" from `requestAuthorizesWrites`, which reads creation verbs
+ * and file-shaped nouns — and a request can contain those while forbidding the
+ * write. A live turn proved it: "read this report … do NOT write, create, or
+ * modify any files, and do NOT run any commands. Just read the file and answer
+ * in chat" was read as an authored-artifact ask, so the pipeline wrote
+ * `assessment_summary.txt` into the user's repo against their explicit
+ * instruction. A negative instruction outranks every positive signal: if the
+ * user said not to write, no write gate may fire.
+ *
+ * Deliberately narrow — it matches a write verb the user NEGATED, or a plain
+ * "answer in chat", never a bare "no" that might mean something else.
+ */
+// Verb STEMS with an optional inflection, so "creating", "modifying" and
+// "writing" all match — the full-verb form missed "without creating anything".
+const NO_WRITE_VERB = '(?:writ|creat|modif|sav|edit|touch|chang|add|generat)(?:e|es|s|d|ed|ing|y|ying|ies)?';
+const NO_WRITE_RE = new RegExp(
+  `\\b(?:do\\s+not|don't|never|avoid|without|refrain\\s+from)\\s+(?:ever\\s+)?${NO_WRITE_VERB}\\b`
+  + '|\\b(?:answer|reply|respond|tell\\s+me)\\b[^.]{0,20}\\b(?:in\\s+(?:the\\s+)?chat|in\\s+chat|here|in\\s+your\\s+reply|inline|in\\s+the\\s+conversation)\\b'
+  + '|\\bread[- ]only\\b'
+  + '|\\bno\\s+(?:new\\s+)?files?\\b',
+  'i',
+);
+
+/**
+ * Did the request explicitly forbid writing to disk?
+ *
+ * Read by the deliverable gate and by the `undeliveredArtifact` flag, so a turn
+ * whose request said "do not write any files" is never nudged to write one and
+ * is never reported as having failed to deliver a file it was told not to make.
+ */
+export function requestForbidsWrites(request: string): boolean {
+  return NO_WRITE_RE.test(request || '');
+}
+
+/**
  * Is this message a plain confirmation of work already proposed ("yes", "go
  * ahead", "do it")? Exported because the intent grant reads it: an affirmative
  * reply to a plan is what turns that plan into an approved envelope.

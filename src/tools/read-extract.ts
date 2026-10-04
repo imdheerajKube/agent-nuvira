@@ -30,6 +30,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { refusalFields, type ToolRefusalCode } from './tool-refusal.js';
 import { htmlToText } from './extract/html-text.js';
+import { resolveExtractMaxChars } from '../config/limits.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -82,11 +83,48 @@ export interface ExtractOptions {
 // ─── Budgets ────────────────────────────────────────────────────────────────
 
 /**
- * Character budget for one extraction. Documents are unbounded input flowing into
- * a bounded context window, so the output is capped and `metadata.truncated` says
- * whether it was hit — a partial document is never presented as the whole one.
+ * Character budget for one extraction, when nothing overrides it. Documents are
+ * unbounded input flowing into a bounded context window, so the output is capped
+ * and the truncation is stated BOTH in `metadata.truncated` and in the returned
+ * text (see {@link truncationNotice}) — a partial document is never presented as
+ * the whole one.
+ *
+ * The effective budget is `resolveExtractMaxChars()` (`NUVIRA_EXTRACT_MAX_CHARS`),
+ * so a user can raise it for a large document without a code change. This constant
+ * stays as the documented default and the value tests pin.
  */
 const MAX_EXTRACT_CHARS = 40_000;
+
+/**
+ * The model-facing sentence appended when a read was cut short.
+ *
+ * `metadata.truncated` alone was not enough: a live run read a 66,021-character
+ * lab report, the reader capped it at 40,000 and set `truncated: true`, and the
+ * model — which reads the TEXT, not the metadata — assessed the partial document
+ * as if it were complete, silently missing the entire hematology section. The
+ * notice travels with the text so the fact is impossible to miss, and it names
+ * the way out (raise the cap, or read the rest another way).
+ */
+function truncationNotice(kept: number, total: number, limit: number): string {
+  return (
+    `\n\n⚠️ [This extraction was TRUNCATED at ${limit.toLocaleString()} of ${total.toLocaleString()} characters — `
+    + `the remaining ${(total - kept).toLocaleString()} characters are NOT included above. `
+    + 'Do not treat this as the complete document. To read all of it, raise the cap with '
+    + '`NUVIRA_EXTRACT_MAX_CHARS` (dashboard → Process Environment, or `nuvira config limit set extract-max-chars <n>`), '
+    + 'then read it again.]'
+  );
+}
+
+/**
+ * Apply the character budget to extracted text, appending the truncation notice
+ * when the budget was hit. Shared by every text-shaped extractor so a truncated
+ * read can never be silent in one format and loud in another.
+ */
+function capText(text: string, total: number, limit: number): { text: string; truncated: boolean } {
+  if (text.length <= limit) return { text, truncated: false };
+  const kept = text.slice(0, limit);
+  return { text: kept + truncationNotice(kept.length, total, limit), truncated: true };
+}
 
 // ─── Format model ───────────────────────────────────────────────────────────
 
@@ -218,10 +256,11 @@ class ReadExtractManager {
       return this.notConfigured('.pdf', 'the PDF reader (pdfjs-dist)', err);
     }
 
+    const limit = resolveExtractMaxChars();
     let result: import('./extract/pdf.js').PdfExtractResult;
     try {
       result = await mod.extractPdfText(new Uint8Array(fs.readFileSync(filePath)), {
-        maxChars: MAX_EXTRACT_CHARS,
+        maxChars: limit,
       });
     } catch (err) {
       const encrypted = err instanceof mod.PdfExtractError && err.encrypted;
@@ -244,6 +283,9 @@ class ReadExtractManager {
       return this.scannedPdfResult(filePath, result, opts);
     }
 
+    // The PDF reader caps internally AND writes its own in-text marker
+    // (`[Remaining N page(s) not read …]`), so the text already carries the fact;
+    // it is not passed through `capText` again, which would double-report.
     return {
       text: result.text,
       format: 'pdf',
@@ -269,7 +311,7 @@ class ReadExtractManager {
     }
 
     try {
-      const result = await mod.extractDocxText(fs.readFileSync(filePath), { maxChars: MAX_EXTRACT_CHARS });
+      const result = await mod.extractDocxText(fs.readFileSync(filePath), { maxChars: resolveExtractMaxChars() });
       return {
         text: result.text,
         format: 'docx',
@@ -301,7 +343,7 @@ class ReadExtractManager {
     }
 
     try {
-      const result = await mod.extractXlsxText(fs.readFileSync(filePath), { maxChars: MAX_EXTRACT_CHARS });
+      const result = await mod.extractXlsxText(fs.readFileSync(filePath), { maxChars: resolveExtractMaxChars() });
       if (result.text.trim().length === 0) {
         return {
           text: '',
@@ -348,7 +390,7 @@ class ReadExtractManager {
     }
 
     try {
-      const result = await mod.extractPptxText(fs.readFileSync(filePath), { maxChars: MAX_EXTRACT_CHARS });
+      const result = await mod.extractPptxText(fs.readFileSync(filePath), { maxChars: resolveExtractMaxChars() });
       if (result.text.trim().length === 0) {
         return {
           text: '',
@@ -506,14 +548,15 @@ class ReadExtractManager {
       );
     }
     const content = fs.readFileSync(filePath, 'utf-8');
-    const truncated = content.length > MAX_EXTRACT_CHARS;
+    const limit = resolveExtractMaxChars();
+    const capped = capText(content, content.length, limit);
     return {
-      text: truncated ? `${content.slice(0, MAX_EXTRACT_CHARS)}\n…[truncated]` : content,
+      text: capped.text,
       format: 'text',
       success: true,
       metadata: {
         words: countWords(content),
-        truncated,
+        truncated: capped.truncated,
       },
     };
   }
@@ -525,14 +568,15 @@ class ReadExtractManager {
    */
   private extractHTML(filePath: string): ExtractResult {
     const text = htmlToText(fs.readFileSync(filePath, 'utf-8'));
-    const truncated = text.length > MAX_EXTRACT_CHARS;
+    const limit = resolveExtractMaxChars();
+    const capped = capText(text, text.length, limit);
     return {
-      text: truncated ? `${text.slice(0, MAX_EXTRACT_CHARS)}\n…[truncated]` : text,
+      text: capped.text,
       format: 'html',
       success: true,
       metadata: {
         words: countWords(text),
-        truncated,
+        truncated: capped.truncated,
       },
     };
   }
@@ -551,16 +595,17 @@ class ReadExtractManager {
     // Rows stay themselves — separated by newlines, cells by ` | ` — so the table
     // shape the file encoded is the shape the model reads.
     const text = rows.map((cells) => cells.join(' | ')).join('\n');
-    const truncated = text.length > MAX_EXTRACT_CHARS;
+    const limit = resolveExtractMaxChars();
+    const capped = capText(text, text.length, limit);
 
     return {
-      text: truncated ? `${text.slice(0, MAX_EXTRACT_CHARS)}\n…[truncated]` : text,
+      text: capped.text,
       format: delimiter === '\t' ? 'tsv' : 'csv',
       success: true,
       metadata: {
         words: countWords(text),
         rows: rows.length,
-        truncated,
+        truncated: capped.truncated,
       },
     };
   }
@@ -576,13 +621,14 @@ class ReadExtractManager {
       text = content;
       valid = false;
     }
-    const truncated = text.length > MAX_EXTRACT_CHARS;
+    const limit = resolveExtractMaxChars();
+    const capped = capText(text, text.length, limit);
     return {
-      text: truncated ? `${text.slice(0, MAX_EXTRACT_CHARS)}\n…[truncated]` : text,
+      text: capped.text,
       format: 'json',
       success: true,
       metadata: {
-        truncated,
+        truncated: capped.truncated,
         // A success result never carries an `error` string: the two together are
         // exactly the ambiguity ("did it work?") this module removes.
         ...(valid ? {} : { warnings: ['File is not valid JSON — raw text returned'] }),
@@ -593,23 +639,25 @@ class ReadExtractManager {
   private extractXML(filePath: string): ExtractResult {
     const content = fs.readFileSync(filePath, 'utf-8');
     const text = htmlToText(content);
-    const truncated = text.length > MAX_EXTRACT_CHARS;
+    const limit = resolveExtractMaxChars();
+    const capped = capText(text, text.length, limit);
     return {
-      text: truncated ? `${text.slice(0, MAX_EXTRACT_CHARS)}\n…[truncated]` : text,
+      text: capped.text,
       format: 'xml',
       success: true,
-      metadata: { words: countWords(text), truncated },
+      metadata: { words: countWords(text), truncated: capped.truncated },
     };
   }
 
   private extractYAML(filePath: string): ExtractResult {
     const content = fs.readFileSync(filePath, 'utf-8');
-    const truncated = content.length > MAX_EXTRACT_CHARS;
+    const limit = resolveExtractMaxChars();
+    const capped = capText(content, content.length, limit);
     return {
-      text: truncated ? `${content.slice(0, MAX_EXTRACT_CHARS)}\n…[truncated]` : content,
+      text: capped.text,
       format: 'yaml',
       success: true,
-      metadata: { words: countWords(content), truncated },
+      metadata: { words: countWords(content), truncated: capped.truncated },
     };
   }
 

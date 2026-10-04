@@ -22,6 +22,7 @@ import { homedir } from 'node:os';
 
 import { getQuotaLedger } from './quota-ledger.js';
 import { getModelRegistry } from './model-registry.js';
+import { classifyModelEntitlement } from '../inference/model-entitlement.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -48,6 +49,13 @@ export interface CostEntry {
    * estimates were used. The dashboard splits measured vs estimated spend.
    */
   measured?: boolean;
+  /**
+   * True when `costUsd` was reported BY THE PROVIDER for this call rather than
+   * computed from the local price table. A provider-reported cost is the most
+   * accurate value available (it reflects credits, free tier, discounts), so it
+   * wins over any estimate — see calculateCost's `reportedCostUsd` parameter.
+   */
+  costReported?: boolean;
 }
 
 export interface CostSummary {
@@ -145,14 +153,51 @@ export function estimateTokens(text: string): number {
 }
 
 /**
+ * True when the provider/model pair provably costs nothing per call — a
+ * provider-declared free id (`:free` suffix) or a keyless local runtime.
+ *
+ * Delegates to the ONE authority for this question (classifyModelEntitlement),
+ * so the dashboard badge and the cost ledger can never disagree about what is
+ * free. A zero price in the catalog is deliberately NOT free — see the module
+ * header on model-entitlement.ts (Gemini paid models 403 without billing).
+ */
+export function isFreeModel(provider: string, model: string): boolean {
+  try {
+    return classifyModelEntitlement(provider, model).tier === 'free';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Calculate the cost for a given provider, model, and token counts.
+ *
+ * @param reportedCostUsd When the PROVIDER told us the exact cost of this call
+ *   (e.g. OpenRouter's `usage.cost`), that figure is authoritative and is
+ *   returned verbatim (rounded to the ledger's micro-cent precision). This is
+ *   what lets a free/subscription call report a TRUE $0 instead of a generic
+ *   rate, and a discounted call report what was actually charged.
  */
 export function calculateCost(
   provider: string,
   model: string,
   inputTokens: number,
   outputTokens: number,
+  reportedCostUsd?: number,
 ): number {
+  // Provider-reported cost wins over everything — it is the provider's own
+  // accounting, not our estimate.
+  if (typeof reportedCostUsd === 'number' && Number.isFinite(reportedCostUsd)) {
+    return Math.round(reportedCostUsd * 100000) / 100000;
+  }
+
+  // A free model bills $0 regardless of token count — a provider-declared
+  // free id or a local runtime. Without this, a `:free` OpenRouter id was
+  // charged the generic OpenRouter rate, inventing spend the user never paid.
+  if (isFreeModel(provider, model)) {
+    return 0;
+  }
+
   const pricing = DEFAULT_PRICING[provider] || { inputPer1K: 0.00010, outputPer1K: 0.00010 };
 
   // Model-specific pricing overrides for known expensive models
@@ -200,8 +245,11 @@ export class CostTracker {
     outputTokens: number,
     task?: string,
     measured?: boolean,
+    reportedCostUsd?: number,
   ): CostEntry {
-    const costUsd = calculateCost(provider, model, inputTokens, outputTokens);
+    const costReported =
+      typeof reportedCostUsd === 'number' && Number.isFinite(reportedCostUsd);
+    const costUsd = calculateCost(provider, model, inputTokens, outputTokens, reportedCostUsd);
 
     const entry: CostEntry = {
       provider,
@@ -216,6 +264,9 @@ export class CostTracker {
       // writeCosts and any post-hoc mutation never reaches disk (which would
       // silently zero the dashboard's measured-vs-estimated split).
       measured,
+      // Set (only when true) so the dashboard can show provider-billed spend
+      // apart from locally-priced estimates.
+      ...(costReported ? { costReported: true } : {}),
     };
 
     // Store in session
@@ -268,10 +319,11 @@ export class CostTracker {
     inputTokens: number,
     outputTokens: number,
     task?: string,
+    reportedCostUsd?: number,
   ): CostEntry {
     // measured: true is set inside recordCall BEFORE the entry is persisted,
     // so the dashboard's measured-vs-estimated split reads correctly from disk.
-    const entry = this.recordCall(provider, model, inputTokens, outputTokens, task, true);
+    const entry = this.recordCall(provider, model, inputTokens, outputTokens, task, true, reportedCostUsd);
     // Write the exact measured tokens through to the registry (best-effort) so
     // getMeasuredUsage() feeds measured-cost routing scoring.
     try {
@@ -434,11 +486,24 @@ export function recordCallWithUsage(
   model: string,
   prompt: string,
   content: string,
-  usage?: { promptTokens?: number; completionTokens?: number },
+  usage?: { promptTokens?: number; completionTokens?: number; costUsd?: number },
+  reportedCostUsd?: number,
 ): void {
+  // Prefer the explicit reported-cost argument, else the cost carried on the
+  // usage object (sse/tools attach it from the endpoint's `usage.cost`).
+  const cost =
+    typeof reportedCostUsd === 'number'
+      ? reportedCostUsd
+      : typeof usage?.costUsd === 'number'
+        ? usage.costUsd
+        : undefined;
   if (usage && typeof usage.promptTokens === 'number' && typeof usage.completionTokens === 'number') {
-    costTracker.recordCallMeasured(provider, model, usage.promptTokens, usage.completionTokens);
+    costTracker.recordCallMeasured(provider, model, usage.promptTokens, usage.completionTokens, undefined, cost);
   } else {
-    costTracker.recordCallEstimated(provider, model, prompt, content);
+    // No measured tokens: estimate token counts, but still honor a
+    // provider-reported cost when the endpoint gave us one.
+    const inputTokens = estimateTokens(prompt);
+    const outputTokens = estimateTokens(content);
+    costTracker.recordCall(provider, model, inputTokens, outputTokens, undefined, undefined, cost);
   }
 }

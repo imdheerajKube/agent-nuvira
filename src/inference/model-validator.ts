@@ -25,6 +25,7 @@ import type { InferenceProvider, ModelDescriptor } from './interface.js';
 import { logger } from '../utils/logger.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { preferredModelsFor } from '../learning/model-selection.js';
+import { nonDowngradeCandidates } from '../learning/model-capability.js';
 import { getDefaultModel } from './provider-catalog.js';
 
 // ─── Dynamic preference — never hardcoded model names ──────────────────────
@@ -141,7 +142,16 @@ export async function resolveWorkingModel(
     const entry = registry.getEntry(providerType, explicit);
     const pinDead = !!entry && (entry.status === 'unavailable' || entry.quotaParkedUntil > Date.now());
     if (pinDead) {
-      const verified = preferredModelsFor(providerType)[0];
+      // CAPABILITY-AWARE REPAIR — a dead pin is replaced by a model at least as
+      // capable, not merely by the healthiest one. `preferredModelsFor` ranks by
+      // error rate then latency, which a small/fast model always wins: found
+      // live, a quota-parked `openai/gpt-oss-120b` was repaired to the only
+      // never-rate-limited sibling — `allam-2-7b`, a 7B toy — while a 27B and a
+      // 120B were both verified-usable. `nonDowngradeCandidates` narrows the
+      // health ranking to models in the request's capability band or above
+      // (order preserved), and falls back to the full list when nothing is that
+      // capable — so this can never dead-end, only avoid a silent downgrade.
+      const verified = nonDowngradeCandidates(explicit, preferredModelsFor(providerType))[0];
       if (verified) return verified;
     }
   }
@@ -204,7 +214,10 @@ export async function resolveWorkingModel(
       return !!m && modelFallbackScore(m) < 100 && !registryBlocks(id);
     });
     if (chosen) {
-      if (explicit && announce) {
+      // (capability-aware narrowing happens on the DEAD-pin path above; the
+    // live-list path keeps its curated/health-first behavior so a stale pin is
+    // still repaired to the provider's known-good model.)
+    if (explicit && announce) {
         const fromVerified = preferredModelsFor(providerType).includes(chosen);
         logger.warn(
           `♻️  Auto routing: model '${explicit}' is not available on '${providerType}' — using '${chosen}'${fromVerified ? ' (verified working)' : ''}.`,

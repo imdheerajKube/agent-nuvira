@@ -243,11 +243,12 @@ describe('ChatCommand — E3b tool-call turn', () => {
     );
 
     // BOUNDED — the loop returns instead of spinning forever. The hard cap is
-    // now maxSteps + the auto-continuation budget (16 + 2 x 8 = 32): a turn
-    // that still had work gets its budget extended a bounded number of times
-    // rather than being cut off at 16 with the task unfinished.
+    // maxSteps + the auto-continuation budget (16 + 2 x 8 = 32), plus at most
+    // ONE step for each bounded nudge the loop spends (here the self-diagnosis
+    // nudge, which fires once when the model keeps re-running the same failing
+    // call). Still a hard bound, never an infinite loop.
     expect(out.content.length).toBeGreaterThan(0);
-    expect((provider.generateTools as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(32);
+    expect((provider.generateTools as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(33);
   });
 });
 

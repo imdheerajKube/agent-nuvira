@@ -24,6 +24,8 @@ interface WireResponse {
   choices?: Array<{
     message?: { content?: string | null; tool_calls?: WireToolCall[] };
   }>;
+  /** Endpoint-reported token usage (and, for OpenRouter, the exact cost). */
+  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
 }
 
 /**
@@ -99,7 +101,7 @@ export async function chatCompletionsWithTools(opts: {
    * their non-tool path. Absent → no recording. The third arg carries the
    * endpoint-reported usage when the streaming path captured it (M2.2).
    */
-  onCost?: (promptText: string, contentText: string, usage?: { promptTokens?: number; completionTokens?: number }) => void;
+  onCost?: (promptText: string, contentText: string, usage?: { promptTokens?: number; completionTokens?: number; costUsd?: number }) => void;
 }): Promise<ToolCallResponse> {
   const temperature = opts.temperature ?? 0.7;
   const maxTokens = opts.maxTokens ?? 4096;
@@ -128,12 +130,26 @@ export async function chatCompletionsWithTools(opts: {
     throw attachHttpContext(new Error(`Tool-calling API error (${response.status}): ${errorBody}`), response.status, response.headers);
   }
 
-  const result = parseToolCallResponse((await response.json()) as WireResponse);
+  const data = (await response.json()) as WireResponse;
+  const result = parseToolCallResponse(data);
   if (opts.onCost) {
     try {
+      // M2.2: pass the endpoint's own usage when it reported one (tokens and,
+      // on OpenRouter, the exact cost) so adapters record MEASURED cost instead
+      // of a length-based estimate.
+      const usage = data.usage;
+      const reported =
+        usage && typeof usage.prompt_tokens === 'number' && typeof usage.completion_tokens === 'number'
+          ? {
+              promptTokens: usage.prompt_tokens,
+              completionTokens: usage.completion_tokens,
+              ...(typeof usage.cost === 'number' ? { costUsd: usage.cost } : {}),
+            }
+          : undefined;
       opts.onCost(
         opts.messages.map((m) => m.content).filter(Boolean).join('\n'),
         result.content,
+        reported,
       );
     } catch {
       // Cost recording must never break the tool call.
@@ -161,7 +177,7 @@ interface WireStreamChunk {
     delta?: { content?: string | null; tool_calls?: WireStreamToolCallDelta[] };
     finish_reason?: string | null;
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
 }
 
 /** Accumulator for one streaming tool call (fragments joined per index). */
@@ -218,6 +234,9 @@ export async function chatCompletionsWithToolsStream(
       // OpenAI convention for measured usage in the final chunk (Groq and
       // OpenRouter support it; providers that ignore it just omit usage).
       stream_options: { include_usage: true },
+      // OpenRouter only reports `usage.cost` for streams when explicitly asked;
+      // providers that don't understand this field ignore it.
+      usage: { include: true },
     }),
     // P4 — external cancellation (the dashboard Cancel button). The streaming
     // path historically had no timeout; an explicit signal is the ONLY way to
@@ -246,7 +265,7 @@ export async function chatCompletionsWithToolsStream(
   // M2.2: capture the endpoint-reported usage from the final chunk
   // (stream_options.include_usage convention) so onCost records MEASURED cost
   // instead of a length-based estimate — the generateStream parity pattern.
-  let streamUsage: { promptTokens?: number; completionTokens?: number } | undefined;
+  let streamUsage: { promptTokens?: number; completionTokens?: number; costUsd?: number } | undefined;
   /**
    * True once the body has produced a server-sent-event line we understood.
    *
@@ -289,6 +308,7 @@ export async function chatCompletionsWithToolsStream(
             streamUsage = {
               promptTokens: parsed.usage.prompt_tokens,
               completionTokens: parsed.usage.completion_tokens,
+              ...(typeof parsed.usage.cost === 'number' ? { costUsd: parsed.usage.cost } : {}),
             };
           }
         } catch {

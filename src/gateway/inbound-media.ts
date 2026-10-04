@@ -74,6 +74,87 @@ const MIME_EXT: Record<string, string> = {
 /** Image extensions — extraction cannot read them; a vision call can. */
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff']);
 
+/**
+ * Sniff a document/image extension from the file's MAGIC BYTES.
+ *
+ * WHY THIS EXISTS. A transport's `fileName` is not guaranteed to carry an
+ * extension — WhatsApp in particular delivers a document whose name may be just
+ * the sender's title (live: an 8 MB, 28-page PDF named `Divya Sharma_report`).
+ * `read_extract` dispatches on the extension, so the file was persisted as
+ * `…-Divya Sharma_report` and refused with `unsupported_format: (no extension)`
+ * even though the bytes were a perfectly good `%PDF-1.4`. The MIME→extension
+ * fallback only fired when the filename was ABSENT, never to AUGMENT a present
+ * but extensionless name.
+ *
+ * Sniffing the bytes is the reliable signal: it is what the file actually IS,
+ * independent of what the transport chose to call it. Returns the canonical
+ * extension (with the leading dot) or null when nothing matches — in which case
+ * the caller keeps the name as-is and read_extract gives its honest refusal.
+ */
+export function sniffExtension(data: Uint8Array | undefined): string | null {
+  if (!data || data.byteLength < 4) return null;
+  const b = data;
+  const startsWith = (sig: number[]): boolean => sig.every((v, i) => b[i] === v);
+  // PDF: %PDF
+  if (startsWith([0x25, 0x50, 0x44, 0x46])) return '.pdf';
+  // PNG
+  if (startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return '.png';
+  // JPEG: FF D8 FF
+  if (startsWith([0xff, 0xd8, 0xff])) return '.jpg';
+  // GIF: GIF8
+  if (startsWith([0x47, 0x49, 0x46, 0x38])) return '.gif';
+  // WEBP: RIFF....WEBP
+  if (
+    startsWith([0x52, 0x49, 0x46, 0x46])
+    && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50
+  ) return '.webp';
+  // BMP: BM
+  if (startsWith([0x42, 0x4d])) return '.bmp';
+  // TIFF: II*0 / MM0*
+  if (startsWith([0x49, 0x49, 0x2a, 0x00]) || startsWith([0x4d, 0x4d, 0x00, 0x2a])) return '.tiff';
+  // ZIP container — OOXML (docx/xlsx/pptx). All three share the PK header, so
+  // the container alone cannot name the exact type; `.docx` is the safest
+  // default (read_extract reads it as an OOXML package). Only applied when the
+  // name carried NO usable extension.
+  if (startsWith([0x50, 0x4b, 0x03, 0x04]) || startsWith([0x50, 0x4b, 0x05, 0x06])) return '.docx';
+  return null;
+}
+
+/**
+ * Does this name end in a KNOWN readable document/image extension?
+ *
+ * `foo.pdf` and `foo.tar.gz` are both fine (the LAST segment wins), but
+ * `Divya Sharma_report` is not — and neither is `report.txt.pdf` mistaken for
+ * anything but a PDF. The set is the union of what `read_extract` reads and the
+ * image types this module routes to `describe_image`.
+ */
+const KNOWN_DOC_EXTS = new Set([
+  '.pdf', '.docx', '.xlsx', '.pptx',
+  '.txt', '.md', '.markdown', '.text', '.log', '.csv', '.tsv',
+  '.json', '.xml', '.yaml', '.yml', '.html', '.htm',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff',
+]);
+
+function hasKnownExtension(name: string): boolean {
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0) return false;
+  return KNOWN_DOC_EXTS.has(name.slice(dot).toLowerCase());
+}
+
+/**
+ * Ensure a persisted name carries a usable extension: keep a known one, else
+ * append the MIME-derived extension, else the sniffed one, else nothing.
+ */
+function ensureExtension(name: string, media: InboundMedia): string {
+  if (hasKnownExtension(name)) return name;
+  const mime = (media.mimetype ?? '').split(';')[0].trim().toLowerCase();
+  const fromMime = MIME_EXT[mime];
+  if (fromMime) return `${name}${fromMime}`;
+  const sniffed = sniffExtension(media.data);
+  if (sniffed) return `${name}${sniffed}`;
+  return name;
+}
+
 /** A human label for the media kind (used in the section heading). */
 function labelFor(media: InboundMedia): string {
   switch (media.type) {
@@ -91,9 +172,16 @@ function labelFor(media: InboundMedia): string {
 export function safeInboundName(media: InboundMedia): string {
   const base = (media.filename ?? '').split(/[\\/]/).pop() ?? '';
   const cleaned = base.replace(/[\u0000-\u001f\u007f"]/g, '').trim();
-  if (cleaned) return cleaned.slice(0, 120);
+  // A sender-supplied name is kept, but a name with NO usable extension gets
+  // one appended (MIME first, then magic bytes). Without this an extensionless
+  // `Divya Sharma_report` persisted as-is and `read_extract` refused a valid
+  // PDF with `unsupported_format: (no extension)`.
+  if (cleaned) return ensureExtension(cleaned.slice(0, 120), media);
   const mime = (media.mimetype ?? '').split(';')[0].trim().toLowerCase();
-  const ext = MIME_EXT[mime] ?? (media.type === 'document' ? '.bin' : `.${media.type}`);
+  const ext =
+    MIME_EXT[mime]
+    ?? sniffExtension(media.data)
+    ?? (media.type === 'document' ? '.bin' : `.${media.type}`);
   return `inbound-${media.type}${ext}`;
 }
 

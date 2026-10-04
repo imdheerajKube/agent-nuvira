@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardAPI } from '../api';
+import { useAuthVersion } from '../useAuthVersion';
 import type { HubChannelPolicy, HubContact, HubData, HubToolset } from '../types';
 import WhatsAppPanel from './WhatsAppPanel';
 import { PlatformConfigSection } from './PlatformConfigSection';
@@ -192,6 +193,7 @@ export default function AgentHub() {
   const [role, setRole] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
   const [user, setUser] = useState('');
+  const authVersion = useAuthVersion();
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
@@ -530,7 +532,7 @@ export default function AgentHub() {
       setRole(s.role ?? null);
       setUserName(s.user ?? null);
     });
-  }, [refresh]);
+  }, [refresh, authVersion]);
 
   /**
    * P4.1 — keep the Subagents tab live while a run is in flight.

@@ -1,6 +1,7 @@
 import type { ConfigManager } from '../config/manager.js';
 import type { AutoRouterOptions } from './auto-router.js';
 import { getModelRegistry } from './model-registry.js';
+import { capabilityRoutingPolicy, resolveCapabilityMode } from '../config/capability-mode.js';
 
 /**
  * ISSUE-003: ONE resolve-options assembly for every action point.
@@ -29,6 +30,12 @@ export function buildAutoResolveOptions(
   } catch {
     // Best-effort — routing must never crash on ledger bookkeeping.
   }
+  // Capability mode — 'balanced' (default) leaves every knob untouched so the
+  // existing behaviour is byte-identical; 'max' relaxes the cost gates (paid
+  // always allowed, no per-call ceiling) and prefers capability over price. The
+  // mode is applied LAST so it can only widen eligibility, never narrow it.
+  const capability = capabilityRoutingPolicy(resolveCapabilityMode(configManager));
+
   return {
     verbose: extra.verbose,
     useRuntimeStats: true,
@@ -48,12 +55,20 @@ export function buildAutoResolveOptions(
     // change picks.
     enforcePromotion: routing.promotionEnforce === true,
     promotionMinDecisions: routing.promotionMinDecisions,
-    maxCostUsd: routing.maxCostUsd,
+    maxCostUsd: capability.maxCostUsd !== undefined ? capability.maxCostUsd : routing.maxCostUsd,
     minSpeed: routing.minSpeed,
-    minReasoning: routing.minReasoning,
+    // `max` sets a reasoned floor so it routes to a strong model, not merely an
+    // allowed one; `balanced` leaves the configured value untouched. The floor
+    // only ever RAISES the configured value (Math.max), so enabling `max` can
+    // never weaken a stricter user/admin floor.
+    minReasoning:
+      capability.minReasoning !== undefined
+        ? Math.max(capability.minReasoning, routing.minReasoning ?? 0)
+        : routing.minReasoning,
     escalationMinSamples: routing.escalationMinSamples,
     quotaStatus,
-    allowPaid: routing.allowPaid,
+    allowPaid: capability.allowPaid !== undefined ? capability.allowPaid : routing.allowPaid,
+    preferenceMode: capability.preferenceMode ?? routing.preferenceMode,
     contextHintTokens: extra.contextHintTokens,
   };
 }

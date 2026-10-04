@@ -2,7 +2,7 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 256,
+  "commandCount": 265,
   "groupCount": 52,
   "groups": [
     {
@@ -250,6 +250,46 @@
           "flags": [
             "--yes"
           ]
+        },
+        {
+          "name": "config limit",
+          "description": "Show or change the size limits for document extraction and attachments",
+          "flags": []
+        },
+        {
+          "name": "config limit list",
+          "description": "Show the effective extraction and attachment limits",
+          "flags": []
+        },
+        {
+          "name": "config limit set",
+          "description": "Set a limit: config limit set <extract-max-chars|attachment-max-kb> <value>",
+          "flags": []
+        },
+        {
+          "name": "config limit unset",
+          "description": "Restore a limit to its default",
+          "flags": []
+        },
+        {
+          "name": "config capability",
+          "description": "Show or change the capability mode (balanced | max)",
+          "flags": []
+        },
+        {
+          "name": "config capability show",
+          "description": "Show the effective capability mode",
+          "flags": []
+        },
+        {
+          "name": "config capability set",
+          "description": "Set the capability mode: config capability set <balanced|max>",
+          "flags": []
+        },
+        {
+          "name": "config capability unset",
+          "description": "Restore the default capability mode (balanced)",
+          "flags": []
         }
       ]
     },
@@ -978,6 +1018,16 @@
             "--provider <provider>",
             "--routing",
             "--suite <suite>",
+            "--tasks <tasks>"
+          ]
+        },
+        {
+          "name": "eval parity",
+          "description": "Measure the capability gap: run the hard tasks under balanced AND max, then compare",
+          "flags": [
+            "--engine <engine>",
+            "--model <model>",
+            "--provider <provider>",
             "--tasks <tasks>"
           ]
         },

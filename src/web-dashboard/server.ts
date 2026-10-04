@@ -32,6 +32,7 @@ import { getRouterPromotion } from '../learning/router-promotion.js';
 import { AUTH_CLEAR_THRESHOLD } from '../learning/key-hygiene.js';
 import {
   ACTION_LOG_FILENAME,
+  DEFAULT_STALE_MS,
   aggregateActionTelemetry,
   readActionTelemetryFile,
   getModelRegistry,
@@ -1839,6 +1840,8 @@ function readCostData(): Record<string, unknown> {
     join(MEMORY_DIR, 'cost-tracker.json'),
   );
   if (!data?.entries) {
+    // The empty state deliberately omits `recent` entirely (the dashboard reads
+    // a missing list as "nothing recorded"), matching the other zero counters.
     return { totalRequests: 0, totalCost: 0, byProvider: {}, byModel: {} };
   }
 
@@ -1849,10 +1852,17 @@ function readCostData(): Record<string, unknown> {
   const byProvider: Record<string, number> = {};
   const byModel: Record<string, number> = {};
   const byProviderMeasured: Record<string, number> = {};
+  const byProviderReported: Record<string, number> = {};
   let measuredCalls = 0;
   let estimatedCalls = 0;
   let measuredCost = 0;
   let estimatedCost = 0;
+  // Provider-REPORTED cost (costReported): the exact figure the endpoint billed
+  // (e.g. OpenRouter's `usage.cost`), as opposed to a locally-priced figure. It
+  // is a SUBSET of measured spend — reported cost always rides on measured
+  // tokens — so the UI labels it "of which" rather than a third partition.
+  let reportedCalls = 0;
+  let reportedCost = 0;
   for (const e of entries) {
     const cost = typeof e.costUsd === 'number' ? e.costUsd : 0;
     if (e.provider) byProvider[e.provider as string] = (byProvider[e.provider as string] || 0) + cost;
@@ -1867,6 +1877,12 @@ function readCostData(): Record<string, unknown> {
       estimatedCalls += 1;
       estimatedCost += cost;
     }
+    // Reported-cost split: the provider told us the exact bill for this call.
+    if (e.costReported === true) {
+      reportedCalls += 1;
+      reportedCost += cost;
+      if (e.provider) byProviderReported[e.provider as string] = (byProviderReported[e.provider as string] || 0) + cost;
+    }
   }
 
   const recent = entries.slice(-50).reverse().map((e) => ({
@@ -1876,6 +1892,7 @@ function readCostData(): Record<string, unknown> {
     totalTokens: e.totalTokens,
     timestamp: e.timestamp,
     measured: e.measured === true,
+    reported: e.costReported === true,
   }));
 
   return {
@@ -1885,10 +1902,13 @@ function readCostData(): Record<string, unknown> {
     byProvider,
     byModel,
     byProviderMeasured,
+    byProviderReported,
     measuredCalls,
     estimatedCalls,
     measuredCost: Math.round(measuredCost * 100000) / 100000,
     estimatedCost: Math.round(estimatedCost * 100000) / 100000,
+    reportedCalls,
+    reportedCost: Math.round(reportedCost * 100000) / 100000,
     recent,
   };
 }
@@ -2250,10 +2270,21 @@ function readModelRegistryData(): Record<string, unknown> {
   }).sort((a, b) => a.provider.localeCompare(b.provider));
 
   const allModels = providers.flatMap((p) => p.models as Array<Record<string, unknown>>);
+  // Two DIFFERENT questions, two numbers. `verifiedRoutable` = proven to work
+  // (status verified, not parked); `routableNow` adds the staleness gate the
+  // router itself applies (`isUsable`). They diverge the moment a proof ages
+  // past 7 days, and reporting only the first under a "routable" label is what
+  // let the Overview contradict the Discovery Timeline's "routable now".
+  const routableNow = allModels.filter((m) => {
+    const verifiedAt = Number(m.lastVerifiedAt ?? 0);
+    return m.status === 'verified' && !m.parked && now - verifiedAt <= DEFAULT_STALE_MS;
+  }).length;
   return {
     enabled: providers.length > 0,
     total: allModels.length,
     verified: allModels.filter((m) => m.status === 'verified' && !m.parked).length,
+    /** The staleness-gated subset of `verified` — see the comment above. */
+    routableNow,
     unverified: allModels.filter((m) => m.status === 'unverified').length,
     unavailable: allModels.filter((m) => m.status === 'unavailable').length,
     parked: allModels.filter((m) => m.parked).length,
@@ -5507,6 +5538,30 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   if (pathname === '/api/routing') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readRoutingInsights()));
+    return;
+  }
+
+  // ── The two size limits the composer needs BEFORE it reads a file ──────
+  // The browser blocks an over-cap file client-side, so it cannot discover the
+  // cap from a refusal (the file never leaves the page). This is the one place
+  // it can ask, and it keeps the client and the server from disagreeing about
+  // the limit — the same class of bug the Process Environment page fixes for
+  // the switches. Open, like the other read paths: it exposes a number, no data.
+  if (pathname === '/api/limits') {
+    void (async () => {
+      const { resolveExtractMaxChars, resolveAttachmentMaxBytes, DEFAULT_EXTRACT_MAX_CHARS, DEFAULT_ATTACHMENT_MAX_BYTES } =
+        await import('../config/limits.js');
+      const attachmentMaxBytes = resolveAttachmentMaxBytes();
+      writeJson(res, 200, {
+        attachmentMaxBytes,
+        attachmentMaxKb: Math.round(attachmentMaxBytes / 1024),
+        extractMaxChars: resolveExtractMaxChars(),
+        defaults: {
+          attachmentMaxBytes: DEFAULT_ATTACHMENT_MAX_BYTES,
+          extractMaxChars: DEFAULT_EXTRACT_MAX_CHARS,
+        },
+      });
+    })();
     return;
   }
 

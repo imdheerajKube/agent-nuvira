@@ -150,8 +150,44 @@ export function getAdminToken(): string | null {
   return readAdminToken();
 }
 
+/**
+ * A monotonic counter bumped on every session change (sign in, setup, sign out,
+ * and a 401 that clears a stale token). Pages that gate on the session hold the
+ * auth-status answer in local state, so without this signal a login made from
+ * the shell left an open page — Chat most visibly — still showing its
+ * signed-out message. `useAuthVersion()` turns this into a re-read.
+ */
+let authVersion = 0;
+const authListeners = new Set<(v: number) => void>();
+
+/** The current session version (a stable snapshot for `useState` initialisers). */
+export function getAuthVersion(): number {
+  return authVersion;
+}
+
+/** Subscribe to session changes; returns the unsubscribe function. */
+export function subscribeAuthVersion(listener: (v: number) => void): () => void {
+  authListeners.add(listener);
+  return () => {
+    authListeners.delete(listener);
+  };
+}
+
+/** Announce a session change to every subscribed page. */
+function emitAuthVersion(): void {
+  authVersion += 1;
+  for (const listener of authListeners) {
+    try {
+      listener(authVersion);
+    } catch {
+      /* one bad listener must not stop the rest of the shell. */
+    }
+  }
+}
+
 export function setAdminToken(token: string | null): void {
   writeAdminToken(token);
+  emitAuthVersion();
 }
 
 /** Authorization header for admin-gated endpoints (empty when unauthenticated). */
@@ -1996,6 +2032,28 @@ export class DashboardAPI {
       return data?.vars ?? [];
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * The effective size limits the composer must respect BEFORE it reads a file.
+   *
+   * The browser refuses an over-cap attachment client-side, so it cannot learn
+   * the cap from a server refusal — the bytes never leave the page. Null when the
+   * server predates the endpoint, in which case the caller keeps its built-in
+   * default rather than accepting an unbounded file.
+   */
+  async fetchLimits(): Promise<{ attachmentMaxBytes: number; extractMaxChars: number } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/limits`);
+      const data = (await parseJsonOrNull(res)) as { attachmentMaxBytes?: unknown; extractMaxChars?: unknown } | null;
+      if (!data || typeof data.attachmentMaxBytes !== 'number' || data.attachmentMaxBytes <= 0) return null;
+      return {
+        attachmentMaxBytes: data.attachmentMaxBytes,
+        extractMaxChars: typeof data.extractMaxChars === 'number' ? data.extractMaxChars : 0,
+      };
+    } catch {
+      return null;
     }
   }
 

@@ -209,6 +209,38 @@ Set a service key: config service set <serviceId> <ENV_VAR> <value> (or --set VA
 Remove a service key (all vars, or one with [varName]) from the env file
 
    - flags: `--yes`
+### `nuvira config limit`
+
+Show or change the size limits for document extraction and attachments
+
+### `nuvira config limit list`
+
+Show the effective extraction and attachment limits
+
+### `nuvira config limit set`
+
+Set a limit: config limit set <extract-max-chars|attachment-max-kb> <value>
+
+### `nuvira config limit unset`
+
+Restore a limit to its default
+
+### `nuvira config capability`
+
+Show or change the capability mode (balanced | max)
+
+### `nuvira config capability show`
+
+Show the effective capability mode
+
+### `nuvira config capability set`
+
+Set the capability mode: config capability set <balanced|max>
+
+### `nuvira config capability unset`
+
+Restore the default capability mode (balanced)
+
 ### `nuvira cache`
 
 Manage inference cache
@@ -702,6 +734,11 @@ Run the Agent-Nuvira evaluation framework — measures if the agent is actually 
 Run the evaluation suite
 
    - flags: `--budget <budget>, --engine <engine>, --format <format>, --keep-workspaces, --model <model>, --pace, --provider <provider>, --routing, --suite <suite>, --tasks <tasks>`
+### `nuvira eval parity`
+
+Measure the capability gap: run the hard tasks under balanced AND max, then compare
+
+   - flags: `--engine <engine>, --model <model>, --provider <provider>, --tasks <tasks>`
 ### `nuvira eval verify-seeds`
 
 Prove every seeded bug is genuinely broken (and genuinely fixable) — no provider needed
@@ -1389,4 +1426,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*450 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*460 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

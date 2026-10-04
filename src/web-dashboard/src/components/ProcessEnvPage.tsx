@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
+import { useAuthVersion } from '../useAuthVersion';
 import type { ProcessEnvVarRow } from '../types';
 import PageHeader from './PageHeader';
 
@@ -57,6 +58,7 @@ const GROUPS: Array<{ id: ProcessEnvVarRow['group']; title: string; blurb: strin
 
 export default function ProcessEnvPage() {
   const [auth, setAuth] = useState<AuthState>({ configured: false, authenticated: false, role: null });
+  const authVersion = useAuthVersion();
   const [rows, setRows] = useState<ProcessEnvVarRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +84,7 @@ export default function ProcessEnvPage() {
       );
     });
     void refresh();
-  }, [refresh]);
+  }, [refresh, authVersion]);
 
   /**
    * Write one switch and adopt the row the server sent back.

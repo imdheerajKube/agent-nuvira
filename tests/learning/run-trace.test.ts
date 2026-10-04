@@ -18,6 +18,8 @@ import {
   isTraceKey,
   questionShape,
   repeatNudge,
+  repeatedFailureNudge,
+  noProgressNudge,
   runTraceFor,
   peekRunTrace,
   clearRunTrace,
@@ -120,6 +122,36 @@ describe('RunTrace — what the run knows about itself', () => {
     expect(t.distinctMutationPaths()).toEqual(['script.js', 'style.css']);
     expect(t.priorRefusalMatches('run_terminal', 'running "npm publish"')).toBe(1);
   });
+
+  /**
+   * The self-diagnosis signal: an action that RAN and FAILED, more than once.
+   *
+   * The live macOS-build turn re-issued `npx tauri build` ~10 times against the
+   * same missing Rust/Cargo and never once stopped to ask WHY — the run had no
+   * record of its own repeated failure. This is that record.
+   */
+  it('recognizes the SAME failing action run more than once', () => {
+    const t = new RunTrace();
+    t.recordFailure('run_terminal', 'npx tauri build', 'command not found: cargo');
+    t.recordFailure('run_terminal', 'npx tauri build', 'command not found: cargo');
+    const repeated = t.repeatedFailure();
+    expect(repeated).not.toBeNull();
+    expect(repeated!.times).toBe(2);
+    expect(repeated!.action).toBe('npx tauri build');
+    expect(repeated!.detail).toContain('cargo');
+  });
+
+  it('does NOT flag ordinary iteration — distinct failures are not a loop', () => {
+    const t = new RunTrace();
+    t.recordFailure('run_terminal', 'npm test', 'exit 1');
+    t.recordFailure('run_terminal', 'npm run build', 'exit 2');
+    // Different actions, one failure each → no repeated action → no diagnosis.
+    expect(t.repeatedFailure()).toBeNull();
+    // A single failure is likewise not a loop.
+    const single = new RunTrace();
+    single.recordFailure('run_terminal', 'npx tauri build', 'exit 1');
+    expect(single.repeatedFailure()).toBeNull();
+  });
 });
 
 describe('selfReport — the material for answering "why are you asking again?"', () => {
@@ -219,5 +251,64 @@ describe('repeatNudge — stop the loop without bulldozing the decision', () => 
     const text = repeatNudge('Do you want me to overwrite index.html?', 'No');
     expect(text).not.toMatch(/\bproceed\b/i);
     expect(text).toMatch(/what blocks you/);
+  });
+});
+
+describe('repeatedFailureNudge — the self-diagnosis correction', () => {
+  const failure = {
+    tool: 'run_terminal',
+    action: 'npx tauri build',
+    times: 3,
+    detail: 'command not found: cargo',
+  };
+
+  it('names the repeated action, its count, and the failure', () => {
+    const text = repeatedFailureNudge(failure);
+    expect(text).toContain('npx tauri build');
+    expect(text).toContain('3 times');
+    expect(text).toContain('command not found: cargo');
+  });
+
+  it('demands a diagnosis and a changed approach, not another retry', () => {
+    const text = repeatedFailureNudge(failure);
+    expect(text).toMatch(/ROOT CAUSE/);
+    expect(text).toMatch(/DIFFERENT action/);
+    expect(text).toMatch(/STOP retrying/);
+    // The one move that produced the loop must be forbidden explicitly.
+    expect(text).toMatch(/Do NOT ask the user for permission to run the same failing command/);
+  });
+});
+
+describe('recentFailures + noProgressNudge — the GENERALIZED stall', () => {
+  it('hands back the most recent failures, newest last and bounded', () => {
+    const t = new RunTrace();
+    t.recordFailure('run_terminal', 'npm test', 'exit 1');
+    t.recordFailure('run_terminal', 'npm run build', 'exit 2');
+    t.recordFailure('run_terminal', 'npm run lint', 'exit 3');
+    const recent = t.recentFailures(2);
+    expect(recent.map((f) => f.action)).toEqual(['npm run build', 'npm run lint']);
+  });
+
+  it('names every attempt and demands a shared-cause diagnosis', () => {
+    const failures = [
+      { tool: 'run_terminal', action: 'npx tauri build', detail: 'command not found: cargo' },
+      { tool: 'run_terminal', action: 'cargo build', detail: 'command not found: cargo' },
+      { tool: 'run_terminal', action: 'rustc src/main.rs', detail: 'command not found: cargo' },
+      { tool: 'run_terminal', action: 'cargo install tauri-cli', detail: 'command not found: cargo' },
+    ];
+    const text = noProgressNudge(failures, 4);
+    expect(text).toContain('4 attempts');
+    expect(text).toContain('npx tauri build');
+    expect(text).toContain('cargo install tauri-cli');
+    expect(text).toMatch(/STALL/);
+    expect(text).toMatch(/shared cause/);
+    expect(text).toMatch(/DIFFERENT action/);
+  });
+
+  it('still gives usable guidance when no single action repeated', () => {
+    const text = noProgressNudge([], 5);
+    expect(text).toContain('5 attempts');
+    expect(text).toContain('no single action repeated');
+    expect(text).toMatch(/DIAGNOSE/);
   });
 });

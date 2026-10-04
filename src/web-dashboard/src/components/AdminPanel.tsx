@@ -21,6 +21,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
+import { useAuthVersion } from '../useAuthVersion';
 import QuotaPanel from './QuotaPanel';
 import ServiceProvidersPanel from './ServiceProvidersPanel';
 // The check row is shared with the System tab, which shows the same doctor
@@ -66,6 +67,7 @@ export default function AdminPanel() {
   const [role, setRole] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
   const [user, setUser] = useState('');
+  const authVersion = useAuthVersion();
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -204,7 +206,7 @@ export default function AdminPanel() {
       }
     });
     return () => { alive = false; };
-  }, [refresh, loadCatalog, loadUsers, loadWorkspace, loadCache]);
+  }, [refresh, loadCatalog, loadUsers, loadWorkspace, loadCache, authVersion]);
 
   const isAdmin = role === 'admin';
   /** routing.operate — the capability the workspace write requires. */

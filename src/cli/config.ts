@@ -30,6 +30,18 @@ import {
   redactValue,
   writeEnvFile,
 } from '../gateway/platform-config.js';
+import {
+  DEFAULT_ATTACHMENT_MAX_BYTES,
+  DEFAULT_EXTRACT_MAX_CHARS,
+  resolveAttachmentMaxBytes,
+  resolveExtractMaxChars,
+} from '../config/limits.js';
+import { deleteEnvValue, saveEnvValue } from '../skills/secret-capture.js';
+import {
+  DEFAULT_CAPABILITY_MODE,
+  parseCapabilityMode,
+  resolveCapabilityMode,
+} from '../config/capability-mode.js';
 
 /**
  * Parse a reply-window duration for `config gateway ask-user-wait timeout`.
@@ -64,6 +76,8 @@ export class ConfigCommand extends BaseCommand {
       .addCommand(this.createVaultCommand())
       .addCommand(this.createGatewayCommand())
       .addCommand(this.createServiceCommand())
+      .addCommand(this.createLimitCommand())
+      .addCommand(this.createCapabilityCommand())
       .action(() => {
         // Show current config when no subcommand is given
         this.displayConfig();
@@ -1191,6 +1205,187 @@ export class ConfigCommand extends BaseCommand {
    * Configuration section writes — the CLI is never deprecated, so one command
    * configures a backend for both surfaces. Values land in ~/.nuvira/.env.
    */
+  /**
+   * `config limit` — the two size limits a user can move.
+   *
+   * Both are ordinary process-environment variables (`NUVIRA_EXTRACT_MAX_CHARS`,
+   * `NUVIRA_ATTACHMENT_MAX_BYTES`), so this is a convenience over
+   * `config set`/`unset` for the names a user would otherwise have to remember.
+   * The values land in the same `~/.nuvira/.env` the dashboard's Process
+   * Environment page writes, so the CLI and the dashboard stay parallel.
+   */
+  private createLimitCommand(): Command {
+    const limit = new Command('limit').description(
+      'Show or change the size limits for document extraction and attachments',
+    );
+
+    limit
+      .command('list')
+      .description('Show the effective extraction and attachment limits')
+      .action(() => this.listLimits());
+
+    limit
+      .command('set')
+      .description('Set a limit: config limit set <extract-max-chars|attachment-max-kb> <value>')
+      .argument('<key>', 'extract-max-chars | attachment-max-kb')
+      .argument('<value>', 'A positive integer')
+      .action((key: string, value: string) => this.setLimit(key, value));
+
+    limit
+      .command('unset')
+      .description('Restore a limit to its default')
+      .argument('<key>', 'extract-max-chars | attachment-max-kb')
+      .action((key: string) => this.unsetLimit(key));
+
+    return limit;
+  }
+
+  private listLimits(): void {
+    const extract = resolveExtractMaxChars();
+    const attach = resolveAttachmentMaxBytes();
+    console.log('\n  Size limits');
+    console.log(`    extract-max-chars   ${extract.toLocaleString()} characters` +
+      (extract === DEFAULT_EXTRACT_MAX_CHARS ? '  (default)' : ''));
+    console.log(`    attachment-max-kb   ${Math.round(attach / 1024).toLocaleString()} KB` +
+      (attach === DEFAULT_ATTACHMENT_MAX_BYTES ? '  (default)' : ''));
+    console.log('\n  Values come from NUVIRA_EXTRACT_MAX_CHARS / NUVIRA_ATTACHMENT_MAX_BYTES');
+    console.log('  (or their BUFF_ aliases). A value exported in your shell wins over the file.\n');
+  }
+
+  private setLimit(key: string, value: string): void {
+    const n = Number(value.trim());
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+      logger.error(`'${value}' is not a positive integer.`);
+      return;
+    }
+    const resolved = this.resolveLimitKey(key);
+    if (!resolved) {
+      logger.error(`Unknown limit '${key}'. Known: extract-max-chars, attachment-max-kb`);
+      return;
+    }
+    // attachment-max-kb is stored in the BYTES variable the reader actually reads,
+    // so the CLI and the dashboard's byte field cannot disagree.
+    const stored = resolved.bytesFromValue(n);
+    const result = saveEnvValue(resolved.envName, String(stored));
+    if (!result.success) {
+      logger.error(`Could not write ${resolved.envName} to the env file (${result.reason ?? 'unknown'}).`);
+      return;
+    }
+    logger.success(`✅ ${resolved.envName} = ${stored} — takes effect on the next turn.`);
+  }
+
+  private unsetLimit(key: string): void {
+    const resolved = this.resolveLimitKey(key);
+    if (!resolved) {
+      logger.error(`Unknown limit '${key}'. Known: extract-max-chars, attachment-max-kb`);
+      return;
+    }
+    const result = deleteEnvValue(resolved.envName);
+    if (!result.success) {
+      logger.error(`Could not remove ${resolved.envName} (${result.reason ?? 'unknown'}).`);
+      return;
+    }
+    logger.success(
+      result.removed
+        ? `✅ ${resolved.envName} removed — back to the default (${resolved.defaultLabel}).`
+        : `${resolved.envName} was not set; the default (${resolved.defaultLabel}) still applies.`,
+    );
+  }
+
+  /** Map a friendly limit key to the env var the reader reads, and its default label. */
+  private resolveLimitKey(
+    key: string,
+  ): { envName: string; bytesFromValue: (n: number) => number; defaultLabel: string } | null {
+    switch (key.trim()) {
+      case 'extract-max-chars':
+        return { envName: 'NUVIRA_EXTRACT_MAX_CHARS', bytesFromValue: (n) => n, defaultLabel: '40,000 characters' };
+      case 'attachment-max-kb':
+        return {
+          envName: 'NUVIRA_ATTACHMENT_MAX_BYTES',
+          bytesFromValue: (kb) => kb * 1024,
+          defaultLabel: '300 KB',
+        };
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * `config capability` — the reasoning-vs-cost switch.
+   *
+   * Writes `NUVIRA_CAPABILITY_MODE` into the same `~/.nuvira/.env` the
+   * dashboard's Process Environment page writes, so the CLI and the dashboard
+   * stay parallel. `balanced` (default) leaves the routing untouched; `max`
+   * relaxes the cost gates and always prefers capability. It only ever widens
+   * MODEL QUALITY and AUTONOMY — the deterministic safety gates are unchanged.
+   */
+  private createCapabilityCommand(): Command {
+    const capability = new Command('capability').description(
+      'Show or change the capability mode (balanced | max)',
+    );
+
+    capability
+      .command('show', { isDefault: true })
+      .description('Show the effective capability mode')
+      .action(() => this.showCapability());
+
+    capability
+      .command('set')
+      .description('Set the capability mode: config capability set <balanced|max>')
+      .argument('<mode>', 'balanced | max')
+      .action((mode: string) => this.setCapability(mode));
+
+    capability
+      .command('unset')
+      .description('Restore the default capability mode (balanced)')
+      .action(() => this.unsetCapability());
+
+    return capability;
+  }
+
+  private showCapability(): void {
+    const mode = resolveCapabilityMode(this.configManager);
+    console.log('\n  Capability mode');
+    console.log(`    ${mode}${mode === DEFAULT_CAPABILITY_MODE ? '  (default)' : ''}`);
+    console.log(
+      mode === 'max'
+        ? '    → cost is not a concern: every turn routes to the strongest model, paid models are always allowed.'
+        : '    → best model for complex/critical work, cheaper models for simple work, escalate on a detected stall.',
+    );
+    console.log('\n  Values come from NUVIRA_CAPABILITY_MODE (or the BUFF_ alias), then routing.capabilityMode.');
+    console.log('  A value exported in your shell wins over the file.\n');
+  }
+
+  private setCapability(mode: string): void {
+    const parsed = parseCapabilityMode(mode);
+    if (!parsed) {
+      logger.error(`Unknown capability mode '${mode}'. Known: balanced, max`);
+      return;
+    }
+    const result = saveEnvValue('NUVIRA_CAPABILITY_MODE', parsed);
+    if (!result.success) {
+      logger.error(`Could not write NUVIRA_CAPABILITY_MODE to the env file (${result.reason ?? 'unknown'}).`);
+      return;
+    }
+    logger.success(
+      `✅ NUVIRA_CAPABILITY_MODE = ${parsed} — takes effect on the next turn.` +
+        (parsed === 'max' ? ' (cost is not a concern — strongest model, every turn)' : ''),
+    );
+  }
+
+  private unsetCapability(): void {
+    const result = deleteEnvValue('NUVIRA_CAPABILITY_MODE');
+    if (!result.success) {
+      logger.error(`Could not remove NUVIRA_CAPABILITY_MODE (${result.reason ?? 'unknown'}).`);
+      return;
+    }
+    logger.success(
+      result.removed
+        ? `✅ NUVIRA_CAPABILITY_MODE removed — back to the default (${DEFAULT_CAPABILITY_MODE}).`
+        : `NUVIRA_CAPABILITY_MODE was not set; the default (${DEFAULT_CAPABILITY_MODE}) still applies.`,
+    );
+  }
+
   private createServiceCommand(): Command {
     const collect = (value: string, previous: string[]): string[] => previous.concat([value]);
     return new Command('service')

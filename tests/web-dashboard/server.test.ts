@@ -679,6 +679,41 @@ describe('Dashboard Server', () => {
       expect(body.recent[1].measured).toBe(false);
     });
 
+    it('GET /api/cost splits PROVIDER-REPORTED cost from locally-priced spend', async () => {
+      // A provider that reported the exact bill (OpenRouter `usage.cost`): the
+      // entry carries costReported + measured. A second, locally-priced entry
+      // must not be counted as reported.
+      writeFixture('cost-tracker', {
+        entries: [
+          { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costUsd: 0, totalTokens: 900, timestamp: Date.now() - 5000, measured: true, costReported: true },
+          { provider: 'anthropic', model: 'claude-3.5-sonnet', costUsd: 0.02, totalTokens: 4000, timestamp: Date.now() - 4000, measured: true },
+        ],
+      });
+
+      try {
+        const res = await httpGet(`${baseUrl}/api/cost`);
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+
+        // One reported call — a true $0 for the :free model.
+        expect(body.reportedCalls).toBe(1);
+        expect(body.reportedCost).toBe(0);
+        expect(body.byProviderReported.openrouter).toBe(0);
+        expect(body.byProviderReported.anthropic).toBeUndefined();
+
+        // Both calls are measured (token basis), so reported is a subset.
+        expect(body.measuredCalls).toBe(2);
+        expect(body.measuredCost).toBeCloseTo(0.02, 6);
+
+        // The recent rows carry the per-call reported flag.
+        expect(body.recent[0].reported).toBe(false); // anthropic, newest
+        expect(body.recent[1].reported).toBe(true); // openrouter
+      } finally {
+        // Restore the shared default fixtures for the remaining tests.
+        writeDefaultFixtures();
+      }
+    });
+
     it('GET /api/history returns sorted recent sessions', async () => {
       const res = await httpGet(`${baseUrl}/api/history`);
       expect(res.statusCode).toBe(200);

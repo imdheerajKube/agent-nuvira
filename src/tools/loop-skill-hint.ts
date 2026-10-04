@@ -81,7 +81,115 @@ const PATTERN_STOPWORDS = new Set([
   'into', 'user', 'users', 'want', 'wants', 'need', 'needs', 'request',
   'requests', 'help', 'make', 'using', 'used', 'work', 'works', 'some',
   'onto', 'over', 'your', 'their', 'them', 'then', 'also', 'each',
+  // Generic document nouns/verbs — no domain evidence on their own.
+  //
+  // The docx skill's DESCRIPTION is long prose ("create, read, edit, or
+  // manipulate Word **documents**… produce professional **documents** with
+  // … **page** numbers"), so its generic words cleared the two-distinct-word
+  // bar for any goal that merely mentioned a document. Measured live
+  // (2026-10-03): the hub docx skill matched "Read the health report PDF …
+  // produce a thorough assessment" on exactly `documents` + `produce` + `page`
+  // — none of which names a document FORMAT.
+  'document', 'documents', 'produce', 'produces', 'page', 'pages',
+  // Generic document/analysis verbs — no domain evidence on their own.
+  //
+  // Measured live (2026-10-03): "read my health report - blood test report
+  // and share me findings which are concerning and what changes i should do"
+  // activated the **docx** skill and injected its whole "a .docx is a ZIP
+  // archive of XML files / read with pandoc / unzip → edit word/document.xml"
+  // methodology into a PDF lab-report turn — the model then reported the PDF
+  // as a .docx with blank tables. The two "domain" words that cleared the
+  // two-word bar were `read` (from the docx goalPattern) and `changes` (from
+  // the description's "tracked changes"); neither names a document FORMAT.
+  //
+  // A FORMAT skill must match on its format NAME or a domain TAG, never on the
+  // generic act of reading or on the noun "changes". Deliberately narrow: only
+  // the two words observed in the false positive are excluded, so skills whose
+  // real evidence is `create`/`build`/`edit`/`convert` are unaffected.
+  'read', 'reads', 'reading', 'changes', 'changed', 'changing',
 ]);
+
+/**
+ * Skill-NAME words that are too generic to be evidence on their own.
+ *
+ * A skill's name is normally its strongest evidence — `wsl-setup` fires on
+ * "wsl", `docker-config` on "docker". But a handful of skill names are built
+ * from ordinary English words that carry a DIFFERENT meaning outside software:
+ * `test` is also a medical/chemical noun (a blood test), a school noun, a
+ * quality noun. Measured live (2026-10-03): the goal "read my health report -
+ * blood test report and share me findings…" matched the **test-strategy**
+ * skill on the single name word `test` and would have injected a
+ * unit/integration/e2e software-testing methodology into a lab-report turn.
+ *
+ * A generic name word is NOT thrown away — it is DEMOTED: it counts as
+ * evidence only when the goal uses it as the action (a leading/verb use, e.g.
+ * "test the project") or when the skill's own domain vocabulary corroborates
+ * it (see {@link isCompoundNounUse} and {@link hasRealGoalEvidence}).
+ *
+ * Deliberately tiny. Domain-ish names (`api`, `code`, `docx`, `docker`, `game`)
+ * stay strong on their own: `REST API` and `code review` ARE the domain, so
+ * excluding them would trade this false positive for a worse one. Only words
+ * whose NON-software sense is common enough to appear in everyday requests
+ * belong here.
+ */
+const GENERIC_SKILL_NAME_WORDS = new Set([
+  'test', 'tests', 'testing',
+]);
+
+/**
+ * Words that do NOT make a following token a compound-noun modifier.
+ *
+ * Used by {@link isCompoundNounUse} to tell `blood test report` (the generic
+ * word is a noun modifier, so it names no domain) from `please test the build`
+ * (the generic word is the verb, so it IS the action). Determiners, pronouns,
+ * prepositions, conjunctions, politeness and auxiliaries — the words a verb
+ * can legitimately follow.
+ */
+const VERB_PRECEDER_STOPWORDS = new Set([
+  ...PATTERN_STOPWORDS,
+  'the', 'a', 'an', 'and', 'or', 'of', 'to', 'for', 'in', 'on', 'at', 'by',
+  'my', 'our', 'your', 'their', 'its', 'his', 'her', 'me', 'us', 'them', 'him',
+  'please', 'can', 'could', 'would', 'will', 'should', 'do', 'does', 'did',
+  'is', 'are', 'be', 'been', 'was', 'were', 'have', 'has', 'had', 'not',
+  'no', 'if', 'as', 'it', 'i', 'you', 'we', 'they', 'so', 'up', 'out',
+  'all', 'any', 'some', 'this', 'that', 'these', 'those', 'then', 'also',
+  'just', 'now', 'new', 'again', 'here', 'there',
+]);
+
+/**
+ * Is `word` used as a COMPOUND-NOUN modifier in the goal — i.e. immediately
+ * preceded by another content word?
+ *
+ * "blood test report" → `test` follows the content word `blood`, so it is a
+ * noun modifier and names no software domain. "test the project" / "please
+ * test the build" → `test` follows nothing or a determiner/auxiliary, so it is
+ * the verb and IS the action. Deterministic, no LLM.
+ */
+function isCompoundNounUse(goal: string, word: string): boolean {
+  const tokens = (goal || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 0);
+  for (let i = 1; i < tokens.length; i++) {
+    if (tokens[i] !== word) continue;
+    const prev = tokens[i - 1];
+    if (prev.length > 3 && !VERB_PRECEDER_STOPWORDS.has(prev)) return true;
+  }
+  return false;
+}
+
+/**
+ * Is this word, for THIS goal, a generic word being used as a compound-noun
+ * modifier rather than as its own domain term?
+ *
+ * The single rule every evidence loop consults: a generic name word (`test`) is
+ * dropped when the goal only uses it as a noun modifier ("blood test report"),
+ * because there it names a different domain than the skill's. Applied to name,
+ * tag and pattern evidence alike so the three can never disagree.
+ */
+function isDemotedGenericUse(goal: string, word: string): boolean {
+  return GENERIC_SKILL_NAME_WORDS.has(word) && isCompoundNounUse(goal, word);
+}
 
 /**
  * Meta-vocabulary that is ALSO excluded from TAG hits.
@@ -192,14 +300,23 @@ export function hasRealGoalEvidence(
 
   let nameHits = 0;
   for (const word of skill.name.toLowerCase().split(/[^a-z0-9]+/)) {
-    if (word.length > 3 && !isPlatformName(word) && tokens.has(word)) nameHits++;
+    if (word.length <= 3 || isPlatformName(word) || !tokens.has(word)) continue;
+    // A GENERIC name word (see GENERIC_SKILL_NAME_WORDS) is evidence only when
+    // the goal uses it as the action, not as a compound-noun modifier. A
+    // count alone did the wrong thing: the single word `test` in "blood test
+    // report" cleared `nameHits >= 1` and activated the software-testing
+    // skill on a lab-report turn. `please test the project` still counts (a
+    // verb use), and `run the unit tests` counts below via its domain words.
+    if (isDemotedGenericUse(goal, word)) continue;
+    nameHits++;
   }
 
   let tagHits = 0;
   for (const tag of skill.tags ?? []) {
     const t = tag.toLowerCase().trim();
-    // Generic process vocabulary is not goal evidence (see GENERIC_SKILL_TAGS).
-    if (t.length > 3 && !GENERIC_SKILL_TAGS.has(t) && !isPlatformName(t) && tokens.has(t)) tagHits++;
+    // Generic process vocabulary is not goal evidence (see GENERIC_SKILL_TAGS),
+    // and a generic word used only as a noun modifier is not either.
+    if (t.length > 3 && !GENERIC_SKILL_TAGS.has(t) && !isPlatformName(t) && !isDemotedGenericUse(goal, t) && tokens.has(t)) tagHits++;
   }
 
   // Pattern-level evidence: the skill's own goalPattern words, plus (for a hub
@@ -220,7 +337,7 @@ export function hasRealGoalEvidence(
   const evidenceText = `${skill.goalPattern ?? ''} ${skill.description ?? ''}`;
   for (const word of evidenceText.toLowerCase().split(/[^a-z0-9]+/)) {
     const w = word.trim();
-    if (w.length > 3 && !PATTERN_STOPWORDS.has(w) && !GENERIC_SKILL_TAGS.has(w) && !isPlatformName(w) && tokens.has(w)) {
+    if (w.length > 3 && !PATTERN_STOPWORDS.has(w) && !GENERIC_SKILL_TAGS.has(w) && !isPlatformName(w) && !isDemotedGenericUse(goal, w) && tokens.has(w)) {
       patternHits.add(w);
     }
   }
@@ -405,6 +522,77 @@ export async function buildLoopSkillHint(
     `To (re)load it with parameters mid-turn, call the skill tool with {"skill":"${match.name}"}.`,
   );
   return lines.join('\n');
+}
+
+/**
+ * A bounded CATALOG of available skills for the system prompt — the model-facing
+ * replacement for keyword auto-injection.
+ *
+ * WHY THIS REPLACES THE MATCHER: a word list cannot decide whether "blood test
+ * report" is software testing, and every stopword added to force it right made
+ * some real match wrong. The model can read the same catalog and judge instantly,
+ * so the fix is to STOP deciding in code and hand the model the list: name + a
+ * one-line description each, plus the exact `skill` tool syntax to load one. This
+ * scales to infinite permutations with no maintenance and no false positives —
+ * the model loads a skill only when it actually applies.
+ *
+ * Bounded deliberately: descriptions are capped and the list is capped, so a
+ * crowded catalog cannot balloon the system prompt. Returns '' when there are no
+ * skills (nothing to say) — never a forced recommendation.
+ *
+ * @param cm       ConfigManager (honors skills.disabled — a disabled skill is
+ *                 never listed, the same gate the tool enforces)
+ * @param opts     caps: maxSkills (default 200 — the full bundled+hub catalog,
+ *                 so NO skill is dropped from the model's view; missing a skill
+ *                 is the failure this design exists to avoid), descriptionChars
+ *                 (default 140)
+ */
+export async function buildSkillCatalogHint(
+  cm?: ConfigManager,
+  opts: { maxSkills?: number; descriptionChars?: number } = {},
+): Promise<string> {
+  const maxSkills = opts.maxSkills ?? 200;
+  const descChars = opts.descriptionChars ?? 140;
+  const entries: Array<{ name: string; description: string }> = [];
+
+  // Compiled first-party skills.
+  try {
+    const { getSkillStore } = await import('../learning/skill-store.js');
+    for (const skill of getSkillStore().getAll()) {
+      if (isDisabled(skill.id, cm)) continue;
+      entries.push({ name: skill.name, description: skill.description ?? '' });
+    }
+  } catch {
+    // Best-effort — a store failure must not remove the hub half.
+  }
+
+  // Hub (installed SKILL.md) skills.
+  try {
+    const { listMatchableHubSkills } = await import('../learning/hub-skill-catalog.js');
+    for (const skill of listMatchableHubSkills(cm)) {
+      if (isDisabled(skill.id, cm)) continue;
+      if (entries.some((e) => e.name === skill.name)) continue;
+      entries.push({ name: skill.name, description: skill.description ?? '' });
+    }
+  } catch {
+    // Best-effort — a catalog failure leaves the compiled half.
+  }
+
+  if (entries.length === 0) return '';
+  const shown = entries.slice(0, maxSkills);
+  const lines = shown.map(
+    (e) => `  - ${e.name}: ${cap(e.description, descChars)}`,
+  );
+  const more = entries.length > shown.length ? `\n  (+${entries.length - shown.length} more — call the skill tool with no name to list all)` : '';
+  return [
+    '',
+    '## Available skills',
+    'A first-party skill may fit this goal. Read the list and decide — load one with the skill tool ONLY when it genuinely applies (ignore the rest):',
+    ...lines,
+    more,
+    '',
+    'Load one with the skill tool, e.g. {"skill":"<name>"} (or call it with no name to list every skill).',
+  ].filter((l) => l !== undefined).join('\n');
 }
 
 /**

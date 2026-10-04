@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { dashboardAPI } from '../api';
+import { useAuthVersion } from '../useAuthVersion';
 import type { TaskRecord, TaskStatus } from '../types';
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -47,6 +48,7 @@ interface Props {
 
 export default function TaskConsole({ presets, customPlaceholder, timeoutMs = 300_000, hint }: Props) {
   const [auth, setAuth] = useState<{ authenticated: boolean; role: string | null } | null>(null);
+  const authVersion = useAuthVersion();
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [custom, setCustom] = useState('');
@@ -59,7 +61,7 @@ export default function TaskConsole({ presets, customPlaceholder, timeoutMs = 30
     void dashboardAPI.fetchAdminAuthStatus().then((s) => {
       setAuth(s ? { authenticated: s.authenticated, role: s.role ?? null } : { authenticated: false, role: null });
     });
-  }, []);
+  }, [authVersion]);
 
   useEffect(() => {
     try {

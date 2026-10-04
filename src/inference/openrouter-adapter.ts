@@ -4,7 +4,7 @@ import { logger } from '../utils/logger.js';
 import { streamCompletion } from './sse.js';
 import { chatCompletionsWithTools, chatCompletionsWithToolsStream } from './tools.js';
 import { getModelTags } from './model-catalog.js';
-import { getCostTracker } from '../learning/cost-tracker.js';
+import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -29,10 +29,36 @@ function openRouterModelMaxTokens(model: string): number {
   return 4096;
 }
 
+interface OpenRouterUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  /** OpenRouter's exact USD cost for this call (credits). */
+  cost?: number;
+}
+
 interface OpenRouterResponse {
   choices: Array<{
     message: { content: string };
   }>;
+  usage?: OpenRouterUsage;
+  /** Some responses mirror the request cost at the top level instead. */
+  cost?: number;
+}
+
+/**
+ * The exact cost OpenRouter billed for a call, when it reported one.
+ *
+ * This is authoritative: it already accounts for the account's credits, the
+ * model's real price (including `:free` ids), and any discount — so we record
+ * it verbatim instead of charging our generic per-provider rate. Returning
+ * `undefined` (not 0) keeps "no cost reported" distinct from "cost is zero".
+ */
+function openRouterReportedCost(usage?: OpenRouterUsage, body?: { cost?: number }): number | undefined {
+  const candidates = [usage?.cost, body?.cost];
+  for (const c of candidates) {
+    if (typeof c === 'number' && Number.isFinite(c)) return c;
+  }
+  return undefined;
 }
 
 /**
@@ -86,9 +112,22 @@ export class OpenRouterAdapter implements InferenceProvider {
     const data = (await response.json()) as OpenRouterResponse;
     const content = data.choices[0]?.message?.content || '';
 
-    // Track cost
+    // Track cost — M2.2: prefer OpenRouter's own measured usage and its exact
+    // reported `cost`; fall back to a length-based estimate only when the
+    // response carried neither.
     try {
-      getCostTracker().recordCallEstimated('openrouter', model, prompt, content);
+      const usage = data.usage;
+      recordCallWithUsage(
+        getCostTracker(),
+        'openrouter',
+        model,
+        prompt,
+        content,
+        usage && typeof usage.prompt_tokens === 'number' && typeof usage.completion_tokens === 'number'
+          ? { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens }
+          : undefined,
+        openRouterReportedCost(usage, data),
+      );
     } catch { /* Non-critical */ }
 
     return content;
@@ -118,10 +157,12 @@ export class OpenRouterAdapter implements InferenceProvider {
       timeoutMs: this.config.timeoutMs ?? 30_000,
       // P4 — external cancellation (the dashboard Cancel button).
       signal: options?.signal,
-      // Cost parity with generate(): meter tool-calling turns too.
-      onCost: (promptText, contentText) => {
+      // Cost parity with generate(): meter tool-calling turns too. The third
+      // arg carries the endpoint's usage (and OpenRouter's reported cost) when
+      // the helper captured it — otherwise this records an estimate.
+      onCost: (promptText, contentText, usage) => {
         try {
-          getCostTracker().recordCallEstimated('openrouter', model, promptText, contentText);
+          recordCallWithUsage(getCostTracker(), 'openrouter', model, promptText, contentText, usage);
         } catch {
           // Non-critical.
         }
@@ -158,10 +199,12 @@ export class OpenRouterAdapter implements InferenceProvider {
         timeoutMs: this.config.timeoutMs ?? 30_000,
         // P4 — external cancellation (the dashboard Cancel button).
         signal: options?.signal,
-        // Cost parity with generate(): meter tool-calling turns too.
-        onCost: (promptText, contentText) => {
+        // Cost parity with generate(): meter tool-calling turns too. The third
+        // arg carries the endpoint's usage (and OpenRouter's reported cost)
+        // captured from the final SSE chunk.
+        onCost: (promptText, contentText, usage) => {
           try {
-            getCostTracker().recordCallEstimated('openrouter', model, promptText, contentText);
+            recordCallWithUsage(getCostTracker(), 'openrouter', model, promptText, contentText, usage);
           } catch {
             // Non-critical.
           }
@@ -190,6 +233,12 @@ export class OpenRouterAdapter implements InferenceProvider {
 
     logger.debug(`OpenRouter: Streaming with model=${model}, temperature=${temperature}, maxTokens=${maxTokens}`);
 
+    // M2.2: capture the endpoint-reported usage (and OpenRouter's `cost`) from
+    // the final SSE chunk when present. `usage: { include: true }` asks
+    // OpenRouter to emit it for streams — other OpenAI-compatible endpoints
+    // ignore the field.
+    let streamUsage: { promptTokens: number; completionTokens: number; costUsd?: number } | undefined;
+
     // OpenRouter uses OpenAI-compatible streaming SSE, same as Groq/NIM
     const fullContent = await streamCompletion(
       `${OPENROUTER_BASE_URL}/chat/completions`,
@@ -198,13 +247,15 @@ export class OpenRouterAdapter implements InferenceProvider {
         'HTTP-Referer': 'https://github.com/buff-cli/buff',
         'X-Title': 'Buff CLI',
       },
-      { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens },
+      { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens: maxTokens, usage: { include: true } },
       onToken,
+      (u) => { streamUsage = u; },
     );
 
-    // Track cost for streaming response
+    // Track cost for streaming response — measured usage + reported cost when
+    // the stream carried them, estimate otherwise.
     try {
-      getCostTracker().recordCallEstimated('openrouter', model, prompt, fullContent);
+      recordCallWithUsage(getCostTracker(), 'openrouter', model, prompt, fullContent, streamUsage);
     } catch { /* Non-critical */ }
 
     return fullContent;

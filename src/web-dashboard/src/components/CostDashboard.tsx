@@ -74,6 +74,13 @@ export default function CostDashboard({ data }: CostDashboardProps) {
           <span className="cost-amount">{formatCost(cost.estimatedCost)}</span>
           <span className="cost-label">{formatNumber(cost.estimatedCalls)} calls</span>
         </div>
+        <div className="cost-total">
+          {/* Provider-reported is a SUBSET of measured spend, so it is labelled
+              "of which" — a free/subscription call's exact $0 shows here. */}
+          <span className="cost-label">🧾 of which provider-reported (exact billed)</span>
+          <span className="cost-amount">{formatCost(cost.reportedCost)}</span>
+          <span className="cost-label">{formatNumber(cost.reportedCalls)} calls</span>
+        </div>
       </div>
 
       <h2 className="section-subtitle">By Provider</h2>
@@ -127,7 +134,8 @@ export default function CostDashboard({ data }: CostDashboardProps) {
               <span className="request-time">{formatTime(req.timestamp)}</span>
               <span className="request-provider">{req.provider || '--'}</span>
               <span className="request-model">{req.model || '--'}</span>
-              <span className="request-cost">{formatCost(req.costUsd)}</span>
+              {/* 🧾 marks a cost the PROVIDER reported, not one we priced. */}
+              <span className="request-cost">{req.reported ? '🧾 ' : ''}{formatCost(req.costUsd)}</span>
               <span className="request-tokens">{formatNumber(req.totalTokens)} tok</span>
             </div>
           ))

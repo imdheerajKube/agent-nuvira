@@ -179,6 +179,22 @@ export type TraceGateName =
   | 'autonomy'
   | 'repeat'
   | 'budget'
+  // The loop's SELF-DIAGNOSIS nudge: the same action failed more than once and
+  // the model was told to diagnose the cause instead of retrying it (see
+  // RunTrace.repeatedFailure). A gate name rather than a new kind — it IS a
+  // bounded decision the loop made about the run's own behaviour.
+  | 'diagnosis'
+  // The loop's SELF-REVIEW nudge: a substantial, already-verified turn is ending
+  // and the model was asked to check the result against the ORIGINAL ask before
+  // it can finish. The verification gate owns "did you check"; this owns "did you
+  // answer the whole question" — a distinct, bounded decision about the run.
+  | 'self-review'
+  // The loop's ZERO-ACTION nudge: the request directed work on the workspace and
+  // the turn was ending having run no tool at all, so it was told to do the work
+  // (see `requireAction` in tool-loop.ts). A bounded decision about the run's own
+  // behaviour, distinct from 'deliverable' (an authored file) and 'promise' (an
+  // announced action the answer dropped).
+  | 'action'
   // WS4 (#26) — an operator's tool hook decided (or failed to decide) about a
   // call. A gate name rather than a new event kind: a hook veto IS a decision
   // about a call, which is what this vocabulary is for.

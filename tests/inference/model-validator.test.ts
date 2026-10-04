@@ -314,4 +314,64 @@ describe('resolveWorkingModel', () => {
       warnSpy.mockRestore();
     }
   });
+
+  // ─── Capability-aware repair (the observed "strong pin → 7B toy" bug) ───────
+  // Found live: a quota-parked `openai/gpt-oss-120b` was silently repaired to
+  // the ONLY verified model that never rate-limited — `allam-2-7b`, the weakest
+  // the provider serves — while a 27B and a 120B were both verified-usable.
+  // The repair ranking (error rate, then latency) is a HEALTH ranking, so the
+  // small fast model always wins it. When the dead pin was STRONG, repair must
+  // not drop a capability band if a comparable sibling exists.
+  it('repairs a dead STRONG pin to a comparable model, not the health-first 7B toy', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const registry = getModelRegistry();
+      // The requested strong model is dead (quota-parked / rate-limited).
+      registry.markUnavailable('groq', 'qwen/qwen3.8-27b', 'rate-limit', 'telemetry');
+      // The weak model is FASTEST → it wins the health ranking.
+      registry.markVerified('groq', 'allam-2-7b', 'telemetry', 100);
+      // A comparable-capability sibling is verified but SLOWER → health-second.
+      registry.markVerified('groq', 'openai/gpt-oss-120b', 'telemetry', 800);
+
+      const provider = makeProvider([]);
+      const result = await resolveWorkingModel(provider, 'groq', 'qwen/qwen3.8-27b');
+      expect(result).toBe('openai/gpt-oss-120b');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('still repairs to the health-first model when the dead pin was WEAK', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const registry = getModelRegistry();
+      registry.markUnavailable('groq', 'allam-2-7b', 'rate-limit', 'telemetry');
+      registry.markVerified('groq', 'openai/gpt-oss-120b', 'telemetry', 100);
+      registry.markVerified('groq', 'qwen/qwen3.8-27b', 'telemetry', 200);
+
+      const provider = makeProvider([]);
+      // A weak request is not narrowed — the health-first pick is kept.
+      const result = await resolveWorkingModel(provider, 'groq', 'allam-2-7b');
+      expect(result).toBe('openai/gpt-oss-120b');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('never dead-ends: repairs to an available (weaker) model when nothing comparable exists', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const registry = getModelRegistry();
+      registry.markUnavailable('groq', 'qwen/qwen3.8-27b', 'rate-limit', 'telemetry');
+      registry.markVerified('groq', 'allam-2-7b', 'telemetry', 100);
+
+      const provider = makeProvider([]);
+      const result = await resolveWorkingModel(provider, 'groq', 'qwen/qwen3.8-27b');
+      // Nothing is comparable, so the health-first model is still used — a weak
+      // candidate beats no candidate.
+      expect(result).toBe('allam-2-7b');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });

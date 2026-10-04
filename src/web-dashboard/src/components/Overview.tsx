@@ -185,7 +185,12 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
                 </Link>
               }
             >
-              <SummaryRow value={formatNumber(registry.verified)} label="Verified / routable" />
+              {/* Two numbers, deliberately: "routable now" is the staleness-gated
+                  subset of "verified". One row labelled "Verified / routable"
+                  read as a single count and contradicted the Discovery
+                  Timeline's "routable now" whenever a proof aged past 7 days. */}
+              <SummaryRow value={formatNumber(registry.routableNow ?? registry.verified)} label="Routable now" />
+              <SummaryRow value={formatNumber(registry.verified)} label="Verified (proven)" />
               <SummaryRow value={formatNumber(registry.total)} label="In the registry" />
               {registry.parked > 0 && <SummaryRow value={formatNumber(registry.parked)} label="Quota-parked" />}
             </SummaryCard>

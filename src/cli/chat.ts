@@ -1671,21 +1671,17 @@ export class ChatCommand extends BaseCommand {
     // prompt, so on this surface the MODEL decides and the rules are invisible.
     const systemText = buildToolSystemPrompt(parsed);
 
-    // Phase 3.2 (assessment Addendum v4) — loop-side skill match hint: the
-    // orchestrator consults SkillStore.findMatch + the hub catalog before
-    // planning; the chat loop never heard about that layer. One
-    // deterministic, best-effort match is appended to the system prompt
-    // (methodology + exact skill-tool load syntax, bounded to ONE block).
-    // Any failure returns '' and the turn proceeds byte-identically.
+    // Model-selected skills: a bounded CATALOG (name + one line) is appended to
+    // the system prompt and the MODEL decides which skill applies, loading it
+    // with the `skill` tool. This replaces keyword auto-injection, whose word
+    // lists could not tell "blood test report" from software testing — the model
+    // reads the same list and judges instantly, so there is no false positive to
+    // maintain away and no real match to accidentally drop. Best-effort: any
+    // failure returns '' and the turn proceeds byte-identically.
     let skillHint = '';
     try {
-      const { buildLoopSkillHint, markLoopSkillUsed } = await import('../tools/loop-skill-hint.js');
-      const injected: { value: import('../tools/loop-skill-hint.js').LoopSkillHintMatch | null } = { value: null };
-      skillHint = await buildLoopSkillHint(message, this.configManager, injected);
-      if (injected.value) {
-        void markLoopSkillUsed(injected.value);
-        ctxOverrides?.onProgress?.(`   🧠 Matched skill '${injected.value.name}' — methodology injected into this turn's context`);
-      }
+      const { buildSkillCatalogHint } = await import('../tools/loop-skill-hint.js');
+      skillHint = await buildSkillCatalogHint(this.configManager);
     } catch {
       skillHint = ''; // best-effort — a hint failure never breaks the turn
     }

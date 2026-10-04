@@ -206,8 +206,14 @@ describe('read_extract — an unimplemented format refuses, it does not return b
 
     expect(r.success).toBe(true);
     expect(r.metadata?.truncated).toBe(true);
-    expect(r.text).toContain('…[truncated]');
-    expect(r.text.length).toBeLessThan(41_000);
+    // The truncation is stated IN THE TEXT the model reads (not only in
+    // metadata) — a model that read a silently-cut document assessed it as if
+    // it were complete.
+    expect(r.text).toContain('TRUNCATED');
+    expect(r.text).toContain('NUVIRA_EXTRACT_MAX_CHARS');
+    // Body capped at the budget; the notice is appended after it, so the total
+    // is the budget plus the notice — still far short of the 45,000-char file.
+    expect(r.text.length).toBeLessThan(42_000);
   });
 
   it('parses CSV quoting rules directly', () => {

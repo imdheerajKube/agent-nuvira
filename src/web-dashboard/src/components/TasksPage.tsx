@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardAPI } from '../api';
+import { useAuthVersion } from '../useAuthVersion';
 import type { TaskLogLine, TaskRecord, TaskStatus } from '../types';
 import PageHeader from './PageHeader';
 import CommandBrowser from './CommandBrowser';
@@ -83,6 +84,7 @@ function fmtAge(at: number): string {
 
 export default function TasksPage() {
   const [auth, setAuth] = useState<AuthState | null>(null);
+  const authVersion = useAuthVersion();
   const [command, setCommand] = useState('');
   const [timeoutSec, setTimeoutSec] = useState(300);
   const [starting, setStarting] = useState(false);
@@ -111,7 +113,7 @@ export default function TasksPage() {
       );
       if (s?.authenticated) void refreshHistory();
     });
-  }, [refreshHistory]);
+  }, [refreshHistory, authVersion]);
 
   // Auto-scroll the console to the newest line while running.
   useEffect(() => {

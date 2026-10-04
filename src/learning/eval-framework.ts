@@ -37,6 +37,10 @@ import { execSync } from 'node:child_process';
 import type { InferenceProvider } from '../inference/interface.js';
 import { ConfigManager } from '../config/manager.js';
 import { getQuotaLedger } from './quota-ledger.js';
+// Loop-arm usage accounting: the orchestrator hands back `stats`, but the loop
+// arm does not build those — every adapter records its calls into the shared
+// cost tracker, so `costSince` is how the loop arm's tokens/cost are measured.
+import { costSince } from './cost-tracker.js';
 import { Orchestrator, type OrchestrationResult } from '../agents/orchestrator.js';
 import { classifyFallbackError } from './provider-fallback.js';
 import { logger } from '../utils/logger.js';
@@ -211,6 +215,23 @@ export interface EvalMetrics {
    * an incomplete run has no meaningful ratio and leaves this undefined.
    */
   asksPerCompletedTask?: number;
+  /**
+   * The model that ACTUALLY served the run, when the arm can report it (loop
+   * arm: `runLoopExecutor` echoes the served route). Recorded separately from
+   * `EvalResult.model` (which is the REQUESTED provider/model): a substitution is
+   * only visible when both are kept, and without it a parity report claims it ran
+   * the model the user pinned while it ran a repaired one.
+   */
+  servedModel?: string;
+  /** The model the run was ASKED to use (the pin). */
+  requestedModel?: string;
+  /**
+   * Loop arm: the turn ran ZERO tools successfully — nothing was changed and
+   * nothing was observed. The honesty signal behind the completion fix: a
+   * `completed` turn that did nothing is not a completion, and this is the
+   * evidence a report can show for why. Undefined on arms that cannot observe it.
+   */
+  actionless?: boolean;
 }
 
 /** Result of running one eval task */
@@ -1407,6 +1428,10 @@ export async function runEvalTask(
   let bounded = false;
   /** Stage 2 — interruptions this run, when the arm can observe them. */
   let permissionAsks: number | undefined;
+  /** The model that ACTUALLY served the run (loop arm reports it; else unknown). */
+  let servedModel: string | undefined;
+  /** Loop arm: the turn ran zero tools successfully (nothing done). */
+  let actionless = false;
 
   try {
     if (options.executeGoal) {
@@ -1438,6 +1463,12 @@ export async function runEvalTask(
         // ask attempts is the honest number, and it is only available because
         // the loop now reports its own trace (see learning/run-trace.ts).
         permissionAsks = loopResult.runTrace?.shownAsks;
+        // The model that actually served the turn — echoed by the executor from
+        // the route it resolved. Kept so a substitution is visible (the report
+        // would otherwise claim it ran the REQUESTED model).
+        servedModel = loopResult.model;
+        // Zero-action signal — the loop did nothing (no tool succeeded).
+        actionless = (loopResult.successfulToolCalls?.length ?? 0) === 0;
         result = {
           success: !loopResult.generationFailed,
           goal: task.goal,
@@ -1513,13 +1544,38 @@ export async function runEvalTask(
   const testPassed = testsPassed === task.hiddenTests.length && task.hiddenTests.length > 0;
   const elapsedMs = Date.now() - taskStart;
   const editAccuracy = computeEditAccuracy(task, workspace);
-  const totalTokens = (stats?.inputTokens ?? 0) + (stats?.outputTokens ?? 0);
+  // ── Loop-arm usage accounting ──────────────────────────────────────────
+  // The loop arm does not build `stats`, so it used to report 0 tokens / $0 —
+  // which made the cost of a capability mode unmeasurable. Every adapter records
+  // its calls into the shared cost tracker, so the arm's REAL usage is what was
+  // recorded since this task started. Best-effort: accounting must never break a
+  // run (and a pipeline arm keeps its own `stats`).
+  let loopTokens = 0;
+  let loopCostUsd = 0;
+  if (engine === 'loop' && !options.executeGoal) {
+    try {
+      const usage = costSince(taskStart);
+      loopTokens = usage.tokens;
+      loopCostUsd = usage.costUsd;
+    } catch {
+      // Best-effort — a tracker read failure is not the task's failure.
+    }
+  }
+  const statsTokens = (stats?.inputTokens ?? 0) + (stats?.outputTokens ?? 0);
+  const totalTokens = statsTokens > 0 ? statsTokens : loopTokens;
   const tokenEfficiency = totalTokens > 0
     ? clamp01(task.tokenBudget / totalTokens)
     : 0;
+  // A task with hidden tests asks for WORK to be produced, so a turn that ran
+  // nothing did not complete it — however cleanly it ended. This is the honesty
+  // fix: `completed` used to be `!generationFailed`, so a one-line apology or a
+  // restated request scored as a completed turn (composite floored at 0.25 in
+  // every such run). Tasks with no hidden tests are left alone.
+  const taskRequiresAction = task.hiddenTests.length > 0 || (task.referencePatterns?.length ?? 0) > 0;
+  const completed = result.success && !(actionless && taskRequiresAction);
 
   const metrics: EvalMetrics = {
-    completed: result.success,
+    completed,
     testPassed,
     testPassRate: task.hiddenTests.length > 0 ? testsPassed / task.hiddenTests.length : 0,
     timeToFixMs: firstGreenAt ?? (testPassed ? elapsedMs : Number.POSITIVE_INFINITY),
@@ -1541,6 +1597,10 @@ export async function runEvalTask(
     toolCallCount,
     erroredToolCount,
     bounded,
+    // Model attribution + zero-action honesty (loop arm only).
+    requestedModel: model,
+    ...(servedModel ? { servedModel } : {}),
+    ...(engine === 'loop' ? { actionless } : {}),
     // Stage 2 — the interruption metric (loop arm only).
     ...(permissionAsks !== undefined ? { permissionAsks } : {}),
     ...(permissionAsks !== undefined && result.success ? { asksPerCompletedTask: permissionAsks } : {}),
@@ -1557,6 +1617,11 @@ export async function runEvalTask(
     );
   } catch {
     // cost estimation is best-effort
+  }
+  // Loop arm: prefer the cost the adapter ACTUALLY recorded over the
+  // stats-derived estimate (which is 0 when the arm has no stats).
+  if (engine === 'loop' && !options.executeGoal && loopCostUsd > 0) {
+    metrics.costUsd = loopCostUsd;
   }
 
   if (!options.keepWorkspaces) {
@@ -1895,6 +1960,20 @@ export function formatEvalReport(run: EvalRun): string {
   lines.push(
     `  Interruptions (avg questions shown to the user): ${s.avgPermissionAsks.toFixed(1)}`,
   );
+  // Model attribution — a substitution is a fact about what RAN, and a report
+  // that hid it would credit the requested model with another model's result.
+  const substituted = run.results.filter(
+    (r) => r.metrics.servedModel !== undefined && r.metrics.servedModel !== r.metrics.requestedModel,
+  );
+  if (substituted.length > 0) {
+    const pairs = [...new Set(substituted.map((r) => `${r.metrics.requestedModel} → ${r.metrics.servedModel}`))];
+    lines.push(`  🔀 Model substituted: ${substituted.length}/${run.results.length} task(s) — ${pairs.join('; ')}`);
+  }
+  // Zero-action honesty — a turn that ran no tool is not a completed turn.
+  const actionlessCount = run.results.filter((r) => r.metrics.actionless === true).length;
+  if (actionlessCount > 0) {
+    lines.push(`  🛠️ No action taken: ${actionlessCount}/${run.results.length} task(s) — the turn ran no tool at all (not a completion)`);
+  }
   lines.push('');
   lines.push('  ── Reliability Metrics ──');
   lines.push(`  ✅ Task completion rate:  ${(s.completionRate * 100).toFixed(0)}%`);

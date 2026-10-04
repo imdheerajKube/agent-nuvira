@@ -141,6 +141,21 @@ export interface RegistryProvider {
 }
 
 export interface ModelRegistryInsights {
+  /**
+   * Verified AND un-parked, with NO proof-age gate — "has this pair ever been
+   * proven to work". This is the honest sibling of `routable`.
+   */
+  verifiedRoutable?: number;
+  /**
+   * Verified, un-parked, AND verified within the staleness window — the subset
+   * of `verifiedRoutable` the router can pick right now.
+   *
+   * Two numbers, not one, because they answer different questions and can
+   * legitimately differ: a model proven 8 days ago is verified but no longer
+   * routable until it is re-probed. Labelling one of them "Verified / routable"
+   * is what let the Overview disagree with the Discovery Timeline.
+   */
+  routableNow?: number;
   enabled: boolean;
   total: number;
   verified: number;
@@ -256,6 +271,15 @@ export interface CostData {
   estimatedCalls: number;
   measuredCost: number;
   estimatedCost: number;
+  /**
+   * Calls + spend where the PROVIDER told us the exact billed cost (e.g.
+   * OpenRouter's `usage.cost`). A subset of measured spend — shown as "of
+   * which provider-reported" so a free/subscription call's true $0 is visible.
+   */
+  reportedCalls: number;
+  reportedCost: number;
+  /** Provider-reported spend per provider. */
+  byProviderReported: Record<string, number>;
   recent: Array<{
     provider: string;
     model: string;
@@ -263,6 +287,8 @@ export interface CostData {
     totalTokens: number;
     timestamp: number;
     measured: boolean;
+    /** True when the provider reported the exact cost for this call. */
+    reported: boolean;
   }>;
 }
 

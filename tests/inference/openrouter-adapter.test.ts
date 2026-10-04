@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OpenRouterAdapter } from '../../src/inference/openrouter-adapter.js';
 import { resetModelRegistry } from '../../src/learning/model-registry.js';
+import { getCostTracker } from '../../src/learning/cost-tracker.js';
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -123,6 +124,54 @@ describe('OpenRouterAdapter', () => {
       const adapter = new OpenRouterAdapter(baseConfig);
       const result = await adapter.generate('test');
       expect(result).toBe('');
+    });
+  });
+
+  describe('cost metering (M2.2 measured cost + provider-reported cost)', () => {
+    /** The most recent openrouter entry persisted to the hermetic ledger. */
+    function lastOpenRouterEntry() {
+      const entries = getCostTracker().getAllEntries().filter((e) => e.provider === 'openrouter');
+      return entries[entries.length - 1];
+    }
+
+    it('records measured tokens and the exact OpenRouter-reported cost', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'hi' } }],
+          usage: { prompt_tokens: 100, completion_tokens: 50, cost: 0.00123 },
+        }),
+      });
+
+      await new OpenRouterAdapter(baseConfig).generate('hello');
+
+      const entry = lastOpenRouterEntry();
+      expect(entry.measured).toBe(true);
+      expect(entry.inputTokens).toBe(100);
+      expect(entry.outputTokens).toBe(50);
+      // Provider-reported cost wins over the local price table verbatim.
+      expect(entry.costUsd).toBe(0.00123);
+      expect(entry.costReported).toBe(true);
+    });
+
+    it('bills a :free model $0 even when usage carries no cost', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'hi' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        }),
+      });
+
+      await new OpenRouterAdapter(baseConfig).generate('hello', {
+        model: 'meta-llama/llama-3.3-70b-instruct:free',
+      });
+
+      const entry = lastOpenRouterEntry();
+      expect(entry.model).toBe('meta-llama/llama-3.3-70b-instruct:free');
+      expect(entry.costUsd).toBe(0);
+      // Zero because the model is free — not because the provider said so.
+      expect(entry.costReported).toBeUndefined();
     });
   });
 

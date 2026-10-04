@@ -11,6 +11,13 @@ import {
   runToolLoop,
   isThinkOnlyResponse,
   MAX_THINK_CONTINUES,
+  MAX_CAPABILITY_MAX_CONTINUATIONS,
+  MAX_CAPABILITY_CONTINUATION_STEPS,
+  buildWorkDigest,
+  upsertWorkDigest,
+  WORK_DIGEST_MARKER,
+  selfReviewNudge,
+  zeroActionNudge,
   isBareAcknowledgment,
   extractFallbackToolCalls,
   fallbackHintForTool,
@@ -829,6 +836,41 @@ describe('tool loop — bounded auto-continuation', () => {
     // 2 initial + 2 continuation steps; the model never terminates itself.
     expect(deps.callModel).toHaveBeenCalledTimes(4);
   });
+
+  it('max capability mode raises the DEFAULT continuation budget (cost is not a concern)', async () => {
+    // A model that never ends on its own: only the budget stops it. With the
+    // default mode this would stop after 2 continuations; `max` grants the
+    // longest bounded budget so a long build can finish.
+    const endless: StepResponse = { content: '', toolCalls: [{ id: 'c1', name: 'verify_requirement', arguments: {} }] };
+    const deps = mockDeps([endless], async () => 'result');
+    const maxCtx: ToolContext = { configManager: { getAll: () => ({ routing: { capabilityMode: 'max' } }) } };
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'long build' }],
+      context: maxCtx,
+      deps,
+      maxSteps: 2,
+      // No explicit maxContinuations/continuationSteps — the mode supplies them.
+    });
+    expect(result.bounded).toBe(true);
+    expect(result.continuations).toBe(MAX_CAPABILITY_MAX_CONTINUATIONS);
+    expect(deps.callModel).toHaveBeenCalledTimes(2 + MAX_CAPABILITY_MAX_CONTINUATIONS * MAX_CAPABILITY_CONTINUATION_STEPS);
+  });
+
+  it('an explicit continuation budget still wins over max capability mode', async () => {
+    const endless: StepResponse = { content: '', toolCalls: [{ id: 'c1', name: 'verify_requirement', arguments: {} }] };
+    const deps = mockDeps([endless], async () => 'result');
+    const maxCtx: ToolContext = { configManager: { getAll: () => ({ routing: { capabilityMode: 'max' } }) } };
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'long build' }],
+      context: maxCtx,
+      deps,
+      maxSteps: 2,
+      maxContinuations: 1,
+      continuationSteps: 3,
+    });
+    expect(result.continuations).toBe(1);
+    expect(deps.callModel).toHaveBeenCalledTimes(5);
+  });
 });
 
 describe('tool loop — G1 verification gate + G2 edit-claim honesty', () => {
@@ -1352,6 +1394,104 @@ describe('tool loop — trace events (G18)', () => {
     return { events, sink: (e) => events.push(e) };
   }
 
+  /**
+   * SELF-DIAGNOSIS — the same action failing repeatedly must trigger ONE
+   * bounded nudge to diagnose the cause, not another blind retry.
+   *
+   * The live macOS-build turn re-issued `npx tauri build` ~10 times against the
+   * same missing Rust/Cargo. Nothing in the loop noticed the repetition: a
+   * refusal was remembered, a command that RAN and FAILED was not. This drives
+   * the REAL loop with the identical failing call and asserts the `diagnosis`
+   * gate fires with the corrective message, and that a run of DISTINCT failures
+   * does NOT fire it (ordinary iteration is not a loop).
+   */
+  it('fires ONE diagnosis nudge when the SAME action fails repeatedly', async () => {
+    const { events, sink } = collect();
+    const seenThreads: string[][] = [];
+    const deps: ToolLoopDeps = {
+      callModel: vi.fn(async (messages: readonly { role: string; content: string }[]) => {
+        seenThreads.push(messages.map((m) => String(m.content ?? '')));
+        // Always re-issue the identical failing command, then finally stop.
+        const calls = messages.filter((m) => m.role === 'tool').length;
+        return calls < 3
+          ? { content: '', toolCalls: [{ id: `c${calls}`, name: 'run_terminal', arguments: { command: 'npx tauri build' } }] }
+          : { content: 'Diagnosed: cargo is missing; installing it first.', toolCalls: [] };
+      }),
+      executeTool: vi.fn(async () => 'Error: run_terminal: `npx tauri build` ❌ failed (exit 1).\nOutput:\ncommand not found: cargo'),
+      onEvent: vi.fn(),
+    };
+
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'build the mac app' }],
+      context: ctx,
+      deps,
+      onTraceEvent: sink,
+    });
+
+    const diagnosis = events.filter((e) => e.kind === 'gate' && e.gate === 'diagnosis');
+    expect(diagnosis).toHaveLength(1);
+    expect(diagnosis[0].summary).toContain('npx tauri build');
+    // The corrective message reached the model: a later prompt carries it.
+    const nudgeSeen = seenThreads.some((t) => t.some((c) => c.includes('ROOT CAUSE')));
+    expect(nudgeSeen).toBe(true);
+  });
+
+  it('does NOT fire the diagnosis nudge for ordinary iteration (distinct failures)', async () => {
+    const { events, sink } = collect();
+    const cmds = ['npm test', 'npm run build', 'npm run lint'];
+    const deps: ToolLoopDeps = {
+      callModel: vi.fn(async (messages: readonly { role: string; content: string }[]) => {
+        const calls = messages.filter((m) => m.role === 'tool').length;
+        return calls < cmds.length
+          ? { content: '', toolCalls: [{ id: `c${calls}`, name: 'run_terminal', arguments: { command: cmds[calls] } }] }
+          : { content: 'Three checks tried.', toolCalls: [] };
+      }),
+      executeTool: vi.fn(async () => 'Error: run_terminal: ❌ failed (exit 1).'),
+      onEvent: vi.fn(),
+    };
+
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'check the project' }],
+      context: ctx,
+      deps,
+      onTraceEvent: sink,
+    });
+
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'diagnosis')).toHaveLength(0);
+  });
+
+  it('generalizes self-diagnosis: a sustained all-fail stall fires even when NO action repeats', async () => {
+    // The second loop shape: a weak model substitutes a NEW command each step,
+    // every one failing the same underlying way. Nothing repeats exactly, so
+    // `repeatedFailure` never fires — the sustained no-progress streak must.
+    const { events, sink } = collect();
+    const seenThreads: string[][] = [];
+    const cmds = ['npx tauri build', 'cargo build', 'rustc src/main.rs', 'cargo install tauri-cli'];
+    const deps: ToolLoopDeps = {
+      callModel: vi.fn(async (messages: readonly { role: string; content: string }[]) => {
+        seenThreads.push(messages.map((m) => String(m.content ?? '')));
+        const calls = messages.filter((m) => m.role === 'tool').length;
+        return calls < cmds.length
+          ? { content: '', toolCalls: [{ id: `c${calls}`, name: 'run_terminal', arguments: { command: cmds[calls] } }] }
+          : { content: 'Diagnosed: the Rust toolchain is missing; installing it first.', toolCalls: [] };
+      }),
+      executeTool: vi.fn(async () => 'Error: run_terminal: ❌ failed (exit 127).\nOutput:\ncommand not found: cargo'),
+      onEvent: vi.fn(),
+    };
+
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'build the mac app' }],
+      context: ctx,
+      deps,
+      onTraceEvent: sink,
+    });
+
+    const diagnosis = events.filter((e) => e.kind === 'gate' && e.gate === 'diagnosis');
+    expect(diagnosis).toHaveLength(1);
+    expect(diagnosis[0].summary).toContain('none succeeded');
+    expect(seenThreads.some((t) => t.some((c) => c.includes('STALL')))).toBe(true);
+  });
+
   it('records a tool call with its args, result preview, verdict and duration', async () => {
     const { events, sink } = collect();
     const deps = mockDeps(
@@ -1706,5 +1846,258 @@ describe('Phase 4c — onStep step-boundary snapshot', () => {
       },
     });
     expect(result.content).toBe('Done.');
+  });
+});
+
+describe('work digest — the memory a compacted thread keeps', () => {
+  it('records changes, command verdicts and tools (bounded, deduped)', () => {
+    const digest = buildWorkDigest({
+      successfulTools: ['read_file', 'run_terminal', 'read_file'],
+      mutatedPaths: ['src/a.ts', 'src/a.ts', 'src/b.ts'],
+      executedActions: [
+        { tool: 'run_terminal', ok: false, command: 'npm test' },
+        { tool: 'run_terminal', ok: true, command: 'npm run build' },
+        { tool: 'read_file', ok: true, path: 'src/a.ts' },
+      ],
+    });
+    expect(digest.startsWith(WORK_DIGEST_MARKER)).toBe(true);
+    expect(digest).toContain('src/a.ts');
+    expect(digest).toContain('❌ npm test');
+    expect(digest).toContain('✅ npm run build');
+    expect(digest).toContain('Tools used: read_file, run_terminal');
+  });
+
+  it('returns nothing for a turn that has done nothing (no prompt noise)', () => {
+    expect(buildWorkDigest({ successfulTools: [], mutatedPaths: [], executedActions: [] })).toBe('');
+  });
+
+  it('upserts ONE digest (never stacks) and keeps it just after the ask', () => {
+    const thread = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'the ask' },
+      { role: 'assistant', content: '', toolCalls: [] },
+    ] as unknown as Parameters<typeof upsertWorkDigest>[0];
+    upsertWorkDigest(thread, `${WORK_DIGEST_MARKER}\nold`);
+    upsertWorkDigest(thread, `${WORK_DIGEST_MARKER}\nnew`);
+    const digests = thread.filter((m) => m.content.startsWith(WORK_DIGEST_MARKER));
+    expect(digests).toHaveLength(1);
+    expect(digests[0].content).toContain('new');
+    expect(thread[1].role).toBe('user'); // the ask is still second
+    expect(thread[2].content.startsWith(WORK_DIGEST_MARKER)).toBe(true);
+  });
+
+  it('injects the digest into the thread once compaction fires', async () => {
+    const big = 'y'.repeat(3000);
+    const seenThreads: string[][] = [];
+    const deps: ToolLoopDeps = {
+      callModel: vi.fn(async (messages: readonly { role: string; content?: string }[]) => {
+        seenThreads.push(messages.map((m) => String(m.content ?? '')));
+        const calls = messages.filter((m) => m.role === 'tool').length;
+        return calls < 8
+          ? { content: '', toolCalls: [{ id: `c${calls}`, name: 'read_file', arguments: { path: `f${calls}.txt` } }] }
+          : { content: 'done', toolCalls: [] };
+      }),
+      executeTool: vi.fn(async () => big),
+      onEvent: vi.fn(),
+    };
+    await runToolLoop({
+      messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'read everything' }],
+      context: ctx,
+      deps,
+      maxSteps: 12,
+      threadBudgetChars: 2000,
+      maxContinuations: 0,
+    });
+    expect(seenThreads.some((t) => t.some((c) => c.startsWith(WORK_DIGEST_MARKER)))).toBe(true);
+  });
+});
+
+describe('self-review — the wrong-direction catch', () => {
+  function collect() {
+    const events: LoopTraceEvent[] = [];
+    return { events, sink: (e: LoopTraceEvent) => events.push(e) };
+  }
+
+  it('names the ask and demands evidence from THIS turn', () => {
+    const text = selfReviewNudge('build the mac app and give me the app');
+    expect(text).toContain('build the mac app');
+    expect(text).toMatch(/ORIGINAL request/);
+    expect(text).toMatch(/EVERY part/);
+    expect(text).toMatch(/backed by a tool result from THIS turn/);
+    // It must forbid padding, not invite a longer answer.
+    expect(text).toMatch(/Do NOT restate the work in more words/);
+  });
+
+  it('fires ONCE for a substantial VERIFIED turn and reaches the model', async () => {
+    const { events, sink } = collect();
+    const seenThreads: string[][] = [];
+    const files = ['src/a.js', 'src/b.js', 'src/c.js', 'src/d.js', 'src/e.js'];
+    const deps: ToolLoopDeps = {
+      callModel: vi.fn(async (messages: readonly { role: string; content?: string }[]) => {
+        seenThreads.push(messages.map((m) => String(m.content ?? '')));
+        const tools = messages.filter((m) => m.role === 'tool').length;
+        if (tools < files.length) {
+          return {
+            content: '',
+            toolCalls: [{ id: `e${tools}`, name: 'edit_file', arguments: { path: files[tools], old_string: 'x', new_string: 'y' } }],
+          };
+        }
+        if (tools === files.length) {
+          return { content: '', toolCalls: [{ id: 'v1', name: 'run_terminal', arguments: { command: 'npm test' } }] };
+        }
+        return { content: 'Refactor complete and the tests pass.', toolCalls: [] };
+      }),
+      executeTool: vi.fn(async (name: string) => (name === 'run_terminal' ? 'all tests passed' : 'ok')),
+      onEvent: vi.fn(),
+    };
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'refactor the calculator so every operation works, and make sure the tests pass' }],
+      context: ctx,
+      deps,
+      onTraceEvent: sink,
+    });
+
+    const reviews = events.filter((e) => e.kind === 'gate' && e.gate === 'self-review');
+    expect(reviews).toHaveLength(1);
+    expect(seenThreads.some((t) => t.some((c) => c.includes('REVIEW your result')))).toBe(true);
+    expect(result.content).toContain('Refactor complete');
+  });
+
+  it('does NOT fire for a SHORT edit turn (byte-identical to before)', async () => {
+    const { events, sink } = collect();
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'e1', name: 'edit_file', arguments: { path: 'a.js', old_string: 'x', new_string: 'y' } }] },
+        { content: 'Edited a.js.', toolCalls: [] },
+      ],
+      async () => 'ok',
+    );
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'tweak a.js' }],
+      context: ctx,
+      deps,
+      onTraceEvent: sink,
+    });
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'self-review')).toHaveLength(0);
+  });
+
+  it('does NOT fire when the turn changed nothing (a read-only answer)', async () => {
+    const { events, sink } = collect();
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'a.js' } }] },
+        { content: 'Here is what a.js does.', toolCalls: [] },
+      ],
+      async () => 'const x = 1;',
+    );
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'explain a.js' }],
+      context: ctx,
+      deps,
+      onTraceEvent: sink,
+    });
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'self-review')).toHaveLength(0);
+  });
+});
+
+// ─── ZERO-ACTION gate ───────────────────────────────────────────────────────
+// Found live (loop arm of `nuvira eval parity`): a fully specified four-part
+// coding ask ended in prose with ZERO tool calls and ZERO file edits, five runs
+// out of six — and `generationFailed` stayed false, so every surface read the
+// turn as completed. The gates that existed all key on a POSITIVE shape in the
+// reply (an announced action, a permission question, an authored file) and so
+// missed a plain non-answer. This gate keys on the REQUEST and the ABSENCE of
+// action.
+const WORK_ASK = 'Make these four changes in this project, then verify them: fix add in math.js, add subtract, write test.js, and run the test.';
+
+describe('tool loop — ZERO-ACTION gate (a directed work request answered with nothing)', () => {
+  it('nudges ONCE to do the work, then honours the requirement', async () => {
+    const threads: Array<Array<{ role: string; content: string }>> = [];
+    const callModel = vi.fn();
+    let i = 0;
+    const script: StepResponse[] = [
+      { content: 'Sure, I can help with that.', toolCalls: [] },
+      { content: 'Here is how it could be done.', toolCalls: [] },
+    ];
+    callModel.mockImplementation(async (messages: Array<{ role: string; content: string }>) => {
+      threads.push([...messages]);
+      return script[Math.min(i++, script.length - 1)];
+    });
+    const deps: ToolLoopDeps = { callModel, executeTool: vi.fn(async (n) => `executed ${n}`), onEvent: vi.fn() };
+    const result = await runToolLoop({ messages: [{ role: 'user', content: WORK_ASK }], context: ctx, deps });
+    // step 1 non-answer → nudge → step 2 answer → end.
+    expect(callModel).toHaveBeenCalledTimes(2);
+    // The nudge reached the model on the second call.
+    expect(threads[1].some((m) => m.content.includes('Nothing has been done yet'))).toBe(true);
+    // Residual honesty: the request directed work and none was done.
+    expect(result.noActionTaken).toBe(true);
+  });
+
+  it('does NOT fire for a plain chat ask (no directed work)', async () => {
+    const deps = mockDeps([{ content: '2 + 2 is 4.', toolCalls: [] }]);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: 'what is 2+2?' }], context: ctx, deps });
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+    expect(result.noActionTaken).toBeUndefined();
+  });
+
+  it('does NOT fire when a tool already succeeded (a read-only answer)', async () => {
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'math.js' } }] },
+        { content: 'Here is what math.js does.', toolCalls: [] },
+      ],
+      async () => 'const x = 1;',
+    );
+    const result = await runToolLoop({ messages: [{ role: 'user', content: WORK_ASK }], context: ctx, deps });
+    expect(deps.callModel).toHaveBeenCalledTimes(2);
+    // The flag is set only when nothing was done (the codebase convention for
+    // honesty flags); a turn that acted leaves it absent.
+    expect(result.noActionTaken).toBeUndefined();
+  });
+
+  it('fires on the concluding suggest_followups exit when only the conclusion ran', async () => {
+    const deps = mockDeps([
+      {
+        content: 'I have completed the changes.',
+        toolCalls: [{ id: 's1', name: 'suggest_followups', arguments: { followups: [{ prompt: 'Verify now?' }] } }],
+      },
+      { content: 'All set.', toolCalls: [] },
+    ]);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: WORK_ASK }], context: ctx, deps });
+    // step 1 conclude (no real work) → nudge → step 2 answer → end.
+    expect(deps.callModel).toHaveBeenCalledTimes(2);
+    expect(result.noActionTaken).toBe(true);
+  });
+
+  it('respects requireAction: false (byte-identical to before)', async () => {
+    const deps = mockDeps([{ content: 'Sure, I can help.', toolCalls: [] }]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: WORK_ASK }],
+      context: ctx,
+      deps,
+      requireAction: false,
+    });
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+    // The residual flag is a function of what the turn DID, not of the gate.
+    expect(result.noActionTaken).toBe(true);
+  });
+
+  it('never fires when the request forbade writes', async () => {
+    const deps = mockDeps([{ content: 'The file says hello.', toolCalls: [] }]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'Read report.txt and answer in chat — do not write any files.' }],
+      context: ctx,
+      deps,
+    });
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+    expect(result.noActionTaken).toBeUndefined();
+  });
+
+  it('zeroActionNudge names the ask and forbids a plan/apology in place of the work', async () => {
+    const text = zeroActionNudge(WORK_ASK);
+    expect(text).toContain('Nothing has been done yet');
+    expect(text).toContain('math.js');
+    expect(text).toContain('Do NOT reply with a plan');
   });
 });

@@ -455,13 +455,17 @@ describe('scanned-PDF OCR route — available, or a refusal that names the missi
 // ─── Budgets and structure sharing ──────────────────────────────────────────
 
 describe('extraction budgets and shared structure handling', () => {
-  it('caps extraction and says so rather than silently cutting a document', async () => {
+  it('caps extraction and says so IN THE TEXT rather than silently cutting a document', async () => {
     const huge = put('huge.txt', Buffer.from('y'.repeat(MAX_EXTRACT_CHARS + 5_000)));
     const r = await mgr.extract(huge);
 
     expect(r.success).toBe(true);
     expect(r.metadata?.truncated).toBe(true);
-    expect(r.text).toContain('…[truncated]');
+    // The notice must be in the text the MODEL reads, not only in metadata — a
+    // model that read a silently-truncated report assessed it as if complete.
+    expect(r.text).toContain('TRUNCATED');
+    expect(r.text).toContain('NUVIRA_EXTRACT_MAX_CHARS');
+    expect(r.text).toContain(MAX_EXTRACT_CHARS.toLocaleString());
   });
 
   it('htmlToText keeps a cell on its line and decodes entities', () => {

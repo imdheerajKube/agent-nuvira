@@ -24,12 +24,20 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import { getReadExtractManager } from '../tools/read-extract.js';
+import { resolveAttachmentMaxBytes } from '../config/limits.js';
 
 /** Cap on attachments per turn (the composer allows 10). */
 export const MAX_ATTACHMENTS = 10;
 /** Cap on inline text content, in characters. */
 export const MAX_TEXT_CHARS = 300_000;
-/** Cap on decoded binary content, in bytes. */
+/**
+ * The DEFAULT cap on decoded binary content, in bytes.
+ *
+ * Kept as the documented default and the value tests pin; the effective cap is
+ * `resolveAttachmentMaxBytes()` (`NUVIRA_ATTACHMENT_MAX_BYTES`), read fresh on
+ * every hydration so a user can raise it for a larger file without a rebuild.
+ * A project file over the default had no route into a turn at all.
+ */
 export const MAX_BINARY_BYTES = 300_000;
 
 export interface RawAttachment {
@@ -137,11 +145,14 @@ async function hydrateOneBinary(a: RawAttachment, dir: string): Promise<Hydrated
   if (bytes.length === 0) {
     return refusal(name, kind, 'The attachment decoded to zero bytes, so there was nothing to read.');
   }
-  if (bytes.length > MAX_BINARY_BYTES) {
+  const maxBytes = resolveAttachmentMaxBytes();
+  if (bytes.length > maxBytes) {
     return refusal(
       name,
       kind,
-      `The attachment is larger than the ${Math.round(MAX_BINARY_BYTES / 1024)} KB limit (${Math.round(bytes.length / 1024)} KB), so it was not read.`,
+      `The attachment is larger than the ${Math.round(maxBytes / 1024)} KB limit (${Math.round(bytes.length / 1024)} KB), so it was not read.`
+      + ' Raise the limit with NUVIRA_ATTACHMENT_MAX_BYTES (dashboard → Process Environment, or'
+      + ' `nuvira config limit set attachment-max-kb <n>`).',
     );
   }
 

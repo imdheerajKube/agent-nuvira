@@ -37,7 +37,7 @@ const makeRequests = (overrides: Partial<RequestsInsights> = {}): RequestsInsigh
 
 const makeData = (requests?: RequestsInsights): DashboardData =>
   ({
-    cost: { totalRequests: 0, totalCost: 0, totalTokens: 0, byProvider: {}, byModel: {}, byProviderMeasured: {}, measuredCalls: 0, estimatedCalls: 0, measuredCost: 0, estimatedCost: 0, recent: [] },
+    cost: { totalRequests: 0, totalCost: 0, totalTokens: 0, byProvider: {}, byModel: {}, byProviderMeasured: {}, byProviderReported: {}, measuredCalls: 0, estimatedCalls: 0, measuredCost: 0, estimatedCost: 0, reportedCalls: 0, reportedCost: 0, recent: [] },
     history: { total: 0, recent: [] },
     benchmarks: { totalRuns: 0, latest: null, runs: [] },
     memory: { total: 0, avgScore: 0, byFingerprint: {} },

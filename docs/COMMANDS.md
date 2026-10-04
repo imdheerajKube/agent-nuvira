@@ -449,6 +449,28 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira config init                          # interactive defaults (already set? shows them)
   ```
 
+### 4.2c Size limits and the capability mode
+
+- **Objective:** Bound how much the agent reads/writes in one call, and choose how much
+  REASONING it buys versus how much it saves.
+- **Command:** `nuvira config limit list` · `nuvira config limit set <name> <value>` · `nuvira config limit unset <name>` · `nuvira config capability show` · `nuvira config capability set <balanced|max>` · `nuvira config capability unset`
+- **Examples:**
+  ```bash
+  nuvira config limit list                          # every size limit + its default
+  nuvira config limit set attachment-max-kb 500     # accept a larger single file
+  nuvira config limit unset attachment-max-kb       # back to the default
+  nuvira config capability show                     # balanced (default) or max
+  nuvira config capability set max                   # cost is not a concern: strongest model,
+                                                     # no cost ceilings, longest loop budget
+  nuvira config capability unset                     # restore the balanced default
+  ```
+- **Capability mode:** `balanced` (the default) uses the best model for complex/critical work
+  and cheaper models for simple work, escalating when a stall is detected. `max` routes every
+  turn to a strong model (a reasoning floor — not merely a paid one), allows paid models, and
+  lifts cost ceilings and the loop's continuation budget. It writes `NUVIRA_CAPABILITY_MODE`,
+  the same switch the dashboard Chat page and Process Env page use, and never widens the
+  deterministic safety surface.
+
 ### 4.1b The website — capabilities, commands, docs, setup
 
 - **Objective:** Open the Agent-Nuvira website, where the capabilities, the full command
@@ -860,15 +882,24 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ### 8.1 Evaluation framework
 
 - **Objective:** Measure whether the agent is actually improving.
-- **Command:** `nuvira eval run [-p <provider>] [-m <model>] [--tasks <t>] [--suite <s>] [--budget <$>] [--pace <n>] [--format <fmt>] [--routing]` · `nuvira eval verify-seeds` · `nuvira eval list` · `nuvira eval results [--last] [--compare <id>]` · `nuvira eval score` · `nuvira eval clear`
+- **Command:** `nuvira eval run [-p <provider>] [-m <model>] [--tasks <t>] [--suite <s>] [--budget <$>] [--pace <n>] [--format <fmt>] [--routing]` · `nuvira eval parity [-p <provider>] [-m <model>] [--tasks <ids>] [--engine loop|pipeline]` · `nuvira eval verify-seeds` · `nuvira eval list` · `nuvira eval results [--last] [--compare <id>]` · `nuvira eval score` · `nuvira eval clear`
 - **Examples:**
   ```bash
   nuvira eval run --tasks quick --format text
   nuvira eval run --suite full --provider groq
   nuvira eval verify-seeds                  # every seeded bug is broken, and fixable
   nuvira eval run --suite seeded-bugs -p groq -m llama-3.3-70b-versatile
+  nuvira eval parity -p groq -m llama-3.3-70b-versatile   # balanced vs max on the hard tasks
   nuvira eval results --last
   ```
+- **Capability parity (`nuvira eval parity`):** run the SAME hard, multi-step tasks twice —
+  once under `balanced`, once under `max` — and print the deltas that describe the
+  capability gap (composite score, hidden-test pass, completion, bounded-ness,
+  interruptions per task, tokens, cost). The mode is applied through the real
+  `NUVIRA_CAPABILITY_MODE` switch, so the measurement exercises production resolution,
+  not a test-only knob. Read the delta column: positive composite/test/completed favors
+  `max`; negative bounded/asks favors `max`. This costs real tokens — it runs the suite
+  twice.
 - **Seeded bugs (`--suite seeded-bugs`):** a separate benchmark with its own scoring — a
   deliberate defect is planted in a small project, the run is asked to make the failing
   check pass without editing it, and three things are scored apart: **found** (read from

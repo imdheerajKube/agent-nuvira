@@ -156,6 +156,19 @@ export interface LoopExecutorResult {
   /** Tool names that returned an error result (captured from tool:called). */
   erroredTools: string[];
   /**
+   * Tool names that ACTUALLY ran successfully this turn (the loop's honest
+   * accounting — a refusal, an unknown tool or an errored call is not here).
+   * Carried so a caller can tell "did nothing" from "did the work": the eval
+   * arm reads it to refuse to score a zero-action turn as a completion.
+   */
+  successfulToolCalls?: string[];
+  /**
+   * The request DIRECTED work on the workspace and the turn performed none (see
+   * `ToolLoopResult.noActionTaken`). Echoed so a caller never reads "completed"
+   * from a turn that never touched what it was asked to change.
+   */
+  noActionTaken?: boolean;
+  /**
    * Per-call tool outcomes, in call order — WHICH call succeeded or failed, not
    * a name list beside a separate error set.
    *
@@ -703,22 +716,16 @@ export async function runLoopExecutor(
     }
   }
 
-  // ── Loop-side skill match hint (Phase 3.2 — chat/execute parity) ─────────
-  // The orchestrator consults SkillStore.findMatch + the hub catalog before
-  // planning; the execute loop never heard about that layer. One
-  // deterministic, best-effort match is appended to the system prompt
-  // (methodology + exact skill-tool load syntax, bounded to ONE block). A
-  // failure returns '' and the prompt is byte-identical to pre-3.2.
+  // ── Model-selected skills (chat/execute parity) ──────────────────────────
+  // A bounded CATALOG (name + one line) is appended to the system prompt and
+  // the MODEL picks the skill, loading it with the `skill` tool. This replaces
+  // keyword auto-injection (a word list cannot decide what applies; the model
+  // can). Best-effort: a failure returns '' and the prompt is unchanged.
   let skillHint = '';
   if (!opts.skipSkillHint) {
     try {
-      const { buildLoopSkillHint, markLoopSkillUsed } = await import('../tools/loop-skill-hint.js');
-      const injected: { value: import('../tools/loop-skill-hint.js').LoopSkillHintMatch | null } = { value: null };
-      skillHint = await buildLoopSkillHint(goal, configManager, injected);
-      if (injected.value) {
-        void markLoopSkillUsed(injected.value);
-        if (!opts.quiet) logger.info(`   🧠 Matched skill '${injected.value.name}' — methodology injected into the loop context`);
-      }
+      const { buildSkillCatalogHint } = await import('../tools/loop-skill-hint.js');
+      skillHint = await buildSkillCatalogHint(configManager);
     } catch {
       skillHint = ''; // best-effort — never breaks the turn
     }
@@ -1293,6 +1300,8 @@ export async function runLoopExecutor(
       toolCalls: result.toolCalls,
       erroredTools,
       toolOutcomes,
+      ...(result.successfulToolCalls ? { successfulToolCalls: result.successfulToolCalls } : {}),
+      ...(result.noActionTaken ? { noActionTaken: true } : {}),
       ...(findings.length > 0 ? { findings } : {}),
       durationMs: Date.now() - startedAt,
       provider: providerType,

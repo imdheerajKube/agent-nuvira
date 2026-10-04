@@ -45,6 +45,32 @@ const ROWS: ProcessEnvVarRow[] = [
     shadowed: false,
   },
   {
+    name: 'NUVIRA_EXTRACT_MAX_CHARS',
+    label: 'Document extraction budget',
+    group: 'turn',
+    kind: 'text',
+    placeholder: '40000',
+    description: 'How many characters one read_extract call may return.',
+    unsetMeans: '40,000 characters — about 10,000 words.',
+    fileValue: null,
+    processValue: null,
+    state: 'unset',
+    shadowed: false,
+  },
+  {
+    name: 'NUVIRA_ATTACHMENT_MAX_BYTES',
+    label: 'Attachment size cap (bytes)',
+    group: 'turn',
+    kind: 'text',
+    placeholder: '300000',
+    description: 'The largest single file the dashboard composer will accept, in bytes.',
+    unsetMeans: '300,000 bytes (~293 KB) per attachment.',
+    fileValue: '5242880',
+    processValue: '5242880',
+    state: 'set',
+    shadowed: false,
+  },
+  {
     name: 'NUVIRA_OTEL',
     label: 'Export OTLP spans',
     group: 'observability',
@@ -148,10 +174,37 @@ describe('ProcessEnvPage', () => {
     fireEvent.change(screen.getByLabelText('NUVIRA_TOOL_HOOK_BEFORE value'), {
       target: { value: 'node ~/audit.mjs' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /💾 Save/ }));
+    // Scope to the row: several text rows each render their own Save button.
+    fireEvent.click(
+      within(screen.getByTestId('process-env-row-NUVIRA_TOOL_HOOK_BEFORE')).getByRole('button', { name: /💾 Save/ }),
+    );
 
     await waitFor(() =>
       expect(dashboardAPI.saveProcessEnvVar).toHaveBeenCalledWith('NUVIRA_TOOL_HOOK_BEFORE', 'node ~/audit.mjs'),
+    );
+  });
+
+  it('renders the size limits as editable values, so a large file can be enabled', async () => {
+    mockApi();
+    render(<ProcessEnvPage />);
+    await screen.findByText('NUVIRA_EXTRACT_MAX_CHARS');
+
+    // The extraction budget defaults to unset (40,000) and the attachment cap
+    // shows the raised stored value.
+    const extract = within(screen.getByTestId('process-env-row-NUVIRA_EXTRACT_MAX_CHARS'));
+    expect(extract.getByText('➖ Unset')).toBeTruthy();
+    expect(extract.getByText('Unset: 40,000 characters — about 10,000 words.')).toBeTruthy();
+    expect(screen.getByText('✅ Set')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('NUVIRA_EXTRACT_MAX_CHARS value'), {
+      target: { value: '200000' },
+    });
+    fireEvent.click(
+      within(screen.getByTestId('process-env-row-NUVIRA_EXTRACT_MAX_CHARS')).getByRole('button', { name: /💾 Save/ }),
+    );
+
+    await waitFor(() =>
+      expect(dashboardAPI.saveProcessEnvVar).toHaveBeenCalledWith('NUVIRA_EXTRACT_MAX_CHARS', '200000'),
     );
   });
 

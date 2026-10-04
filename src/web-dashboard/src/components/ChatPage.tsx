@@ -19,11 +19,17 @@
 // P8 — attachment caps (composer). Files are read client-side and travel
 // inline; pasted text beyond the threshold is offered as an attachment so the
 // input box stays a message box, not a document.
-const MAX_ATTACHMENT_BYTES = 300_000; // ~300 KB per attachment, 10 max
+//
+// The byte cap is only the FALLBACK: the effective limit is read from the server
+// (`/api/limits`) on mount, so a user who raised NUVIRA_ATTACHMENT_MAX_BYTES is
+// not blocked by a stale client constant before the file is ever sent. A server
+// too old to answer leaves this default in place rather than accepting anything.
+const DEFAULT_MAX_ATTACHMENT_BYTES = 300_000; // ~300 KB per attachment, 10 max
 const PASTE_ATTACH_THRESHOLD = 2_000; // chars — larger pastes are offered as a chip
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardAPI } from '../api';
+import { useAuthVersion } from '../useAuthVersion';
 import Markdown from './Markdown';
 // P2 — structured artifacts extracted from the answer TEXT (```diff blocks,
 // test/build output, deploy URLs) rendered as cards, not raw markdown.
@@ -273,6 +279,37 @@ interface ResolvedCommand {
 interface PendingResolve {
   ask: string;
   top: ResolvedCommand | null;
+}
+
+/**
+ * Is this message an EXPLICIT agent-nuvira CLI ask?
+ *
+ * The pre-model command resolver now fires only for a message that literally
+ * begins with the CLI name (`buff` / `agent-nuvira` / `nuvira`) — the one case
+ * where the user is unambiguously driving the CLI by hand. Every other message
+ * goes to the agent, which decides whether a command is the right move and runs
+ * it via `run_cli`. Without this gate a normal ask could be intercepted by a
+ * keyword match and shown as a confirm card before the model saw it — the nag
+ * a user reads as the agent refusing to act.
+ */
+export function isExplicitCliAsk(text: string): boolean {
+  return /^\s*(?:buff|agent-nuvira|nuvira)\b/i.test(text ?? '');
+}
+
+/** The two capability modes (a local mirror of the server's `CapabilityMode`). */
+export type CapabilityMode = 'balanced' | 'max';
+
+/**
+ * The mode a stored/effective `NUVIRA_CAPABILITY_MODE` value means, for the
+ * composer toggle. Mirrors the server's `parseCapabilityMode`: any synonym of
+ * "go all out" reads as `max`, and everything else (including unset) as the
+ * default `balanced`, so the toggle never shows a value the run would not use.
+ */
+export function capabilityModeFromValue(raw: string | null | undefined): CapabilityMode {
+  const v = String(raw ?? '').trim().toLowerCase();
+  return v === 'max' || v === 'maximum' || v === 'unlimited' || v === 'performance' || v === 'performance-first'
+    ? 'max'
+    : 'balanced';
 }
 
 /** P2 — status label for one inline command-run card. */
@@ -935,6 +972,25 @@ function groupSessions(
 
 export default function ChatPage() {
   const [auth, setAuth] = useState<AuthState | null>(null);
+  const authVersion = useAuthVersion();
+  /** The effective attachment cap, read from the server; the built-in default until it answers. */
+  const [maxAttachmentBytes, setMaxAttachmentBytes] = useState(DEFAULT_MAX_ATTACHMENT_BYTES);
+
+  useEffect(() => {
+    void dashboardAPI.fetchLimits().then((l) => {
+      if (l && l.attachmentMaxBytes > 0) setMaxAttachmentBytes(l.attachmentMaxBytes);
+    });
+  }, []);
+
+  // Read the effective capability mode once, so the composer toggle opens on the
+  // mode the runs actually use. Best-effort: an old server or a signed-out page
+  // leaves the default (balanced), which is what an unset value means anyway.
+  useEffect(() => {
+    void dashboardAPI.fetchProcessEnv().then((rows) => {
+      const row = rows.find((r) => r.name === 'NUVIRA_CAPABILITY_MODE');
+      if (row) setCapabilityMode(capabilityModeFromValue(row.processValue ?? row.fileValue));
+    });
+  }, []);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -971,6 +1027,16 @@ export default function ChatPage() {
    */
   const [resume, setResume] = useState(false);
   const [resumeId, setResumeId] = useState('');
+  /**
+   * The capability mode for this conversation's turns (balanced | max). Read
+   * from the curated process env on mount and written back on toggle, so the
+   * choice is the SAME one the CLI and the Process Env page see rather than a
+   * separate per-page setting. `max` routes every turn to the strongest model,
+   * removes cost ceilings, and grants the loop its longest reasoning budget;
+   * the server reads it fresh each turn, so a change applies to the next one.
+   */
+  const [capabilityMode, setCapabilityMode] = useState<CapabilityMode>('balanced');
+  const [capabilityNote, setCapabilityNote] = useState('');
   const [meta, setMeta] = useState<string | null>(null);
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
   // P0.6 — live tool-call cards (upserted by id: started creates, called completes).
@@ -1065,6 +1131,9 @@ export default function ChatPage() {
   // accepted by the server and threaded into the tool result.
   const [questionCustom, setQuestionCustom] = useState('');
 
+  // Re-read when the session changes, not only on mount: signing in from the
+  // top bar must clear this page's signed-out message (and signing out must
+  // restore it) without the user having to reload or navigate away.
   useEffect(() => {
     void dashboardAPI.fetchAdminAuthStatus().then((s) => {
       setAuth(
@@ -1073,7 +1142,7 @@ export default function ChatPage() {
           : { configured: false, authenticated: false, role: null },
       );
     });
-  }, []);
+  }, [authVersion]);
 
   // Auto-scroll the thread to the newest message.
   useEffect(() => {
@@ -1190,8 +1259,11 @@ export default function ChatPage() {
    */
   const pickFile = useCallback(async (file: File) => {
     if (!file) return;
-    if (file.size > MAX_ATTACHMENT_BYTES) {
-      setError(`Attachment "${file.name}" is too large (max ${Math.round(MAX_ATTACHMENT_BYTES / 1024)} KB).`);
+    if (file.size > maxAttachmentBytes) {
+      setError(
+        `Attachment "${file.name}" is too large (max ${Math.round(maxAttachmentBytes / 1024)} KB). `
+        + 'Raise the cap in Admin → Process Environment (NUVIRA_ATTACHMENT_MAX_BYTES).',
+      );
       return;
     }
 
@@ -1447,14 +1519,20 @@ export default function ChatPage() {
       // P8 — smart rail: while the agent works, the results own the window.
       setRailOpen(false);
 
-      // Pre-resolve the ask against the command manifest. A confident match
-      // short-circuits to a confirm card (deterministic commands like "stop
-      // the dashboard" shouldn't need a model turn); ambiguous asks show
-      // their options as choices; everything else falls through to the agent.
+      // Pre-resolve the ask against the command manifest ONLY for an EXPLICIT
+      // CLI ask — a message that literally begins with `buff` / `agent-nuvira` /
+      // `nuvira`. Everything else goes straight to the agent, which decides for
+      // itself whether a CLI command is the right move and runs it via run_cli.
+      //
+      // Why the gate: resolving EVERY message meant a normal ask ("build the
+      // mac app") could be intercepted by a keyword match and shown as a
+      // "⚡ Run this command? / ✕ No — ask the agent" card BEFORE the model ever
+      // saw it — the nagging a user reads as the agent refusing to act. The
+      // agent owns execution now; the card survives only for the case it was
+      // built for, where the user is unambiguously driving the CLI by hand.
       // skipResolve: when the user already declined a resolved command
-      // ("No — ask the agent"), skip re-resolution and go straight to the
-      // agent — prevents the loop where declining re-shows the same card.
-      if (!skipResolve) {
+      // ("No — ask the agent"), skip re-resolution and go straight to the agent.
+      if (!skipResolve && isExplicitCliAsk(clean)) {
         const resolved = await dashboardAPI.chatResolve(clean);
         const matches = (resolved.matches ?? []) as ResolvedCommand[];
         const top = matches[0] ?? null;
@@ -1655,6 +1733,27 @@ export default function ChatPage() {
   const cancelTurn = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
+  /**
+   * Toggle the capability mode and persist it to the curated process env.
+   *
+   * The write is explicit for BOTH modes (never a delete), so what the toggle
+   * shows is exactly what the run uses — a config-file default cannot resurface
+   * underneath it. The server applies the value to its own process, so the next
+   * turn obeys it without a restart; the button reports the outcome rather than
+   * assuming success.
+   */
+  const toggleCapabilityMode = useCallback(async () => {
+    const next: CapabilityMode = capabilityMode === 'max' ? 'balanced' : 'max';
+    setCapabilityNote('');
+    const r = await dashboardAPI.saveProcessEnvVar('NUVIRA_CAPABILITY_MODE', next);
+    if (r.ok) {
+      setCapabilityMode(next);
+      setCapabilityNote(next === 'max' ? '⚡ Max capability is on for the next turn.' : '⚖️ Back to balanced.');
+    } else {
+      setCapabilityNote(r.error || 'Could not change the capability mode.');
+    }
+  }, [capabilityMode]);
 
   /**
    * WS2 (#24) — download this conversation's support bundle: the debug log(s)
@@ -2557,6 +2656,28 @@ export default function ChatPage() {
               >
                 🐞
               </button>
+              {/*
+                Capability mode — the inline lever for "how much reasoning do I
+                want to pay for". It writes the SAME curated switch the CLI and
+                the Process Env page write, so there is one source of truth; the
+                tooltip states exactly what each mode changes.
+              */}
+              <button
+                type="button"
+                className={`chat-attach-btn${capabilityMode === 'max' ? ' chat-attach-btn-on' : ''}`}
+                aria-label="Capability mode: balanced or max"
+                aria-pressed={capabilityMode === 'max'}
+                disabled={busy}
+                title={
+                  capabilityMode === 'max'
+                    ? 'Max capability: every turn routes to a strong model (a reasoning floor — not merely “paid”), cost ceilings are lifted, paid models are always allowed, and the loop gets its longest reasoning budget. Click to return to balanced.'
+                    : 'Balanced (default): the best model for complex/critical work and cheaper models for simple work, escalating when a stall is detected. Click for max capability — cost is not a concern.'
+                }
+                onClick={() => void toggleCapabilityMode()}
+              >
+                {capabilityMode === 'max' ? '⚡ max' : '⚖️ balanced'}
+              </button>
+              {capabilityNote ? <span className="admin-hint">{capabilityNote}</span> : null}
               {/*
                 WS5 (#27) — isolation, as a toggle beside the other composer
                 controls, plus its own second lever once it is on. Both are backed

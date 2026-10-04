@@ -150,6 +150,27 @@ interface RefusalRecord {
   at: number;
 }
 
+/**
+ * One FAILED action (a command that exited non-zero, a timed-out build, a tool
+ * error) — distinct from a REFUSAL, which is a gate declining to run at all.
+ *
+ * Why this record exists: a refusal is recorded and re-fed to the next run
+ * (step-handoff), but a command that RUNS and FAILS was never remembered, so a
+ * run could re-issue the identical failing command dozens of times — the live
+ * macOS-build turn retried `npx tauri build` ~10 times, each time with the same
+ * missing-Cargo cause, and never once stopped to ask WHY. Recording the failure
+ * by its ACTION signature is what lets the loop notice "same action, same
+ * failure, again" and demand a diagnosis instead of another blind retry.
+ */
+interface FailureRecord {
+  tool: string;
+  /** The action's signature (the command / path), normalized for comparison. */
+  action: string;
+  /** The failure's own line, for the diagnosis prompt. */
+  detail: string;
+  at: number;
+}
+
 /** One workspace mutation. */
 interface MutationRecord {
   tool: string;
@@ -187,6 +208,7 @@ export interface RunTraceSnapshot {
 export class RunTrace {
   private asks: AskRecord[] = [];
   private refusals: RefusalRecord[] = [];
+  private failures: FailureRecord[] = [];
   private mutations: MutationRecord[] = [];
 
   /** Prior asks that are the SAME question as this one (excluding it). */
@@ -227,6 +249,60 @@ export class RunTrace {
       at: Date.now(),
     });
     if (this.refusals.length > MAX_TRACE_ENTRIES) this.refusals.shift();
+  }
+
+  /**
+   * Record an action that RAN and FAILED, keyed by what it was (the command or
+   * path), so the identical retry is recognizable.
+   */
+  recordFailure(tool: string, action: string, detail: string): void {
+    this.failures.push({
+      tool,
+      action: normalize(action).slice(0, 200),
+      detail: String(detail ?? '').slice(0, 200),
+      at: Date.now(),
+    });
+    if (this.failures.length > MAX_TRACE_ENTRIES) this.failures.shift();
+  }
+
+  /**
+   * The most recent FAILED actions, newest last — for a stall nudge that must
+   * name what was actually tried instead of describing "your attempts".
+   *
+   * Bounded by the caller (the loop asks for the last few), so the prompt a
+   * stuck model reads stays short and specific.
+   */
+  recentFailures(limit = 3): Array<{ tool: string; action: string; detail: string }> {
+    return this.failures.slice(-Math.max(1, limit)).map((f) => ({ tool: f.tool, action: f.action, detail: f.detail }));
+  }
+
+  /**
+   * The action that has failed MORE THAN ONCE, with its count — or null when no
+   * action has repeated.
+   *
+   * The single signal a stuck run needs: "I have tried this exact thing N times
+   * and it has failed every time." Deliberately counts by ACTION (the command /
+   * path), not by tool: `run_terminal` failing once on `npm test` and once on
+   * `npm build` is normal iteration, while the SAME command failing twice is a
+   * loop that will not resolve by trying it a third time.
+   */
+  repeatedFailure(): { tool: string; action: string; times: number; detail: string } | null {
+    const counts = new Map<string, { tool: string; action: string; times: number; detail: string }>();
+    for (const f of this.failures) {
+      const key = `${f.tool}\u0000${f.action}`;
+      const hit = counts.get(key);
+      if (hit) {
+        hit.times += 1;
+        hit.detail = f.detail;
+      } else {
+        counts.set(key, { tool: f.tool, action: f.action, times: 1, detail: f.detail });
+      }
+    }
+    let worst: { tool: string; action: string; times: number; detail: string } | null = null;
+    for (const entry of counts.values()) {
+      if (entry.times >= 2 && (!worst || entry.times > worst.times)) worst = entry;
+    }
+    return worst;
   }
 
   recordMutation(tool: string, path?: string): void {
@@ -368,6 +444,64 @@ export function repeatNudge(question: string, answer?: string): string {
     'does not settle the matter — say plainly what blocks you and what you need, instead ' +
     'of repeating the question. Repeating a question the user has answered is the one ' +
     'behaviour they will read as the agent being stuck.'
+  );
+}
+
+/**
+ * The correction handed back when the SAME action has failed more than once.
+ *
+ * This is the loop's missing self-diagnosis. A run that re-issues the identical
+ * command and gets the identical failure is not "trying again" — it is
+ * rediscovering the same wall, and the next attempt will hit it too. The nudge
+ * does not tell the model what the cause is (it does not know); it demands that
+ * the model STOP and diagnose: state the cause, and change the APPROACH rather
+ * than the command. Crucially it forbids the one move that produced the loop —
+ * asking the user for permission to run the same failing command again.
+ */
+export function repeatedFailureNudge(
+  failure: { tool: string; action: string; times: number; detail: string },
+): string {
+  return (
+    `You have run the SAME action ${failure.times} times and it has FAILED every time: ` +
+    `\`${failure.action}\` (${failure.tool}).\n` +
+    `Most recent failure: ${failure.detail}\n` +
+    'STOP retrying it. Repeating an identical failing action is a loop, not progress. ' +
+    'Before you do anything else, DIAGNOSE: (1) state the ROOT CAUSE of the failure in one line, ' +
+    '(2) name the specific thing that must change (a missing tool, a wrong path, a config value, ' +
+    'a version mismatch), and (3) take a DIFFERENT action that addresses that cause — or, if the ' +
+    'blocker is genuinely outside your reach, say so plainly and stop. Do NOT ask the user for ' +
+    'permission to run the same failing command again.'
+  );
+}
+
+/**
+ * The correction handed back when the run has taken several steps in a row and
+ * NONE of them succeeded — the generalisation of {@link repeatedFailureNudge}.
+ *
+ * `repeatedFailure` catches the identical action retried verbatim. A weaker run
+ * loops in a second shape that it misses entirely: it keeps substituting a
+ * different command each step, every one of them failing the same underlying
+ * way (`npx tauri build` → `cargo build` → `rustc …`, all against a missing
+ * toolchain). Nothing repeats exactly, so nothing was caught, and the run burns
+ * its whole budget rediscovering one wall. This nudge names the shared failure
+ * and demands the same diagnosis — cause first, then a different APPROACH.
+ */
+export function noProgressNudge(
+  failures: Array<{ tool: string; action: string; detail: string }>,
+  steps: number,
+): string {
+  const listed =
+    failures.length > 0
+      ? failures.map((f) => `  • ${f.tool}: \`${f.action}\` → ${f.detail}`).join('\n')
+      : '  • (no single action repeated, but none of them succeeded)';
+  return (
+    `You have made ${steps} attempts in a row and NONE of them succeeded:\n${listed}\n` +
+    'This is a STALL, not progress. Do NOT keep substituting commands that fail the same way. ' +
+    'Before you do anything else, DIAGNOSE: (1) state in ONE line why these attempts are failing — ' +
+    'name the shared cause if there is one (a missing dependency or toolchain, an unconfigured tool, ' +
+    'the wrong directory, a permission wall, a version mismatch); (2) name the ONE thing that must ' +
+    'change; and (3) take a DIFFERENT action that addresses that cause — or, if the blocker is ' +
+    'genuinely outside your reach, say plainly and specifically what it is and stop.'
   );
 }
 

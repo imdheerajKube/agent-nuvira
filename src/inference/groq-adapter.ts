@@ -168,9 +168,9 @@ export class GroqAdapter implements InferenceProvider {
       // P4 — external cancellation (the dashboard Cancel button).
       signal: options?.signal,
       // Cost parity with generate(): meter tool-calling turns too.
-      onCost: (promptText, contentText) => {
+      onCost: (promptText, contentText, usage) => {
         try {
-          recordCallWithUsage(getCostTracker(), 'groq', model, promptText, contentText, undefined);
+          recordCallWithUsage(getCostTracker(), 'groq', model, promptText, contentText, usage);
         } catch {
           // Non-critical.
         }
@@ -205,9 +205,9 @@ export class GroqAdapter implements InferenceProvider {
         // P4 — external cancellation (the dashboard Cancel button).
         signal: options?.signal,
         // Cost parity with generate(): meter tool-calling turns too.
-        onCost: (promptText, contentText) => {
+        onCost: (promptText, contentText, usage) => {
           try {
-            recordCallWithUsage(getCostTracker(), 'groq', model, promptText, contentText, undefined);
+            recordCallWithUsage(getCostTracker(), 'groq', model, promptText, contentText, usage);
           } catch {
             // Non-critical.
           }

@@ -289,9 +289,9 @@ export class OpenAICompatAdapter implements InferenceProvider {
       signal: options?.signal,
       // Cost parity with generate(): tool-calling turns are metered so the
       // quota ledger enforces free-tier limits here too.
-      onCost: (promptText, contentText) => {
+      onCost: (promptText, contentText, usage) => {
         try {
-          recordCallWithUsage(getCostTracker(), this.meta.providerId, model, promptText, contentText, undefined);
+          recordCallWithUsage(getCostTracker(), this.meta.providerId, model, promptText, contentText, usage);
         } catch {
           // Non-critical.
         }
@@ -329,9 +329,9 @@ export class OpenAICompatAdapter implements InferenceProvider {
         // P4 — external cancellation (the dashboard Cancel button).
         signal: options?.signal,
         // Cost parity with generate(): tool-calling turns are metered.
-        onCost: (promptText, contentText) => {
+        onCost: (promptText, contentText, usage) => {
           try {
-            recordCallWithUsage(getCostTracker(), this.meta.providerId, model, promptText, contentText, undefined);
+            recordCallWithUsage(getCostTracker(), this.meta.providerId, model, promptText, contentText, usage);
           } catch {
             // Non-critical.
           }
