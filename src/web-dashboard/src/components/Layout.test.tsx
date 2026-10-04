@@ -49,9 +49,10 @@ describe('shell navigation', () => {
     const appSource = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8');
     const declared = [...appSource.matchAll(/<Route\s+path="([^"]+)"/g)].map((m) => m[1]);
 
-    // `/chat` is a redirect to `/` and `*` is the catch-all: neither is a
-    // destination, so neither should be linked.
-    const destinations = declared.filter((path) => path !== '/chat' && path !== '*');
+    // `/` is a redirect to `/overview` and `*` is the catch-all: neither is a
+    // destination, so neither should be linked. `/chat` IS a real destination
+    // (the persistently-mounted chat page) and must have a link.
+    const destinations = declared.filter((path) => path !== '/' && path !== '*');
     expect(destinations.length).toBeGreaterThan(15);
 
     renderShell();

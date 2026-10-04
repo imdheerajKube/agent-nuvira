@@ -1484,14 +1484,14 @@ export class DashboardAPI {
   /**
    * P4 — load one past session's full transcript (resume in the thread).
    */
-  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string } | null> {
+  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; busy?: boolean } | null> {
     const token = getAdminToken();
     try {
       const res = await fetch(`${this.baseUrl}/api/sessions/${encodeURIComponent(id)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: AbortSignal.timeout(10_000),
       });
-      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string } };
+      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; busy?: boolean } };
       if (res.status === 200 && d.ok && d.session) return d.session;
       return null;
     } catch {
@@ -1623,6 +1623,18 @@ export class DashboardAPI {
     } catch {
       return { ok: false, error: 'Could not reach the dashboard server, or the turn timed out.' };
     }
+  }
+
+  /**
+   * Cancel a session's in-flight turn. Explicit since a dropped connection no
+   * longer cancels a turn (a page reload must not kill it), so the Cancel
+   * button has its own request.
+   */
+  async chatCancel(sessionId: string): Promise<{ ok: boolean; cancelled?: boolean; error?: string }> {
+    const r = await this.sendAdminRequest('/api/chat/cancel', 'POST', { sessionId });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as { ok?: boolean; cancelled?: boolean; error?: string };
+    return r.status === 200 && d.ok ? { ok: true, cancelled: d.cancelled === true } : { ok: false, error: d.error || 'Cancel failed.' };
   }
 
   /** Forget a chat session's conversation history. */

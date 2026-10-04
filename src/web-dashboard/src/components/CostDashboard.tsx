@@ -90,6 +90,7 @@ export default function CostDashboard({ data }: CostDashboardProps) {
         ) : (
           byProvider.map(([provider, amount]) => {
             const pct = providerTotal > 0 ? ((amount / providerTotal) * 100).toFixed(1) : '0';
+            const reported = cost.byProviderReported?.[provider];
             return (
               <div className="cost-row" key={provider}>
                 <span className="cost-row-name">{provider}</span>
@@ -97,6 +98,11 @@ export default function CostDashboard({ data }: CostDashboardProps) {
                   <div className="cost-row-fill" style={{ width: `${pct}%` }} />
                 </div>
                 <span className="cost-row-value">{formatCost(amount)}</span>
+                {/* Per-provider provider-REPORTED spend — the exact billed
+                    figure, a subset of the total (shown only when reported). */}
+                {typeof reported === 'number' && (
+                  <span className="cost-row-reported" title="Provider-reported (exact billed) cost">🧾 {formatCost(reported)}</span>
+                )}
               </div>
             );
           })

@@ -6,6 +6,9 @@ import { formatCost, formatNumber } from '../format';
 import { dashboardAPI } from '../api';
 import MetricTiles, { buildMetricTiles } from './MetricTiles';
 import PageHeader from './PageHeader';
+// The SAME model/provider counts Overview, the Timeline and the Models page
+// show — one endpoint, so the three tabs cannot disagree.
+import { useModelCounts } from '../useModelCounts';
 
 interface OverviewProps {
   data: DashboardData | null;
@@ -67,6 +70,7 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
   // source for is omitted rather than shown as zero.
   const [hub, setHub] = useState<HubData | null>(null);
   const [tasks, setTasks] = useState<{ status: number; tasks: TaskRecord[] } | null>(null);
+  const modelCounts = useModelCounts();
 
   useEffect(() => {
     let cancelled = false;
@@ -191,7 +195,23 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
                   Timeline's "routable now" whenever a proof aged past 7 days. */}
               <SummaryRow value={formatNumber(registry.routableNow ?? registry.verified)} label="Routable now" />
               <SummaryRow value={formatNumber(registry.verified)} label="Verified (proven)" />
-              <SummaryRow value={formatNumber(registry.total)} label="In the registry" />
+              {/* Two labelled pairs, matching the Timeline and the Models page
+                  word-for-word — an unlabelled single "models" number is what
+                  let the three tabs look inconsistent when they were not. */}
+              <SummaryRow
+                value={formatNumber(modelCounts?.trackedModels ?? registry.total)}
+                label="Tracked models (registry)"
+              />
+              <SummaryRow
+                value={formatNumber(modelCounts?.trackedProviders ?? registry.providers?.length ?? 0)}
+                label="Tracked providers (registry)"
+              />
+              {modelCounts && (
+                <>
+                  <SummaryRow value={formatNumber(modelCounts.listedModels)} label="Listed models (live probe)" />
+                  <SummaryRow value={formatNumber(modelCounts.listedProviders)} label="Listed providers (live probe)" />
+                </>
+              )}
               {registry.parked > 0 && <SummaryRow value={formatNumber(registry.parked)} label="Quota-parked" />}
             </SummaryCard>
           )}

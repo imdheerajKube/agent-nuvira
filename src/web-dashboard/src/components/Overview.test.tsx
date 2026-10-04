@@ -162,7 +162,7 @@ describe('Overview — summary cards', () => {
     // is the bug this split removes.
     expect(valueFor('Verified (proven)')).toBe('15');
     expect(valueFor('Routable now')).toBe('11');
-    expect(valueFor('In the registry')).toBe('20');
+    expect(valueFor('Tracked models (registry)')).toBe('20');
     expect(valueFor('Quota-parked')).toBe('2');
   });
 

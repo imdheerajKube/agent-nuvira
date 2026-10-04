@@ -943,6 +943,34 @@ function newSessionId(): string {
   return `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * The ACTIVE session id, kept in sessionStorage so a page reload resumes the
+ * same conversation instead of starting an empty one.
+ *
+ * A reload used to mint a fresh id, so the thread the user was in — and its
+ * in-flight answer — became unreachable even though the server still had it.
+ * sessionStorage (not localStorage) is deliberate: a reload in the same tab
+ * resumes, while a NEW tab starts clean.
+ */
+const ACTIVE_SESSION_KEY = 'nuvira.dashboard.chat.activeSession';
+
+function readPersistedSessionId(): string | null {
+  try {
+    const v = sessionStorage.getItem(ACTIVE_SESSION_KEY);
+    return v && v.length > 0 && v.length <= 64 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistSessionId(id: string): void {
+  try {
+    sessionStorage.setItem(ACTIVE_SESSION_KEY, id);
+  } catch {
+    /* storage may be unavailable (private mode) — resuming is best-effort */
+  }
+}
+
 /** P8 — group sessions by recency (Today / Yesterday / This week / Older)
  *  and filter by the sidebar search box (title / preview / first message). */
 function groupSessions(
@@ -1078,7 +1106,9 @@ export default function ChatPage() {
   // P4 — the last message whose turn FAILED, for the Retry affordance (null
   // when nothing to retry).
   const [retryAsk, setRetryAsk] = useState<string | null>(null);
-  const sessionIdRef = useRef<string>(newSessionId());
+  // Resume the session open before a reload when one was stored; otherwise a
+  // brand-new id.
+  const sessionIdRef = useRef<string>(readPersistedSessionId() ?? newSessionId());
   // Phase 6 — the last sent message (↑ recalls it into the box).
   const lastSentRef = useRef<string>('');
   // P4 — the session sidebar: past conversations, click to resume.
@@ -1168,6 +1198,7 @@ export default function ChatPage() {
     const rec = await dashboardAPI.getChatSession(id);
     if (!rec) return;
     sessionIdRef.current = id;
+    persistSessionId(id);
     setMessages(
       rec.turns.map((t) => ({
         role: t.role,
@@ -1213,6 +1244,7 @@ export default function ChatPage() {
     subRef.current?.();
     subRef.current = null;
     sessionIdRef.current = newSessionId();
+    persistSessionId(sessionIdRef.current);
     setSessionProjectPath(null);
     setMessages([]);
     setLiveSteps([]);
@@ -1342,6 +1374,46 @@ export default function ChatPage() {
   }, [newChat]);
 
   const canChat = auth?.authenticated === true && (auth.role === 'admin' || auth.role === 'operator');
+
+  // Resume the conversation that was open before a RELOAD.
+  //
+  // A reload used to mint a fresh session id, so the thread vanished even though
+  // the server still held it — and an in-flight turn (which a reload no longer
+  // cancels) answered into a conversation nobody was looking at. Here we reload
+  // the stored transcript, and while the server reports the session busy we keep
+  // the composer busy and re-read the transcript until the answer lands.
+  const resumedOnMountRef = useRef(false);
+  useEffect(() => {
+    if (!canChat || resumedOnMountRef.current) return;
+    resumedOnMountRef.current = true;
+    const id = sessionIdRef.current;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      const rec = await dashboardAPI.getChatSession(id);
+      if (cancelled) return;
+      // No such session (a fresh id that never ran) — nothing to resume.
+      if (!rec) return;
+      // Don't clobber a turn this mount started (abortRef is armed only while a
+      // turn runs); otherwise restore the stored transcript.
+      if (!abortRef.current) {
+        setMessages(
+          rec.turns.map((t) => ({
+            role: t.role,
+            content: t.content,
+            ...(t.role === 'assistant' ? { followups: [], artifacts: extractArtifacts(t.content) } : {}),
+          })),
+        );
+      }
+      setBusy(rec.busy === true);
+      if (rec.busy) timer = setTimeout(() => void tick(), 2500);
+    };
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [canChat]);
 
   // P4 — load the session sidebar once authenticated (admin/operator only).
   useEffect(() => {
@@ -1731,7 +1803,12 @@ export default function ChatPage() {
 
   /** P4 — cancel the in-flight turn (aborts the POST; the server cancels it). */
   const cancelTurn = useCallback(() => {
+    // Cancel is EXPLICIT now: a dropped connection no longer means "cancel", so
+    // aborting the fetch alone would leave the turn running server-side. The
+    // endpoint is what actually stops it; the abort still closes our stream
+    // immediately so the UI responds without waiting for the round trip.
     abortRef.current?.abort();
+    void dashboardAPI.chatCancel(sessionIdRef.current);
   }, []);
 
   /**
@@ -1998,6 +2075,7 @@ export default function ChatPage() {
     subRef.current?.();
     subRef.current = null;
     sessionIdRef.current = newSessionId();
+    persistSessionId(sessionIdRef.current);
     setMessages([]);
     setLiveSteps([]);
     liveStepsRef.current = [];

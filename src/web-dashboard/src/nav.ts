@@ -49,8 +49,10 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Agent Management',
     items: [
-      // Chat is the front door (the lobby); the other rooms are panels.
-      { path: '/', label: 'Chat', icon: '💬' },
+      // Chat is the front door (the lobby); the other rooms are panels. It is
+      // `/chat`, not `/`, so the app can LAND on Overview while chat stays a
+      // reachable destination that survives navigation.
+      { path: '/chat', label: 'Chat', icon: '💬' },
       { path: '/dag', label: 'Execution', icon: '🔀' },
       { path: '/routing', label: 'Routing', icon: '🤖' },
       { path: '/requests', label: 'Requests', icon: '📨' },

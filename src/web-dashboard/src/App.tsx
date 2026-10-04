@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { dashboardAPI } from './api';
 import type { DashboardData } from './types';
 import Layout from './components/Layout';
@@ -51,6 +51,26 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState<string>('--');
   const [refreshing, setRefreshing] = useState(false);
 
+  const location = useLocation();
+  const isChat = location.pathname === '/chat';
+  /**
+   * Chat is mounted the first time the user opens it and then KEPT MOUNTED for
+   * the rest of the session, even while they visit other tabs.
+   *
+   * WHY. A chat turn is a long-running server request whose progress streams to
+   * this component over SSE. React Router unmounts a route's element the moment
+   * the path changes, and unmounting tore down that SSE subscription and threw
+   * away the transcript, the live tool cards and the in-flight turn's state — so
+   * switching to, say, Costs and back restarted the conversation from scratch.
+   * Hiding the mounted page with `display:none` instead of unmounting it makes
+   * navigation behave like switching browser tabs: the turn keeps running, the
+   * stream keeps arriving, and returning shows exactly where you left off.
+   */
+  const [chatMounted, setChatMounted] = useState(isChat);
+  useEffect(() => {
+    if (isChat) setChatMounted(true);
+  }, [isChat]);
+
   const handleData = useCallback((d: DashboardData) => {
     setData(d);
     setLastUpdated(new Date().toLocaleTimeString());
@@ -99,56 +119,68 @@ export default function App() {
       onRefresh={handleRefresh}
       refreshing={refreshing}
     >
-      <Routes>
-        {/* Phase 5 — Chat is the front door; Overview (and every other room)
-            stays reachable as a panel, never required. */}
-        <Route path="/" element={<ChatPage />} />
-        {/* Overview gets the same refresh handler the top bar uses, so its own
-            "Refresh data" control cannot drift from the shell's. */}
-        <Route
-          path="/overview"
-          element={<Overview data={data} onRefresh={handleRefresh} refreshing={refreshing} />}
-        />
-        <Route path="/chat" element={<Navigate to="/" replace />} />
-        <Route path="/dag" element={<DAGView data={data} />} />
-        <Route path="/costs" element={<CostDashboard data={data} />} />
-        <Route path="/benchmarks" element={<BenchmarkCharts data={data} />} />
-        <Route path="/models" element={<ModelsPanel />} />
-        <Route path="/models/timeline" element={<ModelTimeline />} />
-        <Route path="/routing" element={<RoutingInsightsPanel data={data} />} />
-        <Route path="/requests" element={<RequestsPanel data={data} />} />
-        <Route path="/traces" element={<TracePanel />} />
-        <Route path="/hub" element={<AgentHub />} />
-        <Route path="/tasks" element={<TasksPage />} />
-        <Route path="/chat" element={<ChatPage />} />
-        <Route path="/evals" element={<EvalsPage data={data} />} />
-        <Route path="/platforms" element={<PlatformsPage />} />
-        <Route path="/bedrock" element={<BedrockOnboarding canWrite={true} sessionExpired={(msg) => console.error(msg)} />} />
-        <Route path="/contacts" element={<ContactsPage />} />
-        <Route path="/gateway" element={<GatewayPage />} />
-        <Route path="/env" element={<SkillEnvPage />} />
-        <Route path="/process-env" element={<ProcessEnvPage />} />
-        <Route path="/memory" element={<MemoryPanel data={data} />} />
-        <Route path="/history" element={<HistoryBrowser data={data} />} />
-        <Route
-          path="/executions"
-          element={<ExecutionHistory onFetch={(f) => dashboardAPI.fetchExecutionAudit(f)} />}
-        />
-        {/* The System tab is the doctor page: it shows the pass/warn/fail checks
-            and the REAL SSE state, which is tracked here and passed down — the
-            panel used to hardcode "● Connected" and could not be wrong. */}
-        <Route
-          path="/system"
-          element={<HealthPanel data={data} connected={connected} lastUpdated={lastUpdated} />}
-        />
-        <Route path="/admin" element={<AdminPanel />} />
-        {/* Help is a destination, not a modal: it is the page a user reads
-            before they know which of the other tabs they want, and it derives
-            its contents from the same constants the shell and the cheatsheet
-            use, so it cannot describe a shortcut or a page that is gone. */}
-        <Route path="/help" element={<HelpPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      {/* Chat is the front door, but it stays MOUNTED while the user visits
+          other rooms so the conversation never dies (see `chatMounted`). Hidden
+          with `display:none` — not conditionally rendered — so its effects and
+          its SSE subscription are untouched by navigation. */}
+      {chatMounted && (
+        <div style={{ display: isChat ? undefined : 'none' }}>
+          <ChatPage />
+        </div>
+      )}
+      <div style={{ display: isChat ? 'none' : undefined }}>
+        <Routes>
+          {/* Overview is the landing page — the cross-cutting view a reader
+              should see first. Chat lives at `/chat` (and stays mounted); the
+              old `/` → ChatPage default is intentionally gone. */}
+          <Route path="/" element={<Navigate to="/overview" replace />} />
+          {/* Overview gets the same refresh handler the top bar uses, so its own
+              "Refresh data" control cannot drift from the shell's. */}
+          <Route
+            path="/overview"
+            element={<Overview data={data} onRefresh={handleRefresh} refreshing={refreshing} />}
+          />
+          {/* `/chat` has no element: the page is rendered persistently above. */}
+          <Route path="/chat" element={null} />
+          <Route path="/dag" element={<DAGView data={data} />} />
+          <Route path="/costs" element={<CostDashboard data={data} />} />
+          <Route path="/benchmarks" element={<BenchmarkCharts data={data} />} />
+          <Route path="/models" element={<ModelsPanel />} />
+          <Route path="/models/timeline" element={<ModelTimeline />} />
+          <Route path="/routing" element={<RoutingInsightsPanel data={data} />} />
+          <Route path="/requests" element={<RequestsPanel data={data} />} />
+          <Route path="/traces" element={<TracePanel />} />
+          <Route path="/hub" element={<AgentHub />} />
+          <Route path="/tasks" element={<TasksPage />} />
+          <Route path="/evals" element={<EvalsPage data={data} />} />
+          <Route path="/platforms" element={<PlatformsPage />} />
+          <Route path="/bedrock" element={<BedrockOnboarding canWrite={true} sessionExpired={(msg) => console.error(msg)} />} />
+          <Route path="/contacts" element={<ContactsPage />} />
+          <Route path="/gateway" element={<GatewayPage />} />
+          <Route path="/env" element={<SkillEnvPage />} />
+          <Route path="/process-env" element={<ProcessEnvPage />} />
+          <Route path="/memory" element={<MemoryPanel data={data} />} />
+          <Route path="/history" element={<HistoryBrowser data={data} />} />
+          <Route
+            path="/executions"
+            element={<ExecutionHistory onFetch={(f) => dashboardAPI.fetchExecutionAudit(f)} />}
+          />
+          {/* The System tab is the doctor page: it shows the pass/warn/fail checks
+              and the REAL SSE state, which is tracked here and passed down — the
+              panel used to hardcode "● Connected" and could not be wrong. */}
+          <Route
+            path="/system"
+            element={<HealthPanel data={data} connected={connected} lastUpdated={lastUpdated} />}
+          />
+          <Route path="/admin" element={<AdminPanel />} />
+          {/* Help is a destination, not a modal: it is the page a user reads
+              before they know which of the other tabs they want, and it derives
+              its contents from the same constants the shell and the cheatsheet
+              use, so it cannot describe a shortcut or a page that is gone. */}
+          <Route path="/help" element={<HelpPage />} />
+          <Route path="*" element={<Navigate to="/overview" replace />} />
+        </Routes>
+      </div>
     </Layout>
   );
 }

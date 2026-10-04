@@ -57,6 +57,19 @@ describe('needsProjectAttachment — ordinary chat stays ungated', () => {
     expect(needsProjectAttachment('   ')).toBe(false);
   });
 
+  it('lets an inline prose deliverable through, even with a code-ish word', () => {
+    // The reported regression: an essay question was refused because "class 4"
+    // read as "a code class", so a user who had been asked to attach a folder
+    // once kept being asked to attach one for a plain writing task.
+    expect(needsProjectAttachment('write an essay on elephants for class 4 student')).toBe(false);
+    expect(needsProjectAttachment('write a poem about the sea')).toBe(false);
+    expect(needsProjectAttachment('compose a short letter to my landlord')).toBe(false);
+    expect(needsProjectAttachment('draft a summary of this article')).toBe(false);
+    // But the SAME prose request that also names a real file artifact IS gated.
+    expect(needsProjectAttachment('write the essay to essay.md')).toBe(true);
+    expect(needsProjectAttachment('save the poem as poem.txt')).toBe(true);
+  });
+
   it('does not gate an ask that names its own subject', () => {
     // A URL or an absolute path IS the subject — asking to "attach a folder"
     // would be noise the user cannot act on.

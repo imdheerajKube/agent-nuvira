@@ -25,10 +25,19 @@ import { resolve } from 'node:path';
 
 const APP = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8');
 
-/** Component names in `element={<Name …>}` from the route table. */
+/**
+ * Pages rendered OUTSIDE the `<Routes>` table, so the route-scan regex cannot
+ * see them. `ChatPage` is mounted persistently (once opened) instead of as a
+ * route element, so an in-flight turn and its SSE stream survive navigating to
+ * another tab — but it is still a page, so its header is checked here too.
+ */
+const PERSISTENT_PAGES = ['ChatPage'];
+
+/** Component names in `element={<Name …>}` from the route table, plus the
+ *  pages mounted persistently outside it. */
 function routedPages(): string[] {
   const names = [...APP.matchAll(/element=\{<([A-Za-z][A-Za-z0-9]*)/g)].map((m) => m[1]);
-  return [...new Set(names)].filter((name) => name !== 'Navigate');
+  return [...new Set([...names, ...PERSISTENT_PAGES])].filter((name) => name !== 'Navigate');
 }
 
 const PAGES = routedPages();

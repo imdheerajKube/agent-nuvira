@@ -36,6 +36,7 @@ import {
 } from '../learning/step-checkpoint.js';
 import { applyActiveModel } from './model.js';
 import { ConfigManager } from '../config/manager.js';
+import { capabilityReasoningEffort, isMaxCapability } from '../config/capability-mode.js';
 import { InferenceProvider } from '../inference/interface.js';
 import type { ProviderType } from '../config/types.js';
 import { getProviderFallback, classifyFallbackError, isRetryableError, isTransientForRetry, recordRegistrySuccess } from '../learning/provider-fallback.js';
@@ -428,6 +429,17 @@ function buildToolSystemPrompt(parsed?: ParsedRequest): string {
     '- For tasks NOT covered by any tool: COMPOSE PRIMITIVES. Write a script with write_file and run it with run_terminal (or code_execution), fetch pages with read_page, generate images with tool_search load "media" + generate_image. You are the general solution — the tool list is not.',
     '- Some tools live OUTSIDE your visible list in domain toolsets (media, browser, channels, docker, …). If a tool you need is "unknown", call tool_search with {"action":"load","toolset":"<name>"} — its tools become callable immediately.',
     '- Always end with suggest_followups.',
+    '',
+    // WHY THIS BLOCK EXISTS. A weak model, primed by an earlier "attach a
+    // project folder" refusal, carried that refusal into a plain writing
+    // request: asked to write an essay it answered with instructions for moving
+    // a project folder and "I don't have the capability to create files in a
+    // workspace". Both are wrong and both are exactly what these lines forbid.
+    '## Workspace and general requests',
+    '- Writing and questions do NOT need a project folder. An essay, poem, email, explanation, summary or brainstorm is answered directly in your reply — never mention folders, directories, "attaching", or the workspace for these.',
+    '- You CAN create and edit files (write_file) and run commands (run_terminal) when the request needs them. Never say you cannot create or write files.',
+    '- Never ask the user to attach a folder, and never tell them to move files into a directory. If a request genuinely needs a workspace and none is attached, the app asks for one on its own — so just answer as best you can.',
+    '- Treat a request as project work ONLY when it actually concerns the codebase or produces a file on disk. A general question that happens to contain a word like "class", "project", "test" or "document" is still a general question.',
     '',
     TOOL_CONTRACT_JSON,
   ].join('\n');
@@ -2441,11 +2453,11 @@ export class ChatCommand extends BaseCommand {
             // content delivered as a single chunk so the typewriter channel
             // still receives the answer (appears at once — today's behavior).
             if (sink && typeof prov.generateToolsStream === 'function') {
-              const result = await prov.generateToolsStream(messages, schemas, { ...options, model: effectiveModel, signal: abort }, sink);
+              const result = await prov.generateToolsStream(messages, schemas, { ...options, model: effectiveModel, signal: abort, reasoningEffort: capabilityReasoningEffort(this.configManager) }, sink);
               confuseCheck(result.content, result.toolCalls.length > 0);
               return answered({ ...result, transport: 'native' as const });
             }
-            const result = await prov.generateTools(messages, schemas, { ...options, model: effectiveModel, signal: abort });
+            const result = await prov.generateTools(messages, schemas, { ...options, model: effectiveModel, signal: abort, reasoningEffort: capabilityReasoningEffort(this.configManager) });
             confuseCheck(result.content, result.toolCalls.length > 0);
             if (sink && result.content) sink(result.content);
             return answered({ ...result, transport: 'native' as const });
@@ -2495,10 +2507,10 @@ export class ChatCommand extends BaseCommand {
         let raw: string;
         if (typeof prov.generateStream === 'function') {
           const chunks: string[] = [];
-          await prov.generateStream(prompt, { ...options, model: effectiveModel, signal: abort }, (t) => chunks.push(t));
+          await prov.generateStream(prompt, { ...options, model: effectiveModel, signal: abort, reasoningEffort: capabilityReasoningEffort(this.configManager) }, (t) => chunks.push(t));
           raw = chunks.join('');
         } else {
-          raw = await prov.generate(prompt, { ...options, model: effectiveModel, signal: abort });
+          raw = await prov.generate(prompt, { ...options, model: effectiveModel, signal: abort, reasoningEffort: capabilityReasoningEffort(this.configManager) });
         }
         const { text, calls } = extractFallbackToolCalls(raw);
         confuseCheck(text, calls.length > 0);
@@ -3022,6 +3034,7 @@ export class ChatCommand extends BaseCommand {
             source: 'chat',
             agentType: 'chat',
             task: message,
+            verifyOnDemand: isMaxCapability(this.configManager),
           })).model;
           // Record the actually-used route for the dashboard audit trail
           recordRoutingDecision({
@@ -3073,6 +3086,7 @@ export class ChatCommand extends BaseCommand {
       source: 'chat',
       agentType: 'chat',
       task: message,
+      verifyOnDemand: isMaxCapability(this.configManager),
     })).model;
     return {
       type: resolved.type,

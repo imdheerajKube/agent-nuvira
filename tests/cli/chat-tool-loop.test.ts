@@ -359,6 +359,31 @@ describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
     expect(recallIdx).toBeLessThan(askIdx);
   });
 
+  it('the system prompt tells a weak model that general writing needs no folder', async () => {
+    // The regression (dashboard chat): after one "attach a project folder"
+    // refusal, a small model carried the refusal into a plain writing ask —
+    // "write an essay" came back as instructions for moving a project folder
+    // plus "I don't have the capability to create files in a workspace". The
+    // prompt now forbids that outright, so the failure mode is guarded by a test
+    // rather than only by the workspace guard that stopped firing.
+    const { provider, calls } = makeCapturingProvider();
+    stubGetProvider(provider);
+
+    const cmd = new ChatCommand() as unknown as { answerOnce: Function };
+    await cmd.answerOnce('write an essay on elephants for class 4', {
+      provider: 'groq',
+      model: 'mock-model',
+    });
+
+    const system = calls[0].messages
+      .filter((m: { role: string }) => m.role === 'system')
+      .map((m: { content: string }) => m.content)
+      .join('\n');
+    expect(system).toContain('do NOT need a project folder');
+    expect(system).toContain('Never say you cannot create or write files');
+    expect(system).toContain('never tell them to move files into a directory');
+  });
+
   it('a rejected answer is reported as a FAILURE, never as a successful turn', async () => {
     // Live evidence (dashboard chat): the bubble read "The model wrote its own
     // working notes instead of an answer…" while `generationFailed` was FALSE,

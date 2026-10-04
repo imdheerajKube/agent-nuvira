@@ -34,7 +34,7 @@ export default function HelpPage() {
         <ol className="help-steps">
           <li>
             <strong>Talk to the agent in Chat.</strong> It is the front door — the other pages are views of what has
-            already happened. <Link to="/">Open Chat</Link>.
+            already happened. <Link to="/chat">Open Chat</Link>.
           </li>
           <li>
             <strong>Run a command from Tasks.</strong> The Command Console executes the same CLI you would type in a

@@ -1284,6 +1284,16 @@ body {
   text-align: right;
 }
 
+/* Provider-reported (exact billed) spend for one provider — a secondary figure
+   beside the total, so the two are never confused. */
+.cost-row-reported {
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 84px;
+  text-align: right;
+  margin-left: 10px;
+}
+
 .request-list {
   background: var(--bg-card);
   border: 1px solid var(--border);

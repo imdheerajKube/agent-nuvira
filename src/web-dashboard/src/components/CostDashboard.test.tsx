@@ -51,11 +51,23 @@ describe('CostDashboard', () => {
     expect(screen.getByText('1 calls')).toBeTruthy();
   });
 
+  it('shows the provider-reported figure on the By Provider row that has one', () => {
+    render(<CostDashboard data={data(cost())} />);
+
+    // Provider rows render in descending spend: anthropic then openrouter.
+    // (Each name also appears on its recent-request row.)
+    expect(screen.getAllByText('anthropic').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('openrouter').length).toBeGreaterThanOrEqual(1);
+    // openrouter reported $0 — the chip appears (here and on its recent row).
+    expect(screen.getAllByText('🧾 $0.00').length).toBeGreaterThanOrEqual(1);
+  });
+
   it('marks only provider-reported recent rows with the 🧾 badge', () => {
     render(<CostDashboard data={data(cost())} />);
 
-    // The free OpenRouter row: reported, $0, badged.
-    expect(screen.getByText(/🧾 \$0\.00/)).toBeTruthy();
+    // The free OpenRouter row: reported, $0, badged (appears on its provider
+    // row and its recent row).
+    expect(screen.getAllByText(/🧾 \$0\.00/).length).toBeGreaterThanOrEqual(1);
     // The anthropic row is locally priced, not reported — no badge.
     expect(screen.queryByText(/🧾 \$0\.02/)).toBeNull();
   });

@@ -32,7 +32,7 @@ export const SHORTCUTS: Array<{ group: string; items: Shortcut[] }> = [
 
 /** `g` then a letter. Kept here so the handler and the table cannot disagree. */
 export const GO_TARGETS: Record<string, string> = {
-  c: '/',
+  c: '/chat',
   o: '/overview',
   t: '/tasks',
   m: '/models',

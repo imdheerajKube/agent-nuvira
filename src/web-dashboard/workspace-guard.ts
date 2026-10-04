@@ -32,9 +32,42 @@ const PROJECT_WORK_RE =
 /**
  * Filesystem deliverables: making or changing files on disk. These need a
  * directory to land in whether or not the ask says "project".
+ *
+ * NOTE the nouns are artifacts that exist ON DISK. `class` was removed after it
+ * matched a school sense: "write an essay … for **class** 4" was read as
+ * "write a code class" and gated behind a folder prompt it did not need. A bare
+ * "class" is inherently ambiguous — code vs. school — so it is not evidence a
+ * directory is required.
  */
 const FILESYSTEM_TASK_RE =
-  /\b(?:create|write|make|add|generate|produce|build|edit|modify|update|patch|rename|move|delete|remove|save|export|append)\b[^.!?\n]{0,60}\b(?:file|files|folder|folders|directory|directories|script|module|component|class|document|markdown|readme|report|image|picture|photo|logo|diagram|chart|plot|icon|screenshot|video|audio)\b/i;
+  /\b(?:create|write|make|add|generate|produce|build|edit|modify|update|patch|rename|move|delete|remove|save|export|append)\b[^.!?\n]{0,60}\b(?:file|files|folder|folders|directory|directories|script|module|component|document|markdown|readme|report|image|picture|photo|logo|diagram|chart|plot|icon|screenshot|video|audio)\b/i;
+
+/**
+ * INLINE PROSE deliverables — an essay, a poem, a story, a letter. General
+ * chat produces these in the reply with no workspace at all, so they must never
+ * be gated, even when the request incidentally contains a code-ish word
+ * ("an essay on elephants for a **class** 4 student") or a file-ish noun
+ * ("write a **summary**").
+ *
+ * This is the user-reported false positive: after being asked to attach a folder
+ * once, an essay question was refused for the same reason, which read as the
+ * agent having stopped listening. Only an EXPLICIT file artifact (a named file,
+ * `.md`, a folder, a directory) overrides this and keeps the ask gated.
+ */
+const INLINE_PROSE_RE =
+  /\b(?:write|compose|draft|create|make|produce|prepare)\b[^.!?\n]{0,40}\b(?:essay|poem|story|haiku|paragraph|letter|email|article|speech|assignment|homework|answer|explanation|description|summary|short\s+note|blurb|bio|memo)\b/i;
+
+/** An explicit on-disk artifact — the only thing that overrides INLINE_PROSE_RE. */
+const EXPLICIT_FILE_RE =
+  /\b(?:file|files|folder|folders|directory|directories|path|\.md\b|\.txt\b|\.json\b|\.csv\b|\.docx?\b|\.pdf\b|readme|document)\b/i;
+
+/**
+ * A producing verb aimed at an explicit on-disk artifact ("save it as poem.txt",
+ * "write the essay to essay.md"). This is what makes a PROSE deliverable a
+ * workspace task after all — the write target is a file, not the reply.
+ */
+const FILE_PRODUCING_RE =
+  /\b(?:write|create|save|export|produce|generate|make|draft|compose|append)\b[^.!?\n]{0,40}\b(?:file|folder|directory|path|\.md\b|\.txt\b|\.json\b|\.csv\b|\.docx?\b|\.pdf\b)\b/i;
 
 /** Media generation, phrased as a verb on the media itself ("generate an image"). */
 const MEDIA_TASK_RE =
@@ -52,6 +85,12 @@ export function needsProjectAttachment(message: string): boolean {
   // A URL or an absolute path names its own subject — the user is being
   // specific, so asking them to "attach a folder" would be noise.
   if (/(?:^|[\s("'`])(?:\/|~\/|https?:\/\/|www\.)/.test(text)) return false;
+  // A prose deliverable is answered inline; only an explicit file artifact in
+  // the same message makes it a workspace task. Checked BEFORE the project/work
+  // rules so an incidental code-ish noun cannot gate an essay or a poem.
+  if (INLINE_PROSE_RE.test(text) && !EXPLICIT_FILE_RE.test(text)) return false;
+  // A named file target means it lands on disk even if the content is prose.
+  if (FILE_PRODUCING_RE.test(text)) return true;
   if (PROJECT_REFERENCE_RE.test(text)) return true;
   if (FILESYSTEM_TASK_RE.test(text)) return true;
   if (MEDIA_TASK_RE.test(text)) return true;
@@ -81,8 +120,12 @@ export function projectAttachmentPrompt(): string {
     'folder sits in my own working directory.',
     '',
     '**Attach the folder you mean, then send the message again:**',
-    '- Click **📁 Attach** above the message box and pick the project directory.',
-    '- Or paste the absolute path (e.g. `/Users/you/Documents/my-app`) in the attach box.',
+    '1. In the chat composer, find the **Select Project Folder** box (above the message box).',
+    '2. Click **🗂️ Browse** and navigate to your project, then click **Attach** — or paste the',
+    '   folder\'s absolute path (e.g. `/Users/you/Documents/my-app`) into that box and click **Attach**.',
+    '',
+    'On some systems your browser then shows a permission prompt for that folder — click **Allow**,',
+    'and the folder is attached to this chat. (You can **✕ detach** it any time.)',
     '',
     'Once a folder is attached, every turn in this chat is scoped to it.',
     '',
@@ -94,6 +137,7 @@ export function projectAttachmentPrompt(): string {
 /** The followups offered with the refusal — real next actions, not filler. */
 export function projectAttachmentFollowups(): Array<{ label: string; prompt: string }> {
   return [
-    { label: 'Show me the folder picker', prompt: 'How do I attach a project folder?' },
+    { label: 'How do I attach a folder?', prompt: 'How do I attach a project folder?' },
+    { label: 'Browse the picker for me', prompt: 'Open the project folder picker.' },
   ];
 }

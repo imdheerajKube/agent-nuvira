@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { parseJsonOrNull } from '../jsonOrNull';
 import type { ModelsHealthData, ProviderHealth, ModelStatus, TestedModel, ModelRegistryInsights, RegistryModelEntry, ActionTelemetryInsights } from '../types';
 import { formatCount } from '../format';
+import { useModelCounts } from '../useModelCounts';
 import PageHeader from './PageHeader';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -672,7 +673,7 @@ function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
           <span className="stat-icon">📦</span>
           <div className="stat-body">
             <div className="stat-value">{data.total}</div>
-            <div className="stat-label">Tracked models</div>
+            <div className="stat-label">Tracked models (registry)</div>
           </div>
         </div>
         <div className="stat-card">
@@ -1399,11 +1400,6 @@ function ColToggle({ value, onChange }: { value: number; onChange: (v: number) =
 
 function ModelCell({ model, provider }: { model: TestedModel; provider: string }) {
   const s = STATUS_STYLES[model.status];
-  const quotaText = model.rateLimitRemaining !== undefined
-    ? model.rateLimitTotal
-      ? `${model.rateLimitRemaining} / ${model.rateLimitTotal}`
-      : `${model.rateLimitRemaining} left`
-    : '—';
 
   return (
     <td style={{ padding: 10, verticalAlign: 'top' }}>
@@ -1464,18 +1460,9 @@ function ModelCell({ model, provider }: { model: TestedModel; provider: string }
           {model.status === 'available' ? 'Available' : model.status === 'limited' ? 'Limited' : 'Unavailable'}
         </div>
 
-        {/* Line 4: Token remaining */}
-        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-          <span style={{ color: 'var(--text-secondary)' }}>Tokens:</span>{' '}
-          <span style={{
-            color: model.rateLimitRemaining !== undefined && model.rateLimitRemaining <= 10
-              ? 'var(--accent-yellow)' : 'var(--text-secondary)',
-            fontFamily: "'SFMono-Regular', Consolas, monospace",
-            fontWeight: 500,
-          }}>
-            {quotaText}
-          </span>
-        </div>
+        {/* The old "Tokens:" line was removed: no value could ever populate it
+            here (the probe does not carry a per-model token quota), so it
+            rendered a permanent "—" that read as a broken field. */}
 
         {/* Routable (registry) vs listed (provider). The status box above is a
             PROVIDER-level verdict — identical for every model of that provider —
@@ -1585,7 +1572,7 @@ function ModelsGrid({ providers, colsPerRow, searchQuery }: {
       <h2 className="section-subtitle">📋 Model Health Overview</h2>
       <p className="section-description">
         All models across all providers, color-coded by health status.
-        Each cell shows: Model · Provider · Health · Token Remaining.
+        Each cell shows: Model · Provider · Health.
       </p>
 
       <div style={{ overflowX: 'auto' }}>
@@ -1698,6 +1685,8 @@ export default function ModelsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [colsPerRow, setColsPerRow] = useState(4);
   const [searchQuery, setSearchQuery] = useState('');
+  // Shared with Overview and the Timeline so the three tabs agree.
+  const modelCounts = useModelCounts();
   const mountedRef = useRef(true);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True when the LAST load hit a transient (network-level) failure — used to
@@ -1796,7 +1785,10 @@ export default function ModelsPanel() {
       {loading && !modelsData && (
         <div className="loading-state">
           <div className="loading-spinner" />
-          <p>Testing all 17 provider connections...</p>
+          {/* No hardcoded count: the real number is whatever the probe returns
+              (currently 18 checks, and it drifts as providers are added), so
+              naming one here was a value the panel could not know yet. */}
+          <p>Testing provider connections…</p>
         </div>
       )}
 
@@ -1814,7 +1806,17 @@ export default function ModelsPanel() {
               <span className="stat-icon">🧠</span>
               <div className="stat-body">
                 <div className="stat-value">{modelsData.totalModels}</div>
-                <div className="stat-label">Total Models</div>
+                <div className="stat-label">Listed models (live probe)</div>
+              </div>
+            </div>
+            {/* The registry pair, from the SAME endpoint Overview and the
+                Timeline read — so all three tabs agree instead of each
+                headlining a differently-defined "models" number. */}
+            <div className="stat-card">
+              <span className="stat-icon">📦</span>
+              <div className="stat-body">
+                <div className="stat-value">{modelCounts?.trackedModels ?? registryData?.total ?? 0}</div>
+                <div className="stat-label">Tracked models (registry)</div>
               </div>
             </div>
             <div className="stat-card">
@@ -1842,7 +1844,14 @@ export default function ModelsPanel() {
               <span className="stat-icon">🔌</span>
               <div className="stat-body">
                 <div className="stat-value">{modelsData.providers.length}</div>
-                <div className="stat-label">Providers</div>
+                <div className="stat-label">Listed providers (live probe)</div>
+              </div>
+            </div>
+            <div className="stat-card">
+              <span className="stat-icon">🗂️</span>
+              <div className="stat-body">
+                <div className="stat-value">{modelCounts?.trackedProviders ?? registryData?.providers?.length ?? 0}</div>
+                <div className="stat-label">Tracked providers (registry)</div>
               </div>
             </div>
           </div>

@@ -33,6 +33,9 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { dashboardAPI } from '../api';
+// The SAME counts Overview and the Models page show — one endpoint, so the
+// three tabs cannot head different numbers under the same word.
+import { useModelCounts } from '../useModelCounts';
 import type { VerifyBacklogState } from '../types';
 import PageHeader from './PageHeader';
 
@@ -144,6 +147,7 @@ export default function ModelTimeline() {
   const [filter, setFilter] = useState<'all' | 'routable' | 'not-routable'>('all');
   const [sortBy, setSortBy] = useState<'provider' | 'lastProbed'>('provider');
   const mountedRef = useRef(true);
+  const modelCounts = useModelCounts();
 
   const fetchData = useCallback(async () => {
     try {
@@ -304,8 +308,24 @@ export default function ModelTimeline() {
       <div className="stats-grid" style={{ marginBottom: 8 }}>
         <div className="stat-card">
           <div className="stat-value">{data?.totalModels ?? 0}</div>
-          <div className="stat-label">Tracked models</div>
+          <div className="stat-label">Tracked models (registry)</div>
         </div>
+        <div className="stat-card">
+          <div className="stat-value">{modelCounts?.trackedProviders ?? 0}</div>
+          <div className="stat-label">Tracked providers (registry)</div>
+        </div>
+        {modelCounts && (
+          <>
+            <div className="stat-card">
+              <div className="stat-value">{modelCounts.listedModels}</div>
+              <div className="stat-label">Listed models (live probe)</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-value">{modelCounts.listedProviders}</div>
+              <div className="stat-label">Listed providers (live probe)</div>
+            </div>
+          </>
+        )}
         <div className="stat-card" style={{ borderColor: 'var(--accent-green)' }}>
           <div className="stat-value" style={{ color: 'var(--accent-green)' }}>{counts?.routable ?? 0}</div>
           <div className="stat-label">Routable now</div>

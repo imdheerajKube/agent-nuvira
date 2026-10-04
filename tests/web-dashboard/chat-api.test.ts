@@ -415,25 +415,67 @@ describe('/api/chat', () => {
     engine.refusedAnswer = null;
   });
 
-  it('P4 — cancels the in-flight turn when the client disconnects (abort)', async () => {
+  it('P4 — a dropped connection does NOT cancel the turn; /api/chat/cancel does', async () => {
+    // Revised contract. A page reload or a closed tab drops the connection, and
+    // that must NOT kill the turn (the user comes back and finds the answer) —
+    // so the server no longer treats `res` close as an abort. Cancel is
+    // therefore its own request. This test pins BOTH halves: the disconnect is
+    // inert, and the explicit endpoint is what stops the turn.
     engine.honorSignal = true;
-    const controller = new AbortController();
-    const pending = fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ sessionId: 'cancel-session', message: 'long task' }),
-      signal: controller.signal,
-    });
-    // The turn started server-side (the engine is in flight, honoring the signal).
-    await until(() => console_.isBusy('cancel-session'));
-    // The client hits Cancel → the POST aborts → the server sees the response
-    // stream close (never written) and cancels the turn (busy released).
-    controller.abort();
-    await pending.catch(() => {}); // the aborted fetch rejects client-side
-    await until(() => !console_.isBusy('cancel-session'));
-    // The cancelled turn was discarded: nothing persisted for the session.
-    expect(console_.history('cancel-session')).toHaveLength(0);
-    engine.honorSignal = false;
+    try {
+      const controller = new AbortController();
+      const pending = fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ sessionId: 'keepalive-session', message: 'long task' }),
+        signal: controller.signal,
+      });
+      // The turn started server-side (the engine is in flight, honoring the signal).
+      await until(() => console_.isBusy('keepalive-session'));
+      // Simulate a reload / closed tab: the client aborts the POST.
+      controller.abort();
+      await pending.catch(() => {}); // the aborted fetch rejects client-side
+      // The turn is STILL running — disconnecting is not cancelling.
+      await new Promise((r) => setTimeout(r, 150));
+      expect(console_.isBusy('keepalive-session')).toBe(true);
+
+      // The explicit Cancel endpoint is what stops it (busy released).
+      const cancel = await authedFetch('/api/chat/cancel', 'POST', { sessionId: 'keepalive-session' });
+      expect(cancel.status).toBe(200);
+      const cancelBody = (await cancel.json()) as { ok: boolean; cancelled: boolean };
+      expect(cancelBody.ok).toBe(true);
+      expect(cancelBody.cancelled).toBe(true);
+      await until(() => !console_.isBusy('keepalive-session'));
+      // The cancelled turn was discarded: nothing persisted for the session.
+      expect(console_.history('keepalive-session')).toHaveLength(0);
+    } finally {
+      // MUST reset: this flag makes every later turn hang on the abort signal,
+      // so a leaked `true` timed out the whole rest of the file.
+      engine.honorSignal = false;
+    }
+  });
+
+  it('P4 — reports a running session as busy so a reloaded client can resume it', async () => {
+    engine.honorSignal = true;
+    try {
+      const controller = new AbortController();
+      void fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ sessionId: 'busy-session', message: 'long task' }),
+        signal: controller.signal,
+      }).catch(() => {});
+      await until(() => console_.isBusy('busy-session'));
+      const detail = await authedFetch('/api/sessions/busy-session');
+      expect(detail.status).toBe(200);
+      const body = (await detail.json()) as { ok: boolean; session: { busy?: boolean } };
+      expect(body.session.busy).toBe(true);
+      // Clean up: cancel so the turn does not leak into a later test.
+      await authedFetch('/api/chat/cancel', 'POST', { sessionId: 'busy-session' });
+      await until(() => !console_.isBusy('busy-session'));
+    } finally {
+      engine.honorSignal = false;
+    }
   });
 
   it('threads conversation history across messages in the same session', async () => {

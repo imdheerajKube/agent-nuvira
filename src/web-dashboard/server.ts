@@ -1568,6 +1568,57 @@ async function readModelsHealth(): Promise<{
   };
 }
 
+/**
+ * The ONE source of truth for the model/provider counts every page shows.
+ *
+ * Two pairs, deliberately distinct and always LABELLED:
+ *   - `tracked*` — the Model Availability Registry (what routing consults).
+ *   - `listed*`  — the live provider probe (what each provider says it offers).
+ *
+ * These are different questions and their answers legitimately differ (a
+ * provider lists ids the router can never use, and the registry tracks pairs
+ * that no provider currently advertises). Showing them together, from here,
+ * is what stops Overview / Timeline / Models from each headlining a different
+ * number under one ambiguous word like "models".
+ *
+ * The live probe is EXPENSIVE (one HTTP call per provider), so its result is
+ * cached for a minute and shared by all three pages rather than re-probed per
+ * page. `listingAt` is returned so a page can say when the listing was taken.
+ */
+let modelListingCache: { at: number; models: number; providers: number } | null = null;
+const MODEL_LISTING_TTL_MS = 60_000;
+
+async function readModelCounts(): Promise<{
+  trackedModels: number;
+  trackedProviders: number;
+  listedModels: number;
+  listedProviders: number;
+  listingAt: number;
+}> {
+  const registry = readModelRegistryData() as { total?: number; providers?: unknown[] };
+  const trackedModels = registry.total ?? 0;
+  const trackedProviders = Array.isArray(registry.providers) ? registry.providers.length : 0;
+
+  const now = Date.now();
+  if (!modelListingCache || now - modelListingCache.at >= MODEL_LISTING_TTL_MS) {
+    try {
+      const health = await readModelsHealth();
+      modelListingCache = { at: now, models: health.totalModels, providers: health.providers.length };
+    } catch {
+      // A failed probe keeps the previous listing rather than zeroing it:
+      // "we could not reach the providers just now" is not "you have none".
+    }
+  }
+
+  return {
+    trackedModels,
+    trackedProviders,
+    listedModels: modelListingCache?.models ?? 0,
+    listedProviders: modelListingCache?.providers ?? 0,
+    listingAt: modelListingCache?.at ?? 0,
+  };
+}
+
 /** Check local Ollama provider — no rate limits to parse */
 async function checkLocalProvider(): Promise<ModelCheckResult | null> {
   const result: ModelCheckResult = {
@@ -3510,8 +3561,16 @@ function readLargeJsonBody(req: IncomingMessage): Promise<Record<string, unknown
 
 /** Send a JSON response (the admin routes' single writer). */
 function writeJson(res: ServerResponse, status: number, data: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
+  // The client may have gone away (a chat turn that outlives a page reload now
+  // finishes and writes its response to a socket nobody is holding). Writing
+  // there is a no-op, not an error — and it must never throw into the turn.
+  if (res.writableEnded || res.destroyed) return;
+  try {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(data));
+  } catch {
+    /* client disconnected mid-write — nothing to do */
+  }
 }
 
 /**
@@ -5346,6 +5405,16 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // The SHARED model/provider counts every page (Overview, Timeline, Models)
+  // renders — one endpoint, so the three cannot disagree. `tracked*` is the
+  // registry (routing's truth), `listed*` is the cached live provider probe.
+  if (pathname === '/api/model-counts' && req.method === 'GET') {
+    readModelCounts()
+      .then((counts) => writeJson(res, 200, counts))
+      .catch(() => writeJson(res, 500, { error: 'Failed to read model counts' }));
+    return;
+  }
+
   if (pathname === '/api/model-registry') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readModelRegistryData()));
@@ -6742,7 +6811,10 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       writeJson(res, 404, { ok: false, error: 'No such session.' });
       return;
     }
-    writeJson(res, 200, { ok: true, session: { id, ...rec } });
+    // `busy` lets a client that reloaded mid-turn know the answer is still being
+    // produced, so it can keep the bubble alive and poll instead of showing a
+    // finished-looking thread.
+    writeJson(res, 200, { ok: true, session: { id, ...rec, busy: chatConsole.isBusy(id) } });
     return;
   }
 
@@ -6968,15 +7040,20 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           return;
         }
       }
-      // P4 — the dashboard's Cancel button aborts the POST fetch: the server
-      // sees the request close and cancels the in-flight turn (the engine
-      // aborts the provider request — quota is not spent on a cancelled turn).
-      // Guarded: after the response is written (writableEnded) this never
-      // fires, and chatConsole.abort is a no-op once the turn finished.
-      // The client-disconnect signal is res 'close' (fires when the response
-      // stream closes): for an ABORTED fetch the response never completes, so
-      // writableEnded stays false and the turn is cancelled; after a normal
-      // completion writableEnded is true and this is a no-op.
+      // P4 (revised) — a client DISCONNECT no longer cancels the turn. It used
+      // to: the server treated `res` close as an abort, which meant a page
+      // reload or a closed browser tab killed the in-flight turn and discarded
+      // its answer. Reloading mid-turn is common, and "my question just
+      // vanished" is worse than a turn that keeps running. So the turn now runs
+      // to completion and PERSISTS (chat-console records it), and a reloaded
+      // client resumes the same session id and finds the answer there.
+      //
+      // Cancel is therefore EXPLICIT: the Cancel button calls
+      // `POST /api/chat/cancel`, which invokes chatConsole.abort. There is no
+      // longer any ambiguity between "the user cancelled" and "the connection
+      // dropped" — they are different signals because they are now different
+      // requests. The one cost: a turn whose client vanishes and is never
+      // cancelled keeps spending provider quota until it finishes.
       // A pending retry offer is answered HERE, before any turn runs: the reply
       // belongs to the offer, not to the composer's next request. A message that
       // is neither yes nor no falls through to normal handling.
@@ -6993,10 +7070,6 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         });
         return;
       }
-      const onResClose = () => {
-        if (!res.writableEnded) chatConsole.abort(sessionId);
-      };
-      res.on('close', onResClose);
       // Mark the failover log BEFORE the turn so a failure can report which
       // models were actually tried (same contract as the gateway).
       const attemptMark = markFailoverAttempts();
@@ -7010,9 +7083,6 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         ...(keepWorktree === undefined ? {} : { keepWorktree }),
         ...(resume === undefined ? {} : { resume }),
       });
-      // The response is written below — remove the disconnect listener so a
-      // post-completion close can never touch the console again.
-      res.off('close', onResClose);
       if (!result.ok) {
         writeJson(res, 400, {
           ok: false,
@@ -7078,6 +7148,32 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         generationFailed: result.generationFailed === true,
         retryQueued,
       });
+    })();
+    return;
+  }
+
+  // POST /api/chat/cancel — cancel a session's IN-FLIGHT turn { sessionId }.
+  // Cancel is explicit since a dropped connection no longer means "cancel" (see
+  // the chat handler): only this endpoint aborts the running turn.
+  if (pathname === '/api/chat/cancel' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot chat with the agent (requires admin or operator).` });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
+      if (!sessionId) {
+        writeJson(res, 400, { ok: false, error: 'Missing sessionId.' });
+        return;
+      }
+      const cancelled = chatConsole.abort(sessionId);
+      writeJson(res, 200, { ok: true, cancelled });
     })();
     return;
   }

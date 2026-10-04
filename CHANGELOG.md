@@ -2,6 +2,104 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## Unreleased — an inert turn is not a success, a repair keeps its capability, and free models bill $0
+
+### Fixed: a workspace-directed turn that did nothing was reported as done
+
+A loop turn that was asked to change the workspace but never touched it used to exit as a completed
+success, and the eval arm scored a one-word apology at the composite floor while reading its measured
+tokens and cost as **zero**. The loop now delivers a single bounded nudge when a workspace-directed
+request produces no productive action and carries a residual `noActionTaken` flag; the eval arm
+refuses to call a zero-action turn a completion, reports the SERVED model beside the REQUESTED one,
+and reads tokens and cost from the real ledger. `capability-parity` gains `substituted` and
+`no-action` columns, so a downgraded or inert arm is a number rather than a hidden identical score.
+
+### Fixed: a repair could silently downgrade a strong model
+
+When a pinned model was dead or quota-parked, the router repaired it with the fastest HEALTHY model —
+a health ranking with no capability axis, so the smallest fast model could win over the strong one and
+the run was quietly weaker than requested. Repairs now stay in at least the requested model's
+capability band (a new estimator). The capability mode (`balanced` | `max`) widens the loop's own
+reasoning budget and routing quality when cost is explicitly not a concern; every deterministic
+safety invariant (deny-first commands, workspace boundary, git gates) is unchanged.
+
+### Fixed: free models were billed a generic rate
+
+`calculateCost` now returns **$0** for a model the provider declares free (a `:free` id) or a keyless
+local runtime — resolved through the same authority the Models page uses, so the cost ledger and the
+cost badge can never disagree about what is free. When a provider reports the exact cost of a call
+(OpenRouter's `usage.cost`, now captured on every adapter path including streams), that figure is
+recorded verbatim and flagged `costReported`.
+
+### Added: provider-reported cost in the dashboard
+
+The Cost Tracking page splits spend by how it was KNOWN — measured wire tokens, length-based
+estimates, and the provider-reported exact bill — and shows the reported figure per provider in the**By Provider** breakdown and per request in the recent list, so a free or subscription call's true
+$0 is visible instead of a generic rate.
+
+### Added: `max` now asks the routed model to reason harder, without ever breaking one that can't
+
+Raising the routing floor under `max` decided WHICH model answers but nothing about HOW HARD it
+thinks — no adapter sent any request-side reasoning control, so a reasoning-capable model looked
+identical to a toy on the wire. A provider-neutral `reasoningEffort` knob now rides the capability
+mode (`max` → `high`) and is translated per provider family at the adapter boundary
+(`reasoning_effort` for the OpenAI-compatible set — OpenAI, Azure, Groq, DeepSeek, OpenRouter, xAI,
+Mistral, Together, Fireworks, DeepInfra, NIM, Bedrock; extended thinking for Anthropic, with the
+budget clamped under `max_tokens` so it can never 400 on the budget rule; and a thinking budget for
+Gemini, nested under `generationConfig`). It is **default-deny**: the parameter is
+emitted ONLY when the registry has positively verified that the exact provider × model accepts it,
+so a model the provider adds tomorrow — or one that has never been probed — is never sent a
+parameter it hasn't been checked for. Support is learned three ways: from the provider's own
+advertised metadata where it publishes it (OpenRouter's `supported_parameters`, read at list time —
+new models classify themselves), by a tiny probe against high-capability models during a registry
+refresh (Groq, DeepSeek, …), and by a rejected request. A rejection is detected, recorded as
+`learned-unsupported`, and the call is retried ONCE without the parameter — the worst case is a
+silently inert knob, never a failed turn. The reasoning knob is an uplift, never a requirement: with
+no evidence, a call behaves exactly as before.
+
+### Added: `max` proves a strong model instead of silently substituting a weaker one
+
+The registry gap — a strong model that was only UNVERIFIED got replaced by the healthiest verified
+sibling, which a small fast model always wins — is closed at the shared route resolver. The probe's
+spot-check budget is now spent on the most capable chat models first, advertised metadata (context
+window + `supported_parameters`) is read at list time, and under `max` a merely-unverified requested
+model is **verified on demand**: one bounded call proves it works (recorded, so later routes take
+the sub-ms fast path) whenever no verified model is as capable. A provider's own admins/pins are
+never overridden — a model the registry has ruled out is still repaired legitimately.
+
+### Changed: the dashboard lands on Overview, chat survives navigation, and model counts agree
+
+Three tabs used to headline different numbers under the same word "models": the Models page counted
+the LIVE provider listing while Overview and the Discovery Timeline counted the REGISTRY, so a reader
+comparing them saw two totals and reasonably concluded one was wrong. A single `/api/model-counts`
+endpoint now supplies both numbers and every page renders them with their labels attached —
+`Tracked … (registry)` and `Listed … (live probe)` — for models AND providers, so a number with the
+same label is the same number everywhere. The Models page also no longer prints a hardcoded "testing
+17 providers" during load (the real probe covers 18 checks), and its per-model tiles drop a `Tokens`
+value that could never be populated and read as a broken field.
+
+The dashboard now LANDS on Overview; Chat moved to `/chat` and — the important half — is kept
+MOUNTED once opened. React Router was unmounting the chat page on every tab change, which tore down
+its progress SSE stream and discarded the transcript, so returning to Chat restarted the
+conversation. Hiding the mounted page (`display:none`) instead makes navigation behave like
+switching browser tabs: an in-flight turn keeps running, its stream keeps arriving, and coming back
+shows exactly where you left off. A full RELOAD is now covered too: the active session id is kept in `sessionStorage`, so reloading resumes the same conversation, and the server no longer treats a dropped connection as a cancel — the turn finishes and persists, and a reloaded client finds the answer (the session reports `busy` while it runs). Cancel is explicit again (`POST /api/chat/cancel`), so "the user pressed Cancel" and "the connection dropped" are different signals instead of the same one.
+
+### Fixed: an essay question was gated behind an "attach a project folder" prompt
+
+The workspace guard decides when an unattached chat turn must ask for a folder. Its
+filesystem-deliverable rule listed `class` as a file-ish noun, so "write an essay … for
+**class** 4" read as "write a code class" and was refused for a folder it did not need — after
+one earlier folder request, a plain writing task kept asking for a folder, which read as the agent
+having stopped listening. Inline prose deliverables (essay, poem, story, letter, summary …) are now
+never gated unless the ask names a real on-disk artifact (`essay.md`, `save the poem as poem.txt`),
+and `class` is gone from the noun list. The refusal also names the exact controls (**Select Project
+Folder** → **🗂️ Browse** → **Attach**) instead of a button label that does not exist. The chat system
+prompt also now states the rule the small model was violating: an essay or any general request needs
+no folder, you CAN create and edit files, and you must never tell the user to attach a folder or move
+files into a directory — so a refusal cannot bleed into a later general-chat answer.
+
+
 ## v3.3.10 — the provider wire is pinned, answers are scoped to a workspace, and the capabilities are stated honestly
 
 > v3.3.9 was tagged but never reached the registry: npm accepted the publish and
