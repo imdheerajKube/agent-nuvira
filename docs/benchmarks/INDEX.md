@@ -155,4 +155,23 @@ nuvira eval run --suite seeded-bugs -p groq -m llama-3.3-70b-versatile
 
 | Date | Provider | Model | Composite | Report |
 |------|----------|-------|-----------|--------|
-| — | — | — | — | *no live run recorded yet — the suite and its verification are in place, but every number here must come from a real provider run* |
+| 2026-10-05 | gemini | gemini-3.1-flash-lite | 60% | [seeded-bugs-gemini-gemini-3.1-flash-lite.md](seeded-bugs-gemini-gemini-3.1-flash-lite.md) |
+
+**First live run — and what it does and does not support.** Seven real seeds,
+run end to end on `gemini/gemini-3.1-flash-lite`: **localisation 3/7, fix rate
+5/7, false-success rate 2/7 (29% of the 7 tasks that claimed success),
+time-to-green 56.3s** (median, over the 5 tasks actually fixed). Fix rate and
+false-success rate are ground truth — the same checks that failed before the run
+passed after it — so they hold regardless of which model served a task.
+
+What does **not** hold is single-model attribution. The free tier rate-limited
+mid-run: two 120s circuit-breaker cooldowns, and the router failed one task over
+to `qwen2.5:0.5b` → `gemma-4-26b-a4b-it` / `gemma-4-31b-it`. The report names the
+REQUESTED model; a failover is not a property of the model, so read this row as
+"the harness on this provider tier", not as a clean measurement of
+`gemini-3.1-flash-lite`. An earlier attempt on `groq/openai/gpt-oss-120b` was
+substituted on 3 of 7 tasks before the account hit its tokens-per-day ceiling,
+and was discarded rather than published. This is the same free-tier collapse the
+M2b noise-floor note above records (±45pt), now with the failover made visible
+enough to name. **A gate-grade number needs a paid tier, or a paced / split-daily
+run that finishes inside the free quota.**
