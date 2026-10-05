@@ -36,7 +36,11 @@ jobs:
         node-version:
           - 22
           - 23
-    timeout-minutes: 10
+    # The full suite (428 files) runs ~6 min on ubuntu but ~2x that on the
+    # slower windows runners, so a 10-minute cap killed the windows jobs mid-run
+    # ("exceeded the maximum execution time") while ubuntu passed. Keep the cap
+    # generous enough that slowness cannot be mistaken for a failure.
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repository
