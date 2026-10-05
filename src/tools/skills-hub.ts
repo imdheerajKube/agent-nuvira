@@ -38,6 +38,13 @@ export interface SkillManifest {
   source: string;
   sourceHash: string;
   installedAt?: number;
+  /**
+   * The raw SKILL.md (frontmatter + body). Carried so `install()` can write the
+   * skill's actual instructions — a manifest with only metadata would install a
+   * SKILL.md whose body was thrown away (the model then loads an empty
+   * methodology). This is what the hub tool hands back to callers.
+   */
+  content?: string;
 }
 
 export interface LockEntry {
@@ -118,6 +125,7 @@ export class GitHubSource implements SkillSource {
       tags: meta.tags?.split(',').map((t) => t.trim()),
       source,
       sourceHash: createHash('sha256').update(content).digest('hex'),
+      content,
     };
   }
 }
@@ -187,6 +195,7 @@ export class LocalSource implements SkillSource {
       tags: meta.tags?.split(',').map((t) => t.trim()),
       source,
       sourceHash: createHash('sha256').update(content).digest('hex'),
+      content,
     };
   }
 }
@@ -244,8 +253,15 @@ export class SkillsHubManager {
     }
     mkdirSync(skillDir, { recursive: true });
 
-    // Write SKILL.md
-    writeFileSync(join(skillDir, 'SKILL.md'), `---\nname: ${manifest.name}\nversion: ${manifest.version}\ndescription: ${manifest.description}\n---\n\n`, 'utf-8');
+    // Write SKILL.md. The FULL source (frontmatter + body) is what makes the
+    // skill usable — see SkillManifest.content. Regenerating only frontmatter
+    // here silently discarded the methodology, so an installed skill loaded as
+    // an empty shell. Fall back to a frontmatter stub only if a source adapter
+    // genuinely returned no content (defensive; every adapter sets it).
+    const skillMd = manifest.content && manifest.content.trim().length > 0
+      ? manifest.content
+      : `---\nname: ${manifest.name}\nversion: ${manifest.version}\ndescription: ${manifest.description}\n---\n\n`;
+    writeFileSync(join(skillDir, 'SKILL.md'), skillMd, 'utf-8');
 
     // Update lock file
     const lock = this.readLock();
