@@ -176,7 +176,10 @@ async function buildPptx(slides: { title: string; bullets: string[] }[]): Promis
 
 // ─── PDF ────────────────────────────────────────────────────────────────────
 
-describe('PDF — the text layer is read, and table rows survive', () => {
+// A cold pdf.js import on a slow Windows runner can exceed the default 15s
+// timeout before the first assertion runs — the work is real, the wait is the
+// runner, so the PDF suite gets a wider budget than the rest of the file.
+describe('PDF — the text layer is read, and table rows survive', { timeout: 60_000 }, () => {
   let pdfPath: string;
 
   beforeAll(() => {

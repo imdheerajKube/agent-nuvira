@@ -95,7 +95,9 @@ const ctx = { configManager: {} } as unknown as ToolContext;
 
 // ─── read_extract ───────────────────────────────────────────────────────────
 
-describe('read_extract — an unimplemented format refuses, it does not return bytes as text', () => {
+// read_extract pays a cold pdf.js import on its first call; on a slow Windows
+// runner that alone can exceed the default 15s timeout (observed in CI).
+describe('read_extract — an unimplemented format refuses, it does not return bytes as text', { timeout: 60_000 }, () => {
   const mgr = getReadExtractManager();
 
   it('refuses a corrupt PDF without leaking its raw bytes into `text`', async () => {
