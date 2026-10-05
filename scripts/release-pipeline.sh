@@ -262,6 +262,28 @@ if [ "$PUBLISH" = 1 ]; then
     [ -n "$CHANGELOG_TITLE" ] && bump_msg="v%s: $CHANGELOG_TITLE"
     run_step "Version bump (npm version $BUMP)" \
       npm version "$BUMP" -m "$bump_msg" || FAIL_TOTAL=1
+    # The CLI demo cast records `nuvira --version`, so this version-pinned
+    # artifact goes stale the instant we bump. Regenerate it here — while the
+    # release tag is still LOCAL — and fold it into the release commit.
+    # Without this, CI's cli-demo staleness guard fails on the tag commit and
+    # the tag-triggered GitHub Release never runs (the same shape as issue #17).
+    if [ "$FAIL_TOTAL" = 0 ]; then
+      NEW_VERSION="$(node -p "require('./package.json').version" 2>/dev/null)"
+      if run_step "Regenerate version-pinned artifacts (release:artifacts)" \
+           npm run release:artifacts; then
+        if ! git diff --quiet -- docs/demos/nuvira-cli-tour.cast; then
+          git add docs/demos/nuvira-cli-tour.cast
+          run_step "Fold artifacts into the release commit" \
+            git commit --amend --no-edit || FAIL_TOTAL=1
+          run_step "Retag release (v$NEW_VERSION)" \
+            git tag -f -a "v$NEW_VERSION" -m "v$NEW_VERSION" || FAIL_TOTAL=1
+        else
+          ok "Version-pinned artifacts already match v$NEW_VERSION"
+        fi
+      else
+        FAIL_TOTAL=1
+      fi
+    fi
     if [ "$FAIL_TOTAL" = 0 ]; then
       run_step "Git push (branch)" git push origin HEAD || FAIL_TOTAL=1
       run_step "Git push (tags — triggers CI publish + GitHub release)" git push origin --tags || FAIL_TOTAL=1
