@@ -84,7 +84,9 @@ describe('run_terminal — install sandbox (C3)', () => {
     expect(result).toContain('/.venv/bin');
     expect(result).toContain('🔒');
     expect(result).not.toContain('Error:');
-  });
+    // A cold, loaded runner can spend >15s creating the venv; the default 15s
+    // test timeout failed on runner speed, not on the tool.
+  }, 60_000);
 
   withPython('reuses an existing project .venv rather than creating a second one', async () => {
     const root = tmp();
@@ -99,5 +101,7 @@ describe('run_terminal — install sandbox (C3)', () => {
     expect(result).toMatch(/POETRY_SAW_VIRTUAL_ENV=.*\/\.venv/);
     expect(result).toContain('/.venv/bin');
     expect(result).not.toContain('Error:');
-  });
+    // A cold, loaded runner can spend >15s creating the venv; the default 15s
+    // test timeout failed on runner speed, not on the tool.
+  }, 60_000);
 });

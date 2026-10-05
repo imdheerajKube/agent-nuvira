@@ -77,4 +77,8 @@ async function main() {
   return 0;
 }
 
-process.exit(await main());
+// Use exitCode, not process.exit(): on Windows a forced exit races libuv's
+// async-handle teardown and crashes with `UV_HANDLE_CLOSING` AFTER the check has
+// already passed (observed as exit 127 on a green run). Letting the loop drain
+// exits cleanly on every platform.
+process.exitCode = await main();

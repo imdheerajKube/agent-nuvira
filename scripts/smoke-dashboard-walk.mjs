@@ -224,18 +224,25 @@ function auditA11y() {
 
 function pageFacts() {
   const page = document.querySelector('.main') || document.body;
-  const h1s = [...page.querySelectorAll('h1')];
+  // VISIBLE elements only. .main holds the persistently-mounted ChatPage even
+  // while it is hidden with display:none (App keeps it mounted so a chat turn's
+  // SSE stream survives navigation), and querySelectorAll matches hidden nodes,
+  // so a raw scan counted the hidden chat header and saw a second h1 on every
+  // route. A display:none subtree is not in the accessibility tree, so it must
+  // not count toward the page's headings.
+  const visible = (sel) => [...page.querySelectorAll(sel)].filter(isVisible);
+  const h1s = visible('h1');
   // Scoped to .main on purpose: the rail's own group headings are h2 and come
   // BEFORE the page in the DOM, so a document-wide "first heading" reading says
   // h2 for a perfectly correct page.
-  const levels = [...page.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((h) => Number(h.tagName[1]));
+  const levels = visible('h1,h2,h3,h4,h5,h6').map((h) => Number(h.tagName[1]));
   const distinct = [...new Set(levels)].sort((a, b) => a - b);
   let levelsSkipped = null;
   for (let i = 1; i < distinct.length; i++) {
     if (distinct[i] - distinct[i - 1] > 1) levelsSkipped = 'h' + distinct[i - 1] + ' -> h' + distinct[i];
   }
   const root = document.documentElement;
-  const pageHeader = document.querySelector('.page-header');
+  const pageHeader = [...document.querySelectorAll('.page-header')].find(isVisible);
   const topbar = document.querySelector('.topbar');
   const rail = document.querySelector('.nav');
   const activeLink = document.querySelector('.nav-link.active');
