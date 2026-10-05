@@ -55,4 +55,15 @@ describe('ProviderFactory.isConstructible', () => {
   it('keeps zero-config users a provider (local stays constructible)', () => {
     expect(ProviderFactory.isConstructible('local')).toBe(true);
   });
+
+  it('serves OmniRoute as a keyless OpenAI-compatible gateway with an `auto` default', () => {
+    const entry = getCatalogProvider('omniroute');
+    expect(entry?.openAICompat).toBe(true);
+    expect(entry?.keyless).toBe(true);
+    // OmniRoute's zero-config model id — the gateway picks the upstream.
+    expect(entry?.defaultModel).toBe('auto');
+    expect(entry?.baseUrl).toContain('20128');
+    expect(ProviderFactory.isConstructible('omniroute')).toBe(true);
+    expect(() => ProviderFactory.createProvider('omniroute', {} as never)).not.toThrow();
+  });
 });

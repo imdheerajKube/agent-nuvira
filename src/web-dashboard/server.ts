@@ -5273,6 +5273,22 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           updates.model = body.model.trim() ? body.model.trim() : undefined;
         }
         if (typeof body.runner === 'string' && body.runner.trim().length > 0) updates.runner = body.runner.trim() as ProviderConfig['runner'];
+        // A3 — a model id is validated against the provider's LIVE list before
+        // it is written, so a typo cannot become a silent substitution at run
+        // time. An unreachable provider is saved unverified (never blocked); a
+        // reachable one that does not serve the id is refused with suggestions.
+        if (typeof updates.model === 'string' && updates.model) {
+          const { validateModelIdForProvider } = await import('../inference/model-id-validation.js');
+          const verdict = await validateModelIdForProvider(type, updates.model, configManager);
+          if (!verdict.ok) {
+            writeJson(res, 400, {
+              ok: false,
+              error: verdict.message,
+              suggestions: verdict.suggestions ?? [],
+            });
+            return;
+          }
+        }
         // Raw config (vault refs INTACT) — never save a resolved key back to
         // plaintext (the documented resolveVaultRefs footgun).
         const raw = configManager.getAll().providers[type] || {};

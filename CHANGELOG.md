@@ -2,6 +2,59 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## Unreleased — a model id is checked before it is saved, a known build failure names its fix, a step is not done while its artifact is missing, and OmniRoute joins the provider catalog
+
+> Four follow-ups from the `cal` Android assessment, each closing a place where
+the agent could not see the truth for itself: a dead model id that only failed
+at call time, a toolchain failure it diagnosed but could not repair, a plan step
+it could mark done without the file it named, and a provider supply a single
+endpoint can draw on.
+
+### Added: model ids are validated against the provider before they are written (A3)
+
+A config held `providers.deepseek.model = "DeepSeek-V4.1-Flash"`, which the API
+rejects — and the router only discovered that at CALL time, repairing it by
+SUBSTITUTING another model (exactly what strict mode forbids, and invisible
+until much later). `validateModelIdForProvider` now checks the id against the
+provider's LIVE model list at the SAVE boundary: `nuvira config set
+providers.<p>.model` and the dashboard provider editor both refuse an id the
+provider does not serve and name the closest matches (`did you mean
+'deepseek-flash'?`). A provider that is unreachable or keyless lists nothing, so
+the id saves UNVERIFIED rather than blocking offline configuration. The rule is
+provider-agnostic — no per-provider allow-list.
+
+### Added: a known toolchain failure now carries its fix (A4)
+
+On the Android run the agent diagnosed the Gradle/JDK-21 cause correctly and
+then retried the same command, deferring the fix to the user. `run_terminal`
+now appends a bounded remediation to a RECOGNISED failure — JDK version,
+missing Android SDK/`local.properties`, a non-executable `gradlew`, a missing
+toolchain, a Python venv, a Node engine mismatch, a stopped Docker daemon —
+separating the project-local step (a file write, a chmod, an env var scoped to
+that command) from the machine-level one that is the user's call, and telling
+the model not to repeat the identical command. An unknown failure adds nothing:
+a wrong "known fix" is worse than none.
+
+### Added: a plan step is done only when its artifact exists (A6)
+
+A plan step that NAMES a file is verifiable, so `plan_todo` now verifies it:
+marking such a step `done` while the file is absent is refused, with the missing
+paths listed. A step with no file-like token is unaffected, and the extraction
+is deliberately conservative (quoted paths, paths with an extension, known
+extensions) so a false "missing" can never block legitimate work.
+
+### Added: OmniRoute in the provider catalog
+
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) — an MIT, local-first AI
+gateway that multiplexes hundreds of upstream providers behind one
+OpenAI-compatible endpoint — is now a keyless catalog provider (`omniroute`,
+default model `auto`, base URL `http://127.0.0.1:20128/v1`, overridable). It is
+deliberately a PROVIDER, not a replacement for the router: the multilayer
+router keeps task-, capability- and privacy-aware selection, while OmniRoute
+enlarges the provider supply a single connection can draw on. It participates
+in routing, probing and the provider list like every other OpenAI-compatible
+provider.
+
 ## v3.3.12 — the harness sees its own routing, plans before it edits, and never replays a flagged answer as clean
 
 > A turn now records why it picked the provider×model it did, asks before it falls back to a weak

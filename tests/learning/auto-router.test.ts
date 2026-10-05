@@ -45,7 +45,14 @@ import { resetRouterPromotion, getRouterPromotion } from '../../src/learning/rou
 import { resetMlRouter, getMlRouter } from '../../src/learning/ml-router.js';
 import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-registry.js';
 import { PROVIDER_CONTEXT_WINDOWS } from '../../src/learning/model-selection.js';
-import { CATALOG_PROVIDER_IDS } from '../../src/inference/provider-catalog.js';
+import { CATALOG_PROVIDER_IDS, isCatalogKeyless } from '../../src/inference/provider-catalog.js';
+
+/**
+ * Keyless runners OTHER than `local` are not candidates unless verified or
+ * explicitly configured — derived from the catalog so adding a keyless gateway
+ * (e.g. omniroute) cannot silently break these count assertions.
+ */
+const KEYLESS_RUNNERS = CATALOG_PROVIDER_IDS.filter((p) => p !== 'local' && isCatalogKeyless(p));
 
 // ─── Learning-state test isolation ─────────────────────────────────────────
 //
@@ -1842,7 +1849,7 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
     const blocked = decision.governanceBlocked || [];
     expect(blocked.map((b) => b.provider).sort()).toEqual(
       CATALOG_PROVIDER_IDS.filter(
-        (p) => p !== 'groq' && p !== 'local' && !['nuvira', 'lmstudio', 'vllm'].includes(p),
+        (p) => p !== 'groq' && p !== 'local' && !KEYLESS_RUNNERS.includes(p),
       ).sort(),
     );
     expect(blocked.every((b) => b.reason.includes('allowProviders'))).toBe(true);
@@ -1927,7 +1934,7 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
     // every catalog provider is a candidate — except the keyless runners
     // beyond local (nuvira/lmstudio/vllm), which need verification or explicit
     // config. The policy stays permissive either way.
-    expect(decision.ranked.length).toBe(CATALOG_PROVIDER_IDS.length - 3);
+    expect(decision.ranked.length).toBe(CATALOG_PROVIDER_IDS.length - KEYLESS_RUNNERS.length);
     expect(decision.governanceBlocked || []).toEqual([]);
   });
 

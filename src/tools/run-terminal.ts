@@ -33,6 +33,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { diagnoseFailure, formatRemediation } from './remediation-ladder.js';
 import type { ToolContext } from './registry.js';
 import { maskSenderId } from '../utils/mask.js';
 import { decideStateChange } from '../learning/autonomy-policy.js';
@@ -451,6 +452,14 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
   const startedAt = Date.now();
   const output = await execCommand(command, ctx.cwd, timeoutMs, runEnv);
 
+  // A4 — a KNOWN toolchain failure gets its known fix appended, so the model
+  // repairs instead of re-trying the identical command. Advisory only: the note
+  // names the bounded, project-local step; it never mutates the workspace.
+  const remediation = output.startsWith('Error:')
+    ? diagnoseFailure(command, output, ctx.cwd)
+    : null;
+  const remediationNote = remediation ? `\n\n${formatRemediation(remediation)}` : '';
+
   // ── A1: effect verification — a BUILD is not done until its artifact is
   // OBSERVED to launch. The live Aukat_check run reported "successfully built
   // and functional" for a bundle that crashed on import; exit code 0 is not
@@ -472,13 +481,14 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
     if (verdict.status === 'verified') effectNote = `\n${formatEffectVerdict(verdict)}`;
   }
 
-  if (!decidedAutonomously) return output + effectNote + envNote;
+  if (!decidedAutonomously) return output + effectNote + envNote + remediationNote;
   // Reported, never silent — a judgment call the user cannot see is
   // indistinguishable from a bug.
   return (
     `${output}${effectNote}\n💡 Ran without asking: ${autonomyReason}. State what you ran in your answer — ` +
     'do not ask for permission to do work the user already asked for.' +
-    envNote
+    envNote +
+    remediationNote
   );
 }
 

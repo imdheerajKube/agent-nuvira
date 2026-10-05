@@ -455,6 +455,36 @@ describe('registry — gateway_send tool (message delivery to channels)', () => 
     expect(store.progress().done).toBe(1);
   });
 
+  it('A6 — refuses to mark a step done while the artifact it names is missing', async () => {
+    const { PlanStore } = await import('../../src/tools/plan-store.js');
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'buff-plan-artifact-'));
+    try {
+      const store = new PlanStore();
+      const tool = getTool('plan_todo')!;
+      const ctx = { configManager: {}, planStore: store, cwd: dir } as ToolContext;
+      await tool.run(
+        { action: 'create', goal: 'Ship the APK', steps: [{ id: 'apk', description: 'produce dist/app.apk' }] },
+        ctx,
+      );
+
+      const blocked = await tool.run({ action: 'update', id: 'apk', status: 'done' }, ctx);
+      expect(blocked).toContain('Error:');
+      expect(blocked).toContain('dist/app.apk');
+      expect(store.progress().done).toBe(0);
+
+      mkdirSync(join(dir, 'dist'), { recursive: true });
+      writeFileSync(join(dir, 'dist', 'app.apk'), 'x');
+      const ok = await tool.run({ action: 'update', id: 'apk', status: 'done' }, ctx);
+      expect(ok).toContain('1/1 done');
+      expect(store.progress().done).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('P0.7 — plan_todo runs without an injected store (shared fallback, never throws)', async () => {
     const tool = getTool('plan_todo')!;
     const out = await tool.run(

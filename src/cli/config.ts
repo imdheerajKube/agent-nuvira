@@ -7,6 +7,7 @@ import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { ProviderType, BuffConfig } from '../config/types.js';
 import { clearModelListCache } from '../inference/model-validator.js';
+import { validateModelIdForProvider } from '../inference/model-id-validation.js';
 import { CATALOG_PROVIDER_IDS, getCatalogProvider, catalogEnvVar, isCatalogKeyless } from '../inference/provider-catalog.js';
 import { Vault } from '../enterprise/vault.js';
 import { guardRbacAction } from './rbac-guard.js';
@@ -91,8 +92,8 @@ export class ConfigCommand extends BaseCommand {
       .description('Set a configuration value')
       .argument('<key>', 'Config key (e.g., defaultProvider, providers.nim.model)')
       .argument('<value>', 'Config value')
-      .action((key: string, value: string) => {
-        this.setValue(key, value);
+      .action(async (key: string, value: string) => {
+        await this.setValue(key, value);
       });
   }
 
@@ -316,7 +317,7 @@ export class ConfigCommand extends BaseCommand {
     }
   }
 
-  private setValue(key: string, value: string): void {
+  private async setValue(key: string, value: string): Promise<void> {
     const config = this.configManager.getAll();
 
     // Parse the key path to set the value
@@ -378,6 +379,26 @@ export class ConfigCommand extends BaseCommand {
         // Coerce numeric values (existing behavior for model/temperature/maxTokens)
         if (!isNaN(Number(value)) && value.trim() !== '') {
           typedValue = Number(value);
+        }
+      }
+
+      // A3 — validate a model id against the provider that will serve it,
+      // BEFORE writing it. The router repairs a dead id at call time by
+      // SUBSTITUTING, which strict mode forbids and which is invisible until
+      // much later; catching it here turns a silent substitution into a typo
+      // corrected. Best-effort: an unreachable provider yields `verified:false`
+      // and still saves (offline configuration must stay possible).
+      if (field === 'model' && typeof typedValue === 'string' && typedValue.trim()) {
+        const verdict = await validateModelIdForProvider(providerName, typedValue, this.configManager);
+        if (!verdict.ok) {
+          logger.error(`Invalid model for provider '${providerName}': ${verdict.message}`);
+          logger.info('  Not saved. Run `nuvira config list` to see the provider, or set a model the provider serves.');
+          return;
+        }
+        if (!verdict.verified) {
+          logger.warn(
+            `  ⚠️  Could not verify '${typedValue}' against '${providerName}' (provider unreachable or no key) — saved unverified.`,
+          );
         }
       }
 

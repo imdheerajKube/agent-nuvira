@@ -160,6 +160,29 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     pricing: { inputPer1K: 0, outputPer1K: 0 },
     contextWindow: 131_072,
   },
+  /**
+   * OmniRoute (https://github.com/diegosouzapw/OmniRoute) — an MIT, local-first
+   * AI gateway that multiplexes hundreds of upstream providers behind ONE
+   * OpenAI-compatible endpoint, with quota-aware failover and token
+   * compression. It is not a routing BRAIN: our own multilayer router still
+   * owns task-aware selection, while OmniRoute enlarges the provider supply a
+   * single connection can draw on. `auto` is its zero-config model id (a
+   * virtual combo scored live); it also exposes `auto/coding`, `auto/cheap`,
+   * `auto/fast`. Overridable via `providers.omniroute.baseUrl` (OmniRoute's own
+   * default port is 20128). Keyless: the gateway holds the upstream keys.
+   */
+  omniroute: {
+    id: 'omniroute',
+    defaultModel: 'auto',
+    label: 'OmniRoute (AI gateway)',
+    icon: '🔀',
+    keyless: true,
+    openAICompat: true,
+    baseUrl: 'http://127.0.0.1:20128/v1',
+    capabilities: { reasoning: 0.72, speed: 0.68, cost: 0.92, privacy: 0.50, reliability: 0.80 },
+    pricing: { inputPer1K: 0, outputPer1K: 0 },
+    contextWindow: 131_072,
+  },
 
   // ── Extended OpenAI-compatible providers (Issue 001: 17+ in routing) ────
   openai: {

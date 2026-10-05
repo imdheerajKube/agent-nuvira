@@ -281,6 +281,24 @@ empty value (use **Unset**), and a value containing a newline (it would add a se
 the file). Hook commands are stored in plain text — the page says so, because a hook is the one
 place a user might paste a token, and it is not masked here the way a skill secret is.
 
+### Pinning a model, and what happens when the pin cannot run
+
+A model pinned in the chat picker is a **preference**, not a guarantee, unless you say so:
+
+- **Default (`🔓 auto-fallback`).** If the pinned model is unavailable the router substitutes another
+  one, and the turn tells you — *"Auto routing took over: this turn ran on `groq/…` because your
+  pinned `gemini/…` was not available. To work with `gemini/…` only, enable strict model mode."*
+- **Strict (`🔒 strict`).** The turn runs on the pinned model or stops; it never substitutes. Choose
+  this when a result is only meaningful from that model. It is the same contract as
+  `NUVIRA_STRICT_MODEL=1` on the CLI, and per-chat on the dashboard it is scoped to the turn, so two
+  conversations can hold different pins.
+- A **model id is validated before it is saved** (CLI and dashboard): an id the provider does not
+  serve is refused with the closest matches, instead of being repaired by substitution at run time.
+
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) can be added as a provider (`omniroute`,
+keyless, default model `auto`) when you want one endpoint in front of many upstream providers. It is
+an aggregation gateway, not a second router: agent-nuvira still chooses the model for each task.
+
 ### System — the doctor page, not a second set of counters
 
 The **System** tab (`/system`) runs the same checks `nuvira doctor` runs, on demand, and shows each

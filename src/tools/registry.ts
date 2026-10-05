@@ -30,6 +30,7 @@ import { ACTION_BY_INTENT } from '../nlu/actions.js';
 import { detectPermissionSeeking, IRREVERSIBLE_ACTION_RE } from '../learning/autonomy-policy.js';
 import { createFindingTool } from './finding-tool.js';
 import { recordArtifact } from './artifact-append.js';
+import { checkStepArtifacts } from './step-artifact.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -1019,6 +1020,20 @@ registerTool({
         return `Error: plan_todo found no step "${id}" — valid step ids: ${
           valid.length > 0 ? valid.join(', ') : '(none — declare the plan with action "create" first)'
         }. Re-send this update with one of those ids.`;
+      }
+      // A6 — a step that NAMES an artifact is done only once that artifact
+      // exists. The plan can otherwise advance past undelivered work (the `cal`
+      // run kept going after its APK step never produced an APK). Checked
+      // against the workspace; a step with no file-like token is unaffected.
+      if (status === 'done' && ctx.cwd) {
+        const step = store.snapshot?.()?.steps.find((s) => s.id === resolved);
+        const { missing } = checkStepArtifacts(step?.description ?? '', ctx.cwd);
+        if (missing.length > 0) {
+          return (
+            `Error: step "${resolved}" names artifact(s) that do not exist yet: ${missing.join(', ')}. ` +
+            `Create them in ${ctx.cwd}, then mark the step done — a step is not done while its artifact is missing.`
+          );
+        }
       }
       store.update(resolved, status, note);
     } else {
