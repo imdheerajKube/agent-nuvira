@@ -473,7 +473,37 @@ export function buildToolSystemPrompt(parsed?: ParsedRequest): string {
   ].join('\n');
 }
 
-
+/**
+ * #30 — does this turn carry an HONESTY FLAG?
+ *
+ * A flagged answer must NEVER be written to the shared response cache. The cache
+ * stores text only, so a later identical prompt — on the CLI, the dashboard or the
+ * gateway — was served the reply with every flag absent: a known-unverified claim
+ * (`unverifiedActionClaim` / `unverifiedEditClaim` / `unverifiedBuildClaim`), an
+ * announced-but-unperformed action (`unfulfilledPromise`), a missing deliverable
+ * (`undeliveredArtifact`) or an inert turn (`noActionTaken`) replayed as a clean
+ * answer, on every surface at once. The flags exist because those answers must
+ * not be replayed as settled, so the turn is not cached and re-derives instead.
+ */
+export function turnCarriesHonestyFlag(result: {
+  unverifiedActionClaim?: boolean;
+  unfulfilledPromise?: boolean;
+  undeliveredArtifact?: boolean;
+  unverifiedBuildClaim?: boolean;
+  unverifiedEdit?: boolean;
+  unverifiedEditClaim?: boolean;
+  noActionTaken?: boolean;
+}): boolean {
+  return Boolean(
+    result.unverifiedActionClaim ||
+      result.unfulfilledPromise ||
+      result.undeliveredArtifact ||
+      result.unverifiedBuildClaim ||
+      result.unverifiedEdit ||
+      result.unverifiedEditClaim ||
+      result.noActionTaken,
+  );
+}
 
 // ─── ChatCommand ────────────────────────────────────────────────────────────
 
@@ -1746,24 +1776,34 @@ export class ChatCommand extends BaseCommand {
     const cacheModel = this.cacheModelFor(session);
     if (cacheEnabled) {
       try {
-        const cachedResult = await cache.get(message, cacheModel, session.type, turnScope);
-        if (cachedResult) {
+        // #30 — read the entry WITH its recorded activity, not just the text: a
+        // replay that dropped `toolCalls` rendered no tool cards on the dashboard
+        // while the first run did, so a repeated prompt read as a turn that did
+        // nothing. The text alone is still what the answer is; the activity is
+        // reported so the surface is honest about what the cached turn DID.
+        const cached = await cache.getEntry(message, cacheModel, session.type, turnScope);
+        if (cached) {
           // NOTE: the cached answer is NOT printed here — the caller prints
           // content AFTER runChatAnswer returns (answer-first ordering). A
           // print here would show the answer before the turn's own progress
           // lines AND double-print it.
           history.push({ role: 'user', content: message });
-          history.push({ role: 'assistant', content: cachedResult });
-          this.memoryNoteTurn(message, cachedResult);
+          history.push({ role: 'assistant', content: cached.response });
+          this.memoryNoteTurn(message, cached.response);
           // WS2 — a cache replay reached no model, so the log says exactly that
           // rather than borrowing an attribution from a turn that did not run.
           // The workspace the replayed answer belongs to is recorded with the hit:
           // a cache replay does no work, so "which project is this answer about?"
           // is the one fact needed to tell a replay from a real turn.
-          debugLog?.event('cache.hit', { chars: cachedResult.length, scope: turnScope });
+          debugLog?.event('cache.hit', { chars: cached.response.length, scope: turnScope });
           const cacheNotice = debugLogNotice(ctxOverrides?.debugSurface ?? 'cli-chat', debugLog?.write() ?? null);
           if (cacheNotice) logger.info(cacheNotice);
-          return { content: cachedResult };
+          return {
+            content: cached.response,
+            ...(cached.toolCalls ? { toolCalls: cached.toolCalls } : {}),
+            ...(cached.successfulToolCalls ? { successfulToolCalls: cached.successfulToolCalls } : {}),
+            ...(cached.bounded ? { bounded: cached.bounded } : {}),
+          };
         }
       } catch {
         // Cache must never break the turn.
@@ -2515,11 +2555,36 @@ export class ChatCommand extends BaseCommand {
     if (result.content.trim() && !result.generationFailed && !result.cancelled) {
       if (cacheEnabled) {
         try {
-          // Keyed by the model that ACTUALLY answered (tryGenerate records it
-          // on success), so a weak model's reply is never replayed as a strong
-          // model's. `cacheModel` is the pre-flight fallback for the paths that
-          // never resolve one (e.g. a cached-hit turn).
-          await cache.set(message, result.content, this.cacheModelFor(session) || cacheModel, session.type, undefined, turnScope);
+          // #30 — NEVER cache a turn that carries an honesty flag. The cache
+          // stores text only, so storing a flagged answer would let a later
+          // identical prompt (or the same prompt on another surface) replay a
+          // known-unverified claim as a clean one — a truthfulness hole the whole
+          // flag system exists to close. A flagged turn re-derives instead.
+          if (turnCarriesHonestyFlag(result)) {
+            debugLog?.event('cache.skip', { reason: 'honesty-flag', scope: turnScope });
+          } else {
+            // Keyed by the model that ACTUALLY answered (tryGenerate records it
+            // on success), so a weak model's reply is never replayed as a strong
+            // model's. `cacheModel` is the pre-flight fallback for the paths that
+            // never resolve one (e.g. a cached-hit turn).
+            //
+            // #30 — the turn ACTIVITY rides with the text so a replay reports what
+            // the cached turn did (tool cards, bounded), rather than reading as a
+            // turn that did nothing.
+            await cache.set(
+              message,
+              result.content,
+              this.cacheModelFor(session) || cacheModel,
+              session.type,
+              undefined,
+              turnScope,
+              {
+                ...(result.toolCalls ? { toolCalls: result.toolCalls } : {}),
+                ...(result.successfulToolCalls ? { successfulToolCalls: result.successfulToolCalls } : {}),
+                ...(result.bounded ? { bounded: true } : {}),
+              },
+            );
+          }
         } catch {
           // Best-effort.
         }

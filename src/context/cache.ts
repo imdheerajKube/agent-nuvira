@@ -41,6 +41,39 @@ interface CacheEntry {
    * entry, not to keep a second copy of the conversation.
    */
   promptPreview?: string;
+  /**
+   * #30 — the turn's ACTIVITY, stored with the answer so a replay can report
+   * what the original turn actually did. Without this, a repeated prompt on the
+   * dashboard rendered no tool cards (the cards were part of the dropped
+   * metadata, not the text), so a replayed turn read as a turn that did nothing.
+   *
+   * Deliberately NOT the honesty FLAGS: a turn that carries one is never cached
+   * at all (see `ChatCacheFacts` and the write guard in `cli/chat.ts`), so there
+   * is no entry that could replay an unverified claim as clean.
+   */
+  toolCalls?: string[];
+  successfulToolCalls?: string[];
+  bounded?: boolean;
+}
+
+/**
+ * #30 — the turn facts a caller may store with a cached answer, and read back on
+ * a hit. Only NON-flag facts live here on purpose: a flagged turn is not cached,
+ * so persisting a flag would be storing a state that can never legitimately be
+ * replayed.
+ */
+export interface ChatCacheFacts {
+  toolCalls?: string[];
+  successfulToolCalls?: string[];
+  bounded?: boolean;
+}
+
+/** A cache hit, with the answer plus the activity it recorded. */
+export interface CacheHit {
+  response: string;
+  toolCalls?: string[];
+  successfulToolCalls?: string[];
+  bounded?: boolean;
 }
 
 interface CacheData {
@@ -135,6 +168,19 @@ export class InferenceCache {
    * Get cached response if available and not expired
    */
   async get(prompt: string, model: string, provider: string, scope?: string): Promise<string | null> {
+    const hit = await this.getEntry(prompt, model, provider, scope);
+    return hit ? hit.response : null;
+  }
+
+  /**
+   * #30 — the same lookup, but returning the turn ACTIVITY stored with the
+   * answer (tool calls, bounded) rather than only the text. A surface that
+   * replayed a cached answer used to hand back `{ content }` alone, so a repeated
+   * prompt rendered no tool cards while the first run did. `get()` is kept as the
+   * string-returning convenience for callers that only want the text (web
+   * research), so no existing call site changes.
+   */
+  async getEntry(prompt: string, model: string, provider: string, scope?: string): Promise<CacheHit | null> {
     const data = readCache();
     const key = generateKey(prompt, model, provider, scope);
     const entry = data.entries[key];
@@ -149,11 +195,21 @@ export class InferenceCache {
       return null;
     }
 
-    return entry.response;
+    return {
+      response: entry.response,
+      ...(entry.toolCalls ? { toolCalls: entry.toolCalls } : {}),
+      ...(entry.successfulToolCalls ? { successfulToolCalls: entry.successfulToolCalls } : {}),
+      ...(entry.bounded ? { bounded: entry.bounded } : {}),
+    };
   }
 
   /**
    * Store a response in the cache
+   *
+   * `facts` (#30) records the turn ACTIVITY on the entry so a replay can report
+   * it. Callers must NOT cache a turn that carries an honesty flag — that guard
+   * lives at the call site because only the caller sees the turn's flags (see
+   * `cli/chat.ts`).
    */
   async set(
     prompt: string,
@@ -162,7 +218,9 @@ export class InferenceCache {
     provider: string,
     ttl: number = 3600,
     /** The workspace this answer is about (see generateKey). */
-    scope?: string
+    scope?: string,
+    /** #30 — the turn activity to persist alongside the answer. */
+    facts?: ChatCacheFacts
   ): Promise<void> {
     const data = readCache();
     pruneExpired(data); // Clean up expired entries before writing
@@ -176,6 +234,11 @@ export class InferenceCache {
       ttl,
       ...(scope ? { scope } : {}),
       ...(prompt ? { promptPreview: prompt.slice(0, PREVIEW_LIMIT) } : {}),
+      ...(facts?.toolCalls && facts.toolCalls.length > 0 ? { toolCalls: facts.toolCalls } : {}),
+      ...(facts?.successfulToolCalls && facts.successfulToolCalls.length > 0
+        ? { successfulToolCalls: facts.successfulToolCalls }
+        : {}),
+      ...(facts?.bounded ? { bounded: true } : {}),
     };
 
     writeCache(data);
