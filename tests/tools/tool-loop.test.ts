@@ -2307,6 +2307,40 @@ describe('tool loop — PLAN gate (declare a plan before mutating)', () => {
     if (nudgeIdx !== -1) expect(nudgeIdx).toBeGreaterThan(assistantIdx + ids.length);
   });
 
+  it("carries the step's reasoning_content onto the assistant message it replays", async () => {
+    // DeepSeek v4 in thinking mode rejects the next request unless the prior
+    // assistant turn's reasoning_content is sent back with its tool calls.
+    type Msg = { role: string; content: string; reasoningContent?: string };
+    const threads: Msg[][] = [];
+    const callModel = vi.fn();
+    let i = 0;
+    const script: StepResponse[] = [
+      {
+        content: '',
+        reasoningContent: 'thinking about the build',
+        toolCalls: [{ id: 'r1', name: 'run_terminal', arguments: { command: 'npm test' } }],
+      },
+      { content: 'Done.', toolCalls: [] },
+    ];
+    callModel.mockImplementation(async (messages: Msg[]) => {
+      threads.push([...messages]);
+      return script[Math.min(i++, script.length - 1)];
+    });
+    const deps: ToolLoopDeps = {
+      callModel,
+      executeTool: vi.fn(async (n: string) => `executed ${n}`),
+      onEvent: vi.fn(),
+    };
+    await runToolLoop({
+      messages: [{ role: 'user', content: WORK_ASK }],
+      context: ctx,
+      deps,
+      onTraceEvent: () => {},
+    });
+    const assistant = (threads[1] ?? []).find((m) => m.role === 'assistant' && m.reasoningContent);
+    expect(assistant?.reasoningContent).toBe('thinking about the build');
+  });
+
   it('planRequiredNudge names the ask and forbids planning-instead-of-working', () => {
     const text = planRequiredNudge(WORK_ASK);
     expect(text).toContain('declare a short PLAN');

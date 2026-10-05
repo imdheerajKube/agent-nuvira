@@ -42,6 +42,17 @@ export interface ToolMessage {
   toolCalls?: ToolCallRequest[];
   /** Tool only — the id of the tool call being answered. */
   toolCallId?: string;
+  /**
+   * Assistant only — the model's `reasoning_content` for this turn, when it
+   * produced one. Some thinking models (DeepSeek's v4 reasoning models, reached
+   * directly or through a gateway such as OmniRoute) REQUIRE their prior
+   * reasoning to be sent back with the assistant message that carried the tool
+   * calls; omitting it fails the whole conversation with
+   * `400: The reasoning_content in the thinking mode must be passed back to the API`.
+   * Echoed verbatim by {@link buildWireMessages}; harmless to models that
+   * ignore it.
+   */
+  reasoningContent?: string;
 }
 
 /** A tool call in the assistant message (wire form: arguments is a JSON string). */
@@ -85,6 +96,12 @@ export interface ToolCallResponse {
   content: string;
   /** Parsed tool calls (empty = end turn). */
   toolCalls: ToolCall[];
+  /**
+   * The model's `reasoning_content` for this turn, when the endpoint returned
+   * one. Captured so the loop can attach it to the assistant message and the
+   * next request can replay it — see {@link ToolMessage.reasoningContent}.
+   */
+  reasoningContent?: string;
 }
 
 /**

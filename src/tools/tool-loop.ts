@@ -317,6 +317,12 @@ export interface StepResponse {
     providerMeta?: Record<string, unknown>;
   }>;
   /**
+   * The model's `reasoning_content` for this step, when it returned one. Carried
+   * onto the assistant message so a thinking model (DeepSeek v4) can be handed
+   * its own prior reasoning back — see {@link ToolMessage.reasoningContent}.
+   */
+  reasoningContent?: string;
+  /**
    * Which transport ACTUALLY carried this step's tool calls, in the same
    * vocabulary the subagent child announces
    * (`src/tools/child-agent-runtime.ts`):
@@ -1529,7 +1535,12 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // isThinkOnlyResponse: continue instead of ending).
       if (deps.isThinkOnly ? deps.isThinkOnly(response.content) : isThinkOnlyResponse(response.content)) {
         // Feed an empty assistant step so the model continues in-context.
-        thread.push({ role: 'assistant', content: response.content });
+        thread.push({
+          role: 'assistant',
+          content: response.content,
+          // Keep the thinking model's reasoning with the turn it belongs to.
+          ...(response.reasoningContent ? { reasoningContent: response.reasoningContent } : {}),
+        });
         thinkContinues += 1;
         // AN EMPTY RESPONSE IS A FAILURE, NOT REASONING. `isThinkOnlyResponse('')`
         // returns true, so a provider returning nothing (the loop arm falls over
@@ -1842,6 +1853,9 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         arguments: JSON.stringify(tc.arguments),
         ...(tc.providerMeta ? { providerMeta: tc.providerMeta } : {}),
       })),
+      // Thinking-mode reasoning is echoed back with the assistant turn that
+      // carried these calls — DeepSeek v4 rejects the next request without it.
+      ...(response.reasoningContent ? { reasoningContent: response.reasoningContent } : {}),
     });
 
     let endedAfterConcluding = false;

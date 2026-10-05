@@ -40,6 +40,24 @@ describe('buildWireMessages', () => {
     const wire = buildWireMessages([{ role: 'tool', content: 'result', toolCallId: 'c1' }]);
     expect(wire[0]).toEqual({ role: 'tool', tool_call_id: 'c1', content: 'result' });
   });
+
+  it('replays reasoning_content on the assistant turn that carried tool_calls (DeepSeek thinking mode)', () => {
+    const wire = buildWireMessages([
+      {
+        role: 'assistant',
+        content: '',
+        reasoningContent: 'I should list the files first.',
+        toolCalls: [{ id: 'c1', name: 'ls', arguments: '{}' }],
+      },
+    ]);
+    expect(wire[0]).toMatchObject({ role: 'assistant', reasoning_content: 'I should list the files first.' });
+  });
+
+  it('omits reasoning_content entirely when the turn had none (byte-identical for everyone else)', () => {
+    const wire = buildWireMessages([{ role: 'assistant', content: 'ok' }]);
+    expect(wire[0]).toEqual({ role: 'assistant', content: 'ok' });
+    expect(Object.keys(wire[0] as object)).not.toContain('reasoning_content');
+  });
 });
 
 describe('parseToolCallResponse', () => {
@@ -74,5 +92,14 @@ describe('parseToolCallResponse', () => {
     const resp = parseToolCallResponse({ choices: [{ message: { content: 'done' } }] });
     expect(resp.content).toBe('done');
     expect(resp.toolCalls).toEqual([]);
+  });
+
+  it('captures reasoning_content when the endpoint returned one (and omits it otherwise)', () => {
+    const withReasoning = parseToolCallResponse({
+      choices: [{ message: { content: '', reasoning_content: 'plan step', tool_calls: [] } }],
+    });
+    expect(withReasoning.reasoningContent).toBe('plan step');
+    const without = parseToolCallResponse({ choices: [{ message: { content: 'hi' } }] });
+    expect(without.reasoningContent).toBeUndefined();
   });
 });

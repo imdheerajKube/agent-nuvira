@@ -206,7 +206,36 @@ now produces clean single-model attribution under strict mode).
 | # | Defect | Why it matters | Direction |
 |---|--------|----------------|-----------|
 | A5 | OpenRouter DeepSeek needs paid credits | Attribution on that route is impossible | Use the native DeepSeek provider, or OmniRoute as a provider |
-| A7 | OmniRoute not yet measured | It is a catalog entry only; no local instance has been verified running | Start OmniRoute locally and run the WS7 suite on `omniroute/auto` vs native `deepseek-flash` |
+| A8 | An explicit `-p omniroute -m auto` never reaches the gateway | The agent's own `auto` directive wins, so the gateway's headline `auto` combo cannot be selected (the benchmark used `auto/smart`) | When a concrete `--provider` is named, `-m auto` should mean that provider's auto, not the router's |
+
+## 7. OmniRoute, measured
+
+OmniRoute was installed locally (npm, port 20128), connected to the same
+DeepSeek / Gemini / Groq keys this machine already has, and the WS7 seeded-bug
+suite was run against its quality-first combo under strict mode
+(`omniroute/auto/smart`, since `auto` is A8):
+
+- **composite 94% · found 6/7 · fixed 7/7 · false success 0/7 · time-to-green 53.8s**
+- the same composite as native `deepseek-flash` (94%), reached faster
+  (65.6s → 53.8s)
+
+Two interoperability defects surfaced and were fixed to get there, both on the
+OpenAI-compatible path:
+
+- **A9 — thinking-mode `reasoning_content` was dropped.** DeepSeek v4 requires
+  its prior reasoning echoed with the assistant turn that carried tool calls; the
+  compat tool loop never captured it, so the *second* request of every such turn
+  400'd. `parseToolCallResponse` / the streaming twin now capture it, the loop
+  carries it onto the thread, and `buildWireMessages` replays it.
+- **A10 — a keyless provider was read as down on a 401.** OmniRoute serves
+  `/v1/chat/completions` anonymously but `401`s `/v1/models`, and `isAvailable()`
+  trusted that 401 — so every eval/parity run refused a working gateway while
+  `execute` (which never checked) ran fine. A keyless provider now counts a
+  401/403 as reachable; a keyed one still reads it as a bad key.
+
+The two benchmark reports stand side by side: the native model and the gateway
+produce the same composite, which is what makes the gateway a *supply* choice
+rather than a routing replacement (the recommendation in §4.3).
 
 ---
 

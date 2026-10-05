@@ -482,7 +482,17 @@ export class OpenAICompatAdapter implements InferenceProvider {
         headers,
         signal: AbortSignal.timeout(3000),
       });
-      return response.ok;
+      if (response.ok) return true;
+      // A KEYLESS provider cannot validate a credential, so a 401/403 on the
+      // models list is not "your key is wrong" — it means the endpoint is UP
+      // but gates enumeration. Local-first gateways do exactly this: an
+      // OmniRoute instance answers /v1/chat/completions anonymously yet 401s
+      // /v1/models, so treating the 401 as "down" made every eval/parity run
+      // refuse a server that demonstrably works. Reachability is the question
+      // here, and a configured-key provider keeps the strict `response.ok`
+      // answer (a 401 there really is a bad key).
+      const keyless = !this.config.apiKey;
+      return keyless && (response.status === 401 || response.status === 403);
     } catch {
       return false;
     }

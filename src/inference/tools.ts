@@ -22,7 +22,7 @@ interface WireToolCall {
 
 interface WireResponse {
   choices?: Array<{
-    message?: { content?: string | null; tool_calls?: WireToolCall[] };
+    message?: { content?: string | null; tool_calls?: WireToolCall[]; reasoning_content?: string | null };
   }>;
   /** Endpoint-reported token usage (and, for OpenRouter, the exact cost). */
   usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
@@ -34,6 +34,11 @@ interface WireResponse {
  */
 export function buildWireMessages(messages: ToolMessage[]): Array<Record<string, unknown>> {
   return messages.map((m) => {
+    // Reasoning replay: a thinking model (DeepSeek v4) requires its prior
+    // `reasoning_content` echoed on the assistant turn that carried the tool
+    // calls, or the NEXT request is rejected. Emitted only when present, so
+    // every non-reasoning conversation keeps the exact wire shape it had.
+    const reasoning = m.role === 'assistant' && m.reasoningContent ? { reasoning_content: m.reasoningContent } : {};
     if (m.role === 'assistant' && m.toolCalls?.length) {
       return {
         role: 'assistant',
@@ -43,12 +48,13 @@ export function buildWireMessages(messages: ToolMessage[]): Array<Record<string,
           type: 'function',
           function: { name: tc.name, arguments: tc.arguments },
         })),
+        ...reasoning,
       };
     }
     if (m.role === 'tool') {
       return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
     }
-    return { role: m.role, content: m.content };
+    return { role: m.role, content: m.content, ...reasoning };
   });
 }
 
@@ -66,7 +72,12 @@ export function parseToolCallResponse(data: WireResponse): ToolCallResponse {
     }
     toolCalls.push({ id: tc.id, name: tc.function.name, arguments: args });
   }
-  return { content, toolCalls };
+  // Capture reasoning so the caller can replay it (DeepSeek thinking mode).
+  const reasoningContent =
+    typeof message?.reasoning_content === 'string' && message.reasoning_content
+      ? message.reasoning_content
+      : undefined;
+  return { content, toolCalls, ...(reasoningContent ? { reasoningContent } : {}) };
 }
 
 /**
@@ -181,7 +192,7 @@ interface WireStreamToolCallDelta {
 
 interface WireStreamChunk {
   choices?: Array<{
-    delta?: { content?: string | null; tool_calls?: WireStreamToolCallDelta[] };
+    delta?: { content?: string | null; reasoning_content?: string | null; tool_calls?: WireStreamToolCallDelta[] };
     finish_reason?: string | null;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
@@ -269,6 +280,9 @@ export async function chatCompletionsWithToolsStream(
   const decoder = new TextDecoder();
   const contentParts: string[] = [];
   const toolCalls: AccumulatedToolCall[] = [];
+  // DeepSeek thinking mode streams `delta.reasoning_content`; captured so the
+  // caller can replay it on the next request (see ToolMessage.reasoningContent).
+  const reasoningParts: string[] = [];
   let buffer = '';
   // M2.2: capture the endpoint-reported usage from the final chunk
   // (stream_options.include_usage convention) so onCost records MEASURED cost
@@ -308,6 +322,8 @@ export async function chatCompletionsWithToolsStream(
       if (data !== '[DONE]') {
         try {
           const parsed = JSON.parse(data) as WireStreamChunk;
+          const reasoningDelta = parsed?.choices?.[0]?.delta?.reasoning_content;
+          if (typeof reasoningDelta === 'string' && reasoningDelta) reasoningParts.push(reasoningDelta);
           if (
             parsed?.usage &&
             typeof parsed.usage.prompt_tokens === 'number' &&
@@ -384,5 +400,6 @@ export async function chatCompletionsWithToolsStream(
       // Cost recording must never break the stream.
     }
   }
-  return { content, toolCalls: parsedCalls };
+  const reasoningContent = reasoningParts.join('');
+  return { content, toolCalls: parsedCalls, ...(reasoningContent ? { reasoningContent } : {}) };
 }

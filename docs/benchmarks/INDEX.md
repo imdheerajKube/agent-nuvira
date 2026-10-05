@@ -157,6 +157,7 @@ nuvira eval run --suite seeded-bugs -p groq -m llama-3.3-70b-versatile
 |------|----------|-------|-----------|--------|
 | 2026-10-05 | gemini | gemini-3.1-flash-lite | 60% | [seeded-bugs-gemini-gemini-3.1-flash-lite.md](seeded-bugs-gemini-gemini-3.1-flash-lite.md) |
 | 2026-10-05 | deepseek | deepseek-flash | 94% | [seeded-bugs-deepseek-deepseek-flash.md](seeded-bugs-deepseek-deepseek-flash.md) |
+| 2026-10-05 | omniroute | auto/smart | 94% | [seeded-bugs-omniroute-auto-smart.md](seeded-bugs-omniroute-auto-smart.md) |
 
 **First live run — and what it does and does not support.** Seven real seeds,
 run end to end on `gemini/gemini-3.1-flash-lite`: **localisation 3/7, fix rate
@@ -186,3 +187,17 @@ The one non-perfect task, `seed-average-filtered-denominator`, was **fixed but n
 named**: the run corrected the divisor without reporting the aggregation bug. So
 unlike the gemini row above, this number **is** a measurement of the model named,
 not of the provider tier — it is the first seed report that can be read as such.
+
+**Third run — the gateway, behind strict mode.** `omniroute/auto/smart` (the
+OmniRoute gateway's quality-first combo, locally hosted, `NUVIRA_STRICT_MODEL=1`)
+landed at **composite 94%, found 6/7, fixed 7/7, false-success 0/7,
+time-to-green 53.8s** — the same composite as native `deepseek-flash`, arrived at
+faster. The one non-perfect task matches the deepseek run
+(`seed-clone-config-shallow` here was fixed but not named). The requested combo is
+`auto/smart`, not the plain `auto` combo, because `-m auto` collides with
+agent-nuvira's OWN auto-route directive and never reaches the gateway; and plain
+`auto` currently prefers DeepSeek thinking models whose `reasoning_content` replay
+this session added (before that fix, every second request of such a turn 400'd).
+With strict mode on, the run is attributed to the gateway, and OmniRoute's own
+internal fallover across its connected providers (deepseek / gemini / groq) is the
+thing being exercised — the layer the provider adapter was added to test.

@@ -49,6 +49,27 @@ paths listed. A step with no file-like token is unaffected, and the extraction
 is deliberately conservative (quoted paths, paths with an extension, known
 extensions) so a false "missing" can never block legitimate work.
 
+### Fixed: a thinking model's `reasoning_content` is replayed on the tool path
+
+Putting OmniRoute in front of DeepSeek exposed a second protocol gap: DeepSeek v4
+in thinking mode requires its prior `reasoning_content` to be sent back with the
+assistant turn that carried the tool calls, and the OpenAI-compatible tool loop
+dropped it — so the SECOND request of every such turn died with
+`400: The reasoning_content in the thinking mode must be passed back to the API`.
+`parseToolCallResponse` (and the streaming twin) now capture the field,
+`buildWireMessages` echoes it on the assistant message when present, and the loop
+carries it onto the thread. Absent reasoning leaves the wire shape byte-identical
+for every other provider.
+
+### Fixed: a keyless provider is available when its server answers, even behind an auth gate
+
+OmniRoute answers `/v1/chat/completions` anonymously but `401`s `/v1/models`, so
+`isAvailable()` — which read that 401 as "down" — made every `eval`/parity run
+refuse a gateway that demonstrably worked (`execute` never checked, which is why
+only the benchmark failed). For a provider with NO configured key, a 401/403 now
+counts as reachable (the server is up; there is no key to be wrong). A provider
+WITH a key keeps the strict answer, where a 401 really is a bad credential.
+
 ### Fixed: a planning nudge no longer splits an assistant's `tool_calls` group
 
 Re-running the Android task under a pinned model surfaced a protocol bug that a
