@@ -6,8 +6,11 @@
 # Any failure in the areas below is a REGRESSION and fails the gate loudly.
 #
 # Runs, in order:
-#   1. Agent contracts — prompt budget + skill-catalog opt-in + the toolchain
-#                       clause + the routing-policy check (fast, fails fastest)
+#   1. Release contracts — prompt budget + skill-catalog opt-in + the toolchain
+#                       clause + the routing-policy check + the version-pinned
+#                       CLI demo cast (fast, fails fastest). The cast records
+#                       `nuvira --version`, so a version bump invalidates it —
+#                       the artifact class behind issue #17.
 #   2. Routing guard  — bandit / promotion / auto-router / tier0 / hybrid /
 #                       model-registry / provider-fallback (fast, fails fast)
 #   3. Surface parity — tests/parity: the surface registry still matches the
@@ -60,11 +63,23 @@ export NODE_OPTIONS=--no-warnings
 # toolchain-install clause, and the software-intent policy — so this class of
 # regression cannot ship silently again. First, because it is the fastest and
 # the most direct statement of "the agent still behaves".
-step "1/8 Agent contracts (prompt budget / catalog opt-in / routing policy)"
+step "1/8 Release contracts (prompt budget / catalog opt-in / routing policy / CLI demo cast)"
 if npx vitest run tests/release/agent-contracts.test.ts; then
   ok "agent contracts passed"
 else
   bad "agent contracts FAILED — a prompt-budget or routing-policy regression"
+fi
+
+# The CLI demo cast is version-pinned: it records `nuvira --version`, so it goes
+# stale the instant package.json's version bumps. Nothing used to regenerate it
+# during a release, so a tag could carry a cast that fails
+# tests/docs/cli-demo.test.ts ON the tag commit — and the tag-triggered GitHub
+# Release would never run. Build-free and deterministic, so it belongs in the
+# fast gate rather than only the full suite.
+if node scripts/generate-cli-demo.mjs --check-cast docs/demos/nuvira-cli-tour.cast >/dev/null 2>&1; then
+  ok "CLI demo cast matches package.json"
+else
+  bad "CLI demo cast is STALE — regenerate it: npm run demo:cli"
 fi
 
 # ── 2. Routing guard ────────────────────────────────────────────────────────
