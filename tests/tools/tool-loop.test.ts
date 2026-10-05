@@ -2252,6 +2252,61 @@ describe('tool loop — PLAN gate (declare a plan before mutating)', () => {
     expect(events.filter((e) => e.kind === 'gate' && e.gate === 'plan')).toHaveLength(0);
   });
 
+  it('never lands a planning nudge between an assistant tool_calls message and its tool results', async () => {
+    // Regression: DeepSeek (native) rejects the next request with "An assistant
+    // message with 'tool_calls' must be followed by tool messages responding to
+    // each 'tool_call_id'" when ANY other role sits inside the group. The plan
+    // and pre-flight nudges are decided before the results exist, so they must
+    // be queued and flushed after the group, not pushed between it.
+    type Msg = { role: string; content: string; toolCalls?: Array<{ id: string }>; toolCallId?: string };
+    const threads: Msg[][] = [];
+    const callModel = vi.fn();
+    let i = 0;
+    const script: StepResponse[] = [
+      {
+        content: '',
+        toolCalls: [
+          { id: 'c1', name: 'run_terminal', arguments: { command: 'npm test' } },
+          { id: 'c2', name: 'run_terminal', arguments: { command: 'npm run build' } },
+        ],
+      },
+      { content: 'Done.', toolCalls: [] },
+    ];
+    callModel.mockImplementation(async (messages: Msg[]) => {
+      threads.push([...messages]);
+      return script[Math.min(i++, script.length - 1)];
+    });
+    const deps: ToolLoopDeps = {
+      callModel,
+      executeTool: vi.fn(async (n: string) => `executed ${n}`),
+      onEvent: vi.fn(),
+    };
+    await runToolLoop({
+      messages: [{ role: 'user', content: WORK_ASK }],
+      context: ctx,
+      deps,
+      onTraceEvent: () => {},
+    });
+
+    // Look at the thread as the model saw it on the SECOND call.
+    const seen = threads[1] ?? [];
+    const assistantIdx = seen.findIndex(
+      (m) => m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0,
+    );
+    expect(assistantIdx).toBeGreaterThanOrEqual(0);
+    const ids = seen[assistantIdx].toolCalls!.map((t) => t.id);
+    // Every call id is answered by a `tool` message, in order, IMMEDIATELY after
+    // the assistant message — the exact shape the provider demands.
+    ids.forEach((id, k) => {
+      const m = seen[assistantIdx + 1 + k];
+      expect(m?.role).toBe('tool');
+      expect(m?.toolCallId).toBe(id);
+    });
+    // Any planning nudge is strictly after the whole group.
+    const nudgeIdx = seen.findIndex((m) => m.role === 'user' && m.content.includes('declare a short PLAN'));
+    if (nudgeIdx !== -1) expect(nudgeIdx).toBeGreaterThan(assistantIdx + ids.length);
+  });
+
   it('planRequiredNudge names the ask and forbids planning-instead-of-working', () => {
     const text = planRequiredNudge(WORK_ASK);
     expect(text).toContain('declare a short PLAN');

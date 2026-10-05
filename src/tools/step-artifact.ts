@@ -16,8 +16,8 @@
  * token is ignored.
  */
 
-import { existsSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 
 /** Extensions that make a bare token file-like. Keep this list pragmatic. */
 const ARTIFACT_EXT =
@@ -90,11 +90,61 @@ export function checkStepArtifacts(description: string, cwd: string | undefined)
   const missing: string[] = [];
   for (const p of paths) {
     try {
-      const abs = isAbsolute(p) ? p : resolve(cwd, p);
-      if (!existsSync(abs)) missing.push(p);
+      // A token that names a LOCATION is checked there directly. A BARE file
+      // name (`local.properties`, `app-debug.apk`) has no location, and a step
+      // routinely names an artifact that a tool wrote into a subdirectory
+      // (`android/local.properties`, `android/app/build/outputs/apk/debug/`).
+      // Resolving a bare name against the workspace ROOT produced false
+      // "missing" verdicts on the live run — it refused to mark a `local.properties`
+      // step done after the file had been written one level down. A bare name is
+      // therefore searched for in the workspace before it is called missing.
+      if (isAbsolute(p) || p.includes('/')) {
+        const abs = isAbsolute(p) ? p : resolve(cwd, p);
+        if (!existsSync(abs)) missing.push(p);
+      } else if (!basenameExists(cwd, p)) {
+        missing.push(p);
+      }
     } catch {
       // An unreadable path is not proof of absence — stay silent.
     }
   }
   return { checked: paths, missing };
+}
+
+/** Directories never worth descending into when locating a named artifact. */
+const SEARCH_SKIP_DIRS = new Set(['node_modules', '.git', '.gradle', '.idea', '.vscode']);
+/** Bounds so a workspace walk can never become the expensive part of a plan update. */
+const SEARCH_MAX_DEPTH = 6;
+const SEARCH_MAX_DIRS = 4000;
+
+/**
+ * Does a file with this basename exist anywhere in the (bounded) workspace? Used
+ * only for a token that names no directory, so a step that calls `app-debug.apk`
+ * an artifact is satisfied by the APK under `android/.../apk/debug/` — while a
+ * name that exists nowhere is still genuinely missing.
+ */
+function basenameExists(cwd: string, name: string): boolean {
+  const target = name.toLowerCase();
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: cwd, depth: 0 }];
+  let visited = 0;
+  while (queue.length > 0) {
+    if (++visited > SEARCH_MAX_DIRS) break;
+    const { dir, depth } = queue.shift()!;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (depth < SEARCH_MAX_DEPTH && !SEARCH_SKIP_DIRS.has(e.name)) {
+          queue.push({ dir: join(dir, e.name), depth: depth + 1 });
+        }
+      } else if (e.isFile() && e.name.toLowerCase() === target) {
+        return true;
+      }
+    }
+  }
+  return false;
 }

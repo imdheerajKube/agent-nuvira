@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { extractArtifactPaths, checkStepArtifacts } from '../../src/tools/step-artifact.js';
@@ -55,5 +55,35 @@ describe('checkStepArtifacts (A6)', () => {
     const r = checkStepArtifacts('write README.md', undefined);
     expect(r.missing).toEqual([]);
     expect(r.checked).toContain('README.md');
+  });
+
+  it('accepts a BARE filename found in a subdirectory (live-run false positive)', () => {
+    // The cal run wrote android/local.properties and android/.../app-debug.apk,
+    // then a plan step naming `local.properties` / `app-debug.apk` was refused
+    // because a bare name was only ever resolved against the workspace root.
+    const dir = mkdtempSync(join(tmpdir(), 'buff-artifacts-nested-'));
+    try {
+      mkdirSync(join(dir, 'android', 'app', 'build', 'outputs', 'apk', 'debug'), { recursive: true });
+      writeFileSync(join(dir, 'android', 'local.properties'), 'sdk.dir=/x');
+      writeFileSync(join(dir, 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'), 'zip');
+
+      expect(checkStepArtifacts('add local.properties with the SDK path', dir).missing).toEqual([]);
+      expect(checkStepArtifacts('verify app-debug.apk is built', dir).missing).toEqual([]);
+      // A bare name that exists NOWHERE is still missing.
+      expect(checkStepArtifacts('produce release.aab', dir).missing).toEqual(['release.aab']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not count a file that only exists under node_modules', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'buff-artifacts-nm-'));
+    try {
+      mkdirSync(join(dir, 'node_modules', 'pkg'), { recursive: true });
+      writeFileSync(join(dir, 'node_modules', 'pkg', 'index.js'), 'x');
+      expect(checkStepArtifacts('produce index.js', dir).missing).toEqual(['index.js']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

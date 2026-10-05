@@ -49,6 +49,30 @@ paths listed. A step with no file-like token is unaffected, and the extraction
 is deliberately conservative (quoted paths, paths with an extension, known
 extensions) so a false "missing" can never block legitimate work.
 
+### Fixed: a planning nudge no longer splits an assistant's `tool_calls` group
+
+Re-running the Android task under a pinned model surfaced a protocol bug that a
+strict provider turns fatal: the plan gate (and the project pre-flight) pushed
+their "declare a plan first" nudge into the thread *between* the assistant
+message that carried `tool_calls` and the `tool` results answering them. DeepSeek
+native rejects the next request outright — *"An assistant message with
+'tool_calls' must be followed by tool messages responding to each
+'tool_call_id'"* — so the turn died on its third model call and read as a
+provider fault. Both nudges are now queued and flushed AFTER the results, keeping
+assistant→tool contiguous. A regression test asserts the message shape the
+provider demands.
+
+### Fixed: a plan step naming a bare filename is checked by name, not by root
+
+A follow-up Android run wrote `android/local.properties` and
+`android/app/build/outputs/apk/debug/app-debug.apk`, then had two plan steps
+refused because the artifact check resolved the bare names `local.properties`
+and `app-debug.apk` against the workspace ROOT, where they never live. A token
+with no directory component is now searched for in the (bounded) workspace
+before it is called missing — a name that exists nowhere is still missing, and
+`node_modules` is not searched. The `cal` run reported the false positive itself;
+this closes it.
+
 ### Added: OmniRoute in the provider catalog
 
 [OmniRoute](https://github.com/diegosouzapw/OmniRoute) — an MIT, local-first AI

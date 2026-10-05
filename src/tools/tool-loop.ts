@@ -1846,6 +1846,18 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
 
     let endedAfterConcluding = false;
 
+    // ── Provider-protocol safety: nudges decided while PLANNING must queue ──
+    // An assistant message that carries `tool_calls` MUST be followed
+    // immediately by a `tool` result for EVERY call id, before any other role.
+    // A strict OpenAI-compatible API (DeepSeek native) rejects the NEXT request
+    // otherwise: "An assistant message with 'tool_calls' must be followed by
+    // tool messages responding to each 'tool_call_id'." The pre-flight and plan
+    // gates decide during planning — before the results exist — so they push
+    // their nudge into this queue and it is flushed after the results, keeping
+    // the assistant→tool group intact. (Without this, a pinned/strict run died
+    // on the third model call and looked like a provider fault.)
+    const deferredUserNudges: string[] = [];
+
     // ── Phase 1 — decide, in order (deterministic) ─────────────────────────
     // Guards count calls that came BEFORE this one. Pushing the name first made
     // `prior >= 1` true on a tool's FIRST invocation, so plan_todo was refused
@@ -2121,7 +2133,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             createNodePrereqFs(opts.context?.cwd || process.cwd()),
           );
           if (findings.length > 0) {
-            thread.push({ role: 'user', content: formatPreflightFindings(findings) });
+            deferredUserNudges.push(formatPreflightFindings(findings));
             deps.onEvent?.(
               `   🧱 pre-flight: ${findings.length} missing project prerequisite(s) — handed the exact fix before building.`,
             );
@@ -2210,7 +2222,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           ? `a workspace-directing turn was about to mutate without a plan — the first mutation batch (${blocked.join(', ')}) was refused once and the model asked to declare a plan first`
           : 'a workspace-directing turn was about to mutate without a plan — one bounded nudge to declare one first',
       });
-      thread.push({ role: 'user', content: planRequiredNudge(currentAsk(opts)) });
+      deferredUserNudges.push(planRequiredNudge(currentAsk(opts)));
     }
 
     const executed: string[] = new Array(plans.length).fill('');
@@ -2433,6 +2445,11 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         ...(durationMs !== undefined ? { durationMs } : {}),
       });      thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
     }
+
+    // Flush the planning-time nudges now that the assistant's tool_calls group is
+    // complete (every call id has a `tool` result). This is the first point a
+    // user/system message may safely follow the batch.
+    for (const nudge of deferredUserNudges) thread.push({ role: 'user', content: nudge });
 
     // Track the generalized stall: a step that RAN tools but succeeded at none
     // of them extends the streak; any success clears it. A text-only step (no
