@@ -403,6 +403,36 @@ export default function AdminPanel() {
     setBusy(null);
   };
 
+  /**
+   * The per-provider On/Off switch. OFF removes the provider from the
+   * auto-routing pool but KEEPS its credentials (a separate Save/Remove owns
+   * those), so it can be flipped back without re-entering a key. An explicit
+   * `--provider` pin still reaches a provider that is switched off — the switch
+   * governs routing, not a user's decision.
+   */
+  const toggleProvider = async (type: string, enabled: boolean) => {
+    setBusy(type);
+    setRowMsg({});
+    const r = await dashboardAPI.saveProvider(type, { enabled });
+    if (r.ok) {
+      setData((d) => {
+        if (!d) return d;
+        const exists = d.providers.some((p) => p.type === type);
+        const providers = exists
+          ? d.providers.map((p) => (p.type === type && r.provider ? r.provider : p))
+          : r.provider
+            ? [...d.providers, r.provider]
+            : d.providers;
+        return { ...d, providers };
+      });
+      setRowMsg((m) => ({ ...m, [type]: enabled ? '✅ Routing ON' : '⏸ Routing OFF (pin only)' }));
+    } else {
+      setRowMsg((m) => ({ ...m, [type]: `❌ ${r.error || 'Toggle failed'}` }));
+      if (r.unauthorized) sessionExpired();
+    }
+    setBusy(null);
+  };
+
   const testProvider = async (type: string) => {
     setBusy(type);
     const r = await dashboardAPI.testProvider(type);
@@ -608,7 +638,14 @@ export default function AdminPanel() {
       (type): AdminProviderSummary => ({ type, configured: false, keySource: 'none', keyMasked: null }),
     ),
   ];
-  const catalogLabel = (type: string): { label: string; icon?: string; keyless?: boolean; envVar?: string | null } => {
+  const catalogLabel = (type: string): {
+    label: string;
+    icon?: string;
+    keyless?: boolean;
+    envVar?: string | null;
+    description?: string;
+    setup?: string;
+  } => {
     const entry = catalog.find((c) => c.id === type);
     return entry ? entry : { label: type };
   };
@@ -768,11 +805,22 @@ export default function AdminPanel() {
                         ) : p.keySource === 'vault' ? (
                           <div className="admin-hint">stored in the OS keyring (vault)</div>
                         ) : null}
+                        {meta.description ? (
+                          <div className="admin-provider-desc">{meta.description}</div>
+                        ) : null}
+                        {meta.setup ? (
+                          <div className="admin-provider-setup"><strong>Setup:</strong> {meta.setup}</div>
+                        ) : null}
                       </td>
                       <td>
                         <span className={`admin-check-badge ${p.configured ? 'admin-check-pass' : 'admin-check-warn'}`}>
                           {p.configured ? '✅ Configured' : '⚠️ Not configured'}
                         </span>
+                        {p.enabled === false ? (
+                          <span className="admin-check-badge admin-check-warn" title="Kept out of automatic routing; an explicit --provider pin still reaches it">
+                            ⏸ Off (pin only)
+                          </span>
+                        ) : null}
                       </td>
                       <td>
                         {meta.keyless ? (
@@ -823,6 +871,14 @@ export default function AdminPanel() {
                         {isAdmin ? (
                           <>
                             <div className="admin-row-actions">
+                              <button
+                                className="admin-mini-btn"
+                                disabled={busy === p.type}
+                                title="Include this provider in automatic routing, or keep it off and pin it explicitly"
+                                onClick={() => void toggleProvider(p.type, p.enabled === false)}
+                              >
+                                {p.enabled === false ? '▶ Turn on' : '⏸ Turn off'}
+                              </button>
                               <button className="admin-mini-btn" disabled={busy === p.type} onClick={() => void saveProvider(p.type)}>💾 Save</button>
                               <button
                                 className="admin-mini-btn"

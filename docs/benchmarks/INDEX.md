@@ -156,8 +156,9 @@ nuvira eval run --suite seeded-bugs -p groq -m llama-3.3-70b-versatile
 | Date | Provider | Model | Composite | Report |
 |------|----------|-------|-----------|--------|
 | 2026-10-05 | gemini | gemini-3.1-flash-lite | 60% | [seeded-bugs-gemini-gemini-3.1-flash-lite.md](seeded-bugs-gemini-gemini-3.1-flash-lite.md) |
-| 2026-10-05 | deepseek | deepseek-flash | 94% | [seeded-bugs-deepseek-deepseek-flash.md](seeded-bugs-deepseek-deepseek-flash.md) |
+| 2026-10-05 | deepseek | deepseek-flash | 100% | [seeded-bugs-deepseek-deepseek-flash.md](seeded-bugs-deepseek-deepseek-flash.md) |
 | 2026-10-05 | omniroute | auto/smart | 94% | [seeded-bugs-omniroute-auto-smart.md](seeded-bugs-omniroute-auto-smart.md) |
+| 2026-10-05 | omniroute | auto | 94% | [seeded-bugs-omniroute-auto.md](seeded-bugs-omniroute-auto.md) |
 
 **First live run — and what it does and does not support.** Seven real seeds,
 run end to end on `gemini/gemini-3.1-flash-lite`: **localisation 3/7, fix rate
@@ -188,16 +189,26 @@ named**: the run corrected the divisor without reporting the aggregation bug. So
 unlike the gemini row above, this number **is** a measurement of the model named,
 not of the provider tier — it is the first seed report that can be read as such.
 
+**Second run, repeated → 100%.** A repeat of the same arm (after the
+`reasoning_content` and `-m auto` fixes) named all seven defects: **found 7/7,
+fixed 7/7, false-success 0/7, time-to-green 44.3s, composite 100%**. The table row
+and the report file carry the repeat; the 94% above is retained here as the first
+measurement. Read together they bound the LOCALISATION noise at ±1 task while the
+FIX rate held at 7/7 on every arm.
+
 **Third run — the gateway, behind strict mode.** `omniroute/auto/smart` (the
 OmniRoute gateway's quality-first combo, locally hosted, `NUVIRA_STRICT_MODEL=1`)
 landed at **composite 94%, found 6/7, fixed 7/7, false-success 0/7,
-time-to-green 53.8s** — the same composite as native `deepseek-flash`, arrived at
-faster. The one non-perfect task matches the deepseek run
-(`seed-clone-config-shallow` here was fixed but not named). The requested combo is
-`auto/smart`, not the plain `auto` combo, because `-m auto` collides with
-agent-nuvira's OWN auto-route directive and never reaches the gateway; and plain
-`auto` currently prefers DeepSeek thinking models whose `reasoning_content` replay
-this session added (before that fix, every second request of such a turn 400'd).
-With strict mode on, the run is attributed to the gateway, and OmniRoute's own
-internal fallover across its connected providers (deepseek / gemini / groq) is the
-thing being exercised — the layer the provider adapter was added to test.
+time-to-green 53.8s**. Plain `omniroute/auto` (the gateway's zero-config combo) was
+then run the same way and landed at the **same 94% (found 6/7, fixed 7/7,
+false-success 0/7, time-to-green 65.7s)**. With strict mode on, the run is
+attributed to the gateway, and OmniRoute's own internal fallover across its
+connected providers (deepseek / gemini / groq) is the thing being exercised — the
+layer the provider adapter was added to test.
+
+Two defects had to be fixed for these runs to be possible at all, both recorded
+in the changelog: a DeepSeek thinking model's `reasoning_content` was not replayed
+on the tool path (every second request of such a turn 400'd), and `-m auto` with a
+concrete `--provider` never reached that provider (it was read as agent-nuvira's
+own auto-route). The second fix is why the plain `auto` combo above exists at all
+— the earlier note that it "collides" no longer applies.

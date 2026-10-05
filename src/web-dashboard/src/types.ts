@@ -1119,6 +1119,8 @@ export interface AdminProviderSummary {
   keyMasked: string | null;
   model?: string;
   baseUrl?: string;
+  /** Whether the router may choose this provider (the On/Off switch). */
+  enabled?: boolean;
 }
 
 export interface AdminChecksData {
@@ -1255,6 +1257,10 @@ export interface AdminCatalogProvider {
   icon?: string;
   envVar?: string | null;
   keyless?: boolean;
+  /** What the provider is / does (shown in the editor; gateways need this). */
+  description?: string;
+  /** How to set it up — install/run/where the key comes from. */
+  setup?: string;
 }
 
 export interface AdminCatalog {

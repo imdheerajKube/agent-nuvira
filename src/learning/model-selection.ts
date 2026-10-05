@@ -173,13 +173,19 @@ export function rankAvailableProviders(configManager: ConfigManager): RankedProv
   // providers join routing the moment they appear in config. Nothing is
   // hardcoded to the 6 built-ins anymore.
   let configuredIds: string[] = [];
+  let providerConfig: Record<string, { enabled?: boolean } | undefined> = {};
   try {
-    configuredIds = Object.keys(configManager.getAll?.()?.providers ?? {});
+    providerConfig = configManager.getAll?.()?.providers ?? {};
+    configuredIds = Object.keys(providerConfig);
   } catch {
     // Best-effort.
   }
   const candidates = [...new Set([...CATALOG_PROVIDER_IDS, ...configuredIds])].filter((p) => {
     if (blocked.has(p)) return false;
+    // The dashboard's per-provider On/Off switch. Off removes the provider from
+    // the AUTO pool only; credentials stay on disk, and an explicit `--provider`
+    // pin is a user decision the router does not second-guess.
+    if (providerConfig[p]?.enabled === false) return false;
     // Keyless runners BEYOND `local` (nuvira, lmstudio, vllm) only join when the
     // registry has VERIFIED them or the user explicitly configured them — a
     // not-running localhost endpoint must never out-rank running local on a

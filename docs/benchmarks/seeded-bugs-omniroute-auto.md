@@ -1,29 +1,29 @@
 # Seeded-bug benchmark
 
-- **Provider / model:** `deepseek/deepseek-flash`
+- **Provider / model:** `omniroute/auto`
 - **Date:** 2026-10-05
-- **Duration:** 364.0s
-- **Composite:** 100% — 40% found + 40% fixed + 20% for touching nothing else (the last only counts when the task was actually fixed)
+- **Duration:** 495.8s
+- **Composite:** 94% — 40% found + 40% fixed + 20% for touching nothing else (the last only counts when the task was actually fixed)
 
 ## Results
 
 | Task | Axis | Difficulty | Found | Fixed | Touched nothing else | Composite |
 |---|---|---|---|---|---|---|
-| `seed-range-off-by-one` | boundary | easy | yes (<=) | yes | yes | 100% |
+| `seed-range-off-by-one` | boundary | easy | no | yes | yes | 60% |
 | `seed-top-scores-lexical-sort` | comparator | easy | yes (lexicograph) | yes | yes | 100% |
 | `seed-sum-async-for-each` | async | medium | yes (await) | yes | yes | 100% |
 | `seed-format-amount-falsy-zero` | truthiness | easy | yes (!amount) | yes | yes | 100% |
 | `seed-clone-config-shallow` | aliasing | medium | yes (shallow) | yes | yes | 100% |
 | `seed-add-tag-mutates-input` | mutation | easy | yes (mutat) | yes | yes | 100% |
-| `seed-average-filtered-denominator` | aggregation | medium | yes (denominator) | yes | yes | 100% |
+| `seed-average-filtered-denominator` | aggregation | medium | yes (length) | yes | yes | 100% |
 
 ## Summary
 
-- Found the defect: **7/7**
+- Found the defect: **6/7**
 - Fixed it: **7/7**
 - Fixed it without touching anything else: **7/7**
 - Claimed success without fixing it (false success): **0/7** (0% of claims)
-- Time to green (median across fixed tasks): **44.3s**
+- Time to green (median across fixed tasks): **65.7s**
 
 ## How to read this
 

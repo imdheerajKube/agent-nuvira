@@ -723,7 +723,7 @@ export class DashboardAPI {
   /** Save/update a provider's key + config (authed). Mirrors `nuvira config set providers.*`. */
   async saveProvider(
     type: string,
-    fields: { apiKey?: string; baseUrl?: string; model?: string; runner?: string },
+    fields: { apiKey?: string; baseUrl?: string; model?: string; runner?: string; enabled?: boolean },
   ): Promise<AdminWriteResult> {
     const r = await this.sendAdminRequest(`/api/admin/providers/${encodeURIComponent(type)}`, 'PUT', fields);
     if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };

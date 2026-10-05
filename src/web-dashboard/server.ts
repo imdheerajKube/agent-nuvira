@@ -3102,6 +3102,12 @@ interface AdminProviderSummary {
   keyMasked: string | null;
   model?: string;
   baseUrl?: string;
+  /**
+   * Whether the router may choose this provider (the On/Off switch). A
+   * provider switched off keeps its credentials but leaves the auto pool; an
+   * explicit `--provider` pin still reaches it.
+   */
+  enabled?: boolean;
 }
 
 /** Mask a secret so the dashboard never exposes a raw key. */
@@ -3178,6 +3184,7 @@ function summarizeProvider(type: string, configManager: ConfigManager): AdminPro
       : maskKey(key),
     model: c?.model,
     baseUrl: c?.baseUrl,
+    enabled: c?.enabled !== false,
   };
 }
 
@@ -3815,6 +3822,10 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         icon: entry?.icon,
         envVar: entry?.envVar || null,
         keyless: entry?.keyless === true,
+        // What it is / how to set it up — the dashboard renders these beside
+        // the key fields. Optional: most providers need no explanation.
+        ...(entry?.description ? { description: entry.description } : {}),
+        ...(entry?.setup ? { setup: entry.setup } : {}),
       };
     });
     writeJson(res, 200, { providers });
@@ -5273,6 +5284,9 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           updates.model = body.model.trim() ? body.model.trim() : undefined;
         }
         if (typeof body.runner === 'string' && body.runner.trim().length > 0) updates.runner = body.runner.trim() as ProviderConfig['runner'];
+        // The On/Off switch. `false` removes the provider from the auto-routing
+        // pool WITHOUT deleting its credentials; `true` re-admits it.
+        if (typeof body.enabled === 'boolean') updates.enabled = body.enabled;
         // A3 — a model id is validated against the provider's LIVE list before
         // it is written, so a typo cannot become a silent substitution at run
         // time. An unreachable provider is saved unverified (never blocked); a
@@ -5305,7 +5319,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // explicit undefineds, so the fields vanish from the file.
       if (req.method === 'DELETE') {
         const cleared = configManager.clearProviderApiKey(type);
-        configManager.save({ providers: { [type]: { apiKey: undefined, baseUrl: undefined, model: undefined, runner: undefined } } });
+        configManager.save({ providers: { [type]: { apiKey: undefined, baseUrl: undefined, model: undefined, runner: undefined, enabled: undefined } } });
         clearModelListCache();
         // An ENV-sourced key cannot be removed from the file (env re-injects on
         // every load) — surface that so the UI warns instead of hiding the row.

@@ -97,9 +97,11 @@ import { withAgentAnswerQualityGate } from './answer-quality-gate.js';
 import { getMetrics } from '../enterprise/metrics.js';
 import {
   getAutoRouter,
+  isAgentAutoRoute,
   isAgenticTask,
   isAutoModel,
   isAutoProvider,
+  isProviderOwnAuto,
   type AutoRouteResult,
   type TaskIntent,
 } from '../learning/auto-router.js';
@@ -868,7 +870,7 @@ export class Orchestrator {
     // AutoModelRouter so no call ever sends a literal 'auto' model to a real API.
     // Matches executeSingleTask's rule: an explicit --model always wins.
     const autoRoutingActive = (options.autoRouteModels === true && !options.model) ||
-      isAutoModel(options.model) || isAutoProvider(options.provider);
+      isAgentAutoRoute(options.provider, options.model);
     // Cold-start learning: when auto routing is active but the registry has ZERO
     // verified providers (fresh install / stale store), fire ONE background probe
     // pass so later tasks in this pipeline — and the next session — route on
@@ -2204,7 +2206,11 @@ export class Orchestrator {
       // configured model BEFORE validating, so the validator is never asked to
       // repair a sentinel and the 'auto is not available on X' warning is not
       // printed for a value the user never chose as a model.
-      if (isAutoModel(requestedModel)) {
+      //
+      // A8 EXCEPTION: a CONCRETE provider pinned with `-m auto` means that
+      // provider's own auto (an OmniRoute combo), so the sentinel is NOT ours
+      // to resolve — it must reach the provider as-is.
+      if (isAutoModel(requestedModel) && !isProviderOwnAuto(rawProvider, requestedModel)) {
         requestedModel = config.model || undefined;
       }
       // ALWAYS validate the pair — the model against THIS provider instance,
@@ -2721,7 +2727,7 @@ export class Orchestrator {
       // cheap model while complex tasks get a stronger one. An explicit
       // `--model` always wins over auto routing.
       const autoRouting = (options.autoRouteModels === true && !options.model) ||
-        isAutoModel(options.model) || isAutoProvider(options.provider);
+        isAgentAutoRoute(options.provider, options.model);
       const effectiveAgentType = strategy.effectiveAgentType || task.agentType;
       const agentModel = options.model || options.agentModels?.[effectiveAgentType] || options.agentModels?.[task.agentType];
       let taskBoundProvider: string | undefined;

@@ -295,9 +295,35 @@ A model pinned in the chat picker is a **preference**, not a guarantee, unless y
 - A **model id is validated before it is saved** (CLI and dashboard): an id the provider does not
   serve is refused with the closest matches, instead of being repaired by substitution at run time.
 
-[OmniRoute](https://github.com/diegosouzapw/OmniRoute) can be added as a provider (`omniroute`,
-keyless, default model `auto`) when you want one endpoint in front of many upstream providers. It is
-an aggregation gateway, not a second router: agent-nuvira still chooses the model for each task.
+### OmniRoute — one endpoint in front of many providers
+
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) is a local, MIT-licensed AI gateway that
+multiplexes hundreds of upstream providers behind one OpenAI-compatible endpoint. It is an
+**aggregation gateway, not a second router**: agent-nuvira still chooses which provider×model runs
+each step, and OmniRoute only decides which upstream serves a request that has *already been
+addressed to it*. Adding it does not turn off agent-nuvira's routing.
+
+**Set it up**
+
+1. Install and start it: `npm install -g omniroute`, then `omniroute` — it serves a dashboard and the
+   `/v1` API on `http://127.0.0.1:20128` (our default base URL; override with
+   `providers.omniroute.baseUrl`). Docker works too.
+2. Give it upstream keys so its combos have something to route to:
+   `omniroute providers add deepseek --credential-stdin` (repeat for `groq`, `gemini`, …). No key is
+   needed on agent-nuvira's side — the gateway holds them.
+3. **Dashboard** → *Admin* → *Provider Configuration* → add **🔀 OmniRoute (AI gateway)**. Its row
+   carries a description and the setup steps, and an **On/Off switch**:
+   - **On** includes OmniRoute in the automatic routing candidate pool, so the router may select it.
+   - **Off** (the default until you save it) keeps it out of automatic routing — its credentials (if
+     any) are untouched — and you reach it only by pinning it explicitly.
+
+**Use it**
+
+- Pin its own combos: `nuvira execute "…" --provider omniroute --model auto` (or `auto/coding`,
+  `auto/fast`, `auto/cheap`, `auto/offline`). With a concrete `--provider`, `-m auto` now means
+  **OmniRoute's own auto**, not agent-nuvira's auto-route — the two used to collide.
+- Turn it On in the dashboard and it can also be chosen by agent-nuvira's router like any provider.
+- Add `NUVIRA_STRICT_MODEL=1` to guarantee the run stays on the pinned pair.
 
 ### When a build fails for a known toolchain reason
 

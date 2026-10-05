@@ -49,6 +49,27 @@ paths listed. A step with no file-like token is unaffected, and the extraction
 is deliberately conservative (quoted paths, paths with an extension, known
 extensions) so a false "missing" can never block legitimate work.
 
+### Fixed: `-p <provider> -m auto` now means that provider's own auto
+
+Naming a concrete provider together with the `auto` model sentinel used to be
+swallowed by agent-nuvira's OWN auto-route — `-p omniroute -m auto` re-routed
+through our router and never reached the gateway that was named (the request ran
+on whichever provider our router picked). `isProviderOwnAuto` / `isAgentAutoRoute`
+separate the two: a concrete provider + `auto` is the PROVIDER's own auto (an
+OmniRoute combo), while `-p auto` (or no provider) with `-m auto` stays our
+auto-route, byte-identical to before. Applied in the chat engine and the
+orchestrator's planner/task/context routing.
+
+### Added: a per-provider On/Off switch, and provider setup documentation
+
+The dashboard provider editor now has an **On/Off** control per provider
+(`providers.<id>.enabled`): OFF removes the provider from the AUTO-routing
+candidate pool without deleting its credentials, and an explicit `--provider`
+pin still reaches it — the switch governs routing, not a user's decision. The
+catalog can also carry a `description` and `setup` text, surfaced on the row;
+OmniRoute uses both to say what it is, how to install/run it, and how to connect
+upstream keys.
+
 ### Fixed: a thinking model's `reasoning_content` is replayed on the tool path
 
 Putting OmniRoute in front of DeepSeek exposed a second protocol gap: DeepSeek v4

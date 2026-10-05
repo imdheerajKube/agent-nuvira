@@ -108,6 +108,20 @@ describe('model selection — dynamic defaults (nothing hardcoded)', () => {
       expect(noKey).not.toContain('anthropic');
     });
 
+    it('excludes a provider the dashboard switched OFF (routing.enabled=false)', () => {
+      // The On/Off switch owns routing only: credentials stay on disk, and an
+      // explicit --provider pin still reaches it, but it leaves the AUTO pool.
+      const registry = getModelRegistry();
+      registry.markVerified('gemini', 'g-big', 'telemetry');
+      const cm: any = {
+        hasRequiredCredentials: (p: string) => ['gemini', 'groq'].includes(p),
+        getAll: () => ({ providers: { gemini: { enabled: false }, groq: { apiKey: 'x' } } }),
+      };
+      const ranked = rankAvailableProviders(cm).map((r) => r.provider);
+      expect(ranked).not.toContain('gemini');
+      expect(ranked).toContain('groq');
+    });
+
     it('excludes providers the registry has definitively blocked', () => {
       const registry = getModelRegistry();
       registry.markUnavailable('gemini', 'g-big', 'model not found', 'telemetry');

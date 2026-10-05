@@ -38,6 +38,16 @@ describe('provider catalog (Issue 001 — all 17+ providers)', () => {
     }
   });
 
+  it('documents the OmniRoute gateway (description + setup) for the dashboard', () => {
+    const entry = getCatalogProvider('omniroute');
+    expect(entry).toBeDefined();
+    expect(entry?.description).toBeTruthy();
+    expect(entry?.setup).toBeTruthy();
+    // The setup text must be actionable: install + how to connect upstreams.
+    expect(entry?.setup).toMatch(/npm install -g omniroute/);
+    expect(entry?.setup).toMatch(/providers add/);
+  });
+
   it('maps every keyed provider to its REAL env var (not just *_API_KEY)', () => {
     expect(catalogEnvVar('openai')).toBe('OPENAI_API_KEY');
     expect(catalogEnvVar('anthropic')).toBe('ANTHROPIC_API_KEY');

@@ -573,4 +573,55 @@ describe('AdminPanel', () => {
     await screen.findByText('/repo');
     expect((screen.getByRole('button', { name: /🗑 Clear/ }) as HTMLButtonElement).disabled).toBe(true);
   });
+
+  // ─── Provider On/Off routing switch + gateway documentation ─────────────
+
+  it('documents OmniRoute and exposes an On/Off routing switch', async () => {
+    const payload: AdminChecksData = {
+      ...VALID_PAYLOAD,
+      providers: [
+        ...VALID_PAYLOAD.providers,
+        {
+          type: 'omniroute',
+          configured: false,
+          keySource: 'none',
+          keyMasked: null,
+          model: 'auto',
+          baseUrl: 'http://127.0.0.1:20128/v1',
+          enabled: false,
+        },
+      ],
+    };
+    mockAuthedServer(payload);
+    vi.spyOn(dashboardAPI, 'fetchAdminCatalog').mockResolvedValue([
+      ...CATALOG,
+      {
+        id: 'omniroute',
+        label: 'OmniRoute (AI gateway)',
+        icon: '🔀',
+        envVar: null,
+        keyless: true,
+        description: 'A local AI gateway that multiplexes many upstream providers behind one endpoint.',
+        setup: 'Install: npm install -g omniroute — then connect upstream keys.',
+      },
+    ]);
+    const save = vi.spyOn(dashboardAPI, 'saveProvider').mockResolvedValue({
+      ok: true,
+      provider: { type: 'omniroute', configured: false, keySource: 'none', keyMasked: null, enabled: true },
+    });
+
+    render(<AdminPanel />);
+    await screen.findByText(/System Checks/);
+
+    // The description and the setup steps are on the row (a gateway is not
+    // self-explanatory, unlike a plain API-key provider).
+    expect(await screen.findByText(/A local AI gateway that multiplexes/)).toBeTruthy();
+    expect(screen.getByText(/npm install -g omniroute/)).toBeTruthy();
+
+    // The provider is OFF → the switch offers to turn it ON, and does.
+    const row = screen.getByText(/🔀 OmniRoute/).closest('tr')!;
+    fireEvent.click(within(row).getByRole('button', { name: /Turn on/ }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('omniroute', { enabled: true }));
+    expect(await screen.findByText(/Routing ON/)).toBeTruthy();
+  });
 });

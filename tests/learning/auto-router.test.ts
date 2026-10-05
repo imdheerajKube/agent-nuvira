@@ -22,6 +22,8 @@ import {
   resetAutoRouter,
   isAutoModel,
   isAutoProvider,
+  isProviderOwnAuto,
+  isAgentAutoRoute,
   computeWeights,
   scoreProvider,
   computeCostScore,
@@ -136,6 +138,32 @@ describe('isAutoModel / isAutoProvider', () => {
     for (const p of ['local', 'groq', 'nim', 'gemini', 'openrouter']) {
       expect(DEFAULT_AUTO_PROVIDERS).toContain(p);
     }
+  });
+});
+
+// ─── A8 — provider-owned auto vs the agent's auto-route ─────────────────────
+
+describe('isProviderOwnAuto / isAgentAutoRoute (A8)', () => {
+  it('a concrete provider + `auto` model is the PROVIDER\'s own auto', () => {
+    expect(isProviderOwnAuto('omniroute', 'auto')).toBe(true);
+    expect(isAgentAutoRoute('omniroute', 'auto')).toBe(false);
+  });
+
+  it('`-p auto` (or no provider) with `-m auto` stays the AGENT\'s auto-route', () => {
+    expect(isProviderOwnAuto('auto', 'auto')).toBe(false);
+    expect(isAgentAutoRoute('auto', 'auto')).toBe(true);
+    expect(isProviderOwnAuto(undefined, 'auto')).toBe(false);
+    expect(isAgentAutoRoute(undefined, 'auto')).toBe(true);
+  });
+
+  it('a concrete provider with a real model is NOT auto at all', () => {
+    expect(isProviderOwnAuto('omniroute', 'auto/smart')).toBe(false);
+    expect(isAgentAutoRoute('omniroute', 'auto/smart')).toBe(false);
+    expect(isAgentAutoRoute('groq', 'llama-3.3-70b-versatile')).toBe(false);
+  });
+
+  it('`-p auto` with a concrete model is still the AGENT\'s auto-route', () => {
+    expect(isAgentAutoRoute('auto', 'llama-3.3-70b-versatile')).toBe(true);
   });
 });
 

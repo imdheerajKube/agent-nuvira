@@ -19,6 +19,14 @@ export type LocalRunner = 'ollama' | 'huggingface' | 'ggml';
 export interface ProviderConfig {
   apiKey?: string;
   /**
+   * Whether this provider may be chosen by the router. `false` removes it from
+   * the auto-routing candidate pool (the dashboard's per-provider On/Off
+   * switch); absent means enabled. It does NOT delete credentials — a provider
+   * can be switched off and on without re-entering its key, and an explicit
+   * `--provider` pin still reaches it (a pin is a user decision, not routing).
+   */
+  enabled?: boolean;
+  /**
    * M2.3 multi-account rotation: ADDITIONAL API keys for the same provider
    * (the primary stays in `apiKey`). When the failover runner hits a
    * rate-limit/auth failure, it rotates to the next non-parked key of the

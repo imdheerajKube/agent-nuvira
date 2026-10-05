@@ -42,7 +42,7 @@ import type { ProviderType } from '../config/types.js';
 import { getProviderFallback, classifyFallbackError, isRetryableError, isTransientForRetry, recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure, RATE_LIMIT_EXCLUSION_MS } from '../learning/failure-bookkeeping.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
-import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
+import { getAutoRouter, isAgentAutoRoute, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
 import { continuationSoftwareText } from '../learning/continuation-intent.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
@@ -828,7 +828,10 @@ export class ChatCommand extends BaseCommand {
         // Best-effort — an unreadable config leaves the previous behavior.
       }
     }
-    let autoMode = isAutoModel(mergedOpts.model) || isAutoProvider(mergedOpts.provider);
+    // A8 — a CONCRETE provider with `-m auto` means that provider's own auto
+    // (e.g. an OmniRoute combo), NOT our auto-route. isAgentAutoRoute excludes
+    // that case so the pin reaches the provider instead of being re-routed.
+    let autoMode = isAgentAutoRoute(mergedOpts.provider, mergedOpts.model);
     let { type, provider } = autoMode
       ? await this.getProvider({})
       : await this.getProvider(mergedOpts);
@@ -1182,7 +1185,9 @@ export class ChatCommand extends BaseCommand {
     const mergedOpts = { ...options, provider: activeOpts.provider, model: activeOpts.model };
 
     // ── Auto routing mode: agent decides the best provider/model per message ──
-    let autoMode = isAutoModel(mergedOpts.model) || isAutoProvider(mergedOpts.provider);
+    // A8 — a pinned concrete provider with `-m auto` is the provider's own auto,
+    // not ours. See isAgentAutoRoute.
+    let autoMode = isAgentAutoRoute(mergedOpts.provider, mergedOpts.model);
     let { type, provider } = autoMode
       ? await this.getProvider({})
       : await this.getProvider(mergedOpts);

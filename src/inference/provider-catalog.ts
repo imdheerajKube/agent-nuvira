@@ -51,6 +51,17 @@ export interface CatalogProviderEntry {
   openAICompat?: boolean;
   /** True when no API key is needed (reachability is still probed). */
   keyless?: boolean;
+  /**
+   * One-paragraph "what is this and what does it do", shown in the dashboard's
+   * provider editor next to the key fields. Optional — most providers are
+   * self-explanatory; a gateway is not.
+   */
+  description?: string;
+  /**
+   * How to set the provider up (install/run/where the key comes from), shown
+   * with the description. Plain text; the dashboard renders it as a hint block.
+   */
+  setup?: string;
   /** Auth header name (default 'Authorization' → `Bearer <key>`). */
   apiKeyHeader?: string;
   /**
@@ -182,6 +193,18 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     capabilities: { reasoning: 0.72, speed: 0.68, cost: 0.92, privacy: 0.50, reliability: 0.80 },
     pricing: { inputPer1K: 0, outputPer1K: 0 },
     contextWindow: 131_072,
+    description:
+      'A local AI gateway that multiplexes many upstream providers behind one OpenAI-compatible endpoint. ' +
+      'Agent-nuvira still owns task-aware routing; OmniRoute is one candidate provider whose own combos ' +
+      'fall over across the upstreams IT holds keys for. Use model `auto` for its balanced combo, or ' +
+      '`auto/coding`, `auto/fast`, `auto/cheap`, `auto/offline`.',
+    setup:
+      'Install: `npm install -g omniroute` (or the Docker image). Start it: `omniroute` — it serves on ' +
+      'http://127.0.0.1:20128 (dashboard + /v1 API). Connect upstream keys once so its combos have ' +
+      'executable targets: `omniroute providers add deepseek --credential-stdin` (repeat for groq, gemini, …). ' +
+      'Switch it ON here to let the router include it, or leave it OFF and pin it explicitly with ' +
+      '`nuvira execute "…" --provider omniroute --model auto`. No API key is needed on THIS side — the ' +
+      'gateway holds the upstream keys.',
   },
 
   // ── Extended OpenAI-compatible providers (Issue 001: 17+ in routing) ────

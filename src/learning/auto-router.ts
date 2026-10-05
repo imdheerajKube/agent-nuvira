@@ -991,6 +991,29 @@ export function isAutoProvider(provider?: string | null): boolean {
 }
 
 /**
+ * A CONCRETE provider pinned with the `auto` model sentinel means THAT
+ * provider's OWN auto routing — an OmniRoute gateway combo, say — not
+ * agent-nuvira's provider/model selection.
+ *
+ * This is the distinction behind the `-p omniroute -m auto` collision: the
+ * sentinel was read as the agent's auto-route EVERYWHERE, so the request was
+ * re-routed by our router and never reached the gateway that was named. The
+ * sentinel is provider-owned ONLY when the provider is named and is not itself
+ * the `auto` directive; `-m auto` with no provider (or `-p auto`) stays our
+ * auto-route exactly as before.
+ */
+export function isProviderOwnAuto(provider?: string | null, model?: string | null): boolean {
+  return !!provider && !isAutoProvider(provider) && isAutoModel(model);
+}
+
+/** Agent-nuvira's OWN auto routing: the `auto` directive on either axis, minus
+ *  the provider-owned case — use this where a decision would otherwise
+ *  re-route a concretely pinned provider. */
+export function isAgentAutoRoute(provider?: string | null, model?: string | null): boolean {
+  return !isProviderOwnAuto(provider, model) && (isAutoProvider(provider) || isAutoModel(model));
+}
+
+/**
  * Compute the effective dimension weights for a task.
  * Combines complexity baseline + preference-mode adjustments + user overrides,
  * then normalizes to sum 1 so scores are comparable across calls.

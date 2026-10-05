@@ -206,18 +206,26 @@ now produces clean single-model attribution under strict mode).
 | # | Defect | Why it matters | Direction |
 |---|--------|----------------|-----------|
 | A5 | OpenRouter DeepSeek needs paid credits | Attribution on that route is impossible | Use the native DeepSeek provider, or OmniRoute as a provider |
-| A8 | An explicit `-p omniroute -m auto` never reaches the gateway | The agent's own `auto` directive wins, so the gateway's headline `auto` combo cannot be selected (the benchmark used `auto/smart`) | When a concrete `--provider` is named, `-m auto` should mean that provider's auto, not the router's |
+| A8 | ~~An explicit `-p omniroute -m auto` never reaches the gateway~~ | FIXED: a concrete provider + `-m auto` is now that provider's own auto (`isProviderOwnAuto` / `isAgentAutoRoute`); `-p auto` or no provider still means our auto-route | — |
 
 ## 7. OmniRoute, measured
 
 OmniRoute was installed locally (npm, port 20128), connected to the same
 DeepSeek / Gemini / Groq keys this machine already has, and the WS7 seeded-bug
-suite was run against its quality-first combo under strict mode
-(`omniroute/auto/smart`, since `auto` is A8):
+suite was run under strict mode:
 
-- **composite 94% · found 6/7 · fixed 7/7 · false success 0/7 · time-to-green 53.8s**
-- the same composite as native `deepseek-flash` (94%), reached faster
-  (65.6s → 53.8s)
+| run | composite | found | fixed | false success | time-to-green |
+|---|---|---|---|---|---|
+| `deepseek/deepseek-flash` (native, first) | 94% | 6/7 | 7/7 | 0/7 | 65.6s |
+| `deepseek/deepseek-flash` (native, repeat) | **100%** | 7/7 | 7/7 | 0/7 | 44.3s |
+| `omniroute/auto/smart` (gateway) | 94% | 6/7 | 7/7 | 0/7 | 53.8s |
+| `omniroute/auto` (gateway, plain auto) | 94% | 6/7 | 7/7 | 0/7 | 65.7s |
+
+The FIX rate is 7/7 on every arm; the only movement between runs is the
+LOCALISATION step (±1 task), so the gateway sits one diagnosis behind the native
+model rather than behind on work done — exactly the "aggregation is a supply
+choice, not a routing brain" reading from §4.3. (A8 below was fixed during this
+work, which is why the plain `auto` combo could be measured.)
 
 Two interoperability defects surfaced and were fixed to get there, both on the
 OpenAI-compatible path:
