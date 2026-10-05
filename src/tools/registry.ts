@@ -3351,6 +3351,79 @@ registerTool({
   }),
 });
 
+// Knowledge — tag-scoped, vectorized retrieval over the user's own documents
+//
+// WHY A TOOL. The user's flow is "bring documents, tag them, ask questions scoped
+// to that tag." Retrieval must be something the AGENT can drive mid-task without
+// a CLI round-trip, and it must pay the read+embed cost ONCE per document rather
+// than re-reading the file into context every turn. This tool is that surface:
+// `add` ingests under a tag (documents are extracted, chunked, embedded once),
+// `query` returns the tag's top-k chunks with their source files so the model can
+// answer the data half from the user's data and the generic half from its own
+// knowledge / web-research.
+registerTool({
+  name: 'knowledge',
+  description:
+    'Answer questions from the USER\'S OWN tagged documents. `add` ingests files/folders under a tag '
+    + '(extract → chunk → embed, done once); `query` retrieves the tag\'s most relevant passages, labeled '
+    + 'with their source file, so the data part of an answer comes from the user\'s data and the general '
+    + 'part from model knowledge or web-research. Use this instead of re-reading a large document on every '
+    + 'turn. Actions: add | query | list | forget | stats. Tags are normalized (spaces/capitals/underscores '
+    + 'become lowercase-hyphen), e.g. "Dheeraj health report" → "dheeraj-health-report".',
+  category: 'workflow',
+  inputSchema: z.object({
+    action: z.enum(['add', 'query', 'list', 'forget', 'stats']).describe('Action'),
+    tag: z.string().optional().describe('Tag/hashtag scoping the data (e.g. "dheeraj-health-report")'),
+    paths: z.array(z.string()).optional().describe('Files or folders to ingest (action: add)'),
+    question: z.string().optional().describe('Question to answer from the tagged data (action: query)'),
+    topK: z.number().optional().describe('Chunks to retrieve (action: query, default 6)'),
+  }),
+  endsAgentStep: false,
+  run: (args) => import('../learning/knowledge-base.js').then(async (m) => {
+    const { action, tag, paths, question, topK } = args as {
+      action: string; tag?: string; paths?: string[]; question?: string; topK?: number;
+    };
+    switch (action) {
+      case 'add': {
+        if (!tag) return 'tag is required for action: add';
+        if (!paths || paths.length === 0) return 'paths is required for action: add';
+        const result = await m.ingestKnowledge(tag, paths);
+        const skipped = result.skipped.length
+          ? `\nSkipped: ${result.skipped.map((s) => `${s.path} (${s.reason})`).join('; ')}`
+          : '';
+        return `✅ Ingested ${result.files} document(s) / ${result.chunks} chunk(s) under tag '${result.tag}'.`
+          + `\nQuery it with action: query, tag: '${result.tag}'.${skipped}`;
+      }
+      case 'query': {
+        if (!tag) return 'tag is required for action: query';
+        if (!question) return 'question is required for action: query';
+        const hits = await m.queryKnowledge(tag, question, { topK });
+        return m.formatKnowledgeContext(tag, hits);
+      }
+      case 'list': {
+        const tags = m.listKnowledgeTags();
+        if (tags.length === 0) return 'No knowledge tags yet. Ingest documents with action: add.';
+        return tags
+          .map((t) => `  • ${t.tag} — ${t.chunkCount} chunk(s) across ${t.documents.length} document(s)`)
+          .join('\n');
+      }
+      case 'forget': {
+        if (!tag) return 'tag is required for action: forget';
+        const removed = await m.forgetKnowledgeTag(tag);
+        return removed ? `🗑️ Removed knowledge tag '${m.normalizeKnowledgeTag(tag)}'.` : `No knowledge tag '${tag}' found.`;
+      }
+      case 'stats': {
+        if (!tag) return 'tag is required for action: stats';
+        const entry = m.getKnowledgeTag(tag);
+        if (!entry) return `No knowledge tag '${tag}' found.`;
+        return JSON.stringify(entry);
+      }
+      default:
+        return `Unknown action '${action}'`;
+    }
+  }),
+});
+
 // Credential Files — Credential file management
 registerTool({
   name: 'credential_files',

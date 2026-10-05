@@ -2,8 +2,8 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 265,
-  "groupCount": 52,
+  "commandCount": 270,
+  "groupCount": 53,
   "groups": [
     {
       "name": "admin",
@@ -1987,6 +1987,39 @@
         {
           "name": "retrieval clear",
           "description": "Clear the retrieval index and token-savings stats",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "knowledge",
+      "description": "Knowledge base — answer questions from your own tagged documents (vector retrieval)",
+      "commands": [
+        {
+          "name": "knowledge add",
+          "description": "Ingest files or folders under a tag (extracted, chunked and embedded once)",
+          "flags": []
+        },
+        {
+          "name": "knowledge query",
+          "description": "Retrieve the most relevant passages for a question, scoped to a tag",
+          "flags": [
+            "--top-k <top_k>"
+          ]
+        },
+        {
+          "name": "knowledge list",
+          "description": "List knowledge tags with document and chunk counts",
+          "flags": []
+        },
+        {
+          "name": "knowledge stats",
+          "description": "Show details for one knowledge tag",
+          "flags": []
+        },
+        {
+          "name": "knowledge forget",
+          "description": "Remove a tag's vectors and manifest entry",
           "flags": []
         }
       ]

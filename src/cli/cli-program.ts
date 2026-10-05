@@ -68,6 +68,7 @@ import { PublishCommand } from './publish.js';
 import { CredentialsCommand } from './credentials.js';
 import { PhaseCommand } from './phase.js';
 import { RetrievalCommand } from './retrieval.js';
+import { KnowledgeCommand } from './knowledge.js';
 import { TraceCommand } from './trace.js';
 import { ContinuityCommand } from './continuity.js';
 import { WebsiteCommand } from './website.js';
@@ -281,6 +282,10 @@ export function createCLI(): Command {
   // Register Retrieval command (vectorized token-efficient context)
   const retrievalCmd = new RetrievalCommand();
   program.addCommand(retrievalCmd.create());
+
+  // Register Knowledge command (tag-scoped retrieval over the user's own documents)
+  const knowledgeCmd = new KnowledgeCommand();
+  program.addCommand(knowledgeCmd.create());
 
   // Register Trace command (P0 reasoning-trace capture + replay)
   const traceCmd = new TraceCommand();

@@ -1384,6 +1384,32 @@ Semantic search over the indexed repo (top-k chunks)
 
 Clear the retrieval index and token-savings stats
 
+### `nuvira knowledge`
+
+Knowledge base — answer questions from your own tagged documents (vector retrieval)
+
+   - flags: `--verbose`
+### `nuvira knowledge add`
+
+Ingest files or folders under a tag (extracted, chunked and embedded once)
+
+### `nuvira knowledge query`
+
+Retrieve the most relevant passages for a question, scoped to a tag
+
+   - flags: `--top-k <top_k>`
+### `nuvira knowledge list`
+
+List knowledge tags with document and chunk counts
+
+### `nuvira knowledge stats`
+
+Show details for one knowledge tag
+
+### `nuvira knowledge forget`
+
+Remove a tag's vectors and manifest entry
+
 ### `nuvira trace`
 
 Inspect and replay per-step reasoning traces (every LLM call in a pipeline)
@@ -1426,4 +1452,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*460 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*468 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

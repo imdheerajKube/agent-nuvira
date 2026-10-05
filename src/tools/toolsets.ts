@@ -198,8 +198,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'memory',
     label: 'Memory',
-    description: 'Persistent memory management — add, search, delete, replace memories.',
-    tools: ['add_memory', 'search_memory', 'delete_memory', 'replace_memory', 'list_memories', 'memory_stats'],
+    description: 'Persistent memory management — add, search, delete, replace memories — and tag-scoped knowledge retrieval over your own documents.',
+    tools: ['add_memory', 'search_memory', 'delete_memory', 'replace_memory', 'list_memories', 'memory_stats', 'knowledge'],
   },
 ];
 

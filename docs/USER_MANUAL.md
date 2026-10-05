@@ -138,7 +138,7 @@ nuvira -t "<task>"            # one-shot: shorthand for chat "<task>"
 nuvira --debug <cmd>          # debug logging
 ```
 
-### 4.2 The 48 top-level groups
+### 4.2 The 49 top-level groups
 
 ```
 admin      chat       edit       plan       config     cache      models     execute
@@ -147,6 +147,7 @@ skill      skills     gateway    model      benchmark  eval       sandbox    doc
 memory     dashboard  agent      federation team       sdk        provider   security
 audit      sbom       feedback   nlu        intent     code-map   tools      session
 marketplace mcp       ci         publish    bedrock    phase      retrieval  trace
+knowledge
 ```
 
 `nuvira --help` lists them with one-line descriptions; `nuvira <group> --help` lists the
@@ -660,7 +661,8 @@ file". Categories below are descriptive; run `nuvira tools list` for the live re
 
 **Agents & memory** — `delegate`, `delegate_system`, `async_delegation`,
 `subagent`, `plan_todo`, `memory`, `add_memory`, `search_memory`, `list_memories`,
-`skills_hub`, `skills_sync`, `skill_usage`, `skill_provenance`.
+`knowledge` (answer from your own tagged documents), `skills_hub`, `skills_sync`,
+`skill_usage`, `skill_provenance`.
 
 **Security & compliance** — `ast_audit`, `security_score`, `threat_patterns`,
 `path_security`, `osv_check`, `sanitize`, `env_probe`, `sbom` (via CLI).
@@ -763,6 +765,42 @@ $ nuvira retrieval stats
 nuvira retrieval index ./src
 nuvira retrieval query "where is rate-limit backoff applied"
 ```
+
+### `nuvira knowledge` — precise answers from your own tagged documents
+
+Bring your own files, give them a tag, and ask questions scoped to that tag. The
+documents are extracted, chunked and embedded **once**; every later question
+retrieves the relevant passages instead of re-reading the files, so a large
+document costs its tokens a single time rather than on every turn. Each tag is
+its own vector namespace, and everything lives under `~/.nuvira/memory/` — never
+in a repository or package.
+
+The answer is hybrid by design. The **data** half ("my LDL is 142") comes from
+your documents; the **general** half ("how to lower it") comes from the model, and
+from `web-research` when current guidance is needed. Retrieved passages are
+labelled with their source file, so the model can say which part is which.
+
+```bash
+# Ingest a report (PDF, DOCX, XLSX, PPTX, Markdown, CSV, JSON, plain text) under a tag.
+nuvira knowledge add dheeraj-health-report ~/Documents/labs.pdf
+
+# Ask a question — the data part is answered from the PDF, the rest from the model.
+nuvira knowledge query dheeraj-health-report "what is my LDL and how do I lower it"
+
+nuvira knowledge list                          # tags, documents, chunk counts
+nuvira knowledge stats dheeraj-health-report   # one tag in detail
+nuvira knowledge forget dheeraj-health-report  # remove a tag's vectors
+```
+
+The agent can drive the same pipeline mid-task with the `knowledge` tool
+(`action: add | query | list | forget | stats`), so "answer this from my tagged
+data" is a single agent step. Tags are normalized — `Dheeraj Health Report`
+becomes `dheeraj-health-report`.
+
+**Privacy.** Your documents and their vectors live in `~/.nuvira/memory/`, outside
+any repository; they are never committed and never shipped in the npm package. Do
+not store personal data under a project's `.agents/skills/` directory — that
+directory *is* published.
 
 ### `nuvira security scan` — injection / PII / dangerous code
 

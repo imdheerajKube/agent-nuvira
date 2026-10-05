@@ -1196,7 +1196,19 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira retrieval stats
   ```
 
-### 12.5 Session continuity
+### 12.5 Knowledge (tag-scoped documents)
+
+- **Objective:** Bring your own documents, give them a tag, and answer questions scoped to that tag. Documents are extracted, chunked and embedded once, so later questions retrieve the relevant passages instead of re-reading the files every turn.
+- **Command:** `nuvira knowledge add <tag> <paths...>` · `nuvira knowledge query <tag> "<question>" [-k <n>]` · `nuvira knowledge list` · `nuvira knowledge stats <tag>` · `nuvira knowledge forget <tag>`
+- **Examples:**
+  ```bash
+  nuvira knowledge add dheeraj-health-report ~/Documents/labs.pdf
+  nuvira knowledge query dheeraj-health-report "what is my LDL and how do I lower it"
+  nuvira knowledge list                                  # tags, documents, chunk counts
+  nuvira knowledge forget dheeraj-health-report          # remove a tag's vectors
+  ```
+
+### 12.6 Session continuity
 
 - **Objective:** List/resume project-scoped sessions (debug surface; `continue` is the primary path).
 - **Command:** `nuvira session list [--project <p>] [--since <t>] [-l <n>]` · `nuvira session summarize <id>` · `nuvira session resume [--project <p>]`
@@ -1206,7 +1218,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira session resume
   ```
 
-### 12.6 NLU debugging
+### 12.7 NLU debugging
 
 - **Objective:** Debug how a plain-English request is understood (intent/entities/actions).
 - **Command:** `nuvira nlu debug "<request>" [--llm]`
@@ -1216,7 +1228,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
   # → intent: dashboard.stop · entities: { service: dashboard }
   ```
 
-### 12.7 Intent routing (plain-English → CLI)
+### 12.8 Intent routing (plain-English → CLI)
 
 - **Objective:** Resolve a plain-English ask into the exact `nuvira` command(s) to run —
   including the clarifying question when an ask is ambiguous (e.g. verified list vs
@@ -1234,7 +1246,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira intent resolve "run the eval suite" -j   # machine-readable JSON for automation
   ```
 
-### 12.8 Code map
+### 12.9 Code map
 
 - **Objective:** Symbol map of a project — functions/classes/methods with line numbers.
 - **Command:** `nuvira code-map [--json]`
@@ -1243,7 +1255,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira code-map --json
   ```
 
-### 12.9 Tool registry
+### 12.10 Tool registry
 
 - **Objective:** Inspect the agent's tool-calling surface.
 - **Command:** `nuvira tools list` · `nuvira tools show <tool>` · `nuvira tools toolsets [-e <name>] [-d <name>]`
@@ -1256,7 +1268,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
 
 ---
 
-### 12.10 NLU learnings — the corrections the agent has learned
+### 12.11 NLU learnings — the corrections the agent has learned
 
 - **Objective:** See (and if needed forget) the routing corrections learned from
   **confirmed** misreadings — i.e. the agent improving itself from your actual usage.
@@ -1271,7 +1283,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
   not retrain itself off a guess. If it has learned something wrong, `--forget` is how
   you undo it; `nuvira nlu` is the sibling surface for debugging a single phrase.
 
-### 12.11 Intent eval — how good is plain-English → CLI routing?
+### 12.12 Intent eval — how good is plain-English → CLI routing?
 
 - **Objective:** Measure the intent router (deterministic rules vs semantic matching)
   over a labelled corpus, including novel phrasings, instead of trusting an impression.
@@ -1285,7 +1297,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
   changing routing rules — a phrase that used to resolve can regress silently
   otherwise, and this is the only thing that catches it.
 
-### 12.12 Surface parity — prove every surface behaves the same
+### 12.13 Surface parity — prove every surface behaves the same
 
 - **Objective:** Check that the same request produces the same experience on **chat,
   execute, dashboard chat, the gateway and subagents** — and that the code still agrees
