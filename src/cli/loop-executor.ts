@@ -28,7 +28,7 @@
 import { ConfigManager } from '../config/manager.js';
 import { capabilityReasoningEffort, isMaxCapability } from '../config/capability-mode.js';
 import { resolveProvider } from './router.js';
-import { resolveRoute, servedRouteFrom, type ServedRoute } from '../inference/route-resolver.js';
+import { resolveRoute, servedRouteFrom, strictModelMode, type ServedRoute } from '../inference/route-resolver.js';
 import { debugLogNotice, sessionDebugLog } from '../observability/debug-log.js';
 // WS3 (#25) — the turn as a span, when an operator has asked for OTLP export.
 import { flushSpans, otelNoticeOnce, startTurnSpan } from '../observability/otel.js';
@@ -501,6 +501,28 @@ export async function runLoopExecutor(
    */
   const pinnedRun = Boolean(opts.provider && !isAutoProvider(opts.provider));
   /**
+   * A2 — STRICT PIN. `NUVIRA_STRICT_MODEL=1` means "run THIS model or fail":
+   * route-resolver honours it for a single pair, but the loop engine's own
+   * candidate walk did not, so a strict pinned run still fell through to other
+   * providers when the pinned one errored (observed on the `cal` Android run,
+   * 2026-10-05: "deepseek failed — trying the next loop candidate…" ×5 with
+   * strict on). Under a strict pin the walk IS the substitution strict mode
+   * forbids, so it collapses to the pinned pair alone and a failure surfaces
+   * the real error instead of quietly running the user's job on another model.
+   */
+  const strictPin = pinnedRun && strictModelMode();
+  /** The ask as the user framed it, for a strict-pin failure message. */
+  const strictPinLabel = (): string =>
+    `${providerType}${model && model !== 'default' ? `/${model}` : ''}`;
+  const strictPinError = (cause: unknown): Error =>
+    new Error(
+      `Strict model mode is on (NUVIRA_STRICT_MODEL=1): the pinned model ${strictPinLabel()} ` +
+        `could not complete this step, and substituting another model is disabled. Cause: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }. Pick a model this provider serves (\`nuvira models\`), or unset NUVIRA_STRICT_MODEL to ` +
+        'let the router fall over to another model.',
+    );
+  /**
    * The pinned run's config-declared fallback chain, derived LAZILY on the
    * first failure — never at route time. Deriving it eagerly made every pinned
    * run pay for a provider ranking even when nothing failed (measured as a real
@@ -850,10 +872,12 @@ export async function runLoopExecutor(
       seenAll.add(k);
       all.push(c);
     }
-    const walk = [
-      ...all.filter((c) => !failedPairs.has(pairKey(c.provider, c.model))),
-      ...all.filter((c) => failedPairs.has(pairKey(c.provider, c.model))),
-    ];
+    const walk = strictPin
+      ? [primary]
+      : [
+          ...all.filter((c) => !failedPairs.has(pairKey(c.provider, c.model))),
+          ...all.filter((c) => failedPairs.has(pairKey(c.provider, c.model))),
+        ];
     /**
      * Lazily extend the walk with the pinned run's config fallback chain, the
      * first time a candidate actually fails or is unavailable. Appending to
@@ -889,6 +913,9 @@ export async function runLoopExecutor(
         const prov = await resolveAdapter(cand.provider);
         if (typeof prov.isAvailable === 'function' && !(await prov.isAvailable())) {
           failedPairs.add(key);
+          // A2 — under a strict pin, an unreachable pinned provider is the
+          // user's answer, not a reason to run somewhere else.
+          if (strictPin) throw strictPinError(`provider '${cand.provider}' is not available`);
           // A pinned provider that cannot be constructed/reached is not a
           // verdict on it — walk its configured fallbacks.
           extendWithPinnedFallbacks();
@@ -993,6 +1020,10 @@ export async function runLoopExecutor(
             throw err;
           }
         }
+        // A2 — a strict pin never walks on. The failure was booked above (so
+        // strict mode does not blind the router to a dead key), then surfaced,
+        // instead of substituting a model the user did not ask for.
+        if (strictPin) throw strictPinError(err);
         extendWithPinnedFallbacks();
         // ── DURABLE HAND-OFF ────────────────────────────────────────────────
         // The failure is written down BEFORE the walk moves on, so the next

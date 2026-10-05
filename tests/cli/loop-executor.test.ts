@@ -485,6 +485,37 @@ describe('loop executor — pinned-provider failover (config fallback chain)', (
     expect(fallbackCalls.n).toBe(0);
     expect(result.provider).toBe('pinned');
   });
+
+  it('A2 — strict mode refuses to walk to the fallback even on a RETRYABLE failure', async () => {
+    // The live `cal` Android run: `NUVIRA_STRICT_MODEL=1` with a pinned model
+    // that kept timing out still fell through to groq then gemini (5 times).
+    // A retryable failure is exactly what used to justify leaving the pin.
+    const { recordFailure, fallbackCalls } = mockPinnedPair(new Error('429 rate limit exceeded'));
+    const prev = process.env.NUVIRA_STRICT_MODEL;
+    process.env.NUVIRA_STRICT_MODEL = '1';
+    try {
+      const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+      // A DISTINCT goal on purpose: the failover test above uses `do the thing`,
+      // and sharing it would serve this turn from the answer cache (same goal →
+      // cached reply) instead of exercising the strict path at all.
+      const result = await runLoopExecutor('restrict this run to the pinned model', new ConfigManager(), {
+        provider: 'pinned',
+        skipProjectContext: true,
+        skipSkillHint: true,
+        quiet: true,
+      });
+
+      // No substitution: the pinned model ran or the step failed, exactly as asked.
+      expect(fallbackCalls.n).toBe(0);
+      expect(result.provider).toBe('pinned');
+      expect(result.generationFailed).toBe(true);
+      // Strict mode still books the failure, so the router is not blinded.
+      expect(recordFailure).toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.NUVIRA_STRICT_MODEL;
+      else process.env.NUVIRA_STRICT_MODEL = prev;
+    }
+  });
 });
 
 /**

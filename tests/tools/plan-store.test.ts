@@ -211,6 +211,43 @@ describe('PlanStore', () => {
     expect(plan?.steps[0].status).toBe('pending');
   });
 
+  // ─── A1: a model's step REFERENCE is resolved, never silently dropped ──────
+
+  it('resolveStepId maps ordinals, prefixes and case onto real step ids', () => {
+    const store = new PlanStore();
+    store.create('Ship it', [
+      { id: 'step-1', description: 'One' },
+      { id: 'step-2', description: 'Two' },
+      { id: 'Step-3', description: 'Three' },
+    ]);
+    // Ordinal → the step at that 1-based position.
+    expect(store.resolveStepId('2')).toBe('step-2');
+    // Prefix present on one side only.
+    expect(store.resolveStepId('step-1')).toBe('step-1');
+    expect(store.resolveStepId('3')).toBe('Step-3');
+    expect(store.resolveStepId('STEP-2')).toBe('step-2');
+    expect(store.resolveStepId('')).toBeNull();
+    expect(store.resolveStepId('reproduce')).toBeNull();
+    expect(store.resolveStepId('9')).toBeNull(); // out of range
+  });
+
+  it('update() advances the plan when the reference needs resolving (A1)', () => {
+    const store = new PlanStore();
+    store.create('Ship it', [
+      { id: 'step-1', description: 'One' },
+      { id: 'step-2', description: 'Two' },
+      { id: 'step-3', description: 'Three' },
+    ]);
+    // The live `cal` run addressed steps by bare ordinal while they were
+    // `step-N`; every such update must still move the counter, or tracking lies.
+    store.update('1', 'done');
+    store.update('2', 'done');
+    store.update('3', 'done');
+    expect(store.progress().done).toBe(3);
+    expect(store.progress().percent).toBe(100);
+    expect(store.toTable()).toContain('3/3 done (100%)');
+  });
+
   it('createPersistentPlanStore round-trips a plan through a scope file', () => {
     const scope = `test-scope-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const path = planFilePath(scope);

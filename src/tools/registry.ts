@@ -1007,7 +1007,20 @@ registerTool({
       }
       store.create(goal, steps);
     } else if (id && status) {
-      store.update(id, status, note);
+      // A1 — never accept an update that matched nothing. Silently returning
+      // the unchanged plan reads as success to the model (and as tracking to
+      // the user) while the counter stays frozen; observed live on the `cal`
+      // Android run, where the checklist sat at `1/7` across four successful
+      // steps. Resolve the reference first and, when it names no step, say so
+      // with the ids that DO exist so the model can re-send it and move on.
+      const resolved = store.resolveStepId ? store.resolveStepId(id) : id;
+      if (!resolved) {
+        const valid = (store.snapshot?.()?.steps ?? []).map((s) => s.id);
+        return `Error: plan_todo found no step "${id}" — valid step ids: ${
+          valid.length > 0 ? valid.join(', ') : '(none — declare the plan with action "create" first)'
+        }. Re-send this update with one of those ids.`;
+      }
+      store.update(resolved, status, note);
     } else {
       return 'Error: plan_todo update needs id + status (pending|running|done|blocked).';
     }

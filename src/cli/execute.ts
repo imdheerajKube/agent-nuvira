@@ -406,6 +406,15 @@ export class ExecuteCommand extends BaseCommand {
       .option('--keep-worktree', 'Keep the isolated worktree after the run instead of removing it')
       .option('--checkpoint-list', 'List saved checkpoints and exit', false)
       .option('--json-events', 'Emit machine-readable NDJSON pipeline events on stdout (no human board)', false)
+      .addHelpText(
+        'after',
+        '\nModel routing:\n' +
+          '  Pinning -p/--provider (and -m/--model) does NOT stop the router from falling\n' +
+          '  over to another model if the pinned one is unavailable — auto routing takes\n' +
+          '  over and the run says so. To work with the pinned model ONLY, set\n' +
+          '  NUVIRA_STRICT_MODEL=1: a dead pin then fails with a message naming the pair\n' +
+          '  instead of substituting another model.\n',
+      )
       .action(async (goal: string | undefined, options?: {
         provider?: string;
         model?: string;

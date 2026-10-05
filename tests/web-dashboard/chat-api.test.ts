@@ -415,6 +415,47 @@ describe('/api/chat', () => {
     expect(autoOpts.resume).toBe(true);
   });
 
+  it('strict model pin — a substituted pin reports auto routing, and names strict mode', async () => {
+    // The engine (always `groq/llama-3.3-70b`) stands in for a router that left
+    // the pinned model. With strict OFF the reader must be told auto routing
+    // took over AND how to force the pin; silence here is how a user concludes
+    // the pinned model actually ran.
+    const res = await authedFetch('/api/chat', 'POST', {
+      message: 'do the pinned thing',
+      provider: 'gemini',
+      model: 'gemini-2.5-flash',
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { routingNotice?: string };
+    expect(body.routingNotice).toContain('Auto routing took over');
+    expect(body.routingNotice).toContain('gemini/gemini-2.5-flash');
+    expect(body.routingNotice).toContain('strict model mode');
+  });
+
+  it('strict model pin — ON, a failed pinned turn stops instead of substituting', async () => {
+    engine.generationFailed = true;
+    try {
+      const res = await authedFetch('/api/chat', 'POST', {
+        message: 'do the strict thing',
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        strict: true,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { routingNotice?: string };
+      expect(body.routingNotice).toContain('Strict model mode is on');
+    } finally {
+      engine.generationFailed = false;
+    }
+  });
+
+  it('no pin → no routing notice (auto routing is the expected path)', async () => {
+    const res = await authedFetch('/api/chat', 'POST', { message: 'just answer' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { routingNotice?: string };
+    expect(body.routingNotice).toBeUndefined();
+  });
+
   it('WS5 — a REFUSED turn reaches the client as a refusal, and is never offered a retry', async () => {
     engine.refusedAnswer =
       'Isolation was requested for this turn, but the work could not be isolated: /tmp/x is not inside a git work tree.\nNothing ran.';

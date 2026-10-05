@@ -90,6 +90,12 @@ export interface PlanStoreLike {
   snapshot(): Plan | null;
   create(goal: string, steps: Array<{ id: string; description: string }>): Plan;
   update(id: string, status: PlanStepStatus, note?: string): Plan | null;
+  /**
+   * Map a model-supplied step reference onto a real step id, or null when it
+   * names nothing in the plan. `plan_todo` calls this BEFORE `update` so an
+   * unknown reference is reported instead of silently doing nothing (A1).
+   */
+  resolveStepId?(id: string): string | null;
   /** Structured GUI snapshot (plan_todo emits it via plan:changed). */
   toGUI?(): PlanSnapshot | null;
   /** Human-readable checklist text (the model's tool result). */
@@ -221,12 +227,49 @@ export class PlanStore implements PlanStoreLike {
   }
 
   /**
-   * Mark one step's status (and optionally record a plain-English note about
-   * it). Unknown id → no-op (returns the unchanged plan).
+   * Resolve a step reference the model sent to a real step id.
+   *
+   * Models are inconsistent about how they name a step: the schema examples
+   * are `step-1`/`reproduce`, but a live run's model addressed steps by bare
+   * ordinal (`2`, `3`) while it had created them as `step-2` (observed on the
+   * `cal` Android run, 2026-10-05 — the one-update that matched advanced the
+   * plan, every later update was a silent no-op and the checklist froze at
+   * `1/7`). Accept, in order: the exact id, the id with an optional
+   * `step`/`step-`/`#` prefix stripped (either side), and a 1-based ordinal
+   * when the reference is a plain integer inside range. Case-insensitive.
    */
-  update(id: string, status: PlanStepStatus, note?: string): Plan | null {
+  resolveStepId(id: string): string | null {
+    if (!this.plan) return null;
+    const raw = String(id ?? '').trim();
+    if (!raw) return null;
+    const steps = this.plan.steps;
+    const exact = steps.find((s) => s.id === raw);
+    if (exact) return exact.id;
+    const bare = (value: string): string =>
+      value.toLowerCase().replace(/^[#]+/, '').replace(/^step[\s_-]*/, '').replace(/[\s_-]*$/, '');
+    const wanted = bare(raw);
+    if (wanted) {
+      const byBare = steps.find((s) => bare(s.id) === wanted);
+      if (byBare) return byBare.id;
+    }
+    if (/^\d+$/.test(raw)) {
+      const n = Number(raw);
+      if (n >= 1 && n <= steps.length) return steps[n - 1].id;
+    }
+    return null;
+  }
+
+  /**
+   * Mark one step's status (and optionally record a plain-English note about
+   * it). The reference is resolved through {@link resolveStepId} first, so a
+   * model that addressed `3` when the step is `step-3` still advances the
+   * plan. Unknown reference → no-op (returns the unchanged plan); callers that
+   * need to tell the two apart resolve first.
+   */
+  update(reference: string, status: PlanStepStatus, note?: string): Plan | null {
     if (!this.plan) return null;
     if (!VALID_STATUSES.includes(status)) return this.snapshot();
+    const id = this.resolveStepId(reference) ?? reference;
     const cleanNote = typeof note === 'string' && note.trim() ? note.trim() : undefined;
     let changed = false;
     for (const step of this.plan.steps) {

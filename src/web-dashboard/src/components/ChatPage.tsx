@@ -1206,6 +1206,13 @@ export default function ChatPage() {
    * makes, and only from models the router would actually use right now.
    */
   const [pinnedModel, setPinnedModel] = useState<{ provider: string; model: string } | null>(null);
+  /**
+   * Strict model pin — only meaningful WITH a pinned model. Off means the
+   * router may substitute another model when the pin is unavailable (auto
+   * routing takes over, and the server says so in `routingNotice`); on means
+   * "this model or nothing", so the turn stops instead of substituting.
+   */
+  const [strictPin, setStrictPin] = useState(false);
   /** The short routable list the picker offers (provider + model + capability). */
   const [routableModels, setRoutableModels] = useState<
     Array<{ provider: string; model: string; capability: number; band: 'high' | 'medium' | 'low' }>
@@ -1251,6 +1258,8 @@ export default function ChatPage() {
   // P4 — the last message whose turn FAILED, for the Retry affordance (null
   // when nothing to retry).
   const [retryAsk, setRetryAsk] = useState<string | null>(null);
+  /** A sentence the server sent about the PIN not holding (see `routingNotice`). */
+  const [routingNotice, setRoutingNotice] = useState<string | null>(null);
   // Resume the session open before a reload when one was stored; otherwise a
   // brand-new id.
   const sessionIdRef = useRef<string>(readPersistedSessionId() ?? newSessionId());
@@ -1861,6 +1870,9 @@ export default function ChatPage() {
           // An explicit model pin, when the user chose one. Omitted for Auto, so
           // the server's router stays in charge (the default).
           ...(pinnedModel ? { provider: pinnedModel.provider, model: pinnedModel.model } : {}),
+          // The strict pin rides ONLY with a pin: with Auto there is no model to
+          // force, so the flag is meaningless and is not sent.
+          ...(pinnedModel && strictPin ? { strict: true } : {}),
           projectPath: attachedProject?.path,
           // `encoding` rides along so the server knows whether to read the content as
           // text or to decode base64 and extract it (P2).
@@ -1892,6 +1904,7 @@ export default function ChatPage() {
       setStreamingText('');
       if (r.ok) {
         setMeta(r.generationFailed ? null : `${r.provider ?? 'provider'}${r.model ? ` / ${r.model}` : ' (auto-routed)'}`);
+        setRoutingNotice(r.routingNotice ?? null);
         // P4 — a failed generation (no usable answer) offers Retry too — but NOT
         // when the server already queued the ask (see `retryQueued`): the retry
         // loop is re-running it and will push the answer here, so a manual
@@ -2708,6 +2721,20 @@ export default function ChatPage() {
 
           {error ? <div className="admin-row-msg admin-row-msg-err">{error}</div> : null}
 
+          {routingNotice ? (
+            <div className="admin-row-msg chat-routing-notice">
+              <span>ℹ️ {routingNotice}</span>{' '}
+              <button
+                className="chat-routing-notice-dismiss"
+                type="button"
+                aria-label="Dismiss routing notice"
+                onClick={() => setRoutingNotice(null)}
+              >
+                ✕
+              </button>
+            </div>
+          ) : null}
+
           {bundleNote ? (
             <div className={`admin-row-msg${bundleNote.kind === 'err' ? ' admin-row-msg-err' : ''}`}>
               {bundleNote.text}
@@ -3009,6 +3036,29 @@ export default function ChatPage() {
                   </option>
                 ))}
               </select>
+              {/*
+                Strict pin — only shown once a model is pinned (with Auto there
+                is nothing to force). OFF is the safe default: a dead pin falls
+                over to auto routing and the server reports that in a notice.
+                ON makes the pinned model the only model this chat may use.
+              */}
+              {pinnedModel ? (
+                <button
+                  type="button"
+                  className={`chat-attach-btn${strictPin ? ' chat-attach-btn-on' : ''}`}
+                  aria-label="Strict model pin: use this model only"
+                  aria-pressed={strictPin}
+                  disabled={busy}
+                  title={
+                    strictPin
+                      ? `Strict: this chat runs on ${pinnedModel.provider}/${pinnedModel.model} only. If it is unavailable the turn stops instead of substituting another model.`
+                      : `Auto routing may substitute another model if ${pinnedModel.provider}/${pinnedModel.model} is unavailable. Turn on strict mode to work with this model only.`
+                  }
+                  onClick={() => setStrictPin((v) => !v)}
+                >
+                  {strictPin ? '🔒 strict' : '🔓 auto-fallback'}
+                </button>
+              ) : null}
               {/*
                 Capability mode — the inline lever for "how much reasoning do I
                 want to pay for". It writes the SAME curated switch the CLI and

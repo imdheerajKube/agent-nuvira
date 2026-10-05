@@ -33,6 +33,8 @@
  * audit, and the reporting — it must never grow a second repair policy.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import type { InferenceProvider } from './interface.js';
 import { resolveWorkingModel } from './model-validator.js';
 import { getDefaultModel } from './provider-catalog.js';
@@ -110,8 +112,25 @@ export function servedRouteFrom(route: ResolvedRoute): ServedRoute {
  * provider retired a model. On for a caller who would rather know than proceed
  * (`NUVIRA_STRICT_MODEL=1`), because "it ran on something else" is exactly the
  * outcome that is invisible until much later.
+ *
+ * A TURN can also set it, not only the process. The dashboard chat's per-chat
+ * "pin this model only" switch must outrank the process default for that one
+ * turn without a global env mutation (two sessions run concurrently, so an
+ * env write would leak across them). `withStrictModel` scopes the override to
+ * the async turn, and everything that already asks `strictModelMode()` — route
+ * resolution, the loop engine's candidate walk, chat's pinned fallback — obeys
+ * it without change.
  */
+const strictOverride = new AsyncLocalStorage<boolean>();
+
+/** Run `fn` with strict model mode forced on/off for this async turn. */
+export function withStrictModel<T>(strict: boolean, fn: () => T): T {
+  return strictOverride.run(strict, fn);
+}
+
 export function strictModelMode(): boolean {
+  const scoped = strictOverride.getStore();
+  if (scoped !== undefined) return scoped;
   return process.env.NUVIRA_STRICT_MODEL === '1';
 }
 

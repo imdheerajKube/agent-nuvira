@@ -423,6 +423,38 @@ describe('registry — gateway_send tool (message delivery to channels)', () => 
     expect(noStatus).toContain('Error:');
   });
 
+  it('A1 — plan_todo REFUSES an update that names no step, and still resolves aliases', async () => {
+    const { PlanStore } = await import('../../src/tools/plan-store.js');
+    const store = new PlanStore();
+    const tool = getTool('plan_todo')!;
+    const ctx = { configManager: {}, planStore: store } as ToolContext;
+
+    await tool.run(
+      {
+        action: 'create',
+        goal: 'Ship it',
+        steps: [
+          { id: 'step-1', description: 'One' },
+          { id: 'step-2', description: 'Two' },
+        ],
+      },
+      ctx,
+    );
+
+    // An unknown reference is reported with the ids that DO exist, instead of
+    // returning the unchanged table (which read as success).
+    const bad = await tool.run({ action: 'update', id: 'why-does-this-not-work', status: 'done' }, ctx);
+    expect(bad).toContain('Error:');
+    expect(bad).toContain('step-1');
+    expect(bad).toContain('step-2');
+    expect(store.progress().done).toBe(0);
+
+    // A bare ordinal still moves the counter (the live `cal` run's failure mode).
+    const advanced = await tool.run({ action: 'update', id: '1', status: 'done' }, ctx);
+    expect(advanced).toContain('1/2 done');
+    expect(store.progress().done).toBe(1);
+  });
+
   it('P0.7 — plan_todo runs without an injected store (shared fallback, never throws)', async () => {
     const tool = getTool('plan_todo')!;
     const out = await tool.run(

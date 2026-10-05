@@ -27,6 +27,7 @@ import { runAllChecks, type CheckResult, type HealthStatus } from '../cli/doctor
 import type { ProviderConfig } from '../config/types.js';
 import type { WireFinding } from '../findings/verdicts.js';
 import { getAutoRouter } from '../learning/auto-router.js';
+import { withStrictModel } from '../inference/route-resolver.js';
 import { readRecallHits } from '../context/session-recall.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
 import { AUTH_CLEAR_THRESHOLD } from '../learning/key-hygiene.js';
@@ -7107,6 +7108,11 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           : newChatSessionId();
       const provider = typeof body?.provider === 'string' ? body.provider : undefined;
       const model = typeof body?.model === 'string' ? body.model : undefined;
+      // Strict-model pin for THIS turn (the dashboard chat's "pin this model
+      // only" switch). Scoped to the turn with AsyncLocalStorage rather than a
+      // process env write, because two sessions can run concurrently and a
+      // global mutation would leak one user's pin into the other's turn.
+      const strict = body?.strict === true;
       // WS5 (#27) — per-turn isolation and resume, from the GUI.
       //
       // Read as a strict TRI-state, because the three cases are genuinely
@@ -7219,16 +7225,18 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // Mark the failover log BEFORE the turn so a failure can report which
       // models were actually tried (same contract as the gateway).
       const attemptMark = markFailoverAttempts();
-      const result = await chatConsole.answer(sessionId, message, {
-        provider,
-        model,
-        projectContext,
-        projectPath,
-        attachments,
-        ...(worktree === undefined ? {} : { worktree }),
-        ...(keepWorktree === undefined ? {} : { keepWorktree }),
-        ...(resume === undefined ? {} : { resume }),
-      });
+      const result = await withStrictModel(strict, () =>
+        chatConsole.answer(sessionId, message, {
+          provider,
+          model,
+          projectContext,
+          projectPath,
+          attachments,
+          ...(worktree === undefined ? {} : { worktree }),
+          ...(keepWorktree === undefined ? {} : { keepWorktree }),
+          ...(resume === undefined ? {} : { resume }),
+        }),
+      );
       if (!result.ok) {
         writeJson(res, 400, {
           ok: false,
@@ -7241,6 +7249,27 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // enforced (see ChatRetryBroker). Without this the console was a dead end
       // — the reader had to wait and re-send the message themselves.
       let content = result.content ?? '';
+      // When a model was pinned WITHOUT strict mode, say plainly what happened
+      // to the pin: a turn that ran on another provider was auto-routed, and a
+      // pinned model that failed may be handed off on the next attempt. Either
+      // way the reader is told how to force the pinned model — enable strict
+      // mode — instead of discovering the switch later.
+      let routingNotice: string | undefined;
+      if (provider) {
+        const requested = `${provider}${model ? `/${model}` : ''}`;
+        const served = result.provider ? `${result.provider}${result.model ? `/${result.model}` : ''}` : '';
+        const substituted = Boolean(served) && result.provider !== provider;
+        if (strict) {
+          if (result.generationFailed === true) {
+            routingNotice =
+              'Strict model mode is on, so the turn stopped rather than falling back to another model.';
+          }
+        } else if (substituted) {
+          routingNotice = `Auto routing took over: this turn ran on ${served} because your pinned ${requested} was not available. To work with ${requested} only, enable strict model mode.`;
+        } else if (result.generationFailed === true) {
+          routingNotice = `Your pinned ${requested} could not complete this turn, so auto routing may hand the work to another model. To stay on this model only, enable strict model mode.`;
+        }
+      }
       // Did the offer we are about to send get a mechanism behind it? The client
       // uses this to stop offering "↻ Retry" for a turn the server is already
       // retrying on its own — a manual re-send on top of the queued one would
@@ -7271,6 +7300,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         followups: result.followups ?? [],
         provider: result.provider ?? null,
         model: result.model ?? null,
+        ...(routingNotice ? { routingNotice } : {}),
         // WS1 — the findings this turn recorded, with the gate's verdicts, so
         // a dashboard client reads the same wire form the CLI, the gateway and
         // the subagent report (the GUI card is a rendering decision; the FACT

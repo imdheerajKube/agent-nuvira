@@ -6,7 +6,7 @@ import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { BaseCommand, getCliName } from './commands.js';
 import { resolveProvider } from './router.js';
-import { resolveRoute } from '../inference/route-resolver.js';
+import { resolveRoute, strictModelMode } from '../inference/route-resolver.js';
 import { showModelPicker } from './model-picker.js';
 import { ContextParser } from '../context/parser.js';
 import { getCache } from '../context/cache.js';
@@ -1115,8 +1115,8 @@ export class ChatCommand extends BaseCommand {
       .description('Start an interactive chat session with AI')
       .argument('[prompt]', 'Optional initial prompt')
       .option('-f, --file <path>', 'Include file content as context')
-      .option('-p, --provider <provider>', 'Inference provider')
-      .option('-m, --model <model>', 'Model to use (if omitted, an interactive picker will appear)')
+      .option('-p, --provider <provider>', 'Inference provider to pin this chat to')
+      .option('-m, --model <model>', 'Model to pin this chat to (if omitted, an interactive picker will appear)')
       .option('--no-cache', 'Disable response caching')
       .option('-d, --dev', 'Always dispatch requests to the coding pipeline (no confirmation)', false)
       // WS5 (#27) — isolation and partial resume, as the two things an operator
@@ -1137,6 +1137,15 @@ export class ChatCommand extends BaseCommand {
       .option(
         '--resume [id]',
         'Replay the recorded steps of this ask whose input is unchanged instead of paying for them again (defaults to the record for this goal + directory; also asked for by NUVIRA_RESUME=1)',
+      )
+      .addHelpText(
+        'after',
+        '\nModel routing:\n' +
+          '  Pinning -p/--provider (and -m/--model) does NOT stop the router from falling\n' +
+          '  over to another model if the pinned one is unavailable — auto routing takes\n' +
+          '  over and the turn says so. To work with the pinned model ONLY, set\n' +
+          '  NUVIRA_STRICT_MODEL=1: a dead pin then fails with a message naming the pair\n' +
+          '  instead of substituting another model.\n',
       )
       .action(async (prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean }) => {
         await this.execute(prompt, options || {});
@@ -3021,8 +3030,15 @@ export class ChatCommand extends BaseCommand {
               // Next candidate.
             }
           }
-        } else if (isRetryableError(classifyFallbackError(err))) {
+        } else if (!strictModelMode() && isRetryableError(classifyFallbackError(err))) {
           // Non-auto: walk the shared fallback chain (retryable errors only).
+          //
+          // Under strict model mode the walk is exactly the substitution the
+          // user forbade: `strictModelMode()` short-circuits this branch, so a
+          // pinned model that cannot answer surfaces its own error instead of
+          // quietly continuing on a provider the user did not choose (A2 — the
+          // same defect the loop engine had, fixed for dashboard + CLI chat
+          // here). The `tryGenerate` call above already reports the raw error.
           // Providers the admin policy rules out are collected here so the
           // failure can name POLICY as the reason instead of implying the model
           // was unreachable.

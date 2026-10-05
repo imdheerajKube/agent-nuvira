@@ -1658,6 +1658,13 @@ export class DashboardAPI {
     opts?: {
       provider?: string;
       model?: string;
+      /**
+       * Pin the selected provider/model for THIS turn alone: refuse to
+       * substitute another model. Honored only alongside `provider`;
+       * omitted/false means auto routing may take over (the server explains
+       * that in `routingNotice` when it does).
+       */
+      strict?: boolean;
       projectPath?: string;
       /**
        * P8 + P2 — composer attachments. `encoding: 'base64'` means `content` is the
@@ -1685,6 +1692,12 @@ export class DashboardAPI {
         followups: Array<{ prompt: string; label?: string }>;
         provider: string | null;
         model: string | null;
+        /**
+         * Set when a pin did not hold: the turn auto-routed to another model,
+         * the pinned model failed, or strict mode stopped the turn. A short
+         * sentence the GUI shows under the answer, never the answer itself.
+         */
+        routingNotice?: string;
         generationFailed: boolean;
         retryQueued?: boolean;
         /**
@@ -1737,6 +1750,7 @@ export class DashboardAPI {
           message,
           provider: opts?.provider,
           model: opts?.model,
+          ...(opts?.strict === true ? { strict: true } : {}),
           projectPath: opts?.projectPath,
           attachments: opts?.attachments,
           // WS5 — sent only when the caller decided something, so an untouched
@@ -1759,6 +1773,7 @@ export class DashboardAPI {
             : [],
           provider: typeof d.provider === 'string' ? d.provider : null,
           model: typeof d.model === 'string' ? d.model : null,
+          ...(typeof d.routingNotice === 'string' && d.routingNotice ? { routingNotice: d.routingNotice } : {}),
           generationFailed: d.generationFailed === true,
           retryQueued: d.retryQueued === true,
           ...(d.needsProject === true ? { needsProject: true } : {}),

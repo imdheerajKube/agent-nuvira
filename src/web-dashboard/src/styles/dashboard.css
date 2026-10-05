@@ -8098,3 +8098,26 @@ body {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* The routing notice: a pin did not hold (auto routing took over / the pinned
+   model failed / strict mode stopped the turn). A quiet info row, not an error. */
+.chat-routing-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.chat-routing-notice-dismiss {
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.85em;
+  opacity: 0.7;
+  padding: 0 4px;
+}
+
+.chat-routing-notice-dismiss:hover {
+  opacity: 1;
+}
