@@ -352,16 +352,37 @@ export async function drive({ chromePath, url }) {
     facts.initial = await state();
 
     // 1. The rail is a surface of its own, and the pill is a real pill.
-    facts.rail = {
-      railBg: facts.initial.railBg,
-      barBg: facts.initial.barBg,
-      activeBg: facts.initial.activeBg,
-      activeRadius: facts.initial.activeRadius,
-      activeWeight: facts.initial.activeWeight,
-      linkHeight: facts.initial.linkHeight,
-      searchBorder: facts.initial.searchBorder,
-      overflow: facts.initial.railOverflow,
+    //
+    // Read on a route that HAS a rail entry. The landing route (`/` redirects to
+    // Overview) is a TOPBAR destination — nav.ts deliberately keeps the
+    // cross-cutting views out of the rail — so the rail legitimately shows no
+    // active pill there and these assertions would be about nothing. `initial`
+    // is otherwise unused (only the rail facts derive from it), so stepping onto
+    // the first grouped link and back to the landing page changes nothing else
+    // the walk measures.
+    const railFacts = async () => {
+      const s = await state();
+      return {
+        railBg: s.railBg,
+        barBg: s.barBg,
+        activeBg: s.activeBg,
+        activeRadius: s.activeRadius,
+        activeWeight: s.activeWeight,
+        linkHeight: s.linkHeight,
+        searchBorder: s.searchBorder,
+        overflow: s.railOverflow,
+      };
     };
+    if (facts.initial.activeBg) {
+      facts.rail = await railFacts();
+    } else {
+      await clickElement(`document.querySelector('.nav .nav-link')`);
+      await sleep(600);
+      facts.rail = await railFacts();
+      // Back to the landing page for the theme, hotkey and tile steps.
+      await rpc(client, 'Page.navigate', { url: baseUrl });
+      await sleep(1500);
+    }
 
     // 2. Open Appearance with a real click.
     facts.opened = await clickElement(`document.querySelector('.theme-trigger')`);
