@@ -225,3 +225,39 @@ describe('WS7 seeded bugs — scoring reads three separate things', () => {
     expect(run.summary.cleanFix).toBe(0);
   }, 60_000);
 });
+
+describe('WS7 seeded bugs — false success and time to green', () => {
+  it('counts a CLAIMED success that fixed nothing as a false success', async () => {
+    const run = await runSeededSuite('fake', 'fake-model', {
+      taskIds: ['seed-range-off-by-one', 'seed-add-tag-mutates-input'],
+      runAgent: async ({ workspace, bug }) => {
+        if (bug.id === 'seed-range-off-by-one') {
+          materializeSeededBug(bug, workspace, true);
+          return { summary: 'The loop bound was inclusive, an off-by-one.', success: true };
+        }
+        // Declares success while changing nothing — the false success the DoD names.
+        return { summary: 'This one already looks correct.', success: true };
+      },
+    });
+
+    expect(run.scores.every((s) => s.claimedSuccess)).toBe(true);
+    expect(run.summary.claimedSuccess).toBe(2);
+    expect(run.summary.falseSuccess).toBe(1);
+    expect(run.summary.falseSuccessRate).toBeCloseTo(0.5);
+    // Exactly one task was actually fixed, so a green time exists and is real.
+    expect(run.summary.timeToGreenMs).not.toBeNull();
+    expect(run.summary.timeToGreenMs!).toBeGreaterThanOrEqual(0);
+  }, 60_000);
+
+  it('reports no rate over zero claims, and no green time when nothing was fixed', async () => {
+    const run = await runSeededSuite('fake', 'fake-model', {
+      taskIds: ['seed-add-tag-mutates-input'],
+      runAgent: async () => ({ summary: 'I could not reproduce it.', success: false }),
+    });
+    expect(run.summary.claimedSuccess).toBe(0);
+    expect(run.summary.falseSuccess).toBe(0);
+    // No claims means no denominator — a rate over zero claims would be a made-up number.
+    expect(run.summary.falseSuccessRate).toBeNull();
+    expect(run.summary.timeToGreenMs).toBeNull();
+  }, 60_000);
+});

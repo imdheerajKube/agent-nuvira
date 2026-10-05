@@ -94,6 +94,12 @@ export interface SeededTaskScore {
   /** Changed files other than the one the fix belongs in. */
   collateral: string[];
   targetOnly: boolean;
+  /**
+   * The run's OWN success flag. Recorded so a CLAIM that did not hold can be
+   * counted: `claimedSuccess && !fixed` is a false success, and no benchmark that
+   * only reads the checks can see one.
+   */
+  claimedSuccess: boolean;
   checks: SeededCheckOutcome[];
   /** 0-1. `null` when the seed did not verify, because nothing was measured. */
   composite: number | null;
@@ -108,6 +114,14 @@ export interface SeededRunSummary {
   detected: number;
   fixed: number;
   cleanFix: number;
+  /** How many runs CLAIMED success — the denominator for the false-success rate. */
+  claimedSuccess: number;
+  /** Claimed success while the checks still failed. The metric the DoD names. */
+  falseSuccess: number;
+  /** falseSuccess / claimedSuccess, or `null` when nothing claimed success. */
+  falseSuccessRate: number | null;
+  /** Median time from task start to a passing check, over the FIXED tasks (ms), or null. */
+  timeToGreenMs: number | null;
   /** Mean composite over the tasks that were actually scored, or null. */
   composite: number | null;
 }
@@ -253,7 +267,18 @@ export async function runSeededSuite(
       aborted:
         `no seeded bug matched ${options.taskIds?.length ? options.taskIds.join(', ') : '(no filter)'} — ` +
         `declared ids: ${SEEDED_BUGS.map((b) => b.id).join(', ')}.`,
-      summary: { tasks: 0, verified: 0, detected: 0, fixed: 0, cleanFix: 0, composite: null },
+      summary: {
+        tasks: 0,
+        verified: 0,
+        detected: 0,
+        fixed: 0,
+        cleanFix: 0,
+        claimedSuccess: 0,
+        falseSuccess: 0,
+        falseSuccessRate: null,
+        timeToGreenMs: null,
+        composite: null,
+      },
     };
   }
 
@@ -272,7 +297,18 @@ export async function runSeededSuite(
         aborted:
           `${failed.length} seeded bug(s) did not verify (${failed.map((f) => f.id).join(', ')}) — ` +
           'a task that is not provably broken measures nothing, so nothing was scored.',
-        summary: { tasks: bugs.length, verified: bugs.length - failed.length, detected: 0, fixed: 0, cleanFix: 0, composite: null },
+        summary: {
+          tasks: bugs.length,
+          verified: bugs.length - failed.length,
+          detected: 0,
+          fixed: 0,
+          cleanFix: 0,
+          claimedSuccess: 0,
+          falseSuccess: 0,
+          falseSuccessRate: null,
+          timeToGreenMs: null,
+          composite: null,
+        },
       };
     }
   }
@@ -319,6 +355,7 @@ export async function runSeededSuite(
         targetOnly,
         checks,
         composite: seedVerified ? scoreSeededTask(detectedBy !== null, fixed, targetOnly) : null,
+        claimedSuccess: agent.success,
         summary: agent.summary,
         durationMs: Date.now() - taskStart,
         ...(error ? { error } : {}),
@@ -329,6 +366,8 @@ export async function runSeededSuite(
   }
 
   const scored = scores.filter((s) => s.composite !== null);
+  const claimed = scores.filter((s) => s.claimedSuccess);
+  const falseSuccess = claimed.filter((s) => !s.fixed).length;
   const run: SeededRun = {
     provider,
     model,
@@ -342,6 +381,10 @@ export async function runSeededSuite(
       detected: scores.filter((s) => s.detected).length,
       fixed: scores.filter((s) => s.fixed).length,
       cleanFix: scores.filter((s) => s.fixed && s.targetOnly).length,
+      claimedSuccess: claimed.length,
+      falseSuccess,
+      falseSuccessRate: claimed.length === 0 ? null : falseSuccess / claimed.length,
+      timeToGreenMs: median(scores.filter((s) => s.fixed).map((s) => s.durationMs)),
       composite:
         scored.length === 0 ? null : scored.reduce((sum, s) => sum + (s.composite ?? 0), 0) / scored.length,
     },
@@ -376,6 +419,8 @@ export function formatSeededReport(run: SeededRun): string {
     '',
     `  found ${s.detected}/${s.tasks} · fixed ${s.fixed}/${s.tasks} · fixed without touching anything else ` +
       `${s.cleanFix}/${s.tasks} · composite ${pct(s.composite)}`,
+    `  false success ${s.falseSuccess}/${s.claimedSuccess}${s.falseSuccessRate === null ? ' (no success claimed)' : ` (${pct(s.falseSuccessRate)})`}` +
+      ` · time to green ${s.timeToGreenMs === null ? 'n/a' : `${(s.timeToGreenMs / 1000).toFixed(1)}s`}`,
   );
   return lines.join('\n');
 }
@@ -415,6 +460,9 @@ export function formatSeededMarkdown(run: SeededRun): string {
     `- Found the defect: **${s.detected}/${s.tasks}**`,
     `- Fixed it: **${s.fixed}/${s.tasks}**`,
     `- Fixed it without touching anything else: **${s.cleanFix}/${s.tasks}**`,
+    `- Claimed success without fixing it (false success): **${s.falseSuccess}/${s.claimedSuccess}**` +
+      `${s.falseSuccessRate === null ? ' — no run claimed success' : ` (${pct(s.falseSuccessRate)} of claims)`}`,
+    `- Time to green (median across fixed tasks): **${s.timeToGreenMs === null ? 'n/a' : `${(s.timeToGreenMs / 1000).toFixed(1)}s`}**`,
     '',
     '## How to read this',
     '',
@@ -423,6 +471,11 @@ export function formatSeededMarkdown(run: SeededRun): string {
     '  explain one it never fixed,',
     '  which is why the two columns are separate.',
     '- **Fixed** is ground truth: the same checks that failed before the run passed after it.',
+    '- **False success** is the run\'s own success flag against ground truth: a run that declared itself',
+    '  finished while its checks still failed. The denominator is the runs that CLAIMED success, not',
+    '  every task — a run that reported failure cannot produce a false success.',
+    '- **Time to green** is the median wall-clock from a task starting to its checks passing, over the',
+    '  tasks that were actually fixed. A task that was never fixed contributes no green time.',
     '- **Touched nothing else** diffs every seeded file against its original content and lists files',
     '  the seed never had, so a fix that rewrites unrelated code cannot look like a clean one. It',
     '  is scored as a modifier on a FIX, not as credit of its own — a run that changed nothing',
@@ -442,6 +495,14 @@ function formatVerificationInline(results: readonly SeedVerification[]): string 
 
 function pct(value: number | null): string {
   return value === null ? 'n/a' : `${Math.round(value * 100)}%`;
+}
+
+/** Median of a list of numbers, or `null` for an empty one. */
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
 }
 
 /** Where a run's report belongs, matching the M2b convention in `docs/benchmarks/`. */
