@@ -71,8 +71,12 @@ jobs:
           CI: true
           NO_COLOR: '1'
 
+      # --reporter=dot, not verbose: verbose prints ~8k per-test lines, and on
+      # the slower windows runners that log I/O is a measurable slice of the
+      # job — MEASURED locally at ~3m40s verbose vs ~2m46s dot for the full
+      # suite. dot still prints every failure with its full detail.
       - name: Run tests
-        run: npx vitest run --reporter=verbose
+        run: npx vitest run --reporter=dot
         env:
           CI: true
           NODE_OPTIONS: --no-warnings

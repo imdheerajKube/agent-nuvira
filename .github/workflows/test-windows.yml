@@ -151,8 +151,12 @@ jobs:
         env:
           NO_COLOR: '1'
 
+      # --reporter=dot: the windows runners are the slowest here, and verbose's
+      # ~8k per-test lines are a measurable slice of the job on them (MEASURED
+      # ~3m40s verbose vs ~2m46s dot for the full suite on a fast machine). dot
+      # still prints every failure with its full detail.
       - name: Run all tests
-        run: npx vitest run --reporter=verbose
+        run: npx vitest run --reporter=dot
         shell: bash
 
       # The same real-browser walk the Unix gate runs, on the platform where

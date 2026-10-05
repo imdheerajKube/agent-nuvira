@@ -128,8 +128,10 @@ jobs:
           CI: true
           NODE_OPTIONS: --no-warnings
 
+      # --reporter=dot keeps the log scannable and cuts per-test log I/O; every
+      # failure is still printed with its full detail.
       - name: Run tests
-        run: npx vitest run --reporter=verbose
+        run: npx vitest run --reporter=dot
         env:
           CI: true
           NODE_OPTIONS: --no-warnings
@@ -234,6 +236,6 @@ jobs:
         run: bun run build
 
       - name: Run tests
-        run: bunx vitest run --reporter=verbose
+        run: bunx vitest run --reporter=dot
         env:
           CI: true
