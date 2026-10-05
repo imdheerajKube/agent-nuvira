@@ -772,7 +772,7 @@ describe('WS0 parity — every surface, real provider, transport-depth stub', ()
     // as "every deployment is isolated whether it asked or not".
     expect(resolveIsolationRequest({})).toEqual({ asked: false, keep: false });
     expect(process.env[WORKTREE_ENABLE_ENV]).toBe(previousIsolationEnv);
-  }, 240_000);
+  }, 360_000);
 
   it('replays the unchanged steps of a resumed run instead of re-paying, on every surface', async () => {
     // WS5 (#27). One turn cannot show this: the claim is about a PAIR of runs —

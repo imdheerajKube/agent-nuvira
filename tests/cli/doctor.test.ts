@@ -287,9 +287,10 @@ describe('doctor --enterprise (P7 M7.1)', () => {
   });
 
   it('runSystemChecks includes the G1 Fact Memory check (best-effort, never throws)', async () => {
-    // 60s budget: the full check suite runs native-free here, but Windows CI
-    // runners have measured ~20s for this single check — keep a generous
-    // window so a slow runner can't flake the release pipeline.
+    // 120s budget: the full check suite runs native-free here, but it spawns
+    // several CLI tools (up to 5s each) and imports the memory stack, and a
+    // Windows CI runner under the full 8k-test suite has blown a 60s window.
+    // Keep a generous budget so a slow runner can't flake the release pipeline.
     const { ConfigManager } = await import('../../src/config/manager.js');
     const cm = new ConfigManager();
     const { system } = await runAllChecks(cm);
@@ -297,7 +298,7 @@ describe('doctor --enterprise (P7 M7.1)', () => {
     expect(factCheck).toBeDefined();
     expect(['pass', 'warn', 'fail']).toContain(factCheck!.status);
     expect(factCheck!.message).toMatch(/fact\(s\)/);
-  }, 60_000);
+  }, 120_000);
 
   it('runSystemChecks reports the vector backend + entry counts as one line', async () => {
     const { ConfigManager } = await import('../../src/config/manager.js');
@@ -309,7 +310,7 @@ describe('doctor --enterprise (P7 M7.1)', () => {
     // The backend name the dashboard Cache/Memory panels and `memory backend` agree on.
     expect(check!.message).toMatch(/(faiss-native|faiss-ivf|json)/);
     expect(check!.message).toMatch(/vector\(s\) across \d+ namespace\(s\)/);
-  }, 60_000);
+  }, 120_000);
 
   it('runAllChecks (dashboard command-runner shared core) returns both system and enterprise arrays', async () => {
     // The dashboard's /api/admin/checks calls this SAME function as

@@ -47,8 +47,17 @@ export const WORKTREE_ENABLE_ENV = 'NUVIRA_ISOLATE';
 /** The environment keys a forked child reads to learn which worktree it is in. */
 export const WORKTREE_DIR_ENV = 'NUVIRA_WORKTREE_DIR';
 export const WORKTREE_BASE_ENV = 'NUVIRA_WORKTREE_BASE';
-/** How long `git worktree add` may take — a big repository is still a checkout. */
-export const WORKTREE_CREATE_TIMEOUT_MS = 20_000;
+/**
+ * How long `git worktree add` may take — a big repository is still a checkout.
+ *
+ * 60s rather than 20s: a checkout that is sub-second locally was measured
+ * TIMING OUT at exactly 20s on a loaded Windows CI runner (the parity suite
+ * creates five worktrees in one process, and the runner was concurrently
+ * importing a 8k-test suite). The failure mode is nasty — the surface reports a
+ * refusal and the turn never runs — so the bound is deliberately generous; a
+ * genuinely stuck `git` still fails, just later.
+ */
+export const WORKTREE_CREATE_TIMEOUT_MS = 60_000;
 /** Bound on one file's diff body, so a huge change cannot be handed over whole. */
 export const WORKTREE_PATCH_CHARS = 120_000;
 

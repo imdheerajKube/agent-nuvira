@@ -1,3 +1,5 @@
+import { availableParallelism } from 'node:os';
+
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
@@ -46,7 +48,14 @@ export default defineConfig({
     //
     // Bounded on purpose: these suites fork node processes and bind sockets, so
     // unbounded workers would trade one kind of contention for another.
-    maxWorkers: 4,
+    //
+    // Capped at the machine's own parallelism as well as at 4: the macOS runner
+    // has 3 cores, and 4 forked workers each loading the native deps (pdf.js,
+    // transformers, canvas) oversubscribe it — a full macOS run was observed
+    // with all 7,938 tests green yet the JOB red, because one vitest worker
+    // process exited after the run (`Worker exited unexpectedly`). Fewer, not
+    // more, workers is the honest fix for a process that dies under pressure.
+    maxWorkers: Math.max(1, Math.min(4, availableParallelism())),
     // Load every .mjs through Node's own loader instead of Vite's SSR transform.
     //
     // WHY. Vitest inlines project .mjs files (`defaultInline` contains
