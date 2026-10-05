@@ -156,6 +156,7 @@ nuvira eval run --suite seeded-bugs -p groq -m llama-3.3-70b-versatile
 | Date | Provider | Model | Composite | Report |
 |------|----------|-------|-----------|--------|
 | 2026-10-05 | gemini | gemini-3.1-flash-lite | 60% | [seeded-bugs-gemini-gemini-3.1-flash-lite.md](seeded-bugs-gemini-gemini-3.1-flash-lite.md) |
+| 2026-10-05 | deepseek | deepseek-flash | 94% | [seeded-bugs-deepseek-deepseek-flash.md](seeded-bugs-deepseek-deepseek-flash.md) |
 
 **First live run — and what it does and does not support.** Seven real seeds,
 run end to end on `gemini/gemini-3.1-flash-lite`: **localisation 3/7, fix rate
@@ -175,3 +176,13 @@ and was discarded rather than published. This is the same free-tier collapse the
 M2b noise-floor note above records (±45pt), now with the failover made visible
 enough to name. **A gate-grade number needs a paid tier, or a paced / split-daily
 run that finishes inside the free quota.**
+
+**Second run — the first with clean single-model attribution.** The
+`deepseek/deepseek-flash` run (native DeepSeek endpoint, `NUVIRA_STRICT_MODEL=1`)
+finished with **0 provider fallthroughs and 0 provider errors** in its log — no
+task was served by another model. Ground truth landed at **fix rate 7/7,
+false-success rate 0/7, localisation 6/7, time-to-green 65.6s**, composite **94%**.
+The one non-perfect task, `seed-average-filtered-denominator`, was **fixed but not
+named**: the run corrected the divisor without reporting the aggregation bug. So
+unlike the gemini row above, this number **is** a measurement of the model named,
+not of the provider tier — it is the first seed report that can be read as such.
