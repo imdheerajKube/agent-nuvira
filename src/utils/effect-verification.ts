@@ -71,7 +71,7 @@ export const DEFAULT_LAUNCH_TIMEOUT_MS = 8000;
  * Kept to the well-known producers so this never surprises an ordinary command.
  */
 const BUILD_COMMAND_RE =
-  /(?:^|[\s;&|])(?:npx\s+)?(?:pyinstaller|pyinstaller-?\d*|cargo\s+build|go\s+build|xcodebuild|maturin\s+build|python3?\s+-m\s+(?:PyInstaller|build)|npm\s+run\s+build|pnpm\s+run\s+build|yarn\s+build|bun\s+run\s+build|make)\b/;
+  /(?:^|[\s;&|])(?:npx\s+)?(?:pyinstaller|pyinstaller-?\d*|cargo\s+build|tauri\s+build|go\s+build|xcodebuild|maturin\s+build|swift\s+build|cmake\s+--build|dotnet\s+build|mvn\s+(?:package|install|verify)|gradle\s+(?:build|assemble)|(?:\.\/)?gradlew\s+(?:build|assemble)|python3?\s+-m\s+(?:PyInstaller|build)|npm\s+run\s+build|pnpm\s+run\s+build|yarn\s+build|bun\s+run\s+build|make)\b/;
 
 /** Does this command build a runnable artifact worth launching? */
 export function isBuildCommand(command: string): boolean {

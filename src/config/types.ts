@@ -478,6 +478,31 @@ export interface RoutingConfig {
    * 'all'. See `src/config/work-digest.ts`.
    */
   workDigest?: 'all' | 'max' | 'off';
+  /**
+   * Weak-model consent for surfaces that CANNOT ask (gateway channels,
+   * headless/CI). The explicit per-session ask is the primary mechanism on
+   * every interactive surface; this value only governs the non-interactive
+   * fallback. 'ask' (default) — never silently use a weak model: fail over to
+   * a capable one or abort honestly. 'auto-allow' — proceed on the weak model
+   * and record the verdict. 'deny' — never use a weak model. Set via
+   * `NUVIRA_WEAK_MODEL_POLICY` or this value. Resolution: env, then config,
+   * then 'ask'. See `src/learning/agentic-route-gate.ts`.
+   */
+  weakModelPolicy?: 'ask' | 'auto-allow' | 'deny';
+  /**
+   * Outbound CONTEXT budget (chars): measurement thresholds + hard ceiling for
+   * the assembled prompt. Overrides `DEFAULT_CONTEXT_BUDGET` in
+   * `src/learning/context-budget.ts` per key. When the total exceeds the
+   * ceiling, optional contributors are dropped lowest-value-first (skill hint →
+   * work digest → recall → …); the identity/tool contract is never trimmed.
+   */
+  promptBudget?: {
+    noteTotal?: number;
+    warnTotal?: number;
+    maxTotal?: number;
+    noteSystem?: number;
+    warnSystem?: number;
+  };
 }
 
 /**
@@ -591,6 +616,17 @@ export interface SkillsConfig {
    * override (or the built-in default) is used.
    */
   registries?: string[];
+  /**
+   * Which skill hint the chat/execute system prompt carries. See
+   * `resolveSkillHintMode` in `src/tools/loop-skill-hint.ts`.
+   *   - `match` (DEFAULT) — the small keyword-matched hint: ONE skill, only when
+   *     the goal actually matches, else nothing. 3.3.10 behaviour.
+   *   - `catalog` — the full name+description catalog (opt-in; ~24K chars).
+   *   - `names` — the catalog WITHOUT descriptions (names only; a fraction of
+   *     `catalog`; the model can still load one by name).
+   *   - `off` — never inject a skill hint.
+   */
+  catalogHint?: string;
 }
 
 /**

@@ -901,6 +901,32 @@ describe('/api/projects — P3 project attach', () => {
     expect(bad.status).toBe(400);
   });
 
+  it('/api/chat/routable-models lists only routable pairs, each with a capability band', async () => {
+    // The chat picker's data source: Auto by default, and a short list of pairs
+    // the router would actually use right now. Unauthenticated must be refused.
+    expect((await fetch(`${baseUrl}/api/chat/routable-models`)).status).toBe(401);
+
+    const res = await authedFetch('/api/chat/routable-models');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      models: Array<{ provider: string; model: string; capability: number; band: string }>;
+    };
+    expect(body.ok).toBe(true);
+    expect(Array.isArray(body.models)).toBe(true);
+    for (const m of body.models) {
+      expect(typeof m.provider).toBe('string');
+      expect(typeof m.model).toBe('string');
+      expect(m.capability).toBeGreaterThanOrEqual(0);
+      expect(m.capability).toBeLessThanOrEqual(1);
+      expect(['high', 'medium', 'low']).toContain(m.band);
+    }
+    // Sorted strongest-first, so the picker leads with the capable models.
+    for (let i = 1; i < body.models.length; i++) {
+      expect(body.models[i - 1].capability).toBeGreaterThanOrEqual(body.models[i].capability);
+    }
+  });
+
   it('/api/chat with projectPath injects the project context into the turn', async () => {
     // A tiny fixture project so the snapshot has content.
     const fixture = join(testDir, 'proj');

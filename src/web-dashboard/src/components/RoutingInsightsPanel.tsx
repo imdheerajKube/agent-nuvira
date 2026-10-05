@@ -248,6 +248,22 @@ function AuditTimelineSection({ history }: { history: RoutingHistoryEntry[] }) {
                     {COMPLEXITY_LABELS[h.complexity] || h.complexity}
                   </span>
                 )}
+                {/* A3 — capability verdict: a weak pick must READ as weak, not
+                    merely show a low score (the failed Tauri turn looked
+                    identical to a healthy one). */}
+                {h.agenticCapable === false && (
+                  <span
+                    style={chipStyle('var(--danger-soft)', 'var(--accent-red)')}
+                    title={h.overrideReason ? `override: ${h.overrideReason}` : undefined}
+                  >
+                    ⚠️ weak model
+                  </span>
+                )}
+                {h.fallbackFrom && (
+                  <span style={chipStyle('var(--bg-tertiary)', 'var(--border-hover)')}>
+                    ↩ from {h.fallbackFrom}
+                  </span>
+                )}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={h.task}>
                 {h.task || h.agentType}

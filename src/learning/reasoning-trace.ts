@@ -40,6 +40,19 @@ export interface TraceRoutingSnapshot {
   score: number;
   complexity: string;
   explanation: string;
+  /**
+   * A1/A2 — may the FINAL routed model hold an agentic software task? Recorded
+   * with the same shared predicate the router used, so the Trace tab can show
+   * the capability verdict instead of only the pair. Optional: entries written
+   * before this field parse unchanged.
+   */
+  agenticCapable?: boolean;
+  /** A1 — how the model-first override affected the final pick, if known. */
+  overrideReason?: 'none' | 'model-first' | 'model-first-blocked' | string;
+  /** B — what the consent gate decided for this route (`proceed` | `ask` | …). */
+  gateAction?: string;
+  /** C3 — the pair this route failed over FROM (the failover chain's head). */
+  fallbackFrom?: string;
 }
 
 /** One LLM call within a trace. */
@@ -198,7 +211,30 @@ export type TraceGateName =
   // WS4 (#26) — an operator's tool hook decided (or failed to decide) about a
   // call. A gate name rather than a new event kind: a hook veto IS a decision
   // about a call, which is what this vocabulary is for.
-  | 'tool-hook';
+  | 'tool-hook'
+  // Missing-prerequisite TAKEOVER: a `run_terminal` failed because a KNOWN,
+  // installable system tool was missing (command not found / exit 127), and the
+  // model was told, deterministically, to install it itself rather than declare
+  // itself unable and hand the user a manual step.
+  | 'tool-takeover'
+  // ROUTING self-instrumentation (A2): the router chose a provider×model for a
+  // turn and the harness recorded the CONTEXT of that choice — the pair, its
+  // complexity/score, whether the model is agentic-capable, and (for a weak
+  // agentic route) the consent-gate outcome. This is the record whose absence
+  // let the failed Tauri turn route to `local/gemma4:e4b` invisibly.
+  | 'routing'
+  // PROMPT/CONTEXT BUDGET (D1): the assembled outbound context crossed a budget
+  // threshold and the harness recorded which contributor is responsible. A gate
+  // name because it IS a decision the harness made about its own context.
+  | 'context-budget'
+  // PREREQUISITE verification (D2): a build/run was about to fail (or already
+  // did) on a MISSING PROJECT PREREQUISITE (a required file/feature that is not
+  // a missing binary) and the harness took over with the exact fix.
+  | 'prerequisite'
+  // PLAN gate (E2): a workspace-directing turn was about to MUTATE without
+  // having declared a plan, so the loop spent one bounded nudge to plan first —
+  // the "plan → track → verify" contract made structural instead of optional.
+  | 'plan';
 
 /**
  * A NON-LLM fact about a turn: a tool call, a gate decision, or a refusal.
@@ -227,7 +263,7 @@ export interface TraceEvent {
    * `decision` — a non-tool decision worth auditing (e.g. the provider walk
    *              abandoning a candidate, a loop bound being reached).
    */
-  kind: 'tool' | 'gate' | 'refusal' | 'decision';
+  kind: 'tool' | 'gate' | 'refusal' | 'decision' | 'failover';
   /** Tool name for `tool`/`refusal` events. */
   tool?: string;
   /** Which gate/nudge/bound this is about (see {@link TraceGateName}). */
@@ -241,6 +277,13 @@ export interface TraceEvent {
   /** True when the call succeeded; false for an error or a refusal. */
   ok?: boolean;
   durationMs?: number;
+  /**
+   * A2 — the routing snapshot for a `'routing'` gate event (provider, model,
+   * complexity, score, agenticCapable, override reason, consent-gate action).
+   * Present only on routing decision events, so a turn can be audited for the
+   * pair it chose and whether that pair could hold the task.
+   */
+  routing?: TraceRoutingSnapshot;
 }
 
 /** A full reasoning trace — one pipeline execution. */

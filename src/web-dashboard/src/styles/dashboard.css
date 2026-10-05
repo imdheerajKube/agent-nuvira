@@ -5374,6 +5374,91 @@ body {
   flex: none;
 }
 
+/* P0.7 — progress bar + progress TABLE (the card's primary rendering) */
+.chat-plan-bar {
+  margin-top: 7px;
+  height: 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+  overflow: hidden;
+}
+
+.chat-plan-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent-purple);
+  transition: width 0.25s ease;
+}
+
+.chat-plan-table {
+  margin-top: 7px;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.chat-plan-table th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: 2px 6px 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-plan-table td {
+  padding: 3px 6px 3px 0;
+  vertical-align: top;
+  color: var(--text-primary);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+
+.chat-plan-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* In a table cell a description WRAPS (the checklist row truncated it). */
+.chat-plan-table .chat-plan-step-text {
+  white-space: normal;
+  overflow: visible;
+}
+
+.chat-plan-col-n {
+  width: 1.6em;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+}
+
+.chat-plan-col-status {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.chat-plan-note {
+  color: var(--text-secondary);
+}
+
+.chat-plan-row-done .chat-plan-step-text {
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.chat-plan-row-blocked .chat-plan-step-text {
+  color: var(--accent-red);
+}
+
+.chat-plan-settled {
+  margin-top: 7px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.chat-plan-complete {
+  border-left-color: var(--accent-green, #3fb950);
+}
+
 .chat-plan-steps {
   margin-top: 7px;
   display: flex;
@@ -7813,4 +7898,22 @@ body {
 .theme-reset:focus-visible {
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
+}
+
+/* The chat model picker: Auto (default) or a routable pin. Kept compact so it
+   sits beside the capability toggle without crowding the composer. */
+.chat-model-picker {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  max-width: 260px;
+  padding: 6px 8px;
+}
+
+.chat-model-picker:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

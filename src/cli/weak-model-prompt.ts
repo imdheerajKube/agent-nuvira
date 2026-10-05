@@ -4,11 +4,11 @@
  *
  * When a task can only run on a WEAK model (model escalation is a no-op —
  * every stronger candidate is unavailable/blocked, e.g. only a small local
- * model is configured), the default behavior is SILENT: the pipeline
- * continues on the weak model with lenient parsing and a bounded repair
- * budget (never stuck, but the deliverable may be recommendations rather
- * than reliable code). When the user opts into `routing.promptOnWeakModel:
- * true`, the orchestrator instead asks BEFORE committing to that path:
+ * model is configured), the orchestrator ASKS before committing to that path
+ * (ask-first by default — never a silent weak model). An explicit
+ * `routing.promptOnWeakModel: false` (or `weakModelPolicy: 'auto-allow'`)
+ * restores the silent weak-model continuation. The ask fires ONCE per pipeline
+ * and only on an interactive TTY:
  *
  *   ⚠️ Only a weak model is available (local/gemma4:e4b)
  *   ? How would you like to proceed?
@@ -29,7 +29,7 @@ import { logger } from '../utils/logger.js';
 
 /** The config shape we read (only the routing sub-section). */
 export interface WeakModelPromptConfig {
-  routing?: { promptOnWeakModel?: boolean };
+  routing?: { promptOnWeakModel?: boolean; weakModelPolicy?: unknown };
 }
 
 /** What the user chose when a task can only run on a weak model. */
@@ -39,11 +39,24 @@ export type WeakModelChoice = 'continue' | 'wait' | 'abort';
 
 /**
  * Whether the orchestrator should ASK what to do when only a weak model is
- * available. Reads `routing.promptOnWeakModel` (default false — silent
- * weak-model continuation).
+ * available.
+ *
+ * ASK-FIRST BY DEFAULT (the user's requirement: never a silent weak model).
+ * An explicit `routing.promptOnWeakModel: false` remains the opt-out, and
+ * `weakModelPolicy: 'auto-allow'` (the non-interactive fallback) also opts out
+ * so an unattended deployment is not forced to prompt. Any other value —
+ * including unset — asks.
+ *
+ * NOTE: the caller only reaches the prompt on an interactive TTY
+ * (`process.stdin.isTTY`), so a piped/CI/headless run is never blocked.
  */
 export function shouldPromptWeakModel(config: WeakModelPromptConfig): boolean {
-  return config.routing?.promptOnWeakModel === true;
+  const r = config.routing;
+  if (!r) return true;
+  if (r.promptOnWeakModel === false) return false;
+  if (r.promptOnWeakModel === true) return true;
+  const policy = String(r.weakModelPolicy ?? '').trim().toLowerCase();
+  return policy !== 'auto-allow';
 }
 
 // ─── Prompt ─────────────────────────────────────────────────────────────────

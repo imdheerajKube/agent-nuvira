@@ -1448,6 +1448,22 @@ describe('AutoModelRouter.resolve hard constraints', () => {
     expect(decision.provider).toBeTruthy();
     expect(decision.ranked.length).toBeGreaterThanOrEqual(1);
   });
+
+  it('restores by CAPABILITY, not cost, when a reasoning floor eliminates everyone', () => {
+    // The live regression (trace-1791118414038-wdmliw): under `max`
+    // (minReasoning 0.7 + performance-first) every cloud candidate sat below
+    // the floor, the benign fallback restored the RAW ranking, and
+    // `performance-first` then handed a real build task to LOCAL gemma4:e4b
+    // (score 0.71 vs gemini's 0.40). A relaxed reasoning floor must relax in the
+    // SAME direction — strongest served model first — so a free 4-bit local
+    // entry can never win on price/speed.
+    const decision = new AutoModelRouter().resolve('writer', 'create mac os gui app', {
+      allowedProviders: ['local', 'gemini', 'groq'],
+      minReasoning: 0.99,
+      preferenceMode: 'performance-first',
+    });
+    expect(decision.provider).not.toBe('local');
+  });
 });
 
 // ─── C4 — verification/build-debug model-tier floor ─────────────────────────
@@ -2545,6 +2561,22 @@ describe('R4 — agentic capability floor', () => {
     const decision = new AutoModelRouter().resolve('writer', 'format this code', opts, bothProviders);
     expect(decision.complexity).toBe('trivial');
     expect(decision.ranked.map((r) => r.provider)).toContain('local');
+  });
+
+  it('APPLIES the floor to a MODERATE software ask, not just complex/critical', () => {
+    // The live regression (2026-10-04): "create mac od gui app" is 🟡 moderate
+    // (NOT complex), so it skipped the floor entirely and `max` mode's
+    // performance-first score handed the build to a local 4-bit model. A
+    // software build is agentic at any non-trivial complexity.
+    const decision = new AutoModelRouter().resolve('writer', 'create a settings page for the app', opts, bothProviders);
+    expect(decision.complexity).not.toBe('critical');
+    expect(decision.ranked.map((r) => r.provider)).not.toContain('local');
+  });
+
+  it('still allows a small local model for CREATIVE work (writing is not a build)', () => {
+    // The user's own rule: complex tasks to reasoning models, chat/writing to
+    // whatever is available. A poem may use the free local model.
+    expect(analyzeTaskProfile('write a short poem about rain').intent).toBe('creative');
   });
 
   it('judges the SERVED model, so a provider hosting both keeps its strong entry', () => {

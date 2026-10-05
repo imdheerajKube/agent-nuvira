@@ -589,7 +589,25 @@ export default function AdminPanel() {
   const entPass = data?.enterprise.filter((c) => c.status === 'pass').length ?? 0;
   const entWarn = data?.enterprise.filter((c) => c.status === 'warn').length ?? 0;
   const entFail = data?.enterprise.filter((c) => c.status === 'fail').length ?? 0;
-  const providers = data?.providers ?? [];
+  const savedProviders = data?.providers ?? [];
+  /**
+   * Rows to render = SAVED providers PLUS any provider whose draft exists but
+   * is not saved yet.
+   *
+   * This is the whole point of the "➕ Add" control. "Add" only writes an empty
+   * DRAFT (`setDrafts({ [newType]: {} })`) — it deliberately does not create the
+   * provider server-side, because a key has not been entered yet. But the table
+   * used to iterate `data.providers` (the SAVED list) alone, so a newly-added
+   * provider had no row, no fields and no Save button: clicking "Add" appeared
+   * to do nothing. Rendering the union gives the draft an editable, savable row.
+   */
+  const draftOnlyTypes = Object.keys(drafts).filter((t) => !savedProviders.some((p) => p.type === t));
+  const providers = [
+    ...savedProviders,
+    ...draftOnlyTypes.map(
+      (type): AdminProviderSummary => ({ type, configured: false, keySource: 'none', keyMasked: null }),
+    ),
+  ];
   const catalogLabel = (type: string): { label: string; icon?: string; keyless?: boolean; envVar?: string | null } => {
     const entry = catalog.find((c) => c.id === type);
     return entry ? entry : { label: type };

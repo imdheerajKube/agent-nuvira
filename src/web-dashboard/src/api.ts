@@ -1330,6 +1330,26 @@ export class DashboardAPI {
   }
 
   /**
+   * The short list a chat MODEL PICKER may offer: only pairs the router would
+   * use right now, each with a capability estimate (0–1) and band. Auto remains
+   * the default; picking one pins provider+model for the session.
+   */
+  async listRoutableModels(): Promise<Array<{ provider: string; model: string; capability: number; band: 'high' | 'medium' | 'low' }>> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/chat/routable-models`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json()) as { ok?: boolean; models?: Array<{ provider: string; model: string; capability: number; band: 'high' | 'medium' | 'low' }> };
+      if (res.status === 200 && d.ok && Array.isArray(d.models)) return d.models;
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * P3 — project picker: the dashboard's cwd + recently attached paths.
    */
   async listProjects(): Promise<Array<{ path: string; name: string; kind: 'cwd' | 'recent' }>> {
@@ -1484,14 +1504,14 @@ export class DashboardAPI {
   /**
    * P4 — load one past session's full transcript (resume in the thread).
    */
-  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; busy?: boolean } | null> {
+  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; busy?: boolean } | null> {
     const token = getAdminToken();
     try {
       const res = await fetch(`${this.baseUrl}/api/sessions/${encodeURIComponent(id)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: AbortSignal.timeout(10_000),
       });
-      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; busy?: boolean } };
+      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; busy?: boolean } };
       if (res.status === 200 && d.ok && d.session) return d.session;
       return null;
     } catch {
@@ -1703,7 +1723,7 @@ export class DashboardAPI {
       /** P0.6 — a tool-call lifecycle step (rendered as a card). */
       onTool?: (t: { id: string; tool: string; phase: 'started' | 'called'; args?: string; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
       /** P0.7 — a plan mutation (rendered as a live checklist card). */
-      onPlan?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void;
+      onPlan?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string; note?: string }>; revision: number }) => void;
       /** P3b — a git diff payload (rendered as a 🔧 diff card). */
       onDiff?: (d: { files: Array<{ path: string; body: string }>; summary: string }) => void;
       onQuestion?: (q: { questionId: string; question: string; choices: Array<{ label: string; description?: string }>; multiSelect: boolean }) => void;
@@ -1772,7 +1792,7 @@ export class DashboardAPI {
       try {
         const payload = JSON.parse((event as MessageEvent).data) as {
           goal?: string;
-          steps?: Array<{ id: string; description: string; status: string }>;
+          steps?: Array<{ id: string; description: string; status: string; note?: string }>;
           revision?: number;
         };
         if (payload.goal && Array.isArray(payload.steps)) {

@@ -18,6 +18,7 @@ import {
   WORK_DIGEST_MARKER,
   selfReviewNudge,
   zeroActionNudge,
+  planRequiredNudge,
   isBareAcknowledgment,
   extractFallbackToolCalls,
   fallbackHintForTool,
@@ -2099,5 +2100,131 @@ describe('tool loop — ZERO-ACTION gate (a directed work request answered with 
     expect(text).toContain('Nothing has been done yet');
     expect(text).toContain('math.js');
     expect(text).toContain('Do NOT reply with a plan');
+  });
+});
+
+// ─── PLAN gate (E2) ─────────────────────────────────────────────────────────
+// A workspace-directing turn about to MUTATE without a declared plan gets ONE
+// bounded, ADVISORY nudge to plan first. It never blocks the call; the residual
+// (mutating with no plan) stays honest in the TurnReport.
+describe('tool loop — PLAN gate (declare a plan before mutating)', () => {
+  it('nudges once when a directed turn mutates without a plan', async () => {
+    const events: LoopTraceEvent[] = [];
+    const threads: Array<Array<{ role: string; content: string }>> = [];
+    const callModel = vi.fn();
+    let i = 0;
+    const script: StepResponse[] = [
+      { content: '', toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: 'a.js', content: 'x' } }] },
+      { content: 'Done.', toolCalls: [] },
+    ];
+    callModel.mockImplementation(async (messages: Array<{ role: string; content: string }>) => {
+      threads.push([...messages]);
+      return script[Math.min(i++, script.length - 1)];
+    });
+    const deps: ToolLoopDeps = { callModel, executeTool: vi.fn(async (n) => `executed ${n}`), onEvent: vi.fn() };
+    await runToolLoop({
+      messages: [{ role: 'user', content: WORK_ASK }],
+      context: ctx,
+      deps,
+      onTraceEvent: (e) => events.push(e),
+    });
+    // The nudge reached the model on the next step.
+    expect(threads[1]?.some((m) => m.content.includes('declare a short PLAN'))).toBe(true);
+    // …and it was recorded as a bounded gate decision.
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'plan')).toHaveLength(1);
+  });
+
+  it('does NOT fire when a plan already exists', async () => {
+    const events: LoopTraceEvent[] = [];
+    const planCtx: ToolContext = {
+      ...ctx,
+      planStore: { snapshot: () => ({ goal: 'g', steps: [], revision: 1, updatedAt: Date.now() }) } as never,
+    };
+    const deps = mockDeps([
+      { content: '', toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: 'a.js', content: 'x' } }] },
+      { content: 'Done.', toolCalls: [] },
+    ]);
+    await runToolLoop({
+      messages: [{ role: 'user', content: WORK_ASK }],
+      context: planCtx,
+      deps,
+      onTraceEvent: (e) => events.push(e),
+    });
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'plan')).toHaveLength(0);
+  });
+
+  it('respects requirePlan: false', async () => {
+    const events: LoopTraceEvent[] = [];
+    const deps = mockDeps([
+      { content: '', toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: 'a.js', content: 'x' } }] },
+      { content: 'Done.', toolCalls: [] },
+    ]);
+    await runToolLoop({
+      messages: [{ role: 'user', content: WORK_ASK }],
+      context: ctx,
+      deps,
+      requirePlan: false,
+      onTraceEvent: (e) => events.push(e),
+    });
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'plan')).toHaveLength(0);
+  });
+
+  it('planRequiredNudge names the ask and forbids planning-instead-of-working', () => {
+    const text = planRequiredNudge(WORK_ASK);
+    expect(text).toContain('declare a short PLAN');
+    expect(text).toContain('math.js');
+    expect(text).toContain('do NOT let planning replace the work');
+  });
+});
+
+// ─── D2.2 — project prerequisite PRE-FLIGHT through the real loop ────────────
+// Before the first build of a turn, a Tauri project missing `src-tauri/build.rs`
+// must be handed the exact fix BEFORE the build runs — not after ten identical
+// retries.
+describe('tool loop — project prerequisite pre-flight (D2.2)', () => {
+  let root: string;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'buff-prereq-preflight-'));
+    mkdirSync(join(root, 'src-tauri'), { recursive: true });
+    // A Tauri project with NO build.rs — the live blocker.
+    writeFileSync(
+      join(root, 'src-tauri', 'Cargo.toml'),
+      '[dependencies]\ntauri = { version = "1.5.0" }\n[build-dependencies]\ntauri-build = { version = "1.5.0" }\n[features]\ncustom-protocol = []\n',
+    );
+    writeFileSync(
+      join(root, 'src-tauri', 'tauri.conf.json'),
+      JSON.stringify({ bundle: { icon: [] } }),
+    );
+  });
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('hands the model the missing-prerequisite fix before the first build', async () => {
+    const events: LoopTraceEvent[] = [];
+    const threads: Array<Array<{ role: string; content: string }>> = [];
+    const callModel = vi.fn();
+    let i = 0;
+    const script: StepResponse[] = [
+      { content: '', toolCalls: [{ id: 'b1', name: 'run_terminal', arguments: { command: 'npx tauri build' } }] },
+      { content: 'Done.', toolCalls: [] },
+    ];
+    callModel.mockImplementation(async (messages: Array<{ role: string; content: string }>) => {
+      threads.push([...messages]);
+      return script[Math.min(i++, script.length - 1)];
+    });
+    const deps: ToolLoopDeps = { callModel, executeTool: vi.fn(async (n) => `executed ${n}`), onEvent: vi.fn() };
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'build the app' }],
+      context: { ...ctx, cwd: root },
+      deps,
+      onTraceEvent: (e) => events.push(e),
+    });
+
+    // The pre-flight instruction reached the model on the next step.
+    expect(threads[1]?.some((m) => m.content.includes('PROJECT PREREQUISITES MISSING'))).toBe(true);
+    expect(threads[1]?.some((m) => m.content.includes('build.rs'))).toBe(true);
+    // …and it was recorded as a bounded gate decision.
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'prerequisite').length).toBeGreaterThanOrEqual(1);
   });
 });

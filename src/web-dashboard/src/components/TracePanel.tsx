@@ -282,6 +282,13 @@ function StepRow({ step }: { step: TraceStep }) {
                   {step.routing.explanation}
                 </div>
               )}
+              {/* A2 — the capability verdict, so a weak route is self-evident in
+                  the trace instead of looking like any other turn. */}
+              {step.routing.agenticCapable === false && (
+                <div style={{ color: 'var(--accent-red)', marginTop: 4, fontSize: 11, fontWeight: 600 }}>
+                  ⚠️ not agentic-capable{step.routing.overrideReason ? ` (${step.routing.overrideReason})` : ''} — a software ask on this model may fabricate results
+                </div>
+              )}
             </div>
           )}
           {step.layers && (

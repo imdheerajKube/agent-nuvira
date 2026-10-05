@@ -195,6 +195,21 @@ export interface ToolContext {
    */
   planStore?: import('./plan-store.js').PlanStoreLike;
   /**
+   * A state-changing command that a tool just refused PENDING THE USER'S
+   * CONFIRMATION (set by `run_terminal`), with the command text.
+   *
+   * WHY THIS EXISTS (2026-10-04). `run_terminal` refuses a `confirm`-class
+   * command with "call ask_user (yes/no, one-line reason), then re-call
+   * run_terminal with confirm:true only if the user agreed." But the G13 gate
+   * in `ask_user` then SUPPRESSED that very question ("your request already
+   * authorized this work — decide it yourself"), so a model could neither run
+   * the command nor ask about it. A live trace (`trace-1791118650644-d73hyr`)
+   * hit exactly this deadlock on `cargo --version` and stalled. Setting this
+   * when a confirmation refusal is issued lets that ONE ask reach the user
+   * instead of being swallowed. Cleared once it is consumed.
+   */
+  pendingConfirmation?: { tool: string; command: string };
+  /**
    * Tiered tool exposure (AGENTIC_CAPABILITY_ASSESSMENT Addendum v3/v4):
    * when the loop runs in 'tiered' mode, tools outside the CORE set are
    * hidden from the model's schema until loaded. A `tool_search` load action
@@ -429,6 +444,12 @@ export const planTodoSchema = z.object({
     .describe('Ordered steps (required for action=create)'),
   id: z.string().optional().describe('The step id to update (required for action=update)'),
   status: z.enum(['pending', 'running', 'done', 'blocked']).optional().describe('New status for the step (required for action=update)'),
+  note: z
+    .string()
+    .optional()
+    .describe(
+      'Optional plain-English note for this step, recorded with the update (e.g. "reproduced with a minimal test", "blocked on the missing API key"). Shown in the progress table and the completion summary.',
+    ),
 });
 
 /** H2 — delegate tool args: a focused subtask for a specialized sub-agent. */
@@ -807,7 +828,13 @@ registerTool({
     // Narrow on purpose — both conditions must hold, and any question naming an
     // irreversible action (overwrite, delete, publish, deploy, send, pay…) is
     // passed straight through, because that decision IS the user's.
+    // A confirmation the TOOL ITSELF demanded (run_terminal's "call ask_user")
+    // must not be swallowed by this gate — that is the deadlock fixed in
+    // ToolContext.pendingConfirmation. Consume the flag and fall through so the
+    // question reaches the user once.
+    const pending = ctx.pendingConfirmation;
     if (
+      !pending &&
       (ctx.writesAuthorized?.authorized === true || Boolean(ctx.envelope)) &&
       detectPermissionSeeking(question) &&
       !IRREVERSIBLE_ACTION_RE.test(question)
@@ -835,6 +862,8 @@ registerTool({
         'that specific irreversible choice (e.g. whether to overwrite an existing file).'
       );
     }
+    // One confirmation refusal buys exactly ONE ask — clear it before rendering.
+    if (pending) ctx.pendingConfirmation = undefined;
     const render = ctx.askUser || (await import('./ask-user.js')).renderAskUser;
     const answer = await render(question, choices, multi_select);
     const picked = Array.isArray(answer.answer) ? answer.answer.join(', ') : answer.answer;
@@ -964,12 +993,12 @@ registerTool({
 
 registerTool({
   name: 'plan_todo',
-  description: 'Declare and track a multi-step plan: create ordered steps with descriptions, then mark each as running/done/blocked as you work through them. Use for any job with 2+ steps — the checklist persists across the whole conversation, so a later turn can reference "step N is done". Call create once at the start, then update per step as each completes.',
+  description: 'Declare and track a multi-step plan as a live progress table: create ordered steps with descriptions, then update each step (running → done/blocked) as you work, ideally with a short note saying what happened. Use for any job with 2+ steps — the table persists across the whole conversation AND across sessions, so a later turn can reference "step N is done", and the plan closes out with an achieved summary. Call create once at the start, then update each step as it starts and again as it finishes.',
   category: 'workflow',
   inputSchema: planTodoSchema,
   endsAgentStep: false,
   run: async (args, ctx) => {
-    const { action, goal, steps, id, status } = planTodoSchema.parse(args);
+    const { action, goal, steps, id, status, note } = planTodoSchema.parse(args);
     const { defaultPlanStore } = await import('./plan-store.js');
     const store: import('./plan-store.js').PlanStoreLike = ctx.planStore ?? defaultPlanStore();
     if (action === 'create') {
@@ -978,7 +1007,7 @@ registerTool({
       }
       store.create(goal, steps);
     } else if (id && status) {
-      store.update(id, status);
+      store.update(id, status, note);
     } else {
       return 'Error: plan_todo update needs id + status (pending|running|done|blocked).';
     }

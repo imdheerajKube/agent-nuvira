@@ -731,9 +731,10 @@ export function toUserFacingGenerationError(err: unknown): string {
  * strip (the helper module's whole reason for existing), so every surface that
  * shows an answer can share it.
  *
- * Deliberately conservative: it only removes artifacts that ARE the followups
- * contract. A fenced block with real content, and a code block the user asked
- * for, are untouched.
+ * Deliberately conservative: it removes artifacts that ARE a tool call — the
+ * `{"tool":…,"arguments":…}` shape, for the followups contract or any other
+ * tool the model leaked as text. A fenced block with real content, and a code
+ * block the user asked for, are untouched.
  */
 export function stripToolCallArtifacts(content: string): string {
   if (!content) return '';
@@ -746,7 +747,18 @@ export function stripToolCallArtifacts(content: string): string {
     // The bare trailing call object (the model wrote the tool JSON verbatim).
     .replace(/\n?\*?\s*\{\s*"tool"\s*:\s*"suggest_followups"[\s\S]*$/, '')
     // The Anthropic-style tag form (<function=suggest_followups …>).
-    .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*?<\/function>/g, '');
+    .replace(/\n?\*?\s*<function=suggest_followups[\s\S]*?<\/function>/g, '')
+    // ANY OTHER leaked tool call — the strip above only knew the followups
+    // contract, so a model that leaked `write_file` / `run_terminal` / … as
+    // text printed the whole call (arguments and file body included) to the
+    // user. Observed live: an answer that ended
+    //   `…saved this essay to the file cow_essay.md.`
+    //   `{"tool":"write_file","arguments":{"content":"…"}}`
+    // and the user saw the JSON. The `{"tool":…,"arguments":…}` opener IS the
+    // canonical tool-call shape, so it is safe to remove wherever it is the
+    // tail of the answer (prose a user asked for does not open with that key).
+    .replace(/```[a-z]*\s*\{[\s\S]*?"tool"\s*:\s*"[a-z][a-z0-9_]*"[\s\S]*?```/gi, '')
+    .replace(/\n?[*_\s]*\{\s*"tool"\s*:\s*"[a-z][a-z0-9_]*"\s*,\s*"arguments"\s*:[\s\S]*$/, '')
   // The THIRD shape — the model wrote the tool's ARGUMENTS (not the call) as
   // text, optionally under a bold header. Observed live from the execute loop:
   //

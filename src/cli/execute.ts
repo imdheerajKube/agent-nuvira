@@ -35,6 +35,7 @@ import { showModelPicker } from './model-picker.js';
 import { resolveProvider } from './router.js';
 import { isAutoModel } from '../learning/auto-router.js';
 import { startWarmupDaemon } from '../learning/model-warmup.js';
+import { formatTurnReport } from '../learning/turn-report.js';
 import { parseRequestSync } from '../nlu/parser.js';
 import { resolveEngine, readEngineModeConfig } from '../learning/engine-router.js';
 import { runLoopExecutor } from './loop-executor.js';
@@ -1830,6 +1831,12 @@ export class ExecuteCommand extends BaseCommand {
         }) + '\n');
       } else if (content) {
         console.log('\n' + content + '\n');
+        // E — the honest plan → track → verify close-out. Rendered only when the
+        // report has something to say (a plan, changes, or a non-trivial
+        // verdict), so an ordinary answer stays clean.
+        if (answer.turnReport?.summary) {
+          console.log(formatTurnReport(answer.turnReport) + '\n');
+        }
         // The same visible failure signal the loop arm prints, so a person running
         // `nuvira execute` is told the run produced no answer rather than left to
         // read the provider's apology as one.
@@ -1846,6 +1853,7 @@ export class ExecuteCommand extends BaseCommand {
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(toolOutcomes.length > 0 ? { toolOutcomes } : {}),
         ...(findings.length > 0 ? { findings } : {}),
+        ...(answer.turnReport ? { turnReport: answer.turnReport } : {}),
         // WS5 — the isolation and resume this turn had, back to the caller.
         ...(answer.worktree ? { worktree: answer.worktree } : {}),
         ...(answer.resume ? { resume: answer.resume } : {}),

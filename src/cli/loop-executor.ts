@@ -719,16 +719,23 @@ export async function runLoopExecutor(
     }
   }
 
-  // ── Model-selected skills (chat/execute parity) ──────────────────────────
-  // A bounded CATALOG (name + one line) is appended to the system prompt and
-  // the MODEL picks the skill, loading it with the `skill` tool. This replaces
-  // keyword auto-injection (a word list cannot decide what applies; the model
-  // can). Best-effort: a failure returns '' and the prompt is unchanged.
+  // ── Skill hint (chat/execute parity) ────────────────────────────────────
+  // MODE-DEPENDENT (see resolveSkillHintMode): `match` (default) injects ONE
+  // keyword-matched skill only when the goal really matches; `catalog`
+  // (opt-in — ~24K chars) hands the model the full list to choose from; `off`
+  // injects nothing. Best-effort: a failure returns '' and the prompt is
+  // unchanged.
   let skillHint = '';
   if (!opts.skipSkillHint) {
     try {
-      const { buildSkillCatalogHint } = await import('../tools/loop-skill-hint.js');
-      skillHint = await buildSkillCatalogHint(configManager);
+      const { buildConfiguredSkillHint, markLoopSkillUsed } = await import(
+        '../tools/loop-skill-hint.js'
+      );
+      const injected: { value: import('../tools/loop-skill-hint.js').LoopSkillHintMatch | null } = {
+        value: null,
+      };
+      skillHint = await buildConfiguredSkillHint(goal, configManager, injected);
+      await markLoopSkillUsed(injected.value);
     } catch {
       skillHint = ''; // best-effort — never breaks the turn
     }

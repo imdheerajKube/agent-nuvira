@@ -184,7 +184,7 @@ describe('tool loop — planner + pipeline dispatch guards', () => {
     expect(messages[0].content).not.toContain('already called');
   });
 
-  it('refuses a SECOND plan_todo call in the same turn', async () => {
+  it('refuses a SECOND plan_todo CREATE in the same turn (the planner loop)', async () => {
     const planArg = { action: 'create', goal: 'ship it', steps: [{ description: 'step 1' }] };
     const script: StepResponse[] = [
       {
@@ -200,8 +200,37 @@ describe('tool loop — planner + pipeline dispatch guards', () => {
     await runToolLoop({ messages: [{ role: 'user', content: 'plan it twice' }], context: ctx, deps });
 
     const messages = fedBackToolMessages(deps);
-    expect(messages[0].content).not.toContain('already called');
-    expect(messages[1].content).toContain('plan_todo already called');
+    expect(messages[0].content).not.toContain('do NOT declare it again');
+    expect(messages[1].content).toContain('do NOT declare it again');
+  });
+
+  it('ALLOWS plan_todo UPDATES in the same turn as the create (tracking, not looping)', async () => {
+    const script: StepResponse[] = [
+      {
+        content: '',
+        toolCalls: [
+          {
+            id: 'c1',
+            name: 'plan_todo',
+            arguments: { action: 'create', goal: 'ship it', steps: [{ id: 'step-1', description: 'step 1' }] },
+          },
+          {
+            id: 'c2',
+            name: 'plan_todo',
+            arguments: { action: 'update', id: 'step-1', status: 'done', note: 'shipped' },
+          },
+        ],
+      },
+      { content: 'Done.', toolCalls: [] },
+    ];
+    const { deps } = trackingDeps(script);
+    await runToolLoop({ messages: [{ role: 'user', content: 'plan and do it' }], context: ctx, deps });
+
+    const messages = fedBackToolMessages(deps);
+    // The update EXECUTES (it is the tracking the user watches); no refusal.
+    expect(messages[1].content).toContain('result:plan_todo');
+    expect(messages[1].content).not.toContain('do NOT declare it again');
+    expect(messages[1].content).not.toContain('has been updated');
   });
 
   it('refuses a duplicate pipeline dispatch within one step', async () => {

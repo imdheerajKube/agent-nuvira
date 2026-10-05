@@ -55,6 +55,18 @@ jobs:
       - name: Build project
         run: npm run build
 
+      # Explicit release contract gate — system-prompt budget, the skill
+      # catalog staying opt-in, the toolchain-install clause, and the
+      # software-routing policy. Also covered by the full suite below, but named
+      # here so a regression fails FAST under a step that says what broke. This
+      # is the gate that would have caught v3.3.11 (a 7,653 -> 32,809-char
+      # prompt) before it reached users.
+      - name: Agent behaviour contracts (release gate)
+        run: npm run gate:contracts
+        env:
+          CI: true
+          NO_COLOR: '1'
+
       - name: Run tests
         run: npx vitest run --reporter=verbose
         env:

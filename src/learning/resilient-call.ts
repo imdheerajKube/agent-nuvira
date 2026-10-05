@@ -1506,13 +1506,26 @@ export function renderModelBreadthReport(
   }
 
   lines.push('');
+  // MODELS WERE AVAILABLE AND UNREACHED — a routing gap, not a shortage — so
+  // do not LEAD WITH A WAIT. A user reported exactly this: the reply said "a
+  // model frees up in ~4m" while a healthy pool (other providers, credentialed
+  // and verified) sat unused. This only overrides the WAIT framing: when some
+  // model was tried and other eligible models remain, the honest next step is an
+  // immediate retry that routes to a different model, not "wait".
+  const modelsRemain = poolMeasured && tried.length > 0 && poolSize > tried.length;
   if (report.nextFreeInMs !== undefined) {
-    // `nextFreeInMs` is computed from ACTIVE exclusions with an expiry, so a
-    // retired pair (expiresAt 0) can never be the thing we are waiting for.
-
-    lines.push(
-      `A model frees up in about ${formatWait(report.nextFreeInMs)}. Want me to keep checking and run this the moment one is available, then update you here? Reply *yes* and I will keep trying until it is done.`,
-    );
+    if (modelsRemain) {
+      lines.push(
+        `Note: ${formatCount(poolSize)} model${poolSize === 1 ? '' : 's'} were eligible but only ${tried.length} ${tried.length === 1 ? 'was' : 'were'} tried — so waiting is not the fix. ` +
+          'Want me to retry now and route to one of the untried models? Reply *yes* and I will run it.',
+      );
+    } else {
+      // `nextFreeInMs` is computed from ACTIVE exclusions with an expiry, so a
+      // retired pair (expiresAt 0) can never be the thing we are waiting for.
+      lines.push(
+        `A model frees up in about ${formatWait(report.nextFreeInMs)}. Want me to keep checking and run this the moment one is available, then update you here? Reply *yes* and I will keep trying until it is done.`,
+      );
+    }
   } else if (emptyPool) {
     lines.push(
       'No suitable model is available right now — the eligible pool is empty. Want me to keep checking in the background and run this as soon as one comes back? Reply *yes* and I will keep trying until it is done.',

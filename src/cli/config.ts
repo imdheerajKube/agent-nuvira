@@ -484,6 +484,10 @@ export class ConfigCommand extends BaseCommand {
         'maxCostUsd', 'minSpeed', 'minReasoning', 'mlK', 'mlMinSamples', 'mlStrength',
         'promotionMinDecisions',
       ]);
+      // Enum routing keys with their allowed values (weak-model consent fallback).
+      const ENUM_ROUTING_KEYS: Record<string, readonly string[]> = {
+        weakModelPolicy: ['ask', 'auto-allow', 'deny'],
+      };
 
       if (BOOLEAN_ROUTING_KEYS.has(field)) {
         const lower = value.trim().toLowerCase();
@@ -504,8 +508,16 @@ export class ConfigCommand extends BaseCommand {
           return;
         }
         this.configManager.save({ routing: { [field]: num } } as Partial<BuffConfig>);
+      } else if (ENUM_ROUTING_KEYS[field]) {
+        const allowed = ENUM_ROUTING_KEYS[field];
+        const lower = value.trim().toLowerCase();
+        if (!allowed.includes(lower)) {
+          logger.error(`Invalid value for ${key}: "${value}". Use ${allowed.join(' | ')}.`);
+          return;
+        }
+        this.configManager.save({ routing: { [field]: lower } } as Partial<BuffConfig>);
       } else {
-        logger.error(`Unknown routing config key: ${field}. Valid keys: bandit, allowPaid, capabilityFit, contextFit, partialFlakiness, promptOnWeakModel, promptOnFailover, mlRouter, promotionEnforce, maxCostUsd, minSpeed, minReasoning, mlK, mlMinSamples, mlStrength, promotionMinDecisions`);
+        logger.error(`Unknown routing config key: ${field}. Valid keys: bandit, allowPaid, capabilityFit, contextFit, partialFlakiness, promptOnWeakModel, promptOnFailover, mlRouter, promotionEnforce, weakModelPolicy, maxCostUsd, minSpeed, minReasoning, mlK, mlMinSamples, mlStrength, promotionMinDecisions`);
         return;
       }
     } else if (parts.length === 4 && parts[0] === 'routing' && parts[1] === 'quota') {

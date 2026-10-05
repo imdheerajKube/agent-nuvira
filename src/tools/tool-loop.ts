@@ -87,6 +87,18 @@ import {
 import { effectiveToolJsonSchemas, coreToolJsonSchemas, isToolEnabled, toolsetForTool } from './toolsets.js';
 import { deliverablesNamedIn, recordStepHandoff } from '../agents/step-handoff.js';
 import { fenceUntrustedToolOutput } from './untrusted-content.js';
+import {
+  installableToolsFromFailure,
+  resolveInstallCommand,
+  toolTakeoverInstruction,
+} from '../cli/tool-install-prompt.js';
+import {
+  matchPrerequisiteSignatures,
+  prerequisiteTakeoverInstruction,
+  checkProjectPrerequisites,
+  createNodePrereqFs,
+  formatPreflightFindings,
+} from '../learning/build-prerequisites.js';
 import type { TraceEvent, TraceGateName } from '../learning/reasoning-trace.js';
 
 /**
@@ -468,6 +480,17 @@ export interface ToolLoopOptions {
    * model that still does nothing ends the turn as before — but now flagged.
    */
   requireAction?: boolean;
+  /**
+   * PLAN GATE (E2, default ON). When a request DIRECTS work on the workspace and
+   * the turn is about to run its FIRST mutating tool call having declared no
+   * plan, the loop spends ONE bounded nudge asking the model to declare a short
+   * plan with `plan_todo` first. The nudge is ADVISORY (like every other gate):
+   * it never blocks the call, it only makes the plan → track → verify contract
+   * structural rather than optional — and the residual (a turn that still
+   * mutated without planning) is visible in the TurnReport as `planned:false`.
+   * Set false to restore the pre-gate behaviour.
+   */
+  requirePlan?: boolean;
   /**
    * G18 — OBSERVABILITY SINK for the loop's non-LLM facts: every tool call that
    * ran (name, args, ok/error, duration), every gate DECISION (a nudge spent,
@@ -921,6 +944,15 @@ export const NO_PROGRESS_STALL_STEPS = 4;
  * where an extra pass earns its latency.
  */
 export const SELF_REVIEW_MIN_STEPS = 6;
+/**
+ * S5 — how many `plan_todo` UPDATE calls one turn may make. The guard refuses
+ * repeated CREATES (the observed planner loop) but must allow updates, because
+ * an update is how the user's checklist advances; this cap only stops a model
+ * that replaces doing the work with spamming status changes. It sits well above
+ * a genuine multi-step job (the largest real plans in the tree are single
+ * digits) and far below a loop.
+ */
+export const PLAN_TODO_UPDATE_CAP = 64;
 /** Default continuations granted per turn when the option is omitted. */
 export const DEFAULT_MAX_CONTINUATIONS = 2;
 /** Default extra steps granted per continuation. */
@@ -1069,6 +1101,12 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
 
   const followups: FollowupSuggestion[] = [];
   const toolCallsRun: string[] = [];
+  // S5 — the plan_todo loop guard is split by ACTION (see the guard below):
+  // repeated CREATES were the observed planner loop; UPDATES are the tracking
+  // that keeps the user's checklist honest. Counted across the whole turn, like
+  // `toolCallsRun`, because a multi-step job runs many steps in one turn.
+  let planTodoCreates = 0;
+  let planTodoUpdates = 0;
   // Every collected suggestion passes through the shared normalizer, so the
   // loop's output is ALWAYS clean + structured (1–3 items, deduped, no leaked
   // tool JSON, capped prompt/label) regardless of what the model emitted —
@@ -1244,6 +1282,12 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // with an empty/bounded response (the "where is the essay?" bug).
   let lastContent = '';
   let bounded = false;
+  // D2.2 — has this turn already pre-flighted the project's build prerequisites?
+  // Checked once, before the FIRST build command the turn plans to run.
+  let prerequisitesPreflighted = false;
+  // E2 — has this turn already spent its one bounded "declare a plan first"
+  // nudge? Bounded once, like every other gate.
+  let planNudged = false;
 
   /**
    * Should the SELF-REVIEW gate fire now? Returns the correction to inject, or
@@ -1793,15 +1837,45 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       const tool = getTool(call.name);
       const priorSameTool = toolCallsRun.filter((t) => t === call.name).length;
       toolCallsRun.push(call.name);
-      // S5 — PLANNER LOOP GUARD: allow the first plan of the turn, refuse
-      // repeats (the 6x planner loop observed in
-      // trace-1788059239352-k7zl03: 15.6K tokens, 2m25s, FAILED).
-      if (call.name === 'plan_todo' && priorSameTool >= 1) {
-        return {
-          call,
-          refuse:
-            'Error: plan_todo already called. You have a plan — now execute it. Do NOT call plan_todo again. Use write_file, run_terminal, or other execution tools to complete the work.',
-        };
+      // S5 — PLANNER LOOP GUARD, now split by ACTION.
+      //
+      // The guard exists because of a real failure: the model called plan_todo
+      // six times in one turn (trace-1788059239352-k7zl03 — 15.6K tokens,
+      // 2m25s, FAILED) instead of doing the work. But `create` and `update` are
+      // the SAME tool, and the original `priorSameTool >= 1` check refused BOTH
+      // — so a plan could be declared once and then never advanced, and the
+      // checklist the user watches went stale the moment the first step closed.
+      // Only repeated CREATES are the loop; updates ARE the tracking. Anything
+      // that is not an explicit update (absent/malformed action) is counted as
+      // a create, so the original protection is unchanged for the loop case.
+      if (call.name === 'plan_todo') {
+        const action = ((): string | undefined => {
+          try {
+            const raw = call.arguments;
+            const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            return obj && typeof obj === 'object'
+              ? String((obj as { action?: unknown }).action ?? '')
+              : undefined;
+          } catch {
+            return undefined;
+          }
+        })();
+        const isUpdate = action === 'update';
+        if (!isUpdate && planTodoCreates >= 1) {
+          return {
+            call,
+            refuse:
+              'Error: a plan already exists for this turn — do NOT declare it again. Advance it instead: call plan_todo with action "update", the step id and its status, then keep doing the work.',
+          };
+        }
+        if (isUpdate && planTodoUpdates >= PLAN_TODO_UPDATE_CAP) {
+          return {
+            call,
+            refuse: `Error: plan_todo has been updated ${PLAN_TODO_UPDATE_CAP} times this turn — stop updating the plan and finish the remaining work.`,
+          };
+        }
+        if (isUpdate) planTodoUpdates += 1;
+        else planTodoCreates += 1;
       }
       if (tool?.category === 'pipeline' && priorSameTool >= 1) {
         // The guard this replaces tested the literal name `pipeline`, which is
@@ -2002,6 +2076,76 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       }
     };
 
+    // ── PROJECT PREREQUISITE PRE-FLIGHT (D2.2) ──────────────────────────
+    // Before the FIRST build of the turn, check the project's markers so a
+    // missing prerequisite (build.rs, a Cargo feature, an icon) is handed over
+    // BEFORE a failed build — not after ten identical retries. Best-effort and
+    // bounded: once per turn, only when a build is actually planned.
+    if (!prerequisitesPreflighted) {
+      const buildPlan = plans.find((p) => {
+        if (p.refuse !== undefined) return false;
+        if (p.call.name !== 'run_terminal' && p.call.name !== 'terminal') return false;
+        try {
+          const raw = p.call.arguments;
+          const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          const cmd = String((obj as { command?: unknown })?.command ?? '');
+          return isBuildCommand(cmd);
+        } catch {
+          return false;
+        }
+      });
+      if (buildPlan) {
+        prerequisitesPreflighted = true;
+        try {
+          const findings = checkProjectPrerequisites(
+            createNodePrereqFs(opts.context?.cwd || process.cwd()),
+          );
+          if (findings.length > 0) {
+            thread.push({ role: 'user', content: formatPreflightFindings(findings) });
+            deps.onEvent?.(
+              `   🧱 pre-flight: ${findings.length} missing project prerequisite(s) — handed the exact fix before building.`,
+            );
+            traceEvent({
+              kind: 'gate',
+              gate: 'prerequisite',
+              summary:
+                `pre-flight found ${findings.length} missing project prerequisite(s) before the build: ` +
+                findings.map((f) => f.id).join(', '),
+            });
+          }
+        } catch {
+          // A pre-flight must never break the turn.
+        }
+      }
+    }
+
+    // ── PLAN GATE (E2) ──────────────────────────────────────────────────
+    // A workspace-directing turn about to MUTATE without having declared a plan
+    // gets ONE bounded, ADVISORY nudge to plan first (`plan_todo`). Advisory on
+    // purpose — the codebase's other gates nudge, they never wall — but the
+    // residual (mutating with no plan) is honest in the TurnReport.
+    if (
+      !planNudged &&
+      opts.requirePlan !== false &&
+      schemas.length > 0 &&
+      !opts.context?.planStore?.snapshot?.() &&
+      plans.some((p) => p.refuse === undefined && MUTATING_TOOL_NAMES.has(p.call.name)) &&
+      requestRequiresWorkspaceAction(requestText, authorization.authorized)
+    ) {
+      planNudged = true;
+      // Deliberately NO `stepLimit += 1`: this nudge is advisory and adds no
+      // model round-trip of its own (unlike the zero-action nudge, which forces
+      // a re-answer). The model sees it on its next step.
+      deps.onEvent?.('   🗺️ No plan declared — asking the model to plan before it changes files.');
+      traceEvent({
+        kind: 'gate',
+        gate: 'plan',
+        summary:
+          'a workspace-directing turn was about to mutate without a plan — one bounded nudge to declare one first',
+      });
+      thread.push({ role: 'user', content: planRequiredNudge(currentAsk(opts)) });
+    }
+
     const executed: string[] = new Array(plans.length).fill('');
     for (let i = 0; i < plans.length; ) {
       // A run of consecutive read-only calls is ONE bounded fan-out; any
@@ -2146,6 +2290,62 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // fires once after the 2nd (bounded, deterministic, advisory).
       const parallelTip = parallel.note(call.name, !resultText.startsWith('Error:'));
       if (parallelTip) resultText = `${resultText}\n\n${parallelTip}`;
+      // ── MISSING-PREREQUISITE TAKEOVER ──────────────────────────────────
+      // A `command not found` (exit 127) for a KNOWN, installable system tool
+      // is a STEP, not a wall — but a model can read it as an environment
+      // limit and stop: "I cannot install system-level software on your host
+      // machine — I am physically unable" (live: trace-1791127992452-qzgodi,
+      // where a user who had explicitly granted terminal permission was handed
+      // a manual `curl … | sh` step instead of the install being done). Inject
+      // the exact install command and forbid the refusal, deterministically, so
+      // the NEXT model step acts. Advisory text only — the loop never runs the
+      // install itself; that stays the model's governed `run_terminal` call.
+      if (!ranOk && (call.name === 'run_terminal' || call.name === 'terminal')) {
+        const failedCommand = String(
+          (call.arguments as { command?: unknown } | undefined)?.command ?? '',
+        );
+        // EVERY installable tool the failing line needs, not just the first —
+        // a `cd app && cargo build && cmake .` turn should hand the model all
+        // the prerequisites in one takeover instead of one per round-trip.
+        const missing = installableToolsFromFailure(failedCommand, rawResult);
+        if (missing.length > 0) {
+          const installCommands = missing.map((t) => resolveInstallCommand(t));
+          resultText = `${resultText}\n\n${toolTakeoverInstruction(missing, installCommands)}`;
+          deps.onEvent?.(
+            `   🛠️ ${missing.map((t) => `'${t}'`).join(', ')} missing and installable — handing the model the install command(s) to run.`,
+          );
+          traceEvent({
+            kind: 'gate',
+            gate: 'tool-takeover',
+            summary:
+              `${missing.join(', ')} missing (command not found) and installable — the model is ` +
+              'told to install them itself instead of declaring itself unable',
+          });
+        }
+        // ── PROJECT PREREQUISITE BACKSTOP (D2.3) ──────────────────────────
+        // No missing BINARY, but this failure may be a missing project FILE/
+        // FEATURE (the other half of the same wall): `src-tauri/build.rs`, a
+        // Cargo `custom-protocol` feature, an icon — none of which is a tool to
+        // install, so the takeover above never fired and the live macOS turn
+        // re-ran `npx tauri build` ~10 times. Match the OUTPUT SIGNATURE, hand
+        // the model the exact fix on the FIRST failure, and record it.
+        if (missing.length === 0) {
+          const rules = matchPrerequisiteSignatures(rawResult);
+          if (rules.length > 0) {
+            resultText = `${resultText}\n\n${prerequisiteTakeoverInstruction(rules)}`;
+            deps.onEvent?.(
+              `   🧱 build prerequisite signature matched (${rules.map((r) => r.id).join(', ')}) — handing the model the exact fix.`,
+            );
+            traceEvent({
+              kind: 'gate',
+              gate: 'prerequisite',
+              summary:
+                `build failed on a missing PROJECT prerequisite (${rules.map((r) => r.id).join(', ')}) — ` +
+                'the model is given the exact fix instead of retrying the identical command',
+            });
+          }
+        }
+      }
       delivered[i] = resultText;
       // G18 — record what this call DID, in the model's own call order, with the
       // evidence a later reader needs: the args the gate saw, the first line of
@@ -2917,6 +3117,25 @@ function zeroActionGateApplies(
   if (hasProductiveAction(progress)) return false;
   if (progress.mutatedPaths.length > 0) return false;
   return requestRequiresWorkspaceAction(requestText, authorized);
+}
+
+/**
+ * The bounded PLAN-REQUIRED nudge (E2) — one advisory step telling the model to
+ * declare a short plan before it mutates.
+ *
+ * Names the ask, states the contract (plan first, then work), and closes the
+ * failure mode the nudge exists for: planning that REPLACES the work; the last
+ * line forbids exactly that dormancy.
+ */
+export function planRequiredNudge(ask: string): string {
+  const quoted = (ask || '').trim().replace(/\s+/g, ' ').slice(0, 300);
+  return (
+    'Before you change anything, declare a short PLAN for this turn — call `plan_todo` with 2–6 ordered steps' +
+    ' (create the plan once, then advance it with action "update" as you go).' +
+    (quoted ? ` The request: "${quoted}".` : '') +
+    '\nA plan is how the user can follow along and how the turn is verified — keep it accurate, do not pad it,' +
+    ' and do NOT let planning replace the work: declare it, then do the first step now.'
+  );
 }
 
 /**

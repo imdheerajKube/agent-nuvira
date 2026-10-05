@@ -122,6 +122,33 @@ describe('renderModelBreadthReport', () => {
     expect(text).toMatch(/Reply \*yes\*/i);
   });
 
+  it('does NOT lead with "wait N min" when eligible models were left untried', () => {
+    // The live complaint: the reply said "a model frees up in ~4m" while a
+    // healthy pool sat unused. A routing gap is not a shortage, so the wait
+    // framing must not appear when other models were eligible.
+    const text = renderModelBreadthReport({
+      tried: [attempt('gemini', 'gemma-4-26b-a4b-it', 'rate-limit')],
+      parked: [
+        {
+          provider: 'gemini',
+          model: 'gemma-4-26b-a4b-it',
+          kind: 'rate-limit' as never,
+          scope: 'model' as never,
+          recordedAt: Date.now(),
+          expiresAt: Date.now() + 4 * 60_000,
+          active: true,
+          source: 'routing-failures' as never,
+        },
+      ],
+      nextFreeInMs: 4 * 60_000,
+      poolSize: 7,
+      poolProviders: 3,
+    })!;
+    expect(text).toMatch(/were eligible but only 1 was tried/);
+    expect(text).toMatch(/waiting is not the fix/i);
+    expect(text).not.toMatch(/A model frees up in about/);
+  });
+
   it('offers to keep checking when the pool is GENUINELY empty', () => {
     // `poolSize: 0` is the measured claim that there is nothing to route to.
     // Only a measured-empty pool earns the global-drought sentence (G9).

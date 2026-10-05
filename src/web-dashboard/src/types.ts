@@ -791,6 +791,14 @@ export interface RoutingHistoryEntry {
   provider: string;
   model: string;
   score: number;
+  /** A3 — did the FINAL routed pair pass the agentic capability predicate? */
+  agenticCapable?: boolean;
+  /** A3 — how the model-first override affected the final pick. */
+  overrideReason?: string;
+  /** B — the consent-gate outcome for this route (`proceed` | `ask` | …). */
+  gateAction?: string;
+  /** C3 — the pair this route failed over FROM (the failover chain's origin). */
+  fallbackFrom?: string;
 }
 
 // ─── Requests Panel Types (P3-M3.2) ────────────────────────────────────────
@@ -949,6 +957,14 @@ export interface TraceStep {
     score: number;
     complexity: string;
     explanation: string;
+    /** A1/A2 — capability verdict on the routed pair at decision time. */
+    agenticCapable?: boolean;
+    /** A1 — how the model-first override affected the final pick. */
+    overrideReason?: string;
+    /** B — the consent-gate outcome for this route. */
+    gateAction?: string;
+    /** C3 — the pair this route failed over FROM. */
+    fallbackFrom?: string;
   };
   /** True when this step is a REPAIR re-prompt escalated to a stronger model
    *  (v1.60.4 per-task/planner escalation). */

@@ -124,6 +124,38 @@ describe('ChatPage capability toggle', () => {
   });
 });
 
+describe('ChatPage model picker — Auto by default, pin only routable models', () => {
+  it('offers Auto plus the routable pairs, and pins the chosen pair on the next send', async () => {
+    mockAuthed('admin');
+    vi.spyOn(dashboardAPI, 'fetchProcessEnv').mockResolvedValue([]);
+    vi.spyOn(dashboardAPI, 'listRoutableModels').mockResolvedValue([
+      { provider: 'gemini', model: 'gemini-3.1-flash-lite', capability: 0.65, band: 'medium' },
+      { provider: 'groq', model: 'openai/gpt-oss-120b', capability: 0.9, band: 'high' },
+    ]);
+    mockChatStream();
+    const send = mockChatSend(OK_RESPONSE);
+    render(<ChatPage />);
+
+    const picker = await screen.findByLabelText('Model: Auto or a specific routable model');
+    // Auto is the default and stays the first option.
+    expect((picker as HTMLSelectElement).value).toBe('');
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: /groq\/openai\/gpt-oss-120b/ })).toBeTruthy(),
+    );
+
+    fireEvent.change(picker, { target: { value: 'groq|openai/gpt-oss-120b' } });
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'hello' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    const opts = send.mock.calls[0][2] as { provider?: string; model?: string };
+    expect(opts.provider).toBe('groq');
+    expect(opts.model).toBe('openai/gpt-oss-120b');
+  });
+});
+
 describe('ChatPage', () => {
   it('downloads the support bundle for THIS conversation, and says so', async () => {
     // WS2 (#24) — the log is written per turn, so the page has to be able to hand
@@ -434,12 +466,16 @@ describe('ChatPage', () => {
     // The plan is created — the checklist card appears live with the goal.
     planCb!({ goal: 'Fix the failing test', steps: [{ id: 'reproduce', description: 'Reproduce the failure', status: 'pending' }], revision: 1 });
     await waitFor(() => expect(screen.getByText('Fix the failing test')).toBeTruthy());
-    expect(screen.getByText('0/1 done')).toBeTruthy();
+    expect(screen.getByText(/0\/1 done/)).toBeTruthy();
     expect(screen.getByText('Reproduce the failure')).toBeTruthy();
+    // The card is a PROGRESS TABLE, not a bare checklist.
+    expect(screen.getByText('Status')).toBeTruthy();
 
     // A later mutation updates the card IN PLACE (revision 2, status done).
     planCb!({ goal: 'Fix the failing test', steps: [{ id: 'reproduce', description: 'Reproduce the failure', status: 'done' }], revision: 2 });
-    await waitFor(() => expect(screen.getByText('1/1 done')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/1\/1 done/)).toBeTruthy());
+    // Completion is announced in plain English.
+    await waitFor(() => expect(screen.getByText(/Plan complete — 1\/1 steps achieved/)).toBeTruthy());
 
     // On completion the plan snapshots into the assistant bubble.
     resolveSend(OK_RESPONSE);
@@ -768,6 +804,9 @@ describe('ChatPage', () => {
     const getSession = vi.spyOn(dashboardAPI, 'getChatSession').mockResolvedValue({
       title: 'assess the repo',
       updatedAt: 2,
+      // P8 — the server-persisted pin must come back with the session.
+      pinnedProvider: 'groq',
+      pinnedModel: 'openai/gpt-oss-120b',
       turns: [
         { role: 'user' as const, content: 'assess the repo' },
         { role: 'assistant' as const, content: '**all green**' },
@@ -786,6 +825,12 @@ describe('ChatPage', () => {
     await waitFor(() => expect(screen.getByText('all green')).toBeTruthy());
     expect(screen.getByText('what about tests?')).toBeTruthy();
     expect(screen.getByText('220 pass')).toBeTruthy();
+
+    // P8 — resuming the session restores its pinned model into the picker.
+    const picker = screen.getByRole('combobox', {
+      name: /Model: Auto or a specific routable model/,
+    }) as HTMLSelectElement;
+    await waitFor(() => expect(picker.value).toBe('groq|openai/gpt-oss-120b'));
   });
 
   it('P0.1 — skip lets the agent proceed on best judgment (index -1)', async () => {

@@ -1095,6 +1095,21 @@ agent-nuvira config set routing.maxCostUsd 0.005
 # Minimum capability floors for auto-routed tasks (0–1)
 agent-nuvira config set routing.minSpeed 0.5
 agent-nuvira config set routing.minReasoning 0.6
+
+# Weak-model consent (agentic/software tasks). ASK-FIRST by default: if a
+# software task can only run on a weak model, the agent asks ONCE for the
+# session (approve the weak model, or wait for a strong one) — never a silent
+# downgrade. This value governs only the surfaces that CANNOT ask (gateway
+# channels, headless/CI):
+#   ask (default) — never silently use a weak model: fail over or abort honestly
+#   auto-allow    — proceed on the weak model (records the verdict)
+#   deny          — never use a weak model
+agent-nuvira config set routing.weakModelPolicy ask
+
+# Outbound PROMPT budget (chars). When the assembled prompt exceeds maxTotal,
+# optional context is dropped lowest-value-first (skill hint → recall → …); the
+# identity/tool contract is never trimmed. Set on the config file:
+#   "routing": { "promptBudget": { "warnTotal": 40000, "maxTotal": 48000 } }
 ```
 
 #### How the routing engine works (v1.51.0)
