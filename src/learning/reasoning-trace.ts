@@ -30,6 +30,7 @@ import type { InferenceOptions } from '../config/types.js';
 import { estimateTokens } from './cost-tracker.js';
 import { splitPromptLayers, digestPromptLayers, type PromptLayerDigests } from './prompt-layers.js';
 import { describeFinding, toWire, type WireFinding, type Finding } from '../findings/verdicts.js';
+import type { TurnReport } from './turn-report.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -331,6 +332,19 @@ export interface ReasoningTrace {
    */
   findings?: WireFinding[];
   /**
+   * E-trace — the derived plan → track → verify → report artifact for the run
+   * (see `learning/turn-report.ts`).
+   *
+   * Persisted for the same reason `findings` is: the report is the turn's TRUST
+   * VERDICT (how many plan steps closed, what changed, whether anything verified
+   * it, and which honesty flag fired). A verdict that only ever lived in the
+   * turn's return value cannot be reviewed after the fact — a reader opening the
+   * Trace tab would see the tool calls and the events but not the assembled
+   * report they sum to. It is DERIVED from recorded evidence, never narrated, so
+   * storing it cannot add a claim the run did not back.
+   */
+  turnReport?: TurnReport;
+  /**
    * The FULL stable layer (system prompt), captured ONCE per trace.
    * Previously every trace exposed only the first 80 characters of it, so the
    * persona / tool contract / response rules were unreviewable. Capped to keep
@@ -621,6 +635,54 @@ export function recordTraceFindings(
     }
     // Same cap and re-numbering rule as `recordTraceEvent`, so the timeline's
     // `seq` stays 1-based contiguous however the events arrived.
+    if (events.length > MAX_EVENTS_PER_TRACE) {
+      trace.events = events.slice(-MAX_EVENTS_PER_TRACE);
+      trace.events.forEach((e, i) => { e.seq = i + 1; });
+    }
+    writeFile(data);
+  } catch {
+    // Best-effort — an instrument must never break the run it observes.
+  }
+}
+
+/**
+ * Attach the derived TurnReport a turn ended with to its trace — E-trace.
+ *
+ * Stores the report VERBATIM rather than re-deriving it: the report is already
+ * built from recorded evidence (`buildTurnReport`), and a reader comparing the
+ * Trace tab against the turn's own close-out must not find two different
+ * verdicts. A `null`/absent report is a no-op — a plain answer that produced no
+ * non-trivial report leaves the field unset, which reads as "this trace
+ * predates the report or the turn had nothing to report", never as "verified".
+ *
+ * Best-effort and id-less-capable on exactly the same contract as
+ * `recordTraceEvent` / `recordTraceFindings`: an id-less call attaches to the
+ * run in progress, and an instrument must never break the run it observes.
+ *
+ * It ALSO lands as a `decision` event in the timeline (like findings do), so the
+ * report reads in order at the end of the run rather than appearing only in a
+ * section of its own.
+ */
+export function recordTurnReport(
+  traceId: string | undefined,
+  report: TurnReport | null | undefined,
+): void {
+  if (!report) return;
+  try {
+    const id = traceId || currentTraceId;
+    if (!id) return;
+    const data = readFile();
+    const trace = data.traces.find((t) => t.id === id);
+    if (!trace) return;
+    trace.turnReport = report;
+    const events = trace.events ?? (trace.events = []);
+    events.push({
+      seq: events.length + 1,
+      timestamp: Date.now(),
+      kind: 'decision',
+      summary: `turn report — ${report.summary ?? report.verification}`,
+    });
+    // Same cap and re-numbering rule as `recordTraceEvent`.
     if (events.length > MAX_EVENTS_PER_TRACE) {
       trace.events = events.slice(-MAX_EVENTS_PER_TRACE);
       trace.events.forEach((e, i) => { e.seq = i + 1; });

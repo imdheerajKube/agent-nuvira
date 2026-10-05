@@ -7176,6 +7176,10 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         // that sets `NUVIRA_RESUME` gets resumed turns, and a reader who is never
         // told cannot tell a replayed turn from a fresh one.
         ...(result.resume ? { resume: result.resume } : {}),
+        // E — the derived plan → track → verify → report artifact for this turn,
+        // so the GUI can render the trust verdict instead of inferring it from the
+        // transcript. Absent when the turn produced no non-trivial report.
+        ...(result.turnReport ? { turnReport: result.turnReport } : {}),
         // WS5 — whether the turn declined to run, so the client labels the failure
         // as the refusal it is instead of offering a Retry that cannot help.
         refused: result.refused === true,

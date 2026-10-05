@@ -35,7 +35,7 @@ import Markdown from './Markdown';
 // test/build output, deploy URLs) rendered as cards, not raw markdown.
 import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
 import { stripAnsi } from '../ansi';
-import type { ResumeOutcome, TaskLogLine, TaskStatus, TraceFinding, WorktreeOutcome } from '../types';
+import type { ResumeOutcome, TaskLogLine, TaskStatus, TraceFinding, TurnReport, WorktreeOutcome } from '../types';
 import { formatCount } from '../format';
 import PageHeader from './PageHeader';
 
@@ -74,6 +74,11 @@ interface ChatMessage {
    * authoritative; the live SSE events only fill the card while the turn runs.
    */
   findings?: TraceFinding[];
+  /**
+   * E — the derived plan → track → verify → report artifact for this turn, off
+   * the authoritative POST response. Rendered as the trust-verdict card.
+   */
+  turnReport?: TurnReport;
   /**
    * WS5 (#27) — the git worktree this turn ran in, and what it changed. The POST
    * response is authoritative (the same contract as `findings`), and the card is
@@ -983,6 +988,82 @@ function ResumeCard({ resume }: { resume: ResumeOutcome }) {
   );
 }
 
+/**
+ * E — the TurnReport card: the plan → track → verify TRUST VERDICT for a turn.
+ *
+ * Derived from recorded evidence on the server (`buildTurnReport`), never from
+ * the model's narration, so this card cannot be talked into reading "done" about
+ * work nothing verified. The verdict badge and the step counts carry the
+ * distinction: a turn with a change and no observation is UNVERIFIED even when
+ * every step is marked done, and the honesty flags are shown as chips rather
+ * than folded into the summary.
+ */
+function TurnReportCard({ report }: { report: TurnReport }) {
+  const verdictLabel =
+    report.verification === 'verified' ? 'VERIFIED'
+    : report.verification === 'unverified' ? 'UNVERIFIED'
+    : report.verification === 'blocked' ? 'BLOCKED'
+    : 'no changes';
+  const flagChips: string[] = [];
+  if (report.flags.unverifiedActionClaim) flagChips.push('claimed an action no tool ran');
+  if (report.flags.unverifiedEditClaim) flagChips.push('claimed a fix nothing verified');
+  if (report.flags.unverifiedBuildClaim) flagChips.push('claimed a failing build worked');
+  if (report.flags.unverifiedEdit) flagChips.push('edited without verifying');
+  if (report.flags.undeliveredArtifact) flagChips.push('deliverable never written');
+  if (report.flags.unfulfilledPromise) flagChips.push('promised an action it did not take');
+  if (report.flags.noActionTaken) flagChips.push('no action taken');
+  return (
+    <div className={`chat-turn-card chat-turn-${report.verification}`}>
+      <div className="chat-turn-head">
+        <span className="chat-turn-icon" aria-hidden="true">📋</span>
+        <span className="chat-turn-title">Turn report</span>
+        {report.planned ? (
+          <span className="chat-turn-count">
+            {report.stepCounts.done}/{report.stepCounts.total} steps
+          </span>
+        ) : null}
+        <span
+          className="chat-turn-verdict"
+          title="derived from recorded evidence, never the model's own narration"
+        >
+          {verdictLabel}
+        </span>
+      </div>
+      {report.summary ? <div className="chat-turn-summary">{report.summary}</div> : null}
+      {report.steps.length > 0 ? (
+        <ul className="chat-turn-steps">
+          {report.steps.map((s) => (
+            <li key={s.id} className={`chat-turn-step chat-turn-step-${s.status}`}>
+              <span className="chat-turn-step-icon" aria-hidden="true">
+                {s.status === 'done' ? '✅' : s.status === 'running' ? '🔄' : s.status === 'blocked' ? '⛔' : '⬜'}
+              </span>
+              <span className="chat-turn-step-text">{s.description}</span>
+              {s.note ? <span className="chat-turn-step-note">{s.note}</span> : null}
+              {s.evidence ? <span className="chat-turn-step-evidence">{s.evidence}</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {report.changedPaths.length > 0 ? (
+        <div className="chat-turn-files">
+          {report.changedPaths.length} file{report.changedPaths.length === 1 ? '' : 's'} changed:{' '}
+          <code>
+            {report.changedPaths.slice(0, 6).join(', ')}
+            {report.changedPaths.length > 6 ? ` +${report.changedPaths.length - 6} more` : ''}
+          </code>
+        </div>
+      ) : null}
+      {flagChips.length > 0 ? (
+        <div className="chat-turn-flags">
+          {flagChips.map((f) => (
+            <span key={f} className="chat-turn-flag">⚠️ {f}</span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function newSessionId(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -1845,6 +1926,9 @@ export default function ChatPage() {
             // over a turn that ran in the real tree.
             worktree: r.worktree,
             resume: r.resume,
+            // E — the derived trust verdict for this turn, from the authoritative
+            // response. Absent when the turn produced no non-trivial report.
+            turnReport: r.turnReport,
             refused: r.refused,
             needsProject: r.needsProject,
             // P2 — extract artifact cards from the answer TEXT (diff/result/
@@ -2549,6 +2633,7 @@ export default function ChatPage() {
                     <WorktreeCard worktree={m.worktree} />
                   ) : null}
                   {m.role === 'assistant' && m.resume ? <ResumeCard resume={m.resume} /> : null}
+                  {m.role === 'assistant' && m.turnReport ? <TurnReportCard report={m.turnReport} /> : null}
                   {m.role === 'assistant' && m.findings && m.findings.length > 0 ? (
                     <FindingCards findings={m.findings} />
                   ) : null}

@@ -70,7 +70,7 @@ import {
   isToolCallingUnsupported,
   stripToolCallArtifacts,
 } from '../inference/tool-call-utils.js';
-import { beginTrace, endTrace, recordStep, recordTraceEvent, recordTraceFindings, buildTraceOutcome, traceOutcomeSucceeded } from '../learning/reasoning-trace.js';
+import { beginTrace, endTrace, recordStep, recordTraceEvent, recordTraceFindings, recordTurnReport, buildTraceOutcome, traceOutcomeSucceeded } from '../learning/reasoning-trace.js';
 import { recordWorkingState, getWorkingState, formatWorkingState, isProjectLedgerDir } from '../learning/working-state.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile, shouldSkipNativeTools, isAgenticCapableModel } from '../learning/model-harness.js';
@@ -1018,6 +1018,10 @@ export class ChatCommand extends BaseCommand {
     } catch {
       // A report must never break the turn.
     }
+    // E-trace — persist the report on the turn's reasoning trace so it is
+    // reviewable after the fact (the Trace tab renders it), not only in this
+    // turn's return value. Best-effort: a trace write never breaks a turn.
+    recordTurnReport(answer.traceId, turnReport);
     // E3 — surface a non-trivial report on the console. A plain answer (no
     // plan, nothing changed) produces no summary and stays silent.
     if (turnReport?.summary) {
@@ -1685,6 +1689,12 @@ export class ChatCommand extends BaseCommand {
      */
     successfulToolCalls?: string[];
     runTrace?: import('../learning/run-trace.js').RunTraceSnapshot;
+    /**
+     * E-trace — the reasoning trace this turn was recorded under, so a caller
+     * that assembles the TurnReport AFTER the turn (as `answerOnce` does) can
+     * attach it to the same trace. Absent only when no trace was opened.
+     */
+    traceId?: string;
     unverifiedEdit?: boolean;
     unverifiedEditClaim?: boolean;
     noActionTaken?: boolean;
@@ -2612,6 +2622,9 @@ export class ChatCommand extends BaseCommand {
       unverifiedEdit: result.unverifiedEdit,
       unverifiedEditClaim: result.unverifiedEditClaim,
       noActionTaken: result.noActionTaken,
+      // E-trace — the trace this turn was recorded under, so `answerOnce` can
+      // attach the TurnReport to it (see `recordTurnReport`).
+      traceId: chatTraceId,
     });
   }
 

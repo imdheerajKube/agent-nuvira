@@ -36,6 +36,7 @@ import type {
   ResumeOutcome,
   TraceEntry,
   TraceFinding,
+  TurnReport,
   WhatsAppPairStatus,
   WorktreeOutcome,
 } from './types';
@@ -112,6 +113,35 @@ function isResumeOutcome(value: unknown): value is ResumeOutcome {
     typeof r.saved === 'boolean' &&
     typeof r.notice === 'string' &&
     (r.callsAvoided === undefined || typeof r.callsAvoided === 'number')
+  );
+}
+
+/**
+ * E — the derived TurnReport, narrowed off the response rather than cast.
+ *
+ * The card renders a TRUST VERDICT, so a payload missing its evidence must be
+ * dropped rather than defaulted: a report with no `steps`/`stepCounts` would
+ * render "0/0 done" (a clean-looking checklist) over a run whose plan simply did
+ * not arrive. Anything that does not prove its shape is dropped, and the turn
+ * then reads as "no report" — which for a server too old to send the field is
+ * the truth.
+ */
+function isTurnReport(value: unknown): value is TurnReport {
+  if (!value || typeof value !== 'object') return false;
+  const r = value as Partial<TurnReport>;
+  return (
+    typeof r.goal === 'string' &&
+    typeof r.planned === 'boolean' &&
+    Array.isArray(r.steps) &&
+    !!r.stepCounts &&
+    typeof r.stepCounts === 'object' &&
+    typeof r.stepCounts.total === 'number' &&
+    typeof r.verification === 'string' &&
+    ['verified', 'unverified', 'blocked', 'not-applicable'].includes(r.verification) &&
+    (r.summary === null || typeof r.summary === 'string') &&
+    Array.isArray(r.changedPaths) &&
+    !!r.flags &&
+    typeof r.flags === 'object'
   );
 }
 
@@ -1583,6 +1613,12 @@ export class DashboardAPI {
         /** WS5 (#27) — what a resume replayed instead of paying for. */
         resume?: ResumeOutcome;
         /**
+         * E — the derived plan → track → verify → report artifact for this turn,
+         * so the GUI can render the trust verdict instead of inferring it from the
+         * transcript. Absent when the turn produced no non-trivial report.
+         */
+        turnReport?: TurnReport;
+        /**
          * WS1 — every finding this turn recorded, already gated by the server
          * (`confirmFinding`), in call order. AUTHORITATIVE for the transcript
          * snapshot: the live `finding` SSE event renders while the turn runs,
@@ -1632,6 +1668,7 @@ export class DashboardAPI {
           ...(isWorktreeOutcome(d.worktree) ? { worktree: d.worktree } : {}),
           ...(isResumeOutcome(d.resume) ? { resume: d.resume } : {}),
           ...(Array.isArray(d.findings) ? { findings: d.findings as TraceFinding[] } : {}),
+          ...(isTurnReport(d.turnReport) ? { turnReport: d.turnReport } : {}),
         };
       }
       return {

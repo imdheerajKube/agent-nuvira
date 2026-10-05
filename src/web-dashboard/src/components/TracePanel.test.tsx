@@ -89,3 +89,42 @@ describe('TracePanel — recorded findings (WS1)', () => {
     expect(screen.queryByText('CONFIRMED')).toBeNull();
   });
 });
+
+// ─── E-trace — the persisted TurnReport rendered in the detail view ─────────
+
+describe('TracePanel — persisted turn report (E-trace)', () => {
+  const TRACE_WITH_REPORT: TraceEntry = {
+    ...TRACE,
+    id: 'trace-report-1',
+    goal: 'fix add',
+    findings: undefined,
+    turnReport: {
+      goal: 'fix add in math.js',
+      planned: true,
+      steps: [{ id: 's1', description: 'fix add in math.js', status: 'done' }],
+      stepCounts: { done: 1, blocked: 0, pending: 0, running: 0, total: 1 },
+      toolCalls: ['edit_file', 'run_terminal'],
+      successfulToolCalls: ['edit_file', 'run_terminal'],
+      mutations: 1,
+      changedPaths: ['math.js'],
+      verification: 'verified',
+      flags: {},
+      summary: '1/1 steps done · 1 file(s) changed · verification: verified',
+    },
+  };
+
+  it('shows the verdict, plan steps and changed files after the fact', async () => {
+    vi.spyOn(dashboardAPI, 'fetchTraces').mockResolvedValue([TRACE_WITH_REPORT]);
+    render(<TracePanel />);
+
+    await waitFor(() => expect(screen.getByText('fix add')).toBeTruthy());
+    fireEvent.click(screen.getByText('fix add'));
+
+    // The report is reviewable after the turn — the trust verdict and the plan
+    // it was derived from, not only the raw tool calls.
+    await waitFor(() => expect(screen.getByText('verified')).toBeTruthy());
+    expect(screen.getByText(/Turn report/)).toBeTruthy();
+    expect(screen.getByText('fix add in math.js')).toBeTruthy();
+    expect(screen.getByText('1 file(s) changed')).toBeTruthy();
+  });
+});

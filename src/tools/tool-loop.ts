@@ -114,6 +114,20 @@ const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
   'run_cli',
 ]);
 
+/**
+ * The subset of mutating tools the PLAN gate HARD-BLOCKS on the first call —
+ * the ones that change the workspace's FILES. `run_terminal` / `run_cli` are
+ * deliberately excluded from the BLOCK (they still trigger the nudge): a
+ * terminal command is as often a test, a build or an inspection as it is an
+ * edit, and refusing it outright would stop the very step a plan is meant to
+ * reach. The nudge still tells the model to plan first.
+ */
+const PLAN_GATED_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'write_file',
+  'edit_file',
+  'propose_change',
+]);
+
 /** The path a mutating call was aimed at, when it named one. */
 function mutatedPathOf(args: unknown): string | undefined {
   const a = args as { path?: unknown; file_path?: unknown; file?: unknown } | undefined;
@@ -1288,6 +1302,12 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // E2 — has this turn already spent its one bounded "declare a plan first"
   // nudge? Bounded once, like every other gate.
   let planNudged = false;
+  // E2 (hard) — has this turn already spent its one bounded BLOCK of the first
+  // mutation? The plan gate is a hard requirement the first time it fires and a
+  // pure nudge after that: the first mutating batch is refused (see the gate
+  // below), and the second attempt runs even without a plan — a bounded block,
+  // never a wall.
+  let planBlocked = false;
 
   /**
    * Should the SELF-REVIEW gate fire now? Returns the correction to inject, or
@@ -2121,11 +2141,31 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
 
     // ── PLAN GATE (E2) ──────────────────────────────────────────────────
     // A workspace-directing turn about to MUTATE without having declared a plan
-    // gets ONE bounded, ADVISORY nudge to plan first (`plan_todo`). Advisory on
-    // purpose — the codebase's other gates nudge, they never wall — but the
-    // residual (mutating with no plan) is honest in the TurnReport.
+    // is stopped ONCE: its first FILE mutation is refused and the model is told
+    // to plan first (`plan_todo`). Terminal commands still trigger the nudge but
+    // are not blocked (see PLAN_GATED_TOOL_NAMES) — a build or a test is a step
+    // a plan is meant to reach, not a change to gate. Bounded by design: the
+    // SECOND attempt runs even without a plan (see `planBlocked`), so this guides
+    // the model into the plan → track → verify contract instead of walling the
+    // turn off. A batch that DECLARES a plan itself is never blocked (the model
+    // is already doing the right thing), and `requirePlan:false` leaves the gate
+    // byte-identical to not existing.
+    const declaresPlan = !opts.context?.planStore?.snapshot?.() && plans.some((p) => {
+      if (p.call.name !== 'plan_todo') return false;
+      try {
+        const raw = p.call.arguments;
+        const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        const action = obj && typeof obj === 'object' ? String((obj as { action?: unknown }).action ?? '') : '';
+        return action !== 'update';
+      } catch {
+        // Malformed args still count as a create attempt — the plan_todo guard
+        // above already handles a repeated create, and a first one is honored.
+        return true;
+      }
+    });
     if (
       !planNudged &&
+      !declaresPlan &&
       opts.requirePlan !== false &&
       schemas.length > 0 &&
       !opts.context?.planStore?.snapshot?.() &&
@@ -2133,15 +2173,42 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       requestRequiresWorkspaceAction(requestText, authorization.authorized)
     ) {
       planNudged = true;
-      // Deliberately NO `stepLimit += 1`: this nudge is advisory and adds no
-      // model round-trip of its own (unlike the zero-action nudge, which forces
-      // a re-answer). The model sees it on its next step.
-      deps.onEvent?.('   🗺️ No plan declared — asking the model to plan before it changes files.');
+      // Hard requirement, spent ONCE: refuse the first batch's FILE mutations
+      // so nothing is written before a plan exists. It bumps the step budget by
+      // one because it forces a genuine re-answer (the model must declare the
+      // plan and retry), exactly like the zero-action nudge.
+      const blocked: string[] = [];
+      if (!planBlocked) {
+        planBlocked = true;
+        for (const p of plans) {
+          if (p.refuse === undefined && PLAN_GATED_TOOL_NAMES.has(p.call.name)) {
+            p.refuse =
+              'Error: declare a plan first via plan_todo — call it with 2–6 ordered steps (action "create"), then retry this change. The plan is how the turn is tracked and verified.';
+            blocked.push(p.call.name);
+          }
+        }
+        if (blocked.length > 0) stepLimit += 1;
+        for (const name of blocked) {
+          traceEvent({
+            kind: 'refusal',
+            gate: 'plan',
+            tool: name,
+            summary:
+              `refused ${name}: no plan declared — the first mutation is blocked once so the model plans before it changes files`,
+          });
+        }
+      }
+      deps.onEvent?.(
+        blocked.length > 0
+          ? '   🗺️ No plan declared — blocking the first change until the model plans.'
+          : '   🗺️ No plan declared — asking the model to plan before it changes files.',
+      );
       traceEvent({
         kind: 'gate',
         gate: 'plan',
-        summary:
-          'a workspace-directing turn was about to mutate without a plan — one bounded nudge to declare one first',
+        summary: blocked.length > 0
+          ? `a workspace-directing turn was about to mutate without a plan — the first mutation batch (${blocked.join(', ')}) was refused once and the model asked to declare a plan first`
+          : 'a workspace-directing turn was about to mutate without a plan — one bounded nudge to declare one first',
       });
       thread.push({ role: 'user', content: planRequiredNudge(currentAsk(opts)) });
     }

@@ -412,6 +412,60 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
         </div>
       ) : null}
 
+      {/* E-trace — the derived TurnReport the run ended with: the plan → track →
+          verify verdict, assembled from recorded EVIDENCE. Rendered in the
+          detail view so the trust verdict is reviewable after the fact, rather
+          than living only in the turn's own close-out. */}
+      {trace.turnReport ? (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+            {`📋 Turn report — ${trace.turnReport.summary ?? trace.turnReport.verification}`}
+          </div>
+          <div style={{ fontSize: 11, marginBottom: 6 }}>
+            <span
+              style={{
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                fontSize: 10,
+                border: '1px solid currentColor',
+                borderRadius: 12,
+                padding: '1px 8px',
+                color:
+                  trace.turnReport.verification === 'verified'
+                    ? 'var(--accent-green)'
+                    : trace.turnReport.verification === 'unverified'
+                      ? 'var(--accent-yellow)'
+                      : trace.turnReport.verification === 'blocked'
+                        ? 'var(--accent-red)'
+                        : 'var(--text-secondary)',
+              }}
+            >
+              {trace.turnReport.verification}
+            </span>
+            {trace.turnReport.changedPaths.length > 0 ? (
+              <span style={{ marginLeft: 8, color: 'var(--text-secondary)' }}>
+                {`${trace.turnReport.changedPaths.length} file(s) changed`}
+              </span>
+            ) : null}
+          </div>
+          {trace.turnReport.steps.length > 0 ? (
+            <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {trace.turnReport.steps.map((s) => (
+                <li key={s.id} style={{ fontSize: 12 }}>
+                  <span aria-hidden="true">
+                    {s.status === 'done' ? '✅' : s.status === 'running' ? '🔄' : s.status === 'blocked' ? '⛔' : '⬜'}
+                  </span>{' '}
+                  {s.description}
+                  {s.evidence ? (
+                    <span style={{ color: 'var(--accent-yellow)', fontSize: 11 }}> ({s.evidence})</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
       {trace.systemPrompt && (
         <details style={{ marginBottom: 12 }}>
           <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--accent-blue)' }}>

@@ -5459,6 +5459,167 @@ body {
   border-left-color: var(--accent-green, #3fb950);
 }
 
+/* E — the TurnReport card: the plan → track → verify TRUST VERDICT for a turn.
+   Derived from recorded evidence on the server, so the verdict colour is the
+   whole point: a green edge means something VERIFIED the change, and an
+   unverified/blocked turn must never read the same (yellow/red), however neat
+   its checklist looks. */
+.chat-turn-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-purple);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 8px 0 2px;
+  background: color-mix(in srgb, var(--bg-secondary, #1b1f27) 55%, transparent);
+}
+
+.chat-turn-card.chat-turn-verified {
+  border-left-color: var(--accent-green);
+}
+
+.chat-turn-card.chat-turn-unverified {
+  border-left-color: var(--accent-yellow);
+}
+
+.chat-turn-card.chat-turn-blocked {
+  border-left-color: var(--accent-red);
+}
+
+.chat-turn-card.chat-turn-not-applicable {
+  border-left-color: var(--border);
+}
+
+.chat-turn-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-turn-icon {
+  font-size: 12px;
+  flex: none;
+}
+
+.chat-turn-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-turn-count {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chat-turn-verdict {
+  margin-left: auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0 6px;
+  flex: none;
+}
+
+.chat-turn-verified .chat-turn-verdict {
+  color: var(--accent-green);
+}
+
+.chat-turn-unverified .chat-turn-verdict {
+  color: var(--accent-yellow);
+}
+
+.chat-turn-blocked .chat-turn-verdict {
+  color: var(--accent-red);
+}
+
+.chat-turn-not-applicable .chat-turn-verdict {
+  color: var(--text-secondary);
+}
+
+.chat-turn-summary {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.chat-turn-steps {
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chat-turn-step {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.chat-turn-step-icon {
+  flex: none;
+  font-size: 11px;
+}
+
+.chat-turn-step-text {
+  color: var(--text-primary);
+  min-width: 0;
+}
+
+.chat-turn-step-done .chat-turn-step-text {
+  opacity: 0.7;
+}
+
+.chat-turn-step-blocked .chat-turn-step-text {
+  color: var(--accent-red);
+}
+
+.chat-turn-step-note {
+  color: var(--text-secondary);
+  font-size: 11px;
+  flex: none;
+}
+
+.chat-turn-step-evidence {
+  color: var(--accent-yellow);
+  font-size: 11px;
+}
+
+.chat-turn-files {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.chat-turn-files code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.chat-turn-flags {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.chat-turn-flag {
+  font-size: 10.5px;
+  color: var(--accent-yellow);
+  background: var(--warn-soft);
+  border: 1px solid var(--accent-yellow);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
 .chat-plan-steps {
   margin-top: 7px;
   display: flex;

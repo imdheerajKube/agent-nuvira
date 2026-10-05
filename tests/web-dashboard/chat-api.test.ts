@@ -86,6 +86,8 @@ class FakeEngine implements ChatEngine {
   } | null = null;
   /** WS5 (#27) — what this turn's resume replayed, when the engine reported one. */
   resumeAnswer: { id: string; replayed: number; modelCalls: number; saved: boolean; notice: string } | null = null;
+  /** E — the derived TurnReport this turn reports, when it produced one. */
+  turnReportAnswer: import('../../src/learning/turn-report.js').TurnReport | null = null;
   /**
    * WS5 (#27) — stand in for a turn that REFUSED to run, returning the reason as
    * its content with `generationFailed` AND `refused`. Both, because that is what
@@ -93,7 +95,7 @@ class FakeEngine implements ChatEngine {
    * first says "failed", the second says "do not retry this".
    */
   refusedAnswer: string | null = null;
-  async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string; generationFailed?: boolean }> {
+  async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string; generationFailed?: boolean; turnReport?: import('../../src/learning/turn-report.js').TurnReport }> {
     this.calls.push({ message, opts });
     const o = opts as { onProgress?: (line: string) => void; onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void; onPlanChange?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void; onGitDiff?: (d: { files: Array<{ path: string; body: string }>; summary: string }) => void };
     for (const line of this.progressLines) o.onProgress?.(line);
@@ -141,6 +143,7 @@ class FakeEngine implements ChatEngine {
       model: 'llama-3.3-70b',
       ...(this.worktreeAnswer ? { worktree: this.worktreeAnswer } : {}),
       ...(this.resumeAnswer ? { resume: this.resumeAnswer } : {}),
+      ...(this.turnReportAnswer ? { turnReport: this.turnReportAnswer } : {}),
     };
   }
 }
@@ -349,6 +352,34 @@ describe('/api/chat', () => {
     expect(body.resume?.notice).toContain('replayed 2');
     engine.worktreeAnswer = null;
     engine.resumeAnswer = null;
+  });
+
+  it('E — reports the derived TurnReport the engine produced, so the GUI can render the trust verdict', async () => {
+    engine.turnReportAnswer = {
+      goal: 'fix add in math.js',
+      planned: true,
+      steps: [{ id: 's1', description: 'fix add', status: 'done' }],
+      stepCounts: { done: 1, blocked: 0, pending: 0, running: 0, total: 1 },
+      toolCalls: ['edit_file', 'run_terminal'],
+      successfulToolCalls: ['edit_file', 'run_terminal'],
+      mutations: 1,
+      changedPaths: ['math.js'],
+      verification: 'verified',
+      flags: {},
+      summary: '1/1 steps done · 1 file(s) changed · verification: verified',
+    };
+    const res = await authedFetch('/api/chat', 'POST', { message: 'fix add' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      turnReport?: { verification: string; changedPaths: string[]; summary: string | null };
+    };
+    // The report travels the HTTP boundary — a turn whose verdict is computed but
+    // dropped here would leave the GUI unable to show it.
+    expect(body.turnReport?.verification).toBe('verified');
+    expect(body.turnReport?.changedPaths).toEqual(['math.js']);
+    expect(body.turnReport?.summary).toContain('verified');
+    engine.turnReportAnswer = null;
   });
 
   it('WS5 — sends NO isolation keys when the GUI did not ask, so the deployment environment still decides', async () => {

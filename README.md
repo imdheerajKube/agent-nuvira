@@ -1112,6 +1112,22 @@ agent-nuvira config set routing.weakModelPolicy ask
 #   "routing": { "promptBudget": { "warnTotal": 40000, "maxTotal": 48000 } }
 ```
 
+**Plan gate (E2).** A workspace-directing turn that tries to edit FILES before
+it has declared a plan is stopped **once**: the first file mutation is refused
+and the model is told to call `plan_todo` first. Terminal commands (builds,
+tests) are nudged but never blocked — a command is a step a plan is meant to
+reach, not a change to gate. The block is bounded: the second attempt runs even
+without a plan, so it guides rather than walls. A turn that declares a plan in
+the same step is never blocked.
+
+**Turn report (E).** Every turn derives a plan → track → verify report — steps
+done, files changed, and a verification verdict (`verified` | `unverified` |
+`blocked` | `not-applicable`), plus the honesty flags that produced it. It is
+built from **recorded evidence** (the plan store, tool outcomes and the honesty
+flags), never from the model's own narration, so it cannot be talked into
+calling unverified work "done". It is surfaced on the console, in the dashboard
+chat, and persisted on the reasoning trace for review in the Trace tab.
+
 #### How the routing engine works (v1.51.0)
 
 **5 scoring dimensions:** Every provider has a static capability profile (0–1) for reasoning, speed, cost, privacy, reliability. The cost dimension is computed from **real per-1K-token pricing** (free tiers = $0) — configurable via `agent-nuvira config set pricing.<provider>.inputPer1K`.
