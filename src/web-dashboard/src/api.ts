@@ -246,6 +246,32 @@ export interface ChatRetryEventPayload {
   serverTime?: number;
 }
 
+// ── Knowledge base (tag-scoped retrieval over the operator's own documents) ──
+
+/** A document recorded under a knowledge tag. */
+export interface KnowledgeDocument {
+  path: string;
+  chunks: number;
+  addedAt: number;
+}
+
+/** A knowledge tag with its documents and chunk count. */
+export interface KnowledgeTag {
+  tag: string;
+  updatedAt: number;
+  chunkCount: number;
+  documents: KnowledgeDocument[];
+}
+
+/** One retrieved passage, labelled with its source file. */
+export interface KnowledgeHit {
+  tag: string;
+  text: string;
+  sourcePath: string;
+  chunkIndex: number;
+  similarity: number;
+}
+
 export class DashboardAPI {
   private sse: EventSource | null = null;
   private listeners: Set<DashboardListener> = new Set();
@@ -880,6 +906,78 @@ export class DashboardAPI {
       unauthorized: r.status === 401,
       forbidden: r.status === 403,
     };
+  }
+
+  // ── Knowledge base (tag-scoped retrieval over the operator's own documents) ──
+  /** List every knowledge tag with its documents and chunk counts. */
+  async fetchKnowledge(): Promise<KnowledgeTag[] | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/knowledge`, {
+        headers: authHeaders(),
+        signal: AbortSignal.timeout(8000),
+      });
+      const d = (await res.json()) as { ok?: boolean; tags?: KnowledgeTag[] };
+      if (!Array.isArray(d.tags)) return null;
+      return d.tags;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Ingest files/folders under a tag (extract + chunk + embed, once). */
+  async knowledgeIngest(tag: string, paths: string[]): Promise<{
+    ok: boolean; tag?: string; files?: number; chunks?: number;
+    skipped?: Array<{ path: string; reason: string }>; error?: string;
+  }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/knowledge/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ tag, paths }),
+      });
+      const d = (await res.json()) as {
+        ok?: boolean; tag?: string; files?: number; chunks?: number;
+        skipped?: Array<{ path: string; reason: string }>; error?: string;
+      };
+      if (res.status === 200 && d.ok) return { ...d, ok: true };
+      return { ok: false, error: d.error || 'Ingest failed.' };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Retrieve the tag's most relevant passages for a question. */
+  async knowledgeQuery(tag: string, question: string, topK?: number): Promise<{
+    ok: boolean; tag?: string; hits?: KnowledgeHit[]; error?: string;
+  }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/knowledge/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ tag, question, topK }),
+      });
+      const d = (await res.json()) as { ok?: boolean; tag?: string; hits?: KnowledgeHit[]; error?: string };
+      if (res.status === 200 && d.ok) return { ...d, ok: true };
+      return { ok: false, error: d.error || 'Query failed.' };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Remove a tag's vectors and manifest entry. */
+  async knowledgeForget(tag: string): Promise<{ ok: boolean; removed?: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/knowledge/forget`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ tag }),
+      });
+      const d = (await res.json()) as { ok?: boolean; removed?: boolean; error?: string };
+      if (res.status === 200 && d.ok) return { ...d, ok: true };
+      return { ok: false, error: d.error || 'Forget failed.' };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /**

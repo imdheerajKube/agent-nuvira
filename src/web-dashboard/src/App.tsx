@@ -27,6 +27,10 @@ import ModelTimeline from './components/ModelTimeline';
 // (`readMemoryData()` / `readHistoryData()` in the /api payload) but no route
 // rendered them, so the panels sat unreachable and the data reached nobody.
 import MemoryPanel from './components/MemoryPanel';
+// Tag-scoped retrieval over the operator's own documents had a module, an
+// agent tool and a CLI but no dashboard surface — the tags it created were
+// visible nowhere. This page lists, ingests and queries them.
+import KnowledgePage from './components/KnowledgePage';
 import HistoryBrowser from './components/HistoryBrowser';
 // Skill executions were invisible end to end: this panel and the audit backend
 // behind `/api/executions` were both complete and both unreferenced, so a skill
@@ -160,6 +164,7 @@ export default function App() {
           <Route path="/env" element={<SkillEnvPage />} />
           <Route path="/process-env" element={<ProcessEnvPage />} />
           <Route path="/memory" element={<MemoryPanel data={data} />} />
+          <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/history" element={<HistoryBrowser data={data} />} />
           <Route
             path="/executions"

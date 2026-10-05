@@ -4226,6 +4226,118 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     })();
     return;
   }
+  // ── Knowledge base (tag-scoped retrieval over the operator's own documents) ──
+  // Thin endpoints over learning/knowledge-base.ts: list tags, ingest a file or
+  // folder under a tag, query a tag, and forget a tag. Documents are extracted,
+  // chunked and embedded ONCE on ingest, so a query only embeds the question.
+  // Reads list a tag's metadata; writes (ingest/forget) need routing.operate.
+  if (pathname === '/api/knowledge' && req.method === 'GET') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      try {
+        const { listKnowledgeTags } = await import('../learning/knowledge-base.js');
+        writeJson(res, 200, { ok: true, tags: listKnowledgeTags() });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+  if (pathname === '/api/knowledge/ingest' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot ingest documents (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const tag = typeof body?.tag === 'string' ? body.tag.trim() : '';
+      const paths = Array.isArray(body?.paths) ? body.paths.filter((p: unknown): p is string => typeof p === 'string' && p.trim().length > 0) : [];
+      if (!tag) {
+        writeJson(res, 400, { ok: false, error: 'A tag is required.' });
+        return;
+      }
+      if (paths.length === 0) {
+        writeJson(res, 400, { ok: false, error: 'At least one file or folder path is required.' });
+        return;
+      }
+      try {
+        const { ingestKnowledge } = await import('../learning/knowledge-base.js');
+        const result = await ingestKnowledge(tag, paths);
+        writeJson(res, 200, { ok: true, ...result });
+      } catch (err) {
+        writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+  if (pathname === '/api/knowledge/query' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const tag = typeof body?.tag === 'string' ? body.tag.trim() : '';
+      const question = typeof body?.question === 'string' ? body.question.trim() : '';
+      const topK = typeof body?.topK === 'number' ? body.topK : undefined;
+      if (!tag || !question) {
+        writeJson(res, 400, { ok: false, error: 'A tag and a question are required.' });
+        return;
+      }
+      try {
+        const { queryKnowledge } = await import('../learning/knowledge-base.js');
+        const hits = await queryKnowledge(tag, question, { topK });
+        writeJson(res, 200, { ok: true, tag, hits });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+  if (pathname === '/api/knowledge/forget' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot remove knowledge tags (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const tag = typeof body?.tag === 'string' ? body.tag.trim() : '';
+      if (!tag) {
+        writeJson(res, 400, { ok: false, error: 'A tag is required.' });
+        return;
+      }
+      try {
+        const { forgetKnowledgeTag } = await import('../learning/knowledge-base.js');
+        const removed = await forgetKnowledgeTag(tag);
+        writeJson(res, 200, { ok: true, removed });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+
   // ── PA4 — save skill env vars to ~/.nuvira/.env (dashboard secret capture) ──
   if (pathname === '/api/skills/secrets' && req.method === 'POST') {
     void (async () => {

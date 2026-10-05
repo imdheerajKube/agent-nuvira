@@ -72,6 +72,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Resources',
     items: [
       { path: '/memory', label: 'Memory', icon: '💾' },
+      { path: '/knowledge', label: 'Knowledge', icon: '📚' },
       { path: '/history', label: 'History', icon: '📝' },
       { path: '/env', label: 'Env Config', icon: '🔐' },
       { path: '/process-env', label: 'Process Env', icon: '🌱' },
