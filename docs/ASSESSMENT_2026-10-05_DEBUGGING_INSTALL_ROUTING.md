@@ -15,6 +15,9 @@ This document accompanies two fixes landed the same day:
 and one capability added the same day: a **per-chat strict pin** in the
 dashboard and a plain-English routing notice when a pin does not hold.
 
+The open defects A3, A4 and A6 below were then closed the same day, and
+OmniRoute was added as a provider (see §5).
+
 ---
 
 ## 1. Debugging capability — diagnosable, but it stops at the diagnosis
@@ -193,15 +196,17 @@ now produces clean single-model attribution under strict mode).
 | A2 | Strict mode fell through | `strictModelMode()` is an `AsyncLocalStorage`-scoped override; the loop engine collapses its candidate walk to the pinned pair under strict and surfaces the real error; chat's pinned fallback branch is short-circuited | `tests/cli/loop-executor.test.ts`, `tests/inference/route-resolver.test.ts` |
 | NEW | Per-chat strict pin | Dashboard chat gains a **🔒 strict / 🔓 auto-fallback** toggle (shown once a model is pinned); `/api/chat` accepts `strict`, scoped to the turn via `withStrictModel`; the response carries a `routingNotice` ("Auto routing took over … to work with X only, enable strict model mode.") | `tests/web-dashboard/chat-api.test.ts` |
 | NEW | CLI help | `nuvira chat --help` and `nuvira execute --help` state that a pin does **not** stop auto routing, and that `NUVIRA_STRICT_MODEL=1` is how to force the pinned model only | `src/cli/chat.ts`, `src/cli/execute.ts` |
+| A3 | Invalid DeepSeek model id in default config | `validateModelIdForProvider` checks an id against the provider's live model list at the SAVE boundary (CLI + dashboard), refusing with the closest matches; an unreachable/keyless provider saves unverified instead of blocking | `src/inference/model-id-validation.ts`, `tests/inference/model-id-validation.test.ts` |
+| A4 | Environment failures deferred, not remediated | `run_terminal` appends a bounded project-local remediation to a recognised failure (JDK, SDK/`local.properties`, non-exec wrapper, toolchain, venv, Node engine, Docker daemon); opt-in `NUVIRA_REMEDIATE=auto` applies only the two idempotent single-file operations | `src/tools/remediation-ladder.ts`, `tests/tools/remediation-ladder.test.ts` |
+| A6 | No artifact-checked stop condition | `plan_todo` refuses to mark a step `done` while a file it NAMES is absent | `src/tools/step-artifact.ts`, `tests/tools/step-artifact.test.ts` |
+| NEW | OmniRoute as a provider | Keyless `omniroute` catalog entry (default `auto`, `127.0.0.1:20128/v1`) served by the generic OpenAI-compatible adapter — aggregation reach without ceding task-aware routing | `src/inference/provider-catalog.ts`, `tests/inference/factory-constructibility.test.ts` |
 
-## 6. Open defects (not fixed today)
+## 6. Open defects
 
 | # | Defect | Why it matters | Direction |
 |---|--------|----------------|-----------|
-| A3 | Invalid DeepSeek model id in default config | A live pin 404s / is substituted | Validate a model id against the provider's `/models` before saving |
-| A4 | Environment failures deferred, not remediated | The turn ends with instructions instead of the artifact | Project-local remediation for recognised toolchain errors |
 | A5 | OpenRouter DeepSeek needs paid credits | Attribution on that route is impossible | Use the native DeepSeek provider, or OmniRoute as a provider |
-| A6 | No artifact-checked stop condition | The loop cannot tell a done step from a looked-done step | A step that names an artifact is done only when the artifact exists |
+| A7 | OmniRoute not yet measured | It is a catalog entry only; no local instance has been verified running | Start OmniRoute locally and run the WS7 suite on `omniroute/auto` vs native `deepseek-flash` |
 
 ---
 

@@ -299,6 +299,21 @@ A model pinned in the chat picker is a **preference**, not a guarantee, unless y
 keyless, default model `auto`) when you want one endpoint in front of many upstream providers. It is
 an aggregation gateway, not a second router: agent-nuvira still chooses the model for each task.
 
+### When a build fails for a known toolchain reason
+
+A build failure the agent recognises — the wrong JDK for the Android toolchain, a missing Android
+SDK, a non-executable `gradlew`, a missing Python venv, a Node engine mismatch, a stopped Docker
+daemon — now comes back with a **bounded fix attached**: the project-local step to take *now* (a file
+write, a `chmod`, an env var scoped to that one command), kept separate from the machine-level step
+that is your decision (installing a system JDK), and an explicit instruction not to re-run the
+identical command. An unrecognised failure adds nothing — the agent never invents a fix.
+
+The note is **advisory by default**. If you want the two fixes that are a single idempotent,
+project-local operation applied for you — `chmod +x` on the Gradle wrapper, and writing
+`android/local.properties` from an SDK the machine already has configured — set `NUVIRA_REMEDIATE=auto`
+for the run. Only those safe operations are taken, never silently, and an existing key in
+`local.properties` is preserved. Leave it unset and the agent takes the step itself, visibly.
+
 ### System — the doctor page, not a second set of counters
 
 The **System** tab (`/system`) runs the same checks `nuvira doctor` runs, on demand, and shows each

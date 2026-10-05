@@ -33,7 +33,13 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { diagnoseFailure, formatRemediation } from './remediation-ladder.js';
+import {
+  applyRemediationAutoFixes,
+  diagnoseFailure,
+  formatAutoApply,
+  formatRemediation,
+  remediationAutoApplyEnabled,
+} from './remediation-ladder.js';
 import type { ToolContext } from './registry.js';
 import { maskSenderId } from '../utils/mask.js';
 import { decideStateChange } from '../learning/autonomy-policy.js';
@@ -459,6 +465,21 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
     ? diagnoseFailure(command, output, ctx.cwd)
     : null;
   const remediationNote = remediation ? `\n\n${formatRemediation(remediation)}` : '';
+  // Auto-apply (opt-in, NUVIRA_REMEDIATE=auto): take the safe, idempotent
+  // project-local step now instead of asking the model to transcribe it, and
+  // report exactly what changed. Off by default — advisory stays the norm.
+  const autoApplyNote =
+    remediation?.autoFix?.length && remediationAutoApplyEnabled()
+      ? (() => {
+          const result = applyRemediationAutoFixes(remediation);
+          ctx.emit?.('remediation:auto-applied', {
+            id: remediation.id,
+            applied: result.applied,
+            skipped: result.skipped,
+          }, 'tool-loop');
+          return `\n\n${formatAutoApply(result)}`;
+        })()
+      : '';
 
   // ── A1: effect verification — a BUILD is not done until its artifact is
   // OBSERVED to launch. The live Aukat_check run reported "successfully built
@@ -481,14 +502,15 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
     if (verdict.status === 'verified') effectNote = `\n${formatEffectVerdict(verdict)}`;
   }
 
-  if (!decidedAutonomously) return output + effectNote + envNote + remediationNote;
+  if (!decidedAutonomously) return output + effectNote + envNote + remediationNote + autoApplyNote;
   // Reported, never silent — a judgment call the user cannot see is
   // indistinguishable from a bug.
   return (
     `${output}${effectNote}\n💡 Ran without asking: ${autonomyReason}. State what you ran in your answer — ` +
     'do not ask for permission to do work the user already asked for.' +
     envNote +
-    remediationNote
+    remediationNote +
+    autoApplyNote
   );
 }
 

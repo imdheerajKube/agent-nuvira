@@ -2,13 +2,14 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## Unreleased — a model id is checked before it is saved, a known build failure names its fix, a step is not done while its artifact is missing, and OmniRoute joins the provider catalog
+## Unreleased — a model id is checked before it is saved, a known build failure names (and can take) its fix, a step is not done while its artifact is missing, and OmniRoute joins the provider catalog
 
 > Four follow-ups from the `cal` Android assessment, each closing a place where
 the agent could not see the truth for itself: a dead model id that only failed
 at call time, a toolchain failure it diagnosed but could not repair, a plan step
 it could mark done without the file it named, and a provider supply a single
-endpoint can draw on.
+endpoint can draw on. The remediation fix additionally has an OPT-IN auto-apply
+for the two operations that are a single idempotent project-local write.
 
 ### Added: model ids are validated against the provider before they are written (A3)
 
@@ -33,7 +34,12 @@ toolchain, a Python venv, a Node engine mismatch, a stopped Docker daemon —
 separating the project-local step (a file write, a chmod, an env var scoped to
 that command) from the machine-level one that is the user's call, and telling
 the model not to repeat the identical command. An unknown failure adds nothing:
-a wrong "known fix" is worse than none.
+a wrong "known fix" is worse than none. The note stays advisory by DEFAULT; when
+a run opts in with `NUVIRA_REMEDIATE=auto`, the two fixes that are a single
+idempotent project-local operation — `chmod +x` on the wrapper, writing
+`android/local.properties` from a discoverable SDK — are applied to the
+workspace and reported exactly (`remediation:auto-applied`), never silently and
+never clobbering an existing key.
 
 ### Added: a plan step is done only when its artifact exists (A6)
 
