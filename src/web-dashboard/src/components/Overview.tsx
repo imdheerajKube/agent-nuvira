@@ -9,6 +9,11 @@ import PageHeader from './PageHeader';
 // The SAME model/provider counts Overview, the Timeline and the Models page
 // show — one endpoint, so the three tabs cannot disagree.
 import { useModelCounts } from '../useModelCounts';
+// The task list is admin-gated, so a sign-in made from the shell's account menu
+// must re-read it: otherwise Overview keeps the 401 it read on mount — claiming
+// "sign in" to a user who just did — until they navigate away and back remounts
+// the page. `authVersion` is the single signal every gated page re-reads on.
+import { useAuthVersion } from '../useAuthVersion';
 
 interface OverviewProps {
   data: DashboardData | null;
@@ -71,6 +76,7 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
   const [hub, setHub] = useState<HubData | null>(null);
   const [tasks, setTasks] = useState<{ status: number; tasks: TaskRecord[] } | null>(null);
   const modelCounts = useModelCounts();
+  const authVersion = useAuthVersion();
 
   useEffect(() => {
     let cancelled = false;
@@ -83,7 +89,9 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
     return () => {
       cancelled = true;
     };
-  }, []);
+    // Re-read on any sign in/out. The task list answers 401 while signed out, so
+    // without this a login left the Task Summary stuck on its "sign in" note.
+  }, [authVersion]);
 
   if (!data) {
     // The header stays while the data arrives, so the page keeps its title and

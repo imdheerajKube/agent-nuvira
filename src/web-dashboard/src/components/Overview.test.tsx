@@ -15,10 +15,10 @@
  */
 
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Overview from './Overview';
-import { dashboardAPI } from '../api';
+import { dashboardAPI, setAdminToken } from '../api';
 import type { DashboardData, HubData, TaskRecord } from '../types';
 
 const TASK = (over: Partial<TaskRecord>): TaskRecord =>
@@ -93,6 +93,9 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // Clearing the token emits an auth-version bump; do it after cleanup so no
+  // mounted page is left holding a stale session between tests.
+  setAdminToken(null);
 });
 
 /** Mock both fetch paths. A null `tasks` means "the read never answered". */
@@ -253,5 +256,32 @@ describe('Overview — admin-gated task history', () => {
     await screen.findByText('Task Summary');
     expect(screen.getByRole('link', { name: /Run a CLI command/ })).toBeTruthy();
     await screen.findByText('Gateway Status');
+  });
+
+  it('re-reads the task history after a sign-in made elsewhere in the app', async () => {
+    // Mount signed out: the task read answers 401 and the card says so.
+    const listTasks = vi
+      .spyOn(dashboardAPI, 'listTasks')
+      .mockResolvedValue({ status: 401, tasks: [] });
+    vi.spyOn(dashboardAPI, 'fetchHub').mockResolvedValue(HUB);
+
+    renderPage();
+    await screen.findByText('Task Summary');
+    await waitFor(() => expect(screen.getByText(/Sign in to Admin to see task history/)).toBeTruthy());
+
+    // The shell's account menu signs in. This page was NOT remounted and has no
+    // prop telling it so — only the token change signals it.
+    listTasks.mockResolvedValue({
+      status: 200,
+      tasks: [TASK({ id: 'run', status: 'running', finishedAt: null }), TASK({ id: 'done' })],
+    });
+    await act(async () => {
+      setAdminToken('tok-signed-in');
+    });
+
+    // The stale "sign in" note is replaced by the real counts, with no tab switch.
+    await waitFor(() => expect(valueFor('Running now')).toBe('1'));
+    expect(valueFor('Completed today')).toBe('1');
+    expect(screen.queryByText(/Sign in to Admin to see task history/)).toBeNull();
   });
 });

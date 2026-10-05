@@ -2861,7 +2861,7 @@ export default function ChatPage() {
                 ))}
               </div>
             ) : null}
-            <div className="chat-input-row">
+            <div className="chat-controls">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -2894,72 +2894,6 @@ export default function ChatPage() {
               >
                 🐞
               </button>
-              {/*
-                Model picker — Auto by default, or an explicit pin chosen from
-                the ROUTABLE models only (provider + model + capability), so the
-                user rules on routing without ever seeing the 500-id catalog.
-                A pin overrides Auto for this conversation; leaving it on Auto
-                keeps the router's judgment.
-              */}
-              <select
-                className="chat-model-picker"
-                aria-label="Model: Auto or a specific routable model"
-                title={
-                  pinnedModel
-                    ? `Pinned to ${pinnedModel.provider}/${pinnedModel.model} for this chat. Choose Auto to let the agent route again.`
-                    : 'Auto (default): the agent picks the best routable model each turn. Choose one to pin it for this chat.'
-                }
-                value={pinnedModel ? `${pinnedModel.provider}|${pinnedModel.model}` : ''}
-                disabled={busy}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (!v) {
-                    setPinnedModel(null);
-                    return;
-                  }
-                  const idx = v.indexOf('|');
-                  setPinnedModel({ provider: v.slice(0, idx), model: v.slice(idx + 1) });
-                }}
-              >
-                <option value="">🤖 Auto (agent decides)</option>
-                {/* A server-restored pin may name a model no longer in the live
-                    routable list — render it so the control still reflects it. */}
-                {pinnedModel &&
-                !routableModels.some(
-                  (m) => m.provider === pinnedModel.provider && m.model === pinnedModel.model,
-                ) ? (
-                  <option value={`${pinnedModel.provider}|${pinnedModel.model}`}>
-                    {pinnedModel.provider}/{pinnedModel.model} · pinned
-                  </option>
-                ) : null}
-                {routableModels.map((m) => (
-                  <option key={`${m.provider}|${m.model}`} value={`${m.provider}|${m.model}`}>
-                    {m.provider}/{m.model} · {m.band} ({m.capability.toFixed(2)})
-                  </option>
-                ))}
-              </select>
-              {/*
-                Capability mode — the inline lever for "how much reasoning do I
-                want to pay for". It writes the SAME curated switch the CLI and
-                the Process Env page write, so there is one source of truth; the
-                tooltip states exactly what each mode changes.
-              */}
-              <button
-                type="button"
-                className={`chat-attach-btn${capabilityMode === 'max' ? ' chat-attach-btn-on' : ''}`}
-                aria-label="Capability mode: balanced or max"
-                aria-pressed={capabilityMode === 'max'}
-                disabled={busy}
-                title={
-                  capabilityMode === 'max'
-                    ? 'Max capability: every turn routes to a strong model (a reasoning floor — not merely “paid”), cost ceilings are lifted, paid models are always allowed, and the loop gets its longest reasoning budget. Click to return to balanced.'
-                    : 'Balanced (default): the best model for complex/critical work and cheaper models for simple work, escalating when a stall is detected. Click for max capability — cost is not a concern.'
-                }
-                onClick={() => void toggleCapabilityMode()}
-              >
-                {capabilityMode === 'max' ? '⚡ max' : '⚖️ balanced'}
-              </button>
-              {capabilityNote ? <span className="admin-hint">{capabilityNote}</span> : null}
               {/*
                 WS5 (#27) — isolation, as a toggle beside the other composer
                 controls, plus its own second lever once it is on. Both are backed
@@ -3029,6 +2963,76 @@ export default function ChatPage() {
                   📌{keepWorktree ? ' keep' : ' drop'}
                 </button>
               ) : null}
+            </div>
+            <div className="chat-controls">
+              {/*
+                Model picker — Auto by default, or an explicit pin chosen from
+                the ROUTABLE models only (provider + model + capability), so the
+                user rules on routing without ever seeing the 500-id catalog.
+                A pin overrides Auto for this conversation; leaving it on Auto
+                keeps the router's judgment.
+              */}
+              <select
+                className="chat-model-picker"
+                aria-label="Model: Auto or a specific routable model"
+                title={
+                  pinnedModel
+                    ? `Pinned to ${pinnedModel.provider}/${pinnedModel.model} for this chat. Choose Auto to let the agent route again.`
+                    : 'Auto (default): the agent picks the best routable model each turn. Choose one to pin it for this chat.'
+                }
+                value={pinnedModel ? `${pinnedModel.provider}|${pinnedModel.model}` : ''}
+                disabled={busy}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) {
+                    setPinnedModel(null);
+                    return;
+                  }
+                  const idx = v.indexOf('|');
+                  setPinnedModel({ provider: v.slice(0, idx), model: v.slice(idx + 1) });
+                }}
+              >
+                <option value="">🤖 Auto (agent decides)</option>
+                {/* A server-restored pin may name a model no longer in the live
+                    routable list — render it so the control still reflects it. */}
+                {pinnedModel &&
+                !routableModels.some(
+                  (m) => m.provider === pinnedModel.provider && m.model === pinnedModel.model,
+                ) ? (
+                  <option value={`${pinnedModel.provider}|${pinnedModel.model}`}>
+                    {pinnedModel.provider}/{pinnedModel.model} · pinned
+                  </option>
+                ) : null}
+                {routableModels.map((m) => (
+                  <option key={`${m.provider}|${m.model}`} value={`${m.provider}|${m.model}`}>
+                    {m.provider}/{m.model} · {m.band} ({m.capability.toFixed(2)})
+                  </option>
+                ))}
+              </select>
+              {/*
+                Capability mode — the inline lever for "how much reasoning do I
+                want to pay for". It writes the SAME curated switch the CLI and
+                the Process Env page write, so there is one source of truth; the
+                tooltip states exactly what each mode changes.
+              */}
+              <button
+                type="button"
+                className={`chat-attach-btn${capabilityMode === 'max' ? ' chat-attach-btn-on' : ''}`}
+                aria-label="Capability mode: balanced or max"
+                aria-pressed={capabilityMode === 'max'}
+                disabled={busy}
+                title={
+                  capabilityMode === 'max'
+                    ? 'Max capability: every turn routes to a strong model (a reasoning floor — not merely “paid”), cost ceilings are lifted, paid models are always allowed, and the loop gets its longest reasoning budget. Click to return to balanced.'
+                    : 'Balanced (default): the best model for complex/critical work and cheaper models for simple work, escalating when a stall is detected. Click for max capability — cost is not a concern.'
+                }
+                onClick={() => void toggleCapabilityMode()}
+              >
+                {capabilityMode === 'max' ? '⚡ max' : '⚖️ balanced'}
+              </button>
+              {capabilityNote ? <span className="admin-hint">{capabilityNote}</span> : null}
+            </div>
+            <div className="chat-input-row">
               <textarea
                 className="chat-input-box"
                 value={input}

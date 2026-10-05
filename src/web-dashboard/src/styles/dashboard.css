@@ -3803,6 +3803,16 @@ body {
   word-break: break-word;
 }
 
+/* The composer's controls sit on two compact rows ABOVE the text row, so the
+   input keeps the full width instead of sharing one line with the icon buttons
+   (attachment / debug / isolate / resume, then model / capability mode). */
+.chat-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
 .chat-input-row {
   display: flex;
   gap: 8px;
@@ -4850,6 +4860,16 @@ body {
   color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* The composer's controls sit on two compact rows ABOVE the text row, so the
+   input keeps the full width instead of sharing one line with the icon buttons
+   (attachment / debug / isolate / resume, then model / capability mode). */
+.chat-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .chat-input-row {
