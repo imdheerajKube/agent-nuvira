@@ -791,6 +791,14 @@ export interface RoutingHistoryEntry {
   provider: string;
   model: string;
   score: number;
+  /** A3 — did the FINAL routed pair pass the agentic capability predicate? */
+  agenticCapable?: boolean;
+  /** A3 — how the model-first override affected the final pick. */
+  overrideReason?: string;
+  /** B — the consent-gate outcome for this route (`proceed` | `ask` | …). */
+  gateAction?: string;
+  /** C3 — the pair this route failed over FROM (the failover chain's origin). */
+  fallbackFrom?: string;
 }
 
 // ─── Requests Panel Types (P3-M3.2) ────────────────────────────────────────
@@ -923,6 +931,53 @@ export interface ResumeOutcome {
   notice: string;
 }
 
+// ─── Turn Report Types (Workstream E) ──────────────────────────────────────
+
+/** The honesty verdict for a turn's outcome (mirrors `learning/turn-report.ts`). */
+export type TurnVerification = 'verified' | 'unverified' | 'blocked' | 'not-applicable';
+
+/**
+ * E — the derived plan → track → verify → report artifact for one chat turn.
+ *
+ * Mirrors `TurnReport` in `src/learning/turn-report.ts`. The dashboard bundle is
+ * built from `src/web-dashboard/src` alone (see `vite.config.ts`), so the shape is
+ * restated here; the server side of the chat payload asserts it on the wire, so
+ * drift is a type error there. It is DERIVED from recorded evidence, never from
+ * the model's narration — the card cannot be talked into claiming "done" about
+ * work the run did not verify.
+ */
+export interface TurnReport {
+  goal: string;
+  /** Did the turn declare a plan at all? */
+  planned: boolean;
+  steps: Array<{
+    id: string;
+    description: string;
+    status: 'pending' | 'running' | 'done' | 'blocked';
+    note?: string;
+    /** Why this status can be trusted (e.g. "marked done, but the turn is unverified"). */
+    evidence?: string;
+  }>;
+  stepCounts: { done: number; blocked: number; pending: number; running: number; total: number };
+  toolCalls: string[];
+  successfulToolCalls: string[];
+  mutations: number;
+  changedPaths: string[];
+  verification: TurnVerification;
+  /** The run's honesty flags, carried so the report can never hide one. */
+  flags: {
+    unverifiedActionClaim?: boolean;
+    unverifiedEdit?: boolean;
+    unverifiedEditClaim?: boolean;
+    unverifiedBuildClaim?: boolean;
+    undeliveredArtifact?: boolean;
+    unfulfilledPromise?: boolean;
+    noActionTaken?: boolean;
+  };
+  /** One deterministic sentence for the console/trace, or null when trivial. */
+  summary: string | null;
+}
+
 // ─── Reasoning Trace Types (P0) ────────────────────────────────────────────
 
 /** One LLM call recorded in a reasoning trace. */
@@ -949,6 +1004,14 @@ export interface TraceStep {
     score: number;
     complexity: string;
     explanation: string;
+    /** A1/A2 — capability verdict on the routed pair at decision time. */
+    agenticCapable?: boolean;
+    /** A1 — how the model-first override affected the final pick. */
+    overrideReason?: string;
+    /** B — the consent-gate outcome for this route. */
+    gateAction?: string;
+    /** C3 — the pair this route failed over FROM. */
+    fallbackFrom?: string;
   };
   /** True when this step is a REPAIR re-prompt escalated to a stronger model
    *  (v1.60.4 per-task/planner escalation). */
@@ -1009,6 +1072,12 @@ export interface TraceEntry {
     /** The request asked for an authored deliverable and no file was written. */
     undeliveredArtifact?: boolean;
   };
+  /**
+   * E-trace — the derived TurnReport the run ended with (the plan → track →
+   * verify → report artifact). Present in the detail view; absent means the run
+   * had nothing to report or predates the field — never "verified".
+   */
+  turnReport?: TurnReport;
   /**
    * WS1 — the findings this run recorded, in call order, with the verdicts the
    * GATE computed and the evidence behind them. Present on both the list and

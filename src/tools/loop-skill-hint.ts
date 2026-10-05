@@ -549,10 +549,11 @@ export async function buildLoopSkillHint(
  */
 export async function buildSkillCatalogHint(
   cm?: ConfigManager,
-  opts: { maxSkills?: number; descriptionChars?: number } = {},
+  opts: { maxSkills?: number; descriptionChars?: number; namesOnly?: boolean } = {},
 ): Promise<string> {
   const maxSkills = opts.maxSkills ?? 200;
   const descChars = opts.descriptionChars ?? 140;
+  const namesOnly = opts.namesOnly === true;
   const entries: Array<{ name: string; description: string }> = [];
 
   // Compiled first-party skills.
@@ -580,19 +581,111 @@ export async function buildSkillCatalogHint(
 
   if (entries.length === 0) return '';
   const shown = entries.slice(0, maxSkills);
+  // `namesOnly` (mode `names`) drops the per-skill description: the model still
+  // sees the whole catalog and can `skill` with no name to read the details, but
+  // the prompt pays a fraction of the ~24K of a full description catalog.
   const lines = shown.map(
-    (e) => `  - ${e.name}: ${cap(e.description, descChars)}`,
+    (e) => (namesOnly ? `  - ${e.name}` : `  - ${e.name}: ${cap(e.description, descChars)}`),
   );
   const more = entries.length > shown.length ? `\n  (+${entries.length - shown.length} more — call the skill tool with no name to list all)` : '';
   return [
     '',
     '## Available skills',
-    'A first-party skill may fit this goal. Read the list and decide — load one with the skill tool ONLY when it genuinely applies (ignore the rest):',
+    namesOnly
+      ? 'A first-party skill may fit this goal. These are NAMES only — call the skill tool with no name to read a skill\u2019s description, then load one ONLY when it genuinely applies (ignore the rest):'
+      : 'A first-party skill may fit this goal. Read the list and decide — load one with the skill tool ONLY when it genuinely applies (ignore the rest):',
     ...lines,
     more,
     '',
     'Load one with the skill tool, e.g. {"skill":"<name>"} (or call it with no name to list every skill).',
   ].filter((l) => l !== undefined).join('\n');
+}
+
+/**
+ * Which skill hint the system prompt carries. See {@link resolveSkillHintMode}.
+ *   - `match`   — the small keyword-matched hint (ONE skill, only on a real
+ *                 match). The default and the 3.3.10 behaviour.
+ *   - `catalog` — the FULL name+description catalog (opt-in).
+ *   - `names`   — the catalog WITHOUT descriptions (names only; far smaller).
+ *   - `off`     — never inject a skill hint.
+ */
+export type SkillHintMode = 'match' | 'catalog' | 'names' | 'off';
+
+/** The default. The catalog is ~24K chars — it must never be the default. */
+export const DEFAULT_SKILL_HINT_MODE: SkillHintMode = 'match';
+
+/** Env names, `NUVIRA_*` first with the legacy `BUFF_*` alias accepted. */
+const SKILL_HINT_ENV_NAMES = ['NUVIRA_SKILL_CATALOG', 'BUFF_SKILL_CATALOG'];
+
+/**
+ * Parse a raw value into a mode. Synonyms accepted so a typo cannot silently
+ * change behaviour; null (unrecognized) falls through to the next source.
+ *   - match / keyword / auto / small / default      → 'match'
+ *   - catalog / full / all / on / true / 1          → 'catalog'
+ *   - names / names-only / list / bare / titles     → 'names'
+ *   - off / none / never / false / 0                → 'off'
+ */
+export function parseSkillHintMode(raw: string | undefined | null): SkillHintMode | null {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (!v) return null;
+  if (v === 'match' || v === 'keyword' || v === 'auto' || v === 'small' || v === 'default') return 'match';
+  if (v === 'catalog' || v === 'full' || v === 'all' || v === 'on' || v === 'true' || v === '1') return 'catalog';
+  if (v === 'names' || v === 'names-only' || v === 'list' || v === 'bare' || v === 'titles') return 'names';
+  if (v === 'off' || v === 'none' || v === 'never' || v === 'false' || v === '0') return 'off';
+  return null;
+}
+
+/**
+ * The effective skill-hint mode. Env first (`NUVIRA_SKILL_CATALOG`, then the
+ * legacy `BUFF_*`), then `skills.catalogHint` in the config file, then the
+ * default (`match`). Pure and never throws.
+ *
+ * WHY THIS EXISTS (2026-10-04). 3.3.11 replaced the keyword hint with the full
+ * catalog unconditionally — measured live, `buildSkillCatalogHint()` returned
+ * 24,543 chars on the goal "create mac od gui app", taking the chat system
+ * prompt from 7,653 chars (3.3.10) to 32,809. That ~6.1K-token tax on EVERY
+ * turn buried the task for weak/free-tier models and made 16K-token tiers
+ * impossible (the prompt alone is ~8.2K). The catalog is a genuinely useful
+ * discovery mechanism, but it must be CHOSEN, not imposed.
+ */
+export function resolveSkillHintMode(cm?: ConfigManager): SkillHintMode {
+  for (const name of SKILL_HINT_ENV_NAMES) {
+    const parsed = parseSkillHintMode(process.env[name]);
+    if (parsed) return parsed;
+  }
+  try {
+    const cfg = cm?.getAll?.() as { skills?: { catalogHint?: unknown } } | undefined;
+    const parsed = parseSkillHintMode(typeof cfg?.skills?.catalogHint === 'string' ? cfg.skills.catalogHint : undefined);
+    if (parsed) return parsed;
+  } catch {
+    // Best-effort — a config failure must not break a turn.
+  }
+  return DEFAULT_SKILL_HINT_MODE;
+}
+
+/**
+ * The skill hint for a goal, resolved through the configured mode. The ONE
+ * entry point both chat and execute call, so the surface can never drift from
+ * the policy:
+ *   - `off`     → ''
+ *   - `catalog` → the full name+description catalog ({@link buildSkillCatalogHint})
+ *   - `names`   → the names-only catalog (no descriptions)
+ *   - `match`   → the small keyword-matched hint ({@link buildLoopSkillHint})
+ *
+ * `injected` is the same out-param `buildLoopSkillHint` takes (the match that
+ * was injected, for usage marking) — left untouched in the catalog/names/off
+ * modes, where no single skill was selected.
+ */
+export async function buildConfiguredSkillHint(
+  goal: string,
+  cm?: ConfigManager,
+  injected?: { value: LoopSkillHintMatch | null },
+): Promise<string> {
+  const mode = resolveSkillHintMode(cm);
+  if (mode === 'off') return '';
+  if (mode === 'catalog') return buildSkillCatalogHint(cm);
+  if (mode === 'names') return buildSkillCatalogHint(cm, { namesOnly: true });
+  return buildLoopSkillHint(goal, cm, injected);
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   getModelTags,
   getModelBadge,
   formatModelName,
+  isReasoningModel,
   CATEGORY_INFO,
   type ModelCategory,
 } from '../../src/inference/model-catalog.js';
@@ -93,6 +94,68 @@ describe('categorizeModel', () => {
       expect(categorizeModel('custom-reasoning-model')).toBe('reasoning');
       expect(categorizeModel('o1-thinking')).toBe('reasoning');
       expect(categorizeModel('deep-think-v1')).toBe('reasoning');
+    });
+
+    // The generalization: reasoning is a CROSS-VENDOR capability, not the one
+    // `deepseek-reasoner` alias. Each family below is a real id shape.
+    it('should categorize the shipped deepseek reasoner alias', () => {
+      expect(categorizeModel('deepseek-reasoner')).toBe('reasoning');
+      expect(categorizeModel('deepseek/deepseek-reasoner')).toBe('reasoning');
+    });
+
+    it('should categorize OpenAI o-series reasoning models', () => {
+      expect(categorizeModel('o1')).toBe('reasoning');
+      expect(categorizeModel('o1-preview')).toBe('reasoning');
+      expect(categorizeModel('o3-mini')).toBe('reasoning');
+      expect(categorizeModel('o4-mini')).toBe('reasoning');
+      expect(categorizeModel('openai/o3')).toBe('reasoning');
+    });
+
+    it('should categorize other thinking families (qwq, glm-z1, magistral, exaone-deep)', () => {
+      expect(categorizeModel('qwq-32b')).toBe('reasoning');
+      expect(categorizeModel('glm-z1-air')).toBe('reasoning');
+      expect(categorizeModel('magistral-small-2506')).toBe('reasoning');
+      expect(categorizeModel('exaone-deep-32b')).toBe('reasoning');
+    });
+
+    it('should categorize qwen3 thinking ids but not qwen3-coder', () => {
+      expect(categorizeModel('qwen3:8b')).toBe('reasoning');
+      expect(categorizeModel('qwen3-32b')).toBe('reasoning');
+      // A coder variant stays code — reasoning must not swallow it.
+      expect(categorizeModel('qwen3-coder:30b')).toBe('code');
+    });
+  });
+
+  describe('isReasoningModel', () => {
+    it('recognizes reasoning families regardless of vendor', () => {
+      for (const id of [
+        'deepseek-reasoner',
+        'deepseek-r1-distill-qwen-32b',
+        'deepseek-v3.2',
+        'o1',
+        'o3-mini',
+        'qwq-32b',
+        'glm-z1-air',
+        'magistral-medium',
+        'qwen3:14b',
+        'some-vendor-reasoning-v1',
+        'kimi-thinking-preview',
+      ]) {
+        expect(isReasoningModel(id)).toBe(true);
+      }
+    });
+
+    it('does not claim reasoning for plain chat/code ids', () => {
+      for (const id of [
+        'deepseek-chat',
+        'llama-3.3-70b-versatile',
+        'gemini-2.0-flash',
+        'qwen2.5-coder-32b',
+        'gpt-4o',
+        'claude-sonnet-4',
+      ]) {
+        expect(isReasoningModel(id)).toBe(false);
+      }
     });
   });
 

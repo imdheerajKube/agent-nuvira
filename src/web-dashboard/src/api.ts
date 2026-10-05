@@ -36,6 +36,7 @@ import type {
   ResumeOutcome,
   TraceEntry,
   TraceFinding,
+  TurnReport,
   WhatsAppPairStatus,
   WorktreeOutcome,
 } from './types';
@@ -112,6 +113,35 @@ function isResumeOutcome(value: unknown): value is ResumeOutcome {
     typeof r.saved === 'boolean' &&
     typeof r.notice === 'string' &&
     (r.callsAvoided === undefined || typeof r.callsAvoided === 'number')
+  );
+}
+
+/**
+ * E — the derived TurnReport, narrowed off the response rather than cast.
+ *
+ * The card renders a TRUST VERDICT, so a payload missing its evidence must be
+ * dropped rather than defaulted: a report with no `steps`/`stepCounts` would
+ * render "0/0 done" (a clean-looking checklist) over a run whose plan simply did
+ * not arrive. Anything that does not prove its shape is dropped, and the turn
+ * then reads as "no report" — which for a server too old to send the field is
+ * the truth.
+ */
+function isTurnReport(value: unknown): value is TurnReport {
+  if (!value || typeof value !== 'object') return false;
+  const r = value as Partial<TurnReport>;
+  return (
+    typeof r.goal === 'string' &&
+    typeof r.planned === 'boolean' &&
+    Array.isArray(r.steps) &&
+    !!r.stepCounts &&
+    typeof r.stepCounts === 'object' &&
+    typeof r.stepCounts.total === 'number' &&
+    typeof r.verification === 'string' &&
+    ['verified', 'unverified', 'blocked', 'not-applicable'].includes(r.verification) &&
+    (r.summary === null || typeof r.summary === 'string') &&
+    Array.isArray(r.changedPaths) &&
+    !!r.flags &&
+    typeof r.flags === 'object'
   );
 }
 
@@ -1330,6 +1360,26 @@ export class DashboardAPI {
   }
 
   /**
+   * The short list a chat MODEL PICKER may offer: only pairs the router would
+   * use right now, each with a capability estimate (0–1) and band. Auto remains
+   * the default; picking one pins provider+model for the session.
+   */
+  async listRoutableModels(): Promise<Array<{ provider: string; model: string; capability: number; band: 'high' | 'medium' | 'low' }>> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/chat/routable-models`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json()) as { ok?: boolean; models?: Array<{ provider: string; model: string; capability: number; band: 'high' | 'medium' | 'low' }> };
+      if (res.status === 200 && d.ok && Array.isArray(d.models)) return d.models;
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * P3 — project picker: the dashboard's cwd + recently attached paths.
    */
   async listProjects(): Promise<Array<{ path: string; name: string; kind: 'cwd' | 'recent' }>> {
@@ -1484,14 +1534,14 @@ export class DashboardAPI {
   /**
    * P4 — load one past session's full transcript (resume in the thread).
    */
-  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; busy?: boolean } | null> {
+  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; busy?: boolean } | null> {
     const token = getAdminToken();
     try {
       const res = await fetch(`${this.baseUrl}/api/sessions/${encodeURIComponent(id)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: AbortSignal.timeout(10_000),
       });
-      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; busy?: boolean } };
+      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; busy?: boolean } };
       if (res.status === 200 && d.ok && d.session) return d.session;
       return null;
     } catch {
@@ -1563,6 +1613,12 @@ export class DashboardAPI {
         /** WS5 (#27) — what a resume replayed instead of paying for. */
         resume?: ResumeOutcome;
         /**
+         * E — the derived plan → track → verify → report artifact for this turn,
+         * so the GUI can render the trust verdict instead of inferring it from the
+         * transcript. Absent when the turn produced no non-trivial report.
+         */
+        turnReport?: TurnReport;
+        /**
          * WS1 — every finding this turn recorded, already gated by the server
          * (`confirmFinding`), in call order. AUTHORITATIVE for the transcript
          * snapshot: the live `finding` SSE event renders while the turn runs,
@@ -1612,6 +1668,7 @@ export class DashboardAPI {
           ...(isWorktreeOutcome(d.worktree) ? { worktree: d.worktree } : {}),
           ...(isResumeOutcome(d.resume) ? { resume: d.resume } : {}),
           ...(Array.isArray(d.findings) ? { findings: d.findings as TraceFinding[] } : {}),
+          ...(isTurnReport(d.turnReport) ? { turnReport: d.turnReport } : {}),
         };
       }
       return {
@@ -1703,7 +1760,7 @@ export class DashboardAPI {
       /** P0.6 — a tool-call lifecycle step (rendered as a card). */
       onTool?: (t: { id: string; tool: string; phase: 'started' | 'called'; args?: string; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void;
       /** P0.7 — a plan mutation (rendered as a live checklist card). */
-      onPlan?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void;
+      onPlan?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string; note?: string }>; revision: number }) => void;
       /** P3b — a git diff payload (rendered as a 🔧 diff card). */
       onDiff?: (d: { files: Array<{ path: string; body: string }>; summary: string }) => void;
       onQuestion?: (q: { questionId: string; question: string; choices: Array<{ label: string; description?: string }>; multiSelect: boolean }) => void;
@@ -1772,7 +1829,7 @@ export class DashboardAPI {
       try {
         const payload = JSON.parse((event as MessageEvent).data) as {
           goal?: string;
-          steps?: Array<{ id: string; description: string; status: string }>;
+          steps?: Array<{ id: string; description: string; status: string; note?: string }>;
           revision?: number;
         };
         if (payload.goal && Array.isArray(payload.steps)) {

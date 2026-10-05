@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { AutoModelRouter, resetAutoRouter } from '../../src/learning/auto-router.js';
+import { isTinyModel, isAgenticCapableModel } from '../../src/learning/model-harness.js';
 import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
 import { resetRouterBandit } from '../../src/learning/router-bandit.js';
 import { resetRouterPromotion } from '../../src/learning/router-promotion.js';
@@ -96,5 +97,102 @@ describe('AutoModelRouter — decision presentation is self-consistent (T3)', ()
       const rationale = decision.explanation.split('→ ')[1]?.split(' ')[0];
       expect(rationale).toBe(`${decision.provider}/${decision.model}`);
     }
+  });
+});
+
+/**
+ * REGRESSION (2026-10-04, live trace): a MODERATE software build ask routed to
+ * `local/gemma4:e4b` — a ≤4B model — even though credentialed cloud providers
+ * were available. The deterministic rank was correct (groq first); the
+ * MODEL-FIRST override, which runs AFTER the agentic capability floor, replaced
+ * it with the local 4B model (reason `local: model-first pick`). Chat then
+ * fabricated `[Tool result] ✅ succeeded` output. The override must respect the
+ * same agentic floor the ranker applied.
+ */
+describe('AutoModelRouter — model-first override respects the agentic capability floor', () => {
+  // The shared predicate is what BOTH the ranking floor and the model-first
+  // override call, so pinning it pins both seams. (The live bug was the
+  // override bypassing the floor and re-picking `local/gemma4:e4b`.)
+  it('excludes tiny and local-placeholder models, keeps unknown and capable ones', () => {
+    // Out: ≤4B tags on any provider.
+    expect(isAgenticCapableModel('gemma4:e4b', 'local')).toBe(false);
+    expect(isAgenticCapableModel('qwen2.5:0.5b', 'local')).toBe(false);
+    expect(isAgenticCapableModel('llama3.2:1b', 'groq')).toBe(false);
+    expect(isAgenticCapableModel('phi3', 'openrouter')).toBe(false);
+    // Out: a local runtime with no judgeable model id.
+    expect(isAgenticCapableModel('default', 'local')).toBe(false);
+    expect(isAgenticCapableModel('unknown', 'local')).toBe(false);
+    // Kept: a real local tag (a local 70B is fine), a capable cloud model, and
+    // an UNKNOWN model (never eliminate on ignorance).
+    expect(isAgenticCapableModel('llama3:70b', 'local')).toBe(true);
+    expect(isAgenticCapableModel('gemini-3.1-flash-lite', 'gemini')).toBe(true);
+    expect(isAgenticCapableModel('llama-3.3-70b-versatile', 'groq')).toBe(true);
+    expect(isAgenticCapableModel(undefined, 'local')).toBe(true);
+  });
+
+  it('never lands an agentic software ask on a ≤4B local model when a capable provider exists', () => {
+    // A box with a tiny local runtime AND two credentialed cloud providers —
+    // exactly the shape that produced the regression.
+    seedVerified('local', 'gemma4:e4b', 'qwen2.5:0.5b', 'deepseek-coder:latest');
+    seedVerified('groq', 'llama-3.3-70b-versatile');
+    seedVerified('gemini', 'gemini-2.5-flash');
+    const config = makeConfig(['local', 'groq', 'gemini']);
+
+    const router = new AutoModelRouter();
+    const decision = router.resolve(
+      'chat',
+      'install rust and build the macos gui app in /Users/me/Documents/cal/src-tauri',
+      {},
+      config,
+    );
+
+    expect(isTinyModel(decision.model)).toBe(false);
+    expect(decision.provider).not.toBe('local');
+  });
+});
+
+/**
+ * A1 — the router must RECORD a capability verdict on its own decision, so the
+ * turn/trace/console can prove what it did without re-deriving it. These pin
+ * that `agenticCapable` is exactly the shared predicate on the FINAL pair, and
+ * that `overrideReason` names the shape of the original bug (a model-first
+ * candidate set emptied BY THE FLOOR).
+ */
+describe('AutoRouteResult — agentic capability verdict is recorded (A1)', () => {
+  it('verdict matches the shared predicate on the FINAL routed pair', () => {
+    seedVerified('local', 'gemma4:e4b', 'qwen2.5:0.5b', 'deepseek-coder:latest');
+    seedVerified('groq', 'llama-3.3-70b-versatile');
+    seedVerified('gemini', 'gemini-2.5-flash');
+    const config = makeConfig(['local', 'groq', 'gemini']);
+
+    const decision = new AutoModelRouter().resolve(
+      'chat',
+      'install rust and build the macos gui app in /Users/me/Documents/cal/src-tauri',
+      {},
+      config,
+    );
+
+    expect(decision.agenticCapable).toBe(true);
+    expect(decision.agenticCapable).toBe(
+      isAgenticCapableModel(decision.model, decision.provider),
+    );
+  });
+
+  it('records agenticCapable=false and model-first-blocked when only weak models exist', () => {
+    // A box whose ONLY models are ≤4B: the floor has nothing capable to keep,
+    // so the model-first candidate set is emptied BY THE FLOOR and the
+    // deterministic (weak) pick must stand — recorded, not inferred.
+    seedVerified('local', 'gemma4:e4b', 'qwen2.5:0.5b');
+    const config = makeConfig(['local']);
+
+    const decision = new AutoModelRouter().resolve(
+      'chat',
+      'install rust and build the macos gui app in /Users/me/Documents/cal/src-tauri',
+      {},
+      config,
+    );
+
+    expect(decision.agenticCapable).toBe(false);
+    expect(decision.overrideReason).toBe('model-first-blocked');
   });
 });

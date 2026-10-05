@@ -97,11 +97,14 @@ import { withAgentAnswerQualityGate } from './answer-quality-gate.js';
 import { getMetrics } from '../enterprise/metrics.js';
 import {
   getAutoRouter,
+  isAgenticTask,
   isAutoModel,
   isAutoProvider,
   type AutoRouteResult,
   type TaskIntent,
 } from '../learning/auto-router.js';
+import { isAgenticCapableModel } from '../learning/model-harness.js';
+import { weakRouteNotice } from '../learning/agentic-route-gate.js';
 import { analyzeComplexity, type ComplexityLevel } from '../learning/hybrid-router.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
@@ -1900,21 +1903,37 @@ export class Orchestrator {
    * to fail complex tasks. Warning only — the user keeps control.
    */
   private maybeWarnWeakLocalModel(decision: AutoRouteResult): void {
-    if (
-      decision.provider === 'local' &&
-      typeof decision.score === 'number' &&
-      decision.score < 0.5
-    ) {
-      logger.warn(
-        `   ⚠️  Auto-routing found only a weak LOCAL model (${decision.model}, score ${decision.score.toFixed(2)}/1.0) — no verified cloud model is available. ` +
+    // B2 — CAPABILITY-based, not locality-based. Prefer the router's own verdict
+    // (A1) when present; else fall back to the shared predicate on the served
+    // pair. The legacy local+low-score case is kept so a weak LOCAL model is
+    // still surfaced even when the router had no task profile to judge against.
+    const capable =
+      typeof decision.agenticCapable === 'boolean'
+        ? decision.agenticCapable
+        : isAgenticCapableModel(decision.model, decision.provider);
+    const agentic =
+      decision.taskProfile && decision.complexity
+        ? isAgenticTask(decision.complexity, decision.taskProfile)
+        : false;
+    const weakForAgenticAsk = agentic && !capable;
+    const weakLocalLegacy =
+      decision.provider === 'local' && typeof decision.score === 'number' && decision.score < 0.5;
+    if (!weakForAgenticAsk && !weakLocalLegacy) return;
+
+    // One shared wording (A4/B2) so chat, the orchestrator and the dashboard
+    // cannot describe the same situation three different ways.
+    const notice =
+      weakRouteNotice(decision, agentic) ??
+      `⚠️  Auto-routing found only a weak LOCAL model (${decision.model}, score ${decision.score.toFixed(2)}/1.0) — no verified cloud model is available.`;
+    logger.warn(
+      `   ${notice} ` +
         `Complex tasks may run slowly or fail. Add a real API key (nuvira provider set) or run with an explicit --model for reliable results.`,
-      );
-      this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
-        agentType: 'orchestrator',
-        stage: 'routing',
-        message: `⚠️ Only a weak local model (${decision.model}) is available — this pipeline may be slow or fail. Add a real API key for better results.`,
-      }, 'orchestrator');
-    }
+    );
+    this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+      agentType: 'orchestrator',
+      stage: 'routing',
+      message: `⚠️ Only a weak model (${decision.model}) is available — this pipeline may be slow or fail. Add a real API key for better results.`,
+    }, 'orchestrator');
   }
 
   /**

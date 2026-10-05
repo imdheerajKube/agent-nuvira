@@ -513,6 +513,25 @@ describe('ChatConsole', () => {
       ]);
     });
 
+    it('P8 — persists the pinned model across turns and a restart, and clears it on Auto', async () => {
+      const first = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      await first.answer('s1', 'build the app', { provider: 'groq', model: 'openai/gpt-oss-120b' });
+      expect(first.get('s1')).toMatchObject({ pinnedProvider: 'groq', pinnedModel: 'openai/gpt-oss-120b' });
+
+      // A later turn that sends NO pin (Auto) clears the pin on the record.
+      await first.answer('s1', 'never mind', {});
+      expect(first.get('s1')?.pinnedProvider).toBeUndefined();
+
+      // Re-pin, then simulate a dashboard restart: the pin survives the store.
+      await first.answer('s1', 'pin again', { provider: 'gemini', model: 'gemini-2.5-flash' });
+      const second = new ChatConsole({ engine: engineFor(), persistPath: storePath });
+      expect(second.get('s1')).toMatchObject({ pinnedProvider: 'gemini', pinnedModel: 'gemini-2.5-flash' });
+
+      // A NON-recorded turn (the deferred-retry broker) never touches the pin.
+      await second.answer('s1', 'retry quietly', { recordTurn: false });
+      expect(second.get('s1')?.pinnedProvider).toBe('gemini');
+    });
+
     /**
      * The read path must clean what is ALREADY on disk. Live evidence: one
      * calculator session stored 13 assistant turns ending in the raw

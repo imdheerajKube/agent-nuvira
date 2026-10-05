@@ -126,4 +126,26 @@ describe('InferenceCache — per-workspace listing and clearing', () => {
     await getCache().set('q', 'a', 'm', 'p', undefined, '/repo');
     expect(await getCache().clearWorkspace('/somewhere-else')).toBe(0);
   });
+
+  it('#30 — stores the turn activity and returns it on a hit, while get() stays text-only', async () => {
+    const cache = getCache();
+    await cache.set('list the files', 'Directory listed.', 'm', 'p', undefined, '/repo', {
+      toolCalls: ['list_dir'],
+      successfulToolCalls: ['list_dir'],
+      bounded: true,
+    });
+
+    const hit = await cache.getEntry('list the files', 'm', 'p', '/repo');
+    expect(hit?.response).toBe('Directory listed.');
+    expect(hit?.toolCalls).toEqual(['list_dir']);
+    expect(hit?.successfulToolCalls).toEqual(['list_dir']);
+    expect(hit?.bounded).toBe(true);
+    // The string-returning convenience is unchanged for callers that only want the
+    // text (web research), so adding facts did not break that contract.
+    expect(await cache.get('list the files', 'm', 'p', '/repo')).toBe('Directory listed.');
+
+    // An entry with no recorded activity still hits, with no invented facts.
+    await cache.set('q', 'plain', 'm', 'p', undefined, '/repo');
+    expect(await cache.getEntry('q', 'm', 'p', '/repo')).toEqual({ response: 'plain' });
+  });
 });

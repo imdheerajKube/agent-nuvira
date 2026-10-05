@@ -38,6 +38,7 @@ import {
   getModelRegistry,
 } from '../learning/model-registry.js';
 import { classifyModelEntitlement } from '../inference/model-entitlement.js';
+import { capabilityBand, estimateModelCapability } from '../learning/model-capability.js';
 import type { ActionTelemetryInsights } from '../learning/model-registry.js';
 import { listUnattendedJobs } from '../learning/unattended-job.js';
 import {
@@ -6932,6 +6933,39 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // GET /api/chat/routable-models — the short list a chat model PICKER may
+  // offer: only pairs the router would actually use right now (the registry's
+  // own `isUsable` predicate), each with a capability estimate and band.
+  //
+  // WHY THIS EXISTS (2026-10-04). The user's question was fair: the chat had no
+  // way to choose a model, so every turn was Auto — and when Auto's floor had to
+  // relax it silently landed on a 4-bit LOCAL model. Offering a handful of
+  // ROUTABLE pairs (provider + model + capability) lets the user rule on Auto
+  // without ever being shown the 500-id catalog. Cheap: a registry read, no
+  // provider probe.
+  if (pathname === '/api/chat/routable-models' && req.method === 'GET') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      const registry = getModelRegistry();
+      const now = Date.now();
+      const models: Array<{ provider: string; model: string; capability: number; band: string }> = [];
+      for (const provider of registry.getTrackedProviders()) {
+        for (const entry of registry.getAllModelsForProvider(provider)) {
+          if (!registry.isUsable(provider, entry.model, now)) continue;
+          const capability = estimateModelCapability(entry.model);
+          models.push({ provider, model: entry.model, capability, band: capabilityBand(capability) });
+        }
+      }
+      models.sort((a, b) => b.capability - a.capability);
+      writeJson(res, 200, { ok: true, models: models.slice(0, 80) });
+    })();
+    return;
+  }
+
   // POST /api/chat — send one message { sessionId?, message, provider?, model? }.
   if (pathname === '/api/chat' && req.method === 'POST') {
     void (async () => {
@@ -7142,6 +7176,10 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         // that sets `NUVIRA_RESUME` gets resumed turns, and a reader who is never
         // told cannot tell a replayed turn from a fresh one.
         ...(result.resume ? { resume: result.resume } : {}),
+        // E — the derived plan → track → verify → report artifact for this turn,
+        // so the GUI can render the trust verdict instead of inferring it from the
+        // transcript. Absent when the turn produced no non-trivial report.
+        ...(result.turnReport ? { turnReport: result.turnReport } : {}),
         // WS5 — whether the turn declined to run, so the client labels the failure
         // as the refusal it is instead of offering a Retry that cannot help.
         refused: result.refused === true,

@@ -91,9 +91,11 @@ describe('the tool loop records a refused mutation as a durable hand-off', () =>
       deps,
       maxSteps: 2,
       // The refusal is the subject here; the verification/deliverable gates only
-      // add steps around it.
+      // add steps around it, and the plan gate would refuse the first write for a
+      // different reason (no plan) before the workspace guard ever sees it.
       requireVerification: false,
       requireDeliverable: false,
+      requirePlan: false,
     });
 
     const open = loadOpenHandoffs(workspace);

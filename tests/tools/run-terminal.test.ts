@@ -99,6 +99,32 @@ describe('classifyCommand — deny-first three-class model', () => {
     expect(classifyCommand('node -e "console.log(1)"')).toBe('confirm');
   });
 
+  it('classifies read-only VERSION/HELP probes and metadata reads as verify (never gate them)', () => {
+    // A live trace (2026-10-04) burned five steps on `cargo --version`: it was
+    // `confirm`-class, the gate refused it as "external", then the autonomy gate
+    // swallowed the model's ask_user — a deadlock that ended in a bad failover.
+    // A probe that cannot change state must never generate a prompt.
+    for (const cmd of [
+      'cargo --version',
+      'rustc --version',
+      'node --version',
+      'python --version',
+      'go version',
+      'docker --version',
+      'npm view @tauri-apps/cli versions --json',
+      'npm ls --depth=0',
+      'cargo metadata --format-version 1',
+      'command -v cargo',
+      'some-tool --help',
+      'some-tool -h',
+    ]) {
+      expect(classifyCommand(cmd), cmd).toBe('verify');
+    }
+    // A probe flag LAUNDERING a state change stays confirm (worst-segment rule).
+    expect(classifyCommand('cargo --version && rm -rf target')).toBe('confirm');
+    expect(classifyCommand('cargo --version && npm publish')).toBe('confirm');
+  });
+
   it('classifies state-changing commands as confirm', () => {
     for (const cmd of [
       'touch marker.txt',

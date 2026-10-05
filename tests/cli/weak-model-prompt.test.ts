@@ -21,18 +21,17 @@ import inquirer from 'inquirer';
 const promptMock = vi.mocked(inquirer.prompt);
 
 describe('weak-model-prompt — shouldPromptWeakModel gate', () => {
-  it('is false when routing config is absent (silent weak-model continuation default)', () => {
-    expect(shouldPromptWeakModel({})).toBe(false);
-    expect(shouldPromptWeakModel({ routing: undefined })).toBe(false);
-  });
-
-  it('is false when promptOnWeakModel is unset or false', () => {
-    expect(shouldPromptWeakModel({ routing: {} })).toBe(false);
-    expect(shouldPromptWeakModel({ routing: { promptOnWeakModel: false } })).toBe(false);
-  });
-
-  it('is true only when routing.promptOnWeakModel === true', () => {
+  it('is TRUE by default (ask-first: never a silent weak model)', () => {
+    expect(shouldPromptWeakModel({})).toBe(true);
+    expect(shouldPromptWeakModel({ routing: undefined })).toBe(true);
+    expect(shouldPromptWeakModel({ routing: {} })).toBe(true);
     expect(shouldPromptWeakModel({ routing: { promptOnWeakModel: true } })).toBe(true);
+  });
+
+  it('is false only on an explicit opt-out', () => {
+    expect(shouldPromptWeakModel({ routing: { promptOnWeakModel: false } })).toBe(false);
+    // The non-interactive fallback also opts out (unattended deployments).
+    expect(shouldPromptWeakModel({ routing: { weakModelPolicy: 'auto-allow' } })).toBe(false);
   });
 });
 

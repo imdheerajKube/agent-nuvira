@@ -6,25 +6,27 @@
 # Any failure in the areas below is a REGRESSION and fails the gate loudly.
 #
 # Runs, in order:
-#   1. Routing guard  — bandit / promotion / auto-router / tier0 / hybrid /
+#   1. Agent contracts — prompt budget + skill-catalog opt-in + the toolchain
+#                       clause + the routing-policy check (fast, fails fastest)
+#   2. Routing guard  — bandit / promotion / auto-router / tier0 / hybrid /
 #                       model-registry / provider-fallback (fast, fails fast)
-#   2. Surface parity — tests/parity: the surface registry still matches the
+#   3. Surface parity — tests/parity: the surface registry still matches the
 #                       real import graph, no new silo bypasses the shared turn
 #                       entry, and the capability matrix still separates a
 #                       claim from a proof (fast; #22)
-#   3. Parity CLI     — the same parity checks through the BUILT binary rather
+#   4. Parity CLI     — the same parity checks through the BUILT binary rather
 #                       than through `src/`: `nuvira parity surfaces|debt|matrix|
 #                       run`. Builds the CLI first (which also typechecks the
 #                       tree — no other step here does), because `dist/` is
 #                       gitignored and the artifact is the only thing a user
 #                       ever runs.
-#   4. Failover E2E   — tests/e2e/failover-learning.test.ts (the hermetic
+#   5. Failover E2E   — tests/e2e/failover-learning.test.ts (the hermetic
 #                       mock-429 -> learn -> skip -> recover loop; the single
 #                       most important regression test for Nuvira-Router)
-#   5. Full root suite — every root test (default; skipped with --fast)
-#   6. Dashboard suite — src/web-dashboard typecheck + component tests
+#   6. Full root suite — every root test (default; skipped with --fast)
+#   7. Dashboard suite — src/web-dashboard typecheck + component tests
 #                       (default; --fast)
-#   7. Dashboard bundle — the COMMITTED artifact must be the one the source
+#   8. Dashboard bundle — the COMMITTED artifact must be the one the source
 #                       builds (default; --fast). A committed build artifact
 #                       drifts silently: the component suite runs the source, so
 #                       it passes whether or not the bundle was rebuilt.
@@ -50,8 +52,23 @@ bad()  { printf '\033[1;31m✘ %s\033[0m\n' "$1"; FAIL=1; }
 export CI=1
 export NODE_OPTIONS=--no-warnings
 
-# ── 1. Routing guard ────────────────────────────────────────────────────────
-step "1/6 Routing guard (bandit / promotion / auto-router / tier0 / hybrid / registry / fallback)"
+# ── 1. Agent behaviour contracts (prompt budget + routing policy) ───────────
+# The gate that would have caught v3.3.11: the skill CATALOG (24.5K chars) was
+# injected into the chat system prompt on EVERY turn, taking it from 7,653 to
+# 32,809 chars, and NOTHING asserted the prompt's size. These are cheap,
+# deterministic contracts — prompt budget, the catalog staying opt-in, the
+# toolchain-install clause, and the software-intent policy — so this class of
+# regression cannot ship silently again. First, because it is the fastest and
+# the most direct statement of "the agent still behaves".
+step "1/8 Agent contracts (prompt budget / catalog opt-in / routing policy)"
+if npx vitest run tests/release/agent-contracts.test.ts; then
+  ok "agent contracts passed"
+else
+  bad "agent contracts FAILED — a prompt-budget or routing-policy regression"
+fi
+
+# ── 2. Routing guard ────────────────────────────────────────────────────────
+step "2/8 Routing guard (bandit / promotion / auto-router / tier0 / hybrid / registry / fallback)"
 if npx vitest run \
     tests/learning/router-bandit.test.ts \
     tests/learning/router-promotion.test.ts \
@@ -71,7 +88,7 @@ fi
 # claims `supported` on a surface nothing can prove (the frozen debt list can
 # only shrink). Runs before the E2E guard because a drift here invalidates the
 # parity claims every other step is measured against.
-step "2/6 Surface parity (registry / anti-silo / capability matrix / scenario parity)"
+step "3/8 Surface parity (registry / anti-silo / capability matrix / scenario parity)"
 if npx vitest run tests/parity; then
   ok "surface parity passed"
 else
@@ -85,13 +102,13 @@ fi
 # whose import throws only when loaded through it, passes every source-level
 # check and fails for the first user who types it. Same blind spot step 7
 # guards for the committed dashboard bundle, and worse: `dist/` is gitignored,
-# so nothing else in this gate would ever notice.
+# so nothing else in this gate would ever notice (step 8).
 #
 # `build:cli`, NOT `build` — the full build also rewrites the COMMITTED
 # dashboard bundle, which would make step 7 pass by construction and leave the
 # working tree dirty. It costs a few seconds and buys the only root typecheck
 # in the gate.
-step "3/7 Surface parity from the built CLI (nuvira parity …)"
+step "4/8 Surface parity from the built CLI (nuvira parity …)"
 
 # Each subcommand sets exit code 1 on a real drift, so this is a gate rather
 # than a smoke test. `parity run` is the one that matters most: it drives all
@@ -119,7 +136,7 @@ else
 fi
 
 # ── 4. Failover E2E (canonical no-regression guard) ────────────────────────
-step "4/7 Failover-learning E2E"
+step "5/8 Failover-learning E2E"
 if npx vitest run tests/e2e/failover-learning.test.ts; then
   ok "failover-learning E2E passed"
 else
@@ -127,10 +144,10 @@ else
 fi
 
 if [ "$FAST" = 1 ]; then
-  step "(--fast: skipping steps 5-7 — full root + dashboard suites)"
+  step "(--fast: skipping steps 6-8 — full root + dashboard suites)"
 else
   # ── 5. Full root suite ─────────────────────────────────────────────────────
-  step "5/7 Full root suite"
+  step "6/8 Full root suite"
   if npx vitest run; then
     ok "full root suite passed"
   else
@@ -141,7 +158,7 @@ else
   # `npm test` runs the tree's tsc --noEmit first: the dashboard bundle is built
   # by vite, which strips types without checking them, so this is the only gate
   # that can see a type error there.
-  step "6/7 Dashboard typecheck + component suite"
+  step "7/8 Dashboard typecheck + component suite"
   if (cd src/web-dashboard && npm test); then
     ok "dashboard typecheck + component suite passed"
   else
@@ -152,7 +169,7 @@ else
   # The dashboard the operator sees is src/web-dashboard/public, served straight
   # from the repo — so a bundle that was not rebuilt after a source change is a
   # shipped bug that no other step in this gate can see.
-  step "7/7 Dashboard bundle matches its source"
+  step "8/8 Dashboard bundle matches its source"
   if npm run dashboard:bundle:check -- --rebuild; then
     ok "dashboard bundle matches its source"
   else

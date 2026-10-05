@@ -24,6 +24,7 @@ const {
   deleteTrace,
   withTraceCapture,
   recordTraceFindings,
+  recordTurnReport,
   MAX_TRACES,
 } = await import('../../src/learning/reasoning-trace.js');
 
@@ -427,5 +428,58 @@ describe('reasoning-trace — layered prompt tracing', () => {
     const id = beginTrace({ goal: 'g', source: 'chat' });
     recordStep(id, { ...base });
     expect(getTrace(id)!.steps[0].layers).toBeUndefined();
+  });
+});
+
+// ─── E-trace — the TurnReport persisted on the trace ────────────────────────
+// The report is the turn's TRUST VERDICT. A verdict that only lived in the
+// turn's return value cannot be reviewed after the fact, so it is stored on the
+// trace and lands a decision event, exactly like findings do.
+
+describe('reasoning-trace — recorded turn report (E-trace)', () => {
+  beforeEach(() => clearTraces());
+  afterEach(() => clearTraces());
+
+  const report: import('../../src/learning/turn-report.js').TurnReport = {
+    goal: 'fix add in math.js',
+    planned: true,
+    steps: [{ id: 's1', description: 'fix add', status: 'done', note: 'patched' }],
+    stepCounts: { done: 1, blocked: 0, pending: 0, running: 0, total: 1 },
+    toolCalls: ['edit_file', 'run_terminal'],
+    successfulToolCalls: ['edit_file', 'run_terminal'],
+    mutations: 1,
+    changedPaths: ['math.js'],
+    verification: 'verified',
+    flags: {},
+    summary: '1/1 steps done · 1 file(s) changed · verification: verified',
+  };
+
+  it('attaches the report to the trace and lands a decision event', () => {
+    const id = beginTrace({ goal: 'fix add', source: 'chat' });
+    // Ended BEFORE the report is recorded — the same contract as
+    // `recordTraceFindings`: an explicit id still lands after close.
+    endTrace(id, true);
+    recordTurnReport(id, report);
+
+    const trace = getTrace(id)!;
+    expect(trace.turnReport).toEqual(report);
+    const events = trace.events ?? [];
+    expect(events).toHaveLength(1);
+    expect(events[0].kind).toBe('decision');
+    expect(events[0].seq).toBe(1);
+    expect(events[0].summary).toContain('verified');
+  });
+
+  it('is a best-effort no-op for a null report or an unknown trace', () => {
+    const id = beginTrace({ goal: 'g', source: 'chat' });
+    expect(() => recordTurnReport(id, null)).not.toThrow();
+    expect(getTrace(id)!.turnReport).toBeUndefined();
+    expect(() => recordTurnReport('trace-nope', report)).not.toThrow();
+  });
+
+  it('attaches to the run IN PROGRESS when no id is passed', () => {
+    const id = beginTrace({ goal: 'g', source: 'chat' });
+    recordTurnReport(undefined, report);
+    expect(getTrace(id)!.turnReport).toEqual(report);
   });
 });

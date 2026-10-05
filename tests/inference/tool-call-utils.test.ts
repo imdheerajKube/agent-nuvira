@@ -762,3 +762,32 @@ const REASONING_REPLY_ONLY = [
   '',
   'I should use the `plan_todo` tool to create a structured plan.',
 ].join('\n');
+
+describe('stripToolCallArtifacts — a leaked call of ANY tool, not just followups', () => {
+  it('removes a trailing leaked write_file call (the user saw the raw JSON)', () => {
+    // Live: an essay answer ended with the whole write_file call as text,
+    // arguments and file body included, and the dashboard printed it.
+    const answer = [
+      'The cow is a gentle animal.',
+      '',
+      'I have saved this essay to the file `cow_essay.md` in your workspace.',
+      '',
+      '{"tool":"write_file","arguments":{"confirm":false,"content":"The cow is a gentle animal.\\nLine two."}}',
+    ].join('\n');
+    const out = stripToolCallArtifacts(answer);
+    expect(out).not.toContain('"tool"');
+    expect(out).not.toContain('write_file');
+    expect(out).toContain('I have saved this essay');
+  });
+
+  it('removes a leaked call inside a fenced block', () => {
+    const out = stripToolCallArtifacts('Done.\n\n```json\n{"tool":"run_terminal","arguments":{"command":"ls"}}\n```');
+    expect(out).not.toContain('run_terminal');
+    expect(out).toContain('Done.');
+  });
+
+  it('leaves ordinary JSON the user asked for alone (no tool-call shape)', () => {
+    const answer = 'Here is the config:\n\n{"name":"app","version":"1.0.0"}';
+    expect(stripToolCallArtifacts(answer)).toContain('"name":"app"');
+  });
+});

@@ -90,6 +90,19 @@ export interface RoutingHistoryEntry {
    * non-explain sources and older entries omit it.
    */
   snapshot?: RoutingSnapshot;
+  /**
+   * A1/A3 — may the FINAL routed model hold an agentic software task? Recorded
+   * with the same shared predicate the router used, so the dashboard can flag a
+   * weak pick with a warning chip instead of only showing its score. Optional:
+   * entries written before this field load unchanged.
+   */
+  agenticCapable?: boolean;
+  /** A3 — how the model-first override affected the final pick, if known. */
+  overrideReason?: string;
+  /** B — the consent-gate outcome for this route (`proceed` | `ask` | …). */
+  gateAction?: string;
+  /** C3 — the pair this route failed over FROM (the failover chain's head). */
+  fallbackFrom?: string;
 }
 
 /** Aggregated usage statistics over the recorded history. */

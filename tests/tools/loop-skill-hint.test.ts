@@ -518,3 +518,74 @@ describe('markLoopSkillUsed', () => {
     await expect(markLoopSkillUsed(null)).resolves.toBeUndefined();
   });
 });
+
+// ─── buildConfiguredSkillHint — the mode gate ───────────────────────────────
+
+describe('buildConfiguredSkillHint — the full catalog is OPT-IN, never the default', () => {
+  afterEach(() => {
+    delete process.env.NUVIRA_SKILL_CATALOG;
+    delete process.env.BUFF_SKILL_CATALOG;
+  });
+
+  it('resolves to `match` by default, `catalog` from env/config, `off` on request', async () => {
+    const { resolveSkillHintMode, parseSkillHintMode, DEFAULT_SKILL_HINT_MODE } = await loadHint();
+    expect(DEFAULT_SKILL_HINT_MODE).toBe('match');
+    expect(resolveSkillHintMode()).toBe('match');
+
+    process.env.NUVIRA_SKILL_CATALOG = 'catalog';
+    expect(resolveSkillHintMode()).toBe('catalog');
+    process.env.NUVIRA_SKILL_CATALOG = 'off';
+    expect(resolveSkillHintMode()).toBe('off');
+    delete process.env.NUVIRA_SKILL_CATALOG;
+
+    const cm = { getAll: () => ({ skills: { catalogHint: 'catalog' } }) } as unknown as ConfigManager;
+    expect(resolveSkillHintMode(cm)).toBe('catalog');
+
+    expect(parseSkillHintMode('nonsense')).toBeNull();
+    expect(parseSkillHintMode('')).toBeNull();
+    // `names` is its own mode (a trimmed catalog), not a synonym of full/off.
+    expect(parseSkillHintMode('names')).toBe('names');
+    expect(parseSkillHintMode('names-only')).toBe('names');
+  });
+
+  it('in the default (match) mode does NOT inject the catalog on a goal with no skill', async () => {
+    // The regression this whole gate exists for: 3.3.11 appended the catalog
+    // (24,543 chars for this goal) to EVERY turn, taking the chat system prompt
+    // from 7,653 → 32,809 chars. With no override the hint must stay small.
+    installHubSkill('zorbafier', 'Zorbafies the widget frobnicator');
+    const { buildConfiguredSkillHint } = await loadHint();
+    const hint = await buildConfiguredSkillHint('create mac od gui app');
+    expect(hint).not.toContain('## Available skills');
+    expect(hint.length).toBeLessThan(2000);
+  });
+
+  it('in `catalog` mode injects the full list (and `off` injects nothing)', async () => {
+    installHubSkill('zorbafier', 'Zorbafies the widget frobnicator');
+    const { buildConfiguredSkillHint } = await loadHint();
+
+    process.env.NUVIRA_SKILL_CATALOG = 'catalog';
+    const catalog = await buildConfiguredSkillHint('create mac od gui app');
+    expect(catalog).toContain('## Available skills');
+    expect(catalog).toContain('zorbafier');
+
+    process.env.NUVIRA_SKILL_CATALOG = 'off';
+    expect(await buildConfiguredSkillHint('create mac od gui app')).toBe('');
+  });
+
+  it('in `names` mode lists names WITHOUT descriptions, and is smaller than `catalog`', async () => {
+    installHubSkill('zorbafier', 'Zorbafies the widget frobnicator');
+    const { buildConfiguredSkillHint } = await loadHint();
+
+    process.env.NUVIRA_SKILL_CATALOG = 'names';
+    const names = await buildConfiguredSkillHint('create mac od gui app');
+    expect(names).toContain('## Available skills');
+    expect(names).toContain('zorbafier');
+    // The description never rides along, but the load instruction still does.
+    expect(names).not.toContain('Zorbafies the widget frobnicator');
+    expect(names).toContain('{"skill":"<name>"}');
+
+    process.env.NUVIRA_SKILL_CATALOG = 'catalog';
+    const catalog = await buildConfiguredSkillHint('create mac od gui app');
+    expect(names.length).toBeLessThan(catalog.length);
+  });
+});

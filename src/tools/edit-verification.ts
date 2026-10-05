@@ -402,9 +402,46 @@ export const VERIFICATION_NUDGE =
  * no runnable check at all the instruction is a REAL RUN, and failing that an
  * explicit admission — never a claim.
  */
+/**
+ * File extensions that are WRITING deliverables rather than executable code.
+ *
+ * A `.md`/`.txt` file is the deliverable itself — there is nothing to "run".
+ * Treating it like code is what made an essay turn run the whole
+ * test/typecheck/run gauntlet (and, before that, spin twice producing nothing)
+ * for ten lines about cows.
+ */
+const PROSE_ARTIFACT_EXTENSIONS = new Set([
+  '.md', '.markdown', '.mdx', '.txt', '.text', '.rst', '.adoc', '.asc', '.org',
+]);
+
+/** Is this changed path a prose/text deliverable (not code)? */
+export function isProseArtifactPath(path: string): boolean {
+  const clean = String(path ?? '').trim().toLowerCase();
+  const dot = clean.lastIndexOf('.');
+  if (dot < 0) return false;
+  return PROSE_ARTIFACT_EXTENSIONS.has(clean.slice(dot));
+}
+
 export function verificationNudgeFor(cwd: string, changedFiles: readonly string[] = []): string {
   const checks = detectAvailableChecks(cwd);
-  const changed = changedFiles.filter(Boolean).slice(0, 5);
+  const allChanged = changedFiles.filter(Boolean);
+  const changed = allChanged.slice(0, 5);
+
+  // A WRITING deliverable is verified by its CONTENT, not by a test/build/run —
+  // none of those apply to prose, and asking for them sent a weak model into
+  // empty retries. Say what the check actually is, so it converges in one step.
+  if (allChanged.length > 0 && allChanged.every((f) => isProseArtifactPath(f))) {
+    return (
+      'You produced a written deliverable this turn' +
+      (changed.length > 0 ? ` (${changed.join(', ')})` : '') +
+      ' but nothing VERIFIED the change. A written file IS the deliverable, so the check ' +
+      'is a CONTENT check — not a test, typecheck, build or run (those do not apply to prose). ' +
+      'Re-read the file (`read_files`, or `run_terminal` with `cat <file>`) and confirm it contains ' +
+      'what the request asked for — the right subject, the requested length and structure, and no ' +
+      'placeholder text. Fix anything wrong, then say plainly what you checked.'
+    );
+  }
+
   const head =
     'You changed files this turn' +
     (changed.length > 0 ? ` (${changed.join(', ')})` : '') +

@@ -50,7 +50,7 @@ import { getModelRegistry } from './model-registry.js';
 // R4: the agentic capability floor needs the same "too small to hold a tool
 // loop" judgement the harness uses. model-harness.ts imports nothing, so this
 // adds no cycle risk to the router.
-import { isTinyModel } from './model-harness.js';
+import { isTinyModel, isAgenticCapableModel } from './model-harness.js';
 import { estimateTokens } from './cost-tracker.js';
 import { preferredModelsFor, PROVIDER_CONTEXT_WINDOWS } from './model-selection.js';
 import { isNonChatModel } from '../inference/model-catalog.js';
@@ -94,6 +94,38 @@ export interface TaskProfile {
   requiresVerification: boolean;
   escalationTarget?: string;
   notes: string[];
+}
+
+/**
+ * The software intents whose NON-TRIVIAL asks need an agentic-capable model.
+ * Writing/creative and plain chat are deliberately excluded: there a small
+ * model is a legitimate choice.
+ */
+export const SOFTWARE_INTENTS: ReadonlySet<string> = new Set([
+  'coding', 'debugging', 'verification', 'migration', 'architecture', 'security',
+]);
+
+/**
+ * Is this complexity/intent profile an AGENTIC ask — one that needs a model
+ * able to hold a tool loop across turns and report truthfully what it observed?
+ *
+ * Exported so the router's capability floor and the shared post-route gate
+ * (`assertAgenticRoute`) can never disagree about what counts as agentic — the
+ * same reason `isAgenticCapableModel` is shared across both seams. A software
+ * build ask is agentic at ANY non-trivial complexity; a trivial one-shot
+ * ("format this code") and non-software asks are not.
+ */
+export function isAgenticTask(
+  complexity: ComplexityLevel,
+  taskProfile: Pick<TaskProfile, 'intent' | 'requiresVerification'>,
+): boolean {
+  const softwareIntent = SOFTWARE_INTENTS.has(String(taskProfile.intent ?? ''));
+  return (
+    complexity === 'complex' ||
+    complexity === 'critical' ||
+    taskProfile.requiresVerification === true ||
+    (softwareIntent && complexity !== 'trivial')
+  );
 }
 
 /** Human labels for each dimension (used in explanations). */
@@ -533,6 +565,25 @@ export interface AutoRouteResult {
   model: string;
   /** Composite score of the selected provider (0–1) */
   score: number;
+  /**
+   * A1 — may the FINAL routed model hold an agentic software task? Computed
+   * with the SAME shared predicate (`isAgenticCapableModel`) the capability
+   * floor and the model-first override use, so the recorded verdict can never
+   * disagree with the routing that produced it. This is the fact the failed
+   * Tauri turn could not see about itself: it was routed to `local/gemma4:e4b`
+   * and nothing in the turn, trace, or console said so.
+   */
+  agenticCapable: boolean;
+  /**
+   * A1 — how the model-first override affected the FINAL pick:
+   *   - `none` — the override did not change the provider/model;
+   *   - `model-first` — it replaced the deterministic pick with a model-first
+   *     candidate (still agentic-capable when the task was agentic);
+   *   - `model-first-blocked` — it had candidates but the agentic capability
+   *     floor removed ALL of them, so the deterministic pick stood (the shape
+   *     of the original bug: the override was constrained by the floor).
+   */
+  overrideReason: 'none' | 'model-first' | 'model-first-blocked';
   /** Effective dimension weights used for this decision */
   weights: Record<RoutingDimension, number>;
   /** All scored providers, ranked best-first */
@@ -1491,6 +1542,11 @@ export class AutoModelRouter {
             fallbackChain: [],
             explanation: `Routing rule '${rule.name}' matched task → ${provider}/${model}`,
             routedBy: 'rule',
+            // A1 — a forced rule bypasses scoring and the model-first override
+            // entirely, but the verdict on the FINAL pair is still recorded so
+            // the trace/console can warn when a rule pins a weak model.
+            agenticCapable: isAgenticCapableModel(model, provider),
+            overrideReason: 'none',
           };
         }
       }
@@ -1880,6 +1936,28 @@ export class AutoModelRouter {
         // not an admin policy. Keep the full ranking so the caller still gets
         // a decision instead of erroring.
         governanceBlocked = blockedHere;
+        // CAPABILITY-AWARE RESTORE (2026-10-04). Restoring the RAW ranking is
+        // what let `max` mode (minReasoning 0.7) hand a real Tauri build task to
+        // a LOCAL 4-bit model: every cloud candidate sat below the floor, the
+        // fallback fired, and `performance-first` scoring then favoured the
+        // free, "fast" local entry (score 0.71 vs gemini's 0.40 — measured in
+        // `trace-1791118414038-wdmliw`). The floor's INTENT is "require a strong
+        // served model", so when it must be relaxed, relax it in that SAME
+        // direction: order by served-model REASONING, strongest first, so the
+        // least-weak candidate wins rather than the cheapest. Only applied when
+        // a reasoning floor was actually set — a balanced-mode ask is left
+        // byte-identical.
+        if (options.minReasoning !== undefined) {
+          const reasoningOf = (s: ScoredProvider): number => {
+            try {
+              const served = this.resolveModel(s.provider, agentType, configManager, taskDescription);
+              return this.getModelCapabilities(s.provider, served).reasoning;
+            } catch {
+              return 0;
+            }
+          };
+          scored = [...scored].sort((a, b) => reasoningOf(b) - reasoningOf(a));
+        }
         if (options.verbose) {
           logger.warn('  ⚠️ Governance/hard constraints eliminated every provider — falling back to full ranking');
         }
@@ -1911,10 +1989,23 @@ export class AutoModelRouter {
     //     JSON-contract transport still gives it a way to act);
     //   - if the floor would eliminate everyone, the ranking is left alone rather
     //     than returning no route at all. Auto must never dead-end.
-    const agenticTask =
-      complexity === 'complex' ||
-      complexity === 'critical' ||
-      taskProfile.requiresVerification === true;
+    // INTENT WIDENING (2026-10-04). The floor used to fire only on
+    // complex/critical/verification asks, so a MODERATE software ask (measured:
+    // "create mac od gui app", complexity 🟡 moderate) skipped it entirely and
+    // `max` mode's performance-first score handed the build to a LOCAL 4-bit
+    // model (`trace-1791118414038-wdmliw` → local/gemma4:e4b, then
+    // trace-1791118650644-d73hyr failed over to local/qwen2.5:0.5b, which
+    // FABRICATED `[Tool result][Success]` output). A software build ask is
+    // agentic at ANY complexity — it needs a model that can hold a tool loop
+    // across turns and truthfully report what it observed. Writing/creative and
+    // plain chat are deliberately NOT included: there, a small/free model is a
+    // legitimate choice (the user's own rule — "complex tasks to reasoning
+    // models, chat/writing to whatever is available").
+    // Widen to software intents ONLY above `trivial`: a trivial one-shot
+    // ("format this code") is exactly what a small local model is for — free,
+    // fast, offline — and the existing contract keeps it available there. The
+    // failure we are closing was a MODERATE build ask, not a one-liner.
+    const agenticTask = isAgenticTask(complexity, taskProfile);
     if (agenticTask) {
       const capable = scored.filter((s) => {
         let servedModel: string | undefined;
@@ -1923,7 +2014,10 @@ export class AutoModelRouter {
         } catch {
           servedModel = undefined;
         }
-        return servedModel === undefined || !isTinyModel(servedModel);
+        // The shared predicate owns the rule (tiny tag out; local placeholder
+        // out; unknown kept) so the model-first override below can re-apply the
+        // SAME test and can never resurrect a model this floor just removed.
+        return isAgenticCapableModel(servedModel, s.provider);
       });
       if (capable.length > 0) {
         scored = capable;
@@ -2081,6 +2175,9 @@ export class AutoModelRouter {
       : scored.find((s) => !s.inCooldown && !s.quotaParked) || scored[0];
     let provider = selected.provider;
     let model = this.resolveModel(provider, agentType, configManager, taskDescription);
+    // A1 — record what the model-first override did to the final pick, so the
+    // result carries a verdict and not just a pair (see `overrideReason`).
+    let overrideReason: 'none' | 'model-first' | 'model-first-blocked' = 'none';
 
     // ── MODEL-FIRST ROUTING: override provider pick with model-level scoring ──
     // Instead of picking a provider then a model, score ALL models across ALL
@@ -2113,13 +2210,32 @@ export class AutoModelRouter {
           configManager,
           allowed,
         );
-        if (modelCandidates.length > 0) {
-          const bestModel = modelCandidates[0];
+        // AGENTIC SAFETY (2026-10-04). This override runs AFTER the agentic
+        // capability floor above, so without re-applying that floor it could
+        // hand an agentic software ask to the very model the floor removed.
+        // Measured: a Tauri build ask (intent 'coding', moderate) overrode the
+        // deterministic groq winner with `local/gemma4:e4b` (a ≤4B model), and
+        // chat then fabricated `[Tool result] ✅ succeeded` output. Filter with
+        // the SAME predicate the floor uses (tiny served model, or a local
+        // placeholder id we cannot judge); take the best surviving candidate so
+        // the override still fires when a capable model-first pick exists.
+        const eligibleCandidates = agenticTask
+          ? modelCandidates.filter((c) => isAgenticCapableModel(c.model, c.provider))
+          : modelCandidates;
+        // A1 — a non-empty candidate set emptied BY THE FLOOR is the exact
+        // shape of the original bug; record it as `model-first-blocked` so the
+        // trace does not have to infer it from a missing log line.
+        if (agenticTask && modelCandidates.length > 0 && eligibleCandidates.length === 0) {
+          overrideReason = 'model-first-blocked';
+        }
+        if (eligibleCandidates.length > 0) {
+          const bestModel = eligibleCandidates[0];
           // Only override if the model-first pick is significantly better
           // (at least 10% higher score) to avoid thrashing on marginal gains
           if (bestModel.score > selected.score * 1.1 || selected.score < 0.3) {
             provider = bestModel.provider;
             model = bestModel.model;
+            overrideReason = 'model-first';
             if (options.verbose) {
               logger.info(`  🎯 Model-first override: ${provider}/${model} (score ${bestModel.score.toFixed(3)} vs provider ${selected.score.toFixed(3)})`);
             }
@@ -2276,6 +2392,21 @@ export class AutoModelRouter {
     scored = [winner, ...scored.filter((s) => s.provider !== provider)];
     const decisionScore = winner.score;
 
+    // WEAK-MODEL WARNING (2026-10-04). When a software/agentic ask STILL lands
+    // on a tiny or placeholder local model, the floor had to be relaxed because
+    // nothing capable was available — which is a real risk the user should hear
+    // about, not a silent surprise (the failed Tauri turn looked identical to a
+    // normal one). Never fires for writing/chat, where a small model is fine.
+    const weakModelForAgenticAsk =
+      agenticTask &&
+      (isTinyModel(String(model)) ||
+        (provider === 'local' && /^(?:default|unknown)$/i.test(String(model).trim())));
+    if (weakModelForAgenticAsk) {
+      logger.warn(
+        `  ⚠️ Routing a software task to a weak/local model (${provider}/${model}) — no capable provider was available. Expect it to struggle; the run may need a retry once a stronger model is free.`,
+      );
+    }
+
     const explanation = this.buildExplanation(
       agentType,
       complexity,
@@ -2286,7 +2417,9 @@ export class AutoModelRouter {
       model,
       weights,
       taskProfile,
-    ) + (routedBy === 'bandit' ? ' | bandit-learned' : '') +
+    ) +
+      (weakModelForAgenticAsk ? ' | ⚠ weak-model fallback (no capable provider free)' : '') +
+      (routedBy === 'bandit' ? ' | bandit-learned' : '') +
       (banditEscalation ? ' | escalated: winner unlearned' : '') +
       // ISSUE-002 explanation transparency: cite the registry data that
       // excluded providers from the candidate pool, so auto routing proves
@@ -2340,6 +2473,8 @@ export class AutoModelRouter {
       fallbackChain,
       explanation,
       routedBy,
+      agenticCapable: isAgenticCapableModel(model, provider),
+      overrideReason,
       banditEscalation,
       governanceBlocked,
       registryExcluded,

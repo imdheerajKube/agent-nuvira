@@ -43,6 +43,7 @@ import { getProviderFallback, classifyFallbackError, isRetryableError, isTransie
 import { recordActionFailure, RATE_LIMIT_EXCLUSION_MS } from '../learning/failure-bookkeeping.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
 import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
+import { continuationSoftwareText } from '../learning/continuation-intent.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
@@ -51,9 +52,9 @@ import { recordRoutingDecision } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { runSingleShotAuto } from './failover-runner.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
-import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
+import { buildDeepFailoverPool, createFailoverExclusionFilter, modelBreadthReport } from '../learning/resilient-call.js';
 import { parseRequestSync } from '../nlu/parser.js';
-import { PlanStore } from '../tools/plan-store.js';
+import { createPersistentPlanStore } from '../tools/plan-store.js';
 import { withLogCorrelation } from '../enterprise/log.js';
 import { recordMetricTime, getMetrics } from '../enterprise/metrics.js';
 import type { ParsedRequest } from '../nlu/parser.js';
@@ -69,10 +70,13 @@ import {
   isToolCallingUnsupported,
   stripToolCallArtifacts,
 } from '../inference/tool-call-utils.js';
-import { beginTrace, endTrace, recordStep, recordTraceEvent, recordTraceFindings, buildTraceOutcome, traceOutcomeSucceeded } from '../learning/reasoning-trace.js';
+import { beginTrace, endTrace, recordStep, recordTraceEvent, recordTraceFindings, recordTurnReport, buildTraceOutcome, traceOutcomeSucceeded } from '../learning/reasoning-trace.js';
 import { recordWorkingState, getWorkingState, formatWorkingState, isProjectLedgerDir } from '../learning/working-state.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
-import { resolveModelHarnessProfile, shouldSkipNativeTools } from '../learning/model-harness.js';
+import { resolveModelHarnessProfile, shouldSkipNativeTools, isAgenticCapableModel } from '../learning/model-harness.js';
+import { assertAgenticRoute, setWeakModelConsent, resolveWeakModelPolicy, weakRouteNotice } from '../learning/agentic-route-gate.js';
+import { resolvePromptBudget, measurePromptBudget, formatPromptBudgetBreakdown } from '../learning/prompt-budget.js';
+import { buildTurnReport, formatTurnReport, type TurnReport } from '../learning/turn-report.js';
 import { resolveAdapterDefault, hasCredentials } from '../learning/model-selection.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
 import { sweepTransientFailures, collectionRevivalStore } from '../learning/provider-revival.js';
@@ -130,6 +134,12 @@ type AutoRoutedMessage = {
   ranked: string[];
   complexity: string;
   score: number;
+  /** A1/A2 — capability verdict on the FINAL (post-repair) pair, when known. */
+  agenticCapable?: boolean;
+  /** A1 — how the model-first override affected the final pick. */
+  overrideReason?: string;
+  /** The task profile the post-route capability gate needs. */
+  taskProfile?: { intent?: string; requiresVerification?: boolean };
 };
 
 interface ErrorRecoveryResult {
@@ -406,7 +416,12 @@ export async function generateWithTransientRetry<T>(
   }
 }
 
-function buildToolSystemPrompt(parsed?: ParsedRequest): string {
+/**
+ * Exported for the release gate (`tests/release/agent-contracts.test.ts`): the
+ * assembled system prompt's SIZE and its required contract clauses are a
+ * release invariant, not an implementation detail. See the gate for why.
+ */
+export function buildToolSystemPrompt(parsed?: ParsedRequest): string {
   return [
     "You are Nuvira, Agent-Nuvira's AI agent. You code, create, write, analyze, and automate — anything the user needs. You identify as Nuvira (never 'Buff').",
     'Be precise and honest. When a request is ambiguous or incomplete, clarify with ask_user instead of guessing.',
@@ -441,11 +456,54 @@ function buildToolSystemPrompt(parsed?: ParsedRequest): string {
     '- Never ask the user to attach a folder, and never tell them to move files into a directory. If a request genuinely needs a workspace and none is attached, the app asks for one on its own — so just answer as best you can.',
     '- Treat a request as project work ONLY when it actually concerns the codebase or produces a file on disk. A general question that happens to contain a word like "class", "project", "test" or "document" is still a general question.',
     '',
+    // WHY THIS BLOCK EXISTS. Asked to build a Tauri app, a model ran
+    // `cargo --version` → exit 127 and then answered "I cannot install
+    // system-level software like Rust on your host machine — I am physically
+    // unable to build the Tauri application", handing the user a manual
+    // `curl … | sh` step. It was not sandboxed at all; it had a real shell and
+    // the user had just granted terminal permission (trace
+    // trace-1791127992452-qzgodi). A missing prerequisite is a step to
+    // complete, not a capability limit — so this states that plainly.
+    '## Toolchains and missing prerequisites',
+    '- You run on the user\u2019s REAL machine with a REAL shell (run_terminal). You are NOT sandboxed and NOT "enclosed".',
+    '- If a command fails because a tool is missing (`command not found`, exit 127), INSTALL it yourself with run_terminal — e.g. `brew install <tool>`, `xcode-select --install`, the language installer (rustup for cargo/rust, nvm/npm for node, pyenv/pip for python, go, …), or apt/winget — then re-run the original command.',
+    '- NEVER answer that you are unable or not permitted to install a prerequisite, and never hand the user an install step you were asked to do. A missing tool is a step to complete, not a wall.',
+    '',
     TOOL_CONTRACT_JSON,
   ].join('\n');
 }
 
-
+/**
+ * #30 — does this turn carry an HONESTY FLAG?
+ *
+ * A flagged answer must NEVER be written to the shared response cache. The cache
+ * stores text only, so a later identical prompt — on the CLI, the dashboard or the
+ * gateway — was served the reply with every flag absent: a known-unverified claim
+ * (`unverifiedActionClaim` / `unverifiedEditClaim` / `unverifiedBuildClaim`), an
+ * announced-but-unperformed action (`unfulfilledPromise`), a missing deliverable
+ * (`undeliveredArtifact`) or an inert turn (`noActionTaken`) replayed as a clean
+ * answer, on every surface at once. The flags exist because those answers must
+ * not be replayed as settled, so the turn is not cached and re-derives instead.
+ */
+export function turnCarriesHonestyFlag(result: {
+  unverifiedActionClaim?: boolean;
+  unfulfilledPromise?: boolean;
+  undeliveredArtifact?: boolean;
+  unverifiedBuildClaim?: boolean;
+  unverifiedEdit?: boolean;
+  unverifiedEditClaim?: boolean;
+  noActionTaken?: boolean;
+}): boolean {
+  return Boolean(
+    result.unverifiedActionClaim ||
+      result.unfulfilledPromise ||
+      result.undeliveredArtifact ||
+      result.unverifiedBuildClaim ||
+      result.unverifiedEdit ||
+      result.unverifiedEditClaim ||
+      result.noActionTaken,
+  );
+}
 
 // ─── ChatCommand ────────────────────────────────────────────────────────────
 
@@ -498,7 +556,9 @@ export class ChatCommand extends BaseCommand {
    * console injects a per-session store instead; this is the CLI/execute
    * default so a plan survives across turns within one chat session).
    */
-  private planStore: import('../tools/plan-store.js').PlanStoreLike = new PlanStore();
+  private planStore: import('../tools/plan-store.js').PlanStoreLike = createPersistentPlanStore(
+    `cli:${process.cwd()}`,
+  );
 
   /**
    * Whether the cold-start probe has fired this session. On a fresh registry
@@ -724,6 +784,14 @@ export class ChatCommand extends BaseCommand {
    * none"), which is what lets five surfaces be compared honestly.
    */
   findings?: WireFinding[];
+  /**
+   * E — the derived plan → track → verify → report artifact for this turn.
+   * Assembled from RECORDED evidence (plan store, tool outcomes, honesty
+   * flags), never from the model's narration, so a caller/dashboard can show
+   * the trust verdict instead of inferring it. Absent only on paths that never
+   * ran the loop (a refused/no-model fallback).
+   */
+  turnReport?: TurnReport;
 }> {
     // `'default'` is the config SENTINEL for "use the provider's default
     // model", never a real model id. Left in place it (a) disables auto routing
@@ -765,11 +833,33 @@ export class ChatCommand extends BaseCommand {
       ? await this.getProvider({})
       : await this.getProvider(mergedOpts);
     let model = mergedOpts.model;
+    // B — captured from the route so the post-route capability gate below can
+    // judge the FINAL pair without re-resolving anything.
+    let routeVerdict:
+      | {
+          complexity: string;
+          agenticCapable?: boolean;
+          taskProfile?: { intent?: string; requiresVerification?: boolean };
+        }
+      | undefined;
+    let routedText: string | undefined;
     if (autoMode) {
-      const routed = await this.routeMessageAuto(message);
+      // Intent-aware escalation: a bare "yes"/"do it" continuing software work
+      // routes on the prior ask, not on the signal-free continuation. When
+      // there is no such hint the call is byte-identical to before.
+      const routingText = continuationSoftwareText(message, opts.history ?? []) ?? undefined;
+      const routed = routingText
+        ? await this.routeMessageAuto(message, [], { routingText })
+        : await this.routeMessageAuto(message);
       type = routed.type;
       provider = routed.provider;
       model = routed.model;
+      routedText = routingText;
+      routeVerdict = {
+        complexity: routed.complexity,
+        agenticCapable: routed.agenticCapable,
+        taskProfile: routed.taskProfile,
+      };
     }
     // P3 — tell the GUI where the turn is headed before the tool loop runs.
     const isLocalFallback = autoMode && type === 'local';
@@ -777,6 +867,89 @@ export class ChatCommand extends BaseCommand {
       ? ' ⚠️ local model only — run `nuvira models` or `nuvira provider set` to add a cloud provider'
       : '';
     opts.onProgress?.(`   🧠 routed to ${provider.name}${model ? ` / ${model}` : ''} — working…${localWarning}`);
+
+    // ── Workstream B — agentic capability gate (consent-first) ──────────────
+    // The router RECORDED a verdict (A1); the turn must ACT on it. A software/
+    // agentic ask must never silently run on a weak model. Consent is per
+    // SESSION: one answer covers this session, and a new chat/task asks again.
+    //
+    // Interactive = an injected askUser (the dashboard console) or a real TTY.
+    // A piped/headless run never reaches the ask — it falls to the configured
+    // policy, whose default (`deny`/retry) can never silently downgrade.
+    if (autoMode && routeVerdict && routeVerdict.agenticCapable === false) {
+      const sessionId = opts.debugSession;
+      const interactive = Boolean(opts.askUser) || Boolean(process.stdin.isTTY);
+      const policy = resolveWeakModelPolicy(this.configManager);
+      const asDecision = {
+        complexity: routeVerdict.complexity as never,
+        taskProfile: (routeVerdict.taskProfile ?? {
+          intent: 'unknown',
+          requiresVerification: false,
+        }) as never,
+        provider: type,
+        model: model ?? '',
+        agenticCapable: false,
+      };
+      let gate = assertAgenticRoute(asDecision, { sessionId, policy, interactive });
+      if (gate.action === 'ask') {
+        try {
+          const ask =
+            opts.askUser ??
+            (await import('../tools/ask-user.js')).renderAskUser;
+          const answer = await ask(
+            `This is a software task, but only a weak model is available ` +
+              `(${provider.name}${model ? ` / ${model}` : ''}). How should I proceed for this session?`,
+            [
+              { label: 'Approve the weak model for this session' },
+              { label: 'Wait for a strong model only' },
+            ] as never,
+            false,
+          );
+          const granted = Number((answer as { index?: number }).index) === 0;
+          if (sessionId) setWeakModelConsent(sessionId, granted ? 'granted' : 'denied');
+          gate = { ...gate, action: granted ? 'proceed-weak-consented' : 'retry-strong' };
+        } catch {
+          // No answer reachable — treat as deny (never a silent downgrade).
+          gate = { ...gate, action: 'retry-strong' };
+        }
+      }
+      if (gate.action === 'retry-strong') {
+        // Try ONE re-route that EXCLUDES the weak provider; accept it only if
+        // the returned pair is genuinely agentic-capable. Nothing capable →
+        // refuse honestly rather than run the weak model against consent.
+        let next: AutoRoutedMessage | null = null;
+        try {
+          next = routedText
+            ? await this.routeMessageAuto(message, [type], { routingText: routedText })
+            : await this.routeMessageAuto(message, [type]);
+        } catch {
+          next = null;
+        }
+        if (next && isAgenticCapableModel(next.model, next.type)) {
+          type = next.type;
+          provider = next.provider;
+          model = next.model;
+          opts.onProgress?.(
+            `   🧠 re-routed to an agentic-capable model: ${provider.name}${model ? ` / ${model}` : ''}`,
+          );
+        } else {
+          return {
+            content:
+              gate.notice ??
+              'No agentic-capable model is available for this software task right now.',
+            followups: [],
+            generationFailed: true,
+            refused: true,
+            provider: type,
+            model,
+            transport: 'none' as const,
+          };
+        }
+      } else if (gate.notice) {
+        // proceed-weak-consented — say so plainly; never a silent weak model.
+        opts.onProgress?.(`   ${gate.notice}`);
+      }
+    }
 
     // P4 — when a project is attached, recall its prior sessions + facts
     // FRESH per turn (the snapshot is cached, the recall is not — prior work
@@ -849,11 +1022,48 @@ export class ChatCommand extends BaseCommand {
       };
     }
 
+    // E1 — assemble the turn report from RECORDED evidence (plan store, tool
+    // outcomes, honesty flags). Derived, never narrated, so the trust verdict
+    // cannot be talked up by the model.
+    let turnReport: TurnReport | undefined;
+    try {
+      const planSnapshot = (opts.planStore ?? this.planStore).snapshot?.() ?? null;
+      turnReport = buildTurnReport({
+        goal: message,
+        plan: planSnapshot,
+        toolCalls: answer.toolCalls,
+        successfulToolCalls: answer.successfulToolCalls,
+        mutations: answer.runTrace?.mutations,
+        changedPaths: answer.runTrace?.paths,
+        flags: {
+          unverifiedActionClaim: answer.unverifiedActionClaim,
+          unverifiedEdit: answer.unverifiedEdit,
+          unverifiedEditClaim: answer.unverifiedEditClaim,
+          unverifiedBuildClaim: answer.unverifiedBuildClaim,
+          undeliveredArtifact: answer.undeliveredArtifact,
+          unfulfilledPromise: answer.unfulfilledPromise,
+          noActionTaken: answer.noActionTaken,
+        },
+      });
+    } catch {
+      // A report must never break the turn.
+    }
+    // E-trace — persist the report on the turn's reasoning trace so it is
+    // reviewable after the fact (the Trace tab renders it), not only in this
+    // turn's return value. Best-effort: a trace write never breaks a turn.
+    recordTurnReport(answer.traceId, turnReport);
+    // E3 — surface a non-trivial report on the console. A plain answer (no
+    // plan, nothing changed) produces no summary and stays silent.
+    if (turnReport?.summary) {
+      opts.onProgress?.(formatTurnReport(turnReport));
+    }
+
     // E3b: strip raw suggest_followups JSON embedded in content by the model
     const cleanContent = stripToolCallArtifacts(answer.content || '');
     return {
       content: cleanContent,
       followups: answer.followups ?? [],
+      ...(turnReport ? { turnReport } : {}),
       generationFailed: answer.generationFailed,
       cancelled: answer.cancelled,
       bounded: answer.bounded,
@@ -1050,6 +1260,7 @@ export class ChatCommand extends BaseCommand {
         model = routed.model;
       }
 
+
       // E3c: model-decides — EVERY request runs as a TOOL-CALL TURN. The
       // model decides what to do; the rule assessment is NOT in its context
       // (4d30b7e) and acts ONLY as the no-model fallback below (generation
@@ -1201,7 +1412,12 @@ export class ChatCommand extends BaseCommand {
         const historyEstimate = estimateTokens(
           history.map((h) => h.content).join('\n') + '\n' + message,
         );
-        const routed = await this.routeMessageAuto(message, [], { contextHintTokens: historyEstimate });
+        // Intent-aware escalation for a bare continuation of software work.
+        const routingText = continuationSoftwareText(message, history) ?? undefined;
+        const routed = await this.routeMessageAuto(message, [], {
+          contextHintTokens: historyEstimate,
+          ...(routingText ? { routingText } : {}),
+        });
         type = routed.type;
         provider = routed.provider;
         effectiveModel = routed.model;
@@ -1497,6 +1713,22 @@ export class ChatCommand extends BaseCommand {
      * none"), which is what lets five surfaces be compared honestly.
      */      findings?: WireFinding[];
     /**
+     * E — honest "what happened" facts the TurnReport is derived from (see
+     * `learning/turn-report.ts`). Exposed so the report is built from records,
+     * not from the answer text.
+     */
+    successfulToolCalls?: string[];
+    runTrace?: import('../learning/run-trace.js').RunTraceSnapshot;
+    /**
+     * E-trace — the reasoning trace this turn was recorded under, so a caller
+     * that assembles the TurnReport AFTER the turn (as `answerOnce` does) can
+     * attach it to the same trace. Absent only when no trace was opened.
+     */
+    traceId?: string;
+    unverifiedEdit?: boolean;
+    unverifiedEditClaim?: boolean;
+    noActionTaken?: boolean;
+    /**
      * WS5 (#27) — the isolation this turn had, and the diff against its base.
      * Present only when isolation was asked for AND the turn happened; a refused
      * turn reports the refusal as its content instead.
@@ -1544,24 +1776,34 @@ export class ChatCommand extends BaseCommand {
     const cacheModel = this.cacheModelFor(session);
     if (cacheEnabled) {
       try {
-        const cachedResult = await cache.get(message, cacheModel, session.type, turnScope);
-        if (cachedResult) {
+        // #30 — read the entry WITH its recorded activity, not just the text: a
+        // replay that dropped `toolCalls` rendered no tool cards on the dashboard
+        // while the first run did, so a repeated prompt read as a turn that did
+        // nothing. The text alone is still what the answer is; the activity is
+        // reported so the surface is honest about what the cached turn DID.
+        const cached = await cache.getEntry(message, cacheModel, session.type, turnScope);
+        if (cached) {
           // NOTE: the cached answer is NOT printed here — the caller prints
           // content AFTER runChatAnswer returns (answer-first ordering). A
           // print here would show the answer before the turn's own progress
           // lines AND double-print it.
           history.push({ role: 'user', content: message });
-          history.push({ role: 'assistant', content: cachedResult });
-          this.memoryNoteTurn(message, cachedResult);
+          history.push({ role: 'assistant', content: cached.response });
+          this.memoryNoteTurn(message, cached.response);
           // WS2 — a cache replay reached no model, so the log says exactly that
           // rather than borrowing an attribution from a turn that did not run.
           // The workspace the replayed answer belongs to is recorded with the hit:
           // a cache replay does no work, so "which project is this answer about?"
           // is the one fact needed to tell a replay from a real turn.
-          debugLog?.event('cache.hit', { chars: cachedResult.length, scope: turnScope });
+          debugLog?.event('cache.hit', { chars: cached.response.length, scope: turnScope });
           const cacheNotice = debugLogNotice(ctxOverrides?.debugSurface ?? 'cli-chat', debugLog?.write() ?? null);
           if (cacheNotice) logger.info(cacheNotice);
-          return { content: cachedResult };
+          return {
+            content: cached.response,
+            ...(cached.toolCalls ? { toolCalls: cached.toolCalls } : {}),
+            ...(cached.successfulToolCalls ? { successfulToolCalls: cached.successfulToolCalls } : {}),
+            ...(cached.bounded ? { bounded: cached.bounded } : {}),
+          };
         }
       } catch {
         // Cache must never break the turn.
@@ -1683,17 +1925,25 @@ export class ChatCommand extends BaseCommand {
     // prompt, so on this surface the MODEL decides and the rules are invisible.
     const systemText = buildToolSystemPrompt(parsed);
 
-    // Model-selected skills: a bounded CATALOG (name + one line) is appended to
-    // the system prompt and the MODEL decides which skill applies, loading it
-    // with the `skill` tool. This replaces keyword auto-injection, whose word
-    // lists could not tell "blood test report" from software testing — the model
-    // reads the same list and judges instantly, so there is no false positive to
-    // maintain away and no real match to accidentally drop. Best-effort: any
-    // failure returns '' and the turn proceeds byte-identically.
+    // Skill hint — MODE-DEPENDENT (see resolveSkillHintMode):
+    //   - `match` (default) — the small keyword-matched hint: ONE skill, and
+    //     only when the goal really matches; otherwise nothing. This is the
+    //     3.3.10 behaviour and keeps the prompt small.
+    //   - `catalog` (opt-in) — the full name+description catalog, which lets the
+    //     MODEL pick a skill but costs ~24K chars on every turn, so it must be
+    //     chosen (`NUVIRA_SKILL_CATALOG=catalog` or `skills.catalogHint`).
+    //   - `off` — never inject one.
+    // Best-effort: any failure returns '' and the turn proceeds byte-identically.
     let skillHint = '';
     try {
-      const { buildSkillCatalogHint } = await import('../tools/loop-skill-hint.js');
-      skillHint = await buildSkillCatalogHint(this.configManager);
+      const { buildConfiguredSkillHint, markLoopSkillUsed } = await import(
+        '../tools/loop-skill-hint.js'
+      );
+      const injected: { value: import('../tools/loop-skill-hint.js').LoopSkillHintMatch | null } = {
+        value: null,
+      };
+      skillHint = await buildConfiguredSkillHint(message, this.configManager, injected);
+      await markLoopSkillUsed(injected.value);
     } catch {
       skillHint = ''; // best-effort — a hint failure never breaks the turn
     }
@@ -1857,8 +2107,22 @@ export class ChatCommand extends BaseCommand {
           }
         }
         // P0.7 — forward plan mutations to the GUI (structured checklist).
-        if (ctxOverrides?.onPlanChange && event === 'plan:changed') {
-          ctxOverrides.onPlanChange(data as import('../tools/plan-store.js').PlanSnapshot);
+        if (event === 'plan:changed') {
+          const snapshot = data as import('../tools/plan-store.js').PlanSnapshot;
+          if (ctxOverrides?.onPlanChange) {
+            ctxOverrides.onPlanChange(snapshot);
+          } else {
+            // No GUI consumer (the interactive CLI): show the PROGRESS TABLE in
+            // the terminal so a user watching the run sees the plan advance,
+            // not just the model's narration. A settled plan prints its
+            // achieved SUMMARY instead — the same text the turn closes on.
+            const store = ctxOverrides?.planStore ?? this.planStore;
+            const settled =
+              snapshot.steps.length > 0 &&
+              snapshot.steps.every((s) => s.status === 'done' || s.status === 'blocked');
+            const rendered = settled ? store.summary?.() : store.toTable?.();
+            if (rendered) logger.info(`\n${rendered}\n`);
+          }
         }
         // P3b — forward git diff payloads to the GUI (the diff card).
         if (ctxOverrides?.onGitDiff && event === 'git:diff') {
@@ -1908,6 +2172,13 @@ export class ChatCommand extends BaseCommand {
       // default interactive renderer.
       ...(ctxOverrides?.askUser ? { askUser: ctxOverrides.askUser } : {}),
       ...(ctxOverrides?.gateway ? { gateway: ctxOverrides.gateway } : {}),
+      // P0.7 — the plan store. This was DROPPED here: `answerOnce` put a
+      // per-session store on `ctxOverrides.planStore`, but only askUser/gateway
+      // were threaded into the tool context, so every surface fell back to the
+      // shared module store — which is why plans leaked across sessions and a
+      // reload started a blank checklist. Thread it (per-session when injected,
+      // else this command's project-scoped store).
+      planStore: ctxOverrides?.planStore ?? this.planStore,
       // C2 verify with the actual session model (verify_requirement tool).
       callLLM: (prompt, opts) =>
         session.provider.generate(prompt, { ...(opts as Record<string, unknown> | undefined), model: session.model }),
@@ -1925,7 +2196,15 @@ export class ChatCommand extends BaseCommand {
         },
       },
     };
-    const callModel = this.buildToolCallModel(message, session, options, mode, ctxOverrides?.onToken, ctxOverrides?.signal);
+    const callModel = this.buildToolCallModel(
+      message,
+      session,
+      options,
+      mode,
+      ctxOverrides?.onToken,
+      ctxOverrides?.signal,
+      continuationSoftwareText(message, history) ?? undefined,
+    );
 
     let result: ToolLoopResult;
     // v1.8x audit — CHAT TRACE CAPTURE: every LLM call in a chat turn is now
@@ -1944,6 +2223,68 @@ export class ChatCommand extends BaseCommand {
     });
     // G18 — the tool-context emit (declared above) now has somewhere to write.
     traceIdForEvents = chatTraceId;
+    // A2 — record the routing DECISION as a first-class event, so a turn that
+    // ran on a weak/incapable model is self-evident in the Trace tab. The
+    // failed Tauri turn had no such record; this is the instrument that would
+    // have shown `agenticCapable:false` at the moment of the choice.
+    if (this.lastRouteSnapshot) {
+      const snap = this.lastRouteSnapshot;
+      recordTraceEvent(chatTraceId, {
+        kind: 'decision',
+        gate: 'routing',
+        summary:
+          `routed to ${snap.provider}/${snap.model} ` +
+          `(complexity ${snap.complexity}, score ${snap.score.toFixed(3)})` +
+          (snap.agenticCapable === false
+            ? ` — NOT agentic-capable${snap.overrideReason ? ` (${snap.overrideReason})` : ''}`
+            : ''),
+        routing: snap,
+      });
+    }
+    // D1 — measure the OUTBOUND context and, past the ceiling, degrade the
+    // lowest-value optional contributor first (skill hint → work digest →
+    // recall → …). The identity/tool contract is never trimmed. This is the
+    // guard the 3.3.11 bloat (7.6K → 32.8K chars) never had.
+    try {
+      const contextBudget = resolvePromptBudget(this.configManager);
+      const historyChars = history.reduce((n, h) => n + (h.content?.length ?? 0), 0);
+      const report = measurePromptBudget(
+        [
+          { name: 'system:identity+tool-contract', chars: systemText.length },
+          { name: 'system:channel-policy', chars: systemPolicyBlock.length },
+          { name: 'skill-hint', chars: skillHint.length, dropPriority: 10 },
+          { name: 'working-state', chars: workingStateBlock.length, dropPriority: 25 },
+          { name: 'recall', chars: ctxOverrides?.recallContext?.length ?? 0, dropPriority: 30 },
+          {
+            name: 'project-context',
+            chars: ctxOverrides?.projectContext?.length ?? ambientProjectContext?.length ?? 0,
+            dropPriority: 40,
+          },
+          { name: 'file-context', chars: fileContext?.length ?? 0, dropPriority: 45 },
+          { name: 'history+ask', chars: historyChars },
+        ],
+        { budget: contextBudget },
+      );
+      // Apply the FIRST ladder step (the documented, safe one): drop the skill
+      // hint from the assembled system message.
+      if (report.trims.includes('skill-hint') && skillHint) {
+        thread[0] = { role: 'system', content: systemText + systemPolicyBlock };
+      }
+      if (report.level !== 'ok') {
+        recordTraceEvent(chatTraceId, {
+          kind: 'decision',
+          gate: 'context-budget',
+          summary:
+            formatPromptBudgetBreakdown(report) +
+            (report.trims.length ? ` — trimmed: ${report.trims.join(', ')}` : ''),
+        });
+      }
+    } catch {
+      // A budget measurement must never break the turn.
+    }
+    // The instant this turn's model walk began. A failed generation records the
+    // WALK (below) relative to this mark, so the trace can say what was tried. 
+    const modelWalkMark = Date.now();
     const seenStepDigests = new Set<string>();
     const digestPrompt = (p: string): string => {
       try { return createHash('sha256').update(p).digest('hex').slice(0, 16); } catch { return String(p.length); }
@@ -2064,6 +2405,36 @@ export class ChatCommand extends BaseCommand {
       // (`answerQualityError`), which the loop rethrows once every candidate has
       // narrated.
       logger.error(String(err));
+      // DIAGNOSABILITY — a failed turn used to record only the LAST attempt's
+      // provider/model beside the FIRST error, so a reader could not tell which
+      // model actually ran, nor WHY other models were not used. Record the WALK:
+      // what was tried, what was parked (and for how long), and how large the
+      // eligible pool was — the facts that separate a real shortage from a
+      // routing gap. This is the exact ambiguity in the traces that prompted it:
+      // a step labelled `local/qwen2.5:0.5b` carrying Gemini's 429.
+      try {
+        const report = modelBreadthReport(modelWalkMark, this.configManager);
+        const tried = report.tried.filter((a) => !a.skipped);
+        const parked = report.parked.filter((r) => r.active);
+        const triedList = tried
+          .slice(0, 6)
+          .map((a) => `${a.provider}/${a.model} (${a.reason})`)
+          .join(', ');
+        const parkedList = parked
+          .slice(0, 6)
+          .map((r) => `${r.provider}${r.model ? `/${r.model}` : ''} (${r.kind})`)
+          .join(', ');
+        recordTraceEvent(chatTraceId, {
+          kind: 'failover',
+          summary:
+            `the model layer failed — eligible pool ${report.poolSize ?? '?'} model(s) across ` +
+            `${report.poolProviders ?? '?'} provider(s), ${tried.length} tried, ${parked.length} parked` +
+            (triedList ? `; tried: ${triedList}` : '') +
+            (parkedList ? `; parked: ${parkedList}` : ''),
+        });
+      } catch {
+        // Diagnosis is a courtesy — it must never break the failure path.
+      }
       endTrace(chatTraceId, false, { kind: 'failed' });
       result = {
         // Sanitized on purpose: this content is delivered verbatim by every
@@ -2184,11 +2555,36 @@ export class ChatCommand extends BaseCommand {
     if (result.content.trim() && !result.generationFailed && !result.cancelled) {
       if (cacheEnabled) {
         try {
-          // Keyed by the model that ACTUALLY answered (tryGenerate records it
-          // on success), so a weak model's reply is never replayed as a strong
-          // model's. `cacheModel` is the pre-flight fallback for the paths that
-          // never resolve one (e.g. a cached-hit turn).
-          await cache.set(message, result.content, this.cacheModelFor(session) || cacheModel, session.type, undefined, turnScope);
+          // #30 — NEVER cache a turn that carries an honesty flag. The cache
+          // stores text only, so storing a flagged answer would let a later
+          // identical prompt (or the same prompt on another surface) replay a
+          // known-unverified claim as a clean one — a truthfulness hole the whole
+          // flag system exists to close. A flagged turn re-derives instead.
+          if (turnCarriesHonestyFlag(result)) {
+            debugLog?.event('cache.skip', { reason: 'honesty-flag', scope: turnScope });
+          } else {
+            // Keyed by the model that ACTUALLY answered (tryGenerate records it
+            // on success), so a weak model's reply is never replayed as a strong
+            // model's. `cacheModel` is the pre-flight fallback for the paths that
+            // never resolve one (e.g. a cached-hit turn).
+            //
+            // #30 — the turn ACTIVITY rides with the text so a replay reports what
+            // the cached turn did (tool cards, bounded), rather than reading as a
+            // turn that did nothing.
+            await cache.set(
+              message,
+              result.content,
+              this.cacheModelFor(session) || cacheModel,
+              session.type,
+              undefined,
+              turnScope,
+              {
+                ...(result.toolCalls ? { toolCalls: result.toolCalls } : {}),
+                ...(result.successfulToolCalls ? { successfulToolCalls: result.successfulToolCalls } : {}),
+                ...(result.bounded ? { bounded: true } : {}),
+              },
+            );
+          }
         } catch {
           // Best-effort.
         }
@@ -2285,6 +2681,15 @@ export class ChatCommand extends BaseCommand {
       transport: result.transport,
       // WS1 — the findings this turn recorded, with their verdicts.
       findings,
+      // E — the honest "what happened" facts the TurnReport is derived from.
+      successfulToolCalls: result.successfulToolCalls,
+      runTrace: result.runTrace,
+      unverifiedEdit: result.unverifiedEdit,
+      unverifiedEditClaim: result.unverifiedEditClaim,
+      noActionTaken: result.noActionTaken,
+      // E-trace — the trace this turn was recorded under, so `answerOnce` can
+      // attach the TurnReport to it (see `recordTurnReport`).
+      traceId: chatTraceId,
     });
   }
 
@@ -2325,6 +2730,14 @@ export class ChatCommand extends BaseCommand {
     mode: { auto: boolean },
     onToken?: (token: string) => void,
     signal?: AbortSignal,
+    /**
+     * Intent-aware failover: the prior software ask when this turn is a bare
+     * continuation ("yes", "do it"), computed by the caller from the history
+     * it owns. The initial route used it; the mid-turn failover walk needs it
+     * too, or a continuation whose first cloud provider dies re-routes on the
+     * signal-free message and can land on a tiny local model.
+     */
+    routingText?: string,
   ): ToolLoopDeps['callModel'] {
     return async (messages, schemas, stepOnToken, stepSignal) => {
       // The effective token sink: the caller's stream wins; when a step-level
@@ -2543,18 +2956,44 @@ export class ChatCommand extends BaseCommand {
           // success log per landed candidate.
           logger.warn(`   ⚠️ ${session.provider.name} failed — trying the next auto candidate...`);
           const failed = new Set<string>([session.type]);
+          // Intent-aware escalation for the FAILOVER walk (the live junk path):
+          // a mid-turn failure used to re-route on the bare message alone, so a
+          // software turn whose first cloud provider died fell through to a tiny
+          // local model (`local/qwen2.5:0.5b`) that FABRICATED tool output
+          // (trace-1791118650644-d73hyr). Pass the same prior-software-ask hint
+          // the initial route used, so the router's agentic capability floor
+          // applies here too — but NEVER drop a candidate the floor would keep,
+          // so auto still cannot dead-end (local stays the last resort).
+          const failoverRoutingText = routingText;
           // Try ALL ranked candidates (no 3-candidate cap) — bounded by
           // the number of known providers to prevent infinite loops.
           const maxAttempts = 10;
           for (let i = 0; i < maxAttempts; i++) {
             let next: AutoRoutedMessage | null = null;
             try {
-              next = await this.routeMessageAuto(message, [...failed]);
+              next = failoverRoutingText
+                ? await this.routeMessageAuto(message, [...failed], {
+                    routingText: failoverRoutingText,
+                    fallbackFrom: firstType,
+                  })
+                : await this.routeMessageAuto(message, [...failed], { fallbackFrom: firstType });
             } catch {
               break;
             }
             if (!next || next.type === session.type || failed.has(next.type)) break;
             failed.add(next.type);
+            // Last-resort truthfulness: if even the agentic floor could not
+            // avoid a weak model, say so ONCE so a degraded answer is never
+            // mistaken for a real one (the tiny local model fabricated tool
+            // results instead of admitting it could not run them). C2 — the
+            // wording comes from the SHARED helper so chat, the orchestrator
+            // and the dashboard cannot describe this three different ways.
+            if (!isAgenticCapableModel(next.model, next.type)) {
+              const notice =
+                weakRouteNotice({ provider: next.type, model: next.model }, true) ??
+                `⚠️ no agentic-capable model left — falling back to ${next.type}/${next.model}`;
+              logger.warn(`   no agentic-capable model left — ${notice}`);
+            }
             // Opt-in confirmation (routing.promptOnFailover): 'manual' stops
             // the walk and lets the caller's error recovery handle it. Gated on
             // an interactive stdin (inherited from the shared single-shot
@@ -2815,8 +3254,24 @@ export class ChatCommand extends BaseCommand {
   private async routeMessageAuto(
     message: string,
     excludeProviders: string[] = [],
-    opts?: { contextHintTokens?: number },
+    opts?: {
+      contextHintTokens?: number;
+      /**
+       * Intent-aware escalation: when this turn is a BARE continuation of prior
+       * software work ("yes", "do it"), the caller passes the recent software
+       * ask here. Routing scores THAT text instead of the signal-free
+       * continuation, so the follow-up is not sent to a trivial-tier model; the
+       * answer still uses `message`. See `learning/continuation-intent.ts`.
+       */
+      routingText?: string;
+      /** C3 — the pair this route is failing over FROM (the chain's origin). */
+      fallbackFrom?: string;
+    },
   ): Promise<AutoRoutedMessage> {
+    // The text ROUTING is decided from — the prior software ask for a bare
+    // continuation, otherwise the message itself. `message` is used everywhere
+    // else (the answer, the tool loop).
+    const taskText = opts?.routingText?.trim() ? opts.routingText : message;
     // Feed the SHARED circuit breaker into the router so a provider that has
     // failed repeatedly (recorded by recordFailure below) is deprioritized by
     // scoring, not just skipped by the candidate walk.
@@ -2833,7 +3288,7 @@ export class ChatCommand extends BaseCommand {
     // circuit-breaker state on top.
     // C3: the NLU parser seeds the router task-intent (same vocabulary every
     // action command derives from resolveDispatch) when confident.
-    const parsed = parseRequestSync(message);
+    const parsed = parseRequestSync(taskText);
     const dispatch = resolveDispatch(parsed);
     // Routing decision cache (assessment v4 Phase 2): the loop engine
     // resolves per turn; turns with identical STABLE routing inputs (intent,
@@ -2849,7 +3304,7 @@ export class ChatCommand extends BaseCommand {
     const cacheSignature = routingCacheSignature([
       'chat',
       dispatch.taskIntentHint ?? null,
-      analyzeComplexity(message),
+      analyzeComplexity(taskText),
       routingCfg.preferenceMode ?? null,
       routingCfg.bandit === false ? 'b' : 'B',
       routingCfg.mlRouter === true ? 'm' : 'M',
@@ -2865,7 +3320,7 @@ export class ChatCommand extends BaseCommand {
     const decision = withRoutingCache(cacheSignature, 30_000, () =>
       getAutoRouter().resolve(
         'chat',
-        message,
+        taskText,
         {
           ...buildAutoResolveOptions(this.configManager, {
             verbose: envBuff('DEBUG') === 'true',
@@ -2885,6 +3340,10 @@ export class ChatCommand extends BaseCommand {
       score: decision.score,
       complexity: String(decision.complexity),
       explanation: decision.explanation,
+      // A1/A2/C3 — carry the capability verdict + override reason so the trace
+      // and console can show WHY the pair was chosen, not just which pair.
+      agenticCapable: decision.agenticCapable,
+      overrideReason: decision.overrideReason,
     };
 
     // Walk the ranked candidates (winner first) and return the first available
@@ -3045,6 +3504,9 @@ export class ChatCommand extends BaseCommand {
             provider: candidate.provider,
             model,
             score: decision.score,
+            agenticCapable: isAgenticCapableModel(model, candidate.provider),
+            overrideReason: decision.overrideReason,
+            ...(opts?.fallbackFrom ? { fallbackFrom: opts.fallbackFrom } : {}),
           });
           return {
             type: resolved.type,
@@ -3053,6 +3515,12 @@ export class ChatCommand extends BaseCommand {
             ranked: candidates,
             complexity: decision.complexity,
             score: decision.score,
+            agenticCapable: isAgenticCapableModel(model, resolved.type),
+            overrideReason: decision.overrideReason,
+            taskProfile: {
+              intent: decision.taskProfile.intent,
+              requiresVerification: decision.taskProfile.requiresVerification,
+            },
           };
         }
       } catch {
@@ -3077,6 +3545,9 @@ export class ChatCommand extends BaseCommand {
       provider: usableProvider,
       model: decision.model,
       score: decision.score,
+      agenticCapable: isAgenticCapableModel(decision.model, usableProvider),
+      overrideReason: decision.overrideReason,
+      ...(opts?.fallbackFrom ? { fallbackFrom: opts.fallbackFrom } : {}),
     });
     const resolved = resolveProvider(this.configManager, usableProvider);
     const model = (await resolveRoute({

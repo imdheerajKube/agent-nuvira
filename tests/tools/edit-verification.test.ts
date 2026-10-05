@@ -18,6 +18,7 @@ import {
   detectUnverifiedEditClaim,
   isMutationTool,
   isParseOnlyCheck,
+  isProseArtifactPath,
   isVerificationTool,
   verificationExercisedArtifact,
   verificationNudgeFor,
@@ -339,5 +340,47 @@ describe('detectAvailableChecks + verificationNudgeFor', () => {
     withPkg({ test: 'a', typecheck: 'b', build: 'c', lint: 'd', check: 'e' });
     const listed = verificationNudgeFor(root, []).split('\n').filter((l) => /^  \d\./.test(l));
     expect(listed).toHaveLength(3);
+  });
+});
+
+describe('verificationNudgeFor — deliverable-aware (a written file is not code)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'nudge-prose-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('asks for a CONTENT check for a prose deliverable — never a test/run', () => {
+    // The live turn: a 10-line essay on cows drove the whole test/typecheck/run
+    // gauntlet (and two empty retries) for a markdown file.
+    const nudge = verificationNudgeFor(dir, ['cow_essay.md']);
+    expect(nudge).toMatch(/written deliverable/i);
+    expect(nudge).toMatch(/CONTENT check/i);
+    expect(nudge).toMatch(/do not apply to prose/i);
+    expect(nudge).not.toMatch(/REAL RUN/);
+    expect(nudge).not.toMatch(/npm test/);
+  });
+
+  it('recognises prose extensions and rejects code ones', () => {
+    expect(isProseArtifactPath('cow_essay.md')).toBe(true);
+    expect(isProseArtifactPath('notes/REPORT.TXT')).toBe(true);
+    expect(isProseArtifactPath('script.js')).toBe(false);
+    expect(isProseArtifactPath('app.tsx')).toBe(false);
+  });
+
+  it('still names real checks when CODE was changed', () => {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'x', scripts: { test: 'vitest run' } }), 'utf-8');
+    const nudge = verificationNudgeFor(dir, ['src/thing.ts']);
+    expect(nudge).toMatch(/strongest available checks/);
+    expect(nudge).toMatch(/npm test/);
+  });
+
+  it('names real checks when a turn changed BOTH prose and code', () => {
+    // Mixed → code rules apply: one .ts file means there is something to run.
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'x', scripts: { test: 'vitest run' } }), 'utf-8');
+    const nudge = verificationNudgeFor(dir, ['README.md', 'src/thing.ts']);
+    expect(nudge).toMatch(/strongest available checks/);
   });
 });

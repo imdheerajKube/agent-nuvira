@@ -105,6 +105,38 @@ interface CategoryMatch {
 }
 
 /**
+ * Model-id patterns that identify a REASONING/THINKING model — a cross-vendor
+ * capability, not one brand alias. DeepSeek (`-reasoner`, `-r1`, `-v2/v3/v4`),
+ * OpenAI's o-series (`o1`/`o3`/`o4-mini`), Qwen (`qwq`, `qwen3` thinking), Zhipu
+ * (`glm-z1`), Mistral (`magistral`), LG (`exaone-deep`), plus the generic
+ * `reasoning` / `reasoner` / `think(ing)` tokens any vendor uses.
+ *
+ * Single source of truth: shared by the category table below and
+ * `isReasoningModel()`, so a new family is taught once.
+ */
+export const REASONING_MODEL_PATTERNS: RegExp[] = [
+  /qwen-2(?:\.5)?-(?:\d+)?b?(?:\d+)?-?(?:instruct|reasoning)?$/i,
+  /qwen-?3(?:\.\d+)?(?:[:@-](?:\d+)?b)?$/i,
+  /\bqwq\b/i,
+  /deepseek-r1/i,
+  /deepseek-(?:v[234]|reasoner)/i,
+  /(?:^|[-/_.])o[134](?:-(?:mini|preview|pro|high|low))?(?=$|[-/_.])/i,
+  /\b(?:glm-?z1|magistral|exaone-deep|reasoner)\b/i,
+  /reasoning/i,
+  /think(?:ing)?/i,
+];
+
+/**
+ * True when the model id names a reasoning/thinking model (any vendor).
+ * Unknown ids are `false` — we only claim a capability we can positively
+ * identify from the id.
+ */
+export function isReasoningModel(modelId: string): boolean {
+  if (!modelId) return false;
+  return REASONING_MODEL_PATTERNS.some((re) => re.test(modelId));
+}
+
+/**
  * Ordered list of pattern matchers.
  * Each entry has a list of regex patterns to test against the model ID,
  * and the category to assign when any pattern matches.
@@ -121,14 +153,18 @@ const CATEGORY_PATTERNS: Array<{
   // ── Vision / Multimodal ────────────────────────────────────────────────
   { patterns: [/vision/i, /multimodal/i], category: 'vision', priority: 2 },
   // ── Reasoning / Thinking ───────────────────────────────────────────────
+  // Capability families, NOT one brand alias. Reasoning/thinking is now a
+  // CROSS-VENDOR capability: DeepSeek (`-reasoner`, `-r1`, `-v2/v3/v4`),
+  // OpenAI's o-series (`o1`/`o3`/`o4-mini`), Qwen (`qwq`, `qwen3` thinking),
+  // Zhipu (`glm-z1`), Mistral (`magistral`), LG (`exaone-deep`), plus the
+  // generic `reasoning` / `reasoner` / `think(ing)` tokens any vendor uses.
+  // The old list keyed on `deepseek-r1`/`deepseek-v2|v3` alone, so the shipped
+  // `deepseek-reasoner` alias fell through to the broad chat catch-all (it is
+  // not a `-r1` and contains `reasoner`, not `reasoning`) and o-series ids were
+  // filed as `other`. Matching a *family* here lets the picker, the badges and
+  // any capability floor reason about reasoning uniformly. See `isReasoningModel`.
   {
-    patterns: [
-      /qwen-2(?:\.5)?-(?:\d+)?b?(?:\d+)?-?(?:instruct|reasoning)?$/i,
-      /deepseek-r1/i,
-      /deepseek-(?:v2|v3)/i,
-      /reasoning/i,
-      /think/i,
-    ],
+    patterns: REASONING_MODEL_PATTERNS,
     category: 'reasoning',
     priority: 3,
   },

@@ -30,6 +30,7 @@ import type { InferenceOptions } from '../config/types.js';
 import { estimateTokens } from './cost-tracker.js';
 import { splitPromptLayers, digestPromptLayers, type PromptLayerDigests } from './prompt-layers.js';
 import { describeFinding, toWire, type WireFinding, type Finding } from '../findings/verdicts.js';
+import type { TurnReport } from './turn-report.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -40,6 +41,19 @@ export interface TraceRoutingSnapshot {
   score: number;
   complexity: string;
   explanation: string;
+  /**
+   * A1/A2 — may the FINAL routed model hold an agentic software task? Recorded
+   * with the same shared predicate the router used, so the Trace tab can show
+   * the capability verdict instead of only the pair. Optional: entries written
+   * before this field parse unchanged.
+   */
+  agenticCapable?: boolean;
+  /** A1 — how the model-first override affected the final pick, if known. */
+  overrideReason?: 'none' | 'model-first' | 'model-first-blocked' | string;
+  /** B — what the consent gate decided for this route (`proceed` | `ask` | …). */
+  gateAction?: string;
+  /** C3 — the pair this route failed over FROM (the failover chain's head). */
+  fallbackFrom?: string;
 }
 
 /** One LLM call within a trace. */
@@ -198,7 +212,30 @@ export type TraceGateName =
   // WS4 (#26) — an operator's tool hook decided (or failed to decide) about a
   // call. A gate name rather than a new event kind: a hook veto IS a decision
   // about a call, which is what this vocabulary is for.
-  | 'tool-hook';
+  | 'tool-hook'
+  // Missing-prerequisite TAKEOVER: a `run_terminal` failed because a KNOWN,
+  // installable system tool was missing (command not found / exit 127), and the
+  // model was told, deterministically, to install it itself rather than declare
+  // itself unable and hand the user a manual step.
+  | 'tool-takeover'
+  // ROUTING self-instrumentation (A2): the router chose a provider×model for a
+  // turn and the harness recorded the CONTEXT of that choice — the pair, its
+  // complexity/score, whether the model is agentic-capable, and (for a weak
+  // agentic route) the consent-gate outcome. This is the record whose absence
+  // let the failed Tauri turn route to `local/gemma4:e4b` invisibly.
+  | 'routing'
+  // PROMPT/CONTEXT BUDGET (D1): the assembled outbound context crossed a budget
+  // threshold and the harness recorded which contributor is responsible. A gate
+  // name because it IS a decision the harness made about its own context.
+  | 'context-budget'
+  // PREREQUISITE verification (D2): a build/run was about to fail (or already
+  // did) on a MISSING PROJECT PREREQUISITE (a required file/feature that is not
+  // a missing binary) and the harness took over with the exact fix.
+  | 'prerequisite'
+  // PLAN gate (E2): a workspace-directing turn was about to MUTATE without
+  // having declared a plan, so the loop spent one bounded nudge to plan first —
+  // the "plan → track → verify" contract made structural instead of optional.
+  | 'plan';
 
 /**
  * A NON-LLM fact about a turn: a tool call, a gate decision, or a refusal.
@@ -227,7 +264,7 @@ export interface TraceEvent {
    * `decision` — a non-tool decision worth auditing (e.g. the provider walk
    *              abandoning a candidate, a loop bound being reached).
    */
-  kind: 'tool' | 'gate' | 'refusal' | 'decision';
+  kind: 'tool' | 'gate' | 'refusal' | 'decision' | 'failover';
   /** Tool name for `tool`/`refusal` events. */
   tool?: string;
   /** Which gate/nudge/bound this is about (see {@link TraceGateName}). */
@@ -241,6 +278,13 @@ export interface TraceEvent {
   /** True when the call succeeded; false for an error or a refusal. */
   ok?: boolean;
   durationMs?: number;
+  /**
+   * A2 — the routing snapshot for a `'routing'` gate event (provider, model,
+   * complexity, score, agenticCapable, override reason, consent-gate action).
+   * Present only on routing decision events, so a turn can be audited for the
+   * pair it chose and whether that pair could hold the task.
+   */
+  routing?: TraceRoutingSnapshot;
 }
 
 /** A full reasoning trace — one pipeline execution. */
@@ -287,6 +331,19 @@ export interface ReasoningTrace {
    * must treat `undefined` as "this trace predates findings", never as "none".
    */
   findings?: WireFinding[];
+  /**
+   * E-trace — the derived plan → track → verify → report artifact for the run
+   * (see `learning/turn-report.ts`).
+   *
+   * Persisted for the same reason `findings` is: the report is the turn's TRUST
+   * VERDICT (how many plan steps closed, what changed, whether anything verified
+   * it, and which honesty flag fired). A verdict that only ever lived in the
+   * turn's return value cannot be reviewed after the fact — a reader opening the
+   * Trace tab would see the tool calls and the events but not the assembled
+   * report they sum to. It is DERIVED from recorded evidence, never narrated, so
+   * storing it cannot add a claim the run did not back.
+   */
+  turnReport?: TurnReport;
   /**
    * The FULL stable layer (system prompt), captured ONCE per trace.
    * Previously every trace exposed only the first 80 characters of it, so the
@@ -578,6 +635,54 @@ export function recordTraceFindings(
     }
     // Same cap and re-numbering rule as `recordTraceEvent`, so the timeline's
     // `seq` stays 1-based contiguous however the events arrived.
+    if (events.length > MAX_EVENTS_PER_TRACE) {
+      trace.events = events.slice(-MAX_EVENTS_PER_TRACE);
+      trace.events.forEach((e, i) => { e.seq = i + 1; });
+    }
+    writeFile(data);
+  } catch {
+    // Best-effort — an instrument must never break the run it observes.
+  }
+}
+
+/**
+ * Attach the derived TurnReport a turn ended with to its trace — E-trace.
+ *
+ * Stores the report VERBATIM rather than re-deriving it: the report is already
+ * built from recorded evidence (`buildTurnReport`), and a reader comparing the
+ * Trace tab against the turn's own close-out must not find two different
+ * verdicts. A `null`/absent report is a no-op — a plain answer that produced no
+ * non-trivial report leaves the field unset, which reads as "this trace
+ * predates the report or the turn had nothing to report", never as "verified".
+ *
+ * Best-effort and id-less-capable on exactly the same contract as
+ * `recordTraceEvent` / `recordTraceFindings`: an id-less call attaches to the
+ * run in progress, and an instrument must never break the run it observes.
+ *
+ * It ALSO lands as a `decision` event in the timeline (like findings do), so the
+ * report reads in order at the end of the run rather than appearing only in a
+ * section of its own.
+ */
+export function recordTurnReport(
+  traceId: string | undefined,
+  report: TurnReport | null | undefined,
+): void {
+  if (!report) return;
+  try {
+    const id = traceId || currentTraceId;
+    if (!id) return;
+    const data = readFile();
+    const trace = data.traces.find((t) => t.id === id);
+    if (!trace) return;
+    trace.turnReport = report;
+    const events = trace.events ?? (trace.events = []);
+    events.push({
+      seq: events.length + 1,
+      timestamp: Date.now(),
+      kind: 'decision',
+      summary: `turn report — ${report.summary ?? report.verification}`,
+    });
+    // Same cap and re-numbering rule as `recordTraceEvent`.
     if (events.length > MAX_EVENTS_PER_TRACE) {
       trace.events = events.slice(-MAX_EVENTS_PER_TRACE);
       trace.events.forEach((e, i) => { e.seq = i + 1; });

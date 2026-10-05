@@ -99,6 +99,7 @@ describe('runDeveloperMode — auto provider/model resolution', () => {
   // ~/.nuvira registry must never be mutated by tests.
   let registryTempDir: string;
   let originalMemoryDir: string | undefined;
+  let originalCapabilityMode: string | undefined;
 
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -112,6 +113,13 @@ describe('runDeveloperMode — auto provider/model resolution', () => {
     originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
     process.env.NUVIRA_MEMORY_DIR = registryTempDir;
     resetModelRegistry();
+    // Deterministic capability mode. `max` turns on verify-on-demand, whose
+    // whole job is to PROVE a requested model before downgrading it — and the
+    // fake provider's `generate()` always resolves, so it would "prove" the
+    // deprecated `gemini-2.0-flash-exp` and the health repair under test would
+    // never run. The machine's real `~/.nuvira/.env` must not decide this.
+    originalCapabilityMode = process.env.NUVIRA_CAPABILITY_MODE;
+    process.env.NUVIRA_CAPABILITY_MODE = 'balanced';
   });
 
   afterEach(() => {
@@ -120,6 +128,11 @@ describe('runDeveloperMode — auto provider/model resolution', () => {
       delete process.env.NUVIRA_MEMORY_DIR;
     } else {
       process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
+    }
+    if (originalCapabilityMode === undefined) {
+      delete process.env.NUVIRA_CAPABILITY_MODE;
+    } else {
+      process.env.NUVIRA_CAPABILITY_MODE = originalCapabilityMode;
     }
     rmSync(registryTempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
@@ -172,6 +185,7 @@ describe('runDeveloperMode — model health (working models only)', () => {
   // through instead of being swapped for a live one).
   let registryTempDir: string;
   let originalMemoryDir: string | undefined;
+  let originalCapabilityMode: string | undefined;
 
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -185,6 +199,11 @@ describe('runDeveloperMode — model health (working models only)', () => {
     originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
     process.env.NUVIRA_MEMORY_DIR = registryTempDir;
     resetModelRegistry();
+    // Deterministic capability mode (see the sibling describe): `max` enables
+    // verify-on-demand, which would prove the fake provider's deprecated model
+    // instead of repairing it, defeating the health-repair assertion below.
+    originalCapabilityMode = process.env.NUVIRA_CAPABILITY_MODE;
+    process.env.NUVIRA_CAPABILITY_MODE = 'balanced';
   });
 
   afterEach(() => {
@@ -193,6 +212,11 @@ describe('runDeveloperMode — model health (working models only)', () => {
       delete process.env.NUVIRA_MEMORY_DIR;
     } else {
       process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
+    }
+    if (originalCapabilityMode === undefined) {
+      delete process.env.NUVIRA_CAPABILITY_MODE;
+    } else {
+      process.env.NUVIRA_CAPABILITY_MODE = originalCapabilityMode;
     }
     rmSync(registryTempDir, { recursive: true, force: true });
     vi.restoreAllMocks();

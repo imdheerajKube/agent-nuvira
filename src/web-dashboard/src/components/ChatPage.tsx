@@ -35,7 +35,7 @@ import Markdown from './Markdown';
 // test/build output, deploy URLs) rendered as cards, not raw markdown.
 import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
 import { stripAnsi } from '../ansi';
-import type { ResumeOutcome, TaskLogLine, TaskStatus, TraceFinding, WorktreeOutcome } from '../types';
+import type { ResumeOutcome, TaskLogLine, TaskStatus, TraceFinding, TurnReport, WorktreeOutcome } from '../types';
 import { formatCount } from '../format';
 import PageHeader from './PageHeader';
 
@@ -74,6 +74,11 @@ interface ChatMessage {
    * authoritative; the live SSE events only fill the card while the turn runs.
    */
   findings?: TraceFinding[];
+  /**
+   * E — the derived plan → track → verify → report artifact for this turn, off
+   * the authoritative POST response. Rendered as the trust-verdict card.
+   */
+  turnReport?: TurnReport;
   /**
    * WS5 (#27) — the git worktree this turn ran in, and what it changed. The POST
    * response is authoritative (the same contract as `findings`), and the card is
@@ -189,10 +194,10 @@ function classifyAttachment(
 /** P0.7 — plan-step status as the checklist renders it. */
 type PlanStepStatus = 'pending' | 'running' | 'done' | 'blocked';
 
-/** P0.7 — the plan checklist as rendered (goal + steps with statuses). */
+/** P0.7 — the plan progress table as rendered (goal + steps with statuses). */
 interface PlanView {
   goal: string;
-  steps: Array<{ id: string; description: string; status: PlanStepStatus }>;
+  steps: Array<{ id: string; description: string; status: PlanStepStatus; note?: string }>;
   revision: number;
 }
 
@@ -204,9 +209,10 @@ interface PlanView {
  * a blank badge. Anything unknown is treated as `pending`, which is what the
  * server means by a step that has not started.
  */
-function toPlanStep(s: { id: string; description: string; status: string }): PlanView['steps'][number] {
+function toPlanStep(s: { id: string; description: string; status: string; note?: string }): PlanView['steps'][number] {
   const known = (['pending', 'running', 'done', 'blocked'] as readonly string[]).includes(s.status);
-  return { id: s.id, description: s.description, status: known ? (s.status as PlanStepStatus) : 'pending' };
+  const note = typeof s.note === 'string' && s.note.trim() ? s.note.trim() : undefined;
+  return { id: s.id, description: s.description, status: known ? (s.status as PlanStepStatus) : 'pending', ...(note ? { note } : {}) };
 }
 
 /** One sidebar session row (the `/api/chat/sessions` shape). */
@@ -722,7 +728,7 @@ function TaskRunCard({ task, onCancel }: { task: TaskRunView; onCancel?: () => v
     );
   }
 
-  /** P0.7 — status icon for one checklist step. */
+  /** P0.7 — status icon for one progress-table row. */
   function planStepIcon(status: string): string {
   if (status === 'done') return '✅';
   if (status === 'running') return '🔄';
@@ -730,29 +736,75 @@ function TaskRunCard({ task, onCancel }: { task: TaskRunView; onCancel?: () => v
   return '⬜';
 }
 
+/** P0.7 — the plain-English status word for a row (never the raw enum). */
+function planStatusWord(status: string): string {
+  if (status === 'done') return 'done';
+  if (status === 'running') return 'in progress';
+  if (status === 'blocked') return 'blocked';
+  return 'pending';
+}
+
 /**
- * P0.7 — render the plan checklist card: goal header + per-step status + a
- * progress count ("3/5 done"). Updates in place as `plan` events arrive
- * (each new revision replaces the card content).
+ * P0.7 — render the plan as a PROGRESS TABLE: a goal header with a done/total
+ * count and percent, a progress bar, then one row per step (#, Step, Status,
+ * and Notes when any step reported one). Updates in place as `plan` events
+ * arrive (each new revision replaces the card), and shows a completion banner
+ * once every step has settled.
  */
 function PlanCard({ plan }: { plan: PlanView }) {
+  const total = plan.steps.length;
   const done = plan.steps.filter((s) => s.status === 'done').length;
+  const blocked = plan.steps.filter((s) => s.status === 'blocked').length;
+  const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+  const complete = total > 0 && done === total;
+  const settled = total > 0 && plan.steps.every((s) => s.status === 'done' || s.status === 'blocked');
+  const hasNotes = plan.steps.some((s) => s.note);
   return (
-    <div className="chat-plan-card">
+    <div className={`chat-plan-card${complete ? ' chat-plan-complete' : ''}`}>
       <div className="chat-plan-head">
         <span className="chat-plan-icon">🗂️</span>
         <span className="chat-plan-goal">{plan.goal}</span>
-        <span className="chat-plan-count">{done}/{plan.steps.length} done</span>
+        <span className="chat-plan-count">{done}/{total} done · {percent}%</span>
       </div>
-      <div className="chat-plan-steps">
-        {plan.steps.map((s) => (
-          <div key={s.id} className={`chat-plan-step chat-plan-step-${s.status}`}>
-            <span className="chat-plan-step-icon">{planStepIcon(s.status)}</span>
-            <span className="chat-plan-step-text">{s.description}</span>
-            <span className="chat-plan-step-status">{s.status}</span>
-          </div>
-        ))}
+      <div
+        className="chat-plan-bar"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+      >
+        <span className="chat-plan-bar-fill" style={{ width: `${percent}%` }} />
       </div>
+      <table className="chat-plan-table">
+        <thead>
+          <tr>
+            <th className="chat-plan-col-n">#</th>
+            <th>Step</th>
+            <th className="chat-plan-col-status">Status</th>
+            {hasNotes ? <th>Notes</th> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {plan.steps.map((s, i) => (
+            <tr key={s.id} className={`chat-plan-row chat-plan-row-${s.status}`}>
+              <td className="chat-plan-col-n">{i + 1}</td>
+              <td className="chat-plan-step-text">{s.description}</td>
+              <td className="chat-plan-col-status">
+                <span className="chat-plan-step-icon">{planStepIcon(s.status)}</span>{' '}
+                {planStatusWord(s.status)}
+              </td>
+              {hasNotes ? <td className="chat-plan-note">{s.note ?? ''}</td> : null}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {settled ? (
+        <div className="chat-plan-settled">
+          {complete
+            ? `✅ Plan complete — ${done}/${total} steps achieved`
+            : `📋 Plan settled — ${done}/${total} achieved, ${blocked} blocked`}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -936,6 +988,82 @@ function ResumeCard({ resume }: { resume: ResumeOutcome }) {
   );
 }
 
+/**
+ * E — the TurnReport card: the plan → track → verify TRUST VERDICT for a turn.
+ *
+ * Derived from recorded evidence on the server (`buildTurnReport`), never from
+ * the model's narration, so this card cannot be talked into reading "done" about
+ * work nothing verified. The verdict badge and the step counts carry the
+ * distinction: a turn with a change and no observation is UNVERIFIED even when
+ * every step is marked done, and the honesty flags are shown as chips rather
+ * than folded into the summary.
+ */
+function TurnReportCard({ report }: { report: TurnReport }) {
+  const verdictLabel =
+    report.verification === 'verified' ? 'VERIFIED'
+    : report.verification === 'unverified' ? 'UNVERIFIED'
+    : report.verification === 'blocked' ? 'BLOCKED'
+    : 'no changes';
+  const flagChips: string[] = [];
+  if (report.flags.unverifiedActionClaim) flagChips.push('claimed an action no tool ran');
+  if (report.flags.unverifiedEditClaim) flagChips.push('claimed a fix nothing verified');
+  if (report.flags.unverifiedBuildClaim) flagChips.push('claimed a failing build worked');
+  if (report.flags.unverifiedEdit) flagChips.push('edited without verifying');
+  if (report.flags.undeliveredArtifact) flagChips.push('deliverable never written');
+  if (report.flags.unfulfilledPromise) flagChips.push('promised an action it did not take');
+  if (report.flags.noActionTaken) flagChips.push('no action taken');
+  return (
+    <div className={`chat-turn-card chat-turn-${report.verification}`}>
+      <div className="chat-turn-head">
+        <span className="chat-turn-icon" aria-hidden="true">📋</span>
+        <span className="chat-turn-title">Turn report</span>
+        {report.planned ? (
+          <span className="chat-turn-count">
+            {report.stepCounts.done}/{report.stepCounts.total} steps
+          </span>
+        ) : null}
+        <span
+          className="chat-turn-verdict"
+          title="derived from recorded evidence, never the model's own narration"
+        >
+          {verdictLabel}
+        </span>
+      </div>
+      {report.summary ? <div className="chat-turn-summary">{report.summary}</div> : null}
+      {report.steps.length > 0 ? (
+        <ul className="chat-turn-steps">
+          {report.steps.map((s) => (
+            <li key={s.id} className={`chat-turn-step chat-turn-step-${s.status}`}>
+              <span className="chat-turn-step-icon" aria-hidden="true">
+                {s.status === 'done' ? '✅' : s.status === 'running' ? '🔄' : s.status === 'blocked' ? '⛔' : '⬜'}
+              </span>
+              <span className="chat-turn-step-text">{s.description}</span>
+              {s.note ? <span className="chat-turn-step-note">{s.note}</span> : null}
+              {s.evidence ? <span className="chat-turn-step-evidence">{s.evidence}</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {report.changedPaths.length > 0 ? (
+        <div className="chat-turn-files">
+          {report.changedPaths.length} file{report.changedPaths.length === 1 ? '' : 's'} changed:{' '}
+          <code>
+            {report.changedPaths.slice(0, 6).join(', ')}
+            {report.changedPaths.length > 6 ? ` +${report.changedPaths.length - 6} more` : ''}
+          </code>
+        </div>
+      ) : null}
+      {flagChips.length > 0 ? (
+        <div className="chat-turn-flags">
+          {flagChips.map((f) => (
+            <span key={f} className="chat-turn-flag">⚠️ {f}</span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function newSessionId(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -1019,6 +1147,13 @@ export default function ChatPage() {
       if (row) setCapabilityMode(capabilityModeFromValue(row.processValue ?? row.fileValue));
     });
   }, []);
+
+  // Load the short ROUTABLE model list for the picker once. Best-effort: an
+  // error leaves the picker empty, which reads as "Auto only" — never a broken
+  // control.
+  useEffect(() => {
+    void dashboardAPI.listRoutableModels().then((models) => setRoutableModels(models));
+  }, []);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1065,6 +1200,16 @@ export default function ChatPage() {
    */
   const [capabilityMode, setCapabilityMode] = useState<CapabilityMode>('balanced');
   const [capabilityNote, setCapabilityNote] = useState('');
+  /**
+   * The user's explicit model choice for this conversation, or `null` for Auto.
+   * Auto is the DEFAULT and stays the default: a pin is an override the user
+   * makes, and only from models the router would actually use right now.
+   */
+  const [pinnedModel, setPinnedModel] = useState<{ provider: string; model: string } | null>(null);
+  /** The short routable list the picker offers (provider + model + capability). */
+  const [routableModels, setRoutableModels] = useState<
+    Array<{ provider: string; model: string; capability: number; band: 'high' | 'medium' | 'low' }>
+  >([]);
   const [meta, setMeta] = useState<string | null>(null);
   const [liveSteps, setLiveSteps] = useState<string[]>([]);
   // P0.6 — live tool-call cards (upserted by id: started creates, called completes).
@@ -1226,6 +1371,13 @@ export default function ChatPage() {
     setPendingResolve(null);
     setPendingQuestion(null);
     setRailOpen(true);
+    // P8 — restore the conversation's server-persisted model pin, so resuming a
+    // chat keeps serving it from the model the user explicitly chose.
+    setPinnedModel(
+      rec.pinnedProvider && rec.pinnedModel
+        ? { provider: rec.pinnedProvider, model: rec.pinnedModel }
+        : null,
+    );
     // P4b — auto-restore the attached project from the session's stored path.
     const storedPath = rec.projectPath;
     if (storedPath) {
@@ -1246,6 +1398,7 @@ export default function ChatPage() {
     sessionIdRef.current = newSessionId();
     persistSessionId(sessionIdRef.current);
     setSessionProjectPath(null);
+    setPinnedModel(null);
     setMessages([]);
     setLiveSteps([]);
     liveStepsRef.current = [];
@@ -1705,6 +1858,9 @@ export default function ChatPage() {
         sessionId,
         clean || `(see ${chipList.length} attachment${chipList.length === 1 ? '' : 's'})`,
         {
+          // An explicit model pin, when the user chose one. Omitted for Auto, so
+          // the server's router stays in charge (the default).
+          ...(pinnedModel ? { provider: pinnedModel.provider, model: pinnedModel.model } : {}),
           projectPath: attachedProject?.path,
           // `encoding` rides along so the server knows whether to read the content as
           // text or to decode base64 and extract it (P2).
@@ -1770,6 +1926,9 @@ export default function ChatPage() {
             // over a turn that ran in the real tree.
             worktree: r.worktree,
             resume: r.resume,
+            // E — the derived trust verdict for this turn, from the authoritative
+            // response. Absent when the turn produced no non-trivial report.
+            turnReport: r.turnReport,
             refused: r.refused,
             needsProject: r.needsProject,
             // P2 — extract artifact cards from the answer TEXT (diff/result/
@@ -1798,7 +1957,7 @@ export default function ChatPage() {
       // P8 — the turn resolved: bring the history rail back.
       setRailOpen(true);
     },
-    [busy, attachedProject, attachments, isolate, keepWorktree, resume, resumeId],
+    [busy, attachedProject, attachments, isolate, keepWorktree, resume, resumeId, pinnedModel],
   );
 
   /** P4 — cancel the in-flight turn (aborts the POST; the server cancels it). */
@@ -2474,6 +2633,7 @@ export default function ChatPage() {
                     <WorktreeCard worktree={m.worktree} />
                   ) : null}
                   {m.role === 'assistant' && m.resume ? <ResumeCard resume={m.resume} /> : null}
+                  {m.role === 'assistant' && m.turnReport ? <TurnReportCard report={m.turnReport} /> : null}
                   {m.role === 'assistant' && m.findings && m.findings.length > 0 ? (
                     <FindingCards findings={m.findings} />
                   ) : null}
@@ -2734,6 +2894,50 @@ export default function ChatPage() {
               >
                 🐞
               </button>
+              {/*
+                Model picker — Auto by default, or an explicit pin chosen from
+                the ROUTABLE models only (provider + model + capability), so the
+                user rules on routing without ever seeing the 500-id catalog.
+                A pin overrides Auto for this conversation; leaving it on Auto
+                keeps the router's judgment.
+              */}
+              <select
+                className="chat-model-picker"
+                aria-label="Model: Auto or a specific routable model"
+                title={
+                  pinnedModel
+                    ? `Pinned to ${pinnedModel.provider}/${pinnedModel.model} for this chat. Choose Auto to let the agent route again.`
+                    : 'Auto (default): the agent picks the best routable model each turn. Choose one to pin it for this chat.'
+                }
+                value={pinnedModel ? `${pinnedModel.provider}|${pinnedModel.model}` : ''}
+                disabled={busy}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) {
+                    setPinnedModel(null);
+                    return;
+                  }
+                  const idx = v.indexOf('|');
+                  setPinnedModel({ provider: v.slice(0, idx), model: v.slice(idx + 1) });
+                }}
+              >
+                <option value="">🤖 Auto (agent decides)</option>
+                {/* A server-restored pin may name a model no longer in the live
+                    routable list — render it so the control still reflects it. */}
+                {pinnedModel &&
+                !routableModels.some(
+                  (m) => m.provider === pinnedModel.provider && m.model === pinnedModel.model,
+                ) ? (
+                  <option value={`${pinnedModel.provider}|${pinnedModel.model}`}>
+                    {pinnedModel.provider}/{pinnedModel.model} · pinned
+                  </option>
+                ) : null}
+                {routableModels.map((m) => (
+                  <option key={`${m.provider}|${m.model}`} value={`${m.provider}|${m.model}`}>
+                    {m.provider}/{m.model} · {m.band} ({m.capability.toFixed(2)})
+                  </option>
+                ))}
+              </select>
               {/*
                 Capability mode — the inline lever for "how much reasoning do I
                 want to pay for". It writes the SAME curated switch the CLI and

@@ -371,6 +371,56 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
     expect(attempts).toContain('Gemini');
   });
 
+  it('aggressive: passes the prior software ask into the failover walk (intent-aware, no tiny-local landing)', async () => {
+    const { cmd, session, generateMock } = setupCommand();
+
+    const callModel = (cmd as any).buildToolCallModel(
+      'yes',
+      session,
+      {},
+      { auto: true },
+      undefined,
+      undefined,
+      'build the macOS app',
+    );
+    const result = await callModel([{ role: 'user', content: 'yes' }], []);
+
+    expect(result.content).toBe('hello from gemini');
+    expect(generateMock).toHaveBeenCalledTimes(2);
+    // The walk must route on the prior software ask, not the bare "yes", so
+    // the router's agentic capability floor applies on the failover too.
+    // C3 — it also carries the origin provider it is failing over FROM.
+    const call = cmd.routeMessageAuto.mock.calls[0] as unknown[];
+    expect(call[2]).toMatchObject({ routingText: 'build the macOS app', fallbackFrom: 'groq' });
+  });
+
+  it('warns clearly when even the agentic floor leaves only a weak model', async () => {
+    const generateMock = vi.fn()
+      .mockRejectedValueOnce(new Error('429: quota exceeded'))
+      .mockResolvedValueOnce('fabricated tool output');
+    const cmd = new ChatCommand() as any;
+    cmd.routeMessageAuto = vi.fn().mockResolvedValue({
+      type: 'local',
+      provider: { name: 'Local', generate: generateMock },
+      model: 'qwen2.5:0.5b',
+      ranked: ['local'],
+      complexity: 'simple',
+      score: 0.5,
+    });
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generate: generateMock },
+      model: 'llama-3.3-70b-versatile',
+    };
+
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: true });
+    await callModel([{ role: 'user', content: 'explain this' }], []);
+
+    expect(
+      vi.mocked(logger.warn).mock.calls.some((c) => String(c[0]).includes('no agentic-capable model left')),
+    ).toBe(true);
+  });
+
   it('still fails over on a TRANSIENT error (transport switch is only for tool-incapability)', async () => {
     const generateTools = vi.fn().mockRejectedValue(new Error('429 rate limit exceeded'));
     const generate = vi.fn().mockResolvedValue('should not be reached on the same candidate');
@@ -384,5 +434,54 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
     await expect(
       callModel([{ role: 'user', content: 'q' }], [{ name: 't', description: '', parameters: {} }]),
     ).rejects.toThrow(/429/);
+  });
+
+  /**
+   * C1 — the failover walk must preserve the ORIGINAL software ask across MORE
+   * THAN ONE failure hop. Regression: a single cloud provider dying mid-turn
+   * re-routed on the bare message alone, so a software turn fell through to a
+   * tiny local model that fabricated tool output. The prior-ask hint must be
+   * carried on EVERY hop, not just the first.
+   */
+  it('C1: preserves the software ask across multiple failure hops', async () => {
+    const attempts: string[] = [];
+    const generate = vi.fn().mockImplementation(function (this: { name: string }) {
+      attempts.push(this.name);
+      if (this.name === 'OpenRouter') return Promise.resolve('answered after two hops');
+      return Promise.reject(new Error('429: quota exceeded'));
+    });
+
+    const cmd = new ChatCommand() as any;
+    // Two hops: gemini, then openrouter. The walk must route on the prior
+    // software ask BOTH times — not just the first.
+    const seq = [
+      { type: 'gemini', provider: { name: 'Gemini', generate }, model: 'gemini-2.0-flash', ranked: ['gemini', 'openrouter'], complexity: 'simple', score: 0.8 },
+      { type: 'openrouter', provider: { name: 'OpenRouter', generate }, model: 'some/model', ranked: ['openrouter'], complexity: 'simple', score: 0.7 },
+    ];
+    cmd.routeMessageAuto = vi.fn().mockImplementation(async () => seq.shift() ?? null);
+
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generate },
+      model: 'llama-3.3-70b-versatile',
+    };
+    const callModel = (cmd as any).buildToolCallModel(
+      'yes',
+      session,
+      {},
+      { auto: true },
+      undefined,
+      undefined,
+      'build the macOS app',
+    );
+    const result = await callModel([{ role: 'user', content: 'yes' }], []);
+
+    expect(result.content).toBe('answered after two hops');
+    expect(attempts).toEqual(['Groq', 'Gemini', 'OpenRouter']);
+    // Two hops, and the routing text is preserved on EVERY one.
+    expect(cmd.routeMessageAuto).toHaveBeenCalledTimes(2);
+    for (const call of cmd.routeMessageAuto.mock.calls) {
+      expect(call[2]).toMatchObject({ routingText: 'build the macOS app' });
+    }
   });
 });

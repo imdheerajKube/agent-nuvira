@@ -106,6 +106,28 @@ const VERIFY_PREFIXES: string[] = [
 ];
 
 /**
+ * Read-only PROBES — `<cmd> --version` / `--help`, and package-metadata reads.
+ *
+ * WHY THIS EXISTS (2026-10-04). A version/help probe changes nothing, but it
+ * was not on the verify allowlist, so the classifier scored it `confirm`, the
+ * gate refused it as `external` ("has an effect outside this machine"), and a
+ * live trace (`trace-1791118650644-d73hyr`) burned five steps on `cargo
+ * --version` before stalling and failing over to a tiny local model. The old
+ * `npm view …` refusal in `trace-1791037551766-gznlyy` is the same bug. A
+ * command that cannot mutate state must never generate a prompt.
+ *
+ * Deliberately narrow: the LAST token must BE the probe flag (so `--version`
+ * as a value, e.g. `echo --version`, still classifies by `echo`), and the
+ * info commands listed all read remote metadata without writing anything.
+ */
+const READ_ONLY_PROBE_RE = /(?:^|\s)(?:--version|-V|--help|-h)$/;
+const READ_ONLY_INFO_PREFIXES: string[] = [
+  'npm view', 'npm info', 'npm ls', 'npm list', 'npm ping', 'npm outdated',
+  'cargo search', 'cargo metadata', 'pip show', 'pip list', 'command -v',
+  'go version', 'go env', 'java -version',
+];
+
+/**
  * Recoverable WORKSPACE commands — the state-changing operations a requested
  * build/development task legitimately needs, and that cannot strand the user
  * (a dependency uninstalls, a directory removes, a staged file unstages).
@@ -290,6 +312,15 @@ function classifySegment(segment: string): CommandClass {
       return 'verify';
     }
   }
+  // Read-only probes (`<cmd> --version` / `--help`) and metadata reads — they
+  // cannot change state, so they never need confirmation (see the constants).
+  if (READ_ONLY_PROBE_RE.test(segment)) return 'verify';
+  for (const prefix of READ_ONLY_INFO_PREFIXES) {
+    const pt = prefix.split(' ');
+    if (pt.length <= toks.length && toks.slice(0, pt.length).join(' ') === prefix) {
+      return 'verify';
+    }
+  }
   return 'confirm';
 }
 
@@ -397,6 +428,9 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
           authorizedByRequest: ctx.writesAuthorized?.authorized === true,
         });
     if (verdict.action !== 'proceed') {
+      // Mark the pending confirmation so ask_user does NOT suppress the very
+      // question this refusal asks for (see ToolContext.pendingConfirmation).
+      ctx.pendingConfirmation = { tool: 'run_terminal', command };
       return (
         `Error: run_terminal: "${command}" changes state and needs explicit confirmation ` +
         `(${verdict.reason}). Call ask_user (yes/no, one-line reason), then re-call run_terminal ` +

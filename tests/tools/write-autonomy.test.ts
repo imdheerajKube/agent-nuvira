@@ -132,6 +132,34 @@ describe('ask_user — no message to the user for authorized work', () => {
     expect(result).toContain('Recommended default: "Yes, create it"');
   });
 
+  it('reaches the user when a TOOL demanded the confirmation (the deadlock fix)', async () => {
+    // run_terminal refuses a confirm-class command with "call ask_user…". The
+    // G13 gate used to swallow that very question, so the model could neither
+    // run the command nor ask about it — trace-1791118650644-d73hyr stalled on
+    // `cargo --version` exactly this way.
+    const askUser = vi.fn(async () => ({ answer: 'Yes, run it', index: 0 }));
+    const ctx: ToolContext = {
+      configManager: {},
+      cwd: root,
+      writesAuthorized: auth(STORY_ASK),
+      askUser,
+      pendingConfirmation: { tool: 'run_terminal', command: 'cargo --version' },
+    };
+
+    const result = await callAskUser(
+      {
+        question: 'May I run `cargo --version` to check the toolchain?',
+        choices: [{ label: 'Yes, run it' }, { label: 'No' }],
+      },
+      ctx,
+    );
+
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(result).toContain('User answered: Yes, run it');
+    // One confirmation buys exactly ONE ask.
+    expect(ctx.pendingConfirmation).toBeUndefined();
+  });
+
   it('still reaches the user for an IRREVERSIBLE choice', async () => {
     const askUser = vi.fn(async () => ({ answer: 'No', index: 1 }));
     const ctx: ToolContext = { configManager: {}, cwd: root, writesAuthorized: auth(STORY_ASK), askUser };

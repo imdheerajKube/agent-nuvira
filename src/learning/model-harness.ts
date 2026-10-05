@@ -138,6 +138,31 @@ export function isTinyModel(model: string | undefined): boolean {
 }
 
 /**
+ * May this served model hold an AGENTIC software task?
+ *
+ * The single predicate behind every agentic capability gate, so the router's
+ * ranking floor and its LATER model-first override can never disagree. That
+ * divergence was a live bug (2026-10-04): the floor correctly removed a
+ * ≤4B local model from the ranking, but the model-first override — which runs
+ * afterwards — re-introduced `local/gemma4:e4b` for a Tauri build ask, and chat
+ * then fabricated tool output.
+ *
+ * Deliberately conservative, exactly like the floor it serves:
+ *   - an UNKNOWN model (`undefined`) is KEPT — never eliminate on ignorance;
+ *   - a ≤4B tiny tag is always out;
+ *   - a LOCAL provider whose served id is a placeholder (`default`, `unknown`)
+ *     is out — we cannot judge local compute with no real tag, and it is the
+ *     case that carried the failed build. A local 70B (`llama3:70b`) keeps
+ *     working.
+ */
+export function isAgenticCapableModel(model: string | undefined, provider: string): boolean {
+  if (model === undefined) return true;
+  if (isTinyModel(model)) return false;
+  if (provider === 'local' && /^(?:default|unknown)$/i.test(String(model).trim())) return false;
+  return true;
+}
+
+/**
  * Should this model skip a native tool-calling attempt entirely?
  *
  * The CLI used to find out by trying: a model without native support answered

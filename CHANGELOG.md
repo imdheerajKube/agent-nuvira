@@ -2,6 +2,59 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.3.12 — the harness sees its own routing, plans before it edits, and never replays a flagged answer as clean
+
+> A turn now records why it picked the provider×model it did, asks before it falls back to a weak
+model for a software task, budgets its outbound prompt, verifies a project's build prerequisites,
+and closes with a derived TurnReport. The plan gate is a hard requirement for the first file edit,
+and a flagged answer can no longer be replayed from the response cache as a clean one.
+
+### Added: the harness can see and explain its own decisions
+
+A failed Tauri turn routed invisibly to a weak local model, ran past its context budget, and died on
+an uninstalled prerequisite without recording any of it. Each of those decisions is now a first-class
+fact. The router records whether the chosen pair is agentic-capable and how a model-first override
+resolved, and emits one `routing` event per turn; routing history carries the same verdict, so the
+Trace tab shows the pair, its complexity and whether it could hold the task instead of only the model
+name. The outbound prompt is measured against a budget and degrades the lowest-value optional context
+first (skill hint, then recall, …), never the identity/tool contract. Before the first build of a
+turn, a Tauri (and multi-ecosystem) prerequisite pre-flight hands the model the exact fix — a missing
+`build.rs`, a `tauri`/`tauri-build` major mismatch, a missing bundle icon — and an error-signature
+backstop catches the same class of failure when it slips through.
+
+### Added: an ASK before a weak model runs a software task
+
+A software/agentic task that can only run on a weak model now asks the user ONCE for the session
+(approve the weak model, or wait for a strong one) instead of silently downgrading. Surfaces that
+cannot ask (gateway channels, headless/CI) fall back to `routing.weakModelPolicy` (`ask` |
+`auto-allow` | `deny`, default `ask`), and a failover keeps the software ask rather than dropping it.
+
+### Added: a TurnReport, and a Trace tab that can review it after the fact
+
+Every turn derives a plan → track → verify report — steps done, files changed, the honesty flags
+that fired, and a verification verdict (`verified` | `unverified` | `blocked` | `not-applicable`) —
+from recorded evidence, never the model's own narration, so a clean checklist over unverified work is
+annotated rather than trusted. The report is surfaced on the console, rendered as a card in the
+dashboard chat, and persisted on the reasoning trace for review in the Trace tab.
+
+### Changed: the plan gate is a hard requirement on the first file edit
+
+A workspace-directing turn that edits FILES before declaring a plan is stopped once: the first
+`write_file`/`edit_file`/`propose_change` is refused with `declare a plan first via plan_todo`.
+Terminal commands are nudged but never blocked — a build or a test is a step a plan is meant to
+reach, not a change to gate. The block is bounded, so the second attempt runs even without a plan; a
+turn that declares a plan in the same step is never blocked; and `requirePlan: false` leaves the gate
+byte-identical to not existing.
+
+### Fixed: a flagged answer is no longer replayed from the cache as a clean one
+
+The shared response cache stored text only, so a turn that ended with an honesty flag
+(`unverifiedActionClaim`, `unfulfilledPromise`, `undeliveredArtifact`, and the edit/build analogues)
+was written as plain text and served to the next identical prompt — on the CLI, the dashboard or the
+gateway — with every flag absent. A flagged turn is now never cached and re-derives, and a legitimate
+cache hit reports the activity the cached turn recorded (`toolCalls`, `successfulToolCalls`,
+`bounded`) instead of rendering as a turn that did nothing.
+
 ## v3.3.11 — reasoning effort under max, an honest dashboard, and a chat that survives navigation
 
 > `max` now raises how hard a verified model thinks, not only which model answers; the dashboard

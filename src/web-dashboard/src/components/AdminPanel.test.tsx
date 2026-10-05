@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
 import AdminPanel from './AdminPanel';
 import { dashboardAPI, setAdminToken } from '../api';
 import type { AdminChecksData, AdminServiceRow } from '../types';
@@ -245,6 +245,30 @@ describe('AdminPanel', () => {
     );
     expect(await screen.findByText('✅ Saved')).toBeTruthy();
     expect(screen.getByPlaceholderText('gsk_…wxyz')).toBeTruthy(); // refreshed masked row
+  });
+
+  it('an ADDED provider appears as an editable, savable row (Add must not be a no-op)', async () => {
+    mockAuthedServer();
+    const save = vi.spyOn(dashboardAPI, 'saveProvider').mockResolvedValue({
+      ok: true,
+      provider: { type: 'gemini', configured: true, keySource: 'config', keyMasked: '••••••', model: undefined, baseUrl: undefined },
+    });
+    const { container } = render(<AdminPanel />);
+    await screen.findByText(/System Checks/);
+
+    // gemini is in the catalog but NOT configured → it is offerable to add.
+    const select = container.querySelector('.admin-add-provider select') as HTMLSelectElement | null;
+    expect(select).toBeTruthy();
+    fireEvent.change(select!, { target: { value: 'gemini' } });
+    // Scope to the add-provider control — "➕ Add user" also exists on the page.
+    fireEvent.click(container.querySelector('.admin-add-provider button')!);
+
+    // The added provider now has a ROW: its own key field and its own Save button.
+    const key = await screen.findByLabelText('gemini API key');
+    fireEvent.change(key, { target: { value: 'AIza-new-key' } });
+    const row = key.closest('tr')!;
+    fireEvent.click(within(row).getByRole('button', { name: /Save/ }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('gemini', { apiKey: 'AIza-new-key' }));
   });
 
   it('tests a provider and shows the model count', async () => {

@@ -23,7 +23,14 @@ import {
   stripLeadingReasoningTrace,
   stripToolCallArtifacts,
 } from '../inference/tool-call-utils.js';
-import { PlanStore, type PlanSnapshot, type PlanStoreLike } from '../tools/plan-store.js';
+import {
+  PlanStore,
+  createPersistentPlanStore,
+  planFilePath,
+  writePlanFile,
+  type PlanSnapshot,
+  type PlanStoreLike,
+} from '../tools/plan-store.js';
 
 /** One stored turn in a chat session. */
 export interface ChatTurn {
@@ -160,6 +167,8 @@ export interface ChatEngine {
     worktree?: import('../tools/worktree.js').IsolationOutcome;
     /** WS5 (#27) — what this turn's resume replayed, and what it saved. */
     resume?: import('../learning/step-checkpoint.js').ResumeOutcome;
+    /** E — the derived plan → track → verify report for this turn (data). */
+    turnReport?: import('../learning/turn-report.js').TurnReport;
     /**
      * WS5 (#27) — the turn REFUSED to run (nothing was attempted, no model was
      * called), so its content is the reason rather than an answer.
@@ -217,6 +226,8 @@ export interface ChatAnswerResult {
   worktree?: import('../tools/worktree.js').IsolationOutcome;
   /** WS5 (#27) — what this turn's resume replayed, and what it saved. */
   resume?: import('../learning/step-checkpoint.js').ResumeOutcome;
+  /** E — the derived plan → track → verify report for this turn (passed through). */
+  turnReport?: import('../learning/turn-report.js').TurnReport;
   /** WS5 (#27) — the turn refused to run; its content is the reason (see ChatEngine). */
   refused?: boolean;
   generationFailed?: boolean;
@@ -243,6 +254,14 @@ export interface ChatSessionRecord {
    * execution and carries the continuation marker into the model thread.
    */
   followups?: FollowupSuggestion[];
+  /**
+   * P8 — the model this conversation is PINNED to (the chat picker). When set,
+   * every turn in the session is served by exactly this provider/model instead
+   * of Auto routing. Persisted so a reload or a resumed session keeps honouring
+   * the user's explicit choice; cleared the moment Auto is chosen again.
+   */
+  pinnedProvider?: string;
+  pinnedModel?: string;
 }
 
 /** P4 — the sidebar summary shape for `GET /api/sessions`. */
@@ -440,7 +459,7 @@ export class ChatConsole {
         const data = JSON.parse(raw) as { sessions?: Record<string, ChatSessionRecord> };
         for (const [id, rec] of Object.entries(data?.sessions ?? {})) {
           if (typeof id !== 'string' || !id || !rec || !Array.isArray(rec.turns)) continue;
-          this.sessions.set(id, { turns: rec.turns, title: String(rec.title ?? ''), createdAt: Number(rec.createdAt) || 0, updatedAt: Number(rec.updatedAt) || 0, ...(typeof rec.projectPath === 'string' && rec.projectPath ? { projectPath: rec.projectPath } : {}), ...(Array.isArray(rec.followups) && rec.followups.length > 0 ? { followups: normalizeFollowups(rec.followups) } : {}) });
+          this.sessions.set(id, { turns: rec.turns, title: String(rec.title ?? ''), createdAt: Number(rec.createdAt) || 0, updatedAt: Number(rec.updatedAt) || 0, ...(typeof rec.projectPath === 'string' && rec.projectPath ? { projectPath: rec.projectPath } : {}), ...(Array.isArray(rec.followups) && rec.followups.length > 0 ? { followups: normalizeFollowups(rec.followups) } : {}), ...(typeof rec.pinnedProvider === 'string' && rec.pinnedProvider && typeof rec.pinnedModel === 'string' && rec.pinnedModel ? { pinnedProvider: rec.pinnedProvider, pinnedModel: rec.pinnedModel } : {}) });
         }
       } catch {
         /* unreadable store — start empty rather than crash the dashboard */
@@ -519,6 +538,7 @@ export class ChatConsole {
     const existed = this.sessions.delete(sessionId);
     this.activeAborts.delete(sessionId);
     this.pendingQuestions.delete(sessionId);
+    this.clearPlan(sessionId);
     this.persist();
     return { ok: existed };
   }
@@ -597,6 +617,7 @@ export class ChatConsole {
         updatedAt: now,
         ...(existing?.projectPath ? { projectPath: existing.projectPath } : {}),
         ...(existing?.followups && existing.followups.length > 0 ? { followups: existing.followups } : {}),
+        ...(existing?.pinnedProvider && existing.pinnedModel ? { pinnedProvider: existing.pinnedProvider, pinnedModel: existing.pinnedModel } : {}),
       });
       this.persist();
     } catch {
@@ -688,6 +709,14 @@ export class ChatConsole {
     const continuation = isSuggestedFollowup(clean, existing?.followups);
     const now = Date.now();
     if (recordTurn) {
+      // P8 — the pin is the EXPLICIT provider/model the GUI sent. The client
+      // only includes them when a model is pinned (Auto sends neither), so
+      // their absence on a recorded turn means "Auto" and CLEARS any pin. A
+      // non-recorded turn (the deferred-retry broker) never touches the pin.
+      const pinnedPatch =
+        opts.provider && opts.model
+          ? { pinnedProvider: opts.provider, pinnedModel: opts.model }
+          : {};
       this.sessions.set(sessionId, {
         turns: history,
         title: existing?.title ?? '',
@@ -695,6 +724,7 @@ export class ChatConsole {
         updatedAt: existing?.updatedAt ?? now,
         ...(opts.projectPath ? { projectPath: opts.projectPath } : (existing?.projectPath ? { projectPath: existing.projectPath } : {})),
         ...(existing?.followups && existing.followups.length > 0 ? { followups: existing.followups } : {}),
+        ...pinnedPatch,
       });
     }
     this.busy.add(sessionId);
@@ -880,6 +910,9 @@ export class ChatConsole {
           // P4b — persist the project path so it can be restored on resume.
           ...(opts.projectPath ? { projectPath: opts.projectPath } : (existing?.projectPath ? { projectPath: existing.projectPath } : {})),
           ...(nextFollowups.length > 0 ? { followups: nextFollowups } : {}),
+          // P8 — the completed turn keeps the pin (and an Auto turn clears it),
+          // the same rule the pre-turn record write applies.
+          ...(opts.provider && opts.model ? { pinnedProvider: opts.provider, pinnedModel: opts.model } : {}),
         });
         this.persist();
       }
@@ -962,6 +995,10 @@ export class ChatConsole {
         // WS5 — a refusal is a FAILED turn (so no surface shows it as an answer)
         // but not a retryable one, and the caller needs to be able to tell.
         ...(answer.refused ? { refused: true } : {}),
+        // E — the derived plan → track → verify → report artifact, so the GUI
+        // (and any API consumer) can show the trust verdict instead of inferring
+        // it from the transcript.
+        ...(answer.turnReport ? { turnReport: answer.turnReport } : {}),
       };
     } catch (err) {
       // A cancel racing the engine's unwinding must not surface as an error
@@ -1063,14 +1100,26 @@ export class ChatConsole {
     return true;
   }
 
-  /** The session's plan store — created on first use, dropped on reset. */
+  /**
+   * The session's plan store — created on first use, dropped on reset.
+   *
+   * FILE-BACKED, one file per session id: a plan that spans several turns (or
+   * several browser reloads) is restored instead of starting empty, which is
+   * what makes the progress table continuous rather than per-visit.
+   */
   private planStoreFor(sessionId: string): PlanStore {
     let store = this.planStores.get(sessionId);
     if (!store) {
-      store = new PlanStore();
+      store = createPersistentPlanStore(sessionId);
       this.planStores.set(sessionId, store);
     }
     return store;
+  }
+
+  /** Drop a session's in-memory AND on-disk plan (new conversation / delete). */
+  private clearPlan(sessionId: string): void {
+    this.planStores.delete(sessionId);
+    writePlanFile(planFilePath(sessionId), null);
   }
 
   /** Forget a session's history (new conversation) + drop its pending questions. */
@@ -1083,7 +1132,7 @@ export class ChatConsole {
     }
     this.sessions.delete(sessionId);
     this.busy.delete(sessionId);
-    this.planStores.delete(sessionId);
+    this.clearPlan(sessionId);
     this.persist();
   }
 }
