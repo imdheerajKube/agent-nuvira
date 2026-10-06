@@ -235,7 +235,14 @@ export type TraceGateName =
   // PLAN gate (E2): a workspace-directing turn was about to MUTATE without
   // having declared a plan, so the loop spent one bounded nudge to plan first —
   // the "plan → track → verify" contract made structural instead of optional.
-  | 'plan';
+  | 'plan'
+  // MID-TURN MODEL HANDOFF (fix_model_routing P2): the model serving the turn
+  // resolved with NOTHING usable (no answer text, no tool call) twice in a row,
+  // so the loop handed the work to a DIFFERENT model instead of re-asking the
+  // same one. A gate name because it is a bounded decision the loop made about
+  // its own run — and the record that makes "why did this turn move models?"
+  // answerable from the trace instead of inferred from a missing line.
+  | 'handoff';
 
 /**
  * A NON-LLM fact about a turn: a tool call, a gate decision, or a refusal.

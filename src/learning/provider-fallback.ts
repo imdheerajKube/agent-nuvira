@@ -69,7 +69,20 @@ interface CircuitBreakerState {
 }
 
 /** Error categories for deciding what's retryable */
-export type FallbackErrorType = 'auth' | 'rate-limit' | 'server' | 'network' | 'timeout' | 'unknown';
+export type FallbackErrorType =
+  | 'auth'
+  | 'rate-limit'
+  | 'server'
+  | 'network'
+  | 'timeout'
+  /**
+   * The provider RESOLVED (HTTP 200) but carried nothing usable — no text and
+   * no tool calls. Its own class on purpose: a run that died this way was
+   * booked as `unknown`, which hid it from the report and taught the router
+   * nothing. See `response-usability.ts` (fix_model_routing P1).
+   */
+  | 'empty-response'
+  | 'unknown';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -98,6 +111,11 @@ const COOLDOWN_DURATION_MS = 120_000;
 export function classifyFallbackError(err: unknown): FallbackErrorType {
   const message = err instanceof Error ? err.message : String(err);
   const lower = message.toLowerCase();
+
+  // Checked FIRST: the marker is OUR wording (`response-usability.ts`), so it is
+  // deterministic, and it must never fall through to `unknown` — the ledger, the
+  // exhaustion report and the bandit's reward all key off this class.
+  if (/unusable model response/i.test(message)) return 'empty-response';
 
   if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized') || lower.includes('forbidden') || lower.includes('api key') || lower.includes('auth')) {
     return 'auth';
@@ -191,6 +209,11 @@ const TRANSIENT_RETRY_TYPES: ReadonlySet<FallbackErrorType> = new Set<FallbackEr
   'network',
   'timeout',
 ]);
+// DELIBERATELY ABSENT: `empty-response`. Retrying the SAME provider after it
+// returned nothing re-hits the same model — which is exactly the loop that
+// killed a real turn (5 empty responses on one model, no failover). An empty
+// response is retryable on a DIFFERENT provider (see `isRetryableError`), which
+// is where the walk sends it.
 
 /** Should this error be retried against the SAME provider after a short backoff? */
 export function isTransientForRetry(err: unknown): boolean {

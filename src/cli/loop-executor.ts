@@ -67,6 +67,13 @@ import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict, adminBud
 import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
+// P1/P2 (fix_model_routing) — the shared definition of "this response carries
+// nothing usable". An empty completion is a FAILURE, not an answer, and must
+// advance the candidate walk instead of being returned to the caller.
+import { assertUsableModelResponse, isUnusableModelResponseError } from '../learning/response-usability.js';
+// P6 (fix_model_routing) — the bandit is told about step-level failures too, so
+// an arm that answers with nothing stops being sampled back up.
+import { getRouterBandit } from '../learning/router-bandit.js';
 import {
   recordRegistrySuccess,
   getProviderFallback,
@@ -956,6 +963,16 @@ export async function runLoopExecutor(
         // it several steps earlier.
         servedRoute = noteServedRoute(servedRoute, servedRouteFrom(route));
         const resp = await tryOnce(prov, mdl, nextMessages, schemas, abort);
+        // ── P1/P2 — AN UNUSABLE RESPONSE IS A FAILURE, NOT AN ANSWER ─────
+        // A provider that resolves HTTP 200 with neither answer text nor a tool
+        // call used to be returned from here as the step's response: the walk
+        // only reacts to THROWN errors, so the SAME model was re-asked and the
+        // turn eventually ended as "bounded" with zero work done while healthy
+        // models sat configured and unused. Validating here turns that into what
+        // it is — a candidate-level failure — so the catch below books it
+        // (`empty-response`: the pair rests, its siblings stay routable) and the
+        // walk continues to a DIFFERENT model IN THIS SAME STEP.
+        assertUsableModelResponse(resp);
         // ── ANSWER-QUALITY GATE ──────────────────────────────────────────
         // A reply that is the model's own REASONING, or its narration of the
         // tool contract, is not a deliverable — and it never THROWS, so this
@@ -1019,6 +1036,17 @@ export async function runLoopExecutor(
             });
           } catch {
             // Best-effort — bookkeeping must never mask the generation error.
+          }
+          // P6 — an empty completion is NEGATIVE evidence for the arm itself, at
+          // a granularity the task-level reward can never reach: the turn does
+          // not fail, it just moves on, so without this the prior kept sampling
+          // the same dead model back to the top of the ranking.
+          if (isUnusableModelResponseError(err)) {
+            try {
+              getRouterBandit().penalizeModel(cand.model !== 'default' ? cand.model : model);
+            } catch {
+              // Best-effort — learning must never mask the generation error.
+            }
           }
           // ── PINNED-RUN GATE ──────────────────────────────────────────────
           // Leaving a provider the user EXPLICITLY asked for is only justified

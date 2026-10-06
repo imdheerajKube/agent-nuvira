@@ -1024,7 +1024,75 @@ describe('AutoModelRouter.resolve with bandit learning', () => {
       useBandit: true,
     });
     expect(decision.routedBy).toBe('bandit');
-    expect(decision.explanation).toContain('bandit-learned');
+  });
+
+  /**
+   * P6 (fix_model_routing) — the label is a claim about EVIDENCE.
+   *
+   * This test used to assert `bandit-learned` on a cold-start store, which is
+   * exactly the dishonesty the user found: the live trace read "bandit-learned"
+   * while the bandit store had no entry for any model in play, and its newest
+   * sample predated the decision by eleven days. A cold-start prior is a
+   * constant multiplier that CANNOT reorder anything, so the pick came from the
+   * deterministic ranking and must be described that way.
+   */
+  it('does NOT claim "bandit-learned" when the arm has no samples (P6)', () => {
+    const decision = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini', 'openrouter'],
+      useBandit: true,
+    });
+    expect(decision.banditInformed).toBe(false);
+    expect(decision.explanation).not.toContain('bandit-learned');
+    expect(decision.explanation).toContain('bandit cold-start');
+    expect(decision.explanation).toContain('the deterministic ranking stands');
+  });
+
+  it('DOES claim "bandit-learned" once the winning arm has recorded outcomes (P6)', () => {
+    const router = new AutoModelRouter();
+    const first = router.resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+      useBandit: true,
+    });
+    // Accumulate real outcomes for the arms in play (in the SAME intent-aware
+    // bucket resolve() reads — see RouterBandit.bucketKey), then re-resolve the
+    // same task: now the sample is evidence and the label is earned.
+    for (const provider of ['groq', 'gemini']) {
+      for (let i = 0; i < 8; i++) {
+        getRouterBandit().recordOutcomeWithComplexity(
+          provider,
+          first.complexity as never,
+          'success',
+          0.5,
+          undefined,
+          first.taskProfile.intent,
+        );
+      }
+    }
+    const second = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      allowedProviders: ['groq', 'gemini'],
+      useBandit: true,
+    });
+    expect(second.banditInformed).toBe(true);
+    expect(second.explanation).toContain('bandit-learned');
+  });
+
+  it('treats a STALE store as uninformed even when it has samples (P6)', () => {
+    const bandit = getRouterBandit();
+    const state = bandit.getState();
+    // A sample from long ago describes a different machine, different keys and a
+    // different model roster — "learned" is not true for today's decision.
+    state.learningHistory.length = 0;
+    state.learningHistory.push({
+      provider: 'groq',
+      model: 'openai/gpt-oss-120b',
+      complexity: 'moderate' as never,
+      outcome: 'success',
+      reward: 1,
+      timestamp: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+    expect(bandit.isStale()).toBe(true);
+    expect(bandit.ageMs()).toBeGreaterThan(7 * 24 * 60 * 60 * 1000);
+    expect(bandit.hasLearnedData('groq', 'moderate' as never)).toBe(false);
   });
 
   it('cold-start bandit still returns a valid provider', () => {

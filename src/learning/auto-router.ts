@@ -686,6 +686,14 @@ export interface AutoRouteResult {
    */
   banditEscalation?: boolean;
   /**
+   * P6 (fix_model_routing) — did the bandit's DATA inform this pick? True only
+   * when the winning arm has accumulated samples in this task bucket and the
+   * store is fresh. False means the decision rest on the deterministic ranking
+   * with the bandit merely enabled, which is a different claim from
+   * "bandit-learned" and must not be described as one.
+   */
+  banditInformed?: boolean;
+  /**
    * M2.4: providers eliminated by the governance policy (allow/deny lists,
    * admin max-cost cap, or PII privacy block), with the reason. Empty when no
    * policy is configured or nothing was blocked — keeps the audit trail
@@ -2164,6 +2172,17 @@ export class AutoModelRouter {
     let routedBy: RoutedBy = 'heuristic';
     let banditEscalation = false;
     let escalatedProvider: string | undefined;
+    /**
+     * P6 (fix_model_routing) — did the bandit's data actually inform this pick?
+     *
+     * `routedBy = 'bandit'` is set the moment `useBandit` is on, and the
+     * explanation then says `bandit-learned` — even when the arm has no samples
+     * at all (a cold-start prior, whose constant 0.5 multiplier cannot reorder
+     * anything) and even when the whole store is stale. The label is a claim
+     * about evidence, so it is only made when there IS evidence: samples for the
+     * winning arm, or a real uncertainty-driven escalation.
+     */
+    let banditInformed = false;
     if (options.useBandit) {
       const bandit = getRouterBandit();
       // v3 — the learning bucket is task-INTENT-aware. Derive the intent from
@@ -2194,6 +2213,13 @@ export class AutoModelRouter {
       const minSamples = options.escalationMinSamples ?? DEFAULT_MIN_SAMPLES;
       const winner = scored.find((s) => !s.inCooldown) || scored[0];
       const winnerPrior = bandit.getPrior(winner.provider, complexity, analyzedProfile.intent);
+      // The concrete model is resolved LATER in this method (after the model-first
+      // override), so the verdict is made on the provider arm — the arm every
+      // provider-level sample lands in, and the one the pre-model-first pick is
+      // actually driven by.
+      banditInformed =
+        !bandit.isStale() &&
+        bandit.hasLearnedData(winner.provider, complexity, analyzedProfile.intent);
       if (winnerPrior.alpha + winnerPrior.beta < minSamples) {
         // S5: never escalate DOWNWARD in capability. The bandit's learned
         // priors come from past sessions (often coding-heavy local usage), so
@@ -2218,6 +2244,9 @@ export class AutoModelRouter {
         );
         if (learnedAlternative) {
           banditEscalation = true;
+          // An escalation IS learned behaviour by construction — it fired
+          // BECAUSE the alternative has accumulated data.
+          banditInformed = !bandit.isStale();
           escalatedProvider = learnedAlternative.provider;
           if (options.verbose) {
             logger.info(
@@ -2536,7 +2565,16 @@ export class AutoModelRouter {
       taskProfile,
     ) +
       (weakModelForAgenticAsk ? ' | ⚠ weak-model fallback (no capable provider free)' : '') +
-      (routedBy === 'bandit' ? ' | bandit-learned' : '') +
+      // P6 — say what actually happened. A cold-start or stale store gets NO
+      // claim of learning: the deterministic ranking stands, and the user is told
+      // that instead of being told "learned" about a prior nobody has ever
+      // updated. Silent-about-nothing would be worse still — the absence of the
+      // old label is only honest if the reason is named.
+      (routedBy === 'bandit'
+        ? banditInformed
+          ? ' | bandit-learned'
+          : ' | bandit cold-start (no learned samples for this task bucket — the deterministic ranking stands)'
+        : '') +
       (banditEscalation ? ' | escalated: winner unlearned' : '') +
       // ISSUE-002 explanation transparency: cite the registry data that
       // excluded providers from the candidate pool, so auto routing proves
@@ -2593,6 +2631,8 @@ export class AutoModelRouter {
       agenticCapable: isAgenticCapableModel(model, provider),
       overrideReason,
       banditEscalation,
+      // P6 — whether the bandit's data informed this pick (see `banditInformed`).
+      banditInformed,
       governanceBlocked,
       registryExcluded,
       contextPreflight,

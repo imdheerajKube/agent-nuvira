@@ -20,7 +20,7 @@ import { getModelRegistry, type ModelRegistryEntry } from './model-registry.js';
 import { getCatalogProvider, type CatalogProviderEntry, CATALOG_PROVIDER_IDS } from '../inference/provider-catalog.js';
 import { analyzeComplexity, type ComplexityLevel } from './hybrid-router.js';
 import { getTaskType, type TaskType } from './model-router.js';
-import { preferredModelsFor } from './model-selection.js';
+import { hasCredentials, preferredModelsFor, KEYLESS_PROVIDERS } from './model-selection.js';
 import { isNonChatModel } from '../inference/model-catalog.js';
 import { logger } from '../utils/logger.js';
 import type { ConfigManager } from '../config/manager.js';
@@ -166,16 +166,29 @@ function scoreModelOnProvider(
 
   // 2. Capability fit — score by model SIZE relative to task complexity
   let capabilityFit = 0.5;
-  // Detect model size from name (b = billion parameters)
+  // Detect model size from name (b = billion parameters).
+  //
+  // P6 (fix_model_routing) — MOE ACTIVE PARAMETERS COUNT, NOT TOTAL ONES. A
+  // mixture-of-experts name like `gemma-4-26b-a4b-it` holds 26B parameters but
+  // routes each token through ~4B of them, and it is the ACTIVE width that
+  // decides whether a model can hold a multi-step agentic task — which is why
+  // the tag is in the name at all. The naive parse read `26b` and ranked it as a
+  // MEDIUM model with capabilityFit 1.0, measured live as the #1 pick (0.87)
+  // above `gemini-3.1-flash-lite`, during the very run that then returned five
+  // empty responses in a row. Reading the active width is not a heuristics
+  // rewrite: it is reading the number the provider published.
   const sizeMatch = modelLower.match(/(\d+\.?\d*)b/);
   const sizeB = sizeMatch ? parseFloat(sizeMatch[1]) : 0;
+  const activeMatch = modelLower.match(/a(\d+\.?\d*)b/);
+  const activeB = activeMatch ? parseFloat(activeMatch[1]) : 0;
+  const effectiveB = activeB > 0 && (sizeB === 0 || activeB < sizeB) ? activeB : sizeB;
 
   // Per-model pricing that depends on size detection
   if (modelLower.includes('qwen') && sizeB >= 70) costPerMToken = 0.0009;
   else if (modelLower.includes('qwen') && sizeB > 0) costPerMToken = 0.0001;
 
   // Known large models (70B+ params or known high-capability closed models)
-  const isLargeModel = sizeB >= 70
+  const isLargeModel = effectiveB >= 70
     || modelLower.includes('gpt-4o') && !modelLower.includes('mini')
     || modelLower.includes('claude-3') && !modelLower.includes('haiku')
     || modelLower.includes('sonnet') || modelLower.includes('opus')
@@ -183,7 +196,7 @@ function scoreModelOnProvider(
     || (modelLower.includes('gemini') && (modelLower.includes('pro') && !modelLower.includes('nano')));
 
   // Known medium models (8B-70B or known mid-tier closed models)
-  const isMediumModel = (sizeB >= 8 && sizeB < 70)
+  const isMediumModel = (effectiveB >= 8 && effectiveB < 70)
     || modelLower.includes('gpt-4o-mini') || modelLower.includes('gpt-4o-nano')
     || modelLower.includes('haiku') || modelLower.includes('flash')
     || (modelLower.includes('gemini') && (modelLower.includes('flash') || modelLower.includes('lite')))
@@ -191,7 +204,7 @@ function scoreModelOnProvider(
     || modelLower.includes('command-r') && !modelLower.includes('plus');
 
   // Known small models (<8B or known lightweight)
-  const isSmallModel = (sizeB > 0 && sizeB < 8)
+  const isSmallModel = (effectiveB > 0 && effectiveB < 8)
     || modelLower.includes('nano') || modelLower.includes('0.5b') || modelLower.includes('micro')
     || modelLower.includes('turbo') && !modelLower.includes('gpt')
     || modelLower.includes('lite') || modelLower.includes('tiny') || modelLower.includes('mini') && sizeB > 0;
@@ -210,6 +223,16 @@ function scoreModelOnProvider(
     else if (isMediumModel) capabilityFit = 0.8;
     else if (isLargeModel) capabilityFit = 0.5; // Overkill
   }
+
+  // P6 — EVIDENCE, not a name. A pair the registry has already judged
+  // `unavailable` (repeated real failures — including the empty-response park
+  // the routing fixes now record) must not keep presenting itself as a
+  // capability match for the task. `isCandidateAvailable` filters such an entry
+  // out of the tiered chain, but SCORING still ranked it as if it were healthy,
+  // so any caller that reads the ranking (or the report derived from it) saw an
+  // unfit model near the top. Capability is the dimension that claims "can do
+  // this" — it is exactly the one an availability ruling must limit.
+  if (entry?.status === 'unavailable') capabilityFit = Math.min(capabilityFit, 0.2);
 
   // 3. Health (latency + error rate)
   let health = 0.7; // Default
@@ -251,6 +274,42 @@ function scoreModelOnProvider(
 }
 
 /**
+ * P6 (fix_model_routing) — POOL HYGIENE: could this provider really serve this
+ * model id?
+ *
+ * The registry can hold pairs that are syntactically fine and physically
+ * impossible, and a `verified` status on one of them is worse than useless — it
+ * spends a fallback slot, a round trip, and (as an "eligible model") credibility
+ * on a call that cannot succeed. Observed on disk: `gemini/qwen2.5:0.5b` and
+ * `groq/wire-stub-model` marked verified.
+ *
+ * Deliberately CONSERVATIVE — only two rules, both of which are decidable from
+ * the id alone:
+ *
+ *   1. An Ollama-style TAGGED id (`name:tag`) is a LOCAL runner's naming
+ *      scheme. A hosted provider does not serve `qwen2.5:0.5b`; the `:tag` form
+ *      belongs to the local-ops providers (see KEYLESS_PROVIDERS).
+ *   2. Stub/fixture ids (`wire-stub-model`, `test-…`, `…-stub`) come from test
+ *      harnesses and must never be routed to.
+ *
+ * Anything needing a catalog to adjudicate (a vendor that does not serve a
+ * family) is NOT guessed at here: a wrong exclusion silently removes a working
+ * model, which is the more expensive mistake.
+ */
+export function isPairPlausible(provider: string, model: string): boolean {
+  const id = (model ?? '').trim().toLowerCase();
+  if (!id) return false;
+  // 2. Fixture/stub ids.
+  if (/^(wire-|test-|fixture-|stub-)/.test(id) || /-stub(-|$)|\.stub\./.test(id)) return false;
+  // 1. Ollama-style tags only on a local runner.
+  if (id.includes(':')) {
+    const localRunner = KEYLESS_PROVIDERS.includes(provider) || provider === 'ollama';
+    if (!localRunner) return false;
+  }
+  return true;
+}
+
+/**
  * Build the full model candidate list across all providers.
  * This is the core of model-first routing: instead of scoring providers,
  * we score every model on every provider.
@@ -269,6 +328,19 @@ export function buildModelCandidates(
   const providers = allowedProviders || CATALOG_PROVIDER_IDS;
 
   for (const providerId of providers) {
+    // ── P5 (fix_model_routing) — A CREDENTIAL GATE, so the pool is CALLABLE ──
+    // Without this the candidate list (and every count derived from it) included
+    // providers the user has NO credential for. Measured on this machine: the
+    // pool claimed 538 models across 23 "providers" — openai, anthropic, xai,
+    // perplexity, bedrock, omniroute… all keyless here — while only 17 pairs had
+    // ever been verified. A report that can say "538 models are available"
+    // cannot be trusted when it says "no model can do this", and the ranking it
+    // produces is dominated by providers that would 401. Gated only when a
+    // ConfigManager is supplied (every real routing path passes one); callers
+    // that deliberately want the raw catalog — a probe sweep, a test — still get
+    // the unfiltered list, and `countEligibleModels` keeps its old behaviour
+    // rather than silently changing the meaning of an existing number.
+    if (configManager && !hasCredentials(configManager, providerId)) continue;
     const catalog = getCatalogProvider(providerId);
     const providerSpeed = catalog?.capabilities.speed || 0.5;
 
@@ -298,6 +370,11 @@ export function buildModelCandidates(
       // the pool offered `local/gemini-3.1-flash-lite` (an Ollama runner cannot
       // serve a Google model) on every walk until this filter existed.
       if (registry.isDeadPair(providerId, modelEntry.model)) continue;
+      // P6 — a pair that CANNOT exist is not a candidate: an Ollama-tagged id on
+      // a hosted provider, or a test fixture. Same class as the dead-pair filter
+      // above, decided from the id instead of from a past 404 (see
+      // `isPairPlausible`).
+      if (!isPairPlausible(providerId, modelEntry.model)) continue;
       // Skip speech/audio/video/image/research models early
       const modelLower = modelEntry.model.toLowerCase();
       if (modelLower.includes('whisper') || modelLower.includes('tts') || modelLower.includes('speech')
@@ -394,11 +471,20 @@ export function pickBestModelCandidate(
  * pairs + non-chat models excluded) — the report can never disagree with what
  * routing would actually consider.
  */
-export function countEligibleModels(allowedProviders?: string[]): { models: number; providers: number } {
+export function countEligibleModels(
+  allowedProviders?: string[],
+  configManager?: ConfigManager,
+): { models: number; providers: number } {
   try {
     // A neutral, class-agnostic description: we want the SIZE of the pool, not
     // a ranking. Complexity only shifts score weights, never eligibility.
-    const candidates = buildModelCandidates('general task', 'moderate' as ComplexityLevel, undefined, allowedProviders);
+    //
+    // P5: when a ConfigManager is supplied the count is CREDENTIALED — it is the
+    // set routing would actually try, not the catalog. Without it the count is
+    // the legacy filter-only number, which must never be used to justify a
+    // shortage claim ("no model is available") — it counts models this machine
+    // has no key for.
+    const candidates = buildModelCandidates('general task', 'moderate' as ComplexityLevel, configManager, allowedProviders);
     const providers = new Set<string>();
     for (const c of candidates) providers.add(c.provider);
     return { models: candidates.length, providers: providers.size };

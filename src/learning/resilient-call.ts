@@ -35,11 +35,16 @@ import { getAutoRouter, type AutoRouteResult, type ScoredProvider } from './auto
 import { analyzeComplexity, type ComplexityLevel } from './hybrid-router.js';
 import { buildAutoResolveOptions } from './resolve-options.js';
 import { buildModelCandidates, buildTieredFailoverChain, countEligibleModels } from './model-first-router.js';
+import { assertUsableModelResponse, isUnusableModelResponseError } from './response-usability.js';
 import { recordModelUsage } from './model-warmup.js';
 import { getDefaultModel } from '../inference/provider-catalog.js';
 import { resolveRoute } from '../inference/route-resolver.js';
 import { getModelRegistry } from './model-registry.js';
-import { recordActionFailure, type FailureSessionState } from './failure-bookkeeping.js';
+import {
+  recordActionFailure,
+  EMPTY_RESPONSE_SESSION_EXCLUSION_MS,
+  type FailureSessionState,
+} from './failure-bookkeeping.js';
 import { sweepTransientFailures } from './provider-revival.js';
 import { getProviderFallback, recordRegistrySuccess } from './provider-fallback.js';
 import { ProviderFactory } from '../inference/factory.js';
@@ -53,7 +58,15 @@ import type { LLMCallFn } from '../agents/agent.js';
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 /** Failure classification for routing decisions. */
-type FailureKind = 'auth' | 'rate-limit' | 'timeout' | 'network' | 'model-not-found' | 'unknown';
+type FailureKind =
+  | 'auth'
+  | 'rate-limit'
+  | 'timeout'
+  | 'network'
+  | 'model-not-found'
+  /** The provider resolved with nothing usable (see `response-usability.ts`). */
+  | 'empty-response'
+  | 'unknown';
 
 /** A candidate provider×model pair in the failover chain. */
 export interface FailoverCandidate {
@@ -146,12 +159,23 @@ const RATE_LIMIT_EXCLUSION_MS = 60_000;
 const NETWORK_FAILURE_EXCLUSION_MS = 30_000;
 /** How long a provider is excluded after model-not-found (long cooldown). */
 const MODEL_NOT_FOUND_EXCLUSION_MS = 300_000;
+/**
+ * How long a pair is excluded after resolving with an unusable (empty)
+ * response. Defined ONCE in `failure-bookkeeping.ts` (it is the same fact) so
+ * this walk, chat's deep pool and the loop executor cannot drift apart.
+ */
+const EMPTY_RESPONSE_EXCLUSION_MS = EMPTY_RESPONSE_SESSION_EXCLUSION_MS;
 /** Cross-pipeline failure persistence path. */
 const FAILURE_PERSIST_PATH = 'nuvira-routing-failures.json';
 
 // ─── Failure Classification ─────────────────────────────────────────────────
 
 function classifyFailure(err: unknown): FailureKind {
+  // A response that resolved but carried nothing is its own kind: it is not an
+  // HTTP failure and must not be bucketed as `unknown`, because the report and
+  // the router's learning key off it.
+  if (isUnusableModelResponseError(err)) return 'empty-response';
+
   const msg = err instanceof Error ? err.message : String(err);
   const lower = msg.toLowerCase();
 
@@ -180,6 +204,11 @@ function exclusionDuration(kind: FailureKind): number {
     case 'timeout': return NETWORK_FAILURE_EXCLUSION_MS;
     case 'network': return NETWORK_FAILURE_EXCLUSION_MS;
     case 'model-not-found': return MODEL_NOT_FOUND_EXCLUSION_MS;
+    // A provider that answers with nothing gets a longer cool-off than a blip:
+    // within the turn the session exclusion already keeps it out, and across
+    // turns this stops a model known to return nothing from being re-picked
+    // while still letting a genuinely transient empty self-heal (2 minutes).
+    case 'empty-response': return EMPTY_RESPONSE_EXCLUSION_MS;
     case 'unknown': return NETWORK_FAILURE_EXCLUSION_MS;
   }
 }
@@ -752,6 +781,18 @@ export function createResilientCallLLM(
         state.currentModel = candidate.model;
 
         const result = await adapter.generate(prompt, mergedOptions);
+
+        // fix_model_routing P1 — AN EMPTY COMPLETION IS A FAILURE, NOT A SUCCESS.
+        // `adapter.generate` returns TEXT ONLY (tool calls travel via
+        // `generateTools`), so a blank string here provably carries nothing. It
+        // used to be returned as a success, which is why a provider answering
+        // HTTP 200 with zero content kept its `verified` status, kept
+        // `errorRate 0`, and was re-picked on the next turn while the walk never
+        // advanced — the run that died with 5 empty responses and 0 tool calls.
+        // Throwing here routes it through the SAME handler as a thrown provider
+        // error: the candidate is excluded, the failure is persisted and named,
+        // and the walk moves to the next model.
+        assertUsableModelResponse(result);
 
         // Success — reset failover counter for this candidate
         state.currentAttempt = 0;
@@ -1395,7 +1436,11 @@ export function modelBreadthReport(mark: number, configManager?: ConfigManager):
   }, undefined);
   // The pool size is measured, never assumed — it is what decides whether a
   // "no model is available" claim is allowed to be made at all (G9).
-  const pool = countEligibleModels();
+  // P5 — the pool claim is made from the CREDENTIALED set when a ConfigManager is
+  // available, so "N eligible models" cannot include providers this machine has
+  // no key for (the live over-report: 538 models across 23 providers, most of
+  // them uncredentialed).
+  const pool = countEligibleModels(undefined, configManager);
   return {
     tried,
     parked,

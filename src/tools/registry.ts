@@ -95,6 +95,21 @@ export interface ToolContext {
    */
   askUser?: (question: string, choices: AskUserChoice[], multiSelect: boolean) => Promise<AskUserAnswer>;
   /**
+   * Is this turn happening in FRONT of a person (an interactive chat session),
+   * as opposed to an unattended/gateway run?
+   *
+   * P7 (fix_model_routing) — the only consumer today is `run_terminal`'s
+   * DEFAULT command timeout. A long default is right for a batch job and wrong
+   * for a chat: the live run burned four minutes on three back-to-back 120-second
+   * terminal timeouts while the user watched the console do nothing, then gave
+   * up. A shorter default in front of a person turns a hang into a fast, honest
+   * "this is too slow — narrow it" instead of a silence they cannot act on.
+   *
+   * `undefined` (a direct tool call, an unattended run, a test) keeps the
+   * existing, longer default — nothing changes for a batch pipeline.
+   */
+  interactive?: boolean;
+  /**
    * G13 — does the CURRENT request authorize file writes?
    *
    * Set once per turn by the tool loop from the last user message (see

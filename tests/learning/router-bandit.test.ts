@@ -454,3 +454,77 @@ describe('intent-aware bucketing (v3)', () => {
     expect(sampled).toBeLessThan(0.5);
   });
 });
+
+/**
+ * fix_model_routing P6 — NEGATIVE REWARD for a step-level failure.
+ *
+ * The ungrounded "bandit-learned" score had a second half: the bandit only ever
+ * heard about whole-TASK outcomes, so the failure that actually killed runs — a
+ * model resolving a step with nothing usable — taught it nothing. Its prior kept
+ * sampling the same dead arm back to the top, which is precisely how a model that
+ * returned five empty responses in a row outranked one that had just worked.
+ */
+describe('RouterBandit.penalizeModel — empties are evidence, not silence', () => {
+  it('punishes the model in the arm the ROUTER samples (intent-aware bucket)', () => {
+    const bandit = getRouterBandit();
+    bandit.reset();
+    const before = bandit.getModelPrior('gemma-4-26b-a4b-it', 'moderate' as never, 'coding');
+
+    bandit.penalizeModel('gemma-4-26b-a4b-it', 'moderate' as never, 'coding');
+
+    const after = bandit.getModelPrior('gemma-4-26b-a4b-it', 'moderate' as never, 'coding');
+    expect(after.beta).toBe(before.beta + 1);
+    expect(after.alpha).toBe(before.alpha);
+    // …and the router can now SEE that it has data (no longer a cold-start arm).
+    expect(
+      bandit.hasLearnedData('gemini', 'moderate' as never, 'coding', 'gemma-4-26b-a4b-it'),
+    ).toBe(true);
+  });
+
+  it('repeated empties drive the sampled expectation DOWN', () => {
+    const bandit = getRouterBandit();
+    bandit.reset();
+    const mean = () => {
+      const p = bandit.getModelPrior('broken', 'moderate' as never);
+      return p.alpha / (p.alpha + p.beta);
+    };
+    bandit.penalizeModel('broken', 'moderate' as never);
+    const once = mean();
+    for (let i = 0; i < 5; i++) bandit.penalizeModel('broken', 'moderate' as never);
+    expect(mean()).toBeLessThan(once);
+    expect(mean()).toBeLessThan(0.5);
+  });
+
+  it('with no bucket supplied, penalizes every arm that knows the model (never invents arms)', () => {
+    const bandit = getRouterBandit();
+    bandit.reset();
+    bandit.recordModelOutcomeWithComplexity('broken', 'moderate' as never, 'success', 0.5, undefined, 'coding');
+    bandit.penalizeModel('broken');
+    const coding = bandit.getModelPrior('broken', 'moderate' as never, 'coding');
+    expect(coding.beta).toBeGreaterThan(1);
+    // A bucket with no entry for the model is left alone — and no new one appears
+    // for an unrelated intent.
+    expect(bandit.getModelPrior('broken', 'simple' as never, 'research')).toEqual({ alpha: 1, beta: 1 });
+  });
+
+  it('records the failure in history, so the store reflects that learning happened', () => {
+    const bandit = getRouterBandit();
+    bandit.reset();
+    bandit.penalizeModel('broken', 'moderate' as never);
+    const history = bandit.getState().learningHistory;
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ model: 'broken', outcome: 'failure', reward: 0 });
+    // A fresh write means the staleness guard is not fooled into thinking the
+    // store is old.
+    expect(bandit.isStale()).toBe(false);
+  });
+
+  it('never records anything for a placeholder id', () => {
+    const bandit = getRouterBandit();
+    bandit.reset();
+    bandit.penalizeModel('default');
+    bandit.penalizeModel('');
+    expect(bandit.getState().learningHistory).toHaveLength(0);
+    expect(bandit.getModelPrior('default', 'moderate' as never)).toEqual({ alpha: 1, beta: 1 });
+  });
+});

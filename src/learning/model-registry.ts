@@ -341,6 +341,15 @@ export const DEGRADED_UNAVAILABLE_THRESHOLD = 3;
  */
 export const ERROR_RATE_HEAL_STEP = 0.1;
 
+/**
+ * How long a pair that resolved with an UNUSABLE (empty) response is parked.
+ *
+ * fix_model_routing P1/P2. Short enough to self-heal (a genuinely transient
+ * empty), long enough that the same broken pair is not re-picked on the next
+ * turn. Model-scoped: the provider's healthy siblings stay routable.
+ */
+export const EMPTY_RESPONSE_PARK_MS = 120_000;
+
 function memoryDir(): string {
   return envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR;
 }
@@ -1373,6 +1382,18 @@ export class ModelRegistry {
       entry.quotaParkedUntil = Math.max(entry.quotaParkedUntil, parkUntil);
       // Model-specific parking (from recordCall) — providerParked=false means
       // isUsable() WILL block this verified model (correct: it was rate-limited).
+      entry.providerParked = false;
+      flipped = true;
+    } else if (errorType === 'empty-response') {
+      // fix_model_routing P1/P2 — the provider RESOLVED but carried nothing.
+      // This used to be recorded as a SUCCESS (the walk had no notion of a
+      // usable response), so a model that answers every turn with an empty body
+      // kept `verified` and `errorRate 0` and the router kept choosing it. The
+      // error-rate bump above already sinks it in scoring; the park is the hard
+      // stop, and it is MODEL-scoped so the provider's healthy siblings remain
+      // routable and the pair returns automatically after the window.
+      entry.lastError = 'empty-response (no text, no tool call)';
+      entry.quotaParkedUntil = Math.max(entry.quotaParkedUntil, now + EMPTY_RESPONSE_PARK_MS);
       entry.providerParked = false;
       flipped = true;
     }

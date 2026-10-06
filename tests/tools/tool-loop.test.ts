@@ -2400,3 +2400,288 @@ describe('tool loop — project prerequisite pre-flight (D2.2)', () => {
     expect(events.filter((e) => e.kind === 'gate' && e.gate === 'prerequisite').length).toBeGreaterThanOrEqual(1);
   });
 });
+
+/**
+ * fix_model_routing P2 — MID-TURN MODEL HANDOFF.
+ *
+ * The failure this pins: a live dashboard turn took five consecutive EMPTY
+ * responses from one model and ended `bounded` with zero tool calls, while
+ * healthy models sat configured and unused. The user had to say "retry" — which
+ * is the one thing the system must never require. The loop's rule is now: one
+ * same-model retry, then ask the CALLER (who owns the pool) for a different
+ * model, and only fall back to the old bounded ending when the caller says
+ * there is genuinely nothing else.
+ */
+describe('tool loop — mid-turn model handoff (P2)', () => {
+  it('hands off to a different model after a model answers with nothing twice', async () => {
+    const onTraceEvent = vi.fn();
+    const onEvent = vi.fn();
+    let model = 'A';
+    const callModel = vi.fn(
+      async (): Promise<StepResponse> =>
+        model === 'A' ? { content: '', toolCalls: [] } : { content: 'B answered it.', toolCalls: [] },
+    );
+    const requestModelSwitch = vi.fn(async () => {
+      model = 'B';
+      return true;
+    });
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), onEvent, requestModelSwitch },
+      onTraceEvent,
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    // The turn DELIVERED, on the second model, with no user action.
+    expect(result.content).toBe('B answered it.');
+    expect(result.bounded).toBe(false);
+    // A delivered answer is never reported as a generation failure.
+    expect(result.generationFailed ?? false).toBe(false);
+    expect(result.modelHandoffs).toBe(1);
+    // Asked exactly once, and named the case for what it is.
+    expect(requestModelSwitch).toHaveBeenCalledTimes(1);
+    expect(requestModelSwitch).toHaveBeenCalledWith('empty');
+    // The decision is on the trace, not only in a log line.
+    const events = onTraceEvent.mock.calls.map((c) => c[0] as LoopTraceEvent);
+    expect(events.some((e) => e.kind === 'gate' && e.gate === 'handoff')).toBe(true);
+    // And the replacement model was actually called.
+    expect(callModel).toHaveBeenCalledTimes(3);
+  });
+
+  it('allows ONE same-model retry before it insists on a handoff', async () => {
+    let n = 0;
+    const callModel = vi.fn(
+      async (): Promise<StepResponse> =>
+        ++n === 1 ? { content: '', toolCalls: [] } : { content: 'ok on the second try', toolCalls: [] },
+    );
+    const requestModelSwitch = vi.fn(async () => true);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), requestModelSwitch },
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.content).toBe('ok on the second try');
+    expect(result.steps).toBe(2);
+    // A single empty completion is a blip, not a verdict — no model churn.
+    expect(requestModelSwitch).not.toHaveBeenCalled();
+    expect(result.modelHandoffs).toBeUndefined();
+  });
+
+  it('gives the handed-off model its OWN retry — the streak belongs to the model that failed', async () => {
+    let model = 'A';
+    let bCalls = 0;
+    const callModel = vi.fn(async (): Promise<StepResponse> => {
+      if (model === 'A') return { content: '', toolCalls: [] };
+      bCalls += 1;
+      return bCalls === 1 ? { content: '', toolCalls: [] } : { content: 'B answered', toolCalls: [] };
+    });
+    const requestModelSwitch = vi.fn(async () => {
+      model = 'B';
+      return true;
+    });
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), requestModelSwitch },
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.content).toBe('B answered');
+    // B's first empty did NOT immediately drop B: its streak started at zero.
+    expect(requestModelSwitch).toHaveBeenCalledTimes(1);
+    expect(result.modelHandoffs).toBe(1);
+  });
+
+  it('falls back to the bounded ending when the caller has no other candidate', async () => {
+    const callModel = vi.fn(async (): Promise<StepResponse> => ({ content: '', toolCalls: [] }));
+    const requestModelSwitch = vi.fn(async () => false);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), requestModelSwitch },
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    // Honest about being unfinished, and no phantom "handoff" was claimed.
+    expect(result.bounded).toBe(true);
+    expect(result.modelHandoffs).toBeUndefined();
+    expect(result.steps).toBeLessThanOrEqual(MAX_THINK_CONTINUES + 2);
+    // It DID ask — the loop does not give up while the caller might still have one.
+    expect(requestModelSwitch.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it('keeps the pre-P2 behaviour for a caller that supplies no hook (mocks, children)', async () => {
+    const onTraceEvent = vi.fn();
+    const deps = mockDeps([{ content: '', toolCalls: [] }]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps,
+      onTraceEvent,
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.bounded).toBe(true);
+    const events = onTraceEvent.mock.calls.map((c) => c[0] as LoopTraceEvent);
+    expect(events.some((e) => e.kind === 'gate' && e.gate === 'handoff')).toBe(false);
+  });
+
+  it('does not let a broken switch hook kill the turn', async () => {
+    const callModel = vi.fn(async (): Promise<StepResponse> => ({ content: '', toolCalls: [] }));
+    const requestModelSwitch = vi.fn(async () => {
+      throw new Error('pool exploded');
+    });
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), requestModelSwitch },
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    // Treated exactly like "no candidate": bounded, never a crash.
+    expect(result.bounded).toBe(true);
+  });
+});
+
+/**
+ * fix_model_routing P3 — DELIVERY PERSISTENCE.
+ *
+ * Two invariants are pinned here:
+ *   1. HAND-OFFS CANNOT BE CUT SHORT BY STEP ACCOUNTING. The empty completions
+ *      a handoff costs are not the user's work, so each handoff grants step
+ *      credit (an ATTEMPT budget separate from the step budget). A turn against
+ *      three dead models must still deliver on the fourth — under the plain step
+ *      bound it would have run out of road first, which is how a task gets
+ *      abandoned while capable models are still queued.
+ *   2. THE ENDING SAYS WHY. `bounded: true` conflated "no model can do this"
+ *      with "the budget ran out", and those need opposite responses.
+ */
+describe('tool loop — delivery persistence + named termination (P3)', () => {
+  it('delivers on the 4th model after three unusable ones, despite a small step budget', async () => {
+    const order = ['A', 'B', 'C', 'D'];
+    let idx = 0;
+    let onD = 0;
+    const callModel = vi.fn(async (): Promise<StepResponse> => {
+      const model = order[idx];
+      if (model === 'D') {
+        onD += 1;
+        return onD === 1 ? { content: '', toolCalls: [] } : { content: 'D delivered it.', toolCalls: [] };
+      }
+      return { content: '', toolCalls: [] };
+    });
+    const requestModelSwitch = vi.fn(async () => {
+      if (idx < order.length - 1) idx += 1;
+      return true;
+    });
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), requestModelSwitch },
+      // Deliberately smaller than the number of attempts this needs WITHOUT the
+      // P3 attempt credit (2 per model × 4 models = 8).
+      maxSteps: 6,
+      maxContinuations: 0,
+    });
+
+    expect(result.content).toBe('D delivered it.');
+    expect(result.bounded).toBe(false);
+    expect(result.termination).toBe('delivered');
+    expect(result.modelHandoffs).toBe(3);
+  });
+
+  it('names a repeated-empty ending as a model shortage, not as a budget', async () => {
+    const callModel = vi.fn(async (): Promise<StepResponse> => ({ content: '', toolCalls: [] }));
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), requestModelSwitch: vi.fn(async () => false) },
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.bounded).toBe(true);
+    expect(result.termination).toBe('no-capable-candidate');
+  });
+
+  it('names a repeated THINK-ONLY ending as a reasoning spin (not a model shortage)', async () => {
+    const callModel = vi.fn(async (): Promise<StepResponse> => ({ content: 'hmm', toolCalls: [] }));
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn() },
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.bounded).toBe(true);
+    expect(result.termination).toBe('reasoning-spin');
+  });
+
+  it('names an exhausted-budget ending `budget-exhausted`', async () => {
+    let n = 0;
+    const callModel = vi.fn(async (): Promise<StepResponse> => {
+      n += 1;
+      return { content: '', toolCalls: [{ id: `c${n}`, name: 'list_dir', arguments: { path: '.' } }] };
+    });
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(async () => 'ok') },
+      maxSteps: 2,
+      maxContinuations: 0,
+    });
+
+    expect(result.bounded).toBe(true);
+    expect(result.termination).toBe('budget-exhausted');
+  });
+
+  it('names a delivered turn and a cancelled turn explicitly', async () => {
+    const delivered = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: mockDeps([{ content: 'Sure.', toolCalls: [] }]),
+    });
+    expect(delivered.termination).toBe('delivered');
+
+    const controller = new AbortController();
+    controller.abort();
+    const cancelled = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: mockDeps([{ content: 'Sure.', toolCalls: [] }]),
+      signal: controller.signal,
+    });
+    expect(cancelled.termination).toBe('cancelled');
+    expect(cancelled.cancelled).toBe(true);
+  });
+
+  it('names a generation death with nothing to deliver as a model shortage', async () => {
+    const callModel = vi.fn(async () => {
+      throw new Error('All LLM providers exhausted (every candidate failed)');
+    });
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn() },
+      maxContinuations: 0,
+    });
+
+    expect(result.termination).toBe('no-capable-candidate');
+    expect(result.generationFailed).toBe(true);
+  });
+});

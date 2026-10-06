@@ -29,6 +29,9 @@ import { resolveRoute } from '../inference/route-resolver.js';
 import { recordRoutingDecision, type RoutingSource } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { classifyFallbackError } from '../learning/provider-fallback.js';
+// P1 (fix_model_routing) — the shared definition of "this response carries
+// nothing usable", so an empty completion fails over instead of being answered.
+import { assertUsableModelResponse } from '../learning/response-usability.js';
 import { getQuotaLedger, accountIdForKey } from '../learning/quota-ledger.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { InferenceProvider } from '../inference/interface.js';
@@ -177,6 +180,15 @@ export async function runSingleShotAuto(opts: SingleShotAutoOptions): Promise<st
       const keyLabel = key ? `key#${usableKeys.indexOf(key) + 1}` : '';
       try {
         const result = await opts.generate(resolvedProvider!, candidateType, candidateModel!, key);
+        // ── RC1 (fix_model_routing P1) — A RESOLVED RESPONSE IS NOT A SUCCESS ──
+        // This walk reacted only to THROWN errors, so a provider that answered
+        // with an empty string (HTTP 200, zero content) had its emptiness
+        // returned as the ANSWER and the walk stopped — the same defect the
+        // resilient walk had, on the single-shot path (`nuvira ask`, a CLI
+        // one-shot, the gateway's direct answer). Validating here turns that
+        // into a candidate-level failure, so the walk books it and moves to a
+        // DIFFERENT model instead of handing the user nothing.
+        assertUsableModelResponse(result);
         if (candidateType !== first.type) {
           logger.success(`✅ Auto failover: answered from ${resolvedProviderName} (${candidateModel}) after ${first.type} failed`);
           // Keep the audit trail accurate: the initial route was recorded by

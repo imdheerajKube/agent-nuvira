@@ -295,6 +295,67 @@ A model pinned in the chat picker is a **preference**, not a guarantee, unless y
 - A **model id is validated before it is saved** (CLI and dashboard): an id the provider does not
   serve is refused with the closest matches, instead of being repaired by substitution at run time.
 
+### When a model fails mid-task — what the agent does, and what it will ask you
+
+You should never have to say *"retry"*. A model failing mid-task is the agent's problem to solve,
+and the order of remedies is fixed:
+
+1. **The same model is asked once more.** A single empty or broken reply can be a blip at a shared
+   endpoint, so it gets one retry — never the five-in-a-row that ended a real run.
+2. **The work is handed to a different model.** On the second consecutive unusable reply the turn
+   hands off. The pair that failed is excluded **for that model only** — a free tier meters per model,
+   so the provider's other models are tried before the provider is abandoned. Hand-offs are bounded
+   (5 per turn) and they grant extra step budget, so a run against two or three dead models still has
+   room to finish on a good one.
+3. **The failure is written down.** An empty reply is recorded as a *failure* for that provider×model
+   (it used to be recorded as a success, which is how a model that answered with nothing kept its
+   "verified" badge). It is parked for two minutes, and the model's learned score takes a negative
+   reward, so the next turn routes around it.
+4. **Resuming a task prefers the model that already did it.** A continuation ("resume", "continue")
+   carries no task of its own, so the router re-decides — and it now offers the pair that actually
+   **delivered** this task first, provided it is still callable. That is what stops a working run
+   from degrading onto an untried model on its next turn.
+
+**If nothing left can do it, you get an investigation, not an apology.** The turn ends with the
+measured facts and no question to answer:
+
+```
+I couldn't finish: build the knowledge base app
+
+Tried 3 models, and every one of them was unable to do it:
+  • gemini/gemma-4-26b-a4b-it — answered with nothing (no text, no tool call)
+  • local/gpt-oss:120b-cloud — answered with nothing (no text, no tool call)
+  • groq/qwen3.8-27b — out of quota for now
+
+Unavailable right now, and when each comes back:
+  • groq — out of quota for now; free at 18:42 (about 12m)
+
+538 models across 23 providers were eligible at the time.
+
+This was a routing gap, not a shortage: only 3 of 538 eligible models were actually tried.
+The next attempt routes to an untried model automatically — you do not need to trigger anything.
+
+Things that would unblock it:
+  • Recharge or replace the credential for deepseek — it was rejected, so no amount of waiting fixes it.
+  • Wait — a capable model frees up at 18:42, about 12m from now.
+  • Allow a weaker or cheaper model for this task and accept that its answer may need more checking.
+  • Narrow the ask — one file, one change, or one question at a time.
+```
+
+Two details are deliberate. **Reset windows are wall-clock times**, not wait lengths — *"free at
+18:42"* is something you can plan around in a way that *"in 12 minutes"* is not. And a **routing gap
+is named as a routing gap**: if the eligible pool was healthy and the walk simply did not reach the
+rest of it, the agent says so instead of presenting it as an outage. Honest-sounding generalities
+("the language model was unavailable") are exactly what this replaced.
+
+**Terminal commands follow the same rule.** A command that is killed by the timeout is reported as a
+**timeout** — not as a broken project — together with what to do instead (narrow it, make it
+non-interactive, or ask for a longer `timeout_ms`). The same command cannot be re-run indefinitely:
+it gets **one** blind retry, and the third identical failure at the same timeout is refused in
+milliseconds rather than spending another two minutes — raising `timeout_ms` or changing the command
+is a genuinely new attempt and is never refused — and a success clears the count. In an interactive session the *default* command timeout is 60 s rather
+than 120 s, because two minutes of silence in front of a person is not patience.
+
 ### OmniRoute — one endpoint in front of many providers
 
 [OmniRoute](https://github.com/diegosouzapw/OmniRoute) is a local, MIT-licensed AI gateway that

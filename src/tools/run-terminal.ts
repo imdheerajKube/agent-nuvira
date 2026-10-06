@@ -51,8 +51,90 @@ import { formatEffectVerdict, isBuildCommand, verifyBuildEffect } from '../utils
 const MAX_OUTPUT_CHARS = 6000;
 /** Default timeout for a terminal command (tests/builds are slow). */
 const DEFAULT_TIMEOUT_MS = 120_000;
+/**
+ * P7 (fix_model_routing) — the default when a PERSON is watching.
+ *
+ * The live failure: three back-to-back 120-second `run_terminal` timeouts in one
+ * turn (4 minutes of a 5-minute run) while the dashboard console showed nothing,
+ * and then the agent gave up. Two minutes of silence in front of a person is not
+ * patience, it is a bug. Sixty seconds still covers a real test/build on this
+ * class of project, and an explicit `timeout_ms` (up to MAX_TIMEOUT_MS) still
+ * buys the model as much time as the work genuinely needs.
+ */
+const INTERACTIVE_DEFAULT_TIMEOUT_MS = 60_000;
 /** Hard ceiling — the tool loop bounds the whole turn anyway. */
 const MAX_TIMEOUT_MS = 300_000;
+/**
+ * P7 — how many times the SAME command (at the SAME timeout) may fail before the
+ * next call is refused.
+ *
+ * Two, measured from the live run: it ran a near-identical command three times
+ * (120s, 13s, 120s) and learned nothing from any of them — so the third blind
+ * repeat is exactly what must not happen. A flaky command still gets one retry
+ * (transient failures are real: a held lock, a dead port, a cold cache). After
+ * the second identical failure the refusal is returned in milliseconds with what
+ * to do instead, rather than spending another 60–120 seconds to learn nothing.
+ *
+ * The streak key (see the call site) includes the EFFECTIVE TIMEOUT, so the
+ * remedy this very tool advertises on a timeout — "re-call with an explicit
+ * `timeout_ms`" — is a genuinely different attempt and is never blocked here.
+ */
+const IDENTICAL_FAILURE_CAP = 2;
+/** Failures older than this do not count toward the cap — the world may have changed. */
+const FAILURE_STREAK_WINDOW_MS = 10 * 60_000;
+/** Bound on the streak table (a long session must not accumulate). */
+const FAILURE_STREAK_MAX_ENTRIES = 50;
+
+/** `key → {count, lastAt}` for the identical-command guard. */
+const commandFailureStreaks = new Map<string, { count: number; lastAt: number }>();
+
+/** Test/DI seam: forget every recorded failure streak. */
+export function resetTerminalFailureStreaks(): void {
+  commandFailureStreaks.clear();
+}
+
+/** Record a failure for this exact command in this directory; report the streak. */
+function recordCommandFailure(key: string, now: number): number {
+  const prev = commandFailureStreaks.get(key);
+  const withinWindow = prev && now - prev.lastAt <= FAILURE_STREAK_WINDOW_MS;
+  const count = (withinWindow ? prev.count : 0) + 1;
+  commandFailureStreaks.set(key, { count, lastAt: now });
+  if (commandFailureStreaks.size > FAILURE_STREAK_MAX_ENTRIES) {
+    for (const [k, v] of commandFailureStreaks) {
+      if (commandFailureStreaks.size <= FAILURE_STREAK_MAX_ENTRIES) break;
+      if (now - v.lastAt > FAILURE_STREAK_WINDOW_MS) commandFailureStreaks.delete(k);
+    }
+    // Still too big (all recent) — drop the oldest half by insertion order.
+    if (commandFailureStreaks.size > FAILURE_STREAK_MAX_ENTRIES) {
+      const drop = Math.ceil(commandFailureStreaks.size / 2);
+      let i = 0;
+      for (const k of commandFailureStreaks.keys()) {
+        if (i++ >= drop) break;
+        commandFailureStreaks.delete(k);
+      }
+    }
+  }
+  return count;
+}
+
+/** A command that just SUCCEEDED has nothing to retry — clear its streak. */
+function clearCommandFailure(key: string): void {
+  commandFailureStreaks.delete(key);
+}
+
+/** The guidance a timed-out command gets instead of a bare "timed out". */
+export function timeoutGuidance(command: string, timeoutMs: number, repeated: boolean): string {
+  const seconds = Math.round(timeoutMs / 1000);
+  return (
+    `\n\n⏱ TIMEOUT — that command was killed after ${seconds}s without finishing. A timeout does NOT mean the project is broken; ` +
+    `it means this command is too slow or is waiting for something that will not come. ` +
+    `Do NOT re-run the identical command${repeated ? ' — it has already timed out here' : ''}. Instead: ` +
+    `(a) narrow it (a single test file, \`--reporter=dot\`, \`-x\`, one target rather than the whole suite), ` +
+    `(b) make it non-interactive (it may be waiting on a prompt or a server), or ` +
+    `(c) if the work is genuinely long, re-call with an explicit \`timeout_ms\` up to ${MAX_TIMEOUT_MS} (${Math.round(MAX_TIMEOUT_MS / 1000)}s). ` +
+    `Tell the user what was slow rather than repeating \`${maskSenderId(command)}\` as-is.`
+  );
+}
 
 /** ─── Command classification (deny-first) ───────────────────────────────── */
 
@@ -454,9 +536,48 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
     }, 'tool-loop');
   }
 
-  const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1000, Math.floor(args.timeout_ms ?? DEFAULT_TIMEOUT_MS)));
+  // P7 — the DEFAULT timeout follows the room: a person watching a chat gets a
+  // shorter one (see INTERACTIVE_DEFAULT_TIMEOUT_MS). An explicit `timeout_ms`
+  // always wins, so a genuinely long build still gets its time.
+  const defaultTimeoutMs = ctx.interactive ? INTERACTIVE_DEFAULT_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+  const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1000, Math.floor(args.timeout_ms ?? defaultTimeoutMs)));
+  // P7 — the IDENTICAL-COMMAND guard. A command that has already failed twice at
+  // this timeout in this directory will fail a third time the same way; the live
+  // run spent two 120-second timeouts proving that. Refusing costs milliseconds
+  // and says what to change instead of quietly spending another two minutes of
+  // the user's time. Bounded, self-expiring, and reset by a success.
+  //
+  // The effective timeout is part of the key on purpose: the guidance a timeout
+  // carries tells the model to re-call with a longer `timeout_ms` when the work
+  // is genuinely long, and that advice must not be refused by this guard.
+  const streakKey = `${ctx.cwd ?? process.cwd()}|${command}|${timeoutMs}`;
+  const priorStreak = commandFailureStreaks.get(streakKey);
+  if (
+    priorStreak &&
+    Date.now() - priorStreak.lastAt <= FAILURE_STREAK_WINDOW_MS &&
+    priorStreak.count >= IDENTICAL_FAILURE_CAP
+  ) {
+    return (
+      `Error: run_terminal: \`${maskSenderId(command)}\` has already failed ${priorStreak.count} times at this timeout ` +
+      `and would fail the same way again — refusing to spend another run on it. Change the command before calling ` +
+      `run_terminal again: fix the underlying cause, narrow the scope, raise \`timeout_ms\` if the work is simply long, ` +
+      `or run a different check entirely.`
+    );
+  }
   const startedAt = Date.now();
   const output = await execCommand(command, ctx.cwd, timeoutMs, runEnv);
+  // P7 — a TIMEOUT is its own, specific signal: the command was killed, so
+  // "it timed out" is not "the project is broken", and the ONE thing the model
+  // must not do is re-run the identical command. The guidance says what to do
+  // instead (narrow it, make it non-interactive, or pass a longer timeout_ms).
+  const timedOut = /run_terminal: `[^`]*` ⏱ timed out after \d+ms/.test(output);
+  const failureStreak = timedOut
+    ? recordCommandFailure(streakKey, Date.now())
+    : output.startsWith('Error:')
+      ? recordCommandFailure(streakKey, Date.now())
+      : 0;
+  if (!timedOut && !output.startsWith('Error:')) clearCommandFailure(streakKey);
+  const outputWithNotes = timedOut ? output + timeoutGuidance(command, timeoutMs, failureStreak > 1) : output;
 
   // A4 — a KNOWN toolchain failure gets its known fix appended, so the model
   // repairs instead of re-trying the identical command. Advisory only: the note
@@ -502,11 +623,11 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
     if (verdict.status === 'verified') effectNote = `\n${formatEffectVerdict(verdict)}`;
   }
 
-  if (!decidedAutonomously) return output + effectNote + envNote + remediationNote + autoApplyNote;
+  if (!decidedAutonomously) return outputWithNotes + effectNote + envNote + remediationNote + autoApplyNote;
   // Reported, never silent — a judgment call the user cannot see is
   // indistinguishable from a bug.
   return (
-    `${output}${effectNote}\n💡 Ran without asking: ${autonomyReason}. State what you ran in your answer — ` +
+    `${outputWithNotes}${effectNote}\n💡 Ran without asking: ${autonomyReason}. State what you ran in your answer — ` +
     'do not ask for permission to do work the user already asked for.' +
     envNote +
     remediationNote +

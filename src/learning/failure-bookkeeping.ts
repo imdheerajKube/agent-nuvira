@@ -123,6 +123,23 @@ export function isModelSessionExcluded(
  */
 export const RATE_LIMIT_EXCLUSION_MS = 2 * 60 * 1000;
 
+/**
+ * How long a provider × model pair is excluded after it resolved with NOTHING
+ * usable — an HTTP 200 carrying neither answer text nor a tool call (see
+ * `response-usability.ts`).
+ *
+ * MODEL-scoped on purpose, and never escalated to the provider: the transport
+ * worked and the provider answered, so its OTHER models are very often
+ * perfectly healthy — the live case was one local model returning nothing on
+ * five consecutive steps while Gemini sat configured and unused. Two minutes is
+ * long enough to cover a turn plus its retries, short enough that a genuinely
+ * transient empty self-heals with no user action.
+ *
+ * The failover walk (`resilient-call.ts`) uses this same constant for its own
+ * pair exclusion, so the session and cross-pipeline windows cannot drift.
+ */
+export const EMPTY_RESPONSE_SESSION_EXCLUSION_MS = 2 * 60 * 1000;
+
 // ─── T4 — RPM/TPM rapid-failure breaker ─────────────────────────────────────
 //
 // Free tiers meter requests/tokens PER MINUTE, but a 429 with no reset hint
@@ -341,6 +358,26 @@ export function recordActionFailure(
     // M2.3: park the SPECIFIC account/key too (rotation skips it while
     // other keys of the same provider stay usable).
     parkAccountForKey(providerType, options?.apiKey, now + parkMs, failureKind);
+  } else if (failureKind === 'empty-response') {
+    // ── An empty completion is a MODEL failure, not a provider outage ──────
+    // The provider answered (HTTP 200, a real response body) and simply carried
+    // no text and no tool call. So the pair is what must rest — exclude it and
+    // leave its SIBLINGS routable, or one dead model would take a healthy
+    // provider's whole model list out of the running. No quota park: nothing was
+    // rate-limited, and the registry already parks this exact pair for
+    // `EMPTY_RESPONSE_PARK_MS` (see `model-registry.recordCall`).
+    const failingModel = options?.model;
+    if (session.sessionFailedModels && failingModel && failingModel !== 'default') {
+      session.sessionFailedModels.set(
+        modelExclusionKey(providerType, failingModel),
+        now + EMPTY_RESPONSE_SESSION_EXCLUSION_MS,
+      );
+    } else {
+      // No model attribution available — the provider is the only thing we can
+      // hold back, so fall back to the transient provider exclusion.
+      session.sessionFailedProviders.set(providerType, now + TRANSIENT_FAILURE_EXCLUSION_MS);
+      session.sessionTransientFailedProviders.add(providerType);
+    }
   } else {
     // Server / network / timeout / unknown — transient but definitive enough
     // that the next message shouldn't re-pick this provider. Short cooldown,
@@ -368,9 +405,20 @@ export function recordActionFailure(
   // ── 6. Shared circuit breaker ─────────────────────────────────────────
   // Repeated failures open the breaker so the auto router deprioritizes the
   // provider by scoring even for transient errors.
-  try {
-    getProviderFallback(configManager).recordFailure(providerType);
-  } catch {
-    // Best-effort — circuit-breaker bookkeeping must not crash a call.
+  //
+  // EXCEPT for an empty-response: the breaker is PROVIDER-scoped, and an empty
+  // completion is a MODEL property — the provider answered, on time, with a
+  // well-formed HTTP 200. Tripping its breaker would deprioritize every healthy
+  // sibling on that provider because one model returned nothing, which is the
+  // same corruption the harness-fault guard at the top of this function exists
+  // to prevent. The pair is already parked in the registry (see
+  // `model-registry.recordCall`), so the model rests without the provider paying
+  // for it.
+  if (failureKind !== 'empty-response') {
+    try {
+      getProviderFallback(configManager).recordFailure(providerType);
+    } catch {
+      // Best-effort — circuit-breaker bookkeeping must not crash a call.
+    }
   }
 }

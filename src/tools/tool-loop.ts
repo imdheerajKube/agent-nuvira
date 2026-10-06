@@ -35,6 +35,13 @@ import {
 // when the run is a resume; `stepDigest` is over the whole input, so a step whose
 // thread or tool schema changed MISSES and is paid for again (see the module).
 import { stepDigest, type StepReplay } from '../learning/step-checkpoint.js';
+// P2 (fix_model_routing) — the shared definition of "this response carries
+// nothing usable". The loop does not re-invent the rule; it asks the same module
+// the failover walk validates with, so "empty" means one thing in this repo.
+import type { UnusableResponseKind } from '../learning/response-usability.js';
+// P7 — the identical-command guard's memory. The loop drops it when a WRITE is
+// applied, so a repaired project can re-run its own check (see the context below).
+import { resetTerminalFailureStreaks } from './run-terminal.js';
 // WS6 (#28) — the declared fault seam. `faultAt` is a null check when this
 // process declared no fault (`NUVIRA_INJECT_FAULT`), so an ordinary turn is
 // unaffected.
@@ -373,6 +380,26 @@ export interface ToolLoopDeps {
   executeTool(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<string>;
   /** Whether a content-only response is a think-only block (continues, doesn't end). */
   isThinkOnly?(content: string): boolean;
+  /**
+   * P2 — MID-TURN MODEL HANDOFF. The loop calls this when the model it is
+   * talking to resolved with NOTHING usable (no answer text and no tool call) and
+   * the same model has already had its one retry. The caller owns the pool, so
+   * it — not the loop — decides which model is next: install a DIFFERENT
+   * provider/model and resolve `true`, or resolve `false` when there is genuinely
+   * no other candidate left to try.
+   *
+   * Why the loop cannot do this itself: the pool, its exclusions, the credential
+   * gate and the session cooldowns all live above it. Retrying the SAME model was
+   * the defect (five consecutive empty responses from one model ended a real turn
+   * while healthy models sat configured and unused), so the retry decision is
+   * delegated out rather than guessed at.
+   *
+   * A `false` is NOT a dead end: the loop falls back to its own bounded
+   * escalation, so a turn with no alternative still ends exactly as it did
+   * before. Omitted entirely (mocks, sub-agent children, older callers) → the old
+   * behaviour, byte for byte.
+   */
+  requestModelSwitch?(reason: UnusableResponseKind): Promise<boolean> | boolean;
   /** Log a loop event (board note / console line). Defaults to logger.info. */
   onEvent?(line: string): void;
 }
@@ -623,6 +650,19 @@ export interface ToolLoopResult {
   steps: number;
   /** True when the step bound was hit before an end turn. */
   bounded: boolean;
+  /**
+   * P2 — how many times the turn handed the work to a DIFFERENT model after the
+   * one serving it returned nothing usable (0 = it ran on one model throughout).
+   * Reported rather than merely logged: "this turn moved models twice to get you
+   * an answer" is the fact the trace and the dashboard show.
+   */
+  modelHandoffs?: number;
+  /**
+   * P3 — WHY the turn ended (see {@link TurnTermination}). Set on every exit so
+   * a surface never has to infer the reason from a `bounded` boolean, which
+   * cannot tell a model shortage from an exhausted budget.
+   */
+  termination?: TurnTermination;
   /**
    * How many bounded auto-continuations were spent this turn (0 = the turn ran
    * straight through). Telemetry only — a resumed turn reports the SAME content
@@ -946,6 +986,65 @@ const MAX_PARALLEL_READS = 4;
  */
 export const MAX_THINK_CONTINUES = 3;
 /**
+ * P2 — how many times the SAME model may answer with nothing before the loop
+ * insists on a handoff. One, deliberately: a single empty completion can be a
+ * blip at a shared endpoint, but a model that resolves with nothing twice has
+ * demonstrated it is not answering this step, and re-calling it is the loop that
+ * killed a real turn (five consecutive empties, then the turn reported itself
+ * bounded with zero tool calls).
+ */
+export const MAX_SAME_MODEL_EMPTY_RETRIES = 1;
+/**
+ * P2 — ceiling on mid-turn handoffs, so a caller whose pool churns through
+ * unusable models cannot spin. Each handoff is a genuinely different candidate
+ * (the caller must refuse to hand back the same pair), so this only bounds a
+ * pathological pool; a real one is exhausted well before it.
+ */
+export const MAX_MODEL_HANDOFFS_PER_TURN = 5;
+/**
+ * P3 — the turn's ATTEMPT budget, kept separate from its STEP budget.
+ *
+ * A mid-turn handoff spends model calls that produced nothing: the empty
+ * completion that triggered it, and the first call to the replacement (which
+ * may itself come back empty). Charging those to the same budget that governs
+ * the actual WORK means a run against two or three dead models exhausts its
+ * road before it has done anything — the exact way a task gets abandoned while
+ * capable models are still queued. Each handoff therefore GRANTS two extra
+ * steps of credit (capped), so hand-offs cannot be cut short by step
+ * accounting; everything else — the step budget, the continuation budget, the
+ * think-only cap — is untouched.
+ */
+export const MAX_HANDOFF_ATTEMPT_CREDIT = MAX_MODEL_HANDOFFS_PER_TURN * 2;
+/**
+ * P3 — WHY a turn ended, named.
+ *
+ * `bounded: true` said only "stopped before finishing", conflating a genuine
+ * shortage of capable models with a budget that ran out while models remained.
+ * The two demand opposite responses (an exhaustion report vs. a longer road),
+ * so the loop now says which one it was:
+ *
+ *   - `delivered`          — an answer was produced. Finished.
+ *   - `cancelled`          — the user stopped it (the dashboard Cancel button).
+ *   - `no-capable-candidate` — every model that answered returned NOTHING
+ *                            usable (or none could be reached). An evidenced
+ *                            claim, and the trigger for the exhaustion report.
+ *   - `reasoning-spin`     — one model kept emitting reasoning and never acted
+ *                            or answered, past the bound. A bounded stop, not a
+ *                            model shortage.
+ *   - `budget-exhausted`   — the step budget ran out. BUG SIGNAL when nothing
+ *                            was delivered and a handoff was still available;
+ *                            the loop logs that loudly at the exit.
+ *   - `generation-failed`  — the model call threw and there was nothing to
+ *                            deliver (the provider walk already gave up).
+ */
+export type TurnTermination =
+  | 'delivered'
+  | 'cancelled'
+  | 'no-capable-candidate'
+  | 'reasoning-spin'
+  | 'budget-exhausted'
+  | 'generation-failed';
+/**
  * Consecutive steps that RAN tools and had NO success before the loop asks the
  * model to diagnose the stall. This generalises {@link RunTrace.repeatedFailure}
  * (the identical action retried): a weak model also loops by substituting a
@@ -1093,6 +1192,21 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // Bounded think-only continuation (see THINK_ONLY_ESCALATION). Counts the
   // consecutive reasoning-only steps so the loop cannot spin on them.
   let thinkContinues = 0;
+  // P2 — empty-response accounting. `emptyRetriesOnCurrentModel` is the streak
+  // of usable-nothing responses from the model currently serving the turn; it
+  // resets the moment that model produces anything usable (or is replaced), so
+  // "twice in a row" means twice in a row from THAT model. `modelHandoffs`
+  // bounds how many times the turn may move.
+  let emptyRetriesOnCurrentModel = 0;
+  let modelHandoffs = 0;
+  // P3 — the ATTEMPT budget (see MAX_HANDOFF_ATTEMPT_CREDIT): step credit
+  // granted by mid-turn handoffs, so a run against several dead models cannot
+  // exhaust its road before it has done any work.
+  let handoffAttemptCredit = 0;
+  // Why the turn is ending. The two `break`s in the empty/think-only path mean
+  // opposite things (a model shortage vs. one model spinning), so the reason is
+  // recorded explicitly rather than re-derived at the exit.
+  let exitTermination: TurnTermination | null = null;
   // G13b — bounded "the request asked for a file and none was written" nudges
   // (see wantsAuthoredArtifact).
   let deliverableNudges = 0;
@@ -1192,8 +1306,31 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // so a `finding` in the same step can check its cited command/path against
   // what really happened (see `enforceEvidenceProvenance`).
   const executedActions: ExecutedAction[] = progress.executedActions;
+  // P7 — a WRITE makes the world different, so a command that already failed may
+  // now succeed. `run_terminal`'s identical-command guard exists to stop blind
+  // repeats (the live run burned three back-to-back attempts), but a repaired
+  // project re-running its own check is the ONE case that must never be refused:
+  // with the guard's cap, that call would be rejected before it could ever
+  // succeed and clear the streak — a deadlock where a fixed project could not
+  // run its check again. Every tool that mutates the workspace announces it on
+  // `autonomy:write-applied`, so the streak is dropped exactly when something
+  // changed, and a blind repeat at the same timeout still counts.
+  //
+  // `run_terminal` announces on the SAME event when IT proceeds autonomously, but
+  // that is a statement about its own command, not a change to the world — letting
+  // it invalidate the streak would mean the guard could never accumulate on the
+  // exact commands it exists for. Payloads name their emitter, so its event is
+  // excluded by name while any other write (write_file, edit_file, git, …) counts.
+  const baseEmit = context.emit;
+  const emitWithWriteInvalidation: ToolContext['emit'] = (event, data, source) => {
+    if (event === 'autonomy:write-applied' && (data as { tool?: string } | undefined)?.tool !== 'run_terminal') {
+      resetTerminalFailureStreaks();
+    }
+    baseEmit?.(event, data, source);
+  };
   const ctx: ToolContext = {
     ...context,
+    emit: emitWithWriteInvalidation,
     followups: context.followups || sink,
     executedActions,
     writesAuthorized: authorization,
@@ -1338,7 +1475,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // many-file edit). Extend the budget a bounded number of times and keep
     // the SAME thread — completed tool calls are never re-run — instead of
     // telling the user "I reached my step limit" with the task unfinished.
-    if (steps >= stepLimit) {
+    if (steps >= stepLimit + handoffAttemptCredit) {
       if (continuations < maxContinuations) {
         continuations += 1;
         stepLimit += continuationSteps;
@@ -1352,7 +1489,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // P4 — check cancellation BEFORE each step (a pre-aborted signal never
     // spends a model call) and after tool executions (below).
     if (opts.signal?.aborted) {
-      return { content: '', followups, toolCalls: toolCallsRun, steps, ...(opts.resume ? { replayedSteps } : {}), bounded: false, cancelled: true };
+      return { content: '', followups, toolCalls: toolCallsRun, steps, ...(opts.resume ? { replayedSteps } : {}), bounded: false, cancelled: true, termination: 'cancelled' };
     }
     steps += 1;
     // Mechanical thread budget: trim BEFORE the model call so a provider
@@ -1422,7 +1559,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // generation failure: the caller discards the turn. No error text, no
       // fallback — the fetch itself aborted on the caller's signal.
       if (opts.signal?.aborted) {
-        return { content: '', followups, toolCalls: toolCallsRun, steps, ...(opts.resume ? { replayedSteps } : {}), bounded: false, cancelled: true };
+        return { content: '', followups, toolCalls: toolCallsRun, steps, ...(opts.resume ? { replayedSteps } : {}), bounded: false, cancelled: true, termination: 'cancelled' };
       }
       // Generation failure — surface what we have rather than crash the turn.
       // generationFailed is TRUE only when NOTHING happened yet (no content, no
@@ -1489,6 +1626,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         ...(opts.resume ? { replayedSteps } : {}),
         bounded: false,
         continuations,
+        ...(modelHandoffs > 0 ? { modelHandoffs } : {}),
+        // Nothing to deliver means the provider walk itself gave up — every
+        // candidate was tried and none answered. That IS the evidenced shortage.
+        termination: delivered === '' ? 'no-capable-candidate' : 'delivered',
         generationFailed: delivered === '' || !madeProgress,
       };
     }
@@ -1529,6 +1670,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       lastContent = response.content;
     }
     const { toolCalls } = response;
+    // P2 — the model just produced something usable (text, or at least one tool
+    // call), so its empty-response streak is over: a later blip starts a NEW
+    // streak rather than inheriting one from twenty steps ago.
+    if (toolCalls.length > 0 || !responseThinkOnly) emptyRetriesOnCurrentModel = 0;
 
     if (toolCalls.length === 0) {
       // No tools → end turn UNLESS the content is think-only (
@@ -1550,6 +1695,58 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // is the exact class of defect this work exists to remove, so the two
         // cases are named apart even though they are bounded together.
         const emptyResponse = response.content.trim().length === 0;
+        // ── P2 — MID-TURN MODEL HANDOFF ────────────────────────────────────
+        // An empty completion is a PROVIDER failure, not a state of mind, and
+        // re-asking the model that just returned nothing is what killed a real
+        // run: five consecutive empties from one model, then `bounded: true`
+        // with zero tool calls, while healthy models sat configured and unused.
+        // So once THIS model has had its single retry, the loop asks the caller
+        // for a different candidate. The caller owns the pool (exclusions,
+        // credentials, cooldowns) and refuses to hand back the same pair; a
+        // `false` means there is genuinely nothing else, and we fall through to
+        // the bounded escalation below — unchanged behaviour for a turn with no
+        // alternative (and for every caller that supplies no hook at all).
+        if (
+          emptyResponse &&
+          deps.requestModelSwitch &&
+          modelHandoffs < MAX_MODEL_HANDOFFS_PER_TURN &&
+          emptyRetriesOnCurrentModel >= MAX_SAME_MODEL_EMPTY_RETRIES
+        ) {
+          let switched = false;
+          try {
+            switched = (await deps.requestModelSwitch('empty')) === true;
+          } catch {
+            // A broken switch hook must never kill the turn — fall through to the
+            // bounded path exactly as if it had answered `false`.
+            switched = false;
+          }
+          if (switched) {
+            modelHandoffs += 1;
+            // P3 — the ATTEMPT budget: the empty completion that triggered this
+            // handoff, and the first call to the replacement model, are not the
+            // user's work — grant the step credit so a run against a couple of
+            // dead models cannot exhaust its road before it has done anything.
+            handoffAttemptCredit = Math.min(
+              MAX_HANDOFF_ATTEMPT_CREDIT,
+              handoffAttemptCredit + 2,
+            );
+            // The streak and the think streak belong to the model that failed.
+            emptyRetriesOnCurrentModel = 0;
+            thinkContinues = 0;
+            deps.onEvent?.(
+              `   🔀 That model returned nothing usable — handing the turn to a different model (handoff ${modelHandoffs}/${MAX_MODEL_HANDOFFS_PER_TURN}).`,
+            );
+            traceEvent({
+              kind: 'gate',
+              gate: 'handoff',
+              summary:
+                `the provider returned an empty response twice — the turn handed off to a different model ` +
+                `(handoff ${modelHandoffs}/${MAX_MODEL_HANDOFFS_PER_TURN}) instead of re-asking the same one`,
+            });
+            continue;
+          }
+        }
+        if (emptyResponse) emptyRetriesOnCurrentModel += 1;
         // BOUNDED (see THINK_ONLY_ESCALATION). Continuing on reasoning is right
         // for a `<think>`-then-answer model and catastrophic without a limit:
         // two live eval runs produced 31 reasoning-only steps, one tool call and
@@ -1589,8 +1786,13 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         }
         // Still spinning after the escalation: END the turn rather than burn the
         // rest of the budget. `bounded` is set so every surface reads this as
-        // "stopped before finishing", never as a completed answer.
+        // "stopped before finishing", never as a completed answer — and P3 names
+        // WHICH kind of stop this is, because the two demand opposite responses:
+        // every model that answered returned nothing (a model shortage, which
+        // the caller must report as such) versus one model that kept thinking
+        // (a bounded stop that says nothing about the other models).
         bounded = true;
+        exitTermination = emptyResponse ? 'no-capable-candidate' : 'reasoning-spin';
         deps.onEvent?.(
           emptyResponse
             ? '   ⚠️ Empty responses kept coming — ending the turn instead of spinning. This is a PROVIDER failure, not the agent thinking.'
@@ -1836,6 +2038,8 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         ...(opts.resume ? { replayedSteps } : {}),
         bounded: false,
         continuations,
+        ...(modelHandoffs > 0 ? { modelHandoffs } : {}),
+        termination: 'delivered',
       };
     }
 
@@ -2546,7 +2750,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // P4 — cancellation during/after tool execution: do NOT request another
     // model step on a cancelled turn (the user already walked away).
     if (opts.signal?.aborted) {
-      return { content: '', followups, toolCalls: toolCallsRun, steps, ...(opts.resume ? { replayedSteps } : {}), bounded: false, cancelled: true };
+      return { content: '', followups, toolCalls: toolCallsRun, steps, ...(opts.resume ? { replayedSteps } : {}), bounded: false, cancelled: true, termination: 'cancelled' };
     }
 
     // ── endsAgentStep — a successful dispenser's RESULT is the answer ────────
@@ -2580,6 +2784,8 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         ...(opts.resume ? { replayedSteps } : {}),
         bounded: false,
         continuations,
+        ...(modelHandoffs > 0 ? { modelHandoffs } : {}),
+        termination: 'delivered',
       };
     }
 
@@ -2698,6 +2904,8 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         ...(opts.resume ? { replayedSteps } : {}),
         bounded: false,
         continuations,
+        ...(modelHandoffs > 0 ? { modelHandoffs } : {}),
+        termination: 'delivered',
       };
     }
   }
@@ -2705,11 +2913,47 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // Reaching here means the continuation budget is spent (the in-loop check
   // extends the bound otherwise) — the turn is honestly bounded.
   bounded = true;
-  deps.onEvent?.(`   ⚠️ Tool loop reached its ${stepLimit}-step budget — returning the last response.`);
+  // P3 — the exit SAYS which ending this was. The live trace reported "the step
+  // budget (17) was reached" after FIVE model calls and zero tool calls: the
+  // empty-response path had ended the turn, and this shared tail claimed the road
+  // had run out when it had not. A reader cannot tell a model shortage from a
+  // budget from that line, which is the whole reason `termination` exists.
+  if (exitTermination === 'no-capable-candidate') {
+    deps.onEvent?.(
+      '   ⚠️ Every model that answered returned nothing usable — ending the turn and reporting exactly what was tried.',
+    );
+  } else if (exitTermination === 'reasoning-spin') {
+    deps.onEvent?.('   🧠 Reasoning-only output kept repeating — ending the turn instead of spinning.');
+  } else {
+    deps.onEvent?.(`   ⚠️ Tool loop reached its ${stepLimit}-step budget — returning the last response.`);
+  }
+  // P3 — BUG SIGNAL. Nothing was delivered and the caller could still have
+  // handed the work to another model, so this ending is a GAP IN THE ROAD, not a
+  // shortage of models. It is said out loud (invariant 2: a failure is never
+  // silent) and named on the result, so the caller's report does not have to
+  // guess which of the two it was serving the user.
+  // `exitTermination === null` is what makes this a BUDGET claim: when the empty
+  // path already chose an ending it said WHY (a model shortage, a reasoning
+  // spin), and re-labelling that as a budget gap would be the exact dishonesty
+  // this work removes — the reason must be the one that actually applied.
+  const budgetGapWithCandidates =
+    exitTermination === null &&
+    lastContent.trim() === '' &&
+    !!deps.requestModelSwitch &&
+    modelHandoffs < MAX_MODEL_HANDOFFS_PER_TURN;
+  if (budgetGapWithCandidates) {
+    logger.warn(
+      `   ⚠️ the turn ran out of steps with nothing delivered while a model handoff was still available ` +
+        `(handoffs used ${modelHandoffs}/${MAX_MODEL_HANDOFFS_PER_TURN}) — this is a BUDGET gap, not a model shortage`,
+    );
+  }
   traceEvent({
     kind: 'decision',
     gate: 'budget',
-    summary: `the step budget (${stepLimit}) was reached — the turn ended on its last response instead of finishing`,
+    summary: budgetGapWithCandidates
+      ? `the step budget (${stepLimit}) was reached with nothing delivered while model handoffs were still available ` +
+        `(handoffs used ${modelHandoffs}/${MAX_MODEL_HANDOFFS_PER_TURN}) — a budget gap, not a model shortage`
+      : `the step budget (${stepLimit}) was reached — the turn ended on its last response instead of finishing`,
   });
   return {
     content: lastContent || 'I reached my step limit for this request.',
@@ -2719,6 +2963,11 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     ...(opts.resume ? { replayedSteps } : {}),
     bounded: true,
     continuations,
+    ...(modelHandoffs > 0 ? { modelHandoffs } : {}),
+    // An exit the empty/think path chose says exactly why; otherwise the road
+    // simply ran out, and `budget-exhausted` admits that rather than dressing it
+    // up as a model shortage.
+    termination: exitTermination ?? 'budget-exhausted',
   };
 }
 

@@ -55,6 +55,11 @@ export interface BetaPrior {
  * unlearned and (when enabled) escalates to a provider/model that has data.
  */
 export const DEFAULT_MIN_SAMPLES = 8;
+/**
+ * How old the newest recorded outcome may be before the bandit's data stops
+ * being described as "learned" for a decision made today. See `isStale`.
+ */
+export const BANDIT_STALENESS_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** The complexity buckets the bandit learns per provider. */
 export const COMPLEXITY_BUCKETS: ComplexityLevel[] = [
@@ -258,6 +263,101 @@ export class RouterBandit {
   /** Get the Beta prior for a provider in a complexity bucket (intent-aware). */
   getPrior(provider: string, complexity: ComplexityLevel, taskIntent?: string): BetaPrior {
     return this.state.priors[this.bucketKey(complexity, taskIntent)]?.[provider] ?? { alpha: 1, beta: 1 };
+  }
+
+  /**
+   * P6 (fix_model_routing) — IS THERE ACTUALLY LEARNED DATA for this arm?
+   *
+   * `Beta(1,1)` is the UNTOUCHED prior: no outcome has ever been recorded for
+   * this provider in this bucket. The router used to call any `useBandit`
+   * decision `bandit-learned`, so a decision made from a cold-start prior — a
+   * score multiplied by a constant 0.5 that cannot reorder anything — was
+   * presented to the user as learned. Live: the store had no entry for ANY of
+   * the models in play, and the trace still read `bandit-learned`.
+   */
+  hasLearnedData(
+    provider: string,
+    complexity: ComplexityLevel,
+    taskIntent?: string,
+    /** The concrete model, when known — its own arm is evidence too. */
+    model?: string,
+  ): boolean {
+    const prior = this.getPrior(provider, complexity, taskIntent);
+    if (prior.alpha + prior.beta > 2) return true;
+    if (model) {
+      const modelPrior = this.getModelPrior(model, complexity, taskIntent);
+      if (modelPrior.alpha + modelPrior.beta > 2) return true;
+    }
+    return false;
+  }
+
+  /** Milliseconds since the newest recorded outcome (`Infinity` when none). */
+  ageMs(now: number = Date.now()): number {
+    const newest = this.state.learningHistory.reduce<number>((acc, h) => {
+      const t = Date.parse(h.timestamp ?? '');
+      return Number.isFinite(t) && t > acc ? t : acc;
+    }, 0);
+    return newest === 0 ? Number.POSITIVE_INFINITY : Math.max(0, now - newest);
+  }
+
+  /**
+   * P6 (fix_model_routing) — NEGATIVE REWARD for a step-level failure.
+   *
+   * `recordOutcome` rewards a model only when a whole TASK succeeds or fails,
+   * which never happens for the failure that actually killed runs: a model that
+   * resolves a step with NOTHING usable. That model was retried, the turn ended
+   * `bounded`, and the bandit learned nothing — so its prior kept sampling the
+   * same broken arm back up. This is where an ungrounded "learned" score comes
+   * from, and where it is now corrected.
+   *
+   * The signal is a property of the MODEL rather than of the task (a model that
+   * returns nothing fails every kind of ask), so when no bucket is supplied the
+   * penalty lands on every arm that already holds an entry for this model — the
+   * only arms that could otherwise keep sampling it up — and a brand-new model
+   * with no arms at all gets the general bucket rather than inventing
+   * task-specific ones.
+   */
+  penalizeModel(model: string, complexity?: ComplexityLevel, taskIntent?: string): void {
+    if (!model || model === 'default') return;
+    const keys: string[] = [];
+    if (complexity) {
+      keys.push(this.bucketKey(complexity, taskIntent));
+    } else {
+      for (const key of Object.keys(this.state.modelPriors)) {
+        if (this.state.modelPriors[key]?.[model]) keys.push(key);
+      }
+      if (keys.length === 0) keys.push(this.bucketKey('moderate' as ComplexityLevel, taskIntent));
+    }
+    const nowIso = new Date().toISOString();
+    for (const key of keys) {
+      const bucket = this.state.modelPriors[key] ?? (this.state.modelPriors[key] = {});
+      const prior = bucket[model] ?? (bucket[model] = { alpha: 1, beta: 1 });
+      prior.beta += 1;
+      this.state.learningHistory.push({
+        provider: model, // model-id surface; `provider` keeps CLI history rendering
+        model,
+        complexity: (complexity ?? ('moderate' as ComplexityLevel)),
+        ...(taskIntent ? { taskIntent } : {}),
+        outcome: 'failure',
+        reward: 0,
+        timestamp: nowIso,
+      });
+    }
+    if (this.state.learningHistory.length > MAX_HISTORY) {
+      this.state.learningHistory = this.state.learningHistory.slice(-MAX_HISTORY);
+    }
+    this.save();
+  }
+
+  /**
+   * P6 — staleness guard. A store whose newest sample is older than
+   * {@link BANDIT_STALENESS_MS} describes a different machine, different keys
+   * and a different model roster; calling its output "learned" for today's task
+   * is a claim nobody checked. Observed on disk: the store was last written 11
+   * days before the decision it supposedly informed.
+   */
+  isStale(now: number = Date.now()): boolean {
+    return this.ageMs(now) > BANDIT_STALENESS_MS;
   }
 
   /** Note the provider picked for an agent type (for recordOutcome wiring). */

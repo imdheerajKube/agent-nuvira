@@ -40,10 +40,22 @@ import { capabilityReasoningEffort, isMaxCapability } from '../config/capability
 import { InferenceProvider } from '../inference/interface.js';
 import type { ProviderType } from '../config/types.js';
 import { getProviderFallback, classifyFallbackError, isRetryableError, isTransientForRetry, recordRegistrySuccess } from '../learning/provider-fallback.js';
-import { recordActionFailure, RATE_LIMIT_EXCLUSION_MS } from '../learning/failure-bookkeeping.js';
+import {
+  recordActionFailure,
+  RATE_LIMIT_EXCLUSION_MS,
+} from '../learning/failure-bookkeeping.js';
+import type { ComplexityLevel } from '../learning/hybrid-router.js';
+import { getRouterBandit } from '../learning/router-bandit.js';
+import { UnusableModelResponseError } from '../learning/response-usability.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
 import { getAutoRouter, isAgentAutoRoute, isAutoModel, isAutoProvider, governanceVerdict, adminBudgetVerdict } from '../learning/auto-router.js';
 import { continuationSoftwareText } from '../learning/continuation-intent.js';
+import { TaskModelContinuity, taskSignature } from '../learning/task-model-continuity.js';
+import {
+  describeFailureKind,
+  renderExhaustionReport,
+  type ExhaustionAttempt,
+} from '../learning/exhaustion-report.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
@@ -537,6 +549,42 @@ export class ChatCommand extends BaseCommand {
    * rate-limited (a genuinely shared limit).
    */
   private sessionFailedModels = new Map<string, number>();
+
+  /**
+   * P3 (fix_model_routing) — task-level model CONTINUITY.
+   *
+   * The pair that produced usable work for a task is remembered per task
+   * signature, and the next turn of the SAME task (a "resume"/"continue" whose
+   * routing text resolves to the same ask) offers it FIRST. Routing re-decides
+   * every turn, and a signal-free continuation re-decided from scratch is how a
+   * working run degraded onto a model that then answered with nothing.
+   *
+   * A preference, never a pin: the recalled pair goes through the SAME
+   * credential/exclusion/registry gates as any other candidate, and the normal
+   * pool stands behind it — so a model that has since died costs one check.
+   */
+  private taskContinuity = new TaskModelContinuity();
+  /** The task signature of the turn being routed (see routeMessageAuto). */
+  private lastTaskSignature?: string;
+
+  /**
+   * P4 (fix_model_routing) — what THIS turn actually tried, and why each
+   * candidate did not answer. Reset per turn; consumed by the exhaustion report
+   * when a turn ends without an answer. Chat's own failover walk is the
+   * authority here (the shared walk in `resilient-call.ts` keeps its own log for
+   * the gateway/orchestrator paths), so the report can name the models the user
+   * was actually served by — not a pool that was considered.
+   */
+  private turnAttempts: ExhaustionAttempt[] = [];
+
+  /** Record one failed/skipped attempt for this turn's exhaustion report. */
+  private recordTurnAttempt(attempt: ExhaustionAttempt): void {
+    try {
+      this.turnAttempts.push(attempt);
+    } catch {
+      // Best-effort — telemetry must never break a turn.
+    }
+  }
 
   // RATE_LIMIT_EXCLUSION_MS + TRANSIENT_FAILURE_EXCLUSION_MS now live in
   // src/learning/failure-bookkeeping.ts (shared with every action) — see
@@ -2115,6 +2163,12 @@ export class ChatCommand extends BaseCommand {
       // P4 — when a project is attached, scope tools to its root so the
       // agent operates inside the project (not the dashboard server's cwd).
       cwd: turnCwd,
+      // P7 — is a PERSON watching this turn? It decides `run_terminal`'s DEFAULT
+      // command timeout (60s here vs 120s unattended): two minutes of silence in
+      // front of someone is not patience, it is a bug — the live run spent four
+      // minutes on back-to-back 120-second timeouts while the console showed
+      // nothing, then gave up.
+      interactive: Boolean(ctxOverrides?.askUser) || Boolean(process.stdin.isTTY),
       emit: (event, data, source) => {
         // G3 — collect mutated file paths from `tool:started` (which carries
         // the arguments) so the working-state ledger knows what changed.
@@ -2323,6 +2377,9 @@ export class ChatCommand extends BaseCommand {
     // The instant this turn's model walk began. A failed generation records the
     // WALK (below) relative to this mark, so the trace can say what was tried. 
     const modelWalkMark = Date.now();
+    // P4 — a fresh attempt log for this turn (the report is about what THIS turn
+    // tried, never a stale list from an earlier one).
+    this.turnAttempts = [];
     const seenStepDigests = new Set<string>();
     const digestPrompt = (p: string): string => {
       try { return createHash('sha256').update(p).digest('hex').slice(0, 16); } catch { return String(p.length); }
@@ -2378,6 +2435,145 @@ export class ChatCommand extends BaseCommand {
         throw err;
       }
     };
+    /**
+     * P2 (fix_model_routing) — MID-TURN MODEL HANDOFF.
+     *
+     * The tool loop calls this when the model serving the turn resolved with
+     * NOTHING usable (no answer text, no tool call) and has already had its one
+     * retry. Until now that case re-asked the SAME model: a live dashboard run
+     * took five consecutive empty responses from `local/gpt-oss:120b-cloud` and
+     * ended as `bounded` with zero tool calls, while a healthy Gemini model sat
+     * configured and unused — the user had to say "retry". The loop owns the
+     * retry policy; this owns the POOL.
+     *
+     * Order of business, and why:
+     *   1. Exclude the pair that returned nothing — MODEL-scoped, never the
+     *      provider. Free tiers meter per model, so the provider's next-best
+     *      model is usually perfectly healthy, and `pushCandidate` in the deep
+     *      pool already honours this model-scoped exclusion set.
+     *   2. Auto turns re-resolve through the same deep pool the first route used,
+     *      first WITHOUT excluding the provider (its sibling models are the
+     *      cheapest, lowest-latency handoff) and then WITH it, so a provider
+     *      whose only models are dead is genuinely left behind.
+     *   3. A pinned (non-auto) turn walks the configured fallback chain, and
+     *      honours `strictModelMode()` by refusing to substitute at all — the
+     *      same rule the thrown-error failover already follows.
+     *
+     * Resolving `false` is honest: it means no other candidate exists, and the
+     * loop then falls back to its own bounded escalation instead of spinning.
+     */
+    const requestModelSwitch = async (): Promise<boolean> => {
+      const failedModel = session.model;
+      // P4 — this pair is one of the models the turn actually tried, and it
+      // failed by answering with nothing. Recorded here because the report has
+      // to name it, and because "the provider returned an empty response" is a
+      // cause the user should see instead of a generic apology.
+      this.recordTurnAttempt({
+        provider: session.type,
+        model: failedModel ?? 'default',
+        kind: 'empty-response',
+        reason: describeFailureKind('empty-response'),
+      });
+      // ── RC2: the failure must be LEARNED, not just survived ───────────────
+      // The session exclusion alone only lasts this turn: the model stayed
+      // `verified` with `errorRate` 0 across sessions, so the very next chat
+      // could route to it again. `recordAutoProviderFailure` runs the FULL
+      // shared composition for the pair — session exclusion (model-scoped),
+      // registry write-through (which parks it for EMPTY_RESPONSE_PARK_MS), the
+      // quota-timeline event, and the shared breaker (deliberately skipped for
+      // an empty response: the breaker is provider-scoped and the provider was
+      // fine). One `empty-response` failure nobody wrote down was the whole
+      // reason a dead model kept its "verified" badge.
+      try {
+        this.recordAutoProviderFailure(
+          session.type,
+          new UnusableModelResponseError('empty', 'the provider returned nothing usable for this step'),
+          failedModel,
+        );
+      } catch {
+        // Best-effort — bookkeeping must never break the turn.
+      }
+      // P6 — and the bandit hears about it too: a step-level empty is NEGATIVE
+      // evidence for this model in the arm the router samples (see
+      // `RouterBandit.penalizeModel`), so the score that flipped a working run to
+      // a broken model can actually decay.
+      if (failedModel && failedModel !== 'default') {
+        try {
+          getRouterBandit().penalizeModel(
+            failedModel,
+            (this.lastRouteSnapshot?.complexity as ComplexityLevel | undefined) ?? undefined,
+            this.lastTaskSignature?.split('|')[0],
+          );
+        } catch {
+          // Best-effort — learning must never break the turn.
+        }
+      }
+      /** Install a candidate and report whether it is genuinely a NEW pair. */
+      const install = (next: { type: string; provider: InferenceProvider; model: string }): boolean => {
+        const current = `${session.type}|${session.model ?? 'default'}`;
+        const pair = `${next.type}|${next.model ?? 'default'}`;
+        if (pair === current) return false;
+        session.type = next.type;
+        session.provider = next.provider;
+        if (next.model && next.model !== 'default') session.model = next.model;
+        this.lastAttempt = { provider: next.type, model: next.model };
+        logger.warn(
+          `   🔀 ${current} returned nothing usable — handing the turn to ${pair}`,
+        );
+        return true;
+      };
+
+      if (mode.auto) {
+        // First keep the provider (its sibling models are the cheapest handoff),
+        // then drop the provider entirely so a fully-dead provider is left behind.
+        // The same intent hint the initial route and the failover walk use: a
+        // bare continuation ("resume") must re-route on the ask it continues,
+        // not on the signal-free word, or the handoff lands on a trivial model.
+        const switchRoutingText = continuationSoftwareText(message, history) ?? undefined;
+        for (const excludeProviders of [[], [session.type]] as string[][]) {
+          try {
+            const next = await this.routeMessageAuto(message, excludeProviders, {
+              ...(switchRoutingText ? { routingText: switchRoutingText } : {}),
+              fallbackFrom: session.type,
+              // A handoff must NEVER reuse a decision computed before the failure
+              // it is reacting to. The 30-second routing cache is keyed on inputs
+              // that do not include the pair we just excluded, so a cached
+              // decision could hand back the SAME model — making the handoff a
+              // no-op and ending a recoverable turn. Observed shape: two routing
+              // decisions 17 seconds apart carrying an identical score, one of
+              // them a failover the cache had never re-evaluated.
+              noCache: true,
+            });
+            if (install(next)) return true;
+          } catch {
+            // Unresolvable through this shape — try the next one.
+          }
+        }
+        return false;
+      }
+
+      // A pinned turn: never substitute a model the user explicitly forbade.
+      if (strictModelMode()) return false;
+      try {
+        const chain = getProviderFallback(this.configManager, this.configManager.getAll().fallback)
+          .getFallbackChain(session.type);
+        for (const fbType of chain) {
+          if (fbType === session.type) continue;
+          if (!hasCredentials(this.configManager, fbType)) continue;
+          if (!governanceVerdict(this.configManager, fbType, { taskText: message }).allowed) continue;
+          try {
+            const resolved = resolveProvider(this.configManager, fbType);
+            const model = getAutoRouter().resolveModel(fbType, 'chat', this.configManager);
+            if (install({ type: resolved.type, provider: resolved.provider, model })) return true;
+          } catch {
+            // Next fallback candidate.
+          }
+        }
+      } catch {
+        // Fall through to `false` — the loop's bounded path still applies.
+      }
+      return false;
+    };
     try {
       // R1 — the harness follows the MODEL, not only the config: config says
       // what this deployment prefers, the profile decides what this model can
@@ -2419,6 +2615,8 @@ export class ChatCommand extends BaseCommand {
         onTraceEvent: (event) => recordTraceEvent(chatTraceId, event),
         deps: {
           callModel: callModelWithTrace,
+          // P2 — the empty-response handoff (see `requestModelSwitch` above).
+          requestModelSwitch,
           executeTool: async (name, args, ctx) => {
             const tool = getTool(name);
             if (!tool) throw new Error(`Unknown tool: ${name}`);
@@ -2437,6 +2635,25 @@ export class ChatCommand extends BaseCommand {
           },
         },
       });
+      // P3 — REMEMBER the worker that actually delivered this task, so the next
+      // turn of the SAME task ("resume", "continue") prefers it instead of
+      // re-deciding from a signal-free word. Only a DELIVERED turn is remembered:
+      // a bounded, cancelled or failed one has taught us nothing about which
+      // model can do this job, and remembering it would propagate the failure.
+      if (
+        !result.cancelled &&
+        !result.generationFailed &&
+        !result.bounded &&
+        !result.termination?.includes('no-capable') &&
+        result.content.trim() &&
+        session.model
+      ) {
+        this.taskContinuity.remember(
+          this.lastTaskSignature ?? taskSignature(undefined, undefined),
+          session.type,
+          session.model,
+        );
+      }
     } catch (err) {
       // The tool loop does not throw on its own; this catches the errors that
       // ARE meant to propagate — most importantly the ANSWER-QUALITY rejection
@@ -2491,6 +2708,72 @@ export class ChatCommand extends BaseCommand {
         // reader could have done about it (retry) was never offered.
         generationFailed: true,
       };
+    }
+    // ── P4 — THE HONEST EXHAUSTION REPORT ────────────────────────────────
+    // A turn that ends without an answer used to deliver a bare line ("the
+    // language model was unavailable") or, worse, a QUESTION that made the user
+    // the retry button. Instead, the user gets the measured facts: which models
+    // were tried and why each did not answer, which targets are unavailable and
+    // the WALL-CLOCK time each frees up, whether this was a routing gap or a real
+    // shortage, and the levers only they can pull — with no request to retry.
+    //
+    // Gated on an actual ATTEMPT (or the loop's evidenced `no-capable-candidate`):
+    // a governance refusal, an admin-budget stop or a bad pin fails with a
+    // healthy pool and a message that is already the right answer, and dressing
+    // those up as exhaustion would be a new lie in place of the old one.
+    if (
+      !result.cancelled &&
+      (result.generationFailed || result.termination === 'no-capable-candidate')
+    ) {
+      try {
+        const breadth = modelBreadthReport(modelWalkMark, this.configManager);
+        const seen = new Set(this.turnAttempts.map((a) => `${a.provider}|${a.model}|${a.kind}`));
+        const attempts: ExhaustionAttempt[] = [...this.turnAttempts];
+        for (const a of breadth.tried) {
+          const key = `${a.provider}|${a.model}|${a.kind}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          attempts.push({
+            provider: a.provider,
+            model: a.model,
+            kind: a.kind,
+            reason: a.reason || describeFailureKind(a.kind),
+            ...(a.skipped ? { skipped: true } : {}),
+          });
+        }
+        if (attempts.length > 0) {
+          const exclusions = breadth.parked
+            .filter((r) => r.active)
+            .map((r) => ({
+              provider: r.provider,
+              ...(r.model ? { model: r.model } : {}),
+              kind: r.kind,
+              ...(r.expiresAt ? { expiresAt: r.expiresAt } : {}),
+              ...(r.source ? { source: r.source } : {}),
+            }));
+          const reportText = renderExhaustionReport({
+            attempts,
+            exclusions,
+            ...(typeof breadth.poolSize === 'number' ? { poolSize: breadth.poolSize } : {}),
+            ...(typeof breadth.poolProviders === 'number' ? { poolProviders: breadth.poolProviders } : {}),
+            task: message,
+            // The underlying line is kept as the REASON, so a specific,
+            // actionable cause is never buried by the report.
+            ...(result.generationFailed && result.content.trim() ? { cause: result.content } : {}),
+          });
+          if (reportText) {
+            result.content = reportText;
+            recordTraceEvent(chatTraceId, {
+              kind: 'failover',
+              summary:
+                `exhaustion report delivered — ${attempts.filter((a) => !a.skipped).length} model(s) tried, ` +
+                `${exclusions.length} unavailable, eligible pool ${breadth.poolSize ?? '?'}`,
+            });
+          }
+        }
+      } catch {
+        // The report is a courtesy — the turn's own failure line still stands.
+      }
     }
     // Record WHAT HAPPENED, not just "the model answered": a hallucinated
     // "I have sent it" (no tool ran) must be visible as an unverified claim in
@@ -2995,6 +3278,16 @@ export class ChatCommand extends BaseCommand {
             ),
         );
       } catch (err) {
+        // P4 — the model this turn STARTED on failed. Recorded with a human
+        // phrase (never the raw provider text, which is how a JSON quota dump
+        // once reached a user verbatim) so the exhaustion report can name it.
+        const primaryKind = classifyFallbackError(err);
+        this.recordTurnAttempt({
+          provider: session.type,
+          model: session.model ?? 'default',
+          kind: primaryKind,
+          reason: describeFailureKind(primaryKind),
+        });
         // Auto mode: fail over across the ranked candidates (never stuck).
         if (mode.auto) {
           const firstType = session.type;
@@ -3064,7 +3357,16 @@ export class ChatCommand extends BaseCommand {
               if (next.model && next.model !== 'default') session.model = next.model;
               logger.success(`✅ Auto failover: answered from ${next.provider.name} (${next.model}) after ${firstType} failed`);
               return resp;
-            } catch {
+            } catch (nextErr) {
+              // P4 — record THIS candidate's failure too, so the report lists
+              // every model the turn was actually served by, in order.
+              const nextKind = classifyFallbackError(nextErr);
+              this.recordTurnAttempt({
+                provider: next.type,
+                model: next.model ?? 'default',
+                kind: nextKind,
+                reason: describeFailureKind(nextKind),
+              });
               // Next candidate.
             }
           }
@@ -3320,6 +3622,19 @@ export class ChatCommand extends BaseCommand {
       routingText?: string;
       /** C3 — the pair this route is failing over FROM (the chain's origin). */
       fallbackFrom?: string;
+      /**
+       * P2/P3 (fix_model_routing) — skip the routing-decision cache.
+       *
+       * The cache key covers intent, complexity, provider health and session
+       * exclusions, and a MID-TURN HANDOFF changes none of those in a way it
+       * can see: the pair that just failed is excluded MODEL-scoped, which is
+       * not part of the signature. So a handoff that ran within the 30s TTL
+       * could be handed the very decision it is trying to escape — the same
+       * provider and model — and the "switch" would silently do nothing. A
+       * re-route that is reacting to a just-recorded failure must be computed
+       * fresh.
+       */
+      noCache?: boolean;
     },
   ): Promise<AutoRoutedMessage> {
     // The text ROUTING is decided from — the prior software ask for a bare
@@ -3371,7 +3686,7 @@ export class ChatCommand extends BaseCommand {
         .sort()
         .join(','),
     ]);
-    const decision = withRoutingCache(cacheSignature, 30_000, () =>
+    const resolveFresh = () =>
       getAutoRouter().resolve(
         'chat',
         taskText,
@@ -3384,10 +3699,22 @@ export class ChatCommand extends BaseCommand {
           ...(dispatch.taskIntentHint ? { taskIntentHint: dispatch.taskIntentHint } : {}),
         },
         this.configManager,
-      ),
-    );
+      );
+    const decision =
+      opts?.noCache === true
+        ? resolveFresh()
+        : withRoutingCache(cacheSignature, 30_000, resolveFresh);
     // G5 — record the routing snapshot now (the winner + why), so the reasoning
     // trace for this turn can show the decision instead of a blank column.
+    // P3 — the TASK this turn belongs to, as far as model continuity is
+    // concerned. Kept on the instance because the turn's SUCCESS path (the only
+    // place that knows a model actually DELIVERED) does not hold the routing
+    // decision; intent+complexity is the same key for the original ask and for a
+    // continuation of it, which is exactly the pair that must match.
+    this.lastTaskSignature = taskSignature(
+      dispatch.taskIntentHint ?? decision.taskProfile?.intent,
+      String(decision.complexity),
+    );
     this.lastRouteSnapshot = {
       provider: decision.provider,
       model: decision.model,
@@ -3517,6 +3844,17 @@ export class ChatCommand extends BaseCommand {
     // reserve) → ranked placeholders → config fallback. Chat used to build a
     // shallower list here, which is why it reached strictly fewer models than
     // the orchestrator could.
+    // P3 — TASK-LEVEL CONTINUITY (RC7). A continuation carries no signal about
+    // its own task, so the router re-decides from scratch and can land on a model
+    // that has never served it (the live `resume` degraded from a working Gemini
+    // model to one that returned nothing). Offer the pair that DID serve this
+    // task FIRST. It is pushed through the same `pushCandidate` gate as every
+    // other candidate, so a dead key, an active exclusion or a registry block
+    // simply drops it and the normal pool is used instead.
+    if (opts?.routingText) {
+      const recalled = this.taskContinuity.recall(this.lastTaskSignature);
+      if (recalled) pushCandidate(recalled.provider, recalled.model);
+    }
     const pool = buildDeepFailoverPool(decision, {
       taskDescription: message,
       complexity: decision.complexity,
