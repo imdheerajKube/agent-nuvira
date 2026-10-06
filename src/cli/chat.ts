@@ -2001,6 +2001,25 @@ export class ChatCommand extends BaseCommand {
       }
     }
 
+    // Phase 1 — deterministic, tag-scoped knowledge. A message that OPENS with
+    // `#tag` retrieves that tag's relevant passages and puts them in front of
+    // the model before the question. It is INERT otherwise: with no marker (or
+    // with no tags defined at all) the builder returns an empty block WITHOUT
+    // touching the embedder, so a turn that did not ask for a document is
+    // byte-identical to one from a build without this feature — no extra cost,
+    // no extra noise, and never a wrong corpus. Dynamically imported so the
+    // retrieval modules are not loaded on a turn that will not use them, the
+    // same best-effort contract as the ambient project context above. See
+    // src/learning/knowledge-turn.ts for what the guarantee rests on.
+    let knowledgeBlock = '';
+    try {
+      const { buildKnowledgeTurnContext } = await import('../learning/knowledge-turn.js');
+      const knowledge = await buildKnowledgeTurnContext(message);
+      knowledgeBlock = knowledge.block;
+    } catch {
+      knowledgeBlock = ''; // best-effort — a retrieval failure never breaks the turn
+    }
+
     // G4 — carry THIS project's working state (files changed, verification debt,
     // user-reported regressions) into the turn, so the model does not re-derive
     // what previous turns already established. This is the fix for the
@@ -2034,6 +2053,11 @@ export class ChatCommand extends BaseCommand {
         : ambientProjectContext
           ? [{ role: 'user' as const, content: `[Project context]\n${ambientProjectContext}` }]
           : []),
+      // Phase 1 — the tagged knowledge this ask selected, when it selected one.
+      // It sits with the other CONTEXT blocks (before the history) so the
+      // conversation stays contiguous, and it is a USER-TURN message rather than
+      // system text, so the system prompt stays byte-stable and cacheable.
+      ...(knowledgeBlock ? [{ role: 'user' as const, content: knowledgeBlock }] : []),
       // P4 — the recalled project context (prior sessions + facts) rides in
       // next, so the model starts from what this project was last doing.
       ...(ctxOverrides?.recallContext

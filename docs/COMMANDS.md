@@ -1217,14 +1217,18 @@ nuvira models excluded         # show what routing is skipping, and WHY
 
 ### 12.5 Knowledge (tag-scoped documents)
 
-- **Objective:** Bring your own documents, give them a tag, and answer questions scoped to that tag. Documents are extracted, chunked and embedded once, so later questions retrieve the relevant passages instead of re-reading the files every turn.
-- **Command:** `nuvira knowledge add <tag> <paths...>` · `nuvira knowledge query <tag> "<question>" [-k <n>]` · `nuvira knowledge list` · `nuvira knowledge stats <tag>` · `nuvira knowledge forget <tag>`
+- **Objective:** Bring your own documents, give them a tag, and answer questions scoped to that tag. Documents are extracted, chunked (heading-aware for Markdown) and embedded once, so later questions retrieve the relevant passages instead of re-reading the files every turn. Retrieval is **hybrid** — vectors plus BM25 — fused by rank and capped per source document, and it keeps only passages that clear a relevance floor, so an unrelated question comes back empty rather than receiving the closest passages of a document it has nothing to do with. `query` answers "where is it mentioned"; `read` answers "what does it say" by returning a document or one section **verbatim**.
+- **Command:** `nuvira knowledge add <tag> <paths...>` · `nuvira knowledge sync <tag> <paths...>` · `nuvira knowledge query <tag> "<question>" [-k <n>]` · `nuvira knowledge toc <tag> [doc]` · `nuvira knowledge read <tag> <doc> [-s <heading>]` · `nuvira knowledge remove <tag> <doc>` · `nuvira knowledge list` · `nuvira knowledge stats <tag>` · `nuvira knowledge forget <tag>`
+- **In chat:** open a message with `#<tag>` (chat REPL, dashboard Chat tab, gateway channel) to pull that tag's passages into the turn — e.g. `#dheeraj-health-report what is my LDL?`. Without a leading tag nothing is retrieved and the turn is unchanged. An unknown tag suggests a near match instead of substituting another document set.
 - **Examples:**
   ```bash
   nuvira knowledge add dheeraj-health-report ~/Documents/labs.pdf
   nuvira knowledge query dheeraj-health-report "what is my LDL and how do I lower it"
-  nuvira knowledge list                                  # tags, documents, chunk counts
-  nuvira knowledge forget dheeraj-health-report          # remove a tag's vectors
+  nuvira knowledge sync specs ./docs/specs            # re-sync; unchanged files are not re-embedded
+  nuvira knowledge toc specs                          # documents and their headings
+  nuvira knowledge read specs roadmap.md -s "Q3"      # one section, verbatim
+  nuvira knowledge list                               # tags, documents, chunk counts
+  nuvira knowledge forget dheeraj-health-report       # remove a tag's vectors and stored text
   ```
 
 ### 12.6 Session continuity

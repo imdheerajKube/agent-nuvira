@@ -10,6 +10,7 @@
 import { useMemo, useState } from 'react';
 import type { DashboardData, RequestsInsights } from '../types';
 import { formatCount } from '../format';
+import MetricTiles, { type MetricTile } from './MetricTiles';
 import PageHeader from './PageHeader';
 
 interface RequestsPanelProps {
@@ -36,6 +37,17 @@ function errorColor(rate: number): string {
   return 'var(--accent-red)';
 }
 
+/**
+ * The SAME thresholds as `errorColor`, expressed as a metric-tile tone. The
+ * headline tile and the per-row colour are one classifier in two vocabularies,
+ * so neither can drift away from the other.
+ */
+function errorTone(rate: number): MetricTile['tone'] {
+  if (rate === 0) return 'ok';
+  if (rate < 0.2) return 'warn';
+  return 'danger';
+}
+
 function RequestsStats({ data }: { data: RequestsInsights }) {
   const rows = data.rows;
   const totalRequests = rows.reduce((a, r) => a + r.requests, 0);
@@ -47,51 +59,35 @@ function RequestsStats({ data }: { data: RequestsInsights }) {
     : undefined;
   const actions = new Set(rows.map((r) => r.action)).size;
 
-  return (
-    <div className="stats-grid" style={{ marginBottom: 16 }}>
-      <div className="stat-card">
-        <span className="stat-icon">📨</span>
-        <div className="stat-body">
-          <div className="stat-value">{formatCount(totalRequests)}</div>
-          <div className="stat-label">Requests</div>
-        </div>
-      </div>
-      <div className="stat-card">
-        <span className="stat-icon">🎯</span>
-        <div className="stat-body">
-          <div className="stat-value">{rows.length}</div>
-          <div className="stat-label">provider × model × action groups</div>
-        </div>
-      </div>
-      <div className="stat-card">
-        <span className="stat-icon">⚡</span>
-        <div className="stat-body">
-          <div className="stat-value" style={{ color: avgLatency !== undefined ? 'var(--accent-green)' : 'var(--text-secondary)' }}>
-            {avgLatency !== undefined ? `${avgLatency}ms` : '—'}
-          </div>
-          <div className="stat-label">Avg latency{avgLatency !== undefined ? ` (${latencies.length} groups)` : ' (no samples)'}</div>
-        </div>
-      </div>
-      <div className="stat-card">
-        <span className="stat-icon">📛</span>
-        <div className="stat-body">
-          <div className="stat-value" style={{ color: errorColor(totalRequests > 0 ? totalFailures / totalRequests : 0) }}>
-            {totalRequests > 0 ? `${((totalFailures / totalRequests) * 100).toFixed(1)}%` : '—'}
-          </div>
-          <div className="stat-label">Overall error rate ({formatCount(totalFailures)} failures)</div>
-        </div>
-      </div>
-      <div className="stat-card">
-        <span className="stat-icon">💰</span>
-        <div className="stat-body">
-          <div className="stat-value" style={{ color: totalCost > 0 ? 'var(--accent-yellow)' : 'var(--text-secondary)' }}>
-            {totalCost > 0 ? `$${totalCost.toFixed(4)}` : '—'}
-          </div>
-          <div className="stat-label">Measured cost{actions > 0 ? ` · ${actions} actions` : ''}</div>
-        </div>
-      </div>
-    </div>
-  );
+  const errorRate = totalRequests > 0 ? totalFailures / totalRequests : 0;
+
+  const tiles: MetricTile[] = [
+    { key: 'requests', icon: '📨', value: formatCount(totalRequests), label: 'Requests', tone: 'accent' },
+    { key: 'groups', icon: '🎯', value: String(rows.length), label: 'provider × model × action groups', tone: 'accent' },
+    {
+      key: 'latency',
+      icon: '⚡',
+      value: avgLatency !== undefined ? `${avgLatency}ms` : '—',
+      label: `Avg latency${avgLatency !== undefined ? ` (${latencies.length} groups)` : ' (no samples)'}`,
+      tone: avgLatency !== undefined ? 'ok' : 'accent',
+    },
+    {
+      key: 'error-rate',
+      icon: '📛',
+      value: totalRequests > 0 ? `${(errorRate * 100).toFixed(1)}%` : '—',
+      label: `Overall error rate (${formatCount(totalFailures)} failures)`,
+      tone: errorTone(errorRate),
+    },
+    {
+      key: 'cost',
+      icon: '💰',
+      value: totalCost > 0 ? `$${totalCost.toFixed(4)}` : '—',
+      label: `Measured cost${actions > 0 ? ` · ${actions} actions` : ''}`,
+      tone: 'warn',
+    },
+  ];
+
+  return <MetricTiles tiles={tiles} />;
 }
 
 export default function RequestsPanel({ data }: RequestsPanelProps) {

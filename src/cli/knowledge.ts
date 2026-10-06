@@ -10,10 +10,18 @@
  *
  * Subcommands:
  *   nuvira knowledge add <tag> <path...>      — ingest files/folders under a tag
+ *   nuvira knowledge sync <tag> <path...>     — re-sync folders (hash-gated; prunes vanished files)
  *   nuvira knowledge query <tag> "<question>" — retrieve the tag's relevant passages
+ *   nuvira knowledge toc <tag> [doc]          — documents and their headings
+ *   nuvira knowledge read <tag> <doc>         — one document or section, VERBATIM
+ *   nuvira knowledge remove <tag> <doc>       — remove one document from a tag
  *   nuvira knowledge list                     — list tags, documents and chunk counts
  *   nuvira knowledge stats <tag>              — details for one tag
- *   nuvira knowledge forget <tag>             — remove a tag's vectors
+ *   nuvira knowledge forget <tag>             — remove a tag's vectors and stored text
+ *
+ * `query` answers "where is it mentioned"; `read` answers "what does it say".
+ * They are different jobs — a spec-driven build needs a section verbatim, not
+ * the six most similar paragraphs of it.
  */
 
 import { Command } from 'commander';
@@ -30,6 +38,11 @@ import {
   getKnowledgeTag,
   forgetKnowledgeTag,
   normalizeKnowledgeTag,
+  listKnowledgeSections,
+  readKnowledgeDocument,
+  removeKnowledgeDocument,
+  syncKnowledgeTag,
+  MAX_READ_CHARS,
 } from '../learning/knowledge-base.js';
 
 export class KnowledgeCommand extends BaseCommand {
@@ -53,6 +66,9 @@ export class KnowledgeCommand extends BaseCommand {
         try {
           const result = await ingestKnowledge(tag, paths);
           logger.success(`   Ingested ${result.files} document(s) / ${result.chunks} chunk(s) under '${result.tag}'.`);
+          if (result.unchanged > 0) {
+            logger.info(`   ${result.unchanged} document(s) unchanged — not re-embedded (use 'sync' to prune removed files).`);
+          }
           for (const s of result.skipped) {
             logger.warn(`   Skipped ${basename(s.path)}: ${s.reason}`);
           }
@@ -84,6 +100,87 @@ export class KnowledgeCommand extends BaseCommand {
         });
         console.log('');
         logger.info('The data part of an answer comes from these passages; the general part from the model / web-research.');
+        console.log('');
+      });
+
+    cmd
+      .command('toc <tag> [doc]')
+      .description("List a tag's documents and the headings in each")
+      .action(async (tag: string, doc?: string) => {
+        const docs = listKnowledgeSections(tag, doc);
+        if (docs.length === 0) {
+          logger.warn(`No documents under '${normalizeKnowledgeTag(tag)}'. Add some: nuvira knowledge add <tag> <files...>`);
+          console.log('');
+          return;
+        }
+        logger.highlight(`\n📚 ${normalizeKnowledgeTag(tag)}`);
+        for (const d of docs) {
+          console.log(`   📄 ${d.title} (${d.chunks} chunk${d.chunks === 1 ? '' : 's'}) — ${d.path}`);
+          if (d.sections.length === 0) {
+            console.log('       (no headings — read the whole document)');
+            continue;
+          }
+          for (const s of d.sections) {
+            console.log(`       ${'  '.repeat(Math.max(0, s.level - 1))}§ ${s.headingPath ? `${s.headingPath} > ` : ''}${s.title}`);
+          }
+        }
+        console.log('');
+        logger.info("Read one verbatim: nuvira knowledge read <tag> <doc> --section \"<heading>\"");
+        console.log('');
+      });
+
+    cmd
+      .command('read <tag> <doc>')
+      .description('Print a document, or one named section, VERBATIM (not a summary)')
+      .option('-s, --section <heading>', 'section heading to read (default: the whole document)')
+      .action(async (tag: string, doc: string, opts: { section?: string }) => {
+        const read = readKnowledgeDocument(tag, doc, opts.section);
+        if (!read.ok) {
+          logger.warn(read.reason);
+          console.log('');
+          return;
+        }
+        logger.highlight(`\n📖 ${read.path}${read.headingPath ? ` — §${read.headingPath}` : ''}`);
+        console.log('');
+        console.log(read.text);
+        if (read.truncated) {
+          console.log('');
+          logger.warn(`   [truncated at ${MAX_READ_CHARS} characters — read a section instead]`);
+        }
+        console.log('');
+      });
+
+    cmd
+      .command('remove <tag> <doc>')
+      .description('Remove ONE document from a tag (its chunks, stored text and manifest row)')
+      .action(async (tag: string, doc: string) => {
+        const removed = await removeKnowledgeDocument(tag, doc);
+        if (removed) logger.success(`🗑️  Removed '${doc}' from '${normalizeKnowledgeTag(tag)}'.`);
+        else logger.warn(`No document '${doc}' under '${normalizeKnowledgeTag(tag)}'.`);
+        console.log('');
+      });
+
+    cmd
+      .command('sync <tag> <paths...>')
+      .description("Bring a tag up to date with its folders — hash-gated, prunes files that vanished")
+      .action(async (tag: string, paths: string[]) => {
+        const missing = paths.filter((p) => !existsSync(p));
+        if (missing.length > 0) {
+          logger.error(`Path not found: ${missing.join(', ')}`);
+          return;
+        }
+        const normalized = normalizeKnowledgeTag(tag);
+        logger.info(`🔄 Syncing '${normalized}' from ${paths.length} path(s) ...`);
+        try {
+          const result = await syncKnowledgeTag(tag, paths);
+          logger.success(
+            `   ${result.added} added, ${result.changed} changed, ${result.unchanged} unchanged, ${result.chunks} chunk(s) written.`,
+          );
+          for (const p of result.removed) logger.warn(`   Removed ${basename(p)}: no longer present under a synced path.`);
+          for (const s of result.skipped) logger.warn(`   Skipped ${basename(s.path)}: ${s.reason}`);
+        } catch (err) {
+          logger.error(`Failed to sync: ${err instanceof Error ? err.message : String(err)}`);
+        }
         console.log('');
       });
 

@@ -2,7 +2,7 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, and the Windows CI failure is fixed
+## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
 ### Fixed: the Windows CI run (a POSIX-only assertion in the remediation-ladder test)
 
@@ -55,6 +55,144 @@ and squeezed the tile grid into a single column. The page now uses a plain
 fragment (like Overview), so the tiles fill the width on one row and the summary
 sits beneath them at its existing text size — the same four-tone `metric-tile`
 treatment Overview's top band uses.
+
+### Changed: the Requests, Memory, Models and Health stat bands use the Overview metric tiles
+
+The remaining `.stats-grid` / `.stat-card` bands were a second, near-identical
+way to render a summary row: a card surface with an icon and a value, coloured
+by an inline `style={{ color }}` that no test pinned. They now render through the
+shared `<MetricTiles>`, so the four-tone vocabulary, the tint/`--metric-tone`
+pairing and the AA contrast guarantee that `theme-contrast.test.ts` asserts are
+the same on every page as on Overview. Where a panel already had a colour rule
+— the request error rate, the agent success rate — it is kept and expressed as a
+tone (`errorTone`, `agentSuccessTone`) with the SAME thresholds, so the headline
+tile and the rows it summarises cannot drift apart. `ModelsPanel`'s ActionBar
+deliberately stays as-is: it is a control strip (a refresh button and a note),
+not a band of numbers. No CSS was added — the tile styles already exist.
+
+### Fixed: knowledge retrieval could not answer "nothing here matches"
+
+`queryKnowledge` returned its top-k **unconditionally**: nearest-neighbour search
+always yields k neighbours, so a question with nothing to do with a tagged
+document still came back with that document's six closest passages, labelled as
+the user's own data for the model to (hopefully) ignore. Retrieval is now
+**floored** (`DEFAULT_KNOWLEDGE_MIN_SIMILARITY`, a calibrated cosine, see the
+eval section), which makes the honest empty answer reachable — and `formatKnowledgeContext` now states
+the policy behind it: if the passages do not answer the question, say so rather
+than stretching them to fit, and never assert a fact about the user's data that
+is not in them.
+
+Two further correctness fixes in the same path. Re-ingesting a document that got
+**shorter** left its retired chunks in the namespace forever, because chunk ids
+`<tag>:<path>#<i>` are only overwritten for the indices the new version produces;
+the tail is now deleted. And a chunk whose embedding failed was stored as a zero
+vector, so a partially indexed document read as fully indexed — the chunk is now
+skipped and the shortfall reported in `skipped`.
+
+### Added: `#tag` in chat retrieves that tag's passages for the turn
+
+`knowledge-base.ts` is a store and the `knowledge` tool lets the model drive it
+mid-task; neither answers "answer from THIS document", because that shape makes
+the model the trigger — it must know the tag exists, choose to use it, and a
+wrong guess is a silent answer from the wrong corpus. A message that OPENS with
+a tag now has that tag's passages retrieved and placed in front of the model
+before it sees the question (`src/learning/knowledge-turn.ts`), injected at the
+one seam shared by the CLI, the dashboard console and the gateway
+(`runChatAnswer`).
+
+The new module is **inert unless the message opens with a marker that resolves
+to a tag the user actually has**: no marker (or no tags at all) means no embedder
+call and no injected message, so a turn that did not ask for a document is
+byte-identical to one from a build without the feature. An unknown tag suggests a
+near match (`did you mean #spec-v2?`) and the question is answered normally — the
+wrong corpus is never substituted — and a floor-miss says the tagged documents did
+not cover it. The block is a user-turn message, so the system prompt stays
+byte-stable and cacheable. Pinned by `tests/learning/knowledge-turn.test.ts` and
+the seam-level `tests/cli/chat-knowledge-injection.test.ts`.
+
+### Changed: documents are chunked by their structure, and read back verbatim
+
+`knowledge-base` split documents with the repo retriever's paragraph-aware
+chunker, which knows text but not STRUCTURE: a chunk could begin halfway through
+one section and end inside the next, and its heading — the thing that makes a
+passage attributable — was lost. Markdown is now parsed into an outline
+(`src/learning/markdown-outline.ts`) and chunked along heading boundaries under a
+bounded token budget, and each chunk carries its heading PATH (`Auth Design >
+Token refresh`) into both retrieval and the citation. The heading chain is
+prepended to the text that is EMBEDDED but never to the text that is returned, so
+the model gets the passage as written while the vector gets the structure it needs
+to separate two sections that share vocabulary. A measured side effect worth
+stating: heading-aware chunks are more focused, so per-chunk similarity moves —
+which the eval caught, as intended.
+
+Retrieval answers "where is it mentioned"; it cannot answer "what does the
+section say", and a spec-driven build needs the second. Each ingested document's
+extracted text is now stored beside its vectors (same data dir), so `read`
+returns a whole document, or ONE section named by its heading, **verbatim** —
+bounded at 40k characters with an explicit truncation note. `toc` lists a
+document's headings so the section can be named, and an unknown section reports
+the available ones rather than answering a narrow question with everything.
+`remove` drops a single document — its chunks, stored text and manifest row —
+without forgetting the tag.
+
+### Added: `nuvira knowledge sync` — keep a tag in step with its folders
+
+`add` ingests once; a folder that keeps changing needed a second verb. `sync`
+records a per-document content hash, so an unchanged file is not extracted,
+chunked or embedded again (reported as `unchanged` rather than silently folded
+in), a changed file replaces its own chunks, and a file that has **vanished**
+stops being served. Removal is scoped to the directories actually synced, so
+syncing `./specs` cannot delete documents ingested from somewhere else. New CLI
+`nuvira knowledge sync <tag> <paths...>`, and the same action through the
+`knowledge` tool.
+
+### Changed: retrieval is hybrid — dense and lexical, fused by rank, capped per source
+
+A vector search answers "what is this about" and is unreliable at "which passage
+contains `ERR_TOKEN_FAMILY_REVOKED`"; a keyword search is the mirror image. So
+`queryKnowledge` now runs BOTH: cosine over the vectors (gated by the existing
+relevance floor) and BM25 over the stored chunk text
+(`src/learning/lexical-search.ts`, rebuilt per query — no inverted index to drift
+out of step with the vectors), fused with Reciprocal Rank Fusion. Fusion uses
+RANKS, never scores: cosine and BM25 are on different scales, and summing them
+would silently weight whichever happened to have the larger range. A lexical hit
+is admitted even when its cosine is below the floor — that is the point of the
+second retriever — so an unrelated question now comes back empty because it shares
+no vocabulary with the corpus rather than because of the floor alone;
+`fusion: 'dense'` reproduces the old vector-only behavior. The fused ranking is
+capped at three chunks per source document (relaxed to no cap for a
+single-document tag, the common case), so one long file cannot take every slot
+from the shorter one that answers the question. A passage that survived on
+lexical evidence is marked `term match` in the citation, so its below-floor
+similarity reads as an explanation instead of a mistake.
+
+### Added: a retrieval eval, so "retrieval got better" is a number
+
+Chunk size, the floor and now fusion are judgement calls, and a judgement call
+that is never measured is just a preference. `src/learning/knowledge-eval.ts`
+scores a fixed corpus for **recall@k**, **MRR** and — the one that matters for the
+leak concern — the **leak rate**: of the questions with no answer in the corpus,
+how many still returned passages. Adjacent questions that borrow a domain word
+while asking something the corpus does not cover are a SEPARATE, reported
+category, because retrieving the genuinely closest section is defensible and what
+keeps it honest is the grounding policy, not the floor. A second corpus
+(`tests/fixtures/knowledge-hybrid-corpus.ts`) gates the hybrid half specifically:
+it fits its embedder with the identifiers REMOVED, so a passage that comes back
+for a code-only question provably came back from the keyword half, and it pins the
+per-source cap by asserting one long document cannot take every slot.
+
+**The floor was then MEASURED, and it was wrong.** The opt-in live run
+(`tests/live/knowledge-eval-live.test.ts`, real `bge-small-en-v1.5`) now begins by
+PROVING which embedder tier ran — the embedder silently falls back to Python
+`all-MiniLM-L6-v2` on a different similarity scale, so a number it cannot
+attribute is worse than no number — then prints the separating band: on the eval
+corpus, unrelated questions reach up to **0.425** while the lowest-scoring
+correct answer sits at **0.635** (p50 0.772). The shipped floor was **0.35**,
+below the leak ceiling, so every unrelated probe was being served as evidence
+(live leak rate **1.00**). It is now **0.5**, the round value inside the measured
+gap with margin on both sides, and the live run asserts the invariant rather than
+printing it: leak **0.00**, recall **1.00**. The same run sweeps the per-source
+cap and shows it costs nothing on this corpus (recall 1.00 at every cap).
 
 ## v3.3.13 — a selected model is always honored, automatic picks weigh real evidence, a pinned run honors the admin budget, a stuck weak model gets a smaller ask, chat reads the frame of a request, secrets are scanned across git history, and hooks are a declarative no-code contract
 

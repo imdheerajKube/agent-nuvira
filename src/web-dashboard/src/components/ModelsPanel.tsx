@@ -3,6 +3,7 @@ import { parseJsonOrNull } from '../jsonOrNull';
 import type { ModelsHealthData, ProviderHealth, ModelStatus, TestedModel, ModelRegistryInsights, RegistryModelEntry, ActionTelemetryInsights } from '../types';
 import { formatCount } from '../format';
 import { useModelCounts } from '../useModelCounts';
+import MetricTiles, { type MetricTile } from './MetricTiles';
 import PageHeader from './PageHeader';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -668,57 +669,17 @@ function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
         session are reported to the watch daemon and recorded here immediately.
       </p>
 
-      <div className="stats-grid" style={{ marginBottom: 16 }}>
-        <div className="stat-card">
-          <span className="stat-icon">📦</span>
-          <div className="stat-body">
-            <div className="stat-value">{data.total}</div>
-            <div className="stat-label">Tracked models (registry)</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon">✅</span>
-          <div className="stat-body">
-            <div className="stat-value" style={{ color: 'var(--accent-green)' }}>{data.verified}</div>
-            <div className="stat-label">Verified</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon">◌</span>
-          <div className="stat-body">
-            <div className="stat-value" style={{ color: 'var(--text-secondary)' }}>{data.unverified}</div>
-            <div className="stat-label">Unverified</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon">⛔</span>
-          <div className="stat-body">
-            <div className="stat-value" style={{ color: 'var(--accent-red)' }}>{data.unavailable}</div>
-            <div className="stat-label">Unavailable</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon">⏸</span>
-          <div className="stat-body">
-            <div className="stat-value" style={{ color: 'var(--accent-yellow)' }}>{data.parked}</div>
-            <div className="stat-label">Quota-parked</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon">⏸</span>
-          <div className="stat-body">
-            <div className="stat-value" style={{ color: 'var(--accent-purple)' }}>{data.flaky ?? 0}</div>
-            <div className="stat-label">Flaky mid-stream</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon">🗑️</span>
-          <div className="stat-body">
-            <div className="stat-value" style={{ color: 'var(--text-secondary)' }}>{data.deletedLocal ?? 0}</div>
-            <div className="stat-label">Deleted locally</div>
-          </div>
-        </div>
-      </div>
+      <MetricTiles
+        tiles={[
+          { key: 'tracked-models', icon: '📦', value: String(data.total), label: 'Tracked models (registry)', tone: 'accent' },
+          { key: 'verified', icon: '✅', value: String(data.verified), label: 'Verified', tone: 'ok' },
+          { key: 'unverified', icon: '◌', value: String(data.unverified), label: 'Unverified', tone: 'accent' },
+          { key: 'unavailable', icon: '⛔', value: String(data.unavailable), label: 'Unavailable', tone: 'danger' },
+          { key: 'parked', icon: '⏸', value: String(data.parked), label: 'Quota-parked', tone: 'warn' },
+          { key: 'flaky', icon: '⏸', value: String(data.flaky ?? 0), label: 'Flaky mid-stream', tone: 'warn' },
+          { key: 'deleted-local', icon: '🗑️', value: String(data.deletedLocal ?? 0), label: 'Deleted locally', tone: 'accent' },
+        ] satisfies MetricTile[]}
+      />
 
       {keyHygieneWarning(data.keyHygiene)}
 
@@ -1237,6 +1198,25 @@ function ActionTelemetrySection({ registry }: { registry: ModelRegistryInsights 
       </div>
     );
   }
+  // The 4th tile is conditional — it appears only when the log actually holds
+  // test-origin records, because the point of the tile is to say how many were
+  // excluded, and "0 excluded" would be a claim about a thing that never
+  // happened rather than a number worth showing.
+  const telemetryTiles: MetricTile[] = [
+    { key: 'telemetry-events', icon: '📊', value: String(tele.total), label: 'Telemetry events', tone: 'accent' },
+    { key: 'actions-learning', icon: '🎯', value: String(tele.actions.length), label: 'Actions learning', tone: 'accent' },
+    { key: 'last-update', icon: '⏱️', value: fmtShortTime(tele.updatedAt), label: 'Last update', tone: 'accent' },
+  ];
+  if (tele.synthetic > 0) {
+    telemetryTiles.push({
+      key: 'synthetic',
+      icon: '🧪',
+      value: String(tele.synthetic),
+      label: 'Test-origin, excluded',
+      tone: 'warn',
+    });
+  }
+
   return (
     <>
       <h2 className="section-subtitle">🎓 Learned from real usage — per action</h2>
@@ -1247,44 +1227,11 @@ function ActionTelemetrySection({ registry }: { registry: ModelRegistryInsights 
         &ldquo;fail gemini → fail nim → local&rdquo; into &ldquo;straight to local&rdquo;.
       </p>
 
-      <div className="stats-grid mini" style={{ marginBottom: 16 }}>
-        <div className="stat-card">
-          <span className="stat-icon">📊</span>
-          <div className="stat-body">
-            <div className="stat-value">{tele.total}</div>
-            <div className="stat-label">Telemetry events</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon">🎯</span>
-          <div className="stat-body">
-            <div className="stat-value">{tele.actions.length}</div>
-            <div className="stat-label">Actions learning</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <span className="stat-icon">⏱️</span>
-          <div className="stat-body">
-            <div className="stat-value" style={{ fontSize: 15 }}>{fmtShortTime(tele.updatedAt)}</div>
-            <div className="stat-label">Last update</div>
-          </div>
-        </div>
-        {/*
-          Provenance, stated rather than implied. A test suite once wrote real
-          records into this log (one fake model was 2,110 of 3,436 lines), so
-          the view excludes test-origin records AND says how many it excluded.
-          Hiding them silently would be a different way of lying about the data.
-        */}
-        {tele.synthetic > 0 && (
-          <div className="stat-card" title="Written by a test process — excluded from every number on this panel. The records remain in the hash-chained log.">
-            <span className="stat-icon">🧪</span>
-            <div className="stat-body">
-              <div className="stat-value" style={{ color: 'var(--accent-yellow)' }}>{tele.synthetic}</div>
-              <div className="stat-label">Test-origin, excluded</div>
-            </div>
-          </div>
-        )}
-      </div>
+      {/* Provenance, stated rather than implied. A test suite once wrote real
+          records into this log (one fake model was 2,110 of 3,436 lines), so the
+          view excludes test-origin records AND says how many it excluded.
+          Hiding them silently would be a different way of lying about the data. */}
+      <MetricTiles tiles={telemetryTiles} />
 
       {tele.actions.map((a) => <ActionTelemetryCard key={a.action} entry={a} />)}
 
@@ -1800,61 +1747,20 @@ export default function ModelsPanel() {
 
       {modelsData && (
         <>
-          {/* Summary stats cards */}
-          <div className="stats-grid" style={{ marginBottom: 16 }}>
-            <div className="stat-card">
-              <span className="stat-icon">🧠</span>
-              <div className="stat-body">
-                <div className="stat-value">{modelsData.totalModels}</div>
-                <div className="stat-label">Listed models (live probe)</div>
-              </div>
-            </div>
-            {/* The registry pair, from the SAME endpoint Overview and the
-                Timeline read — so all three tabs agree instead of each
-                headlining a differently-defined "models" number. */}
-            <div className="stat-card">
-              <span className="stat-icon">📦</span>
-              <div className="stat-body">
-                <div className="stat-value">{modelCounts?.trackedModels ?? registryData?.total ?? 0}</div>
-                <div className="stat-label">Tracked models (registry)</div>
-              </div>
-            </div>
-            <div className="stat-card">
-              <span className="stat-icon">✅</span>
-              <div className="stat-body">
-                <div className="stat-value" style={{ color: 'var(--accent-green)' }}>{modelsData.available}</div>
-                <div className="stat-label">Available</div>
-              </div>
-            </div>
-            <div className="stat-card">
-              <span className="stat-icon">🟡</span>
-              <div className="stat-body">
-                <div className="stat-value" style={{ color: 'var(--accent-yellow)' }}>{modelsData.limited}</div>
-                <div className="stat-label">Limited</div>
-              </div>
-            </div>
-            <div className="stat-card">
-              <span className="stat-icon">🔴</span>
-              <div className="stat-body">
-                <div className="stat-value" style={{ color: 'var(--accent-red)' }}>{modelsData.unavailable}</div>
-                <div className="stat-label">Unavailable</div>
-              </div>
-            </div>
-            <div className="stat-card">
-              <span className="stat-icon">🔌</span>
-              <div className="stat-body">
-                <div className="stat-value">{modelsData.providers.length}</div>
-                <div className="stat-label">Listed providers (live probe)</div>
-              </div>
-            </div>
-            <div className="stat-card">
-              <span className="stat-icon">🗂️</span>
-              <div className="stat-body">
-                <div className="stat-value">{modelCounts?.trackedProviders ?? registryData?.providers?.length ?? 0}</div>
-                <div className="stat-label">Tracked providers (registry)</div>
-              </div>
-            </div>
-          </div>
+          {/* Summary tiles. The registry pair comes from the SAME endpoint
+              Overview and the Timeline read — so all three tabs agree instead
+              of each headlining a differently-defined "models" number. */}
+          <MetricTiles
+            tiles={[
+              { key: 'listed-models', icon: '🧠', value: String(modelsData.totalModels), label: 'Listed models (live probe)', tone: 'accent' },
+              { key: 'tracked-models', icon: '📦', value: String(modelCounts?.trackedModels ?? registryData?.total ?? 0), label: 'Tracked models (registry)', tone: 'accent' },
+              { key: 'available', icon: '✅', value: String(modelsData.available), label: 'Available', tone: 'ok' },
+              { key: 'limited', icon: '🟡', value: String(modelsData.limited), label: 'Limited', tone: 'warn' },
+              { key: 'unavailable', icon: '🔴', value: String(modelsData.unavailable), label: 'Unavailable', tone: 'danger' },
+              { key: 'listed-providers', icon: '🔌', value: String(modelsData.providers.length), label: 'Listed providers (live probe)', tone: 'accent' },
+              { key: 'tracked-providers', icon: '🗂️', value: String(modelCounts?.trackedProviders ?? registryData?.providers?.length ?? 0), label: 'Tracked providers (registry)', tone: 'accent' },
+            ] satisfies MetricTile[]}
+          />
 
           <ProgressBar data={modelsData} />
 

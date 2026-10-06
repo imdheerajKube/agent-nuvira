@@ -857,15 +857,74 @@ nuvira knowledge add dheeraj-health-report ~/Documents/labs.pdf
 # Ask a question — the data part is answered from the PDF, the rest from the model.
 nuvira knowledge query dheeraj-health-report "what is my LDL and how do I lower it"
 
+nuvira knowledge sync dheeraj-health-report ~/Documents/health   # re-sync a folder
+nuvira knowledge toc dheeraj-health-report     # documents and their headings
+nuvira knowledge read dheeraj-health-report labs.pdf -s "Lipids"  # one section, VERBATIM
 nuvira knowledge list                          # tags, documents, chunk counts
 nuvira knowledge stats dheeraj-health-report   # one tag in detail
-nuvira knowledge forget dheeraj-health-report  # remove a tag's vectors
+nuvira knowledge forget dheeraj-health-report  # remove a tag's vectors and stored text
 ```
 
 The agent can drive the same pipeline mid-task with the `knowledge` tool
-(`action: add | query | list | forget | stats`), so "answer this from my tagged
-data" is a single agent step. Tags are normalized — `Dheeraj Health Report`
-becomes `dheeraj-health-report`.
+(`action: add | query | toc | read | sync | list | forget | stats`), so "answer
+this from my tagged data" is a single agent step. Tags are normalized —
+`Dheeraj Health Report` becomes `dheeraj-health-report`.
+
+**Ask vs read.** `query` answers *where it is mentioned*: it returns the passages
+most relevant to a question. `read` answers *what it says*: it returns a whole
+document, or one section named by its heading, exactly as the author wrote it —
+which is what you want before implementing a spec or quoting a clause, since no
+amount of passage ranking substitutes for the section itself. `toc` lists what a
+tag holds so you can name the section to read.
+
+**Keeping a folder in step.** `add` ingests once. `sync` is for a folder you keep
+updating: a file whose contents are unchanged is not extracted, chunked or
+re-embedded (it is counted as `unchanged`), a changed file replaces its own
+chunks, and a file that has **disappeared** stops being served — so a deleted
+document cannot keep answering questions.
+
+**How it searches.** Retrieval runs two searches and fuses them: a vector search
+(what the passage is *about*) and a keyword search over the stored text (the exact
+identifier, clause number or error code you typed). Neither alone is enough —
+embeddings miss a literal token, keywords miss a paraphrase — so both run, their
+rankings are merged, and at most three passages from any one document are kept so
+a single long file cannot fill the whole answer.
+
+#### Asking from a tag in chat: open the message with `#tag`
+
+In chat — the `nuvira chat` REPL, the dashboard Chat tab and a gateway channel
+(WhatsApp/Telegram) alike — opening a message with a tag pulls that tag's
+relevant passages into the turn BEFORE the model sees the question:
+
+```
+#dheeraj-health-report what is my LDL and what does my report say to do about it?
+```
+
+The trigger is the leading `#tag` on its own: `#1 priority: fix the build`, a
+Markdown `# Title`, a shebang and a mid-sentence `C#` are left alone. A leading
+`/` is still the chat's command prefix, so only `#` is used for this.
+
+**Nothing happens unless you ask.** A message without a leading tag is unchanged:
+no retrieval runs, no passages are injected, and the agent's prompt is byte-for-byte
+what it would have been — the block is an ordinary user-turn message, so the system
+prompt (persona, tool contract, reasoning rules) is untouched and stays cacheable.
+If you have no tags at all, even a stray leading `#word` (a pasted `#include`) does
+nothing.
+
+**Hits are floored, not guessed.** Retrieval keeps only passages that clear a
+relevance floor calibrated against the real embedding model (unrelated questions
+reach 0.425 cosine, correct answers start at 0.635, and the floor sits between
+them), so an unrelated question comes back empty instead of receiving the closest
+passages of a document it has nothing to do with. When nothing clears the
+floor you get "the tagged documents did not cover it" and a normal answer, not a
+stretched one. A passage that was found by its **words** rather than its meaning is
+marked `term match` in the block, so a low similarity score is explained rather
+than looking like a retrieval mistake. If a tag does not exist you get a suggestion
+(`did you mean #dheeraj-health-report?`) and the question is answered normally —
+the wrong document set is never substituted.
+
+Ingest documents with the CLI or the `knowledge` tool; a tag only matters at
+question time.
 
 **Privacy.** Your documents and their vectors live in `~/.nuvira/memory/`, outside
 any repository; they are never committed and never shipped in the npm package. Do

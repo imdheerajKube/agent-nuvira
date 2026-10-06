@@ -31,6 +31,7 @@ import { dashboardAPI } from '../api';
 import type { AdminCheck, AdminChecksData, DashboardData } from '../types';
 import { CheckRow, countByStatus, summarise } from './CheckRow';
 import { formatCount } from '../format';
+import MetricTiles, { type MetricTile } from './MetricTiles';
 import PageHeader from './PageHeader';
 
 interface HealthPanelProps {
@@ -47,6 +48,16 @@ interface HealthPanelProps {
 /** `successRate` and `overallSuccessRate` are FRACTIONS — the CLI prints rate*100. */
 function asPercent(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`;
+}
+
+/**
+ * The success-rate tone, using the SAME 0.9/0.7 thresholds as the per-agent
+ * rows below — the headline tile and the rows read as one verdict.
+ */
+function agentSuccessTone(rate: number): MetricTile['tone'] {
+  if (rate >= 0.9) return 'ok';
+  if (rate >= 0.7) return 'warn';
+  return 'danger';
 }
 
 function formatNumber(n: number | undefined): string {
@@ -245,16 +256,20 @@ export default function HealthPanel({ data, connected, lastUpdated }: HealthPane
       <h2 className="section-subtitle">Agent Performance</h2>
       {agentStats ? (
         <>
-          <div className="stats-grid" style={{ marginBottom: 10 }}>
-            <div className="stat-card">
-              <div className="stat-value">{formatNumber(agentStats.totalRuns)}</div>
-              <div className="stat-label">Recorded runs</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{asPercent(agentStats.overallSuccessRate)}</div>
-              <div className="stat-label">Overall success rate</div>
-            </div>
-          </div>
+          <MetricTiles
+            tiles={[
+              { key: 'runs', icon: '🩺', value: formatNumber(agentStats.totalRuns), label: 'Recorded runs', tone: 'accent' },
+              {
+                key: 'success-rate',
+                icon: '✅',
+                value: asPercent(agentStats.overallSuccessRate),
+                label: 'Overall success rate',
+                // The same thresholds the per-agent rows below use, so the
+                // headline and the rows agree on what "good" means.
+                tone: agentSuccessTone(agentStats.overallSuccessRate),
+              },
+            ] satisfies MetricTile[]}
+          />
           {agentRows.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 18 }}>
               {agentRows.map((row) => (

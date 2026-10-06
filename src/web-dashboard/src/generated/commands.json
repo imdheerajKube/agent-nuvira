@@ -2,7 +2,7 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 278,
+  "commandCount": 282,
   "groupCount": 55,
   "groups": [
     {
@@ -2027,6 +2027,28 @@
           "flags": [
             "--top-k <top_k>"
           ]
+        },
+        {
+          "name": "knowledge toc",
+          "description": "List a tag's documents and the headings in each",
+          "flags": []
+        },
+        {
+          "name": "knowledge read",
+          "description": "Print a document, or one named section, VERBATIM (not a summary)",
+          "flags": [
+            "--section <section>"
+          ]
+        },
+        {
+          "name": "knowledge remove",
+          "description": "Remove ONE document from a tag (its chunks, stored text and manifest row)",
+          "flags": []
+        },
+        {
+          "name": "knowledge sync",
+          "description": "Bring a tag up to date with its folders — hash-gated, prunes files that vanished",
+          "flags": []
         },
         {
           "name": "knowledge list",

@@ -1,5 +1,6 @@
 import type { DashboardData } from '../types';
 import { formatCount } from '../format';
+import MetricTiles, { type MetricTile } from './MetricTiles';
 import PageHeader from './PageHeader';
 import ContinuitySection from './ContinuitySection';
 
@@ -43,36 +44,20 @@ export default function MemoryPanel({ data }: MemoryPanelProps) {
   const namespaces = [...(memory.vectorNamespaces || [])].sort((a, b) => b.entries - a.entries);
   const recall = memory.recall || { total: 0, today: 0, last7d: 0 };
 
+  const tiles: MetricTile[] = [
+    { key: 'trajectories', icon: '🧭', value: formatNumber(memory.total), label: 'Trajectories', tone: 'accent' },
+    { key: 'avg-score', icon: '⭐', value: formatPercent(memory.avgScore), label: 'Avg Score', tone: 'ok' },
+    { key: 'facts', icon: '📌', value: formatNumber(memory.facts?.total), label: 'Facts', tone: 'warn' },
+    { key: 'recall', icon: '🔁', value: formatNumber(recall.total), label: 'Recall Hits', tone: 'ok' },
+    { key: 'patterns', icon: '🧩', value: formatNumber(health?.patterns), label: 'Coding Patterns', tone: 'warn' },
+    { key: 'feedback', icon: '👍', value: formatNumber(health?.feedback), label: 'Feedback Ratings', tone: 'ok' },
+  ];
+
   return (
     <>
       <PageHeader icon="💾" title="Memory Store" />
 
-      <div className="stats-grid mini">
-        <div className="stat-card">
-          <div className="stat-value">{formatNumber(memory.total)}</div>
-          <div className="stat-label">Trajectories</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{formatPercent(memory.avgScore)}</div>
-          <div className="stat-label">Avg Score</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{formatNumber(memory.facts?.total)}</div>
-          <div className="stat-label">Facts</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{formatNumber(recall.total)}</div>
-          <div className="stat-label">Recall Hits</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{formatNumber(health?.patterns)}</div>
-          <div className="stat-label">Coding Patterns</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{formatNumber(health?.feedback)}</div>
-          <div className="stat-label">Feedback Ratings</div>
-        </div>
-      </div>
+      <MetricTiles tiles={tiles} />
 
       <p className="memory-backend">
         Memory tier: <code>{memory.backend || 'local'}</code>

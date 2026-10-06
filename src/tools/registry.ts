@@ -3443,24 +3443,31 @@ registerTool({
 registerTool({
   name: 'knowledge',
   description:
-    'Answer questions from the USER\'S OWN tagged documents. `add` ingests files/folders under a tag '
-    + '(extract → chunk → embed, done once); `query` retrieves the tag\'s most relevant passages, labeled '
-    + 'with their source file, so the data part of an answer comes from the user\'s data and the general '
-    + 'part from model knowledge or web-research. Use this instead of re-reading a large document on every '
-    + 'turn. Actions: add | query | list | forget | stats. Tags are normalized (spaces/capitals/underscores '
-    + 'become lowercase-hyphen), e.g. "Dheeraj health report" → "dheeraj-health-report".',
+    'Work with the USER\'S OWN tagged documents. `add` ingests files/folders under a tag (extract → '
+    + 'chunk → embed, done once); `query` retrieves the tag\'s most relevant passages, labeled with their '
+    + 'source file and section, so the data part of an answer comes from the user\'s data and the general '
+    + 'part from model knowledge or web-research. `toc` lists a tag\'s documents and their headings; `read` '
+    + 'returns a whole document or ONE named section VERBATIM — use it when you have to implement or quote '
+    + 'what a document says, rather than summarizing it from similar passages. `sync` brings a tag up to '
+    + 'date with its folders (unchanged files are not re-embedded; files that vanished stop being served). '
+    + 'Actions: add | query | toc | read | sync | list | forget | stats. Tags are normalized '
+    + '(spaces/capitals/underscores become lowercase-hyphen), e.g. "Dheeraj health report" → '
+    + '"dheeraj-health-report".',
   category: 'workflow',
   inputSchema: z.object({
-    action: z.enum(['add', 'query', 'list', 'forget', 'stats']).describe('Action'),
+    action: z.enum(['add', 'query', 'toc', 'read', 'sync', 'list', 'forget', 'stats']).describe('Action'),
     tag: z.string().optional().describe('Tag/hashtag scoping the data (e.g. "dheeraj-health-report")'),
-    paths: z.array(z.string()).optional().describe('Files or folders to ingest (action: add)'),
+    paths: z.array(z.string()).optional().describe('Files or folders to ingest (action: add | sync)'),
     question: z.string().optional().describe('Question to answer from the tagged data (action: query)'),
+    doc: z.string().optional().describe('Document to read or list: doc id, full path, or basename (action: read | toc)'),
+    section: z.string().optional().describe('Section heading to read verbatim (action: read) — omit for the whole document'),
     topK: z.number().optional().describe('Chunks to retrieve (action: query, default 6)'),
   }),
   endsAgentStep: false,
   run: (args) => import('../learning/knowledge-base.js').then(async (m) => {
-    const { action, tag, paths, question, topK } = args as {
-      action: string; tag?: string; paths?: string[]; question?: string; topK?: number;
+    const { action, tag, paths, question, doc, section, topK } = args as {
+      action: string; tag?: string; paths?: string[]; question?: string;
+      doc?: string; section?: string; topK?: number;
     };
     switch (action) {
       case 'add': {
@@ -3470,7 +3477,11 @@ registerTool({
         const skipped = result.skipped.length
           ? `\nSkipped: ${result.skipped.map((s) => `${s.path} (${s.reason})`).join('; ')}`
           : '';
-        return `✅ Ingested ${result.files} document(s) / ${result.chunks} chunk(s) under tag '${result.tag}'.`
+        // Unchanged documents are named rather than silently folded in: "0 chunks"
+        // and "nothing needed re-embedding" are different answers, and only one
+        // of them means the ingest did nothing.
+        const unchanged = result.unchanged > 0 ? `, ${result.unchanged} unchanged (not re-embedded)` : '';
+        return `✅ Ingested ${result.files} document(s) / ${result.chunks} chunk(s)${unchanged} under tag '${result.tag}'.`
           + `\nQuery it with action: query, tag: '${result.tag}'.${skipped}`;
       }
       case 'query': {
@@ -3478,6 +3489,48 @@ registerTool({
         if (!question) return 'question is required for action: query';
         const hits = await m.queryKnowledge(tag, question, { topK });
         return m.formatKnowledgeContext(tag, hits);
+      }
+      case 'toc': {
+        if (!tag) return 'tag is required for action: toc';
+        const docs = m.listKnowledgeSections(tag, doc);
+        if (docs.length === 0) {
+          return doc
+            ? `No document '${doc}' under tag '${tag}'.`
+            : `No documents under tag '${tag}' — ingest some with action: add.`;
+        }
+        return docs
+          .map((d) => {
+            const head = `📄 ${d.title} (${d.chunks} chunk(s)) — ${d.path}`;
+            const sections = d.sections.length
+              ? d.sections
+                  .map((s) => `\n  ${'  '.repeat(Math.max(0, s.level - 1))}§ ${s.headingPath ? `${s.headingPath} > ` : ''}${s.title}`)
+                  .join('')
+              : '\n  (no headings — read the whole document)';
+            return head + sections;
+          })
+          .join('\n');
+      }
+      case 'read': {
+        if (!tag) return 'tag is required for action: read';
+        if (!doc) return 'doc is required for action: read (a doc id, full path, or basename — see action: toc)';
+        const read = m.readKnowledgeDocument(tag, doc, section);
+        if (!read.ok) return read.reason;
+        const header = `📖 ${read.path}${read.headingPath ? ` — §${read.headingPath}` : ''}`;
+        const note = read.truncated ? `\n\n[... truncated at ${m.MAX_READ_CHARS} characters ...]` : '';
+        return `${header}\n\n${read.text}${note}`;
+      }
+      case 'sync': {
+        if (!tag) return 'tag is required for action: sync';
+        if (!paths || paths.length === 0) return 'paths is required for action: sync';
+        const synced = await m.syncKnowledgeTag(tag, paths, { onChunkSkipped: () => {} });
+        const removed = synced.removed.length
+          ? `\nRemoved (no longer present): ${synced.removed.map((p) => `${p}`).join('; ')}`
+          : '';
+        const skipped = synced.skipped.length
+          ? `\nSkipped: ${synced.skipped.map((s) => `${s.path} (${s.reason})`).join('; ')}`
+          : '';
+        return `🔄 Synced '${synced.tag}': ${synced.added} added, ${synced.changed} changed, `
+          + `${synced.unchanged} unchanged, ${synced.chunks} chunk(s) written.${removed}${skipped}`;
       }
       case 'list': {
         const tags = m.listKnowledgeTags();

@@ -1414,6 +1414,23 @@ Ingest files or folders under a tag (extracted, chunked and embedded once)
 Retrieve the most relevant passages for a question, scoped to a tag
 
    - flags: `--top-k <top_k>`
+### `nuvira knowledge toc`
+
+List a tag's documents and the headings in each
+
+### `nuvira knowledge read`
+
+Print a document, or one named section, VERBATIM (not a summary)
+
+   - flags: `--section <section>`
+### `nuvira knowledge remove`
+
+Remove ONE document from a tag (its chunks, stored text and manifest row)
+
+### `nuvira knowledge sync`
+
+Bring a tag up to date with its folders — hash-gated, prunes files that vanished
+
 ### `nuvira knowledge list`
 
 List knowledge tags with document and chunk counts
@@ -1494,4 +1511,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*480 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*485 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
