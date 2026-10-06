@@ -3459,6 +3459,49 @@ function runDashboardShutdown(): void {
 }
 
 /**
+ * The OmniRoute gateway lifecycle view (reachability + process state).
+ * Mirrors `OmniRouteStatus` from ../cli/omniroute-control.js without importing
+ * it at module load — the dashboard boot must not drag the CLI in.
+ */
+interface OmniRouteStatusView {
+  reachable: boolean;
+  running: boolean;
+  baseUrl: string;
+  detail: string;
+  pid: number | null;
+  port: number;
+}
+
+interface OmniRouteActions {
+  status: () => Promise<OmniRouteStatusView>;
+  start: () => Promise<{ ok: boolean; started: boolean; status: OmniRouteStatusView; detail: string }>;
+  stop: () => Promise<{ stopped: boolean; pid?: number; reason?: string }>;
+}
+
+/**
+ * The OmniRoute lifecycle actions behind /api/admin/omniroute. `null` (default)
+ * → the REAL probe/spawn/stop. Swappable for the same reason as the gateway-stop
+ * action: the real probe hits the network and the real start/stop spawns or
+ * signals a machine-wide process, so a ROUTE test must not do either.
+ */
+let omniRouteActions: OmniRouteActions | null = null;
+
+/** Test hook: stub the OmniRoute lifecycle actions (null restores the real ones). */
+export function setOmniRouteActionsForTest(actions: OmniRouteActions | null): void {
+  omniRouteActions = actions;
+}
+
+/** The real actions, lazily imported so dashboard boot does not pull the CLI in. */
+async function realOmniRouteActions(): Promise<OmniRouteActions> {
+  const mod = await import('../cli/omniroute-control.js');
+  return {
+    status: () => mod.omnirouteStatus(),
+    start: () => mod.startOmniRoute(),
+    stop: () => mod.stopOmniRoute(),
+  };
+}
+
+/**
  * Test hook: swap the pairing manager (e.g. for a fake-bridge manager) so
  * /api/whatsapp integration tests never open a real WhatsApp connection.
  * Routes read the module variable at request time, so this works anytime.
@@ -3941,6 +3984,67 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // Dashboard target: confirm, then stop this very server.
       writeJson(res, 200, { ok: true, target });
       runDashboardShutdown();
+    })();
+    return;
+  }
+
+  // ── OmniRoute gateway lifecycle (the EXTERNAL AI gateway on port 20128) ──
+  // OmniRoute is a separate long-lived process nuvira does not embed; the Admin
+  // page could configure it as a provider but not start/stop it or say whether
+  // it was up. GET reports reachability (a real HTTP probe — a 401 counts as UP),
+  // POST { action: 'start' | 'stop' } drives it. Reads need a session; start/stop
+  // need gateway.manage (the same gate as `nuvira omniroute start|stop` and
+  // `nuvira gateway stop`).
+  if (pathname === '/api/admin/omniroute' && (req.method === 'GET' || req.method === 'POST')) {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      const actions = omniRouteActions ?? (await realOmniRouteActions());
+      try {
+        if (req.method === 'GET') {
+          const status = await actions.status();
+          writeJson(res, 200, { ok: true, status });
+          return;
+        }
+        if (!roleCan(session.role, 'gateway.manage')) {
+          writeJson(res, 403, {
+            ok: false,
+            error: `Access denied — role '${session.role}' cannot start or stop the OmniRoute gateway (requires admin or operator).`,
+          });
+          return;
+        }
+        const body = await readJsonBody(req);
+        const action = body?.action;
+        if (action === 'start') {
+          const result = await actions.start();
+          writeJson(res, 200, {
+            ok: result.ok,
+            action,
+            started: result.started,
+            detail: result.detail,
+            status: result.status,
+          });
+          return;
+        }
+        if (action === 'stop') {
+          const result = await actions.stop();
+          writeJson(res, 200, {
+            ok: result.stopped,
+            action,
+            stopped: result.stopped,
+            reason: result.reason,
+            pid: result.pid,
+            status: await actions.status(),
+          });
+          return;
+        }
+        writeJson(res, 400, { ok: false, error: 'Invalid action — expected "start" or "stop".' });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
     })();
     return;
   }

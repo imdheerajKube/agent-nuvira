@@ -2,6 +2,54 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## Unreleased — the dashboard can start and stop the OmniRoute gateway, every provider explains itself, and the Discovery Timeline reads as tiles
+
+> Follow-ups from the OmniRoute interop work: the gateway joined the provider
+> catalog but nothing could tell you whether it was up or take it down, the
+> editor only explained the one gateway (not the other 20+ providers), and a
+> stack of six full-width cards pushed the Timeline's own age profile below the
+> fold.
+
+### Added: start / stop / status for the OmniRoute gateway (dashboard + CLI)
+
+OmniRoute is a separate local process nuvira does not embed — it could be
+CONFIGURED as a provider but not started, stopped, or observed. A shared control
+layer (`omniroute-control`) backs both `nuvira omniroute start | stop | status`
+and a new Admin → **External gateway: OmniRoute** section that reports
+reachability and offers Start / Stop / Recheck. Reachability is a real HTTP probe
+of the gateway's `/v1/models`, and a `401` counts as UP — an auth-gated gateway is
+running, not down (the same rule the OpenAI-compat adapter learned). Start is
+detached and waits for the gateway to answer; a missing binary is reported as
+`npm install -g omniroute` rather than an opaque failure. Start/stop are gated on
+`gateway.manage` (admin or operator) in both surfaces; the status read needs only
+a session.
+
+### Added: every catalog provider explains itself in the editor
+
+The provider editor only described OmniRoute. All 23 catalog providers now carry
+a one-line `description` and actionable `setup` steps (where the key comes from,
+or how to run the keyless local servers), rendered on the provider row — so the
+editor answers "what is this and how do I set it up" for every provider, not just
+the gateway.
+
+### Changed: the Model Discovery Timeline's summary band is colour-coded tiles
+
+The six registry/live-probe numbers were stacked `stat-card`s that consumed the
+viewport and pushed the reachability table below the fold. They are now the same
+`metric-tile` band the Overview page uses — colour-coded, wrapping, and reusing
+the four accents the contrast suite already pins (registry = accent, live probe =
+warn, routable = ok, not routable = danger). The values are unchanged; the live
+probe pair is still omitted rather than zeroed when the server does not report it.
+
+### Benchmarks: a THIRD WS7 run of both arms reproduces the first numbers
+
+Re-run the same way (`NUVIRA_STRICT_MODEL=1`): native `deepseek/deepseek-flash`
+repeated at **100%** (found 7/7, fixed 7/7, time-to-green 49.6s) and
+`omniroute/auto` repeated at **94%** (found 6/7, fixed 7/7, 65.0s). Both OmniRoute
+arms miss the same single localisation task, and the fix rate stayed 7/7 on every
+arm and repeat — so the 100% is not a one-off and the 94% is a stable localisation
+figure. See `docs/benchmarks/INDEX.md`.
+
 ## Unreleased — a model id is checked before it is saved, a known build failure names (and can take) its fix, a step is not done while its artifact is missing, and OmniRoute joins the provider catalog
 
 > Four follow-ups from the `cal` Android assessment, each closing a place where

@@ -7,6 +7,8 @@ import type {
   AdminCatalogProvider,
   AdminChecksData,
   AdminLoginResult,
+  AdminOmniRouteResult,
+  AdminOmniRouteStatus,
   AdminQuotaConfig,
   AdminQuotaPayload,
   AdminServiceProbeResult,
@@ -748,6 +750,33 @@ export class DashboardAPI {
     const d = (r.data ?? {}) as AdminTestResult;
     if (r.status === 200) return d;
     return { ok: false, error: d.error || 'Test failed.', unauthorized: r.status === 401 };
+  }
+
+  /**
+   * OmniRoute gateway status (reachability + process state). The EXTERNAL
+   * gateway on port 20128 — not nuvira's own channel gateway. Returns null when
+   * the server predates the route, which the Admin UI reads as "no control".
+   */
+  async fetchOmniRouteStatus(): Promise<AdminOmniRouteStatus | null> {
+    const r = await this.sendAdminRequest('/api/admin/omniroute', 'GET');
+    if (!r) return null;
+    const d = (r.data ?? {}) as { status?: AdminOmniRouteStatus };
+    if (r.status !== 200 || !d.status) return null;
+    return d.status;
+  }
+
+  /** Start or stop the OmniRoute gateway (authed — gateway.manage). */
+  async controlOmniRoute(action: 'start' | 'stop'): Promise<AdminOmniRouteResult> {
+    const r = await this.sendAdminRequest('/api/admin/omniroute', 'POST', { action });
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as AdminOmniRouteResult;
+    if (r.status === 200) return d;
+    return {
+      ok: false,
+      error: d.error || 'OmniRoute control failed.',
+      unauthorized: r.status === 401,
+      forbidden: r.status === 403,
+    };
   }
 
   /**

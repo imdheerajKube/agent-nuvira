@@ -655,6 +655,22 @@ Stop a running gateway gracefully (SIGTERM — from any terminal)
 
 Interactive setup wizard for a messaging platform (e.g. nuvira gateway setup telegram)
 
+### `nuvira omniroute`
+
+Start / stop / inspect the external OmniRoute AI gateway (default port 20128)
+
+### `nuvira omniroute status`
+
+Probe the OmniRoute gateway and report whether it is reachable
+
+### `nuvira omniroute start`
+
+Start the OmniRoute gateway in the background and wait for it to answer
+
+### `nuvira omniroute stop`
+
+Stop the running OmniRoute gateway
+
 ### `nuvira model`
 
 Manage inference providers and models — switch, list, inspect, and recommend
@@ -1452,4 +1468,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*468 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*472 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

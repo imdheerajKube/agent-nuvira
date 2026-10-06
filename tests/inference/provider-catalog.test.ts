@@ -48,6 +48,16 @@ describe('provider catalog (Issue 001 — all 17+ providers)', () => {
     expect(entry?.setup).toMatch(/providers add/);
   });
 
+  it('explains EVERY catalog provider (description + setup) for the editor', () => {
+    // The Admin editor renders `description`/`setup` beside the key fields; a
+    // provider with neither is a row that raises more questions than it answers.
+    for (const id of CATALOG_PROVIDER_IDS) {
+      const entry = getCatalogProvider(id);
+      expect(entry?.description, `${id} has a description`).toBeTruthy();
+      expect(entry?.setup, `${id} has setup steps`).toBeTruthy();
+    }
+  });
+
   it('maps every keyed provider to its REAL env var (not just *_API_KEY)', () => {
     expect(catalogEnvVar('openai')).toBe('OPENAI_API_KEY');
     expect(catalogEnvVar('anthropic')).toBe('ANTHROPIC_API_KEY');

@@ -36,6 +36,7 @@ chat/execute request.
 | Send a message to a channel | `nuvira gateway send ops "nightly build done"` |
 | Start the web dashboard | `nuvira dashboard` |
 | Stop the web dashboard | `nuvira dashboard stop` |
+| Start/stop the external OmniRoute gateway | `nuvira omniroute start` · `nuvira omniroute stop` · `nuvira omniroute status` |
 | Check everything is configured | `nuvira doctor` |
 | Pair WhatsApp (QR) | `nuvira whatsapp pair` |
 | WhatsApp bridge status | `nuvira whatsapp status` |
@@ -121,6 +122,24 @@ nuvira models excluded         # show what routing is skipping, and WHY
   ```
 - **Aliases the agent understands:** "stop dashboard", "kill dashboard", "bounce
   dashboard", "shut down the dashboard" → all map to `nuvira dashboard stop`.
+
+### 1.5 Start / stop the OmniRoute gateway
+
+- **Objective:** Run (or stop) the **external** OmniRoute AI gateway — a separate local process
+  on port 20128 that multiplexes many upstream providers behind one OpenAI-compatible endpoint.
+  Agent-nuvira does not embed it: the provider row decides whether nuvira *routes* to it, these
+  commands control whether the gateway itself is up.
+- **Command:** `nuvira omniroute start | stop | status`
+- **Examples:**
+  ```bash
+  nuvira omniroute status   # probe http://127.0.0.1:20128/v1 (a 401 still counts as running)
+  nuvira omniroute start    # launch it in the background and wait until it answers
+  nuvira omniroute stop     # SIGTERM the running gateway
+  ```
+- **Dashboard:** Admin → **External gateway: OmniRoute** shows reachability (✅ reachable /
+  ⚠️ process up, not answering / ❌ not running) with **Start**, **Stop** and **Recheck** buttons.
+  Start/stop require `gateway.manage` (admin or operator); the status read is available to any
+  signed-in session.
 
 ---
 

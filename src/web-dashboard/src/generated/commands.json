@@ -2,8 +2,8 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 270,
-  "groupCount": 53,
+  "commandCount": 273,
+  "groupCount": 54,
   "groups": [
     {
       "name": "admin",
@@ -884,6 +884,27 @@
         {
           "name": "gateway setup",
           "description": "Interactive setup wizard for a messaging platform (e.g. nuvira gateway setup telegram)",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "omniroute",
+      "description": "Start / stop / inspect the external OmniRoute AI gateway (default port 20128)",
+      "commands": [
+        {
+          "name": "omniroute status",
+          "description": "Probe the OmniRoute gateway and report whether it is reachable",
+          "flags": []
+        },
+        {
+          "name": "omniroute start",
+          "description": "Start the OmniRoute gateway in the background and wait for it to answer",
+          "flags": []
+        },
+        {
+          "name": "omniroute stop",
+          "description": "Stop the running OmniRoute gateway",
           "flags": []
         }
       ]

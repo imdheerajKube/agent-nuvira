@@ -317,6 +317,17 @@ addressed to it*. Adding it does not turn off agent-nuvira's routing.
    - **Off** (the default until you save it) keeps it out of automatic routing — its credentials (if
      any) are untouched — and you reach it only by pinning it explicitly.
 
+**Start / stop it from here**
+
+- `nuvira omniroute status` reports whether it is reachable (a `401` still counts as running — an
+  auth-gated gateway is up) and whether a process holds the port.
+- `nuvira omniroute start` launches it in the background and waits until it answers;
+  `nuvira omniroute stop` SIGTERMs the running gateway. A missing binary is reported as
+  `npm install -g omniroute` rather than an opaque failure.
+- **Dashboard** → *Admin* → **External gateway: OmniRoute** shows the same reachability with
+  **Start**, **Stop** and **Recheck** buttons. Start/stop require admin or operator; the status read
+  is available to any signed-in session.
+
 **Use it**
 
 - Pin its own combos: `nuvira execute "…" --provider omniroute --model auto` (or `auto/coding`,

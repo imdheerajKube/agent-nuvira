@@ -32,6 +32,7 @@ import type {
   AdminCachePayload,
   AdminCatalogProvider,
   AdminChecksData,
+  AdminOmniRouteStatus,
   AdminProviderSummary,
   AdminUser,
   AdminWorkspace,
@@ -99,6 +100,12 @@ export default function AdminPanel() {
   // only the gateway stop (gateway.manage), viewer sees neither.
   const [shutdownMsg, setShutdownMsg] = useState<string | null>(null);
   const [shutdownBusy, setShutdownBusy] = useState<string | null>(null);
+  // OmniRoute — the EXTERNAL AI gateway (port 20128): reachability + start/stop.
+  // Separate from the provider row, which only decides whether nuvira ROUTES to
+  // it; this is whether the gateway itself is up.
+  const [omniroute, setOmniRoute] = useState<AdminOmniRouteStatus | null>(null);
+  const [omnirouteMsg, setOmniRouteMsg] = useState<string | null>(null);
+  const [omnirouteBusy, setOmniRouteBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -129,6 +136,10 @@ export default function AdminPanel() {
   const loadCache = useCallback(async () => {
     const c = await dashboardAPI.fetchAdminCache();
     if (c) setCache(c);
+  }, []);
+
+  const loadOmniRoute = useCallback(async () => {
+    setOmniRoute(await dashboardAPI.fetchOmniRouteStatus());
   }, []);
 
   /**
@@ -201,12 +212,13 @@ export default function AdminPanel() {
         void loadUsers();
         void loadWorkspace();
         void loadCache();
+        void loadOmniRoute();
       } else {
         setLoading(false);
       }
     });
     return () => { alive = false; };
-  }, [refresh, loadCatalog, loadUsers, loadWorkspace, loadCache, authVersion]);
+  }, [refresh, loadCatalog, loadUsers, loadWorkspace, loadCache, loadOmniRoute, authVersion]);
 
   const isAdmin = role === 'admin';
   /** routing.operate — the capability the workspace write requires. */
@@ -303,6 +315,27 @@ export default function AdminPanel() {
       setShutdownMsg(`❌ ${r.error || 'Stop failed.'}`);
       if (r.unauthorized) sessionExpired();
     }
+  };
+
+  /**
+   * Start or stop the EXTERNAL OmniRoute gateway (port 20128). Stopping it is
+   * confirmed — anything routing through it fails until it is started again.
+   */
+  const controlOmniRoute = async (action: 'start' | 'stop') => {
+    if (action === 'stop' && !window.confirm('Stop the OmniRoute gateway? Anything routing through it will fail until it is started again.')) return;
+    setOmniRouteBusy(true);
+    setOmniRouteMsg(null);
+    const r = await dashboardAPI.controlOmniRoute(action);
+    if (r.status) setOmniRoute(r.status);
+    if (r.ok) {
+      setOmniRouteMsg(`✅ ${r.detail ?? (action === 'stop' ? 'OmniRoute stopped.' : 'OmniRoute started.')}`);
+    } else if (r.unauthorized) {
+      sessionExpired();
+      setOmniRouteMsg(`❌ ${r.error || 'Session expired — log in again.'}`);
+    } else {
+      setOmniRouteMsg(`❌ ${r.detail ?? r.reason ?? r.error ?? 'OmniRoute control failed.'}`);
+    }
+    setOmniRouteBusy(false);
   };
 
   /** Shut down this dashboard server — the page will disconnect. */
@@ -774,6 +807,54 @@ export default function AdminPanel() {
                 </button>
               </form>
             </>
+          ) : null}
+
+          {isAdmin || role === 'operator' ? (
+            <div className="admin-omniroute">
+              <h2 className="section-subtitle">🔀 External gateway: OmniRoute (port {omniroute?.port ?? 20128})</h2>
+              <p className="admin-hint">
+                OmniRoute is a separate local process nuvira does not embed. The provider row below
+                decides whether agent-nuvira <em>routes</em> to it; this controls whether the gateway
+                itself is up. A 401 from its API still counts as running.
+              </p>
+              <div className="admin-omniroute-row">
+                <span
+                  className={`admin-check-badge ${omniroute?.reachable ? 'admin-check-pass' : 'admin-check-warn'}`}
+                >
+                  {omniroute === null
+                    ? '… checking'
+                    : omniroute.reachable
+                      ? '✅ Reachable'
+                      : omniroute.running
+                        ? '⚠️ Process up, not answering'
+                        : '❌ Not running'}
+                </span>
+                <span className="admin-hint">
+                  {omniroute?.detail ?? 'Probing…'} · {omniroute?.baseUrl ?? 'http://127.0.0.1:20128/v1'}
+                  {omniroute?.pid != null ? ` · PID ${omniroute.pid}` : ''}
+                </span>
+                <button
+                  className="admin-mini-btn"
+                  disabled={omnirouteBusy}
+                  onClick={() => void controlOmniRoute('start')}
+                  title="Run `omniroute` in the background and wait until it answers"
+                >
+                  ▶ Start
+                </button>
+                <button
+                  className="admin-mini-btn admin-mini-danger"
+                  disabled={omnirouteBusy || !omniroute?.running}
+                  onClick={() => void controlOmniRoute('stop')}
+                  title="SIGTERM the running OmniRoute gateway"
+                >
+                  ⏹ Stop
+                </button>
+                <button className="admin-mini-btn" disabled={omnirouteBusy} onClick={() => void loadOmniRoute()}>
+                  ⟳ Recheck
+                </button>
+              </div>
+              {omnirouteMsg ? <div className="admin-row-msg">{omnirouteMsg}</div> : null}
+            </div>
           ) : null}
 
           <h2 className="section-subtitle">🔑 Provider Configuration (keys masked)</h2>

@@ -36,7 +36,9 @@ import { dashboardAPI } from '../api';
 // The SAME counts Overview and the Models page show — one endpoint, so the
 // three tabs cannot head different numbers under the same word.
 import { useModelCounts } from '../useModelCounts';
+import { formatNumber } from '../format';
 import type { VerifyBacklogState } from '../types';
+import MetricTiles, { type MetricTile } from './MetricTiles';
 import PageHeader from './PageHeader';
 
 /** Server-computed routing verdict, mirrored from `ModelRegistry.isUsable()`. */
@@ -269,6 +271,65 @@ export default function ModelTimeline() {
     ? NOT_ROUTABLE_ORDER.reduce((sum, state) => sum + (counts[state] ?? 0), 0)
     : 0;
 
+  // The registry/live-probe numbers as colour-coded tiles — the same treatment
+  // Overview gives its metric band, so six full-width cards no longer push the
+  // age profile below the fold. The tones reuse the four accents the contrast
+  // suite already pins on the card surface, and they carry meaning: registry =
+  // accent, live probe = warn, routable = ok, not routable = danger. The live
+  // probe pair is OMITTED rather than zeroed when the server does not report it,
+  // matching the conditional cards this replaced and the dashboard's "absent is
+  // not zero" rule.
+  const tiles: MetricTile[] = [
+    {
+      key: 'tracked-models',
+      icon: '🧠',
+      value: formatNumber(data?.totalModels ?? 0),
+      label: 'Tracked models (registry)',
+      tone: 'accent',
+    },
+    {
+      key: 'tracked-providers',
+      icon: '🏢',
+      value: formatNumber(modelCounts?.trackedProviders ?? 0),
+      label: 'Tracked providers (registry)',
+      tone: 'accent',
+    },
+  ];
+  if (modelCounts) {
+    tiles.push(
+      {
+        key: 'listed-models',
+        icon: '📡',
+        value: formatNumber(modelCounts.listedModels),
+        label: 'Listed models (live probe)',
+        tone: 'warn',
+      },
+      {
+        key: 'listed-providers',
+        icon: '🛰️',
+        value: formatNumber(modelCounts.listedProviders),
+        label: 'Listed providers (live probe)',
+        tone: 'warn',
+      },
+    );
+  }
+  tiles.push(
+    {
+      key: 'routable',
+      icon: '✅',
+      value: formatNumber(counts?.routable ?? 0),
+      label: 'Routable now',
+      tone: 'ok',
+    },
+    {
+      key: 'not-routable',
+      icon: '🚫',
+      value: formatNumber(notRoutableTotal),
+      label: 'Not routable',
+      tone: 'danger',
+    },
+  );
+
   const filteredEntries = entries.filter((e) => {
     if (filter === 'routable') return e.reachability === 'routable';
     if (filter === 'not-routable') return e.reachability !== 'routable';
@@ -304,37 +365,11 @@ export default function ModelTimeline() {
         this one answers &ldquo;what is ageing out&rdquo;.
       </p>
 
-      {/* Summary cards. These ARE the filter counts — same classifier, same numbers. */}
-      <div className="stats-grid" style={{ marginBottom: 8 }}>
-        <div className="stat-card">
-          <div className="stat-value">{data?.totalModels ?? 0}</div>
-          <div className="stat-label">Tracked models (registry)</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{modelCounts?.trackedProviders ?? 0}</div>
-          <div className="stat-label">Tracked providers (registry)</div>
-        </div>
-        {modelCounts && (
-          <>
-            <div className="stat-card">
-              <div className="stat-value">{modelCounts.listedModels}</div>
-              <div className="stat-label">Listed models (live probe)</div>
-            </div>
-            <div className="stat-card">
-              <div className="stat-value">{modelCounts.listedProviders}</div>
-              <div className="stat-label">Listed providers (live probe)</div>
-            </div>
-          </>
-        )}
-        <div className="stat-card" style={{ borderColor: 'var(--accent-green)' }}>
-          <div className="stat-value" style={{ color: 'var(--accent-green)' }}>{counts?.routable ?? 0}</div>
-          <div className="stat-label">Routable now</div>
-        </div>
-        <div className="stat-card" style={{ borderColor: 'var(--border-hover)' }}>
-          <div className="stat-value" style={{ color: 'var(--text-secondary)' }}>{notRoutableTotal}</div>
-          <div className="stat-label">Not routable</div>
-        </div>
-      </div>
+      {/* The summary band. These ARE the filter counts — same classifier, same
+          numbers — but colour-coded and wrapping like Overview's metric tiles
+          rather than stacked full-width, which pushed the age profile itself
+          below the fold. */}
+      <MetricTiles tiles={tiles} />
 
       {/* The breakdown of "not routable", because the four reasons need opposite
           actions: one is repaired by re-probing, one clears itself, one is

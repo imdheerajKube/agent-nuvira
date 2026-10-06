@@ -177,7 +177,9 @@ describe('ModelTimeline — reachability', () => {
     // bare "Routable" is what keeps those two distinguishable.
     const labels = screen.getAllByText('Not routable');
     expect(labels).toHaveLength(2);
-    const card = labels.find((el) => el.className === 'stat-label');
+    // The tile's label, found by the metric-tile class — the value it heads sits
+    // on the same row, so this is the number the tile reports.
+    const card = labels.find((el) => el.className === 'metric-tile-label');
     expect(card?.parentElement?.textContent).toContain('3');
     // The breakdown is what replaces the old contradictory "Fresh / Stale /
     // Likely Removed" cards.

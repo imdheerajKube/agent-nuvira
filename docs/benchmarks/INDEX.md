@@ -212,3 +212,14 @@ on the tool path (every second request of such a turn 400'd), and `-m auto` with
 concrete `--provider` never reached that provider (it was read as agent-nuvira's
 own auto-route). The second fix is why the plain `auto` combo above exists at all
 — the earlier note that it "collides" no longer applies.
+
+**Third run — both arms, to test whether the first numbers were noise.** Re-run
+the same way (`NUVIRA_STRICT_MODEL=1`), the native `deepseek/deepseek-flash` arm
+repeated at **composite 100% (found 7/7, fixed 7/7, false-success 0/7,
+time-to-green 49.6s)** and `omniroute/auto` repeated at **94% (found 6/7, fixed
+7/7, false-success 0/7, time-to-green 65.0s)**. The two results reproduce
+exactly, including WHICH task drifts: both OmniRoute arms miss the same single
+task (`seed-top-scores-lexical-sort` — fixed, not named), which is the ±1
+localisation noise the earlier note bounded. So the 100% on the native arm holds
+across two runs, and the 94% on the gateway arm is a stable localisation figure,
+not a one-off. The FIX rate stayed 7/7 on every arm and every repeat.

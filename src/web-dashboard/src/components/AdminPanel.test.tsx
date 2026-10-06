@@ -83,6 +83,16 @@ function mockServerData(payload: AdminChecksData = VALID_PAYLOAD): { checks: Ret
   });
   // The cache listing is authed too. Empty by default; the cache tests override.
   vi.spyOn(dashboardAPI, 'fetchAdminCache').mockResolvedValue({ ok: true, total: 0, workspaces: [] });
+  // OmniRoute status is read on every authed mount; without this the panel
+  // would attempt a real request in a test.
+  vi.spyOn(dashboardAPI, 'fetchOmniRouteStatus').mockResolvedValue({
+    reachable: true,
+    running: true,
+    baseUrl: 'http://127.0.0.1:20128/v1',
+    detail: 'Reachable (HTTP 200)',
+    pid: 111,
+    port: 20128,
+  });
   return { checks, catalog, services };
 }
 
@@ -623,5 +633,52 @@ describe('AdminPanel', () => {
     fireEvent.click(within(row).getByRole('button', { name: /Turn on/ }));
     await waitFor(() => expect(save).toHaveBeenCalledWith('omniroute', { enabled: true }));
     expect(await screen.findByText(/Routing ON/)).toBeTruthy();
+  });
+
+  // ─── OmniRoute gateway lifecycle control ─────────────────────────────────
+
+  it('shows the OmniRoute gateway as reachable and starts it on demand', async () => {
+    mockAuthedServer();
+    const control = vi.spyOn(dashboardAPI, 'controlOmniRoute').mockResolvedValue({
+      ok: true,
+      started: true,
+      detail: 'OmniRoute started.',
+      status: {
+        reachable: true,
+        running: true,
+        baseUrl: 'http://127.0.0.1:20128/v1',
+        detail: 'Reachable (HTTP 200)',
+        pid: 111,
+        port: 20128,
+      },
+    });
+
+    render(<AdminPanel />);
+    await screen.findByText(/System Checks/);
+
+    // Reachability is reported (the stub says reachable).
+    expect(await screen.findByText(/✅ Reachable/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /▶ Start/ }));
+    await waitFor(() => expect(control).toHaveBeenCalledWith('start'));
+    expect(await screen.findByText(/OmniRoute started/)).toBeTruthy();
+  });
+
+  it('disables Stop when the OmniRoute gateway is not running', async () => {
+    mockAuthedServer();
+    vi.spyOn(dashboardAPI, 'fetchOmniRouteStatus').mockResolvedValue({
+      reachable: false,
+      running: false,
+      baseUrl: 'http://127.0.0.1:20128/v1',
+      detail: 'Not reachable (ECONNREFUSED)',
+      pid: null,
+      port: 20128,
+    });
+
+    render(<AdminPanel />);
+    await screen.findByText(/System Checks/);
+
+    expect(await screen.findByText(/❌ Not running/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: /⏹ Stop/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

@@ -1267,6 +1267,32 @@ export interface AdminCatalog {
   providers: AdminCatalogProvider[];
 }
 
+/** OmniRoute gateway lifecycle (Admin) — read from GET /api/admin/omniroute. */
+export interface AdminOmniRouteStatus {
+  /** The gateway's /v1/models answered (a 401/403 counts as up). */
+  reachable: boolean;
+  /** Reachable OR a process is listening on the port. */
+  running: boolean;
+  baseUrl: string;
+  /** Human-readable outcome, e.g. "Reachable (HTTP 200)". */
+  detail: string;
+  pid: number | null;
+  port: number;
+}
+
+/** Result of starting/stopping the OmniRoute gateway (POST /api/admin/omniroute). */
+export interface AdminOmniRouteResult extends AdminWriteResult {
+  status?: AdminOmniRouteStatus;
+  /** start: true when THIS call spawned the process. */
+  started?: boolean;
+  /** stop: whether the process was found and signalled. */
+  stopped?: boolean;
+  /** Human-readable detail from the control layer. */
+  detail?: string;
+  reason?: string;
+  pid?: number;
+}
+
 /** Session 36 — user-declared daily budget (routing.quota + cost cap). */
 export interface AdminQuotaLimit {
   tokensPerWindow?: number;

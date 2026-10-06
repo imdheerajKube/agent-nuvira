@@ -44,6 +44,7 @@ import { SessionCommand } from './session.js';
 import { SkillCommand } from './skill.js';
 import { SkillsCommand } from './skills.js';
 import { GatewayCommand } from './gateway.js';
+import { OmniRouteCommand } from './omniroute.js';
 import { WhatsAppCommand } from './whatsapp.js';
 import { BenchmarkCommand } from './benchmark.js';
 import { EvalCommand } from './eval.js';
@@ -180,6 +181,10 @@ export function createCLI(): Command {
   // Register Gateway command (J1 — multi-channel Telegram/Discord/Slack/WhatsApp)
   const gatewayCmd = new GatewayCommand();
   program.addCommand(gatewayCmd.create());
+
+  // Register OmniRoute command (lifecycle control for the external AI gateway)
+  const omnirouteCmd = new OmniRouteCommand();
+  program.addCommand(omnirouteCmd.create());
 
   // Register Model command (Phase 1.2: model switching)
   const modelCmd = new ModelCommand();
