@@ -7117,6 +7117,11 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   // POST /api/continuity/clear — forget stored continuity data. Body:
   //   { target: 'sessions' | 'recall' }      — clear all of one kind
   //   { target: 'session' | 'recall-entry', id } — clear one entry
+  //   { target: 'sessions' | 'recall', olderThanMs } — TIME-BASED bulk: clear
+  //     only entries older than now − olderThanMs. Per-entry forgetting is fine
+  //     for a handful of records but tedious for a store that grows on every
+  //     run, so "forget anything older than a week" is one request instead of
+  //     N. Absent/<=0 → the existing clear-all behaviour, unchanged.
   if (pathname === '/api/continuity/clear' && req.method === 'POST') {
     const session = adminSessions.validate(bearerToken(req));
     if (!session) {
@@ -7131,8 +7136,17 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       const body = await readJsonBody(req);
       const target = typeof body?.target === 'string' ? body.target : '';
       const id = typeof body?.id === 'string' ? body.id : undefined;
+      const olderThanMs = typeof body?.olderThanMs === 'number' && body.olderThanMs > 0 ? body.olderThanMs : 0;
+      const cutoff = olderThanMs > 0 ? Date.now() - olderThanMs : 0;
       let removed = 0;
-      if (target === 'sessions') {
+      if (target === 'sessions' && cutoff > 0) {
+        // Time-based bulk: only snapshots saved before the cutoff.
+        const { listSessionSnapshots, clearSession } = await import('../learning/session-store.js');
+        for (const s of listSessionSnapshots()) if (s.savedAt < cutoff && clearSession(s.id)) removed += 1;
+      } else if (target === 'recall' && cutoff > 0) {
+        const { listRecallEntries, removeRecallEntry } = await import('../learning/session-recall.js');
+        for (const e of listRecallEntries()) if (e.savedAt < cutoff && removeRecallEntry(e.id)) removed += 1;
+      } else if (target === 'sessions') {
         const { listSessionSnapshots, clearSession } = await import('../learning/session-store.js');
         for (const s of listSessionSnapshots()) if (clearSession(s.id)) removed += 1;
       } else if (target === 'recall') {
@@ -7145,7 +7159,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         const { removeRecallEntry } = await import('../learning/session-recall.js');
         if (removeRecallEntry(id)) removed = 1;
       } else {
-        writeJson(res, 400, { ok: false, error: "Expected { target: 'sessions'|'recall'|'session'|'recall-entry', id? }." });
+        writeJson(res, 400, { ok: false, error: "Expected { target: 'sessions'|'recall'|'session'|'recall-entry', id?, olderThanMs? }." });
         return;
       }
       writeJson(res, 200, { ok: true, removed });

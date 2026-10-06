@@ -874,6 +874,13 @@ export default function AdminPanel() {
                 {providers.map((p) => {
                   const meta = catalogLabel(p.type);
                   const draft = drafts[p.type] || {};
+                  // Bedrock is the one provider whose credentials are NOT a single
+                  // API key: it needs a region, a choice of auth (bearer vs IAM
+                  // access-key pair), and per-family model-access approval. That
+                  // cannot be expressed in a table row, so the AWS Bedrock page's
+                  // wizard is the ONE config surface and this row points at it
+                  // (previously both wrote credentials and could disagree).
+                  const isBedrock = p.type === 'bedrock';
                   return (
                     <tr key={p.type}>
                       <td className="admin-provider-type">
@@ -904,7 +911,12 @@ export default function AdminPanel() {
                         ) : null}
                       </td>
                       <td>
-                        {meta.keyless ? (
+                        {isBedrock ? (
+                          <div className="admin-hint">
+                            Configured on the <a href="/bedrock">AWS Bedrock page</a> — region, auth
+                            (bearer / IAM), and model-access approval live there, not here.
+                          </div>
+                        ) : meta.keyless ? (
                           <div className="admin-hint">No key needed (probed)</div>
                         ) : isAdmin ? (
                           <input

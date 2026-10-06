@@ -71,7 +71,7 @@ describe('ContinuitySection', () => {
 
     await waitFor(() => expect(screen.getByText(/Stored sessions \(2\)/)).toBeTruthy());
     fireEvent.click(screen.getByLabelText('Forget session fix the hotkey'));
-    await waitFor(() => expect(clear).toHaveBeenCalledWith('session', 'cp-1'));
+    await waitFor(() => expect(clear).toHaveBeenCalledWith('session', 'cp-1', undefined));
   });
 
   it('forgets all sessions', async () => {
@@ -81,7 +81,21 @@ describe('ContinuitySection', () => {
 
     await waitFor(() => expect(screen.getByText(/Stored sessions \(2\)/)).toBeTruthy());
     fireEvent.click(screen.getByText(/Forget all sessions/));
-    await waitFor(() => expect(clear).toHaveBeenCalledWith('sessions', undefined));
+    await waitFor(() => expect(clear).toHaveBeenCalledWith('sessions', undefined, undefined));
+  });
+
+  it('forgets only entries older than a week (time-based bulk)', async () => {
+    vi.spyOn(dashboardAPI, 'fetchContinuity').mockResolvedValue(makeData());
+    const clear = vi.spyOn(dashboardAPI, 'clearContinuity').mockResolvedValue({ ok: true, removed: 1 });
+    render(<ContinuitySection />);
+
+    await waitFor(() => expect(screen.getByText(/Stored sessions \(2\)/)).toBeTruthy());
+    // The first "Forget older than a week" is the sessions one; the store grows
+    // on every run, so per-line forgetting is the wrong tool for cleanup.
+    fireEvent.click(screen.getAllByText(/Forget older than a week/)[0]);
+    await waitFor(() =>
+      expect(clear).toHaveBeenCalledWith('sessions', undefined, 7 * 24 * 60 * 60 * 1000),
+    );
   });
 
   it('says so quietly when the server has no continuity endpoint', async () => {

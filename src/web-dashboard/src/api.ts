@@ -2294,12 +2294,19 @@ export class DashboardAPI {
   async clearContinuity(
     target: 'sessions' | 'recall' | 'session' | 'recall-entry',
     id?: string,
+    /**
+     * TIME-BASED bulk: with `sessions`/`recall`, clear only entries older than
+     * this many milliseconds. Omit for the original clear-all/clear-one
+     * behaviour. The store grows on every run, so "older than a week" is one
+     * request instead of N per-line forgets.
+     */
+    olderThanMs?: number,
   ): Promise<{ ok: boolean; removed?: number; error?: string }> {
     try {
       const res = await fetch(`${this.baseUrl}/api/continuity/clear`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ target, ...(id ? { id } : {}) }),
+        body: JSON.stringify({ target, ...(id ? { id } : {}), ...(olderThanMs ? { olderThanMs } : {}) }),
       });
       const data = (await res.json()) as { ok?: boolean; removed?: number; error?: string };
       return { ok: data.ok === true, removed: data.removed, error: data.error };

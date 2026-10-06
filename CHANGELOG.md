@@ -55,6 +55,26 @@ to a real model id. This also closed the one failing test in the suite
 (the orchestrator auto-model test that only failed on a machine with a
 capability-mode/config that enabled verify-on-demand).
 
+### Changed: Agent Hub sits directly after Chat, Bedrock has ONE config surface, and the stores can be swept by age
+
+Three dashboard follow-ups. **Agent Hub** moved to the second slot in the rail
+(it is where the agents a chat turn actually uses are enabled) instead of last.
+**Bedrock** is the one provider whose credentials are not a single API key
+(region + bearer-vs-IAM + per-family model access), so its Admin row no longer
+pretends otherwise — it points at the AWS Bedrock wizard, which is now the only
+place those credentials are written. And both continuity stores gained a
+**time-based bulk forget** (`olderThanMs` on `/api/continuity/clear`, with a
+“Forget older than a week” button), because a store that grows on every run
+should not have to be cleaned one line at a time.
+
+### Added: design doc — skill & plugin ecosystem (import, plugins, leverage review)
+
+`docs/DESIGN-skill-plugin-ecosystem.md` analyses marketplace/GitHub skill
+import (decision pending), what it would take to consume third-party plugins
+(Claude Code / Hermes) per the user's choice, and a grounded free-vs-paid
+review of the named ecosystem plugins (Strix, Ponytail, Graphify, RTK, UI/UX
+Pro Max) with the reasons each is not integrable today.
+
 ### Added: software deliverables carry a project-documentation contract
 
 A software build produced code and stopped; the documents a real project ships

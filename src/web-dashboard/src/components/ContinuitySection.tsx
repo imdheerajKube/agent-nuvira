@@ -18,6 +18,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
 import type { ContinuityData } from '../types';
 
+/** The "older than a week" bulk window (7 days, in ms). */
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
 function relativeAge(ts: number): string {
   const mins = Math.max(0, Math.round((Date.now() - ts) / 60_000));
   if (mins < 1) return 'just now';
@@ -57,10 +60,15 @@ export default function ContinuitySection() {
   }, []);
 
   const clear = useCallback(
-    async (target: 'sessions' | 'recall' | 'session' | 'recall-entry', id?: string) => {
+    async (
+      target: 'sessions' | 'recall' | 'session' | 'recall-entry',
+      id?: string,
+      /** Time-based bulk: only entries older than this (ms). Omit = all. */
+      olderThanMs?: number,
+    ) => {
       setBusy(true);
       setNotice(null);
-      const r = await dashboardAPI.clearContinuity(target, id);
+      const r = await dashboardAPI.clearContinuity(target, id, olderThanMs);
       if (!r.ok) setNotice(r.error || 'Could not clear that.');
       else setNotice(`Removed ${r.removed ?? 0} record(s).`);
       await refresh();
@@ -130,14 +138,27 @@ export default function ContinuitySection() {
                   </div>
                 ))}
               </div>
-              <button
-                className="admin-mini-btn admin-mini-btn-danger"
-                type="button"
-                disabled={busy || sessions.length === 0}
-                onClick={() => void clear('sessions')}
-              >
-                🗑️ Forget all sessions
-              </button>
+              <div className="admin-row-actions">
+                {/* Bulk cleanup: the store grows on every run, so deleting one
+                    line at a time is the wrong tool for "tidy up". */}
+                <button
+                  className="admin-mini-btn admin-mini-btn-danger"
+                  type="button"
+                  disabled={busy}
+                  title="Delete only session snapshots saved more than 7 days ago"
+                  onClick={() => void clear('sessions', undefined, WEEK_MS)}
+                >
+                  🗑️ Forget older than a week
+                </button>
+                <button
+                  className="admin-mini-btn admin-mini-btn-danger"
+                  type="button"
+                  disabled={busy || sessions.length === 0}
+                  onClick={() => void clear('sessions')}
+                >
+                  🗑️ Forget all sessions
+                </button>
+              </div>
             </>
           )}
 
@@ -167,14 +188,25 @@ export default function ContinuitySection() {
                   </div>
                 ))}
               </div>
-              <button
-                className="admin-mini-btn admin-mini-btn-danger"
-                type="button"
-                disabled={busy || recall.length === 0}
-                onClick={() => void clear('recall')}
-              >
-                🗑️ Forget all recall entries
-              </button>
+              <div className="admin-row-actions">
+                <button
+                  className="admin-mini-btn admin-mini-btn-danger"
+                  type="button"
+                  disabled={busy}
+                  title="Delete only recall entries indexed more than 7 days ago"
+                  onClick={() => void clear('recall', undefined, WEEK_MS)}
+                >
+                  🗑️ Forget older than a week
+                </button>
+                <button
+                  className="admin-mini-btn admin-mini-btn-danger"
+                  type="button"
+                  disabled={busy || recall.length === 0}
+                  onClick={() => void clear('recall')}
+                >
+                  🗑️ Forget all recall entries
+                </button>
+              </div>
             </>
           )}
         </>
