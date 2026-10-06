@@ -72,6 +72,57 @@ describe('reasoning-trace — the summary provider is the SERVED one (D3)', () =
     endTrace(id, false);
     expect(getTrace(id)?.provider).toBe('gemini');
   });
+
+  it('reports the served MODEL too — a requested model beside a served provider never ran (A5)', () => {
+    // The summary is a PAIR. Deriving the provider from the steps while leaving
+    // the MODEL as requested produced a pair the run never ran, which `nuvira
+    // trace` printed as `Provider: deepseek` / `Model: openrouter/deepseek-v4.1`.
+    const id = beginTrace({
+      goal: 'build a knowledge base web app',
+      source: 'chat',
+      provider: 'openrouter',
+      model: 'deepseek/deepseek-v4.1-flash',
+    });
+    recordStep(id, step('deepseek', 'deepseek-flash'));
+    recordStep(id, step('deepseek', 'deepseek-flash'));
+    endTrace(id, true);
+
+    expect(getTrace(id)?.provider).toBe('deepseek');
+    expect(getTrace(id)?.model).toBe('deepseek-flash');
+  });
+
+  it('records a mid-turn model detour as one auditable decision event (D2)', () => {
+    // Measured: seq 14 of an 82-step run was served by
+    // `local/deepseek-coder:latest` while the summary, the header and the report
+    // named something else. The detour is a fact, not a failure — a failover is
+    // legitimate — but it must be VISIBLE, or "why does step 14 read like that?"
+    // has no answer anywhere in the artefact.
+    const id = beginTrace({
+      goal: 'build a knowledge base web app',
+      source: 'chat',
+      provider: 'groq',
+      model: 'openai/gpt-oss-120b',
+    });
+    recordStep(id, step('deepseek', 'deepseek-flash'));
+    recordStep(id, step('deepseek', 'deepseek-flash'));
+    recordStep(id, step('local', 'deepseek-coder:latest'));
+    endTrace(id, true);
+
+    const events = getTrace(id)!.events ?? [];
+    const detour = events.find((e) => e.kind === 'decision' && e.summary.includes('model detour'));
+    expect(detour).toBeDefined();
+    expect(detour!.summary).toContain('local/deepseek-coder:latest ×1');
+    expect(detour!.summary).toContain('deepseek/deepseek-flash');
+    expect(detour!.summary).toContain('1 of 3');
+  });
+
+  it('records NO detour when every step ran on the same pair', () => {
+    const id = beginTrace({ goal: 'g', source: 'chat', provider: 'groq', model: 'x' });
+    recordStep(id, step('deepseek', 'deepseek-flash'));
+    recordStep(id, step('deepseek', 'deepseek-flash'));
+    endTrace(id, true);
+    expect((getTrace(id)!.events ?? []).filter((e) => e.summary.includes('model detour'))).toHaveLength(0);
+  });
 });
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────

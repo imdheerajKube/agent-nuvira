@@ -723,33 +723,74 @@ export function endTrace(traceId: string, success?: boolean, outcome?: TraceOutc
     trace.durationMs = trace.endedAt - trace.startedAt;
     if (success !== undefined) trace.success = success;
     if (outcome) trace.outcome = outcome;
-    // ── D3: THE SUMMARY PROVIDER IS THE SERVED ONE, NOT THE REQUESTED ONE ──
-    // `beginTrace` stores the provider the caller had CONFIGURED when the run
+    // ── D3 / A5: THE SUMMARY NAMES THE PAIR THAT SERVED, NOT THE ONE REQUESTED ──
+    // `beginTrace` stores the pair the caller had CONFIGURED when the run
     // started. That is a REQUEST, not a fact: it is read before routing, so a
-    // failover, a handoff or a substitution leaves it describing a provider that
-    // may have served nothing at all. Measured on a real 12-minute turn: the
-    // summary said `groq` while all 81 recorded steps said
-    // `deepseek/deepseek-flash`, and `model explain` had predicted a THIRD
-    // provider — three accounts of one turn, so "which model ran?" was
-    // unanswerable from the very artefact meant to answer it.
+    // failover, a handoff or a substitution leaves it describing a pair that may
+    // have served nothing at all. Measured on a real 12-minute turn: the summary
+    // said `groq` while all 81 recorded steps said `deepseek/deepseek-flash`,
+    // and `model explain` had predicted a THIRD pair — three accounts of one
+    // turn, so "which model ran?" was unanswerable from the very artefact meant
+    // to answer it. The provider half was derived from the steps but the MODEL
+    // was left as REQUESTED, so `nuvira trace` could print a served provider
+    // beside a model that never ran. Both halves are now one vote: the
+    // provider×model PAIR that served the most steps.
     //
-    // The steps carry the SERVED pair, recorded at the call site, so the summary
-    // is derived from them: the provider that served the most calls. No steps →
-    // the requested value is left ALONE rather than overwritten with a guess.
+    // No steps → the requested pair is left ALONE rather than overwritten with a
+    // guess: nothing tried is not evidence.
     try {
-      const servedCounts = new Map<string, number>();
+      const servedPairs = new Map<string, { provider: string; model: string; count: number }>();
       for (const step of trace.steps ?? []) {
-        if (step?.provider) servedCounts.set(step.provider, (servedCounts.get(step.provider) ?? 0) + 1);
+        if (!step?.provider) continue;
+        const key = `${step.provider}\u0000${step.model}`;
+        const entry = servedPairs.get(key);
+        if (entry) entry.count += 1;
+        else servedPairs.set(key, { provider: step.provider, model: step.model, count: 1 });
       }
-      let dominant: string | undefined;
-      let dominantCount = 0;
-      for (const [providerName, count] of servedCounts) {
-        if (count > dominantCount) {
-          dominant = providerName;
-          dominantCount = count;
+      let winner: { provider: string; model: string; count: number } | undefined;
+      for (const entry of servedPairs.values()) {
+        if (!winner || entry.count > winner.count) winner = entry;
+      }
+      if (winner) {
+        // `const` so the narrowing survives into the callbacks below.
+        const served = winner;
+        trace.provider = served.provider;
+        // The MODEL is the other half of the pair: a served provider beside a
+        // requested model is a pair the run never ran.
+        if (served.model) trace.model = served.model;
+        // ── D2: A MID-TURN DETOUR IS A RECORDED FACT, NOT AN INVISIBLE ONE ──
+        // A step served by a pair other than the run's own is how an unrelated
+        // model (measured: a local `deepseek-coder:latest` on seq 14 of an
+        // 82-step run) answers part of a run while the summary, the header and
+        // the report all name something else. The fact is not a failure by
+        // itself — a failover is legitimate — but it must be AUDITABLE, so one
+        // bounded `decision` event lists every other pair and the step count it
+        // served. Without it, "why does step 14 read like that?" had no answer.
+        const detours = [...servedPairs.values()]
+          .filter((p) => p.provider !== served.provider || p.model !== served.model)
+          .sort((a, b) => b.count - a.count);
+        if (detours.length > 0) {
+          const events = trace.events ?? (trace.events = []);
+          const total = (trace.steps ?? []).length;
+          const described = detours
+            .slice(0, 5)
+            .map((p) => `${p.provider}/${p.model || 'unknown'} ×${p.count}`)
+            .join(', ');
+          events.push({
+            kind: 'decision',
+            summary:
+              `model detour — ${detours.reduce((n, p) => n + p.count, 0)} of ${total} step(s) ran on a pair ` +
+              `other than the run's own (${served.provider}/${served.model || 'unknown'}): ${described}` +
+              (detours.length > 5 ? `, +${detours.length - 5} more` : ''),
+            seq: events.length + 1,
+            timestamp: Date.now(),
+          });
+          if (events.length > MAX_EVENTS_PER_TRACE) {
+            trace.events = events.slice(-MAX_EVENTS_PER_TRACE);
+            trace.events.forEach((e, i) => { e.seq = i + 1; });
+          }
         }
       }
-      if (dominant) trace.provider = dominant;
     } catch {
       // Best-effort — the summary must never break the end of a run.
     }
