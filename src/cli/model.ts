@@ -29,6 +29,7 @@ import { resolveNuviraHome } from '../config/paths.js';
 import { BaseCommand, getCliName } from './commands.js';
 import { showModelPicker } from './model-picker.js';
 import { ProviderFactory } from '../inference/factory.js';
+import { CATALOG_PROVIDER_IDS } from '../inference/provider-catalog.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { recommendModel } from '../learning/model-router.js';
 import type { ProviderType, ProviderConfig, BuffConfig } from '../config/types.js';
@@ -266,7 +267,32 @@ export class ModelCommand extends BaseCommand {
   // ── Subcommand: list ───────────────────────────────────────────────────
 
   private async listProviders(opts: { all?: boolean; json?: boolean }): Promise<void> {
-    const builtinTypes: ProviderType[] = ['local', 'groq', 'nim', 'gemini', 'openrouter'];
+    /**
+     * The provider set the ROUTER uses — not a hand-written list of five.
+     *
+     * `rankAvailableProviders` (the router's source of truth) builds its candidate
+     * set from the catalog PLUS whatever the user configured. A literal array here
+     * made `model list` disagree with routing about which providers even exist:
+     * measured live, a machine whose turns were served by `deepseek` — with the
+     * debug header and the trace both naming it — printed only
+     * local/groq/nim/gemini/openrouter, so `deepseek` (and every other catalog
+     * provider: bedrock, openai, mistral, …) was invisible in the one command whose
+     * whole job is "what can I use?". One source, one inventory.
+     *
+     * The familiar five keep their place at the top so the table does not reorder
+     * itself for existing users; the rest follow in catalog order.
+     */
+    const builtinTypes: string[] = (() => {
+      const preferred = ['local', 'groq', 'nim', 'gemini', 'openrouter'];
+      let configured: string[] = [];
+      try {
+        configured = Object.keys(this.configManager.getAll().providers ?? {});
+      } catch {
+        // Best-effort — an unreadable config must not empty the table.
+      }
+      const all = new Set([...preferred, ...CATALOG_PROVIDER_IDS, ...configured]);
+      return [...all];
+    })();
     const registry = getPluginRegistry();
     const pluginTypes = registry.getAllPlugins().map((p) => p.getProviderType());
     const active = readActiveModelState();
@@ -379,7 +405,16 @@ export class ModelCommand extends BaseCommand {
     console.log('  │ Provider                         │ Status   │ Available│ Model            │');
     console.log('  ├──────────────────────────────────┼──────────┼──────────┼──────────────────┤');
 
-    for (const r of results) {
+    // Usable first. The table now carries the WHOLE catalog (so it agrees with
+    // routing), which means most rows are providers this machine has no key for.
+    // Putting the callable ones on top keeps the answer to "what can I use?" in
+    // the first few lines rather than below a dozen `Needs key` rows. Stable
+    // sort, so the familiar five keep their relative order.
+    const rankOf = (r: (typeof results)[number]): number =>
+      r.available ? 0 : r.configured ? 1 : 2;
+    const ordered = [...results].sort((a, b) => rankOf(a) - rankOf(b));
+
+    for (const r of ordered) {
       const name = `${r.icon} ${r.label}`.padEnd(30).slice(0, 30);
       const status = r.isActive ? '✅ Active' : r.configured ? '⚙️  Ready' : '⏳ Needs key';
       const avail = r.available ? '✅' : '⛔';

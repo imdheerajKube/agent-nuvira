@@ -93,7 +93,7 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 |---|---|---|---|---|---|
 | E1 | S2 | **An unattended `ask_user` silently picks option 1** on a real architectural fork and never discloses it. | Run A ×3, Run B ×2 (FAISS vs Milvus) | Disclose every auto-picked decision in the final answer | The answer lists each decision taken on the user's behalf |
 | E2 | S2 | **A pinned chat ask is re-routed into the multi-agent pipeline** by NLU (85% "create"). | Run D | A pin must not silently change the execution model | A pinned chat ask runs the pinned path, or says why it did not |
-| E3 | S2 | **Provider inventory disagrees.** `model list` omits `deepseek` and reports NIM as missing a key, while the router ranks both. | Baseline | One credential source for both | `model list` and the router agree on provider availability |
+| E3 | S2 | **Provider inventory disagrees.** `model list` omits `deepseek` and reports NIM as missing a key, while the router ranks both. | Baseline | **LANDED** — the cause was a hand-written array: `const builtinTypes = ['local','groq','nim','gemini','openrouter']`, while the router derives its set from the catalog + configured ids. Both now read the same source. | `model list` and the router agree on which providers exist and their availability |
 
 ---
 
@@ -108,6 +108,30 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 | P5 bad model's garbage = success | **D2** | P12 explain ranks unsorted | **D5** |
 | P6 unbounded context growth | **C1** | P13 pin rerouted into pipeline | **E2** |
 | P7 stale answer at budget end | **D1** | | |
+
+## Bundle 2b — `model list` must describe the same world routing does (E3 LANDED)
+
+**E3.** `model list`'s provider set was a literal array —
+`['local','groq','nim','gemini','openrouter']` — while the router builds its candidates from
+`CATALOG_PROVIDER_IDS` plus whatever the user configured (`rankAvailableProviders`). So the one
+command whose entire job is "what can I use?" omitted every catalog provider: measured live on the
+machine this programme ran on, `deepseek` **served the turns** (the debug header and the trace both
+named it, and the router ranked it) while `model list` did not show it at all.
+
+Both surfaces now read the same source, which is what the acceptance criterion asked for — and it
+is the only way they can agree, since "is this provider configured?" is answered by
+`hasRequiredCredentials` in one place.
+
+Because the table now carries the whole catalog, it is ordered **usable first** (available →
+configured-but-unreachable → needs-key), stable within each group so the familiar five keep their
+place. Without that, the answer to "what can I use?" sat below a dozen `Needs key` rows.
+
+Measured after: `deepseek` renders as `⚙️ Ready / ✅ / deepseek-flash` (it previously reported
+`default` for every provider it did show). All five docs guards and **237 files / 4058 tests** green.
+
+Honest note: E3's other half — NIM reported as "Needs key" while the router was said to rank it — is
+now *consistent by construction* (one predicate), but whether this machine's NIM key is *detected*
+is a credentials/env-var question this bundle does not answer.
 
 ## Bundle 2a — the offered chain must obey the gate the pick does (D6 LANDED, D5 re-diagnosed)
 
@@ -273,6 +297,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **C2** (was P9) | `error-repair.ts`: a 402 / "insufficient credits" now classifies as **`credit-exhausted`**, which `isRepairable()` refuses and `selectStrategy()` short-circuits to `skip-step`. Before: the live OpenRouter 402 matched **no** branch, fell to `unknown` (repairable), and burned the whole Planner repair budget. The branch is deliberately placed **before** `context-limit`, because the real message contains `max_tokens` and would otherwise have been "fixed" by shrinking the ask. | `tests/learning/error-repair.test.ts` (+4, live rejection text reproduced verbatim; plus a guard that genuine `provider-error`/429 still repairs) | **LANDED**, gate run |
 | **D2 (handoff half)** | `tool-loop.ts`: on a model handoff, the failed model's `reasoningContent` is stripped so a stranger's chain-of-thought is never replayed to the replacement model. Kept on a same-model retry, where some providers require it. | `tests/tools/tool-loop.test.ts` (+1) | **LANDED**, gate run |
 | **A6 (partial)** | `route-resolver.ts`: the **happy path** now records a routing row (previously only substitutions were recorded). | `tests/inference/route-resolver.test.ts` (+3) | superseded by A6/F1 below |
+| **E3 (Bundle 2b)** | `cli/model.ts` `listProviders`: the provider set comes from `CATALOG_PROVIDER_IDS` + configured ids — the same source `rankAvailableProviders` uses — instead of a literal five-provider array; rows are ordered usable-first. | **LANDED**, live-verified: `deepseek` now appears as `Ready / ✅ / deepseek-flash` where it was invisible |
 | **D6 (Bundle 2a)** | `auto-router.ts` `pushFallback`: a pair the registry has proven dead (`unavailable`) is dropped from the offered chain; one with no proof is labelled `unverified`. The `unverified` distinction is the doctrine — an unknown is not a failure. | `tests/learning/auto-router.test.ts` (+2) | **LANDED**, live-verified in `model explain` |
 | **A6 / A2 / A5 / D3 / D4 (Bundle 1c)** | `chat.ts` `execute` honours `defaultProvider: "auto"`; the non-auto fallback installs the served pair on `session`; the pinned path consults `strictPinRefusal`; `preferredModelsFor` drops a "verified" row whose own error says the model does not exist; entitlement failures survive a listing and a prune. | `tests/cli/chat-answer-once-auto-parity.test.ts` (+2, the CLI entry), `tests/learning/model-registry.test.ts` (+2), `tests/learning/model-selection.test.ts` (+1) | **LANDED + live-verified**: routing rows 0→2–3 on `-t`; strict pin 402 bodies 1→0. See "Bundle 1c". |
 
