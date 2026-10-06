@@ -74,6 +74,15 @@ describe('ModelCommand explain', () => {
     expect(output).toContain('fit');
   });
 
+  it('states the availability-first ordering the ranked list is sorted by (D5)', () => {
+    // The list is sorted availability-first (cooling-down → quota-parked → score
+    // within each group), which IS the routing precedence, but only `score` was
+    // printed — so a lower-scored healthy row above a higher-scored cooling one
+    // read as an unsorted list. The header now names the key it sorted by.
+    const output = runCommand(['explain', 'implement a login form']);
+    expect(output).toContain('ordered availability-first');
+  });
+
   it('walks all five complexity levels when no task is given', () => {
     const output = runCommand(['explain']);
 

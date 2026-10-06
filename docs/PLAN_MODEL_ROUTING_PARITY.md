@@ -84,7 +84,7 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 | D2 | S1 | **A useless response is recorded `success: true`.** `local/deepseek-coder:latest` returned a generic non-answer; the step logged success. | Run A seq 14 | **PARTIAL** (Bundle 2d): the DETOUR is now recorded; an empty response is already a failure (G10). The *generic non-answer* half is not detectable without a measured-quality signal (B3) | A mid-turn model detour is visible in the trace as a detour |
 | D3 | S1 | **The trace summary `provider` is wrong** (`groq` while all 81 steps say `deepseek`). | Runs A & B | **LANDED** (Bundle 2d): the summary derives the provider×model PAIR that served the most steps — the provider half was landed earlier but the model was left as requested, so the printed pair could never have run | Summary == the pair that served the most steps |
 | D4 | S2 | **`model explain` does not predict the runtime.** | `gemini-3.1-flash-lite` vs `deepseek-flash` | Share the resolution path | explain's winner == the model a real turn uses, for the same input |
-| D5 | S3 | **`model explain`'s ranks are not sorted by its own scores.** | `0.351, 0.465, 0.397, 0.396` | **CAUSE FOUND — not the original reading.** `ranked` IS sorted (and a test asserts descending score). The sort key is *availability first*: cooldown rows sink, then quota-parked, then score — so a cooling-down provider with a HIGHER raw score renders BELOW a healthy lower-scored one, under a header that says "Ranked providers" with only `score` beside each row. Run A had cooldowns from its own failed calls, which is exactly that shape. | State the grouping (or make the displayed order the displayed metric) | **OPEN** (S3) — display only; the ranking itself is correct |
+| D5 | S3 | **`model explain`'s ranks are not sorted by its own scores.** | `0.351, 0.465, 0.397, 0.396` | **CAUSE FOUND — not the original reading.** `ranked` IS sorted (and a test asserts descending score). The sort key is *availability first*: cooldown rows sink, then quota-parked, then score — so a cooling-down provider with a HIGHER raw score renders BELOW a healthy lower-scored one, under a header that says "Ranked providers" with only `score` beside each row. Run A had cooldowns from its own failed calls, which is exactly that shape. | **LANDED** (Bundle 2e): the header names the availability-first key, and a quota-parked row is labelled (it had no note at all) | The displayed order is explained by the header; the ranking itself was already correct |
 | D6 | S2 | **The fallback chain offers non-routable pairs.** `groq/allam-2-7b` (verified but `lastError=rate-limit`) and `~`-prefixed OpenRouter alias ids (all `unverified`) appear as fallbacks. | `model explain` output + registry | **LANDED** — the offered chain now obeys the same gate the pick does: a proven-dead (`unavailable`) pair is dropped, an unproven one is labelled. | No offered pair is `unavailable`; every offered pair with no proof says so |
 
 ## Cluster E — Autonomy & decisions (S2)
@@ -108,6 +108,21 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 | P5 bad model's garbage = success | **D2** | P12 explain ranks unsorted | **D5** |
 | P6 unbounded context growth | **C1** | P13 pin rerouted into pipeline | **E2** |
 | P7 stale answer at budget end | **D1** | | |
+
+## Bundle 2e — `model explain`'s ranking key is stated, not implied (D5 LANDED)
+
+**D5.** The "Ranked providers" list printed `score` beside every row but was NOT sorted by score: the
+sort key is *availability first* — a cooling-down provider sinks, then a quota-parked one, then score
+within each group — because that IS the routing precedence. Measured on a real run the scores read
+`0.351, 0.465, 0.397, 0.396`, which looked unsorted; the ranking was correct and the header was silent
+about its own key. A quota-parked row was also unlabelled (only `inCooldown` got a note), so a parked
+provider dropping below a lower-scored healthy one had no explanation at all.
+
+The header now names the key (`ordered availability-first — cooling-down, then quota-parked, then score
+within each group`) and a quota-parked row is tagged `(quota-parked)`. The routing order is unchanged —
+this is a display fix over a ranking that was already right.
+
+**Measured after.** `tests/cli/model.test.ts` (+1). All five docs guards green; **237 files / 4064 tests**.
 
 ## Bundle 2d — the trace names the pair that served (D3 model half / A5 + D2 LANDED)
 
@@ -371,6 +386,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **D6 (Bundle 2a)** | `auto-router.ts` `pushFallback`: a pair the registry has proven dead (`unavailable`) is dropped from the offered chain; one with no proof is labelled `unverified`. The `unverified` distinction is the doctrine — an unknown is not a failure. | `tests/learning/auto-router.test.ts` (+2) | **LANDED**, live-verified in `model explain` |
 | **D1 (Bundle 2c)** | `tool-loop.ts`: `lastContent` is replaced by a later answer when real work SUCCEEDED since the stored one (the same predicate as `hasProductiveAction`, so they cannot drift), not only when the new text is longer; the stamp is deferred to the next iteration so a step's own tool call cannot expose its answer to the next step's closing wrapper. | `tests/tools/tool-loop.test.ts` (+2, both proven to fail under the old length-only rule) | **LANDED**, field evidence `trace-1791300903944-upblb7` (seq 65 draft vs seq 80/82 corrections) |
 | **D3 (model half) / A5 / D2 (Bundle 2d)** | `reasoning-trace.ts` `endTrace`: the summary names the provider×model PAIR that served the most steps (previously only the provider was derived, beside a requested model), and a `decision` event records any mid-turn detour with per-pair step counts. | `tests/learning/reasoning-trace.test.ts` (+3) | **LANDED**, live-verified (the summary pair equals the run's step pair) |
+| **D5 (Bundle 2e)** | `cli/model.ts` explain: the "Ranked providers" header states the availability-first sort key and quota-parked rows are labelled — the order was already the routing precedence; only the display hid its key. | `tests/cli/model.test.ts` (+1) | **LANDED** |
 | **A6 / A2 / A5 / D3 / D4 (Bundle 1c)** | `chat.ts` `execute` honours `defaultProvider: "auto"`; the non-auto fallback installs the served pair on `session`; the pinned path consults `strictPinRefusal`; `preferredModelsFor` drops a "verified" row whose own error says the model does not exist; entitlement failures survive a listing and a prune. | `tests/cli/chat-answer-once-auto-parity.test.ts` (+2, the CLI entry), `tests/learning/model-registry.test.ts` (+2), `tests/learning/model-selection.test.ts` (+1) | **LANDED + live-verified**: routing rows 0→2–3 on `-t`; strict pin 402 bodies 1→0. See "Bundle 1c". |
 
 ## Non-goals
@@ -396,7 +412,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 
 1. **Bundle 1 — identity & routability** (A1–A4): the release blocker. Until a pinned/model choice
    is pre-flighted and named, every routing number in the product is unverifiable.
-2. **Bundle 2 — truthful reporting** (A5 residual, D5; **D1 landed in Bundle 2c, D3 in Bundle 2d**): make the system's account of itself true.
+2. **Bundle 2 — truthful reporting** (A5 residual; **D1/D3 landed in Bundles 2c/2d, D5 in 2e**): make the system's account of itself true.
 3. **Bundle 3 — capability by measurement** (B1–B4): the root cause.
 4. **Bundle 4 — context discipline** (C1, C3–C5): the 2.85× gap.
 5. **Bundle 5 — autonomy & inventory** (E1–E3, B5, D6).

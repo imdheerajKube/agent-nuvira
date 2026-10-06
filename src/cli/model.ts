@@ -998,9 +998,17 @@ export class ModelCommand extends BaseCommand {
     console.log('');
 
     logger.highlight('  ── Ranked providers ──');
+    // D5 — the list is ordered by AVAILABILITY FIRST (a cooling-down provider
+    // sinks, then a quota-parked one, and only then by score within each group),
+    // because that IS the routing precedence. But only `score` was printed, so a
+    // lower-scored healthy row sitting above a higher-scored cooling one read as
+    // an unsorted list (measured: 0.351, 0.465, 0.397, 0.396). The ranking was
+    // never wrong — the header was silent about the key. State it, so the display
+    // can never appear to contradict the numbers it prints.
+    console.log('   (ordered availability-first — cooling-down, then quota-parked, then score within each group)');
     decision.ranked.forEach((r, i) => {
       const mark = r.provider === decision.provider ? '✅' : '  ';
-      const cd = r.inCooldown ? '  (circuit-breaker cooldown)' : '';
+      const cd = r.inCooldown ? '  (circuit-breaker cooldown)' : r.quotaParked ? '  (quota-parked)' : '';
       const fit = r.capabilityFit !== undefined ? ` 🎯 fit ${Math.round(r.capabilityFit * 100)}%` : '';
       // M2.2/visibility: cost source on EVERY ranked row — 📏 measured (with
       // the real wire-token basis) or 📐 estimated (length-based default).
