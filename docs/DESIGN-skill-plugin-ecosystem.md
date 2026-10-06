@@ -164,9 +164,67 @@ Three viable models; **no decision taken**:
 | **Graphify** | Builds a **knowledge graph** of a repo (code + docs + PDFs) so the agent queries the graph instead of skimming files; claims large token savings | **Mixed** — the GitHub skill/tool exists and some material is free; the polished product/site is commercial. Verify current terms | Directly attacks nuvira's context cost; complements our vector store | Headline "71x/70x" numbers come from large repos and are disputed for small ones; adds an index + a dependency |
 | **RTK** | A CLI **proxy that compresses command output** before it reaches the model; Claude Code hook rewrites commands (`cat` → rtk …) | **Free / open source** | 60–90% token savings reported on noisy command output | **A reported issue states the hook *increased* costs by 18%** (#582) — i.e. the gain is workload-dependent; hook-based, so it needs porting; changes command semantics |
 | **UI/UX Pro Max** | A **design-intelligence** skill: searchable local guidance (styles, palettes, reasoning profiles) | **Free / open source** (`nextlevelbuilder/ui-ux-pro-max-skill`) | Genuinely improves UI output; pure content → imports cleanly with zero runtime risk | Benchmarks show it is **slow** (~18 min vs a lighter alternative); opinionated; token-heavy |
-| **"API Keys Git Repo"** | **Unidentified.** No specific artifact of this name was found — the search surfaces generic marketplace/API-key material ("bring your own key", "no API keys", key handling in plugins) | n/a | n/a | I did not invent a product. **Please name the exact repo/site** and I will assess it in §7.1 |
+| **"API Key Git Repo"** | Not a single product. It resolves to a **category**: API-key / secret handling skills distributed as git repos. See **§7.1** for the full assessment (three distinct capabilities, free-vs-paid, and a recommendation) | mixed — see §7.1 | Real overlap with what nuvira already does; see §7.2 | Scanners need their own binary (`ggshield`/`gitleaks`); interceptors need a hook API nuvira does not have |
 
-### 7.1 Why these were not "leveraged" in nuvira
+### 7.1 Assessment — "API Key Git Repo" (secret / API-key handling skills)
+
+**What it is.** The name matches a **category**, not one product. Three genuinely
+different capabilities ship under it, and conflating them is the main risk:
+
+| Capability | Representative artifacts | What it does |
+|---|---|---|
+| **A. Secret SCANNING** | `GitGuardian/agent-skills` (via `ggshield`); the Gitleaks-based *Secrets Detection* skill | Finds leaked API keys/tokens in code **and git history**, before they ship |
+| **B. Runtime INTERCEPTION** | `quinnjr/claude-plugin-keypass` (keys → OS password store); `sensitive-canary` (local pre-API interceptor); `maccydee/scrub-transcripts` | Stops key-shaped strings leaving the machine / reaching the model |
+| **C. Key PROVISIONING / management** | marketplace `secrets-management` skills; "bring your own key" plugins | Guides key creation, storage, rotation |
+
+**Free vs paid.**
+
+| Artifact | Verdict |
+|---|---|
+| `GitGuardian/agent-skills` | Skills are **open on GitHub**; `ggshield` is free for individuals, **paid for teams** (GitGuardian is a commercial platform) — verify current terms |
+| Gitleaks-based skills | **Free / open source** (Gitleaks is MIT) — fully local |
+| keypass · sensitive-canary · scrub-transcripts | **Free / open source** (community) |
+| `secrets-management` marketplace skills | **Free** |
+
+**What nuvira already has (this is the important part).** Secret handling is
+*not* a gap: `redact()` (G3 privacy) already strips secret-shaped content before
+anything reaches `history.json`; credentials live in a `0600` env file plus a
+vault/keyring path; the Skill Environment Variables page **refuses** to hand
+provider credentials to skills. So a scanner is a **complement**, not a missing
+capability — and capability **C** is largely already covered.
+
+**Pros.**
+- Directly useful for nuvira's own job: it *writes code and commits*. "Did I just
+  stage a key?" is a real, recurring failure mode in that loop.
+- Capability **A** is a **tool**, not a hook — it plugs into the existing tool
+  model without touching the orchestration seams (§5.2).
+- Local-first options exist (Gitleaks), so the default path needs no vendor and
+  no network.
+
+**Cons / risks.**
+- Scanning **git history** is slow on large repos; it must be opt-in or bounded.
+- Vendor-backed scanners (`ggshield`) send data to a third party — needs an
+  explicit capability declaration (§8) and must never be default-on.
+- Capability **B** (interception) depends on a hook contract nuvira lacks; §5.2
+  applies, and it is the same reason Ponytail/RTK are not directly installable.
+- Any scanner needs its **own binary** installed — which is exactly the
+  self-install path nuvira already handles, but its own failure mode.
+
+**Recommendation (for the later decision, not now).**
+1. Adopt capability **A** as an **on-demand tool** ("scan this repo / this staged
+   diff for secrets"), default **Gitleaks-local**, with a declared network
+   capability reserved for the vendor variant.
+2. Skip capability **B** until a hook API exists (model C, §6).
+3. Treat capability **C** as already covered by the existing env/vault surfaces;
+   only add what is missing (e.g. rotation guidance).
+4. Do **not** ship any of it default-on: a scanner that reads every file is a
+   privacy decision the user must make.
+
+> **Still open:** the exact artifact the reviewer meant. If it is a specific
+> repo, name it and this row is replaced with a product-level assessment. If it
+> is the *category* above, the recommendation stands as written.
+
+### 7.2 Why the other named plugins were not "leveraged" in nuvira
 
 Three distinct reasons — they are not the same kind of thing:
 
