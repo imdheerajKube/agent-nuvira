@@ -3683,6 +3683,47 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // POST /api/history/clear — delete stored conversations. Body:
+  //   { target: 'session', id }        — delete ONE session (the History tab
+  //     used to be read-only: only clear-all or an age band existed)
+  //   { target: 'older', olderThanMs } — time-based bulk sweep
+  //   { target: 'all' }                — clear everything
+  // Same gate as the continuity store: this is local memory, so an authenticated
+  // admin/operator may change it. Reads (/api/history) stay open as before.
+  if (pathname === '/api/history/clear' && req.method === 'POST') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot change conversation history.` });
+      return;
+    }
+    void (async () => {
+      const body = await readJsonBody(req);
+      const target = typeof body?.target === 'string' ? body.target : '';
+      const id = typeof body?.id === 'string' ? body.id : undefined;
+      const olderThanMs = typeof body?.olderThanMs === 'number' && body.olderThanMs > 0 ? body.olderThanMs : 0;
+      const { getChatHistory } = await import('../context/history.js');
+      const history = getChatHistory();
+      let removed = 0;
+      if (target === 'session' && id) {
+        if (await history.deleteSession(id)) removed = 1;
+      } else if (target === 'older' && olderThanMs > 0) {
+        removed = history.pruneOlderThan(olderThanMs);
+      } else if (target === 'all') {
+        removed = history.count();
+        history.clear();
+      } else {
+        writeJson(res, 400, { ok: false, error: "Expected { target: 'session', id } | { target: 'older', olderThanMs } | { target: 'all' }." });
+        return;
+      }
+      writeJson(res, 200, { ok: true, removed });
+    })();
+    return;
+  }
+
   if (pathname === '/api/benchmarks') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readBenchmarkData()));

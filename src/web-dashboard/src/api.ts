@@ -34,6 +34,7 @@ import type {
   SkillEnvVarRow,
   ProcessEnvVarRow,
   ContinuityData,
+  HistoryData,
   VerifyBacklogState,
   ResumeOutcome,
   TraceEntry,
@@ -2307,6 +2308,47 @@ export class DashboardAPI {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ target, ...(id ? { id } : {}), ...(olderThanMs ? { olderThanMs } : {}) }),
+      });
+      const data = (await res.json()) as { ok?: boolean; removed?: number; error?: string };
+      return { ok: data.ok === true, removed: data.removed, error: data.error };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * Re-read the conversation-history list after a delete. The History tab used
+   * to be prop-driven and read-only; a delete needs a fresh read so the counts
+   * reflect what is actually on disk (optimistic removal would lie on a refusal).
+   * Null when the server predates the endpoint.
+   */
+  async fetchHistory(): Promise<HistoryData | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/history`, { headers: { ...authHeaders() } });
+      return (await parseJsonOrNull(res)) as HistoryData | null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Delete stored conversations. `session` removes one by id, `older` removes
+   * everything older than `olderThanMs`, `all` clears the store. Returns how
+   * many records were removed.
+   */
+  async clearHistory(
+    target: 'session' | 'older' | 'all',
+    opts: { id?: string; olderThanMs?: number } = {},
+  ): Promise<{ ok: boolean; removed?: number; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/history/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          target,
+          ...(opts.id ? { id: opts.id } : {}),
+          ...(opts.olderThanMs ? { olderThanMs: opts.olderThanMs } : {}),
+        }),
       });
       const data = (await res.json()) as { ok?: boolean; removed?: number; error?: string };
       return { ok: data.ok === true, removed: data.removed, error: data.error };

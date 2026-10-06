@@ -55,6 +55,18 @@ to a real model id. This also closed the one failing test in the suite
 (the orchestrator auto-model test that only failed on a machine with a
 capability-mode/config that enabled verify-on-demand).
 
+### Added: the History tab can finally clean up (delete one, sweep by age, clear all)
+
+The History tab was read-only. The store grows on every chat session, and the
+only ways to shrink it were `clear()` (wipe everything) or `prune()` (drop a
+whole age band) — neither answers "remove these two, and everything from last
+month". `ChatHistory` gains `deleteSession(id)` and `pruneOlderThan(ms)`, a new
+`POST /api/history/clear` (gated like the continuity store) backs per-session,
+time-based and clear-all targets, and the page offers a per-row **Forget**, a
+**Forget older than a week** sweep, and a confirmed **Clear all history**. The
+list is re-read from the server after a delete, so a refusal (a viewer without
+`routing.operate`) is reported rather than hidden behind an optimistic removal.
+
 ### Changed: Agent Hub sits directly after Chat, Bedrock has ONE config surface, and the stores can be swept by age
 
 Three dashboard follow-ups. **Agent Hub** moved to the second slot in the rail

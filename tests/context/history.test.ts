@@ -444,6 +444,45 @@ describe('ChatHistory', () => {
     });
   });
 
+  // ── deleteSession / pruneOlderThan (History-tab cleanup) ───────────────
+
+  describe('deleteSession', () => {
+    it('removes ONE session and leaves the others', async () => {
+      const keep = storeTestSession(history, { content: 'keep me' });
+      const drop = storeTestSession(history, { content: 'drop me' });
+      expect(history.count()).toBe(2);
+
+      expect(await history.deleteSession(drop)).toBe(true);
+      expect(history.count()).toBe(1);
+      expect(history.getSession(drop)).toBeNull();
+      expect(history.getSession(keep)).not.toBeNull();
+    });
+
+    it('returns false for an unknown id (never claims a delete that did not happen)', async () => {
+      storeTestSession(history);
+      expect(await history.deleteSession('session-does-not-exist')).toBe(false);
+      expect(history.count()).toBe(1);
+    });
+  });
+
+  describe('pruneOlderThan', () => {
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+    it('removes only sessions older than the window', () => {
+      history.storeSession([userMsg('old', NOW - 30 * 24 * 60 * 60 * 1000), assistantMsg('r', NOW - 30 * 24 * 60 * 60 * 1000 + 1000)], 'groq', 'llama');
+      history.storeSession([userMsg('new', NOW), assistantMsg('r', NOW + 1000)], 'groq', 'llama');
+      expect(history.pruneOlderThan(WEEK_MS)).toBe(1);
+      expect(history.count()).toBe(1);
+    });
+
+    it('is a no-op when nothing is old enough (and for a non-positive window)', () => {
+      storeTestSession(history);
+      expect(history.pruneOlderThan(WEEK_MS)).toBe(0);
+      expect(history.pruneOlderThan(0)).toBe(0);
+      expect(history.count()).toBe(1);
+    });
+  });
+
   // ── formatSessionSummary ───────────────────────────────────────────────
 
   describe('formatSessionSummary', () => {

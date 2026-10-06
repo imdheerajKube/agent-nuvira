@@ -372,6 +372,52 @@ export class ChatHistory {
   }
 
   /**
+   * Delete ONE session by id.
+   *
+   * The History tab was read-only: `clear()` wiped every conversation and
+   * `prune()` dropped a whole age band, but there was no way to remove a single
+   * unwanted session — so cleaning up meant either nuking everything or
+   * hand-editing `history.json`. Returns false when the id is unknown (the
+   * caller reports that honestly instead of claiming a delete happened).
+   *
+   * The semantic-search entry is removed best-effort alongside the file entry,
+   * so a deleted conversation cannot still surface in recall.
+   */
+  async deleteSession(id: string): Promise<boolean> {
+    const data = readHistory();
+    if (!data.sessions[id]) return false;
+    delete data.sessions[id];
+    writeHistory(data);
+    try {
+      await getVectorStore().delete(id);
+    } catch {
+      // Best-effort — the JSON entry is gone either way; a leftover vector
+      // entry is stale, not resurrecting (every reader loads from history.json).
+    }
+    return true;
+  }
+
+  /**
+   * Delete every session older than `olderThanMs` (the BULK / time-based sweep).
+   *
+   * Same cut-off semantics as `prune()`, but expressed in milliseconds so the
+   * dashboard's "Forget older than a week" is exact rather than a day-rounded
+   * approximation. Returns the number removed.
+   */
+  pruneOlderThan(olderThanMs: number): number {
+    if (!(olderThanMs > 0)) return 0;
+    const cutoff = Date.now() - olderThanMs;
+    const data = readHistory();
+    const ids: string[] = [];
+    for (const [id, session] of Object.entries(data.sessions)) {
+      if (session.startedAt < cutoff) ids.push(id);
+    }
+    for (const id of ids) delete data.sessions[id];
+    if (ids.length > 0) writeHistory(data);
+    return ids.length;
+  }
+
+  /**
    * Delete sessions older than the specified retention period.
    */
   prune(retentionDays: number = DEFAULT_RETENTION_DAYS): number {
