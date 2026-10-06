@@ -2,7 +2,7 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## Unreleased — a selected model is always honored, automatic picks weigh real evidence, a pinned run honors the admin budget, a stuck weak model gets a smaller ask, a chat turn that only *describes* work no longer demands a folder, secrets are scanned across git history, and hooks are a declarative no-code contract
+## v3.3.13 — a selected model is always honored, automatic picks weigh real evidence, a pinned run honors the admin budget, a stuck weak model gets a smaller ask, chat reads the frame of a request, secrets are scanned across git history, and hooks are a declarative no-code contract
 
 > Follow-ups from the OmniRoute interop work: the gateway joined the provider
 > catalog but nothing could tell you whether it was up or take it down, the
