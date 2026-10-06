@@ -3738,7 +3738,9 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       writeJson(res, 200, {
         ok: true,
         file: m.hookDeclarationsFile(),
-        hooks: m.getHookDeclarations(),
+        // Built-in starter hooks (disabled) are merged in for DISPLAY; the
+        // runtime still evaluates only the in-force user set.
+        hooks: m.listHookDeclarations(),
         events: m.HOOK_EVENTS,
         eventDescriptions: m.HOOK_EVENT_DESCRIPTIONS,
         actionKinds: m.HOOK_ACTION_KINDS,

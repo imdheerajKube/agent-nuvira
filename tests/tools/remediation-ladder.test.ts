@@ -98,7 +98,10 @@ describe('remediation auto-apply (A4, opt-in)', () => {
     expect(remediationAutoApplyEnabled({ NUVIRA_REMEDIATE: 'AUTO' })).toBe(true);
   });
 
-  it('chmods the wrapper in place when gradlew is found (idempotently)', () => {
+  // POSIX-only: the assertion reads the file's execute bits, which do not exist
+  // on Windows (and `applyRemediationAutoFixes` reports chmod-exec as not
+  // applicable there — see the win32 branch in src/tools/remediation-ladder.ts).
+  it.skipIf(process.platform === 'win32')('chmods the wrapper in place when gradlew is found (idempotently)', () => {
     const cwd = makeTree();
     mkdirSync(join(cwd, 'android'));
     const gradlew = join(cwd, 'android/gradlew');

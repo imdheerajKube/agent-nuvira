@@ -41,6 +41,10 @@ import { logger } from '../utils/logger.js';
 import { scanText } from '../security/secret-scan.js';
 import type { HookDecision, HookEvent } from './hooks.js';
 
+// Re-exported so callers (the CLI, the dashboard types mirror) can name a seam
+// without reaching into the registry module.
+export type { HookEvent };
+
 // ─── The allow-list ─────────────────────────────────────────────────────────
 
 /** The four lifecycle seams, in the order the runtime fires them. */
@@ -109,6 +113,100 @@ export interface HookDeclaration {
   source?: 'user' | 'builtin';
   /** Epoch ms, best-effort metadata. */
   updatedAt?: number;
+}
+
+// ─── Built-in starter hooks ─────────────────────────────────────────────────
+
+/**
+ * The STARTER set. These ship DISABLED — nothing changes until an operator
+ * turns one on. They exist so the Hooks page and `nuvira hooks` open on working
+ * examples instead of an empty form, and they cover the two asks that motivated
+ * the feature: stop a destructive `rm -rf`, and catch a secret at the moment it
+ * would be written or run.
+ *
+ * A built-in is a DEFAULT, not a `hooks.json` entry: it is merged into what the
+ * dashboard and CLI DISPLAY (see {@link listHookDeclarations}) but is only
+ * written to disk once an operator edits or enables it. That keeps a shipped
+ * default correctable in a later release without a stale copy shadowing it. Ids
+ * are namespaced (`builtin-…`) so a user hook can override one deliberately.
+ */
+export const BUILTIN_HOOK_DECLARATIONS: HookDeclaration[] = [
+  {
+    id: 'builtin-block-rm-rf',
+    label: 'Block `rm -rf`',
+    event: 'before_tool_call',
+    enabled: false,
+    source: 'builtin',
+    when: { tool: 'run_terminal', argsMatch: { command: '*rm -rf*' } },
+    action: {
+      kind: 'deny',
+      reason: 'Recursive force delete is refused by the built-in "builtin-block-rm-rf" hook. Delete specific paths instead, or disable the hook to allow this.',
+    },
+  },
+  {
+    id: 'builtin-scan-writes-for-secrets',
+    label: 'Block writes that contain a secret',
+    event: 'before_tool_call',
+    enabled: false,
+    source: 'builtin',
+    when: { tool: 'write_file' },
+    action: {
+      kind: 'scan-args',
+      denyOnHit: true,
+      reason: 'A secret-shaped value is in the content about to be written — refusing to write it to disk. Values are masked in the report.',
+    },
+  },
+  {
+    id: 'builtin-scan-terminal-args-for-secrets',
+    label: 'Flag secrets in terminal commands',
+    event: 'before_tool_call',
+    enabled: false,
+    source: 'builtin',
+    when: { tool: 'run_terminal' },
+    action: { kind: 'scan-args', denyOnHit: false },
+  },
+  {
+    id: 'builtin-notify-tool-failures',
+    label: 'Log every failed tool call',
+    event: 'failed_tool_call',
+    enabled: false,
+    source: 'builtin',
+    action: { kind: 'notify', message: '{tool} failed — see the tool result for details.' },
+  },
+];
+
+/** A deep copy of a declaration, so a caller cannot mutate the shipped default. */
+function cloneDeclaration(hook: HookDeclaration): HookDeclaration {
+  return {
+    ...hook,
+    when: hook.when
+      ? { ...hook.when, argsMatch: hook.when.argsMatch ? { ...hook.when.argsMatch } : undefined }
+      : undefined,
+    action: { ...hook.action },
+  };
+}
+
+/** The built-in starter set, cloned (safe to hand to a caller or editor). */
+export function builtinHookDeclarations(): HookDeclaration[] {
+  return BUILTIN_HOOK_DECLARATIONS.map(cloneDeclaration);
+}
+
+/** One built-in by id, cloned, or undefined. */
+export function builtinHookById(id: string): HookDeclaration | undefined {
+  const found = BUILTIN_HOOK_DECLARATIONS.find((h) => h.id === id);
+  return found ? cloneDeclaration(found) : undefined;
+}
+
+/**
+ * Merge the shipped built-ins with a set of user declarations. A user entry with
+ * the same id WINS, so an operator can override a built-in deliberately.
+ * Built-ins come first (they are the defaults) and, being disabled by default,
+ * simply never fire.
+ */
+export function mergeHookDeclarations(user: HookDeclaration[]): HookDeclaration[] {
+  const overridden = new Set(user.map((h) => h.id));
+  const builtins = builtinHookDeclarations().filter((h) => !overridden.has(h.id));
+  return [...builtins, ...user];
 }
 
 // ─── Validation ─────────────────────────────────────────────────────────────
@@ -355,6 +453,16 @@ export function getHookDeclarations(): HookDeclaration[] {
     loadedOnce = true;
   }
   return declarations;
+}
+
+/**
+ * The list to DISPLAY (dashboard + CLI): the built-in starter set merged with
+ * the in-force user declarations. The runtime evaluates only
+ * {@link getHookDeclarations}; built-ins reach it once an operator enables one
+ * (which persists it, so it then appears in the user set too).
+ */
+export function listHookDeclarations(): HookDeclaration[] {
+  return mergeHookDeclarations(getHookDeclarations());
 }
 
 /**

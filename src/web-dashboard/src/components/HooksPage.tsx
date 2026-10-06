@@ -274,6 +274,7 @@ export default function HooksPage() {
                 <div className="env-var-row-header">
                   <span className="env-var-name">
                     {EVENT_ICON[hook.event]} <code>{hook.id}</code> — {hook.label}
+                    {hook.source === 'builtin' ? <span className="hub-chip">builtin</span> : null}
                   </span>
                   <span className="env-var-status">{hook.event}</span>
                 </div>
@@ -287,13 +288,21 @@ export default function HooksPage() {
                     >
                       {hook.enabled ? '✅ Enabled' : '⭕ Disabled'}
                     </button>
-                    <button
-                      className="admin-mini-btn admin-mini-btn-danger"
-                      type="button"
-                      onClick={() => setHooks((prev) => prev.filter((h) => h.id !== hook.id))}
-                    >
-                      🗑️ Remove
-                    </button>
+                    {hook.source === 'builtin' ? (
+                      // A built-in is a code-owned DEFAULT, not a file entry: it is
+                      // merged back in on every load, so "Remove" would look like it
+                      // worked and then undo itself. Offer the honest lever instead —
+                      // disabling it — and say why there is no delete.
+                      <span className="admin-hint">Built-in default — disable it to switch it off; it cannot be deleted.</span>
+                    ) : (
+                      <button
+                        className="admin-mini-btn admin-mini-btn-danger"
+                        type="button"
+                        onClick={() => setHooks((prev) => prev.filter((h) => h.id !== hook.id))}
+                      >
+                        🗑️ Remove
+                      </button>
+                    )}
                   </div>
                 ) : null}
               </div>

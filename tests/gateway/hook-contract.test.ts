@@ -25,6 +25,10 @@ import {
   installDeclaredHooks,
   resetDeclaredHooksInstall,
   hookDeclarationsFile,
+  builtinHookDeclarations,
+  builtinHookById,
+  listHookDeclarations,
+  mergeHookDeclarations,
   type HookDeclaration,
   type HookRegistrar,
 } from '../../src/gateway/hook-contract.js';
@@ -212,5 +216,65 @@ describe('runtime installation', () => {
     setHookDeclarations([{ id: 'late', label: 'Late', event: 'before_tool_call', enabled: true, action: { kind: 'deny', reason: 'now' } }]);
     const decision = before.handler({ tool: 'run_terminal' }) as { deny?: boolean } | undefined;
     expect(decision?.deny).toBe(true);
+  });
+});
+
+describe('built-in starter hooks', () => {
+  it('ship DISABLED, are listed for display, and do not fire until enabled', () => {
+    const builtins = builtinHookDeclarations();
+    expect(builtins.length).toBeGreaterThan(0);
+    expect(builtins.every((h) => h.enabled === false)).toBe(true);
+    expect(builtins.every((h) => h.source === 'builtin')).toBe(true);
+
+    // Listed for the dashboard + CLI even though the runtime set is empty.
+    expect(listHookDeclarations().map((h) => h.id).sort()).toEqual(builtins.map((h) => h.id).sort());
+
+    // None fire: a disabled built-in never vetoes.
+    expect(
+      evaluateDeclarations(listHookDeclarations(), 'before_tool_call', {
+        tool: 'run_terminal',
+        args: { command: 'rm -rf /' },
+      }),
+    ).toBeNull();
+  });
+
+  it('block-rm-rf vetoes a destructive command only once enabled', () => {
+    const hook = builtinHookById('builtin-block-rm-rf')!;
+    const ctx = { tool: 'run_terminal', args: { command: 'sudo rm -rf /tmp/x' } };
+    expect(applyHookDeclaration(hook, ctx)).toBeNull(); // disabled
+    const on = { ...hook, enabled: true };
+    expect(applyHookDeclaration(on, ctx)?.deny).toBe(true);
+    // A different command is untouched.
+    expect(applyHookDeclaration(on, { tool: 'run_terminal', args: { command: 'ls -la' } })).toBeNull();
+  });
+
+  it('scan-writes-for-secrets denies a write carrying a key shape, not a clean one', () => {
+    const hook = { ...builtinHookById('builtin-scan-writes-for-secrets')!, enabled: true };
+    const hit = applyHookDeclaration(hook, { tool: 'write_file', args: { path: 'a.txt', content: `key=${FAKE_TOKEN}` } });
+    expect(hit?.deny).toBe(true);
+    expect(applyHookDeclaration(hook, { tool: 'write_file', args: { path: 'a.txt', content: 'hello world' } })).toBeNull();
+  });
+
+  it('a user hook with the same id overrides the built-in default', () => {
+    const user: HookDeclaration = {
+      id: 'builtin-block-rm-rf', label: 'mine', event: 'before_tool_call', enabled: true,
+      action: { kind: 'notify', message: 'x' },
+    };
+    const merged = mergeHookDeclarations([user]);
+    const mine = merged.filter((h) => h.id === 'builtin-block-rm-rf');
+    expect(mine).toHaveLength(1);
+    expect(mine[0].label).toBe('mine');
+  });
+
+  it('enabling a built-in persists it, shows it on, and makes the runtime fire it', () => {
+    const saved = setHookDeclarations([{ ...builtinHookById('builtin-block-rm-rf')!, enabled: true }]);
+    expect(saved.ok).toBe(true);
+    expect(listHookDeclarations().find((h) => h.id === 'builtin-block-rm-rf')?.enabled).toBe(true);
+    expect(
+      evaluateDeclarations(getHookDeclarations(), 'before_tool_call', {
+        tool: 'run_terminal',
+        args: { command: 'rm -rf /' },
+      })?.deny,
+    ).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 # Hooks — the declarative lifecycle contract
 
-**Status:** implemented · dashboard surface at `/hooks` · runtime in `src/gateway/hook-contract.ts`
+**Status:** implemented · dashboard surface at `/hooks` · CLI surface at `nuvira hooks` · runtime in `src/gateway/hook-contract.ts`
 **Decision recorded in:** `docs/DESIGN-skill-plugin-ecosystem.md` §5.2 / §6 (model C — a bounded, native hook contract)
 
 This document answers three questions: **what is a hook here**, **how does it
@@ -135,6 +135,30 @@ readable summary, shows the four seams and the three actions, and lets an
 admin/operator add, enable/disable, remove and Save. Nothing is in force until
 **Save hooks** is pressed — the form builds a draft.
 
+Built-in starter hooks are shown with a `builtin` chip and cannot be deleted
+(they are code-owned defaults); disable one to switch it off.
+
+### CLI
+
+`nuvira hooks` is the same contract and the same `hooks.json`, from the terminal:
+
+```bash
+nuvira hooks list                       # built-in + user hooks, with state
+nuvira hooks add --id no-force-push --label "No force push" \
+  --event before_tool_call --action deny \
+  --tool run_terminal --arg "command=*git push --force*" --reason "no force push"
+nuvira hooks enable builtin-block-rm-rf # turn a built-in ON (persists it)
+nuvira hooks disable builtin-block-rm-rf
+nuvira hooks remove no-force-push        # remove a user hook
+```
+
+`add` flags mirror the dashboard form (`--event`, `--action`, `--tool`,
+`--surface`, `--cwd`, repeatable `--arg key=glob`, `--reason`, `--message`,
+`--deny-on-hit`, `--disabled`). A hook is enabled on add unless `--disabled` is
+given, matching the dashboard. `enable`/`disable` work on a built-in by
+materializing it into the file, which is how the runtime (which follows the user
+set) starts enforcing it.
+
 ### File
 
 Edit `<config-dir>/hooks.json` directly:
@@ -158,13 +182,22 @@ Edit `<config-dir>/hooks.json` directly:
 The runtime picks it up on the next process start (or the next dashboard save,
 which reloads in memory).
 
-### Recommended starter hooks
+### Built-in starter hooks
+
+These ship with nuvira, **DISABLED** — nothing changes until an operator enables
+one (dashboard toggle → Save, or `nuvira hooks enable <id>`). They are code-owned
+defaults merged into what the dashboard/CLI DISPLAY; enabling one writes it into
+`hooks.json`.
 
 | id | event | when | action | why |
 |---|---|---|---|---|
-| `block-rm-rf` | `before_tool_call` | `tool: run_terminal`, `argsMatch: {command: "rm -rf*"}` | `deny` | deletes a tree irreversibly |
-| `scan-writes` | `before_tool_call` | `tool: write_file\|edit_file` | `scan-args` `denyOnHit` | stops a key being written into source |
-| `notify-session-end` | `on_session_end` | — | `notify` "{event}: pipeline finished" | a cheap audit line |
+| `builtin-block-rm-rf` | `before_tool_call` | `tool: run_terminal`, `argsMatch: {command: "*rm -rf*"}` | `deny` | deletes a tree irreversibly |
+| `builtin-scan-writes-for-secrets` | `before_tool_call` | `tool: write_file` | `scan-args` `denyOnHit` | stops a key being written into source |
+| `builtin-scan-terminal-args-for-secrets` | `before_tool_call` | `tool: run_terminal` | `scan-args` | flags a key pasted into a command |
+| `builtin-notify-tool-failures` | `failed_tool_call` | — | `notify` | one audit line per failure |
+
+A user declaration with the same id overrides a built-in (so you can widen
+`builtin-block-rm-rf` to also match `edit_file`, or relax its matcher).
 
 ---
 

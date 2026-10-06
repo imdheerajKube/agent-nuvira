@@ -1353,6 +1353,29 @@ nuvira models excluded         # show what routing is skipping, and WHY
   and the same scenario list back the parity test suite, so the CLI verdict and CI
   cannot disagree.
 
+### 12.14 Hooks (declarative lifecycle rules, no-code)
+
+- **Objective:** Attach a rule to nuvira's own lifecycle seams — `before_tool_call`,
+  `after_tool_call`, `failed_tool_call`, `on_session_end` — without running any
+  third-party code. A hook is DATA, not code: its only possible actions are `deny`
+  (stop a call), `notify` (log a line) and `scan-args` (run the local secret scanner
+  over a call's arguments/result, optionally denying on a hit). Same contract, same
+  `<config-dir>/hooks.json`, as the dashboard's **Agent Management → Hooks** page.
+- **Command:** `nuvira hooks list` · `nuvira hooks add --id … --label … --event … --action …` · `nuvira hooks remove <id>` · `nuvira hooks enable <id>` · `nuvira hooks disable <id>`
+- **Examples:**
+  ```bash
+  nuvira hooks list                        # built-in + user hooks, with state
+  nuvira hooks enable builtin-block-rm-rf  # turn a built-in ON (persists it)
+  nuvira hooks add --id no-force-push --label "No force push" \
+    --event before_tool_call --action deny \
+    --tool run_terminal --arg "command=*git push --force*" --reason "no force push"
+  nuvira hooks disable no-force-push
+  nuvira hooks remove no-force-push        # remove a user hook
+  ```
+- **Starter set:** four built-in hooks ship **DISABLED** (block `rm -rf`, block writes
+  that contain a secret, flag secrets in terminal commands, log failed tool calls).
+  `enable` writes one into `hooks.json` so the runtime enforces it. See `docs/HOOKS.md`.
+
 ---
 
 ## 13. Cache & sandbox

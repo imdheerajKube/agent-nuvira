@@ -2910,7 +2910,7 @@ export default function ChatPage() {
                 disabled={busy || attachments.length >= 10}
                 onClick={() => fileInputRef.current?.click()}
               >
-                📎
+                📎 attach
               </button>
               <button
                 type="button"
@@ -2919,7 +2919,7 @@ export default function ChatPage() {
                 title="Download a support bundle for this chat: the session debug log (which backend served each turn) plus the conversation. Needs NUVIRA_DEBUG_LOG=1 in the dashboard process."
                 onClick={() => void downloadSupportBundle()}
               >
-                🐞
+                🐞 debug
               </button>
               {/*
                 WS5 (#27) — isolation, as a toggle beside the other composer
@@ -2990,8 +2990,6 @@ export default function ChatPage() {
                   📌{keepWorktree ? ' keep' : ' drop'}
                 </button>
               ) : null}
-            </div>
-            <div className="chat-controls">
               {/*
                 Model picker — Auto by default, or an explicit pin chosen from
                 the ROUTABLE models only (provider + model + capability), so the

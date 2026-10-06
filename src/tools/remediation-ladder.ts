@@ -297,6 +297,14 @@ export function applyRemediationAutoFixes(r: Remediation): AutoApplyResult {
   for (const action of r.autoFix ?? []) {
     try {
       if (action.kind === 'chmod-exec') {
+        // Windows has no POSIX execute bit — `chmod` there can only toggle the
+        // read-only attribute. Running it would report a fix that did not happen
+        // (and could never become idempotent), so say plainly that it does not
+        // apply instead of claiming success.
+        if (process.platform === 'win32') {
+          skipped.push(`chmod +x ${action.path} (not applicable on Windows — no POSIX execute bit)`);
+          continue;
+        }
         if (!existsSync(action.path)) {
           skipped.push(`chmod +x ${action.path} (file not found)`);
           continue;

@@ -2,6 +2,60 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, and the Windows CI failure is fixed
+
+### Fixed: the Windows CI run (a POSIX-only assertion in the remediation-ladder test)
+
+The v3.3.13 tag published to npm from the local pipeline, but its GitHub Actions
+run **failed on both windows-latest jobs** — one test,
+`tests/tools/remediation-ladder.test.ts › chmods the wrapper in place`,
+asserted `statSync(gradlew).mode & 0o111`, the POSIX execute bit, which does not
+exist on Windows. So `chmod +x` there can neither set the bit nor ever read back
+as "already executable", and the test's idempotency half could not pass either.
+Two changes: the POSIX-specific case is now `it.skipIf(process.platform ===
+'win32')` (the property it asserts is POSIX-only), and `applyRemediationAutoFixes`
+reports a `chmod-exec` fix on Windows as **not applicable** rather than claiming
+a success that did not happen. Linux/macOS behavior is unchanged.
+
+### Added: built-in starter hooks, and a `nuvira hooks` CLI
+
+The declarative hook contract shipped with an editor and an empty file — an
+operator met a schema to learn, not an example to use. nuvira now ships a
+**starter set** of four hooks, **all DISABLED** so nothing changes until one is
+turned on: `builtin-block-rm-rf` (deny a `rm -rf` terminal command),
+`builtin-scan-writes-for-secrets` (`scan-args` + deny on a `write_file` carrying
+a key shape), `builtin-scan-terminal-args-for-secrets`, and
+`builtin-notify-tool-failures`. They are code-owned **defaults**: merged into what
+the dashboard and CLI DISPLAY, and written to `hooks.json` only once edited or
+enabled — so a future release can correct a default without a stale copy
+shadowing it. A user hook with the same id overrides a built-in. New CLI,
+`nuvira hooks list|add|remove|enable|disable`, is the same contract and the same
+file as the dashboard page (`src/cli/hooks.ts`), with `add` flags mirroring the
+form; `enable` on a built-in materializes it so the runtime starts enforcing it.
+The dashboard marks built-ins with a `builtin` chip and an honest "disable it,
+it cannot be deleted" note where Remove would otherwise appear (and undo itself
+on reload). Pinned by `tests/gateway/hook-contract.test.ts` (5 new tests) and
+`tests/web-dashboard/hooks-api.test.ts`.
+
+### Changed: the chat composer's controls share one row, with labels on every control
+
+The composer split its controls across **two** rows above the text box, and the
+attach (📎) and debug (🐞) buttons were icons only while isolate / resume / model /
+capability carried text. All of them — 📎 attach, 🐞 debug, 🌿 isolate (and its
+keep/drop lever), ↩️ resume (with its checkpoint input), the model picker, strict
+pin and ⚡ max — now sit on **one** row directly above the input, each labelled, so
+the text box keeps its own full-width line and the controls read at a glance.
+
+### Changed: the Model Timeline tiles sit in one row with the summary beneath them
+
+`ModelTimeline` wrapped its body in `.admin-header`, which is a flex **row** (a
+title + actions bar). Used as a page container it laid the metric tiles and the
+"Proven dead / Proof expired / Parked / Never verified" summary out side by side
+and squeezed the tile grid into a single column. The page now uses a plain
+fragment (like Overview), so the tiles fill the width on one row and the summary
+sits beneath them at its existing text size — the same four-tone `metric-tile`
+treatment Overview's top band uses.
+
 ## v3.3.13 — a selected model is always honored, automatic picks weigh real evidence, a pinned run honors the admin budget, a stuck weak model gets a smaller ask, chat reads the frame of a request, secrets are scanned across git history, and hooks are a declarative no-code contract
 
 > Follow-ups from the OmniRoute interop work: the gateway joined the provider

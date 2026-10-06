@@ -70,6 +70,7 @@ import { CredentialsCommand } from './credentials.js';
 import { PhaseCommand } from './phase.js';
 import { RetrievalCommand } from './retrieval.js';
 import { KnowledgeCommand } from './knowledge.js';
+import { HooksCommand } from './hooks.js';
 import { TraceCommand } from './trace.js';
 import { ContinuityCommand } from './continuity.js';
 import { WebsiteCommand } from './website.js';
@@ -291,6 +292,10 @@ export function createCLI(): Command {
   // Register Knowledge command (tag-scoped retrieval over the user's own documents)
   const knowledgeCmd = new KnowledgeCommand();
   program.addCommand(knowledgeCmd.create());
+
+  // Register Hooks command (declarative lifecycle hooks — the same hooks.json
+  // the dashboard Hooks page edits; a hook is data, never code)
+  program.addCommand(new HooksCommand().create());
 
   // Register Trace command (P0 reasoning-trace capture + replay)
   const traceCmd = new TraceCommand();

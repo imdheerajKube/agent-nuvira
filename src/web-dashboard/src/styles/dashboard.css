@@ -3836,9 +3836,10 @@ body {
   word-break: break-word;
 }
 
-/* The composer's controls sit on two compact rows ABOVE the text row, so the
+/* The composer's controls sit on ONE compact row ABOVE the text row, so the
    input keeps the full width instead of sharing one line with the icon buttons
-   (attachment / debug / isolate / resume, then model / capability mode). */
+   (attachment / debug / isolate / resume, model / capability mode and the rest).
+   The row wraps only when the viewport is too narrow to hold them all. */
 .chat-controls {
   display: flex;
   flex-wrap: wrap;
@@ -4895,9 +4896,10 @@ body {
   word-break: break-word;
 }
 
-/* The composer's controls sit on two compact rows ABOVE the text row, so the
+/* The composer's controls sit on ONE compact row ABOVE the text row, so the
    input keeps the full width instead of sharing one line with the icon buttons
-   (attachment / debug / isolate / resume, then model / capability mode). */
+   (attachment / debug / isolate / resume, model / capability mode and the rest).
+   The row wraps only when the viewport is too narrow to hold them all. */
 .chat-controls {
   display: flex;
   flex-wrap: wrap;

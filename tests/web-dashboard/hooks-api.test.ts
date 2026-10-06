@@ -87,7 +87,13 @@ describe('/api/hooks', () => {
       eventDescriptions: Record<string, string>;
     };
     expect(d.ok).toBe(true);
-    expect(d.hooks).toEqual([]);
+    // No USER hooks yet. The built-in starter set is merged in for display, so
+    // the read is not empty — but every built-in ships DISABLED.
+    const hooks = d.hooks as Array<{ source?: string; enabled: boolean }>;
+    expect(hooks.filter((h) => h.source !== 'builtin')).toEqual([]);
+    const builtins = hooks.filter((h) => h.source === 'builtin');
+    expect(builtins.length).toBeGreaterThan(0);
+    expect(builtins.every((h) => h.enabled === false)).toBe(true);
     expect(d.events).toEqual(['before_tool_call', 'after_tool_call', 'failed_tool_call', 'on_session_end']);
     expect(d.actionKinds).toEqual(['deny', 'notify', 'scan-args']);
     expect(d.eventDescriptions.before_tool_call).toMatch(/DENY/);
@@ -122,9 +128,13 @@ describe('/api/hooks', () => {
     const onDisk = JSON.parse(readFileSync(hooksFile, 'utf-8')) as { hooks: Array<{ id: string }> };
     expect(onDisk.hooks.map((h) => h.id)).toEqual(['block-rm-rf']);
 
-    // Round-trips through GET.
-    const listed = (await (await fetch(`${baseUrl}/api/hooks`)).json()) as { hooks: Array<{ id: string }> };
-    expect(listed.hooks.map((h) => h.id)).toEqual(['block-rm-rf']);
+    // Round-trips through GET. The saved USER hook is listed; the built-in
+    // starter set is merged in alongside it for display.
+    const listed = (await (await fetch(`${baseUrl}/api/hooks`)).json()) as {
+      hooks: Array<{ id: string; source?: string }>;
+    };
+    expect(listed.hooks.filter((h) => h.source !== 'builtin').map((h) => h.id)).toEqual(['block-rm-rf']);
+    expect(listed.hooks.some((h) => h.source === 'builtin')).toBe(true);
 
     // LIVE: the shared registry the tool loop uses vetoes the matching call and
     // leaves a non-matching one untouched.

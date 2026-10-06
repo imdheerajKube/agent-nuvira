@@ -2,8 +2,8 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 273,
-  "groupCount": 54,
+  "commandCount": 278,
+  "groupCount": 55,
   "groups": [
     {
       "name": "admin",
@@ -2041,6 +2041,50 @@
         {
           "name": "knowledge forget",
           "description": "Remove a tag's vectors and manifest entry",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "hooks",
+      "description": "Declarative lifecycle hooks — list/add/remove the rules that deny, notify or secret-scan tool calls (the same hooks.json the dashboard Hooks page edits; a hook is data, never code)",
+      "commands": [
+        {
+          "name": "hooks list",
+          "description": "List built-in and user hooks with their seam, action and state",
+          "flags": []
+        },
+        {
+          "name": "hooks add",
+          "description": "Declare a new hook (it is enabled unless --disabled is given)",
+          "flags": [
+            "--action <action>",
+            "--arg <arg>",
+            "--cwd <cwd>",
+            "--deny-on-hit",
+            "--disabled",
+            "--event <event>",
+            "--id <id>",
+            "--label <label>",
+            "--message <message>",
+            "--reason <reason>",
+            "--surface <surface>",
+            "--tool <tool>"
+          ]
+        },
+        {
+          "name": "hooks remove",
+          "description": "Remove a user hook (a built-in cannot be deleted — disable it instead)",
+          "flags": []
+        },
+        {
+          "name": "hooks enable",
+          "description": "Turn a hook on (works on a built-in too)",
+          "flags": []
+        },
+        {
+          "name": "hooks disable",
+          "description": "Turn a hook off",
           "flags": []
         }
       ]

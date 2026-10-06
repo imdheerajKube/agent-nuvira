@@ -1426,6 +1426,32 @@ Show details for one knowledge tag
 
 Remove a tag's vectors and manifest entry
 
+### `nuvira hooks`
+
+Declarative lifecycle hooks — list/add/remove the rules that deny, notify or secret-scan tool calls (the same hooks.json the dashboard Hooks page edits; a hook is data, never code)
+
+   - flags: `--verbose`
+### `nuvira hooks list`
+
+List built-in and user hooks with their seam, action and state
+
+### `nuvira hooks add`
+
+Declare a new hook (it is enabled unless --disabled is given)
+
+   - flags: `--action <action>, --arg <arg>, --cwd <cwd>, --deny-on-hit, --disabled, --event <event>, --id <id>, --label <label>, --message <message>, --reason <reason>, --surface <surface>, --tool <tool>`
+### `nuvira hooks remove`
+
+Remove a user hook (a built-in cannot be deleted — disable it instead)
+
+### `nuvira hooks enable`
+
+Turn a hook on (works on a built-in too)
+
+### `nuvira hooks disable`
+
+Turn a hook off
+
 ### `nuvira trace`
 
 Inspect and replay per-step reasoning traces (every LLM call in a pipeline)
@@ -1468,4 +1494,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*472 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*480 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

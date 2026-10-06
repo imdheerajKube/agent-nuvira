@@ -356,9 +356,14 @@ export default function ModelTimeline() {
     cursor: 'pointer',
   });
 
+  // NB. This page wraps its body in a plain fragment, not `.admin-header`:
+  // that class is a flex ROW (title + actions), so using it as the page
+  // container laid the tiles and the not-routable summary out side by side and
+  // squeezed the tile grid into one column. As a normal block flow the tiles
+  // fill the width (one row) and the summary sits beneath them, like Overview.
   return (
-    <div className="admin-header">
-        <PageHeader icon="📅" title="Model Discovery Timeline" />
+    <>
+      <PageHeader icon="📅" title="Model Discovery Timeline" />
       <p className="section-description">
         The registry&apos;s age profile: when each tracked model was last probed, last <em>verified</em>, and last
         used — and which ones routing can actually reach. The Models page answers &ldquo;is it usable right now&rdquo;;
@@ -667,6 +672,6 @@ export default function ModelTimeline() {
             : 'No models match the current filter'}
         </div>
       )}
-    </div>
+    </>
   );
 }
