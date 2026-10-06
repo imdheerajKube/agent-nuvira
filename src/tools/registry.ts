@@ -2315,6 +2315,40 @@ registerTool({
   }),
 });
 
+// Secret scan tool — LOCAL, dependency-free, on-demand.
+//
+// `security_score`/`ast_audit` scan ONE named file and report a score. This is
+// the other question an agent that writes and commits code actually has to
+// answer before it commits: "is anything secret-shaped anywhere in here?". It
+// walks the tree with bounded coverage, needs no `gitleaks`/`ggshield` binary
+// and no network, and reports masked values only — see src/security/secret-scan.ts.
+registerTool({
+  name: 'secret_scan',
+  description:
+    'Scan the workspace for secret-shaped strings (API keys, tokens, private keys, credentials in URLs) before committing or publishing. Fully local — no network and no external scanner binary — and every reported value is masked. Returns findings with path:line and severity, plus a summary. A clean result means "nothing matched a known shape", NOT "no secrets": report it as a lint, never as a guarantee.',
+  category: 'workflow',
+  inputSchema: z.object({
+    path: z.string().optional().describe('Directory to scan (relative to the workspace, or absolute). Default: the workspace root.'),
+    subdir: z.string().optional().describe('Narrow the scan to one subtree, e.g. "src" or "docs".'),
+    maxFiles: z.number().optional().describe('Cap on files visited (default 5000) — a huge repo does not hang the turn.'),
+  }),
+  endsAgentStep: false,
+  run: async (args, ctx) => {
+    const { join } = await import('node:path');
+    const m = await import('../security/secret-scan.js');
+    const { path: target, subdir, maxFiles } = args as { path?: string; subdir?: string; maxFiles?: number };
+    const cwd = ctx?.cwd ?? process.cwd();
+    const root = target
+      ? (target.startsWith('/') || /^[A-Za-z]:[\\/]/.test(target) ? target : join(cwd, target))
+      : cwd;
+    const result = m.scanDirectory(root, {
+      ...(subdir ? { subdir } : {}),
+      ...(maxFiles ? { maxFiles } : {}),
+    });
+    return m.formatSecretScan(result);
+  },
+});
+
 // ─── Batch 5: Infrastructure ──────────────────────────────────────────────
 
 // Tool search tool — the tiered-exposure discovery surface. Two actions:

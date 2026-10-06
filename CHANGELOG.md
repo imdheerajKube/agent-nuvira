@@ -55,6 +55,20 @@ to a real model id. This also closed the one failing test in the suite
 (the orchestrator auto-model test that only failed on a machine with a
 capability-mode/config that enabled verify-on-demand).
 
+### Added: a local secret scan (`secret_scan`) — no binary, no network
+
+Nuvira writes code and commits it, and nothing ever LOOKED for a key in those
+files: `redact()` scrubs secrets out of logs and history, but it never reports
+anything. `src/security/secret-scan.ts` is the detector to that scrubber's
+masker — it reuses the same `KNOWN_KEY_PREFIXES` table and the same masking
+primitives, so what we detect can never drift from what we redact. It walks the
+tree with bounded coverage (file cap, per-file size cap, binary/generated dirs
+skipped), reports workspace-relative `path:line`, and masks every value. The
+`security-deep` toolset gains `secret_scan`. Deliberately dependency-free and
+local: no `gitleaks`/`ggshield` binary, no network, no vendor — a scanner that
+reads every file is a privacy decision. Its summary never overclaims: a clean
+run says "nothing matched a known shape — this is a lint, not a guarantee".
+
 ### Added: the History tab can finally clean up (delete one, sweep by age, clear all)
 
 The History tab was read-only. The store grows on every chat session, and the

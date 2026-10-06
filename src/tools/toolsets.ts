@@ -174,8 +174,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'security-deep',
     label: 'Deep Security',
-    description: 'Advanced security: AST audit, threat patterns, URL safety, path security, scoring.',
-    tools: ['ast_audit', 'threat_patterns', 'url_safety', 'path_security', 'security_score'],
+    description: 'Advanced security: AST audit, threat patterns, URL safety, path security, scoring, and a local secret scan of the workspace.',
+    tools: ['ast_audit', 'threat_patterns', 'url_safety', 'path_security', 'security_score', 'secret_scan'],
   },
   {
     name: 'infra-utility',
