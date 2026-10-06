@@ -20,6 +20,7 @@
  * | `adjust-temperature` | Repetitive or hallucinated output | Lower temperature to 0.2 for more deterministic output |
  * | `retry-tool` | Tool call failed with retryable error | Retry the same call after a brief delay |
  * | `alternative-approach` | Persistent failures across strategies | Ask the LLM for a fundamentally different strategy, then re-execute |
+ * | `shrink-scope` | WEAK-MODEL path (escalation is a no-op) | Re-ask for the SMALLEST single unit, so a model that cannot hold the whole task still moves the work forward |
  * | `skip-step` | Budget exhausted or non-repairable | Gracefully skip the failing step |
  *
  * ## Error Classification
@@ -57,6 +58,7 @@ export type RepairStrategy =
   | 'adjust-temperature'
   | 'retry-tool'
   | 'alternative-approach'
+  | 'shrink-scope'
   | 'skip-step';
 
 /** Mode of operation for the repair loop */
@@ -96,6 +98,18 @@ export interface ErrorRepairOptions {
    *  When false, retry-tool and alternative-approach strategies are skipped
    *  because they would hit the same rate-limited provider. */
   isLLMAvailable?: () => boolean;
+  /**
+   * WEAK-MODEL CLOSE-THE-LOOP mode. Set by the orchestrator when model
+   * escalation is a NO-OP — every stronger candidate is unavailable/blocked, so
+   * the task can only ever run on the weak model in use.
+   *
+   * Re-prompting such a model repeats the same failure; the fix is to ask it
+   * for LESS. This switches the ladder to a bounded, non-repeating sequence
+   * (see `selectStrategy`) whose second step shrinks the ask to a single unit,
+   * so the run makes progress instead of dead-ending. Off by default — a
+   * healthy pipeline keeps the ordinary per-category ladder unchanged.
+   */
+  weakModel?: boolean;
 }
 
 /** Default configuration */
@@ -225,6 +239,24 @@ export function selectStrategy(
   attemptNumber: number,
   options: ErrorRepairOptions,
 ): RepairStrategy {
+  // ── WEAK-MODEL CLOSE-THE-LOOP LADDER ────────────────────────────────────
+  // When ONLY a weak model is available, the per-category ladder below is a
+  // trap: its 2nd/3rd steps (switch-model / alternative-approach) assume a
+  // stronger model exists to switch TO, and re-prompting the same weak model
+  // repeats the identical failure. So the ladder is replaced by a bounded,
+  // predictable sequence whose every step is a DIFFERENT kind of attempt:
+  //   1. `re-prompt`     — cheap, honest first move: give it the failure once;
+  //   2. `shrink-scope`  — ask for the SMALLEST single unit. This is the step
+  //      that turns a stuck loop around: a model that cannot hold the whole
+  //      task can still produce one correct file, which is real progress;
+  //   3. `skip-step`     — end honestly (the durable hand-off records what is
+  //      still missing, so the next run continues instead of re-deriving).
+  if (options.weakModel) {
+    if (attemptNumber === 1) return 're-prompt';
+    if (attemptNumber === 2) return 'shrink-scope';
+    return 'skip-step';
+  }
+
   switch (category) {
     case 'llm-error':
       // First attempt: re-prompt. Second: switch model or adjust temperature.
@@ -579,6 +611,21 @@ export class ErrorRepairEngine {
             break;
           }
 
+          case 'shrink-scope': {
+            // WEAK-MODEL CLOSE-THE-LOOP: the model cannot hold the whole task,
+            // so ask for the smallest single unit instead of repeating the full
+            // ask. `context.metadata.expectedFiles` (set by the orchestrator
+            // from the task's declared artifacts) names the FIRST file to
+            // produce, so the narrowed ask is concrete rather than a vague
+            // "do less" — and never invents a file the task did not declare.
+            if (this.options.verbose) {
+              logger.info(`   ✂️ Repair attempt ${attemptNumber}: reducing scope to the smallest single unit`);
+            }
+            context = { ...context, goal: shrinkScopeGoal(context) };
+            result = await executeFn(context, callLLM);
+            break;
+          }
+
           default:
             result = { success: false, summary: `Unknown strategy: ${strategy}`, error: originalError };
         }
@@ -615,6 +662,31 @@ export class ErrorRepairEngine {
   reset(): void {
     this.budget.reset();
   }
+}
+
+/**
+ * Build the NARROWED goal for a `shrink-scope` attempt (weak-model path).
+ *
+ * The whole point is to make the ask fit the model: one unit, explicitly, with
+ * permission to stop. It names the FIRST declared artifact when the caller
+ * supplied one and otherwise says "one file (or one function)" — it never
+ * invents a filename, and it never asks for a summary instead of the work.
+ */
+export function shrinkScopeGoal(context: AgentContext): string {
+  const declared = (context.metadata?.expectedFiles as unknown) as string[] | undefined;
+  const first = Array.isArray(declared)
+    ? declared.find((f) => typeof f === 'string' && f.trim().length > 0)
+    : undefined;
+  return [
+    context.goal,
+    '',
+    '[SCOPE REDUCTION — WEAK MODEL]',
+    'This task is larger than the model in use can hold reliably, so deliver only the',
+    'SMALLEST single unit you can complete CORRECTLY, then stop:',
+    first ? `  • produce exactly this file: ${first}` : '  • one file (or one function) only',
+    'Write it to disk, then stop. Do NOT attempt the remaining files or steps — a later',
+    'step continues from here. One correct unit is worth more than partial work on many.',
+  ].join('\n');
 }
 
 // ─── Format Helpers ─────────────────────────────────────────────────────────

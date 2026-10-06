@@ -21,7 +21,7 @@
  */
 
 import type { ConfigManager } from '../config/manager.js';
-import { getModelRegistry } from './model-registry.js';
+import { getModelRegistry, type ModelRegistrySource } from './model-registry.js';
 import {
   CATALOG_PROVIDER_IDS,
   CATALOG_KEYLESS_IDS,
@@ -79,8 +79,28 @@ export function hasCredentials(configManager: ConfigManager, provider: string): 
 export const MODEL_HEALTH_CEILING = 0.6;
 
 /**
+ * How much a verification SOURCE is worth when ranking models of equal health.
+ * Lower = more trustworthy, so it sorts first.
+ *
+ * A `spot-check` is a single 1-token generation: it proves the model NAME
+ * exists and accepts a request — it does NOT prove the model can hold a task.
+ * `telemetry` is real traffic (hundreds of samples), so it is the strongest
+ * evidence we have. Ranking them as equals let a model with six probe samples
+ * (observed live: `deepseek-v4-pro`, 6 samples) sit at errorRate 0 beside a
+ * model with 290 real calls (`deepseek-flash`) — and whenever the configured
+ * pin was dead, the fallback walk could then hand a caller a model that had
+ * never actually done a task. Real evidence must win.
+ */
+const SOURCE_CONFIDENCE: Record<ModelRegistrySource, number> = {
+  telemetry: 0,
+  'spot-check': 1,
+  probe: 2,
+};
+
+/**
  * Verified working models for a provider, ranked by learned health:
- * lowest error rate first, then lowest latency, then most recently verified.
+ * strongest verification source first, then lowest error rate, then lowest
+ * latency, then most recently verified.
  * Empty when nothing has been verified yet (cold start / no keys).
  *
  * MODELS AT/ABOVE `MODEL_HEALTH_CEILING` SORT AFTER THE HEALTHY ONES but are
@@ -106,6 +126,12 @@ export function preferredModelsFor(provider: string): string[] {
     .sort((a, b) => {
       const ea = registry.getEntry(provider, a);
       const eb = registry.getEntry(provider, b);
+      // 1. Evidence strength. A model proven by real traffic must outrank one
+      //    that only ever answered a 1-token probe — they are NOT equivalent
+      //    evidence, and treating them as such is how an unproven model won.
+      const sa = SOURCE_CONFIDENCE[ea?.source ?? 'probe'] ?? 2;
+      const sb = SOURCE_CONFIDENCE[eb?.source ?? 'probe'] ?? 2;
+      if (sa !== sb) return sa - sb;
       const ra = ea?.errorRate ?? 0;
       const rb = eb?.errorRate ?? 0;
       if (ra !== rb) return ra - rb;

@@ -655,15 +655,17 @@ export function toUserFacingGenerationError(err: unknown): string {
   const REASONING_LEAK = /answered with its own reasoning/;
   const MALFORMED_STEP = /malformed step response/;
   /**
-   * ADMIN POLICY blocks (governance allow/deny lists, the PII privacy gate) are
-   * our own errors and must never be reported as an unavailable model: nothing
-   * was unreachable — a rule refused the provider, and the user needs the rule
-   * (and which provider) to fix it. Matched by NAME, like the two above and for
-   * the same reason the `instanceof` route is unavailable here: the error
-   * classes live in `src/learning/auto-router.ts`, which already imports this
-   * inference layer, so a reverse import would close a cycle.
+   * ADMIN POLICY blocks (governance allow/deny lists, the PII privacy gate) and
+   * the admin BUDGET gate (a pinned run over the user's declared `routing.quota`
+   * window or cost cap) are our own errors and must never be reported as an
+   * unavailable model: nothing was unreachable — a rule refused the provider,
+   * and the user needs the rule (and which provider) to fix it. Matched by NAME,
+   * like the two above and for the same reason the `instanceof` route is
+   * unavailable here: the error classes live in `src/learning/auto-router.ts`,
+   * which already imports this inference layer, so a reverse import would close
+   * a cycle.
    */
-  const POLICY_BLOCK = /governance policy|pii governance policy|pii-domain task/;
+  const POLICY_BLOCK = /governance policy|pii governance policy|pii-domain task|admin budget/;
   const QUOTA =
     /\b429\b|rate.?limit|too many requests|quota|resource.?exhausted|resource_exhausted|insufficient_quota|token_count/;
   const AUTH = /\b401\b|\b403\b|unauthorized|forbidden|api key|invalid key|permission/;

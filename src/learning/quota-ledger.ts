@@ -535,6 +535,35 @@ export class QuotaLedger {
   }
 
   /**
+   * ADMIN-BUDGET exhaustion ONLY: is this provider over the window budget the
+   * user DECLARED in `routing.quota.<provider>`?
+   *
+   * Deliberately ignores transient parks/cooldowns. A rate-limit park is a
+   * provider hiccup that may clear in seconds and says nothing about the user's
+   * plan; the admin budget is a control the user set, so the two must be
+   * separable. The pinned-run preflight reads THIS (a declared limit) — never
+   * the blended `getRouterQuotaStatus()` — so an explicit selection is refused
+   * only when it genuinely exceeds the budget the user configured, and is still
+   * given its shot after a transient 429.
+   */
+  isOverConfiguredLimit(configManager: ConfigManager | undefined, provider: string): boolean {
+    const limit = this.limitsFor(configManager, provider);
+    if (!limit) return false;
+    let requests = 0;
+    let tokens = 0;
+    for (const entry of Object.values(this.state.entries)) {
+      if (entry.provider !== provider) continue;
+      this.rotateWindow(entry);
+      requests += entry.requests;
+      tokens += entry.tokensConsumed;
+    }
+    return (
+      (limit.requestsPerWindow !== undefined && requests >= limit.requestsPerWindow) ||
+      (limit.tokensPerWindow !== undefined && tokens >= limit.tokensPerWindow)
+    );
+  }
+
+  /**
    * Build the router's "parked providers" feed — providers that must sink
    * below healthy candidates because they are exhausted or in cooldown.
    * Shape mirrors `circuitBreakerStatus` so the AutoModelRouter consumes it

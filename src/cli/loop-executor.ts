@@ -63,7 +63,7 @@ import {
   type SessionStore,
 } from '../learning/session-store.js';
 import { noteServedRoute } from '../tools/loop-route-feed.js';
-import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
+import { getAutoRouter, isAutoModel, isAutoProvider, governanceVerdict, adminBudgetVerdict } from '../learning/auto-router.js';
 import { buildDeepFailoverPool, createFailoverExclusionFilter } from '../learning/resilient-call.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
@@ -605,6 +605,18 @@ export async function runLoopExecutor(
         verifyOnDemand: isMaxCapability(configManager),
       });
       model = pinned.model;
+      // ── ADMIN BUDGET GATE (pinned path) ──────────────────────────────────
+      // The pin still runs the model the user chose; this only REFUSES it when
+      // the user's own declared budget is already exceeded, instead of spending
+      // past the control set in the dashboard. The gate runs AFTER `resolveRoute`
+      // so it judges the model that will actually be served (a repaired pin, not
+      // the raw request). Thrown as a policy-shaped error so
+      // `toUserFacingGenerationError` surfaces the reason verbatim. A no-op when
+      // no budget is configured.
+      const budget = adminBudgetVerdict(configManager, resolved.type, { model });
+      if (!budget.allowed) {
+        throw new Error(`Admin budget: ${budget.reason}`);
+      }
       servedRoute = servedRouteFrom(pinned);
       pushCandidate(providerType, model);
       // ── A PINNED RUN FAILS OVER TOO ──────────────────────────────────────

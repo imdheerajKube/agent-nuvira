@@ -187,6 +187,20 @@ describe('model selection — dynamic defaults (nothing hardcoded)', () => {
       expect(preferredModelsFor('groq')).toEqual(['llama-3.3-70b-versatile']);
     });
 
+    it('ranks a telemetry-proven model ABOVE a spot-check-only sibling (live bug: deepseek-v4-pro)', () => {
+      const registry = getModelRegistry();
+      // Observed live on the native deepseek provider: `deepseek-v4-pro` had six
+      // 1-token spot-check samples and `deepseek-flash` had 290 real calls, yet
+      // both sat at errorRate 0 — so health alone could not separate them and
+      // the fallback walk could hand a caller the model that had never done a
+      // task. Evidence strength must decide it.
+      registry.markVerified('deepseek', 'deepseek-v4-pro', 'spot-check', 300);
+      registry.markVerified('deepseek', 'deepseek-flash', 'telemetry', 700);
+      expect(preferredModelsFor('deepseek')[0]).toBe('deepseek-flash');
+      // …and the spot-checked model is still there as a last resort, not dropped.
+      expect(preferredModelsFor('deepseek')).toContain('deepseek-v4-pro');
+    });
+
     it('deprioritizes a chronically failing model BELOW a healthy sibling (never excludes it)', () => {
       const registry = getModelRegistry();
       registry.markVerified('groq', 'healthy-model', 'telemetry', 400);

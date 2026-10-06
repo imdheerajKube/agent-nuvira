@@ -42,7 +42,7 @@ import type { ProviderType } from '../config/types.js';
 import { getProviderFallback, classifyFallbackError, isRetryableError, isTransientForRetry, recordRegistrySuccess } from '../learning/provider-fallback.js';
 import { recordActionFailure, RATE_LIMIT_EXCLUSION_MS } from '../learning/failure-bookkeeping.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
-import { getAutoRouter, isAgentAutoRoute, isAutoModel, isAutoProvider, governanceVerdict } from '../learning/auto-router.js';
+import { getAutoRouter, isAgentAutoRoute, isAutoModel, isAutoProvider, governanceVerdict, adminBudgetVerdict } from '../learning/auto-router.js';
 import { continuationSoftwareText } from '../learning/continuation-intent.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
@@ -2811,6 +2811,15 @@ export class ChatCommand extends BaseCommand {
           // phantom unavailable model (nothing was unreachable — a rule
           // refused it). The reason names the provider and the rule.
           throw new Error(`Governance policy: ${verdict.reason}`);
+        }
+        // ADMIN BUDGET (pinned path). The pin still runs the model the user
+        // chose — this only REFUSES it when the user's own declared budget
+        // (routing.quota window, admin cost cap) is already exceeded, instead
+        // of spending past the control they set in the dashboard. A no-op when
+        // no budget is configured.
+        const budget = adminBudgetVerdict(this.configManager, session.type, { model: session.model });
+        if (!budget.allowed) {
+          throw new Error(`Admin budget: ${budget.reason}`);
         }
       }
 

@@ -2960,6 +2960,13 @@ export class Orchestrator {
             // model exists to escalate to (never for a healthy pipeline).
             try {
               vault.context.metadata.lenientFileParsing = true;
+              // Name the task's DECLARED artifacts so a `shrink-scope` repair
+              // can ask for the FIRST one concretely ("produce exactly this
+              // file") instead of a vague "do less". Absent → the narrowed ask
+              // stays generic and never invents a filename.
+              if (task.expectedFiles?.length) {
+                vault.context.metadata.expectedFiles = task.expectedFiles;
+              }
             } catch {
               // Best-effort — metadata must never break repair.
             }
@@ -3026,20 +3033,29 @@ export class Orchestrator {
               if (this.weakModelChoice !== 'abort' && spl) spl.start();
             }
           }
-          // No-op escalation → cap this task's repair budget at 1 (lenient
-          // parsing already gives the weak writer its best shot; a second
-          // cycle on the same weak model only burns minutes re-running the
-          // identical failure). Healthy pipelines keep the configured budget.
+          // No-op escalation → a bounded WEAK-MODEL CLOSE-THE-LOOP ladder.
+          //
+          // This used to cap the budget at 1 because attempt 2 was the SAME
+          // weak model re-running the SAME failure — pure wasted minutes. It is
+          // now 2, because `weakModel: true` changes what attempt 2 IS: a
+          // `shrink-scope` ask for the smallest single unit (see
+          // error-repair.ts). That is the step that turns a stuck loop around:
+          // re-prompt with the failure, then ask for LESS and move the work
+          // forward, then stop honestly at 3. Healthy pipelines keep the
+          // configured budget and the ordinary per-category ladder.
           //
           // 'abort' skips repair entirely: the user chose to fix the provider
           // config, so re-running the weak model is wasted work. The task is
           // marked failed with an actionable message; the pipeline stops.
           const userAborted = this.weakModelChoice === 'abort';
-          const effectiveMaxRepairs = noOpEscalation && autoRouting ? 1 : maxRepairs;
+          const weakModelOnly = noOpEscalation && autoRouting;
+          const effectiveMaxRepairs = weakModelOnly ? 2 : maxRepairs;
           const repairEngine = new ErrorRepairEngine({
             maxRepairs: effectiveMaxRepairs,
             repairMode,
             verbose: options.verbose,
+            // Only the weak/no-op-escalation path takes the bounded ladder.
+            weakModel: weakModelOnly,
             fallbackModels: options.repairFallbackModels,
             // LLM AVAILABILITY GUARD: check if the escalated task's provider
             // is rate-limited before retrying. Prevents retry-tool and

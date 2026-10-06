@@ -2,7 +2,7 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## Unreleased — the dashboard can start and stop the OmniRoute gateway, every provider explains itself, and the Discovery Timeline reads as tiles
+## Unreleased — a selected model is always honored, automatic picks weigh real evidence, a pinned run honors the admin budget, and a stuck weak model gets a smaller ask
 
 > Follow-ups from the OmniRoute interop work: the gateway joined the provider
 > catalog but nothing could tell you whether it was up or take it down, the
@@ -66,6 +66,47 @@ contract to plan them as REAL steps. It is strictly SOFTWARE-only: an authored
 ask returns nothing, so "write me a poem" is never handed an architecture
 diagram. Documents that already exist are UPDATED in place (a CHANGELOG gets a
 new top section) — never shadowed by a second file.
+
+### Fixed: automatic model picks now weigh the EVIDENCE behind a verification
+
+`preferredModelsFor` ranked verified models on error rate, then latency, then
+recency — with no notion of HOW a model was verified. A `spot-check` is a single
+1-token generation that proves the NAME exists; `telemetry` is real traffic. Both
+sat at errorRate 0, so a model with six probe samples (observed live:
+`deepseek-v4-pro`) could sort beside a model with 290 real calls
+(`deepseek-flash`) and be handed to a caller whenever the configured pin was
+dead. Verification SOURCE is now the first sort key (telemetry → spot-check →
+probe), so real evidence wins the tie.
+
+**This does not block or bar anything.** An explicit selection is returned
+directly by `resolveModel` and never consults this ranking, and no model is
+removed from the pool — a spot-checked model stays a legitimate last-resort
+fallback and rises to the top tier the moment it earns real telemetry. The
+change only affects which model WINS when nuvira is picking for you and nothing
+is pinned.
+
+### Fixed: a pinned run now honors the admin cost / token budget
+
+An explicit `--provider`/`--model` (or a dashboard selection) bypasses
+`autoRouter.resolve`, where `routing.quota` and `maxCostUsd` are enforced — so a
+pin was the one way to spend past the budget set in the dashboard's 💰 Daily
+Budget panel. `adminBudgetVerdict` now gates the pinned path in both chat and the
+`execute` loop. It never substitutes another model — the pin still runs what the
+user chose — and simply REFUSES with a message naming the control once the
+declared window is spent or the typical call exceeds the cap. A transient
+rate-limit park is deliberately NOT a budget (`isOverConfiguredLimit` ignores
+cooldowns), so a pinned run after a 429 still gets its shot. No budget
+configured → byte-for-byte unchanged.
+
+### Added: a weak model that is stuck gets a SMALLER ask, not a repeat
+
+When model escalation is a no-op (only a weak model is available), the ladder
+used to cap repair at one attempt and stop — real progress was possible but never
+asked for. `weakModel: true` now replaces the per-category ladder with a bounded,
+non-repeating one: re-prompt with the failure once, then `shrink-scope` — deliver
+only the SMALLEST single unit (naming the task's first declared artifact when one
+is known), then `skip-step` honestly. A model that cannot hold the whole task can
+still produce one correct file, and the durable hand-off records the rest.
 
 ### Benchmarks: a THIRD WS7 run of both arms reproduces the first numbers
 

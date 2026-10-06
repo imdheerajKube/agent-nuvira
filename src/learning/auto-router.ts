@@ -65,6 +65,7 @@ import { ProviderFactory } from '../inference/factory.js';
 import type { ConfigManager } from '../config/manager.js';
 import type { ProviderPricing, GovernanceConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
+import { getQuotaLedger } from './quota-ledger.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -314,6 +315,91 @@ export function governanceVerdict(
         kind: 'pii',
       };
     }
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * THE admin-BUDGET gate for a PINNED provider×model.
+ *
+ * `governanceVerdict` above covers the admin allow/deny lists and the PII
+ * privacy gate, but deliberately leaves the COST cap to selection — right for
+ * the auto path, wrong for a pin. The user's own request (2026-10-06): "if I
+ * select a specific model it should leverage my selection AND honor the cost /
+ * token controls set in the admin panel". An explicit pin bypasses
+ * `autoRouter.resolve`, where `routing.quota` and `maxCostUsd` are enforced, so
+ * today a pinned run is the one path that can spend past the budget the user
+ * declared in the dashboard's 💰 Daily Budget panel.
+ *
+ * This gate closes that hole WITHOUT substituting another model (a pin must
+ * still run the model the user chose): it either allows the pin or REFUSES it
+ * with a message naming the control, so the outcome is honest rather than a
+ * silent over-budget run. Two controls, both user-declared:
+ *
+ *   1. `routing.quota.<provider>` — a configured window budget (tokens and/or
+ *      requests) already consumed. Read via `isOverConfiguredLimit`, which
+ *      deliberately IGNORES transient rate-limit parks: a 429 that clears in
+ *      seconds is not a budget, and refusing a pin for it would be wrong.
+ *   2. `governance.maxCostUsd` / `routing.maxCostUsd` — the stricter of the two
+ *      admin caps, compared against the provider's typical call cost (the same
+ *      basis the router uses). Absent → no cost gate, unchanged behaviour.
+ *
+ * No budget configured → `{ allowed: true }`, so every existing setup is
+ * byte-for-byte unchanged. Best-effort: an unreadable config never blocks.
+ */
+export interface AdminBudgetVerdict {
+  allowed: boolean;
+  reason?: string;
+  control?: 'quota' | 'cost';
+}
+
+export function adminBudgetVerdict(
+  configManager: ConfigManager | undefined,
+  provider: string,
+  opts: { model?: string } = {},
+): AdminBudgetVerdict {
+  if (!configManager) return { allowed: true };
+
+  // 1. Declared window budget (tokens / requests).
+  try {
+    if (getQuotaLedger().isOverConfiguredLimit(configManager, provider)) {
+      return {
+        allowed: false,
+        control: 'quota',
+        reason:
+          `'${provider}' is over the daily budget you set in ` +
+          `routing.quota.${provider} (tokens or requests for the current window). ` +
+          'Raise the limit in the dashboard 💰 Daily Budget panel (or `nuvira model quota set`), ' +
+          'or wait for the window to reset.',
+      };
+    }
+  } catch {
+    // Best-effort — an unreadable ledger must never block a run.
+  }
+
+  // 2. Admin cost cap — strictest of the routing + governance caps.
+  try {
+    const routing = configManager.getAll?.()?.routing;
+    const caps = [routing?.maxCostUsd, routing?.governance?.maxCostUsd].filter(
+      (c): c is number => c !== undefined,
+    );
+    if (caps.length > 0) {
+      const cap = Math.min(...caps);
+      const typical = estimateCallCostUsd(provider);
+      if (typical > cap) {
+        return {
+          allowed: false,
+          control: 'cost',
+          reason:
+            `'${provider}' costs ~$${typical}/call, over the admin cap of $${cap} per call ` +
+            '(routing.maxCostUsd / routing.governance.maxCostUsd). ' +
+            'Raise the cap in the dashboard Budget panel, or pick a cheaper provider.',
+        };
+      }
+    }
+  } catch {
+    // Best-effort.
   }
 
   return { allowed: true };
