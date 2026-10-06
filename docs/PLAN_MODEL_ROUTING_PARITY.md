@@ -84,8 +84,8 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 | D2 | S1 | **A useless response is recorded `success: true`.** `local/deepseek-coder:latest` returned a generic non-answer; the step logged success. | Run A seq 14 | Mark a step served by an unexpected model, and record the detour | A mid-turn model detour is visible in the trace as a detour |
 | D3 | S1 | **The trace summary `provider` is wrong** (`groq` while all 81 steps say `deepseek`). | Runs A & B | Derive the summary from the steps | Summary == the model that served the most steps |
 | D4 | S2 | **`model explain` does not predict the runtime.** | `gemini-3.1-flash-lite` vs `deepseek-flash` | Share the resolution path | explain's winner == the model a real turn uses, for the same input |
-| D5 | S3 | **`model explain`'s ranks are not sorted by its own scores.** | `0.351, 0.465, 0.397, 0.396` | Sort, or label the columns honestly | Displayed order is the displayed metric |
-| D6 | S2 | **The fallback chain offers non-routable pairs.** `groq/allam-2-7b` (verified but `lastError=rate-limit`, flagged in RC6) and `~`-prefixed OpenRouter alias ids (all `unverified`) appear as fallbacks. | `model explain` output + registry | Filter the offered chain by reachability | Every pair offered as a fallback is routable, or is labelled as unproven |
+| D5 | S3 | **`model explain`'s ranks are not sorted by its own scores.** | `0.351, 0.465, 0.397, 0.396` | **CAUSE FOUND — not the original reading.** `ranked` IS sorted (and a test asserts descending score). The sort key is *availability first*: cooldown rows sink, then quota-parked, then score — so a cooling-down provider with a HIGHER raw score renders BELOW a healthy lower-scored one, under a header that says "Ranked providers" with only `score` beside each row. Run A had cooldowns from its own failed calls, which is exactly that shape. | State the grouping (or make the displayed order the displayed metric) | **OPEN** (S3) — display only; the ranking itself is correct |
+| D6 | S2 | **The fallback chain offers non-routable pairs.** `groq/allam-2-7b` (verified but `lastError=rate-limit`) and `~`-prefixed OpenRouter alias ids (all `unverified`) appear as fallbacks. | `model explain` output + registry | **LANDED** — the offered chain now obeys the same gate the pick does: a proven-dead (`unavailable`) pair is dropped, an unproven one is labelled. | No offered pair is `unavailable`; every offered pair with no proof says so |
 
 ## Cluster E — Autonomy & decisions (S2)
 
@@ -108,6 +108,44 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 | P5 bad model's garbage = success | **D2** | P12 explain ranks unsorted | **D5** |
 | P6 unbounded context growth | **C1** | P13 pin rerouted into pipeline | **E2** |
 | P7 stale answer at budget end | **D1** | | |
+
+## Bundle 2a — the offered chain must obey the gate the pick does (D6 LANDED, D5 re-diagnosed)
+
+**D6. `model explain`'s chain offered pairs the pick would have refused.** Measured on a live
+`model explain`: `openrouter/~deepseek/deepseek-pro-latest` and
+`openrouter/~deepseek/deepseek-flash-latest` — both `unverified` alias ids — were printed with the
+same confident `Fallback (alternate model on openrouter)` wording as a proven model.
+`fallbackModelsFor` deliberately keeps registry-unusable models as a last resort, and passes 1–3
+never re-checked them. Two verdicts, two treatments, and the distinction is the product's own
+doctrine:
+
+- `unavailable` is a **no** — dropped from the offered chain. Recommending a pair a real call
+already rejected tells the operator to walk into a wall, and `model explain` is where they decide
+what to pin next.
+- `unverified` is an **unknown, not a failure** — it stays (a weak candidate beats no candidate)
+but is **labelled** as unproven, so the confidence in the wording matches the evidence.
+
+The reserve passes already labelled themselves this way; this applies the same rule to passes 1–3,
+at the one choke point (`pushFallback`). Verified live: the two alias pairs now read
+`(unverified — not yet proven, alternate model on openrouter)`.
+
+**D5 — corrected, and it is a real defect with a different cause than the report gave.** I could
+not reproduce "ranks are not sorted by their own scores": `ranked` *is* sorted by score, and a test
+in `tests/learning/auto-router.test.ts` asserts exactly that. The mechanism behind the observed
+`0.351, 0.465, 0.397, 0.396` is the **sort key**: the router ranks by *availability first* —
+circuit-breaker-cooldown rows sink, then quota-parked, then score. A cooling-down provider with a
+higher raw score therefore renders BELOW a healthy lower-scored one, in a table whose header says
+"Ranked providers" and whose only quantitative column is `score`. Run A had cooldowns from its own
+failed calls, which is exactly that shape — so the original reading was wrong about *why* and right
+that the output misleads. Left **OPEN** (S3): it is display-only, and the honest fix is to state the
+grouping (or make the displayed order the displayed metric) rather than to change the ranking,
+which the selection logic depends on.
+
+| | Before | After |
+|---|---|---|
+| `~`-prefixed alias pairs in the chain | printed as confident alternatives | labelled `(unverified — not yet proven …)` |
+| Proven-dead (`unavailable`) pairs in the chain | offered as fallbacks | dropped; the chain is never emptied |
+| Tests | — | `tests/learning/auto-router.test.ts` (+2); **237 files / 4058 tests**; tsc; `build:cli`; all five docs guards |
 
 ## Bundle 1c — the CLI was not auto-routing at all (A5/A6/D3/D4 + A2 residual, CLOSED)
 
@@ -235,6 +273,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **C2** (was P9) | `error-repair.ts`: a 402 / "insufficient credits" now classifies as **`credit-exhausted`**, which `isRepairable()` refuses and `selectStrategy()` short-circuits to `skip-step`. Before: the live OpenRouter 402 matched **no** branch, fell to `unknown` (repairable), and burned the whole Planner repair budget. The branch is deliberately placed **before** `context-limit`, because the real message contains `max_tokens` and would otherwise have been "fixed" by shrinking the ask. | `tests/learning/error-repair.test.ts` (+4, live rejection text reproduced verbatim; plus a guard that genuine `provider-error`/429 still repairs) | **LANDED**, gate run |
 | **D2 (handoff half)** | `tool-loop.ts`: on a model handoff, the failed model's `reasoningContent` is stripped so a stranger's chain-of-thought is never replayed to the replacement model. Kept on a same-model retry, where some providers require it. | `tests/tools/tool-loop.test.ts` (+1) | **LANDED**, gate run |
 | **A6 (partial)** | `route-resolver.ts`: the **happy path** now records a routing row (previously only substitutions were recorded). | `tests/inference/route-resolver.test.ts` (+3) | superseded by A6/F1 below |
+| **D6 (Bundle 2a)** | `auto-router.ts` `pushFallback`: a pair the registry has proven dead (`unavailable`) is dropped from the offered chain; one with no proof is labelled `unverified`. The `unverified` distinction is the doctrine — an unknown is not a failure. | `tests/learning/auto-router.test.ts` (+2) | **LANDED**, live-verified in `model explain` |
 | **A6 / A2 / A5 / D3 / D4 (Bundle 1c)** | `chat.ts` `execute` honours `defaultProvider: "auto"`; the non-auto fallback installs the served pair on `session`; the pinned path consults `strictPinRefusal`; `preferredModelsFor` drops a "verified" row whose own error says the model does not exist; entitlement failures survive a listing and a prune. | `tests/cli/chat-answer-once-auto-parity.test.ts` (+2, the CLI entry), `tests/learning/model-registry.test.ts` (+2), `tests/learning/model-selection.test.ts` (+1) | **LANDED + live-verified**: routing rows 0→2–3 on `-t`; strict pin 402 bodies 1→0. See "Bundle 1c". |
 
 ## Non-goals

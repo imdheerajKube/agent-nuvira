@@ -646,6 +646,44 @@ describe('AutoModelRouter.resolve', () => {
     }
   });
 
+  it('D6 — the offered chain never recommends a pair the registry has proven dead', () => {
+    const registry = getModelRegistry();
+    registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check', 200);
+    registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check', 200);
+    registry.markVerified('local', 'llama3.2:1b', 'spot-check', 50);
+    // A pair a REAL call already proved dead on this provider (the live shape:
+    // `groq|gemini-3.1-flash-lite`, `status: verified` while its own lastError
+    // was a 404). "Use every model available" must not mean "recommend one the
+    // registry has already rejected" — `model explain` is where an operator
+    // decides what to pin next.
+    registry.markUnavailable('gemini', 'gemini-2.5-flash', 'unknown: 404 the model does not exist', 'spot-check');
+
+    const decision = router.resolve('writer', 'implement a feature', {
+      allowedProviders: ['groq', 'gemini', 'local'],
+    });
+
+    for (const c of decision.fallbackChain) {
+      expect(registry.getEntry(c.provider, c.model)?.status).not.toBe('unavailable');
+    }
+    // The gate must not empty the chain — "reject only when nothing is left."
+    expect(decision.fallbackChain.length).toBeGreaterThan(0);
+  });
+
+  it('D6 — an unproven fallback pair says it is unproven, instead of borrowing a proven model\'s wording', () => {
+    // Fresh isolated learning state (this file resets it per test): nothing has
+    // been verified, so the chain is made of never-tried pairs. They STAY — an
+    // unknown is not a failure, and a weak candidate beats no candidate — but
+    // their label must not claim more confidence than the evidence supports.
+    const decision = router.resolve('writer', 'implement a feature');
+    const registry = getModelRegistry();
+    const unproven = decision.fallbackChain.filter((c) => {
+      const status = registry.getEntry(c.provider, c.model)?.status;
+      return status === undefined || status === 'unverified';
+    });
+    expect(unproven.length).toBeGreaterThan(0);
+    for (const c of unproven) expect(c.reason.toLowerCase()).toContain('unverified');
+  });
+
   it('ranks the selected provider first when not in cooldown', () => {
     const decision = router.resolve('writer', 'implement a feature');
     expect(decision.ranked[0].provider).toBe(decision.provider);

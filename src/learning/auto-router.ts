@@ -2440,6 +2440,32 @@ export class AutoModelRouter {
     // burning through all of its fallbacks.
     const fallbackChain: ModelCandidate[] = [];
     const seenFallback = new Set<string>();
+    /**
+     * D6 — THE OFFERED CHAIN OBEYS THE SAME GATE THE PICK DOES.
+     *
+     * "Every provider contributes MULTIPLE models" is right, but the models it
+     * contributed were never asked whether they could work. Measured on a live
+     * `model explain`: the chain offered `openrouter/~deepseek/deepseek-pro-latest`
+     * and `openrouter/~deepseek/deepseek-flash-latest` — both `unverified` alias
+     * ids — with the same confident `Fallback (alternate model on openrouter)`
+     * label as a proven model. A pair the registry has already proven dead
+     * (`unavailable` — a 404, a dead key, an unfunded account) was offered the
+     * same way, and `model list`/`models explain` are where an operator decides
+     * what to pin next.
+     *
+     * Two different verdicts, two different treatments, and the distinction is
+     * the product's own doctrine (`model-reachability.ts`):
+     *   - `unavailable` is a NO. It is not offered at all — recommending a pair a
+     *     real call already established cannot work is telling the operator to
+     *     walk into a wall.
+     *   - `unverified` is an UNKNOWN, not a failure. It stays (a weak candidate
+     *     beats no candidate, and "nothing tried yet" is exactly what a reserve
+     *     pool is for) but it is LABELLED as unproven, so the confidence in the
+     *     label matches the evidence behind it.
+     *
+     * The reserve passes below already label themselves this way; passes 1–3 did
+     * not, which is where the unproven ids leaked in.
+     */
     const pushFallback = (
       s: ScoredProvider,
       model: string,
@@ -2447,18 +2473,28 @@ export class AutoModelRouter {
     ): void => {
       const key = `${s.provider}|${model}`;
       if (seenFallback.has(key)) return;
+      let status: string | undefined;
+      try {
+        status = getModelRegistry().getEntry(s.provider, model)?.status;
+      } catch {
+        // Best-effort — the reachability gate must never break routing.
+      }
+      if (status === 'unavailable') return;
       seenFallback.add(key);
+      const unproven = status === undefined || status === 'unverified';
       fallbackChain.push({
         provider: s.provider,
         model,
         estimatedCost: 0,
         qualityScore: s.score,
         contextWindowTokens: s.contextWindowTokens,
-        reason: alternate
-          ? `Fallback (alternate model on ${s.provider})`
-          : s.inCooldown
-            ? `Fallback (in cooldown): ${s.provider}`
-            : `Fallback: ${s.provider}`,
+        reason: unproven
+          ? `Fallback (unverified — not yet proven${alternate ? `, alternate model on ${s.provider}` : `: ${s.provider}`})`
+          : alternate
+            ? `Fallback (alternate model on ${s.provider})`
+            : s.inCooldown
+              ? `Fallback (in cooldown): ${s.provider}`
+              : `Fallback: ${s.provider}`,
       });
     };
     const modelsFor = (s: ScoredProvider): string[] =>
