@@ -1054,6 +1054,29 @@ describe('/api/projects — P3 project attach', () => {
     expect(engine.calls.some((c) => c.message === 'what is 2 + 2')).toBe(true);
   });
 
+  it('answers a META ask with nothing attached — describing a project to test an agent needs no folder', async () => {
+    // The reported gap: a request for TEXT that happens to contain "build the
+    // application" was refused a project folder, and the clarification "this is
+    // not a development ask - i need text" was refused identically. The guard
+    // must only gate asks that ACT on a workspace, not asks that DESCRIBE one.
+    const before = engine.calls.length;
+    const metaAsk =
+      'I want to test an agent on following capability - phased manner planning, testing, ' +
+      'documentation, build the application, git and github capability, leveraging skills and tools.';
+    const res = await authedFetch('/api/chat', 'POST', {
+      sessionId: 'guard-meta',
+      message: metaAsk,
+      projectPath: null,
+    });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { needsProject?: boolean };
+    expect(d.needsProject).toBeUndefined();
+    // It must actually reach the engine — an un-gated refusal would be the bug
+    // wearing a different hat.
+    expect(engine.calls.length).toBeGreaterThan(before);
+    expect(engine.calls.some((c) => c.message === metaAsk)).toBe(true);
+  });
+
   describe('P6d — /api/skills/marketplace (the private-repo-safe import surface)', () => {
     // A LOCAL-DIR fixture registry (file:// base) — hermetic, no network.
     // skills-registry honors BUFF_SKILLS_REGISTRY (single-value fallback).

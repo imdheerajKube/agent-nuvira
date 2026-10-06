@@ -1894,3 +1894,42 @@ export interface VerifyBacklogState {
   defaultCount?: number;
   maxCount?: number;
 }
+
+// ─── Hook contract (/api/hooks) ─────────────────────────────────────────────
+// Mirrors src/gateway/hook-contract.ts. Types are duplicated rather than
+// imported across the dashboard boundary so the browser bundle never pulls the
+// server module (and its node:fs) into the page.
+
+export type HookEvent = 'before_tool_call' | 'after_tool_call' | 'failed_tool_call' | 'on_session_end';
+
+export interface HookMatcher {
+  tool?: string;
+  surface?: string;
+  cwdPrefix?: string;
+  argsMatch?: Record<string, string>;
+}
+
+export type HookAction =
+  | { kind: 'deny'; reason?: string }
+  | { kind: 'notify'; message: string }
+  | { kind: 'scan-args'; denyOnHit?: boolean; reason?: string };
+
+export interface HookDeclaration {
+  id: string;
+  label: string;
+  event: HookEvent;
+  enabled: boolean;
+  when?: HookMatcher;
+  action: HookAction;
+  source?: 'user' | 'builtin';
+  updatedAt?: number;
+}
+
+export interface HooksData {
+  file: string;
+  hooks: HookDeclaration[];
+  events: HookEvent[];
+  eventDescriptions: Record<string, string>;
+  actionKinds: string[];
+  actionDescriptions: Record<string, string>;
+}

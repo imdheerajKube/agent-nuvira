@@ -25,6 +25,7 @@
  *   The summary says so, because a scanner that overclaims is worse than none.
  */
 
+import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { KNOWN_KEY_PREFIXES, maskSecret, redact } from '../enterprise/secrets.js';
@@ -349,6 +350,249 @@ export function scanDirectory(root: string, options: ScanDirectoryOptions = {}):
     bySeverity,
     summary: buildSummary(findings, bySeverity, filesScanned, truncated),
   };
+}
+
+// ─── Git history scan ───────────────────────────────────────────────────────
+//
+// The working-tree scan answers "is a key staged right now?". The other half of
+// the same worry is "was a key ever COMMITTED?" — a key deleted in a later
+// commit is still in the object store, still cloneable, still valid until it is
+// rotated. This walks the reachable blobs (every version of every file) rather
+// than the diff, so a secret that was added and later removed is still found at
+// the commit that introduced it. Bounded the same way as the tree walk, and
+// entirely local (`git` only — no network, no vendor binary).
+
+/** Default cap on commits walked. */
+export const DEFAULT_MAX_HISTORY_COMMITS = 500;
+/** Default cap on distinct blobs read, so a huge history cannot hang a turn. */
+export const DEFAULT_MAX_HISTORY_BLOBS = 2_000;
+/** Per-blob read cap (mirrors MAX_FILE_BYTES). */
+export const MAX_HISTORY_BLOB_BYTES = MAX_FILE_BYTES;
+
+/** A finding plus the commit it was found in (best-effort, may be undefined). */
+export interface HistoryFinding extends SecretFinding {
+  /** Abbreviated commit that last introduced this blob version, when known. */
+  commit?: string;
+}
+
+export interface SecretHistoryScanResult {
+  root: string;
+  /** False when the path is not a git work tree, or `git` is unavailable. */
+  isGitRepo: boolean;
+  commitsScanned: number;
+  blobsScanned: number;
+  blobsSkipped: number;
+  /** True when a cap stopped the walk early — coverage is partial. */
+  truncated: boolean;
+  findings: HistoryFinding[];
+  bySeverity: Record<SecretSeverity, number>;
+  summary: string;
+}
+
+export interface ScanHistoryOptions {
+  /** Max commits to walk (default DEFAULT_MAX_HISTORY_COMMITS). */
+  maxCommits?: number;
+  /** Max distinct blobs to read (default DEFAULT_MAX_HISTORY_BLOBS). */
+  maxBlobs?: number;
+  /** Per-blob byte cap (default MAX_HISTORY_BLOB_BYTES). */
+  maxBlobBytes?: number;
+  /** Restrict to one workspace-relative subtree. */
+  subdir?: string;
+}
+
+/** Run a git command in `root`; null on any failure (git absent, not a repo…). */
+function runGit(root: string, args: string[], input?: string, maxBuffer = 256 * 1024 * 1024): Buffer | null {
+  try {
+    return execFileSync('git', args, {
+      cwd: root,
+      input,
+      maxBuffer,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Scan reachable git history for secret-shaped content.
+ *
+ * Walks `git rev-list --objects --all` to enumerate every blob version, keeps
+ * only blobs whose path survives {@link shouldSkipPath}, reads the small ones
+ * through a single batched `git cat-file`, and runs the SAME {@link scanText}
+ * detector as the tree scan — one pattern source of truth across both surfaces.
+ * A finding's path is labelled `<path>@<commit>` when the introducing commit can
+ * be resolved (best-effort; the blob sha stand-in is used otherwise).
+ */
+export function scanGitHistory(root: string, options: ScanHistoryOptions = {}): SecretHistoryScanResult {
+  const maxCommits = options.maxCommits ?? DEFAULT_MAX_HISTORY_COMMITS;
+  const maxBlobs = options.maxBlobs ?? DEFAULT_MAX_HISTORY_BLOBS;
+  const maxBlobBytes = options.maxBlobBytes ?? MAX_HISTORY_BLOB_BYTES;
+
+  const empty = (isGitRepo: boolean, summary: string): SecretHistoryScanResult => ({
+    root,
+    isGitRepo,
+    commitsScanned: 0,
+    blobsScanned: 0,
+    blobsSkipped: 0,
+    truncated: false,
+    findings: [],
+    bySeverity: { critical: 0, high: 0, medium: 0 },
+    summary,
+  });
+
+  const inside = runGit(root, ['rev-parse', '--is-inside-work-tree']);
+  if (!inside || inside.toString('utf-8').trim() !== 'true') {
+    return empty(false, 'Not a git work tree — nothing in history to scan.');
+  }
+
+  const totalRaw = runGit(root, ['rev-list', '--count', '--all']);
+  const totalCommits = totalRaw ? Number.parseInt(totalRaw.toString('utf-8').trim(), 10) || 0 : 0;
+  const commitsScanned = Math.min(totalCommits, maxCommits);
+
+  const pathArgs = options.subdir ? ['--', options.subdir] : [];
+  const listed = runGit(root, ['rev-list', '--objects', '--max-count', String(maxCommits), '--all', ...pathArgs]);
+  if (!listed) {
+    return empty(true, 'Could not read git history (the repository may be corrupt or shallow).');
+  }
+
+  // sha → first path seen. Bare lines are commits/trees (no path) — ignored.
+  const blobPath = new Map<string, string>();
+  for (const rawLine of listed.toString('utf-8').split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const sp = line.indexOf(' ');
+    if (sp < 0) continue;
+    const sha = line.slice(0, sp);
+    const path = line.slice(sp + 1).trim();
+    if (!path || !sha) continue;
+    if (shouldSkipPath(path)) continue;
+    if (!blobPath.has(sha)) blobPath.set(sha, path);
+  }
+
+  const allShas = [...blobPath.keys()];
+  let truncated = totalCommits > maxCommits || allShas.length > maxBlobs;
+  const shas = allShas.slice(0, maxBlobs);
+  let blobsSkipped = allShas.length - shas.length;
+
+  // Sizes first (no content), so a huge minified bundle is never read.
+  const smallShas: string[] = [];
+  const sizeOut = runGit(root, ['cat-file', '--batch-check'], shas.join('\n') + '\n');
+  if (sizeOut) {
+    for (const line of sizeOut.toString('utf-8').split('\n')) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 3) continue;
+      const [sha, type, sizeStr] = parts;
+      const size = Number.parseInt(sizeStr, 10);
+      if (type !== 'blob' || !Number.isFinite(size)) continue;
+      if (size > maxBlobBytes) {
+        blobsSkipped += 1;
+        continue;
+      }
+      smallShas.push(sha);
+    }
+  } else {
+    blobsSkipped += shas.length;
+  }
+
+  // Read the small blobs in bounded chunks through one batched cat-file.
+  const findings: HistoryFinding[] = [];
+  let blobsScanned = 0;
+  const CHUNK = 500;
+  for (let i = 0; i < smallShas.length; i += CHUNK) {
+    const chunk = smallShas.slice(i, i + CHUNK);
+    const out = runGit(root, ['cat-file', '--batch'], chunk.join('\n') + '\n');
+    if (!out) {
+      blobsSkipped += chunk.length;
+      continue;
+    }
+    let pos = 0;
+    while (pos < out.length) {
+      const nl = out.indexOf(10, pos);
+      if (nl < 0) break;
+      const header = out.toString('utf-8', pos, nl);
+      pos = nl + 1;
+      const [sha, type, sizeStr] = header.split(' ');
+      const size = Number.parseInt(sizeStr, 10);
+      if (!sha || type !== 'blob' || !Number.isFinite(size)) break;
+      const content = out.toString('utf-8', pos, pos + size);
+      pos += size + 1; // skip the content and its trailing newline
+      blobsScanned += 1;
+      const path = blobPath.get(sha) ?? sha;
+      for (const hit of scanText(content, path)) {
+        const lineText = content.split(/\r?\n/)[hit.line - 1] ?? '';
+        findings.push({ ...hit, preview: redact(lineText).slice(0, 200) });
+      }
+    }
+  }
+
+  // Best-effort: name the commit that introduced each finding-bearing blob, so
+  // the report says WHICH commit to rewrite. Done only for blobs with findings.
+  const findingBlobs = new Set(findings.map((f) => f.path));
+  const commitByPath = new Map<string, string>();
+  for (const [sha, path] of blobPath) {
+    if (!findingBlobs.has(path) || commitByPath.has(path)) continue;
+    const log = runGit(root, ['log', '--all', '-1', '--format=%h', `--find-object=${sha}`]);
+    const commit = log?.toString('utf-8').trim().split('\n')[0] || undefined;
+    if (commit) commitByPath.set(path, commit);
+  }
+  for (const f of findings) {
+    const commit = commitByPath.get(f.path);
+    if (commit) f.commit = commit;
+  }
+
+  const bySeverity: Record<SecretSeverity, number> = { critical: 0, high: 0, medium: 0 };
+  for (const f of findings) bySeverity[f.severity] += 1;
+
+  findings.sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line);
+
+  return {
+    root,
+    isGitRepo: true,
+    commitsScanned,
+    blobsScanned,
+    blobsSkipped,
+    truncated,
+    findings,
+    bySeverity,
+    summary: buildHistorySummary(findings, bySeverity, commitsScanned, blobsScanned, truncated),
+  };
+}
+
+/** One honest sentence for a history scan — never overclaims a clean result. */
+function buildHistorySummary(
+  findings: HistoryFinding[],
+  bySeverity: Record<SecretSeverity, number>,
+  commitsScanned: number,
+  blobsScanned: number,
+  truncated: boolean,
+): string {
+  const suffix = truncated ? ' (cap reached — coverage is partial)' : '';
+  const base = `Walked ${commitsScanned} commit(s), ${blobsScanned} blob(s)${suffix}`;
+  if (findings.length === 0) {
+    return `${base}: nothing matched a known secret shape in history. ` +
+      'This is a lint, not a guarantee. A key only in a rewritten-away object is still reachable until `git gc`.';
+  }
+  return (
+    `${base}: ${findings.length} historical finding(s) — ` +
+    `${bySeverity.critical} critical, ${bySeverity.high} high, ${bySeverity.medium} medium. ` +
+    'A committed secret must be ROTATED, not just deleted: it stays in the object store. Values are masked.'
+  );
+}
+
+/** Render a git-history result as a compact report a model or human can act on. */
+export function formatSecretHistoryScan(result: SecretHistoryScanResult): string {
+  const lines = [result.summary];
+  if (result.findings.length > 0) {
+    lines.push('', 'path  commit  severity  kind  value(masked)');
+    for (const f of result.findings.slice(0, 200)) {
+      lines.push(`${f.path}  ${f.commit ?? '?'}  ${f.severity}  ${f.label}  ${f.masked}`);
+    }
+    if (result.findings.length > 200) {
+      lines.push(`… and ${result.findings.length - 200} more`);
+    }
+  }
+  return lines.join('\n');
 }
 
 /** One honest sentence. A clean scan is reported as "nothing matched". */

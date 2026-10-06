@@ -2325,22 +2325,39 @@ registerTool({
 registerTool({
   name: 'secret_scan',
   description:
-    'Scan the workspace for secret-shaped strings (API keys, tokens, private keys, credentials in URLs) before committing or publishing. Fully local — no network and no external scanner binary — and every reported value is masked. Returns findings with path:line and severity, plus a summary. A clean result means "nothing matched a known shape", NOT "no secrets": report it as a lint, never as a guarantee.',
+    'Scan the workspace for secret-shaped strings (API keys, tokens, private keys, credentials in URLs) before committing or publishing. Fully local — no network and no external scanner binary — and every reported value is masked. Returns findings with path:line and severity, plus a summary. Set history:true to scan git HISTORY as well (every committed version of every file) — a key deleted in a later commit is STILL committed and must be rotated. A clean result means "nothing matched a known shape", NOT "no secrets": report it as a lint, never as a guarantee.',
   category: 'workflow',
   inputSchema: z.object({
     path: z.string().optional().describe('Directory to scan (relative to the workspace, or absolute). Default: the workspace root.'),
     subdir: z.string().optional().describe('Narrow the scan to one subtree, e.g. "src" or "docs".'),
     maxFiles: z.number().optional().describe('Cap on files visited (default 5000) — a huge repo does not hang the turn.'),
+    history: z.boolean().optional().describe('Also scan git history (reachable blobs) for secrets ever committed. Default false. Use before publishing or when auditing an existing repo.'),
+    maxBlobs: z.number().optional().describe('With history:true, cap on distinct historical blobs read (default 2000).'),
   }),
   endsAgentStep: false,
   run: async (args, ctx) => {
     const { join } = await import('node:path');
     const m = await import('../security/secret-scan.js');
-    const { path: target, subdir, maxFiles } = args as { path?: string; subdir?: string; maxFiles?: number };
+    const { path: target, subdir, maxFiles, history, maxBlobs } = args as {
+      path?: string; subdir?: string; maxFiles?: number; history?: boolean; maxBlobs?: number;
+    };
     const cwd = ctx?.cwd ?? process.cwd();
     const root = target
       ? (target.startsWith('/') || /^[A-Za-z]:[\\/]/.test(target) ? target : join(cwd, target))
       : cwd;
+    if (history) {
+      // History only: the tree scan runs first (fast, no git), then history is
+      // appended as its own section so a reader can tell the two apart.
+      const tree = m.scanDirectory(root, {
+        ...(subdir ? { subdir } : {}),
+        ...(maxFiles ? { maxFiles } : {}),
+      });
+      const hist = m.scanGitHistory(root, {
+        ...(subdir ? { subdir } : {}),
+        ...(maxBlobs ? { maxBlobs } : {}),
+      });
+      return [m.formatSecretScan(tree), '', '── git history ──', m.formatSecretHistoryScan(hist)].join('\n');
+    }
     const result = m.scanDirectory(root, {
       ...(subdir ? { subdir } : {}),
       ...(maxFiles ? { maxFiles } : {}),

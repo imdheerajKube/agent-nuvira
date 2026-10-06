@@ -44,6 +44,48 @@ describe('needsProjectAttachment — asks that need a workspace', () => {
   });
 });
 
+describe('needsProjectAttachment — META asks that only DESCRIBE work', () => {
+  it('lets through "I want to test an agent on <capability>" (the reported case)', () => {
+    // The exact message from the transcript. It is a request for TEXT — a
+    // scenario to test an agent with — but it contains "build the application"
+    // and "testing … documentation", so the guard demanded a project folder
+    // and refused twice. Development vocabulary inside a meta ask names the
+    // SUBJECT, not the requested action.
+    const ask =
+      'I want to test an agent on following capability - understanding complex ask in one go ' +
+      'for large requirement which required phased manner planning, phased manner development, ' +
+      'testing, documentation, installations of required tools, build the application, git and ' +
+      'github capability, leveraging skills and tools entire ecosystem of a development agent.';
+    expect(needsProjectAttachment(ask)).toBe(false);
+  });
+
+  it('lets through the explicit "this is not a development ask — I need text" clarification', () => {
+    const ask =
+      'this is not a development ask - i need text - a project which will require this for ' +
+      'testing an agent from which i will get this project developed.';
+    expect(needsProjectAttachment(ask)).toBe(false);
+  });
+
+  it('lets through a request for a test scenario / prompt / project idea', () => {
+    expect(needsProjectAttachment('give me a test scenario that exercises phased planning')).toBe(false);
+    expect(needsProjectAttachment('write a prompt to test an agent on refactoring a large codebase')).toBe(false);
+    expect(
+      needsProjectAttachment('suggest a project idea which will require planning, testing and documentation'),
+    ).toBe(false);
+    expect(needsProjectAttachment('how would an agent plan a large migration?')).toBe(false);
+  });
+
+  it('still gates a real workspace ask even when it mentions testing', () => {
+    // A deictic folder the user points AT keeps the guard on.
+    expect(needsProjectAttachment('test this project')).toBe(true);
+    // An explicit on-disk artifact keeps the guard on, meta framing or not.
+    expect(needsProjectAttachment('write the test scenario to scenario.md')).toBe(true);
+    // The old gated phrases are untouched.
+    expect(needsProjectAttachment('review the repository')).toBe(true);
+    expect(needsProjectAttachment('assess this project')).toBe(true);
+  });
+});
+
 describe('needsProjectAttachment — ordinary chat stays ungated', () => {
   it('lets general questions through', () => {
     expect(needsProjectAttachment('what is a monad?')).toBe(false);

@@ -3724,6 +3724,59 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // ── Hook contract (declarative lifecycle rules) ──────────────────────────
+  // GET /api/hooks — the declared hooks plus the contract vocabulary the page
+  //   needs to render an editor (events, action kinds and their descriptions).
+  //   Reads are open like /api/history.
+  // PUT /api/hooks — replace the whole set. Gated on routing.operate (admin or
+  //   operator), the same capability every other config write uses. The server
+  //   VALIDATES before persisting, so a bad declaration is a 400 and the
+  //   previously-saved set stays in force.
+  if (pathname === '/api/hooks' && req.method === 'GET') {
+    void (async () => {
+      const m = await import('../gateway/hook-contract.js');
+      writeJson(res, 200, {
+        ok: true,
+        file: m.hookDeclarationsFile(),
+        hooks: m.getHookDeclarations(),
+        events: m.HOOK_EVENTS,
+        eventDescriptions: m.HOOK_EVENT_DESCRIPTIONS,
+        actionKinds: m.HOOK_ACTION_KINDS,
+        actionDescriptions: m.HOOK_ACTION_DESCRIPTIONS,
+      });
+    })();
+    return;
+  }
+  if (pathname === '/api/hooks' && req.method === 'PUT') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot change hooks (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      if (!body || !Array.isArray(body.hooks)) {
+        writeJson(res, 400, { ok: false, error: 'Invalid JSON body — expected { hooks: [...] }.' });
+        return;
+      }
+      const m = await import('../gateway/hook-contract.js');
+      const saved = m.setHookDeclarations(body.hooks);
+      if (!saved.ok) {
+        writeJson(res, 400, { ok: false, error: saved.error });
+        return;
+      }
+      writeJson(res, 200, { ok: true, hooks: saved.declarations });
+    })();
+    return;
+  }
+
   if (pathname === '/api/benchmarks') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readBenchmarkData()));

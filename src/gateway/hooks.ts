@@ -30,6 +30,10 @@
 
 import { logger } from '../utils/logger.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
+// The declarative contract (operator-authored rules) binds to this registry.
+// Import direction is one-way: hook-contract.ts imports only TYPES from here,
+// so there is no runtime cycle.
+import { installDeclaredHooks } from './hook-contract.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -254,3 +258,13 @@ export function registerBuiltinHooks(): void {
 
 // Install the builtin once (idempotent — register() dedupes by function ref).
 registerBuiltinHooks();
+
+// Install the operator-authored declarative hooks (src/gateway/hook-contract.ts).
+// They are rules, not code: the allow-list is deny / notify / scan-args, all
+// implemented natively, so loading them can never execute third-party code.
+// Best-effort — a failure here must never stop the process from starting.
+try {
+  installDeclaredHooks(hooks);
+} catch (err) {
+  logger.debug(`hook contract install skipped: ${err instanceof Error ? err.message : err}`);
+}

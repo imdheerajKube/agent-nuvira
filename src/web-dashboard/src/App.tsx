@@ -48,6 +48,10 @@ import SkillEnvPage from './components/SkillEnvPage';
 // hooks) are read by the run itself, not by a skill, and several are tri-state —
 // so they get a page that can express on/off/unset rather than a NAME=VALUE box.
 import ProcessEnvPage from './components/ProcessEnvPage';
+// The declarative lifecycle hooks (src/gateway/hook-contract.ts) had a contract
+// and a runtime but no surface: an operator could not see what would fire or
+// what it could do. This page is that surface.
+import HooksPage from './components/HooksPage';
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -163,6 +167,7 @@ export default function App() {
           <Route path="/gateway" element={<GatewayPage />} />
           <Route path="/env" element={<SkillEnvPage />} />
           <Route path="/process-env" element={<ProcessEnvPage />} />
+          <Route path="/hooks" element={<HooksPage />} />
           <Route path="/memory" element={<MemoryPanel data={data} />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/history" element={<HistoryBrowser data={data} />} />

@@ -35,6 +35,8 @@ import type {
   ProcessEnvVarRow,
   ContinuityData,
   HistoryData,
+  HooksData,
+  HookDeclaration,
   VerifyBacklogState,
   ResumeOutcome,
   TraceEntry,
@@ -2435,6 +2437,39 @@ export class DashboardAPI {
       });
       const data = (await res.json()) as { ok?: boolean; removed?: boolean; row?: ProcessEnvVarRow; error?: string };
       return { ok: data.ok === true, removed: data.removed, row: data.row, error: data.error };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * The declared lifecycle hooks plus the contract vocabulary the editor needs
+   * (events, action kinds and their descriptions), or null when the server
+   * predates the endpoint — a null reads as "no such page data", not a crash.
+   */
+  async fetchHooks(): Promise<HooksData | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/hooks`, { headers: { ...authHeaders() } });
+      const data = (await parseJsonOrNull(res)) as (HooksData & { ok?: boolean }) | null;
+      if (!data || !Array.isArray(data.hooks)) return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Replace the whole declared-hook set. Writes require admin/operator. */
+  async saveHooks(
+    hooks: HookDeclaration[],
+  ): Promise<{ ok: boolean; hooks?: HookDeclaration[]; error?: string; forbidden?: boolean }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/hooks`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ hooks }),
+      });
+      const data = (await res.json()) as { ok?: boolean; hooks?: HookDeclaration[]; error?: string };
+      return { ok: data.ok === true, hooks: data.hooks, error: data.error, forbidden: res.status === 403 };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }

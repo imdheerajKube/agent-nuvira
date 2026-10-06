@@ -16,6 +16,13 @@
  * "what's a monad", "summarise this text I pasted" must all keep working with no
  * folder attached. Only asks that name a PROJECT, or that produce/consume files
  * on disk, are gated.
+ *
+ * A second, equally important half was added after a report (2026-10-06): an
+ * ask that merely DESCRIBES work — a test scenario, a prompt, a spec, a project
+ * idea, "I want to test an agent on X" — is TEXT, and is answered inline even
+ * though it is full of development vocabulary. Gating it was the bug the user
+ * summarised as "intelligence is completely missing" about when a folder is
+ * required. See {@link isMetaOrTextAsk}.
  */
 
 /**
@@ -73,6 +80,74 @@ const FILE_PRODUCING_RE =
 const MEDIA_TASK_RE =
   /\b(?:generate|create|make|draw|render|design|produce)\b[^.!?\n]{0,40}\b(?:an?\s+)?(?:image|picture|photo|logo|diagram|chart|plot|icon|illustration|artwork|banner|thumbnail|video|audio|voiceover)\b/i;
 
+// ─── META / INSTRUCTIONAL asks ──────────────────────────────────────────────
+//
+// The user is asking for a DESCRIPTION of work rather than the work itself: a
+// test scenario, a prompt, a spec, a project idea, a capability challenge. The
+// development vocabulary inside those asks names the SUBJECT, not the action,
+// so no workspace is required — even when a producing verb appears ("…build the
+// application…").
+//
+// THIS IS THE REPORTED BUG (2026-10-06). A user asked the dashboard chat to
+// produce a project they could use to TEST an agent on a large, phased
+// capability (planning → development → testing → docs → tool installs → build
+// → git). The guard read "build the application" — a producing verb on a
+// project noun — and refused with the folder prompt. The clarification "this
+// is not a development ask - i need text" was refused IDENTICALLY, because the
+// guard never looked at the FRAME of the request, only at the verbs and nouns
+// buried inside it. The user's summary: "intelligence is completely missing"
+// around when a folder is required and when it is not.
+
+/**
+ * "I want to test an agent on … capability" — the ask is about evaluating the
+ * agent, which is answered with text (a scenario/spec), never by opening a
+ * folder. Requires an intent-to-test frame so a bare "test my agent's code"
+ * (which may well mean an attached checkout) is not swept up.
+ */
+const META_AGENT_TEST_RE =
+  /\b(?:want|need|plan(?:ning)?|intend|would\s+like|trying|going|help(?:\s+me)?|how\s+to|how\s+do\s+i|i\s+am|i'?m)\b[^.!?\n]{0,40}\b(?:test|testing|evaluate|evaluating|benchmark(?:ing)?|assess(?:ing)?|challenge|validate|stress[- ]?test)\b[^.!?\n]{0,50}\b(?:an?|the|my|our|your)\s+(?:ai\s+|coding\s+|development\s+|software\s+|autonomous\s+)?agents?\b/i;
+
+/** "give me a test scenario / a prompt / a spec / a project idea" — a content deliverable, answered inline. */
+const REQUEST_FOR_SCENARIO_RE =
+  /\b(?:give|provide|suggest|design|create|write|draft|generate|propose|come\s+up\s+with|share|need|want)\b[^.!?\n]{0,30}\b(?:prompt|scenario|test\s+case|test\s+plan|test\s+suite|benchmark|spec|specification|project\s+idea|project\s+spec|example\s+project|sample\s+project|use\s+case|exercise|task\s+description|evaluation\s+rubric|rubric)\b/i;
+
+/** "a project which will require this" — an indefinite, hypothetical project, not a folder the user points at. */
+const HYPOTHETICAL_PROJECT_RE =
+  /\b(?:a|some|any)\s+(?:project|app|application|system|tool|service|repo(?:sitory)?|codebase)\b[^.!?\n]{0,40}\b(?:that|which)\b[^.!?\n]{0,40}\b(?:requires?|would\s+require|will\s+require|needs?|would\s+need|involves?|entails?|would\s+involve)\b/i;
+
+/** An explicit statement that the user wants TEXT, not code — decisive on its own. */
+const TEXT_ONLY_RE =
+  /\b(?:i\s+(?:just\s+)?need(?:ed)?\s+(?:the\s+)?text|just\s+the\s+text|only\s+(?:the\s+)?text|text\s+only|no\s+code|without\s+(?:any\s+)?code|need\s+text|not\s+a\s+(?:development|coding|code|software|programming)\s+(?:ask|task|request|question|exercise|work)|this\s+is\s+not\s+a\s+development|no\s+development\s+needed|nothing\s+to\s+(?:build|code|develop|implement))\b/i;
+
+/**
+ * A reference to a REAL workspace the user points AT ("this project", "our
+ * repo"). When present the ask is about a folder, so the meta rules stand down
+ * — "test this project" is still a workspace ask.
+ */
+const DEICTIC_WORKSPACE_RE =
+  /\b(?:this|my|our|the\s+current|current)\s+(?:project|repo|repository|codebase|code\s?base|workspace|solution)\b/i;
+
+/**
+ * True when this ask only DESCRIBES work — a scenario, spec, prompt, capability
+ * challenge, or a plain request for text — rather than asking to perform it.
+ *
+ * Order matters: an explicit on-disk artifact always wins ("write the scenario
+ * to scenario.md" is a workspace ask), then an explicit "I need text" wins over
+ * a deictic mention (the user's own clarification said "this project" while
+ * explicitly asking for text), then a deictic workspace reference otherwise
+ * vetoes the meta rules.
+ */
+function isMetaOrTextAsk(text: string): boolean {
+  if (EXPLICIT_FILE_RE.test(text)) return false;
+  if (TEXT_ONLY_RE.test(text)) return true;
+  if (DEICTIC_WORKSPACE_RE.test(text)) return false;
+  return (
+    META_AGENT_TEST_RE.test(text) ||
+    REQUEST_FOR_SCENARIO_RE.test(text) ||
+    HYPOTHETICAL_PROJECT_RE.test(text)
+  );
+}
+
 /**
  * True when this ask needs a workspace it does not have.
  *
@@ -89,6 +164,11 @@ export function needsProjectAttachment(message: string): boolean {
   // the same message makes it a workspace task. Checked BEFORE the project/work
   // rules so an incidental code-ish noun cannot gate an essay or a poem.
   if (INLINE_PROSE_RE.test(text) && !EXPLICIT_FILE_RE.test(text)) return false;
+  // A META ask describes work instead of doing it — a test scenario, a prompt,
+  // a spec, a project idea, or plainly "I need text". The development words in
+  // it name the SUBJECT, so answer inline rather than demanding a folder. This
+  // is the fix for the reported "test an agent on <capability>" refusal.
+  if (isMetaOrTextAsk(text)) return false;
   // A named file target means it lands on disk even if the content is prose.
   if (FILE_PRODUCING_RE.test(text)) return true;
   if (PROJECT_REFERENCE_RE.test(text)) return true;

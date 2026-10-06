@@ -123,7 +123,18 @@ Third-party plugins assume **Claude Code's hook contract** (`SessionStart`, `Pre
 - **Ponytail** works by a `SessionStart` hook that injects a ruleset; its Claude Code/Codex plugins run Node lifecycle hooks.
 - **RTK** works by a `PreToolUse`/Bash hook that **rewrites commands**.
 
-nuvira has no user-pluggable hook API. Options: (a) **don't** run their hooks — import only the *content* (the ruleset, the compression config) and wire it to our own seams; (b) add a hook API (large, security-sensitive). **Recommend (a)** for now.
+nuvira had no user-pluggable hook API. Options: (a) **don't** run their hooks — import only the *content* (the ruleset, the compression config) and wire it to our own seams; (b) add a hook API (large, security-sensitive); (c) a bounded, native hook contract.
+
+**DECIDED & LANDED (2026-10-06): option (c).** nuvira now has a **declarative**
+hook contract (`src/gateway/hook-contract.ts`, dashboard page `/hooks`, reference
+`docs/HOOKS.md`). A hook is a RULE bound to one of the four existing seams
+(`before_tool_call` / `after_tool_call` / `failed_tool_call` / `on_session_end`)
+with a **fixed allow-list of native actions** — `deny`, `notify`, `scan-args`.
+There is deliberately no `run-command` and no third-party script, so installing a
+hook can never execute code. This is the *safe half* of model C: it gets the
+operator value of hooks (block a destructive call, warn on a secret, audit a
+session end) without building a remote-execution surface. It is **not** a path
+for porting a plugin's *hook code* — Ponytail/RTK still import as content only.
 
 ### 5.3 The user-choice model
 
@@ -147,7 +158,12 @@ Three viable models; **no decision taken**:
 | **B. Full plugin runtime** | Implement a hook API + MCP host + marketplace | Maximum leverage/parity | Large; a hook API is a remote-code-execution surface |
 | **C. Hybrid** | Content-only by default; a small, audited **allow-list of hook kinds** (e.g. prompt-injection-at-session-start) implementable natively | Gets most value, bounded risk | Needs per-plugin porting work |
 
-**Recommendation to evaluate later: C**, starting from A. Do not build B before a trust model (§8) exists.
+**Decision taken (2026-10-06): C, starting from A — and the hook half of C is
+built.** The declarative hook contract (§5.2, `docs/HOOKS.md`) delivers the
+bounded allow-list modelling of C without the RCE risk of B: hooks are rules over
+nuvira's own seams, not code. Model B (a general hook API + MCP host) remains
+**out of scope** until the §8 trust model is in place, because a hook API that
+runs third-party code is exactly the surface a trust model exists to contain.
 
 ---
 
@@ -256,14 +272,14 @@ Three distinct reasons — they are not the same kind of thing:
 | 2 | Quarantine + Agent Hub provenance/capability UI; `skills list/add/remove` | Low |
 | 3 | `skills update` with diff; registry index (source C) | Medium |
 | 4 | Plugin manifest fan-out (skills + MCP + commands); **content-only** (model A) | Medium |
-| 5 | *Decision point:* hook kinds allow-list (model C) | High — needs §8 in place |
+| 5 | ~~*Decision point:* hook kinds allow-list (model C)~~ — **done as a declarative, no-code contract** (`src/gateway/hook-contract.ts`, docs/HOOKS.md). Running *third-party* hook code (full model C/B) still needs §8 | was High; the no-code half is Low |
 
 ---
 
 ## 10. Open questions (decisions)
 
 1. **§3:** GitHub-only first, or GitHub + a curated registry?
-2. **§6:** content-only (A) vs hybrid (C)? **Recommend A then C; not B.**
+2. **§6:** content-only (A) vs hybrid (C)? **Decided: A → C; the declarative (no-code) half of C is implemented. Full B remains closed.**
 3. **§7:** name the "API Keys Git Repo" artifact so it can be assessed.
 4. Do we want a **publish** path (model D) at all, or only consume?
 5. Where does the trust policy live — per-repo, per-org, or per-user?

@@ -2,13 +2,77 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## Unreleased — a selected model is always honored, automatic picks weigh real evidence, a pinned run honors the admin budget, and a stuck weak model gets a smaller ask
+## Unreleased — a selected model is always honored, automatic picks weigh real evidence, a pinned run honors the admin budget, a stuck weak model gets a smaller ask, a chat turn that only *describes* work no longer demands a folder, secrets are scanned across git history, and hooks are a declarative no-code contract
 
 > Follow-ups from the OmniRoute interop work: the gateway joined the provider
 > catalog but nothing could tell you whether it was up or take it down, the
 > editor only explained the one gateway (not the other 20+ providers), and a
 > stack of six full-width cards pushed the Timeline's own age profile below the
 > fold.
+
+### Fixed: a chat turn that only DESCRIBES work no longer demands a project folder
+
+The workspace guard ("refuse to guess a working directory") read verbs and nouns
+without ever reading the FRAME of the request. So a user asking the dashboard to
+produce a **scenario for testing an agent** — text, not a build — was refused a
+project folder, because the message contained "build the application", "testing"
+and "documentation". The clarification *"this is not a development ask - i need
+text"* was refused **identically**, which is how the user experienced it: *"i see
+gaps in agent's understanding of task when project folder is required and when not
+(intelligence is completely missing)"*. The guard now recognises **META / TEXT
+asks** — a test scenario, a prompt, a spec, a project idea, "I want to test an
+agent on X", or a plain "I need text" — and answers them inline, because the
+development vocabulary inside them names the SUBJECT, not the requested action. A
+real workspace ask is untouched: a deictic folder ("test **this** project"), an
+explicit file target ("write the scenario to scenario.md") and every previously
+gated phrase still ask for a folder, so a genuine "assess this project" cannot be
+starved by the fix. Pinned by `tests/web-dashboard/workspace-guard.test.ts` (the
+exact reported message) and by an end-to-end `/api/chat` test proving the meta ask
+actually REACHES the engine instead of being refused.
+
+### Added: git-HISTORY scanning in the secret scanner (`secret_scan history:true`)
+
+The local scanner walked the working tree, which answers "is a key staged right
+now?" — not "was a key ever COMMITTED?", and a key deleted in a later commit is
+still in the object store, still cloneable, still valid until it is rotated.
+`scanGitHistory` (src/security/secret-scan.ts) walks the reachable blobs
+(`git rev-list --objects --all`) rather than the diff, so a secret that was added
+and later removed is found at the commit that introduced it (best-effort commit
+attribution via `git log --find-object`). It reads small blobs through a single
+batched `git cat-file`, skips binary/generated paths and oversized blobs, is
+bounded by commit/blob caps (partial coverage is reported), masks every value,
+and runs the SAME `scanText` detector as the tree scan — one pattern source of
+truth across both surfaces. Entirely local: `git` only, no network, no vendor
+binary. `secret_scan` gains a `history` flag (and `maxBlobs`); the summary never
+overclaims, and a clean result still says "a key only in a rewritten-away object
+is still reachable until `git gc`". `security-deep` keeps the tool. Pinned by 5
+tests including a committed-then-deleted key and an oversized-blob cap.
+
+### Added: a declarative, no-code Hook contract — exposed on the dashboard
+
+nuvira fires four internal lifecycle seams (`before_tool_call`,
+`after_tool_call`, `failed_tool_call`, `on_session_end`) but had **no way for an
+operator to attach a rule to them** — and deliberately no pluggable hook API that
+runs third-party code (a remote-execution surface; see
+`docs/DESIGN-skill-plugin-ecosystem.md` §5.2). The missing half now exists as a
+**contract, not code**: a hook is a rule (`when` → `action`) bound to a seam, with
+a **fixed allow-list of native actions** — `deny` (stop a call; before only),
+`notify` (a log line), `scan-args` (run the local secret scanner over a call's
+arguments or result, optionally denying on a hit). There is deliberately no
+`run-command`, no `script`, no `mcp`, so installing a hook can never execute code
+— that is why the surface is safe to expose. Declarations persist at
+`<config-dir>/hooks.json`; one handler per seam reads them live, so a dashboard
+save is in force on the NEXT tool call; evaluation is ordered with first-denial
+wins and fails open. `validateHookDeclaration` rejects declarations that would be
+silent no-ops (a `deny` on a seam that cannot stop a call; `scan-args` on
+`on_session_end`), and a refused save is a 400 that leaves the previous set in
+force. New dashboard page **Agent Management → Hooks** (`/hooks`) renders the
+contract's vocabulary and an editor; reads are open, writes require
+`routing.operate` (admin/operator). Reference: **`docs/HOOKS.md`**. The design
+doc's §5.2/§6/roadmap/§10 now record the decision (model C, no-code half built;
+full hook runtime still closed until the §8 trust model). Pinned by 16 contract
+tests, an HTTP API test that proves a saved hook is LIVE in the shared registry
+(`hooks.runBefore` actually vetoes), and 8 page tests.
 
 ### Added: start / stop / status for the OmniRoute gateway (dashboard + CLI)
 

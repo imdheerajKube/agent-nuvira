@@ -60,6 +60,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/dag', label: 'Execution', icon: '🔀' },
       { path: '/routing', label: 'Routing', icon: '🤖' },
       { path: '/requests', label: 'Requests', icon: '📨' },
+      // Hooks are agent-management POLICY: the declarative rules that bound what
+      // a tool call may do. They sit with the other capabilities a turn uses.
+      { path: '/hooks', label: 'Hooks', icon: '🪝' },
     ],
   },
   {

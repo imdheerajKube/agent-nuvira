@@ -9,15 +9,18 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   scanText,
   scanDirectory,
+  scanGitHistory,
+  formatSecretScan,
+  formatSecretHistoryScan,
   shouldSkipPath,
   looksLikePlaceholder,
-  formatSecretScan,
   MAX_FILE_BYTES,
 } from '../../src/security/secret-scan.js';
 
@@ -170,6 +173,112 @@ describe('scanDirectory', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('scanGitHistory', () => {
+  const git = (cwd: string, args: string[]): void => {
+    execFileSync('git', args, { cwd, stdio: ['ignore', 'ignore', 'ignore'] });
+  };
+  const commit = (cwd: string, message: string): void => {
+    git(cwd, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', message]);
+  };
+  const initRepo = (): string => {
+    const root = mkdtempSync(join(tmpdir(), 'secret-scan-git-'));
+    git(root, ['init', '-q']);
+    return root;
+  };
+
+  it('finds a secret that was committed and later DELETED (still in history)', () => {
+    const root = initRepo();
+    try {
+      writeFileSync(join(root, 'config.ts'), `export const t = "${FAKE.github}";\n`);
+      git(root, ['add', '-A']);
+      commit(root, 'add key');
+      // Delete it from the working tree and commit the deletion: the blob is
+      // gone from HEAD but still reachable, which is the whole point.
+      rmSync(join(root, 'config.ts'));
+      git(root, ['add', '-A']);
+      commit(root, 'remove key');
+
+      expect(scanDirectory(root).findings).toEqual([]); // working tree is clean
+      const result = scanGitHistory(root);
+      expect(result.isGitRepo).toBe(true);
+      expect(result.commitsScanned).toBeGreaterThanOrEqual(2);
+      const hit = result.findings.find((f) => f.id === 'github-pat');
+      expect(hit).toBeTruthy();
+      expect(hit?.path).toBe('config.ts');
+      // It must name a commit to rewrite, and never the raw value.
+      expect(hit?.commit).toBeTruthy();
+      expect(JSON.stringify(result.findings)).not.toContain(FAKE.github);
+      expect(result.summary).toMatch(/ROTATED/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a clean history honestly (a lint, not a guarantee)', () => {
+    const root = initRepo();
+    try {
+      writeFileSync(join(root, 'ok.ts'), 'export const x = 1;\n');
+      git(root, ['add', '-A']);
+      commit(root, 'clean');
+      const result = scanGitHistory(root);
+      expect(result.findings).toEqual([]);
+      expect(result.summary).toMatch(/nothing matched/);
+      expect(result.summary).toMatch(/not a guarantee/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('says so plainly when the path is not a git work tree', () => {
+    const root = mkdtempSync(join(tmpdir(), 'secret-scan-nogit-'));
+    try {
+      writeFileSync(join(root, 'a.ts'), `x="${FAKE.github}"\n`);
+      const result = scanGitHistory(root);
+      expect(result.isGitRepo).toBe(false);
+      expect(result.findings).toEqual([]);
+      expect(result.summary).toMatch(/Not a git work tree/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('honours the blob cap and says coverage is partial', () => {
+    const root = initRepo();
+    try {
+      for (let i = 0; i < 3; i += 1) writeFileSync(join(root, `f${i}.ts`), `export const x${i} = ${i};\n`);
+      git(root, ['add', '-A']);
+      commit(root, 'three files');
+      const result = scanGitHistory(root, { maxBlobs: 1 });
+      expect(result.truncated).toBe(true);
+      expect(result.summary).toMatch(/partial/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('formatSecretHistoryScan', () => {
+  it('renders masked historical findings with the commit column', () => {
+    const out = formatSecretHistoryScan({
+      root: '/x',
+      isGitRepo: true,
+      commitsScanned: 4,
+      blobsScanned: 9,
+      blobsSkipped: 0,
+      truncated: false,
+      bySeverity: { critical: 1, high: 0, medium: 0 },
+      summary: 'Walked 4 commit(s), 9 blob(s): 1 historical finding(s).',
+      findings: [{
+        path: 'config.ts', line: 3, column: 1, id: 'github-pat', label: 'GitHub token',
+        severity: 'critical', masked: 'ghp_…Q7r8', preview: 'x', commit: 'abc1234',
+      }],
+    });
+    expect(out).toContain('config.ts');
+    expect(out).toContain('abc1234');
+    expect(out).toContain('ghp_…Q7r8');
   });
 });
 
