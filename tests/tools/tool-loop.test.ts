@@ -335,6 +335,74 @@ describe('tool loop — end-turn semantics', () => {
     expect(result.followups).toEqual([{ prompt: 'A' }] as FollowupSuggestion[]);
   });
 
+  /**
+   * D1 — the delivered answer must be the run's OWN last word.
+   *
+   * Measured in `trace-1791300903944-upblb7` (an 82-step run): the longest step
+   * was seq 65's 4,024-char "Built and verified. Here's the rundown." draft, while
+   * seq 80/82 were 155/165-char CORRECTIONS of it ("My README claim was wrong —
+   * I never actually tested that install"). Because `lastContent` used to be
+   * replaced only when the new text was at least as long, the turn delivered the
+   * draft — and the user read a claim the agent had already disproved itself.
+   * Length is the wrong proxy for "a trailing wrapper must not clobber the essay",
+   * because a correction is also short. What separates a correction from a closing
+   * wrapper is whether the turn DID something in between: text written after real
+   * work is an account of a LATER state and supersedes; a closing paragraph
+   * written with no work since is presentation.
+   */
+  it('delivers the run’s own later, SHORTER correction when real work happened since the draft (D1)', async () => {
+    const draft =
+      'Built and verified. Here is the full rundown: the service reads the model registry, ranks providers by ' +
+      'measured quality, records the served pair, and falls back through the configured chain when a call fails.';
+    const correction = 'My earlier claim was wrong — that file DOES resolve; I never actually tested the install.';
+    expect(correction.length).toBeLessThan(draft.length); // the old length-only rule would have kept the draft
+    const script: StepResponse[] = [
+      { content: draft, toolCalls: [{ id: 'c1', name: 'run_terminal', arguments: { command: 'npm run build' } }] },
+      { content: '', toolCalls: [{ id: 'c2', name: 'run_terminal', arguments: { command: 'ls dist' } }] },
+      { content: correction, toolCalls: [] },
+    ];
+    const deps = mockDeps(script);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'explain how the routing works' }],
+      context: ctx,
+      deps,
+      requireVerification: false,
+    });
+    expect(result.content).toBe(correction);
+    expect(result.content).not.toBe(draft);
+  });
+
+  /**
+   * The mirror — S1 must survive the D1 fix. A CLOSING wrapper (a short sign-off
+   * written with no work since the stored answer) is presentation, not an update,
+   * so it must not displace the essay. The essay's own step ran a tool, which is
+   * exactly the case the deferred stamp exists for: a step's OWN tool call must
+   * not make its own answer look superseded by the next step's wrapper.
+   */
+  it('a closing wrapper with no work since the essay does NOT displace it (S1 held)', async () => {
+    const essay =
+      'The routing works like this: the CLI resolves the configured default, the auto router scores candidates, ' +
+      'and each fallback is labelled by what the registry has actually proven about it.';
+    const wrapper = 'All set — let me know if you want anything else.';
+    expect(wrapper.length).toBeLessThan(essay.length);
+    const script: StepResponse[] = [
+      { content: essay, toolCalls: [{ id: 'c1', name: 'run_terminal', arguments: { command: 'git log -1' } }] },
+      {
+        content: wrapper,
+        toolCalls: [{ id: 'c2', name: 'suggest_followups', arguments: { followups: [{ prompt: 'Go deeper?' }] } }],
+      },
+    ];
+    const deps = mockDeps(script);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'explain how the routing works' }],
+      context: ctx,
+      deps,
+      requireVerification: false,
+    });
+    expect(result.content).toBe(essay);
+    expect(result.content).not.toContain('let me know');
+  });
+
   it('the LAST suggest_followups call wins (no accumulated stale suggestions)', async () => {
     const script: StepResponse[] = [
       { content: '', toolCalls: [{ id: 'c1', name: 'suggest_followups', arguments: { followups: [{ prompt: 'Stale A' }, { prompt: 'Stale B' }] } }] },

@@ -80,7 +80,7 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 
 | # | Sev | Issue | Evidence | Fix | Acceptance |
 |---|---|---|---|---|---|
-| D1 | S1 | **Stale final answer at budget exhaustion.** Run A claimed FAISS "never executed" after its own trace verified it (seq 68) and after it corrected the claim (seq 80–82). | Run A | Compose the final answer from the recorded findings at exit, not from an earlier draft | The final answer never contradicts the run's own findings |
+| D1 | S1 | **Stale final answer at budget exhaustion.** Run A claimed FAISS "never executed" after its own trace verified it (seq 68) and after it corrected the claim (seq 80–82). | Run A trace `trace-1791300903944-upblb7` (delivered 4,024 chars, seq 65) | **LANDED** (Bundle 2c): `lastContent` is replaced by a later answer when real work SUCCEEDED since the stored one — not only when the new text is longer | The delivered answer is the run's own last word after real work |
 | D2 | S1 | **A useless response is recorded `success: true`.** `local/deepseek-coder:latest` returned a generic non-answer; the step logged success. | Run A seq 14 | Mark a step served by an unexpected model, and record the detour | A mid-turn model detour is visible in the trace as a detour |
 | D3 | S1 | **The trace summary `provider` is wrong** (`groq` while all 81 steps say `deepseek`). | Runs A & B | Derive the summary from the steps | Summary == the model that served the most steps |
 | D4 | S2 | **`model explain` does not predict the runtime.** | `gemini-3.1-flash-lite` vs `deepseek-flash` | Share the resolution path | explain's winner == the model a real turn uses, for the same input |
@@ -108,6 +108,50 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 | P5 bad model's garbage = success | **D2** | P12 explain ranks unsorted | **D5** |
 | P6 unbounded context growth | **C1** | P13 pin rerouted into pipeline | **E2** |
 | P7 stale answer at budget end | **D1** | | |
+
+## Bundle 2c — the delivered answer must be the run's own last word (D1 LANDED)
+
+**D1. The answer a turn delivered was the LONGEST text of the turn, not its last substantive one.**
+In `trace-1791300903944-upblb7` (the 82-step max/auto run this programme is measured against), the
+longest step was **seq 65 — 4,024 chars** — the "Built and verified. Here's the rundown." draft.
+seq 80 (155 chars) and seq 82 (165 chars) were the run's OWN corrections of that draft ("My README
+claim was **wrong** — torch-2.14.1 and sentence-transformers-6.1.0 *do* resolve…"). Because
+`tool-loop.ts` replaced `lastContent` only when the new text was `>=` the stored length, neither
+correction could ever take over: the turn ended `bounded: true` with `contentChars: 4024` — it handed
+the user a claim the run had already disproved itself.
+
+**Why the length rule existed — and why length is the wrong proxy.** It was written to stop a trailing
+WRAPPER (a short closing paragraph, common when a model repeats `suggest_followups`) from clobbering
+the full answer (the "where is the essay?" bug, S1). But a correction is *also* short, so length
+cannot separate the two. What actually separates them is whether the turn DID something in between:
+**text written after real work is an account of a LATER state and supersedes; a closing paragraph
+written with no work since is presentation.**
+
+**The fix.** A later answer now replaces the stored one when it is at least as long (the old path,
+unchanged) **or** when real work SUCCEEDED since the stored one was written. "Real work" is the
+cardinality of the same predicate `hasProductiveAction` answers — `progress.successfulToolCalls` minus
+`NON_PRODUCTIVE_TOOLS` — read from the loop's own success record, so a refused or failed call is never
+mistaken for work and the two definitions cannot drift. The capture is stamped at the TOP of the next
+iteration (with that step's own tool calls counted) so a step's OWN tool call can never make its own
+answer look superseded by the next step's wrapper — the essay step that also wrote a file must not
+lose to the closing paragraph.
+
+**Measured after.** `tests/tools/tool-loop.test.ts` (+2). Both were proven to FAIL under the old
+length-only rule (the run delivered the draft: `expected 'My earlier claim was wrong…' to be 'Built and
+verified…'`) and pass under the new one:
+
+- a long draft → real tool work → a SHORTER corrective answer is delivered (the D1 case);
+- a short closing wrapper written with NO work since the essay does NOT displace it (S1 held).
+
+All five docs guards green; **237 files / 4060 tests** (4058 + 2). The field evidence is the run-A
+trace above — the shape is not reproducible in a short headless run, so the trace is the proof and the
+unit tests pin the rule.
+
+**Honest residual.** The rule keys on *work since*, not on retraction language, so it cannot tell a
+correction from a genuinely-terse final paragraph when the two have the same shape. That is
+deliberate: the alternative — pattern-matching words like "wrong"/"actually" — is exactly the kind of
+name-driven heuristic this programme exists to remove. If a future measured run shows it, it is a
+candidate for a measured-quality rule (B3), not a phrase list.
 
 ## Bundle 2b — `model list` must describe the same world routing does (E3 LANDED)
 
@@ -299,6 +343,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **A6 (partial)** | `route-resolver.ts`: the **happy path** now records a routing row (previously only substitutions were recorded). | `tests/inference/route-resolver.test.ts` (+3) | superseded by A6/F1 below |
 | **E3 (Bundle 2b)** | `cli/model.ts` `listProviders`: the provider set comes from `CATALOG_PROVIDER_IDS` + configured ids — the same source `rankAvailableProviders` uses — instead of a literal five-provider array; rows are ordered usable-first. | **LANDED**, live-verified: `deepseek` now appears as `Ready / ✅ / deepseek-flash` where it was invisible |
 | **D6 (Bundle 2a)** | `auto-router.ts` `pushFallback`: a pair the registry has proven dead (`unavailable`) is dropped from the offered chain; one with no proof is labelled `unverified`. The `unverified` distinction is the doctrine — an unknown is not a failure. | `tests/learning/auto-router.test.ts` (+2) | **LANDED**, live-verified in `model explain` |
+| **D1 (Bundle 2c)** | `tool-loop.ts`: `lastContent` is replaced by a later answer when real work SUCCEEDED since the stored one (the same predicate as `hasProductiveAction`, so they cannot drift), not only when the new text is longer; the stamp is deferred to the next iteration so a step's own tool call cannot expose its answer to the next step's closing wrapper. | `tests/tools/tool-loop.test.ts` (+2, both proven to fail under the old length-only rule) | **LANDED**, field evidence `trace-1791300903944-upblb7` (seq 65 draft vs seq 80/82 corrections) |
 | **A6 / A2 / A5 / D3 / D4 (Bundle 1c)** | `chat.ts` `execute` honours `defaultProvider: "auto"`; the non-auto fallback installs the served pair on `session`; the pinned path consults `strictPinRefusal`; `preferredModelsFor` drops a "verified" row whose own error says the model does not exist; entitlement failures survive a listing and a prune. | `tests/cli/chat-answer-once-auto-parity.test.ts` (+2, the CLI entry), `tests/learning/model-registry.test.ts` (+2), `tests/learning/model-selection.test.ts` (+1) | **LANDED + live-verified**: routing rows 0→2–3 on `-t`; strict pin 402 bodies 1→0. See "Bundle 1c". |
 
 ## Non-goals
@@ -324,7 +369,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 
 1. **Bundle 1 — identity & routability** (A1–A4): the release blocker. Until a pinned/model choice
    is pre-flighted and named, every routing number in the product is unverifiable.
-2. **Bundle 2 — truthful reporting** (D1, D3, A5, D5): make the system's account of itself true.
+2. **Bundle 2 — truthful reporting** (D3, A5, D5; **D1 landed in Bundle 2c**): make the system's account of itself true.
 3. **Bundle 3 — capability by measurement** (B1–B4): the root cause.
 4. **Bundle 4 — context discipline** (C1, C3–C5): the 2.85× gap.
 5. **Bundle 5 — autonomy & inventory** (E1–E3, B5, D6).

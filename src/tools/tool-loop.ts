@@ -1438,6 +1438,38 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // clobber it — otherwise the delivered answer is lost and the turn ends
   // with an empty/bounded response (the "where is the essay?" bug).
   let lastContent = '';
+  /**
+   * How many PRODUCTIVE actions had SUCCEEDED when `lastContent` was written.
+   *
+   * WHY THIS EXISTS (D1 — the delivered answer contradicted the run's own
+   * evidence). `lastContent` used to be replaced only when the new text was at
+   * least as long, so the delivered answer was the LONGEST text of the turn —
+   * and the model's own later correction could never take over. Measured in
+   * `trace-1791300903944-upblb7` (an 82-step run): the longest step was **seq 65
+   * (4,024 chars)** — the "Built and verified. Here's the rundown." draft — while
+   * seq 80 ("Hold on — that README note claims `sentence-transformers` needs a
+   * `torch` build, but I never actually tested that install. Let me check rather
+   * than assert.") and seq 82 ("My README claim was **wrong** — torch-2.14.1 and
+   * sentence-transformers-6.1.0 do resolve…") are 155 and 165 chars. Both are
+   * corrections of the draft, both are shorter, so the run delivered the draft
+   * and the user read an assertion the agent had already disproved itself.
+   *
+   * The rule the length check was reaching for is "a trailing WRAPPER must not
+   * clobber the essay". Length is the wrong proxy for that, because a correction
+   * is also short. What actually separates them is whether the turn DID something
+   * in between: text written after real work is an account of a LATER state and
+   * supersedes; a closing paragraph written with no work since is presentation.
+   * So a later answer wins when real work happened after the stored one.
+   *
+   * The presentation calls in `NON_PRODUCTIVE_TOOLS` are excluded on purpose —
+   * `suggest_followups` is what the end-of-response contract forces, it changes
+   * nothing, and it is precisely the call that produces the trailing wrapper
+   * this rule must still ignore (the same set `hasProductiveAction` uses, so the
+   * two cannot drift).
+   */
+  let workCallsBeforeLastContent = 0;
+  /** A capture happened this step; stamp it at the top of the NEXT one (see below). */
+  let pendingContentStamp = false;
   let bounded = false;
   // D2.2 — has this turn already pre-flighted the project's build prerequisites?
   // Checked once, before the FIRST build command the turn plans to run.
@@ -1492,6 +1524,20 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       return { content: '', followups, toolCalls: toolCallsRun, steps, ...(opts.resume ? { replayedSteps } : {}), bounded: false, cancelled: true, termination: 'cancelled' };
     }
     steps += 1;
+    // D1 — the work completed BEFORE this step's response is written. Snapshotted
+    // at the TOP of the iteration, where the previous step's tool calls have
+    // already run and been counted, so a step's OWN tool calls can never make its
+    // own answer look superseded by the next step's closing wrapper. See
+    // `workCallsBeforeLastContent`.
+    const workAtIterationStart = countProductiveWork(progress);
+    // Stamp an answer captured LAST step with the work count as of the END of that
+    // step. Doing it here (rather than at capture) is what keeps a step's OWN tool
+    // calls from making its own answer look superseded: the essay step that also
+    // wrote a file must not be replaced by the closing paragraph written next.
+    if (pendingContentStamp) {
+      workCallsBeforeLastContent = workAtIterationStart;
+      pendingContentStamp = false;
+    }
     // Mechanical thread budget: trim BEFORE the model call so a provider
     // request never exceeds the window (deterministic — no LLM summarizer,
     // no latency, no drift; see trimThreadBudget).
@@ -1666,8 +1712,15 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     const responseThinkOnly = deps.isThinkOnly
       ? deps.isThinkOnly(response.content)
       : isThinkOnlyResponse(response.content);
-    if (response.content.trim() && !responseThinkOnly && response.content.length >= lastContent.length) {
+    const responseIsSubstantive =
+      response.content.trim() !== '' && !responseThinkOnly && !isBareAcknowledgment(response.content);
+    const workSinceLastContent = workAtIterationStart > workCallsBeforeLastContent;
+    if (responseIsSubstantive && (response.content.length >= lastContent.length || workSinceLastContent)) {
       lastContent = response.content;
+      // Stamp what this answer is an account OF, so the next step can tell an
+      // update from a wrapper (see `workCallsBeforeLastContent`). Deferred to the
+      // top of the next iteration so it includes THIS step's own work.
+      pendingContentStamp = true;
     }
     const { toolCalls } = response;
     // P2 — the model just produced something usable (text, or at least one tool
@@ -3450,6 +3503,21 @@ const NON_PRODUCTIVE_TOOLS: ReadonlySet<string> = new Set(['suggest_followups'])
 /** True when the turn performed at least one action beyond merely concluding. */
 function hasProductiveAction(progress: ToolLoopProgress): boolean {
   return progress.successfulToolCalls.some((name) => !NON_PRODUCTIVE_TOOLS.has(name));
+}
+
+/**
+ * How many PRODUCTIVE actions have SUCCEEDED this turn — the cardinality of the
+ * very predicate `hasProductiveAction` answers, so the two cannot drift. D1 uses
+ * it to tell a later answer written after real work (an update, which supersedes)
+ * from a closing wrapper written after none (presentation, which must not). It
+ * reads the loop's own success record — `successfulToolCalls`, appended only for
+ * calls that actually ran — so a refused or failed call is never mistaken for
+ * work, and `suggest_followups` (which merely concludes) is never counted.
+ */
+function countProductiveWork(progress: ToolLoopProgress): number {
+  let n = 0;
+  for (const name of progress.successfulToolCalls) if (!NON_PRODUCTIVE_TOOLS.has(name)) n += 1;
+  return n;
 }
 
 /**
