@@ -52,7 +52,7 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 | A2 | S1 | **A pin is not pre-flighted for routability.** A `never-verified`/`proven-dead` pair is attempted, and the failure surfaces as a provider error. | Run D: 402 after the pin was accepted | Consult the reachability verdict before the first call; refuse with the reason | **MET for a `proven-dead` pair** (Bundle 1c): the strict pin logs 0 × 402 and refuses before any request. A `never-verified` pair is still attempted on purpose — "nothing tried yet" is not a failure. |
 | A3 | S1 | **`routable` is a dashboard view, not a gate.** `model-reachability.ts` mirrors `isUsable()` but routing/pins never ask it. | Module header states this | Make it the ONE consulted gate for auto *and* pinned runs | A unit test proves a `never-verified` pair cannot reach a provider call |
 | A4 | S1 | **Definitive provider failures are never written back.** OpenRouter's dead credits are recorded nowhere, so reachability cannot learn. | Registry: no 402/credit error on any openrouter row | Classify 402/`insufficient credits` as a provider **entitlement** state (definitive, not a cooldown) and persist it | After one 402, the provider's pair reads non-routable and stops being ranked/offered |
-| A5 | S1 | **Identity is reported per component, not per pair.** One turn reported 3 different models. | Run A: explain `gemini-3.1-flash-lite` / trace summary `groq` / debug header `deepseek-flash` | **PARTIAL** — the debug header was fixed by F2 and the trace summary now names the served PAIR (Bundle 2d). Residual: pipeline steps can still record `provider: unknown`, which then *becomes* the summary | A run's reported model is byte-identical across all three surfaces |
+| A5 | S1 | **Identity is reported per component, not per pair.** One turn reported 3 different models. | Run A: explain `gemini-3.1-flash-lite` / trace summary `groq` / debug header `deepseek-flash` | **LANDED** — the debug header was fixed by F2, the trace summary names the served PAIR (Bundle 2d), and the pipeline's housekeeping steps are now NAMED and no longer double-recorded (Bundle 2f) | A run's reported model is byte-identical across all three surfaces |
 | A6 | S1 | **The auto chat path records no routing decision at all.** | Runs A/B/C: **0 rows** in `routing-history.json`; reproduced live with `-t` (Bundle 1c) | **LANDED** — the CLI was not auto-routing at all (F1). `execute` now honours `defaultProvider: "auto"`, so the turn goes through `routeMessageAuto` | A completed auto turn appends rows naming the served pair (2–3 genuine decision points per headless turn; 0 before) |
 
 ## Cluster B — Capability understanding (S1, root cause)
@@ -108,6 +108,39 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 | P5 bad model's garbage = success | **D2** | P12 explain ranks unsorted | **D5** |
 | P6 unbounded context growth | **C1** | P13 pin rerouted into pipeline | **E2** |
 | P7 stale answer at budget end | **D1** | | |
+
+## Bundle 2f — the pipeline's housekeeping steps are named, not `unknown` (A5 LANDED)
+
+**A5.** The pipeline's housekeeping calls — the planner, memory retrieval, trajectory summarization,
+self-improvement — all run through `defaultCallLLM`, and each was wrapped for the trace at its use site
+with NO provider/model. Two defects fell out of one omission:
+
+- On the explicit path the step recorded **`unknown/unknown`** even though `options.provider/model` were
+  known, so the trace — and, since Bundle 2d, the summary derived from it — could not say which model ran.
+- In AUTO mode `defaultCallLLM` is ALREADY traced by `createAutoRoutedLLM`, so the extra wrap logged
+  every housekeeping call **twice** (once routed, once `unknown/unknown`). The planner had a guard against
+  exactly this; memory/trajectory/self-improver did not.
+
+**The fix.** One `housekeepingCallLLM(agentType, description)` helper generalises the planner's guard: in
+auto mode it reuses the already-traced LLM (no second wrap), otherwise it wraps once and attributes the
+step to `resolveAuditRoute(options)`. The decision is extracted to `housekeepingTraceContext()` so it is
+testable without driving the orchestrator.
+
+**Measured before / after — the same `nuvira phase execute` on an isolated `NUVIRA_MEMORY_DIR`:**
+
+| | Old build | New build |
+|---|---|---|
+| Orchestrator trace summary | `unknown / unknown` | `groq / default` |
+| Steps reading `unknown` | 5 of 5 (all `planner`) | **0** |
+
+**Tests.** `tests/agents/orchestrator.test.ts` (+3): no re-wrap in auto mode, one wrap naming the pinned
+pair on the explicit path, and the pair omitted (not guessed) when nothing is known. All five docs guards
+green; **453 files / 8307 tests** + dashboard **50 / 1052**.
+
+**Honest limit.** When the pipeline is UNPINNED the audit route resolves the configured model *sentinel*
+(`default`), because the concrete model is chosen by the adapter below the trace layer and is not knowable
+at the record site. The three surfaces now AGREE, which is what A5 asked for; naming the concrete adapter
+default there is a separate, larger change.
 
 ## Bundle 2e — `model explain`'s ranking key is stated, not implied (D5 LANDED)
 
@@ -328,7 +361,7 @@ now with a mechanism and a fix.
   file flipped to `unverified` between runs — which is why the deterministic verification seeds an
   isolated `NUVIRA_MEMORY_DIR`. F6 closes the two in-code paths that did it; the shared-file race
   itself is NOT fixed and is a candidate for its own bundle.
-- **A5 residual**: pipeline steps still record `provider: unknown`.
+- **A5 residual**: CLOSED in Bundle 2f — pipeline housekeeping steps are named and no longer double-recorded.
 - The bogus rows already on disk (`groq|wire-stub-model`) are not migrated; F2 stops new ones and F4
   stops the not-found ones being ranked. A one-shot registry hygiene pass is not implemented.
 
@@ -387,6 +420,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **D1 (Bundle 2c)** | `tool-loop.ts`: `lastContent` is replaced by a later answer when real work SUCCEEDED since the stored one (the same predicate as `hasProductiveAction`, so they cannot drift), not only when the new text is longer; the stamp is deferred to the next iteration so a step's own tool call cannot expose its answer to the next step's closing wrapper. | `tests/tools/tool-loop.test.ts` (+2, both proven to fail under the old length-only rule) | **LANDED**, field evidence `trace-1791300903944-upblb7` (seq 65 draft vs seq 80/82 corrections) |
 | **D3 (model half) / A5 / D2 (Bundle 2d)** | `reasoning-trace.ts` `endTrace`: the summary names the provider×model PAIR that served the most steps (previously only the provider was derived, beside a requested model), and a `decision` event records any mid-turn detour with per-pair step counts. | `tests/learning/reasoning-trace.test.ts` (+3) | **LANDED**, live-verified (the summary pair equals the run's step pair) |
 | **D5 (Bundle 2e)** | `cli/model.ts` explain: the "Ranked providers" header states the availability-first sort key and quota-parked rows are labelled — the order was already the routing precedence; only the display hid its key. | `tests/cli/model.test.ts` (+1) | **LANDED** |
+| **A5 (Bundle 2f)** | `agents/orchestrator.ts`: one `housekeepingCallLLM` helper (planner + memory + trajectory + self-improver) reuses the already-traced LLM in auto mode (no double-record) and wraps once WITH the audit route otherwise (no more `unknown/unknown`); `housekeepingTraceContext()` is the extracted, unit-tested decision. | `tests/agents/orchestrator.test.ts` (+3) | **LANDED**, measured before/after on `nuvira phase execute` (5/5 `unknown` steps → 0) |
 | **A6 / A2 / A5 / D3 / D4 (Bundle 1c)** | `chat.ts` `execute` honours `defaultProvider: "auto"`; the non-auto fallback installs the served pair on `session`; the pinned path consults `strictPinRefusal`; `preferredModelsFor` drops a "verified" row whose own error says the model does not exist; entitlement failures survive a listing and a prune. | `tests/cli/chat-answer-once-auto-parity.test.ts` (+2, the CLI entry), `tests/learning/model-registry.test.ts` (+2), `tests/learning/model-selection.test.ts` (+1) | **LANDED + live-verified**: routing rows 0→2–3 on `-t`; strict pin 402 bodies 1→0. See "Bundle 1c". |
 
 ## Non-goals
@@ -412,7 +446,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 
 1. **Bundle 1 — identity & routability** (A1–A4): the release blocker. Until a pinned/model choice
    is pre-flighted and named, every routing number in the product is unverifiable.
-2. **Bundle 2 — truthful reporting** (A5 residual; **D1/D3 landed in Bundles 2c/2d, D5 in 2e**): make the system's account of itself true.
+2. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D5/A5 landed in Bundles 2c–2f**): make the system's account of itself true.
 3. **Bundle 3 — capability by measurement** (B1–B4): the root cause.
 4. **Bundle 4 — context discipline** (C1, C3–C5): the 2.85× gap.
 5. **Bundle 5 — autonomy & inventory** (E1–E3, B5, D6).

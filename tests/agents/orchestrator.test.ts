@@ -32,7 +32,7 @@ import inquirer from 'inquirer';
 const orchidTestDir = mkdtempSync(join(tmpdir(), 'buff-orch-test-'));
 process.env.NUVIRA_MEMORY_DIR = join(orchidTestDir, '.nuvira', 'memory');
 
-import { Orchestrator } from '../../src/agents/orchestrator.js';
+import { Orchestrator, housekeepingTraceContext } from '../../src/agents/orchestrator.js';
 import type { OrchestratorOptions } from '../../src/agents/orchestrator.js';
 import type { OnRateLimit, RateLimitInfo } from '../../src/agents/agent.js';
 import { ContextVault } from '../../src/agents/context-vault.js';
@@ -155,6 +155,39 @@ function makeRateLimitInfo(overrides: Partial<RateLimitInfo> = {}): RateLimitInf
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
+
+describe('Orchestrator — housekeeping trace attribution (A5)', () => {
+  it('does NOT re-wrap in auto mode — the default LLM is already traced', () => {
+    // In auto mode the housekeeping LLM is `createAutoRoutedLLM`, which ALREADY
+    // wraps withTraceCapture. A second wrap logged each memory/trajectory/
+    // self-improver call twice: once routed, once `unknown/unknown`.
+    expect(
+      housekeepingTraceContext(true, { traceId: 't', agentType: 'memory', description: 'd' }),
+    ).toBeNull();
+  });
+
+  it('wraps ONCE on the explicit path and NAMES the pinned pair', () => {
+    const ctx = housekeepingTraceContext(
+      false,
+      { traceId: 't', agentType: 'memory', description: 'd' },
+      { provider: 'groq', model: 'openai/gpt-oss-120b' },
+    );
+    expect(ctx).toMatchObject({
+      traceId: 't',
+      agentType: 'memory',
+      description: 'd',
+      provider: 'groq',
+      model: 'openai/gpt-oss-120b',
+    });
+  });
+
+  it('omits the pair when nothing is known — the recorder keeps its own unknown marker', () => {
+    const ctx = housekeepingTraceContext(false, { traceId: 't', agentType: 'planner', description: 'd' }, {});
+    expect(ctx).toBeDefined();
+    expect(ctx).not.toHaveProperty('provider');
+    expect(ctx).not.toHaveProperty('model');
+  });
+});
 
 describe('Orchestrator — routing-aware planning', () => {
   it('insert a verification step when routing indicates verification-heavy work', () => {

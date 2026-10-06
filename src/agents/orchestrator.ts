@@ -502,6 +502,35 @@ export function resolveUseToolCalling(options: Pick<OrchestratorOptions, 'useToo
   return options.useToolCalling ?? DEFAULT_USE_TOOL_CALLING;
 }
 
+/**
+ * A5 — the trace-capture context for a pipeline HOUSEKEEPING call (the planner,
+ * memory retrieval, trajectory summarization, self-improvement), or `null` when
+ * the call must NOT be wrapped again.
+ *
+ * WHY THIS EXISTS. Those calls all run through `defaultCallLLM`, and each used to
+ * be wrapped at its use site with no provider/model:
+ *  - in AUTO mode `defaultCallLLM` is already traced by `createAutoRoutedLLM`, so
+ *    the second wrap logged every housekeeping call TWICE — once routed, once
+ *    `unknown/unknown` (the duplicate the planner already guarded against);
+ *  - on the EXPLICIT (pinned) path it is raw and must be wrapped — and NAMED, or
+ *    the step recorded `unknown/unknown` even though `options.provider/model`
+ *    were known, leaving the trace unable to say which model ran.
+ * `null` means "already traced — reuse it". The explicit context carries the
+ * audit route when one is known; `resolveAuditRoute` is best-effort and leaves
+ * its own `unknown` marker when nothing is known, exactly as before.
+ */
+export function housekeepingTraceContext(
+  autoRoutingActive: boolean,
+  base: { traceId: string; agentType: string; description: string },
+  audit?: { provider?: string; model?: string },
+): { traceId: string; agentType: string; description: string; provider?: string; model?: string } | null {
+  if (autoRoutingActive) return null;
+  const context: { traceId: string; agentType: string; description: string; provider?: string; model?: string } = { ...base };
+  if (audit?.provider) context.provider = audit.provider;
+  if (audit?.model) context.model = audit.model;
+  return context;
+}
+
 // ─── Orchestrator ───────────────────────────────────────────────────────────
 
 interface RoutingExecutionStrategy {
@@ -927,22 +956,31 @@ export class Orchestrator {
     const defaultCallLLM = autoRoutingActive
       ? this.createAutoRoutedLLM({ agentType: 'planner', description: goal }, options)
       : this.createLLMProvider(options);
-    // P0 reasoning trace: the planner + memory + trajectory calls share the
-    // raw defaultCallLLM, so wrap AT EACH USE SITE (never at creation) — a
-    // task fallback re-uses defaultCallLLM and wrapping it here would cause
-    // every task call to be recorded twice (once as planner, once as task).
+    // P0 reasoning trace: the planner + memory + trajectory + self-improver
+    // calls share `defaultCallLLM`, so they are wrapped at ONE use-site helper
+    // (never at creation) — a task fallback re-uses defaultCallLLM, and wrapping
+    // it at creation would record every task call twice (planner and task).
     //
-    // FIX: When auto-routing is active, createAutoRoutedLLMFromDecision already
-    // wraps with withTraceCapture — adding another layer causes DUPLICATE trace
-    // entries (the same call logged twice with 'unknown/unknown' provider info).
-    // Only wrap when NOT auto-routing (explicit provider path).
-    const plannerCallLLM = autoRoutingActive
-      ? defaultCallLLM
-      : withTraceCapture(defaultCallLLM, {
-          traceId: this.activeTraceId ?? '',
-          agentType: 'planner',
-          description: goal,
-        });
+    // A5 — THE HOUSEKEEPING STEPS WERE NOT NAMED, AND IN AUTO MODE WERE LOGGED
+    // TWICE. Two facts, one helper:
+    //  - When auto-routing is active `defaultCallLLM` is ALREADY traced by
+    //    `createAutoRoutedLLM`, so wrapping it again logged each housekeeping
+    //    call twice (once 'unknown/unknown', once routed). The planner guarded
+    //    against this; memory/trajectory/self-improver did not.
+    //  - On the explicit (pinned) path the wrapper carried NO provider/model, so
+    //    the step recorded `unknown/unknown` even though the pair was known.
+    // Reuse the already-traced LLM when auto-routing, and attribute the step to
+    // the audit route otherwise. `resolveAuditRoute` is best-effort and leaves
+    // its own 'unknown' marker when nothing is known, exactly as before.
+    const housekeepingCallLLM = (agentType: string, description: string): LLMCallFn => {
+      const context = housekeepingTraceContext(
+        autoRoutingActive,
+        { traceId: this.activeTraceId ?? '', agentType, description },
+        this.resolveAuditRoute(options),
+      );
+      return context ? withTraceCapture(defaultCallLLM, context) : defaultCallLLM;
+    };
+    const plannerCallLLM = housekeepingCallLLM('planner', goal);
     // On resume, seed the report with the steps already finished in the original
     // run (completed/failed) so the final agent breakdown is complete — these
     // steps are never re-executed, but they still count toward the summary.
@@ -1055,11 +1093,7 @@ export class Orchestrator {
         const { getMemoryManager } = await import('../memory/manager.js');
         const memoryResult = await getMemoryManager().buildMemoryBlock(
           goal,
-          withTraceCapture(defaultCallLLM, {
-            traceId: this.activeTraceId ?? '',
-            agentType: 'memory',
-            description: `Memory retrieval for: ${goal.slice(0, 80)}`,
-          }),
+          housekeepingCallLLM('memory', `Memory retrieval for: ${goal.slice(0, 80)}`),
         );
         // The manager composes the FULL persistent-memory block (provider's
         // static system block framing the per-field recall). Consume it
@@ -1791,11 +1825,7 @@ export class Orchestrator {
         const { storeExecutionTrajectory } = await import('../memory/memory-integration.js');
         trajectoryId = await storeExecutionTrajectory(
           orchestrationSummary,
-          withTraceCapture(defaultCallLLM, {
-            traceId: this.activeTraceId ?? '',
-            agentType: 'memory',
-            description: `Trajectory summarization for: ${goal.slice(0, 80)}`,
-          }),
+          housekeepingCallLLM('memory', `Trajectory summarization for: ${goal.slice(0, 80)}`),
           vault.context.taskPlan,
           contextFiles,
           options.verbose,
@@ -1807,11 +1837,7 @@ export class Orchestrator {
           const improver = getSelfImprover();
           await improver.processRun(
             { ...orchestrationSummary, trajectoryId },
-            withTraceCapture(defaultCallLLM, {
-              traceId: this.activeTraceId ?? '',
-              agentType: 'self-improver',
-              description: `Pattern/failure-lesson extraction for: ${goal.slice(0, 80)}`,
-            }),
+            housekeepingCallLLM('self-improver', `Pattern/failure-lesson extraction for: ${goal.slice(0, 80)}`),
             options.agentModels as Record<string, string> | undefined,
             options.verbose,
           );
