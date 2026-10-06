@@ -1003,7 +1003,15 @@ export function isAutoProvider(provider?: string | null): boolean {
  * auto-route exactly as before.
  */
 export function isProviderOwnAuto(provider?: string | null, model?: string | null): boolean {
-  return !!provider && !isAutoProvider(provider) && isAutoModel(model);
+  if (!provider || isAutoProvider(provider) || !isAutoModel(model)) return false;
+  // …and the provider must ACTUALLY expose its own `auto`. The first cut returned
+  // true for ANY concrete provider (`-p groq -m auto`, `-p local -m auto`, …),
+  // which left the sentinel unresolved and handed the literal string `auto` to a
+  // provider that has no such model — a live 400 waiting to happen, and the cause
+  // of a verify-probe + real call (the same request paid for twice). Only a
+  // gateway whose catalog default IS `auto` (OmniRoute, and anything configured
+  // the same way) owns the sentinel; every other provider gets a real model id.
+  return getDefaultModel(provider) === 'auto';
 }
 
 /** Agent-nuvira's OWN auto routing: the `auto` directive on either axis, minus

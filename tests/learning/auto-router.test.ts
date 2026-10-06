@@ -165,6 +165,21 @@ describe('isProviderOwnAuto / isAgentAutoRoute (A8)', () => {
   it('`-p auto` with a concrete model is still the AGENT\'s auto-route', () => {
     expect(isAgentAutoRoute('auto', 'llama-3.3-70b-versatile')).toBe(true);
   });
+
+  it('a PLAIN provider + `-m auto` does NOT own the sentinel — it must be resolved', () => {
+    // Regression: the first A8 cut returned true for ANY concrete provider, so
+    // `-p local -m auto` (/groq/deepseek/…) left `auto` unresolved and handed the
+    // literal string to a provider that has no such model. That 400s live, and it
+    // made the orchestrator pay twice (a verify probe on `auto`, then the real
+    // call). Only a provider whose catalog default IS `auto` — a gateway like
+    // OmniRoute — owns the sentinel.
+    for (const provider of ['local', 'groq', 'deepseek', 'openai', 'gemini']) {
+      expect(isProviderOwnAuto(provider, 'auto'), provider).toBe(false);
+    }
+    // …and because no provider owns it, our own router still picks a real model.
+    expect(isAgentAutoRoute('groq', 'auto')).toBe(true);
+    expect(isAgentAutoRoute('deepseek', 'auto')).toBe(true);
+  });
 });
 
 // ─── computeWeights ─────────────────────────────────────────────────────────

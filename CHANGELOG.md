@@ -41,6 +41,32 @@ the four accents the contrast suite already pins (registry = accent, live probe 
 warn, routable = ok, not routable = danger). The values are unchanged; the live
 probe pair is still omitted rather than zeroed when the server does not report it.
 
+### Fixed: a pinned `-m auto` no longer leaks the `auto` sentinel to a plain provider
+
+The A8 rule ("a concrete `--provider` + `-m auto` means THAT provider's own auto")
+was written for a gateway like OmniRoute but matched ANY concrete provider, so
+`nuvira execute --provider local -m auto` (or groq/deepseek/openai/…) left the
+sentinel unresolved and handed the literal string `auto` to a provider that has
+no such model — a live 400 — and made the orchestrator pay for the SAME request
+twice (a verify-on-demand probe on `auto`, then the real call).
+`isProviderOwnAuto` is now data-driven: the provider owns the sentinel only when
+its catalog default IS `auto` (a gateway). Every other provider resolves `auto`
+to a real model id. This also closed the one failing test in the suite
+(the orchestrator auto-model test that only failed on a machine with a
+capability-mode/config that enabled verify-on-demand).
+
+### Added: software deliverables carry a project-documentation contract
+
+A software build produced code and stopped; the documents a real project ships
+were only written when the user named them. `project-docs` now defines the
+canonical set (README + CHANGELOG always; ARCHITECTURE with a Mermaid diagram,
+`docs/api.md`, `docs/usage.md`, `CONTRIBUTING.md` when the shape warrants a
+greenfield/library/service/test-bearing build) and hands the reasoner a
+contract to plan them as REAL steps. It is strictly SOFTWARE-only: an authored
+ask returns nothing, so "write me a poem" is never handed an architecture
+diagram. Documents that already exist are UPDATED in place (a CHANGELOG gets a
+new top section) — never shadowed by a second file.
+
 ### Benchmarks: a THIRD WS7 run of both arms reproduces the first numbers
 
 Re-run the same way (`NUVIRA_STRICT_MODEL=1`): native `deepseek/deepseek-flash`

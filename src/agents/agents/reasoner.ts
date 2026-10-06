@@ -31,6 +31,7 @@ import {
   deliverableClassLabel,
   type DeliverableClass,
 } from '../../learning/deliverable-class.js';
+import { looksLikeLibraryOrService, softwareProjectGuidance } from '../../learning/project-docs.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -168,6 +169,18 @@ export class ReasonerAgent extends Agent {
         ? authoredDeliverableGuidance(verdict.class, verdict.substrates)
         : '';
       if (authoredGuidance) promptParts.push(authoredGuidance);
+
+      // SOFTWARE deliverables get the project-documentation contract: a README
+      // and a CHANGELOG are part of the deliverable, plus the heavier docs when
+      // the shape warrants them. The authored classes above return '' here, so
+      // "write me a poem" is never asked for an architecture diagram.
+      const softwareGuidance = softwareProjectGuidance(verdict.class, verdict.authored, {
+        greenfield: assessment?.isGreenfield,
+        isLibraryOrService: looksLikeLibraryOrService(context.goal),
+        hasTests: assessment?.hasTests,
+        docsRequested: /\b(documentation|docs|readme|api\s+reference|user\s+guide)\b/i.test(context.goal),
+      });
+      if (softwareGuidance) promptParts.push(softwareGuidance);
 
       // Inject project assessment if available
       if (assessment) {
