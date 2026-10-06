@@ -2501,6 +2501,50 @@ describe('tool loop — mid-turn model handoff (P2)', () => {
     expect(result.modelHandoffs).toBe(1);
   });
 
+  it('drops the failed model\'s private reasoning on handoff, keeping it on a same-model retry', async () => {
+    // A handoff replaces the MODEL. `reasoningContent` is provider-private: the
+    // wire layer echoes it back on the assistant message, which some reasoning
+    // models REQUIRE from THEMSELVES on a retry — but replaying it to a
+    // DIFFERENT model either gets rejected (foreign `reasoning_content` /
+    // tool-call ids) or anchors the new model to the reasoning that just
+    // failed. So: strip on a pair change, keep on a same-model retry.
+    let aCalls = 0;
+    let sawOwnReasoningOnRetry = false;
+    let handedOffThread: Array<{ role: string; reasoningContent?: string }> = [];
+    const callModel = vi.fn(async (thread: unknown): Promise<StepResponse> => {
+      const msgs = thread as Array<{ role: string; reasoningContent?: string }>;
+      if (aCalls < 2) {
+        aCalls += 1;
+        if (aCalls === 2) {
+          sawOwnReasoningOnRetry = msgs.some((m) => m.role === 'assistant' && !!m.reasoningContent);
+        }
+        return { content: '', toolCalls: [], reasoningContent: 'A private chain of thought' };
+      }
+      handedOffThread = msgs;
+      return { content: 'B answered it.', toolCalls: [] };
+    });
+    const requestModelSwitch = vi.fn(async () => true);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), requestModelSwitch },
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.content).toBe('B answered it.');
+    expect(result.modelHandoffs).toBe(1);
+    // The SAME model's retry kept its own reasoning — the strip is scoped to a
+    // pair change, not applied blindly.
+    expect(sawOwnReasoningOnRetry).toBe(true);
+    // The replacement model got the FACTS without the stranger's reasoning.
+    expect(
+      handedOffThread.filter((m) => m.role === 'assistant' && m.reasoningContent).length,
+    ).toBe(0);
+    expect(handedOffThread.some((m) => m.role === 'assistant')).toBe(true);
+  });
+
   it('falls back to the bounded ending when the caller has no other candidate', async () => {
     const callModel = vi.fn(async (): Promise<StepResponse> => ({ content: '', toolCalls: [] }));
     const requestModelSwitch = vi.fn(async () => false);

@@ -15,6 +15,65 @@ import {
 } from '../../src/learning/error-repair.js';
 import type { AgentContext, AgentResult, LLMCallFn } from '../../src/agents/agent.js';
 
+/**
+ * fix: an unfunded PROVIDER account (HTTP 402) is not a repairable failure.
+ *
+ * Measured live (Run D, strict pinned `openrouter/deepseek-v4.1-flash`): the
+ * error `OpenRouter API error (402): {"error":{"message":"Insufficient
+ * credits...","code":402,...}}` matched NO classification branch, fell through
+ * to `unknown`, which `isRepairable` treats as repairable — so the Planner
+ * burned its whole repair budget ("Repair budget exhausted after 2 attempt(s)")
+ * on a failure that could never succeed, and the user lost the real cause
+ * behind a generic repair message.
+ *
+ * The live rejection text is reproduced verbatim below, because the whole point
+ * is that the REAL message must classify correctly — not a tidy paraphrase.
+ */
+const LIVE_OPENROUTER_402 =
+  'OpenRouter API error (402): {"error":{"message":"Insufficient credits. This account never purchased credits. ' +
+  'Make sure your key is on the correct account or org, and if so, purchase more at ' +
+  'https://openrouter.ai/settings/credits","code":402,"metadata":{"limit_source":"openrouter_credits",' +
+  '"remedy_hint":"Add credits at https://openrouter.ai/settings/credits, or lower max_tokens / prompt size to fit your remaining balance."}}}';
+
+describe('error-repair — an unfunded provider is definitive, not repairable', () => {
+  it('classifies the live OpenRouter 402 as credit-exhausted, not unknown', () => {
+    expect(classifyError(LIVE_OPENROUTER_402)).toBe('credit-exhausted');
+  });
+
+  it('does NOT classify it as context-limit even though the text contains max_tokens', () => {
+    // The message mentions `max_tokens`, so a later `context-limit` match would
+    // have tried to SHRINK THE ASK to fix an empty account.
+    expect(classifyError(LIVE_OPENROUTER_402)).not.toBe('context-limit');
+  });
+
+  it('refuses to repair it, and offers no strategy that could waste an attempt', () => {
+    expect(isRepairable('credit-exhausted')).toBe(false);
+    expect(selectStrategy('credit-exhausted', 1, { maxRepairs: 3, repairMode: 'auto' })).toBe('skip-step');
+    expect(selectStrategy('credit-exhausted', 2, { maxRepairs: 3, repairMode: 'auto' })).toBe('skip-step');
+  });
+
+  it('still repairs genuinely transient failures', () => {
+    // Guard against over-reach: the new classes must not swallow the ordinary
+    // provider errors the ladder is FOR.
+    expect(classifyError('Groq API error (503): service unavailable')).toBe('provider-error');
+    expect(isRepairable('provider-error')).toBe(true);
+    expect(classifyError('429 Too Many Requests')).toBe('provider-error');
+  });
+
+  it('treats a strict-mode pin refusal as definitive (this is what reached the repair loop)', () => {
+    // THE REAL CRITICAL PATH. Re-running Run D after the 402 was classified
+    // correctly showed the planner STILL burning its whole budget — because the
+    // error that reached the repair loop was not the 402, it was the refusal
+    // sentence `route-resolver.ts` emits when strict mode forbids substitution.
+    const live = "Model 'deepseek/deepseek-v4.1-flash' is not available on 'openrouter', and strict " +
+      'model mode forbids substituting another model. Pick a model this provider serves ' +
+      '(`nuvira models`), or unset NUVIRA_STRICT_MODEL to let the router repair it.';
+    expect(classifyError(live)).toBe('pin-unavailable');
+    expect(isRepairable('pin-unavailable')).toBe(false);
+    expect(selectStrategy('pin-unavailable', 1, { maxRepairs: 3, repairMode: 'auto' })).toBe('skip-step');
+  });
+});
+
 // ─── Mock agent context ─────────────────────────────────────────────────────
 
 function createMockContext(overrides: Partial<AgentContext> = {}): AgentContext {

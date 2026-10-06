@@ -21,7 +21,7 @@
  */
 
 import type { ConfigManager } from '../config/manager.js';
-import { getModelRegistry, type ModelRegistrySource } from './model-registry.js';
+import { getModelRegistry, type ModelRegistryEntry, type ModelRegistrySource } from './model-registry.js';
 import {
   CATALOG_PROVIDER_IDS,
   CATALOG_KEYLESS_IDS,
@@ -98,6 +98,42 @@ const SOURCE_CONFIDENCE: Record<ModelRegistrySource, number> = {
 };
 
 /**
+ * The provider said, in so many words, that this model does not exist — so the
+ * row is not a candidate no matter what `status` claims.
+ *
+ * WHY THIS EXISTS. `status: 'verified'` is a LATCH: one recorded success sets
+ * it, and nothing but a later failure clears it. A single MIS-ATTRIBUTED success
+ * is therefore enough to make a bogus pair permanently "verified" — and, because
+ * telemetry outranks spot-check in the ranking below, permanently FIRST. Live
+ * registry (2026-10-06), both `source: 'telemetry'`:
+ *   `groq|gemini-3.1-flash-lite` — `status: verified` while carrying
+ *      `lastError: '… Groq API error (404): The model `gemini-3.1-flash-lite`
+ *      does not exist or you do not have access to it.'`
+ *   `groq|deepseek-flash` — the same shape without an error recorded.
+ * The consequence was measured, not inferred: the adapter default for groq became
+ * a foreign model id, so EVERY groq call went out with a name groq cannot serve,
+ * 404'd, and fell through the pinned fallback walk — while the real groq models
+ * (`openai/gpt-oss-120b`, `spot-check`-verified) sat behind it in the ranking.
+ *
+ * The write-side cause (a fallback recording itself under the provider it
+ * failed over FROM) is fixed in `chat.ts`; this keeps the rows already on disk
+ * from continuing to win. Narrow on purpose: it matches a definitive
+ * "missing" verdict only — a `rate-limit` or a 5xx lastError is transient and
+ * leaves the model in the pool.
+ */
+function definitivelyMissing(entry: ModelRegistryEntry | undefined): boolean {
+  const err = entry?.lastError;
+  if (!err) return false;
+  const text = err.toLowerCase();
+  if (!text.includes('404')) return false;
+  return (
+    text.includes('does not exist') ||
+    text.includes('not found') ||
+    text.includes('no such model')
+  );
+}
+
+/**
  * Verified working models for a provider, ranked by learned health:
  * strongest verification source first, then lowest error rate, then lowest
  * latency, then most recently verified.
@@ -123,6 +159,12 @@ export function preferredModelsFor(provider: string): string[] {
     // llama-prompt-guard-2), and before this filter it then sorted FIRST and
     // got served as the chat model. ROUTING MUST NEVER SELECT ONE.
     .filter((m) => !isNonChatModel(m))
+    // Never rank a row whose OWN recorded evidence contradicts its status: a
+    // `verified` entry carrying a definitive "this model does not exist on that
+    // provider" error is not a usable model, whatever its status field says.
+    // This is the read-side half of the cross-provider poisoning measured live
+    // on 2026-10-06 — see `definitivelyMissing`.
+    .filter((m) => !definitivelyMissing(registry.getEntry(provider, m)))
     .sort((a, b) => {
       const ea = registry.getEntry(provider, a);
       const eb = registry.getEntry(provider, b);

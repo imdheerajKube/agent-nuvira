@@ -173,3 +173,112 @@ describe('ChatCommand.answerOnce — no explicit provider/model honors defaultPr
     }
   });
 });
+
+/**
+ * The CLI's OWN entry point — `ChatCommand.execute`.
+ *
+ * Everything above proves `answerOnce` honours the configured default. But
+ * `answerOnce` is the DASHBOARD/GATEWAY path; `execute` is a SEPARATE
+ * implementation, and it is the one the CLI actually runs — `-t/--task`
+ * dispatches into it, `chat "<task>"` is it, and the REPL is it. It was the one
+ * that drifted.
+ *
+ * Live, measured 2026-10-06, on a config whose `defaultProvider` is `auto`
+ * (the shipped default): `nuvira -t "<task>"` logged `autoMode:false,
+ * providerOption:undefined, type:"groq"` and appended ZERO rows to
+ * routing-history. Because `autoMode` was false it took the non-auto path, and
+ * `resolveProvider(config, undefined)` resolved `defaultProvider: "auto"`
+ * through `rankAvailableProviders()` to ONE concrete provider. Everything
+ * downstream of the auto router was skipped on the product's most common entry
+ * point: no `routeMessageAuto` (so no routing-history row auditing which model
+ * served the turn, no routing cache, and no capability gate), no pin
+ * pre-flight, and `model explain` — which DOES use the auto router — predicting
+ * a model the runtime never used (D4).
+ */
+describe('ChatCommand.execute — the CLI entry honours the configured default too', () => {
+  let tempDir: string;
+  let origMemory: string | undefined;
+  let origConfigDir: string | undefined;
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    tempDir = mkdtempSync(join(tmpdir(), 'buff-execute-parity-'));
+    origMemory = process.env.NUVIRA_MEMORY_DIR;
+    origConfigDir = process.env.NUVIRA_CONFIG_DIR;
+    process.env.NUVIRA_MEMORY_DIR = tempDir;
+    process.env.NUVIRA_CONFIG_DIR = join(tempDir, 'config');
+    resetModelRegistry();
+  });
+
+  afterEach(() => {
+    resetModelRegistry();
+    if (origMemory === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = origMemory;
+    if (origConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+    else process.env.NUVIRA_CONFIG_DIR = origConfigDir;
+    rmSync(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  function mockProvider(): InferenceProvider {
+    return {
+      name: 'Mock',
+      generateTools: vi.fn(async () => ({ content: 'Answered.', toolCalls: [] })),
+      generate: vi.fn().mockResolvedValue('Answered.'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+  }
+
+  type Proto = {
+    getProvider: (o?: unknown) => Promise<{ type: string; provider: InferenceProvider }>;
+    routeMessageAuto: (m: string) => Promise<unknown>;
+    runChatAnswer: (...args: unknown[]) => Promise<unknown>;
+  };
+
+  it('engages auto routing with neither -p nor -m, and hands the routed pair to the engine', async () => {
+    const provider = mockProvider();
+    const getProvider = vi
+      .spyOn(ChatCommand.prototype as unknown as Proto, 'getProvider')
+      .mockResolvedValue({ type: 'groq', provider });
+    const routeMessageAuto = vi
+      .spyOn(ChatCommand.prototype as unknown as Proto, 'routeMessageAuto')
+      .mockResolvedValue({ type: 'gemini', provider, model: 'mock-model', complexity: 'moderate', ranked: [], score: 0 });
+    const runChatAnswer = vi
+      .spyOn(ChatCommand.prototype as unknown as Proto, 'runChatAnswer')
+      .mockResolvedValue({ content: 'Answered.', followups: [] });
+
+    await (new ChatCommand() as unknown as { execute: Function }).execute('hello there', {});
+
+    // The regression pin: before the fix `execute` never called this, because
+    // `autoMode` came only from `-p/-m`/`model switch` and not from the config.
+    expect(routeMessageAuto).toHaveBeenCalled();
+    // The AUTO branch resolves the initial provider with NO hint (no concrete
+    // pin is smuggled in through `resolveProvider`'s own ranking).
+    expect(getProvider.mock.calls[0]?.[0]).toEqual({});
+    // …and the pair the router chose is what the engine is told to run on.
+    expect(runChatAnswer.mock.calls[0]?.[2]).toMatchObject({ type: 'gemini', model: 'mock-model' });
+  });
+
+  it('a pin still pins: no auto routing, and the pinned pair reaches the engine', async () => {
+    const provider = mockProvider();
+    const getProvider = vi
+      .spyOn(ChatCommand.prototype as unknown as Proto, 'getProvider')
+      .mockResolvedValue({ type: 'groq', provider });
+    const routeMessageAuto = vi.spyOn(ChatCommand.prototype as unknown as Proto, 'routeMessageAuto');
+    const runChatAnswer = vi
+      .spyOn(ChatCommand.prototype as unknown as Proto, 'runChatAnswer')
+      .mockResolvedValue({ content: 'Answered.', followups: [] });
+
+    await (new ChatCommand() as unknown as { execute: Function }).execute('hello there', {
+      provider: 'groq',
+      model: 'mock-model',
+    });
+
+    expect(routeMessageAuto).not.toHaveBeenCalled();
+    expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({ provider: 'groq', model: 'mock-model' }));
+    expect(runChatAnswer.mock.calls[0]?.[2]).toMatchObject({ type: 'groq', model: 'mock-model' });
+  });
+});

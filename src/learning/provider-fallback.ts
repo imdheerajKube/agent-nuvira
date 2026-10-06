@@ -82,6 +82,21 @@ export type FallbackErrorType =
    * nothing. See `response-usability.ts` (fix_model_routing P1).
    */
   | 'empty-response'
+  /**
+   * The provider's ACCOUNT cannot pay for the call (HTTP 402 / "Insufficient
+   * credits"). Its own class on purpose, for the same reason `empty-response`
+   * has one: an unfunded account was booking as `unknown`, so nothing could act
+   * on it. Semantics differ on each axis, and both matter:
+   *
+   *   - SAME provider: definitive. No backoff, retry or prompt change conjures
+   *     funds, so it is deliberately ABSENT from `TRANSIENT_RETRY_TYPES`.
+   *   - DIFFERENT provider: worth trying. The MODEL may be perfectly healthy
+   *     elsewhere (measured: `deepseek-v4.1-flash` is unreachable on a
+   *     credit-less OpenRouter account while the same family serves fine on the
+   *     `deepseek` provider), so `isRetryableError` stays true for it and the
+   *     failover walk is where the remedy lives.
+   */
+  | 'credit-exhausted'
   | 'unknown';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -116,6 +131,22 @@ export function classifyFallbackError(err: unknown): FallbackErrorType {
   // deterministic, and it must never fall through to `unknown` — the ledger, the
   // exhaustion report and the bandit's reward all key off this class.
   if (/unusable model response/i.test(message)) return 'empty-response';
+
+  // Credit/payment exhaustion — checked BEFORE `auth` and before the
+  // rate-limit patterns. Measured live: `402 Insufficient credits. This account
+  // never purchased credits...` matched NO branch and became `unknown`, so the
+  // registry learned nothing, the pool kept offering the pair, and the repair
+  // ladder spent its whole budget on it. The provider's own `"code":402` is
+  // accepted alongside the words, because providers word the body differently.
+  if (
+    /insufficient credits?/.test(lower) ||
+    /purchase (more )?credits?/.test(lower) ||
+    /credit balance/.test(lower) ||
+    /out of credits/.test(lower) ||
+    /"?code"?\s*:\s*402/.test(lower)
+  ) {
+    return 'credit-exhausted';
+  }
 
   if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized') || lower.includes('forbidden') || lower.includes('api key') || lower.includes('auth')) {
     return 'auth';
@@ -209,11 +240,12 @@ const TRANSIENT_RETRY_TYPES: ReadonlySet<FallbackErrorType> = new Set<FallbackEr
   'network',
   'timeout',
 ]);
-// DELIBERATELY ABSENT: `empty-response`. Retrying the SAME provider after it
-// returned nothing re-hits the same model — which is exactly the loop that
-// killed a real turn (5 empty responses on one model, no failover). An empty
-// response is retryable on a DIFFERENT provider (see `isRetryableError`), which
-// is where the walk sends it.
+// DELIBERATELY ABSENT: `empty-response` and `credit-exhausted`. Retrying the
+// SAME provider after it returned nothing re-hits the same model — which is
+// exactly the loop that killed a real turn (5 empty responses on one model, no
+// failover). Retrying an UNFUNDED account is waste on top of waste: waiting
+// cannot fund it. Both are retryable on a DIFFERENT provider (see
+// `isRetryableError`), which is where the walk sends them.
 
 /** Should this error be retried against the SAME provider after a short backoff? */
 export function isTransientForRetry(err: unknown): boolean {

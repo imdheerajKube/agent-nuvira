@@ -6,7 +6,7 @@ import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { BaseCommand, getCliName } from './commands.js';
 import { resolveProvider } from './router.js';
-import { resolveRoute, strictModelMode } from '../inference/route-resolver.js';
+import { resolveRoute, strictModelMode, strictPinRefusal } from '../inference/route-resolver.js';
 import { showModelPicker } from './model-picker.js';
 import { ContextParser } from '../context/parser.js';
 import { getCache } from '../context/cache.js';
@@ -1231,6 +1231,39 @@ export class ChatCommand extends BaseCommand {
     // Apply the active model state from `nuvira model switch` as defaults
     const activeOpts = applyActiveModel({ provider: options?.provider, model: options?.model });
     const mergedOpts = { ...options, provider: activeOpts.provider, model: activeOpts.model };
+
+    // ── The CONFIG's defaultProvider is a routing directive too ──────────────
+    // When the operator supplies neither a provider nor a model — no `-p`, no
+    // `-m`, no `nuvira model switch` state — the config decides, and the shipped
+    // default is `defaultProvider: "auto"`. This is the CLI's counterpart to the
+    // block in `answerOnce` (see `chat-answer-once-auto-parity.test.ts`, which
+    // pinned the dashboard/gateway side of it in 2026-09-20).
+    //
+    // WHY IT IS LOAD-BEARING, measured 2026-10-06: `execute` — the whole CLI
+    // entry (`-t/--task`, `chat "<task>"`, the REPL) — did NOT honour it. With
+    // neither flag nor active-model state, `autoMode` was `false`, so the turn
+    // took the NON-auto path and `resolveProvider(config, undefined)` resolved
+    // `defaultProvider: "auto"` through `rankAvailableProviders()` to ONE
+    // concrete provider. Everything downstream of the auto router was therefore
+    // skipped on the product's most common entry point: no `routeMessageAuto`
+    // (so no routing-history row to audit which model served the turn, no
+    // routing cache, and no capability gate), no pin pre-flight, and
+    // `model explain` — which DOES use the auto router — predicting a model the
+    // runtime never used. Measured with `NUVIRA_TRACE_ROUTE=1`: a `-t` turn
+    // logged `[TRACE] execute {"autoMode":false,"type":"groq"}` and appended
+    // ZERO rows to routing-history.
+    //
+    // Only the AUTO default changes behaviour: an explicit `-p`/`-m` or a
+    // `model switch` pin is a deliberate choice and keeps the non-auto path
+    // exactly as it is (and is checked FIRST, so a pin can never be re-routed).
+    if (!mergedOpts.provider && !mergedOpts.model) {
+      try {
+        const cfg = this.configManager.getAll() as { defaultProvider?: string };
+        if (isAutoProvider(cfg.defaultProvider)) mergedOpts.provider = cfg.defaultProvider;
+      } catch {
+        // Best-effort — an unreadable config leaves the previous behavior.
+      }
+    }
 
     // ── Auto routing mode: agent decides the best provider/model per message ──
     // A8 — a pinned concrete provider with `-m auto` is the provider's own auto,
@@ -3130,6 +3163,32 @@ export class ChatCommand extends BaseCommand {
         }
       }
 
+      /**
+       * A2 — REACHABILITY PRE-FLIGHT (pinned path).
+       *
+       * The governance/admin checks above cover POLICY; this covers whether the
+       * pin can work at all. Measured (Run D): `-p openrouter -m
+       * deepseek/deepseek-v4.1-flash` on an unfunded account was sent, and the
+       * operator learned the real cause from a raw 402 body — after a full round
+       * trip, with a live 6-second failure that said nothing about what to do.
+       *
+       * `resolveRoute` refuses that pin, and every one of its callers therefore
+       * does — but this method resolves its own model, so after the first fix the
+       * same run still logged BOTH behaviours: the pipeline refused the pair
+       * before any call ("Refusing to call …") while the chat tool loop sent the
+       * request and got `402 Insufficient credits` back. Same gate, same wording,
+       * same implementation (`strictPinRefusal`) — this is the one seam that was
+       * still missing it.
+       *
+       * Strict mode only, exactly like `resolveRoute`: the refusal sentence says
+       * strict mode forbids substituting, and on a non-strict turn the fallback
+       * walk is the correct repair.
+       */
+      if (!mode.auto && strictModelMode()) {
+        const refusal = strictPinRefusal(session.type, session.model);
+        if (refusal) throw new Error(refusal);
+      }
+
       const resolveEffectiveModel = (providerType: string, requested?: string): string | undefined => {
         if (requested && requested !== 'default') return requested;
         try {
@@ -3402,6 +3461,10 @@ export class ChatCommand extends BaseCommand {
             } catch {
               // Ordering is an optimization only.
             }
+            // The pair the turn was PINNED to. Captured before the walk because
+            // the walk now installs what it serves (see below), and the warning
+            // must still name the provider that actually failed.
+            const pinnedType = session.type;
             for (const fbType of ordered) {
               if (fbType === session.type) continue;
               // ADMIN POLICY: never fall back to a provider the policy rules
@@ -3437,7 +3500,41 @@ export class ChatCommand extends BaseCommand {
                 // the dashboard console and the gateway chat engine - looked
                 // dead.) Undefined = that provider's configured/adapter
                 // default, which tryGenerate resolves per attempt.
-                return await tryGenerate(resolved.provider, resolved.type, resolveEffectiveModel(resolved.type, undefined));
+                const fallbackModel = resolveEffectiveModel(resolved.type, undefined);
+                const resp = await tryGenerate(resolved.provider, resolved.type, fallbackModel);
+                // ── The pair that ANSWERED is the pair the turn ran on ───────
+                // This walk used to serve the fallback and leave `session` still
+                // naming the provider that had just failed. Everything the turn
+                // then reported or learned read the WRONG provider against the
+                // RIGHT model — one interlocking defect with four faces, all
+                // measured:
+                //   • the session debug log's `turn.start` named the pinned
+                //     provider while its own header named the one that served
+                //     (`backend.provider: deepseek` with `turn.start {"provider":
+                //     "groq"}` — A5/D3);
+                //   • `servedRoute()` told the MODEL it was a different model
+                //     than the one answering;
+                //   • the response cache stored `provider: "groq"` beside
+                //     `model: "deepseek-flash"`;
+                //   • and worst, `recordRegistrySuccess(session.type,
+                //     session.model)` wrote a PAIR THAT CANNOT EXIST into the
+                //     model registry as `verified`. That is the self-poisoning:
+                //     `groq|deepseek-flash` and `groq|gemini-3.1-flash-lite` are
+                //     both sitting in the live registry as `telemetry`-verified,
+                //     and because `telemetry` outranks `spot-check` in
+                //     `preferredModelsFor`, the NEXT groq call picked the bogus
+                //     id as its adapter default, sent a foreign model name to
+                //     groq, and 404'd into the same fallback walk — each run
+                //     making the next one worse.
+                // The auto branch above has always installed `next`; the pinned
+                // branch is the one that drifted.
+                session.type = resolved.type;
+                session.provider = resolved.provider;
+                if (fallbackModel) session.model = fallbackModel;
+                logger.warn(
+                  `   🔀 ${pinnedType} was unavailable — answered from ${resolved.provider.name} (${fallbackModel ?? 'default'})`,
+                );
+                return resp;
               } catch {
                 // Next fallback candidate.
               }

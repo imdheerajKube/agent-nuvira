@@ -49,6 +49,27 @@ export type ErrorCategory =
   | 'injection-blocked'
   | 'context-limit'
   | 'budget-exhausted'
+  /**
+   * The PROVIDER's account has no money/credits left (HTTP 402). Distinct from
+   * `budget-exhausted` (OUR token/step allowance): retrying, re-prompting or
+   * shrinking the ask cannot conjure funds, so this is never repairable on the
+   * same pair. Switching PROVIDER is the real remedy — a different host may
+   * serve the same model — but that decision belongs to the failover walk, not
+   * to the repair ladder.
+   */
+  | 'credit-exhausted'
+  /**
+   * A PIN that strict mode refuses to honour (`Model 'X' is not available on
+   * 'Y', and strict model mode forbids substituting another model`).
+   *
+   * DEFINITIVE for this run: only the user can change the pin or unset
+   * NUVIRA_STRICT_MODEL. No rung of the repair ladder may substitute a model the
+   * user explicitly forbade, so every attempt is waste. Measured: this sentence —
+   * NOT the raw provider error — is what reached the repair loop, so the planner
+   * burned its entire budget on it even after the underlying 402 was itself
+   * classified correctly.
+   */
+  | 'pin-unavailable'
   | 'unknown';
 
 /** Repair strategies that can be applied */
@@ -142,6 +163,33 @@ export function classifyError(error: string | undefined | null): ErrorCategory {
     return 'injection-blocked';
   }
 
+  // Credit/payment exhaustion — checked BEFORE the generic provider/server
+  // patterns. Measured: an OpenRouter 402
+  // (`{"error":{"message":"Insufficient credits...","code":402,...}}`) matched
+  // NO branch and fell through to `unknown`, which `isRepairable` treats as
+  // repairable — so a Planner burned its whole repair budget ("Repair budget exhausted
+  // after 2 attempt(s)") on a failure that could never succeed. The message
+  // ALSO contains `max_tokens`, which is why the credit check must come first:
+  // a later `context-limit` match would classify an unfunded account as a
+  // too-long-prompt and try to shrink the ask.
+  if (
+    /insufficient credits?/.test(lower) ||
+    /purchase (more )?credits?/.test(lower) ||
+    /credit balance/.test(lower) ||
+    /out of credits/.test(lower) ||
+    /"?code"?\s*:\s*402/.test(lower)
+  ) {
+    return 'credit-exhausted';
+  }
+
+  // A strict-mode pin refusal — DEFINITIVE, and deliberately matched on OUR OWN
+  // wording (the sentence `route-resolver.ts` emits), so it cannot accidentally
+  // swallow a provider's "service not available" (which is a retryable 503 and
+  // must stay `provider-error`).
+  if (lower.includes('strict model mode') || lower.includes('forbids substituting')) {
+    return 'pin-unavailable';
+  }
+
   // Provider errors
   if (
     /5\d{2}(\D|$)/.test(lower) ||
@@ -225,6 +273,15 @@ export function isRepairable(category: ErrorCategory): boolean {
       return true; // conditionally repairable
     case 'injection-blocked':
     case 'budget-exhausted':
+    // No strategy in the ladder changes an unfunded account: re-prompting the
+    // same pair, shrinking the ask or switching model within the provider all
+    // hit the same 402. Only a different PROVIDER can serve it — a decision the
+    // failover walk owns. Spending repair attempts here is pure waste, and it
+    // hides the real cause behind "repair budget exhausted".
+    case 'credit-exhausted':
+    // Only the user can change a pin or lift strict mode; the ladder must not
+    // substitute a model they forbade, so it has nothing to offer.
+    case 'pin-unavailable':
       return false;
     case 'unknown':
       return true; // try a generic repair
@@ -307,6 +364,11 @@ export function selectStrategy(
 
     case 'injection-blocked':
     case 'budget-exhausted':
+    // No rung of the ladder can fund an account, and `isRepairable` already
+    // refuses it — this case exists so the switch stays exhaustive and the
+    // strategy is stated positively rather than defaulting.
+    case 'credit-exhausted':
+    case 'pin-unavailable':
       return 'skip-step';
   }
 }

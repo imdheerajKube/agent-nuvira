@@ -1733,6 +1733,25 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             // The streak and the think streak belong to the model that failed.
             emptyRetriesOnCurrentModel = 0;
             thinkContinues = 0;
+            // ── DROP THE FAILED MODEL'S PRIVATE REASONING ─────────────────
+            // Every assistant turn records `reasoningContent`, and the wire
+            // layer echoes it back on that assistant message — which is
+            // REQUIRED when the SAME model retries (some reasoning models fail
+            // the request without their own prior reasoning; see
+            // `reasoning-cache.ts`). After a HANDOFF the next model is a
+            // DIFFERENT model, and replaying a stranger's chain-of-thought
+            // either gets the request rejected by the target API (foreign
+            // `reasoning_content` / tool-call ids) or anchors the new model to
+            // the reasoning that already failed. Strip it on a pair change; a
+            // same-model retry keeps it untouched, which is where the
+            // requirement actually comes from.
+            // NOTE: `thread` (the loop's own working copy, line ~1398), not
+            // `messages` — the assistant turns live here.
+            for (const prior of thread) {
+              if (prior.role === 'assistant' && prior.reasoningContent) {
+                delete prior.reasoningContent;
+              }
+            }
             deps.onEvent?.(
               `   🔀 That model returned nothing usable — handing the turn to a different model (handoff ${modelHandoffs}/${MAX_MODEL_HANDOFFS_PER_TURN}).`,
             );

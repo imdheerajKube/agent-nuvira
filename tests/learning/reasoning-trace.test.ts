@@ -28,6 +28,52 @@ const {
   MAX_TRACES,
 } = await import('../../src/learning/reasoning-trace.js');
 
+/**
+ * D3 — the trace's SUMMARY provider must be the one that SERVED the run.
+ *
+ * `beginTrace` stores the provider the caller had configured, which is a REQUEST
+ * read before routing — so a failover, handoff or substitution leaves it naming a
+ * provider that may have served nothing. Measured on a real 12-minute turn: the
+ * summary said `groq` while all 81 recorded steps said `deepseek/deepseek-flash`,
+ * and `model explain` had predicted a third provider. Three accounts of one turn,
+ * so "which model ran?" was unanswerable from the artefact meant to answer it.
+ */
+describe('reasoning-trace — the summary provider is the SERVED one (D3)', () => {
+  const step = (provider: string, model: string) => ({
+    agentType: 'chat',
+    provider,
+    model,
+    promptDigest: 'd1',
+    promptPreview: 'p',
+    responsePreview: 'r',
+    responseLength: 1,
+    inputTokens: 1,
+    outputTokens: 1,
+    latencyMs: 1,
+    success: true,
+  });
+
+  it('reports the provider that served the most steps, not the requested one', () => {
+    const id = beginTrace({ goal: 'build a knowledge base web app', source: 'chat', provider: 'groq' });
+    recordStep(id, step('deepseek', 'deepseek-flash'));
+    recordStep(id, step('deepseek', 'deepseek-flash'));
+    // The measured anomaly: one step detoured to a local model, which must NOT
+    // be allowed to become the summary just by being interesting.
+    recordStep(id, step('local', 'deepseek-coder:latest'));
+    endTrace(id, true);
+
+    expect(getTrace(id)?.provider).toBe('deepseek');
+  });
+
+  it('leaves the requested provider alone when the run recorded no steps', () => {
+    // No steps is not evidence of anything — overwriting with a guess would be a
+    // new lie in place of the missing record.
+    const id = beginTrace({ goal: 'a run that never called a model', source: 'chat', provider: 'gemini' });
+    endTrace(id, false);
+    expect(getTrace(id)?.provider).toBe('gemini');
+  });
+});
+
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
 function fakeLLM(response: string, opts?: { throwOn?: string }): (prompt: string, options?: { model?: string }) => Promise<string> {

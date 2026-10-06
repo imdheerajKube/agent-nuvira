@@ -20,6 +20,7 @@ import {
   classifyFallbackError,
   extractRetryAfterMs,
   isRetryableError,
+  isTransientForRetry,
   parseRetryAfterHint,
   ProviderFallback,
   getProviderFallback,
@@ -132,6 +133,43 @@ function createMockProvider(name: string, overrides: Partial<InferenceProvider> 
 }
 
 // ─── classifyFallbackError ──────────────────────────────────────────────────
+
+/**
+ * A4 — an unfunded provider account is its OWN class, definitive on the same
+ * provider and failover-worthy on a different one.
+ *
+ * Measured live (Run D, strict pinned `openrouter/deepseek-v4.1-flash`):
+ * `OpenRouter API error (402): {"error":{"message":"Insufficient credits...",
+ * "code":402,...}}` matched NO branch and became `unknown` — so the registry
+ * learned nothing, the pool kept offering the pair, and the repair ladder spent
+ * its whole budget on it. The live text is reproduced verbatim on purpose.
+ */
+const LIVE_OPENROUTER_402 =
+  'OpenRouter API error (402): {"error":{"message":"Insufficient credits. This account never purchased credits. ' +
+  'Make sure your key is on the correct account or org, and if so, purchase more at ' +
+  'https://openrouter.ai/settings/credits","code":402,"metadata":{"limit_source":"openrouter_credits",' +
+  '"remedy_hint":"Add credits at https://openrouter.ai/settings/credits, or lower max_tokens / prompt size to fit your remaining balance."}}}';
+
+describe('classifyFallbackError — an unfunded account (A4)', () => {
+  it('classifies the live OpenRouter 402 as credit-exhausted, not unknown', () => {
+    expect(classifyFallbackError(new Error(LIVE_OPENROUTER_402))).toBe('credit-exhausted');
+  });
+
+  it('is NOT retried against the same provider (a wait cannot fund an account)', () => {
+    expect(isTransientForRetry(new Error(LIVE_OPENROUTER_402))).toBe(false);
+  });
+
+  it('IS still retryable on a DIFFERENT provider — the model may be healthy elsewhere', () => {
+    // Measured: this exact model is unreachable on the credit-less OpenRouter
+    // account while the same family serves fine on the `deepseek` provider.
+    expect(isRetryableError('credit-exhausted')).toBe(true);
+  });
+
+  it('does not swallow genuine auth or rate-limit failures', () => {
+    expect(classifyFallbackError(new Error('Groq API error (401): unauthorized'))).toBe('auth');
+    expect(classifyFallbackError(new Error('429 Too Many Requests'))).toBe('rate-limit');
+  });
+});
 
 describe('classifyFallbackError', () => {
   it.each([

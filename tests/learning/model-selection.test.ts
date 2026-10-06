@@ -216,6 +216,33 @@ describe('model selection — dynamic defaults (nothing hardcoded)', () => {
       expect(MODEL_HEALTH_CEILING).toBe(0.6);
     });
 
+    it('drops a "verified" row whose own lastError says the model does not exist (A4/D6 — poisoned registry)', () => {
+      const registry = getModelRegistry();
+      // Reconstructed from the LIVE registry (2026-10-06): a fallback recorded
+      // itself under the provider it failed over FROM, so
+      // `groq|gemini-3.1-flash-lite` ended up `status: verified`,
+      // `source: telemetry` — and carrying a 404 saying the model does not exist
+      // on groq. Because telemetry outranks spot-check, that row sorted FIRST,
+      // became the adapter default for groq, and sent a foreign model id to groq
+      // on every call.
+      registry.markUnavailable('groq', 'ghost-model', 'unknown: Groq API error (404): the model does not exist', 'spot-check');
+      registry.markVerified('groq', 'ghost-model', 'telemetry', 50);
+      registry.markVerified('groq', 'openai/gpt-oss-120b', 'spot-check', 400);
+      expect(registry.getEntry('groq', 'ghost-model')?.status).toBe('verified');
+
+      // The row's own evidence contradicts its status, so it is not a candidate.
+      expect(preferredModelsFor('groq')).toEqual(['openai/gpt-oss-120b']);
+      // The adapter last-resort follows the same rule — a run must never default
+      // to a model id its own provider already refused.
+      expect(requireAdapterModel('groq', 'default')).toBe('openai/gpt-oss-120b');
+
+      // …and a TRANSIENT error on a verified row does NOT drop it: this filter
+      // is narrowly about "the provider says it does not exist".
+      registry.markVerified('groq', 'flaky-but-real', 'telemetry', 80);
+      registry.recordCall('groq', 'flaky-but-real', false, 'timeout');
+      expect(preferredModelsFor('groq')).toContain('flaky-but-real');
+    });
+
     it('still returns the failing model when it is the ONLY verified option', () => {
       const registry = getModelRegistry();
       registry.markVerified('groq', 'only-model', 'telemetry');

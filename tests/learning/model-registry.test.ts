@@ -42,6 +42,47 @@ function makeConfigManager(quota?: Record<string, unknown>) {
   } as any;
 }
 
+/**
+ * A4 — an unfunded provider account is DEFINITIVE, and must stop being routed.
+ *
+ * Measured live: `openrouter/deepseek-v4.1-flash` answered 402 "Insufficient
+ * credits", which classified as `unknown`, so `recordCall` applied no definitive
+ * state — the pool kept offering the pair and the router kept choosing it. The
+ * difference from `rate-limit` matters: a rate limit clears on a TIMER, whereas
+ * an empty account does not, so parking it would have expired and re-offered it.
+ */
+describe('ModelRegistry — an unfunded account is definitive (A4)', () => {
+  it('demotes the pair to unavailable, so isUsable() refuses it', () => {
+    const registry = new ModelRegistry();
+    registry.markVerified('openrouter', 'deepseek/deepseek-v4.1-flash', 'probe');
+    expect(registry.isUsable('openrouter', 'deepseek/deepseek-v4.1-flash')).toBe(true);
+
+    registry.recordCall(
+      'openrouter',
+      'deepseek/deepseek-v4.1-flash',
+      false,
+      'credit-exhausted',
+      'chat',
+    );
+
+    expect(registry.isUsable('openrouter', 'deepseek/deepseek-v4.1-flash')).toBe(false);
+    const entry = registry.getEntry('openrouter', 'deepseek/deepseek-v4.1-flash');
+    expect(entry?.status).toBe('unavailable');
+    // The sentence names the ACCOUNT, not the model — a different host may serve
+    // this same model, so the message must not read as "the model is bad".
+    expect(entry?.lastError).toContain('credit-exhausted');
+    expect(entry?.lastError).toContain('account');
+  });
+
+  it('does NOT park it on a timer — an empty account has no reset window', () => {
+    const registry = new ModelRegistry();
+    registry.recordCall('openrouter', 'some/model', false, 'credit-exhausted', 'chat');
+    const entry = registry.getEntry('openrouter', 'some/model');
+    // A park would EXPIRE and the router would offer the pair again.
+    expect(entry?.quotaParkedUntil ?? 0).toBe(0);
+  });
+});
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 describe('ModelRegistry — probe / spot-check lifecycle', () => {
@@ -120,6 +161,34 @@ describe('ModelRegistry — probe / spot-check lifecycle', () => {
     expect(entry?.status).toBe('unavailable');
     expect(entry?.lastError).toContain('403');
     expect(registry.isUsable('openrouter', 'openai/gpt-4o')).toBe(false);
+  });
+
+  it('markListed does NOT re-arm an account-level refusal (A4 — a listing cannot prove entitlement)', () => {
+    const registry = new ModelRegistry();
+    registry.markListed('openrouter', ['deepseek/deepseek-v4.1-flash']);
+    // A REAL call established the account behind the key cannot pay for this one.
+    registry.recordCall('openrouter', 'deepseek/deepseek-v4.1-flash', false, 'credit-exhausted');
+    expect(registry.getEntry('openrouter', 'deepseek/deepseek-v4.1-flash')?.status).toBe('unavailable');
+
+    // A catalogue refresh re-lists the provider. The model is in OpenRouter's
+    // PUBLIC list, which says nothing about whether THIS account may use it —
+    // measured live on 2026-10-06: this reset re-armed the pin, the strict
+    // pre-flight no longer fired, and the run got a raw `402 Insufficient
+    // credits` body back where the previous run had refused before any call.
+    registry.markListed('openrouter', ['deepseek/deepseek-v4.1-flash', 'openai/gpt-4o']);
+
+    const entry = registry.getEntry('openrouter', 'deepseek/deepseek-v4.1-flash');
+    expect(entry?.status).toBe('unavailable');
+    expect(entry?.lastError).toContain('credit-exhausted');
+    // The listing still did its normal job for a model it had never seen.
+    expect(registry.getEntry('openrouter', 'openai/gpt-4o')?.status).toBe('unverified');
+
+    // The complement still holds, and it is the whole point of the split: a
+    // MODEL-NOT-FOUND verdict IS refuted by the provider listing the model
+    // again, so a genuinely retired id that comes back becomes usable again.
+    registry.markUnavailable('groq', 'gone-model', 'unknown: Groq API error (404): the model does not exist', 'spot-check');
+    registry.markListed('groq', ['gone-model']);
+    expect(registry.getEntry('groq', 'gone-model')?.status).toBe('unverified');
   });
 
   it('getVerifiedModels + getUsableProviders only surface usable models', () => {
@@ -646,6 +715,29 @@ describe('ModelRegistry — quota parking & telemetry', () => {
     expect(pruned).toBe(1);
     expect(registry.getEntry('local', 'deleted-by-user')).toBeUndefined();
     expect(registry.getEntry('local', 'still-here')).toBeDefined();
+  });
+
+  it('pruneAbsentModels KEEPS an account-level refusal instead of deleting it (A4)', () => {
+    const registry = new ModelRegistry();
+    registry.markListed('openrouter', ['deepseek/deepseek-v4.1-flash', 'openai/gpt-4o']);
+    registry.recordCall('openrouter', 'deepseek/deepseek-v4.1-flash', false, 'credit-exhausted');
+    expect(registry.getEntry('openrouter', 'deepseek/deepseek-v4.1-flash')?.status).toBe('unavailable');
+
+    // A partial list for the provider arrives (a page, a hiccup) that does not
+    // mention the model. Deleting the entry would lose the verdict, and the next
+    // listing re-creates the pair as a fresh `unverified` one — re-arming exactly
+    // the pin the strict pre-flight exists to refuse. Measured live 2026-10-06:
+    // the verdict on this pair was gone after a refresh, and the run that had
+    // refused before any call sent the request and got a raw 402 back.
+    expect(registry.pruneAbsentModels('openrouter', ['openai/gpt-4o'])).toBe(0);
+    const entry = registry.getEntry('openrouter', 'deepseek/deepseek-v4.1-flash');
+    expect(entry?.status).toBe('unavailable');
+    expect(entry?.lastError).toContain('credit-exhausted');
+
+    // An ordinary unverified entry with no such verdict is still removed.
+    registry.markListed('openrouter', ['transient-model']);
+    expect(registry.pruneAbsentModels('openrouter', ['openai/gpt-4o'])).toBe(1);
+    expect(registry.getEntry('openrouter', 'transient-model')).toBeUndefined();
   });
 
   it('pruneAbsentModels DEMOTES verified-but-absent models instead of deleting them (preserves learned telemetry)', () => {

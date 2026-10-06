@@ -47,6 +47,12 @@ vi.mock('../../src/learning/routing-history.js', () => ({
   recordRoutingDecision: mockRecordDecision,
 }));
 
+// Bundle 1 (A6): `resolveRoute` now AUDITS the pair it resolved, deduped per
+// process. The dedupe is deliberate (a route is a property of the pair, not of
+// the call), but it means a test that asserts the record is made must start from
+// a clean slate — otherwise a previous test in this file silently suppresses it.
+import { resetRouteAudit } from '../../src/inference/route-resolver.js';
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function makeProvider(name: string, available = true) {
@@ -95,6 +101,7 @@ describe('SingleShotAutoRunner — runSingleShotAuto', () => {
     runnerTempDir = mkdtempSync(join(tmpdir(), 'buff-failover-runner-'));
     process.env.NUVIRA_MEMORY_DIR = runnerTempDir;
     resetQuotaLedger();
+    resetRouteAudit();
   });
 
   it('returns the first candidate result without failover telemetry', async () => {
@@ -113,7 +120,15 @@ describe('SingleShotAutoRunner — runSingleShotAuto', () => {
     expect(result).toBe('answer');
     expect(generate).toHaveBeenCalledOnce();
     expect(recordFailure).not.toHaveBeenCalled();
-    expect(mockRecordDecision).not.toHaveBeenCalled();
+    // Bundle 1 (A6) — THIS ASSERTION WAS INVERTED ON PURPOSE.
+    // It used to read `not.toHaveBeenCalled()`, i.e. "a clean run writes no
+    // audit row at all" — which is precisely the defect A6 describes: a real
+    // 12-minute turn left the routing history empty, so "which model served
+    // this?" could not be answered from the trail built to answer it. Resolving
+    // a pair now records it. What must stay true is that no FAILURE telemetry
+    // and no FAILOVER re-record happens on a first-candidate success, and that
+    // exactly ONE row is written for the pair (not one per layer that resolves).
+    expect(mockRecordDecision).toHaveBeenCalledTimes(1);
   });
 
   it('fails over to the next candidate, recording the failure + audit re-record', async () => {

@@ -42,6 +42,7 @@ import { isMaxCapability } from '../config/capability-mode.js';
 import { logger } from '../utils/logger.js';
 import { recordRoutingDecision, type RoutingSource } from '../learning/routing-history.js';
 import { recordTraceEvent } from '../learning/reasoning-trace.js';
+import { getModelRegistry } from '../learning/model-registry.js';
 
 /** Who is asking — used only for the audit record's wording. */
 export type RouteSource = 'orchestrator' | 'chat' | 'publish' | 'failover' | 'cli' | (string & {});
@@ -56,6 +57,13 @@ export interface RouteRequest {
   source?: RouteSource;
   agentType?: string;
   task?: string;
+  /**
+   * Detected complexity, when the caller knows it (`trivial`…`critical`).
+   * Omitted means `unknown`: this layer resolves a PAIR, it does not classify
+   * the ask, and writing a guessed bucket into the audit trail would be a new
+   * lie in place of the missing record.
+   */
+  complexity?: string;
   /** Refuse to substitute; throw instead. Defaults to `NUVIRA_STRICT_MODEL=1`. */
   strict?: boolean;
   /**
@@ -151,6 +159,32 @@ export function resetSubstitutionReporting(): void {
   reportedSubstitutions.clear();
 }
 
+/**
+ * Happy-path routes already audited in this process, keyed by
+ * `providerType::model`.
+ *
+ * WHY THIS EXISTS. `reportSubstitution` below audits a pair that had to be
+ * REPAIRED, so the ordinary resolution — the one every normal call uses —
+ * recorded nothing at all. Measured: a 12-minute, 82-step chat turn on the
+ * dashboard/`-t` path left ZERO routing-history rows, while the debug header
+ * and the reasoning trace disagreed about which model had served it (header
+ * `deepseek/deepseek-flash`, trace summary `groq`, `model explain`
+ * `gemini/gemini-3.1-flash-lite`). "Which model actually served this turn?" is
+ * the first question an operator asks of a model failure, and it was
+ * unanswerable from the audit trail the dashboard reads.
+ *
+ * Deduped per pair per process, exactly like `reportedSubstitutions`: a route is
+ * a property of the PAIR, not of the call, and one pipeline can resolve the same
+ * pair hundreds of times. Recording each one would bury the history instead of
+ * informing it.
+ */
+const reportedRoutes = new Set<string>();
+
+/** Test hook: forget which happy-path routes have been audited. */
+export function resetRouteAudit(): void {
+  reportedRoutes.clear();
+}
+
 /** One line naming the pair that was substituted, for the console and the trace. */
 export function substitutionLine(input: {
   providerType: string;
@@ -211,6 +245,102 @@ export function reportSubstitution(input: {
 }
 
 /**
+ * A DEFINITIVE registry verdict for a pair, or `undefined` when there is none.
+ *
+ * "Definitive" is deliberately narrow (A2): only `unavailable` counts, which
+ * `markUnavailable` and the `auth` / `credit-exhausted` telemetry branches set
+ * when a REAL call established the pair does not work. It is NOT `unverified`:
+ * that state means "nothing has ever been tried", and refusing those would forbid
+ * exactly the pins that exist to prove a new model — the product's own doctrine
+ * says "an unknown, not a failure" (see `model-reachability.ts`).
+ */
+function definitiveVerdict(
+  providerType: string,
+  model: string,
+): { reason: string } | undefined {
+  try {
+    const entry = getModelRegistry().getEntry(providerType, model);
+    if (entry?.status === 'unavailable') {
+      return {
+        reason:
+          entry.lastError ||
+          'a real call established this model does not work on that provider',
+      };
+    }
+  } catch {
+    // Best-effort — a registry read must never block a call.
+  }
+  return undefined;
+}
+
+/**
+ * The same model, verified somewhere else (A1), or `undefined`.
+ *
+ * Matched on the model's BARE id — everything after the last `/`, with a
+ * leading `~` (the provider's alias marker) stripped. That is a deliberately
+ * EXACT comparison, not a family guess: suggesting a "similar" model the user
+ * did not ask for is a worse failure than suggesting nothing, because the pin
+ * exists precisely to name one. Measured case: the requested
+ * `deepseek/deepseek-v4.1-flash` and the verified `deepseek-flash` do NOT share a
+ * bare id, so this honestly returns `undefined` rather than guessing that they
+ * are the same model. A real identity layer (A1 proper) is what would let it
+ * answer, and it is tracked as open.
+ */
+function verifiedEquivalent(model: string, excludeProvider: string): string | undefined {
+  try {
+    const bare = model.replace(/^~/, '').split('/').pop() ?? model;
+    if (!bare) return undefined;
+    const match = getModelRegistry()
+      .getAllUsablePairs()
+      .find(
+        (p) =>
+          p.provider !== excludeProvider &&
+          (p.model.replace(/^~/, '').split('/').pop() ?? p.model) === bare,
+      );
+    return match ? `${match.provider}/${match.model}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The refusal sentence for a STRICT pin to a pair the registry has already
+ * proven dead, or `undefined` when the pin is worth attempting.
+ *
+ * WHY THIS IS EXPORTED. `resolveRoute` was the only thing that consulted the
+ * reachability verdict, so every caller of it got the A2 pre-flight — and every
+ * caller that resolved its own model did not. Measured (Run D): re-running the
+ * strict pin after the fix showed BOTH behaviours in one log — the pipeline path
+ * refused the pair before any network call (line 42), while the chat tool loop
+ * still sent the request and got a raw 402 body back (line 2). One gate, one
+ * sentinel. This is that gate's ONE implementation, so the chat tool loop and
+ * `resolveRoute` cannot drift apart about what "this pin is dead" means.
+ *
+ * The CALLER owns the activation condition (both current callers only ask when
+ * strict model mode is on), because the sentence below states that strict mode
+ * forbids substitution — it would be a lie to print it on a non-strict turn.
+ * The wording is stable on purpose: `error-repair.ts` classifies on
+ * `strict model mode` / `forbids substituting` to refuse spending repair
+ * attempts on a pin only the user can change.
+ */
+export function strictPinRefusal(
+  providerType: string,
+  requested: string | undefined,
+): string | undefined {
+  if (!requested || requested === 'default') return undefined;
+  const verdict = definitiveVerdict(providerType, requested);
+  if (!verdict) return undefined;
+  const equivalent = verifiedEquivalent(requested, providerType);
+  return (
+    `Refusing to call ${providerType}/${requested} without trying it: ${verdict.reason}. ` +
+    'Strict model mode is on and forbids substituting another model. ' +
+    (equivalent
+      ? `The same model is verified on '${equivalent}' — pin that instead.`
+      : 'Pick a model this provider serves (`nuvira models`), or unset NUVIRA_STRICT_MODEL to let the router repair it.')
+  );
+}
+
+/**
  * Resolve `{providerType, provider, model}` as ONE validated pair.
  *
  * Never throws for a missing/unreachable model (it resolves one); it throws ONLY
@@ -221,6 +351,18 @@ export async function resolveRoute(request: RouteRequest): Promise<ResolvedRoute
   const { provider, providerType } = request;
   const requested =
     request.model && request.model !== 'default' ? request.model : undefined;
+
+  // ── A2 — A PIN TO A PROVEN-DEAD PAIR IS REFUSED BEFORE ANY NETWORK CALL ──
+  // Measured (Run D): `-p openrouter -m deepseek/deepseek-v4.1-flash` was fired at
+  // a provider account with no credits. The pin was accepted, the call went out,
+  // and the operator learned the real cause from a raw 402 body — after a full
+  // round trip. Strict mode is the case that matters: substitution is forbidden
+  // anyway, so the run is GUARANTEED to fail, and the only open question is
+  // whether it fails fast with the reason or slowly with a provider error.
+  if (request.strict ?? strictModelMode()) {
+    const refusal = strictPinRefusal(providerType, requested);
+    if (refusal) throw new Error(refusal);
+  }
 
   let served = '';
   try {
@@ -258,6 +400,31 @@ export async function resolveRoute(request: RouteRequest): Promise<ResolvedRoute
       agentType: request.agentType,
       task: request.task,
     });
+  } else {
+    // ── HAPPY PATH — audit it (see `reportedRoutes`) ───────────────────────
+    // The normal resolution used to record NOTHING, so a run that never
+    // substituted left no trace of which model served it. Same row shape the
+    // substitution path writes, so the two can never disagree about the model.
+    // `score` is 0 because this layer never scored a candidate — a fabricated
+    // score would read as a real ranking decision in `model explain --since`.
+    const pair = `${providerType}::${served}`;
+    if (served && !reportedRoutes.has(pair)) {
+      reportedRoutes.add(pair);
+      try {
+        const source: RoutingSource = request.source === 'chat' ? 'chat' : 'orchestrator';
+        recordRoutingDecision({
+          source,
+          agentType: request.agentType || 'unknown',
+          task: request.task || `route resolved on ${providerType}`,
+          complexity: request.complexity || 'unknown',
+          provider: providerType,
+          model: served,
+          score: 0,
+        });
+      } catch {
+        // Best-effort — audit is not allowed to break the call.
+      }
+    }
   }
 
   return { providerType, provider, model: served, requested, substituted };

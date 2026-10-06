@@ -15,9 +15,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   resolveRoute,
   resetSubstitutionReporting,
+  resetRouteAudit,
   substitutionLine,
   strictModelMode,
 } from '../../src/inference/route-resolver.js';
+import { getRoutingHistory } from '../../src/learning/routing-history.js';
+import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { InferenceProvider } from '../../src/inference/interface.js';
 import { logger } from '../../src/utils/logger.js';
 import { beginTrace, endTrace, getTrace } from '../../src/learning/reasoning-trace.js';
@@ -177,6 +183,177 @@ describe('resolveRoute — a substitution reaches the run trace', () => {
     const substitution = events.find((e) => e.summary.includes('gemini-3.1-flash-lite'));
     expect(substitution, 'the substitution must be readable from the run itself').toBeDefined();
     expect(substitution!.kind).toBe('decision');
+  });
+});
+
+describe('resolveRoute — the HAPPY path reaches the audit trail', () => {
+  // The audit trail is a real file. Point it at a temp dir so a test never
+  // writes (or reads) the operator's own routing history.
+  let dir: string;
+  const prior = process.env.NUVIRA_MEMORY_DIR;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'nuvira-route-audit-'));
+    process.env.NUVIRA_MEMORY_DIR = dir;
+    resetRouteAudit();
+  });
+  afterEach(() => {
+    if (prior === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = prior;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('records the served pair, so a run that never substituted is still auditable', async () => {
+    const route = await resolveRoute({
+      providerType: 'groq',
+      provider: fakeProvider(['openai/gpt-oss-120b']),
+      model: 'openai/gpt-oss-120b',
+      source: 'chat',
+      agentType: 'chat',
+      task: 'build a knowledge base app',
+    });
+
+    expect(route.substituted).toBe(false);
+    const rows = getRoutingHistory(50).filter(
+      (e) => e.provider === 'groq' && e.model === 'openai/gpt-oss-120b',
+    );
+    // Measured defect this pins: a 12-minute, 82-step turn left ZERO rows, so
+    // "which model served this?" could not be answered from the audit trail.
+    expect(rows.length).toBe(1);
+    expect(rows[0].source).toBe('chat');
+    expect(rows[0].task).toBe('build a knowledge base app');
+  });
+
+  it('omits a guessed complexity rather than inventing one', async () => {
+    await resolveRoute({
+      providerType: 'groq',
+      provider: fakeProvider(['openai/gpt-oss-120b']),
+      model: 'openai/gpt-oss-120b',
+    });
+    const row = getRoutingHistory(50).find((e) => e.provider === 'groq');
+    // This layer resolves a PAIR; it does not classify the ask.
+    expect(row?.complexity).toBe('unknown');
+  });
+
+  it('records a pair ONCE per process — a route is a property of the pair', async () => {
+    const provider = fakeProvider(['openai/gpt-oss-120b']);
+    for (let i = 0; i < 3; i++) {
+      await resolveRoute({ providerType: 'groq', provider, model: 'openai/gpt-oss-120b' });
+    }
+    const rows = getRoutingHistory(50).filter((e) => e.provider === 'groq');
+    expect(rows.length).toBe(1);
+  });
+});
+
+/**
+ * A1/A2 — a PIN the registry has PROVEN dead is refused before any network call,
+ * and the operator is told the real reason.
+ *
+ * Measured (Run D): `-p openrouter -m deepseek/deepseek-v4.1-flash` was fired at
+ * an account with no credits. The pin was accepted, the call went out, and the
+ * cause arrived as a raw 402 body after a full round trip. Under strict mode the
+ * run was GUARANTEED to fail, so the only question was whether it failed fast
+ * with the reason or slowly with a provider error.
+ */
+describe('resolveRoute — A2: a proven-dead pin is refused before any network call', () => {
+  let dir: string;
+  const prior = process.env.NUVIRA_MEMORY_DIR;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'nuvira-pin-preflight-'));
+    process.env.NUVIRA_MEMORY_DIR = dir;
+    resetModelRegistry();
+    resetRouteAudit();
+  });
+  afterEach(() => {
+    if (prior === undefined) delete process.env.NUVIRA_MEMORY_DIR;
+    else process.env.NUVIRA_MEMORY_DIR = prior;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A provider whose model list is OBSERVABLE — the whole point of a pre-flight. */
+  const spyProvider = (models: string[]) => {
+    const listModels = vi.fn(async () => models.map((id) => ({ id })));
+    return { provider: { name: 'fake', listModels } as unknown as InferenceProvider, listModels };
+  };
+
+  it('refuses without asking the provider for its model list', async () => {
+    getModelRegistry().recordCall(
+      'openrouter',
+      'deepseek/deepseek-v4.1-flash',
+      false,
+      'credit-exhausted',
+      'chat',
+    );
+    const { provider, listModels } = spyProvider(['deepseek/deepseek-v4.1-flash']);
+
+    await expect(
+      resolveRoute({
+        providerType: 'openrouter',
+        provider,
+        model: 'deepseek/deepseek-v4.1-flash',
+        strict: true,
+      }),
+    ).rejects.toThrow(/Refusing to call openrouter\/deepseek\/deepseek-v4\.1-flash/);
+
+    // THE assertion that makes it a PRE-FLIGHT rather than a nicer error.
+    expect(listModels).not.toHaveBeenCalled();
+  });
+
+  it('names the reason, and keeps the phrase the repair ladder classifies on', async () => {
+    getModelRegistry().recordCall('openrouter', 'vendor/broken', false, 'credit-exhausted', 'chat');
+    await expect(
+      resolveRoute({
+        providerType: 'openrouter',
+        provider: fakeProvider(['vendor/broken']),
+        model: 'vendor/broken',
+        strict: true,
+      }),
+    ).rejects.toThrow(/credit-exhausted|forbids substituting/);
+  });
+
+  it('names a verified EQUIVALENT on another provider when the bare model id matches (A1)', async () => {
+    const registry = getModelRegistry();
+    registry.recordCall('openrouter', 'vendor/some-model', false, 'credit-exhausted', 'chat');
+    registry.markVerified('deepseek', 'some-model', 'probe');
+
+    await expect(
+      resolveRoute({
+        providerType: 'openrouter',
+        provider: fakeProvider(['vendor/some-model']),
+        model: 'vendor/some-model',
+        strict: true,
+      }),
+    ).rejects.toThrow(/deepseek\/some-model/);
+  });
+
+  it('honestly offers no equivalent when the bare ids differ (no family guessing)', async () => {
+    // The measured pair: `deepseek/deepseek-v4.1-flash` vs the verified
+    // `deepseek-flash`. They are NOT the same bare id, so claiming they are the
+    // same model would be a guess — a worse failure than suggesting nothing.
+    const registry = getModelRegistry();
+    registry.recordCall('openrouter', 'deepseek/deepseek-v4.1-flash', false, 'credit-exhausted', 'chat');
+    registry.markVerified('deepseek', 'deepseek-flash', 'probe');
+
+    await expect(
+      resolveRoute({
+        providerType: 'openrouter',
+        provider: fakeProvider(['deepseek/deepseek-v4.1-flash']),
+        model: 'deepseek/deepseek-v4.1-flash',
+        strict: true,
+      }),
+    ).rejects.toThrow(/nuvira models/);
+  });
+
+  it('does NOT refuse an UNVERIFIED pin — that is how a new model gets proven', async () => {
+    // `unverified` means "nothing has ever been tried", not "broken". Refusing
+    // it would forbid the pins whose whole purpose is to prove a model.
+    const { provider } = spyProvider(['brand/new-model']);
+    const route = await resolveRoute({
+      providerType: 'openrouter',
+      provider,
+      model: 'brand/new-model',
+      strict: true,
+    });
+    expect(route.model).toBe('brand/new-model');
   });
 });
 

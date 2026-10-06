@@ -723,6 +723,36 @@ export function endTrace(traceId: string, success?: boolean, outcome?: TraceOutc
     trace.durationMs = trace.endedAt - trace.startedAt;
     if (success !== undefined) trace.success = success;
     if (outcome) trace.outcome = outcome;
+    // ── D3: THE SUMMARY PROVIDER IS THE SERVED ONE, NOT THE REQUESTED ONE ──
+    // `beginTrace` stores the provider the caller had CONFIGURED when the run
+    // started. That is a REQUEST, not a fact: it is read before routing, so a
+    // failover, a handoff or a substitution leaves it describing a provider that
+    // may have served nothing at all. Measured on a real 12-minute turn: the
+    // summary said `groq` while all 81 recorded steps said
+    // `deepseek/deepseek-flash`, and `model explain` had predicted a THIRD
+    // provider — three accounts of one turn, so "which model ran?" was
+    // unanswerable from the very artefact meant to answer it.
+    //
+    // The steps carry the SERVED pair, recorded at the call site, so the summary
+    // is derived from them: the provider that served the most calls. No steps →
+    // the requested value is left ALONE rather than overwritten with a guess.
+    try {
+      const servedCounts = new Map<string, number>();
+      for (const step of trace.steps ?? []) {
+        if (step?.provider) servedCounts.set(step.provider, (servedCounts.get(step.provider) ?? 0) + 1);
+      }
+      let dominant: string | undefined;
+      let dominantCount = 0;
+      for (const [providerName, count] of servedCounts) {
+        if (count > dominantCount) {
+          dominant = providerName;
+          dominantCount = count;
+        }
+      }
+      if (dominant) trace.provider = dominant;
+    } catch {
+      // Best-effort — the summary must never break the end of a run.
+    }
     writeFile(data);
     // Close the window for id-less recorders — an event after this belongs to
     // the NEXT run, not to the one that just finished.

@@ -425,6 +425,41 @@ function isDeadEntry(e: ModelRegistryEntry): boolean {
 }
 
 /**
+ * Does an `unavailable` REASON describe an ACCOUNT-level refusal that a fresh
+ * catalogue listing cannot refute?
+ *
+ * The complement of {@link MODEL_NOT_FOUND_REASON_RE}, and deliberately disjoint
+ * from it. "This model does not exist on this endpoint" IS refuted by the
+ * provider listing the model again — but "this account cannot pay for this
+ * call" and "this key is not authorized" are facts about the ACCOUNT, and a
+ * public model list says nothing about them. Collapsing the two is what let a
+ * metadata probe re-arm a pair `recordCall` had already proven dead (see the
+ * note in `markListed`).
+ *
+ * Narrow on purpose: transient refusals (`rate-limit`, quota parks, 5xx) are
+ * NOT entitlement failures — a listing, a park expiry or a recovered key may
+ * legitimately re-open those, and `quotaParkedUntil` already models the clock.
+ */
+function isEntitlementFailure(lastError: string | undefined | null): boolean {
+  if (!lastError) return false;
+  if (MODEL_NOT_FOUND_REASON_RE.test(lastError)) return false;
+  const t = lastError.toLowerCase();
+  return (
+    t.includes('credit-exhausted') ||
+    t.includes('insufficient credit') ||
+    t.includes('payment required') ||
+    t.includes('billing') ||
+    t.includes('unauthorized') ||
+    t.includes('forbidden') ||
+    t.includes('invalid api key') ||
+    t.includes('invalid_api_key') ||
+    t.includes('authentication failed') ||
+    /\bauth\b/.test(t) ||
+    /\b40[123]\b/.test(t)
+  );
+}
+
+/**
  * The config value `'default'` is a SENTINEL meaning "use the provider's
  * default model" — it is NOT a model id. Telemetry must never track it: a
  * `groq|default` entry marked `verified` (observed live, its lastError being
@@ -787,6 +822,24 @@ export class ModelRegistry {
   }
 
   /**
+   * Every verified, usable pair across ALL providers (A1).
+   *
+   * `getVerifiedModels(provider)` answers "what works on THIS provider"; this
+   * answers "what works anywhere", which is the question a pin pre-flight has to
+   * ask: when a pair is refused, the useful next sentence is "the same model is
+   * verified on <other provider>". Built on the SAME `isUsable()` gate as
+   * routing, so a suggestion here can never name a pair the router would reject.
+   *
+   * The `'default'` sentinel is excluded — it is a config marker ("use the
+   * provider's default"), not a model id, and suggesting it would be nonsense.
+   */
+  getAllUsablePairs(now: number = Date.now()): Array<{ provider: string; model: string }> {
+    return Object.values(this.data.entries)
+      .filter((e) => !isSentinelModel(e.model) && this.isUsable(e.provider, e.model, now))
+      .map((e) => ({ provider: e.provider, model: e.model }));
+  }
+
+  /**
    * The learned reasoning-parameter support for a provider × model, or
    * `undefined` when nothing has been established (callers treat absent as
    * "do not send" — default-deny). Sync, sub-ms.
@@ -891,7 +944,9 @@ export class ModelRegistry {
 
   /**
    * listModels probe: mark the model as seen (unverified unless already
-   * verified). Does NOT downgrade a verified entry — real verification wins.
+   * verified). Does NOT downgrade a verified entry — real verification wins —
+   * and does NOT clear a definitive ACCOUNT-level refusal (see
+   * `isEntitlementFailure`).
    * Accepts either bare ids (legacy callers) or full model descriptors; when
    * a descriptor carries the provider-advertised context window, it is
    * recorded so the router's context preflight can use the LIVE value.
@@ -918,10 +973,24 @@ export class ModelRegistry {
         if (reasoningCapability) existing.reasoningCapability = reasoningCapability;
         continue;
       }
+      // ── A DEFINITIVE ENTITLEMENT REFUSAL SURVIVES A CATALOGUE LISTING ───────
+      // Being in the provider's model list proves the provider SERVES the model.
+      // It proves nothing about whether THIS ACCOUNT may use it — and those are
+      // different axes, the same distinction `errorRate`/`partialRate` already
+      // draw below. Measured (2026-10-06): `openrouter|deepseek/deepseek-v4.1-flash`
+      // is in OpenRouter's public catalogue, while the account behind the key had
+      // never purchased credits. `recordCall` had learned the definitive
+      // `credit-exhausted` verdict; a catalogue refresh re-listed the provider,
+      // this loop reset the entry to `unverified`, and the pin that one run
+      // refused before any network call was offered again by the next — which got
+      // a raw `402 Insufficient credits` body back. Same pin, same registry,
+      // opposite outcomes, decided by a metadata probe. An entitlement verdict
+      // only real traffic can clear.
+      const entitled = existing?.status === 'unavailable' && isEntitlementFailure(existing?.lastError);
       this.data.entries[key] = {
         provider,
         model,
-        status: 'unverified',
+        status: entitled ? 'unavailable' : 'unverified',
         lastVerifiedAt: existing?.lastVerifiedAt || 0,
         lastProbedAt: now,
         lastUsedAt: existing?.lastUsedAt || 0,
@@ -1396,6 +1465,22 @@ export class ModelRegistry {
       entry.quotaParkedUntil = Math.max(entry.quotaParkedUntil, now + EMPTY_RESPONSE_PARK_MS);
       entry.providerParked = false;
       flipped = true;
+    } else if (errorType === 'credit-exhausted') {
+      // DEFINITIVE, and NOT a cooldown (A4). The account cannot pay, so there is
+      // no window to wait out — a park would expire and the router would offer
+      // the pair again, which is precisely how `openrouter/deepseek-v4.1-flash`
+      // kept being chosen and kept answering 402. Demoted like `auth`: it takes
+      // a funded key (or `models unblock` / a re-probe) to restore.
+      //
+      // This is honest about WHAT failed: the check is on the PAIR because that
+      // is the granularity the registry stores, but the sentence names the
+      // account, not the model — a different host may serve this same model,
+      // and the failover walk is free to try one.
+      entry.status = 'unavailable';
+      entry.lastError = 'credit-exhausted (that provider account cannot pay for this call)';
+      entry.quotaParkedUntil = 0;
+      entry.providerParked = false;
+      flipped = true;
     }
     this.data.entries[key] = entry;
     this.persist();
@@ -1752,7 +1837,11 @@ export class ModelRegistry {
    * Only call this with an AUTHORITATIVE live list (the refresh probe of a
    * keyless/local runner). Entries whose model is NOT in the list are handled:
    *   - UNVERIFIED / UNAVAILABLE entries are DELETED entirely (never checked
-   *     again — they have no learned value worth keeping).
+   *     again — they have no learned value worth keeping), EXCEPT an entry whose
+   *     unavailability is an ACCOUNT-level refusal (`isEntitlementFailure`): that
+   *     one is the only record that this key cannot pay or is not authorized, so
+   *     deleting it loses the verdict and the next model listing re-creates the
+   *     pair as `unverified` — re-arming exactly the pin A2 exists to refuse.
    *   - VERIFIED entries are DEMOTED to `unavailable` with reason "model
    *     deleted from local system" instead of being hard-deleted — a partial
    *     listModels response (a model mid-pull, a gateway hiccup) must not
@@ -1770,6 +1859,13 @@ export class ModelRegistry {
     for (const [key, e] of Object.entries(this.data.entries)) {
       if (e.provider !== provider || live.has(e.model)) continue;
       if (e.status === 'verified') demotedKeys.push(key);
+      // Absence from a model list is evidence about the CATALOGUE, not about the
+      // account. Deleting an entitlement verdict hands the pair straight back to
+      // the next `markListed` as a fresh `unverified` entry (observed live: the
+      // `credit-exhausted` verdict on `openrouter/deepseek/deepseek-v4.1-flash`
+      // was gone after a refresh, so the strict pre-flight stopped firing and a
+      // run that had refused before any call sent the request and got a raw 402).
+      else if (isEntitlementFailure(e.lastError)) continue;
       else removedKeys.push(key);
     }
     const now = Date.now();
