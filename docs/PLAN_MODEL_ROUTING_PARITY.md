@@ -380,6 +380,42 @@ contract: the header's provider equals the event's `served`, and the misleading 
 labels. And the child agent's own log event (`child-agent-runtime.ts`) records `{ tools, transport }` with
 no provider at all, so it never had this mismatch to fix.
 
+## Bundle 8 — the live re-run of the user's own ask (measured, not inferred)
+
+**What was run.** The user's own large routing-design ask (the one from the transcript), against his
+project folder's contents copied to `/tmp/g-live-routing`, driven through the built CLI:
+`node dist/index.js chat "$(cat task.txt)"`. His `Router_Design.md` was left untouched — the run states so
+itself ("Both existing design docs were left untouched"), and the copy is why.
+
+**It delivered**, in **4m16s** (09:11:23 → 09:15:39), 36 model calls, two bounded continuations
+(1/4, 2/4), 66 log events, and its own verification: it wrote `ai-router/router_core.py`, ran it
+(`EXIT=0`), and confirmed each requirement against that run — entitlements, the
+`(account_id, provider_model_id)` identity, the cross-provider spend cap, `sync_catalog` change events,
+and the capability ingest.
+
+**Three results that only a live run could produce.**
+
+| # | What was measured | Why it matters |
+|---|---|---|
+| 1 | **B5 is confirmed live, not just in a unit test.** `routing-history.json` for this exact ask records `complexity: "complex"`, where the pre-fix ladder rated the same text `moderate`. | The fix that was measured in a script and a test also fires on a real turn through the real router. |
+| 2 | **The A5/D3 log-label fix is confirmed live.** The header reads `backend.provider: deepseek` / `backend.model: deepseek-flash`, the first event is `turn.start {"requested":"gemini/gemma-4-26b-a4b-it"}`, and the last is `turn.end {…,"served":"deepseek/deepseek-flash"}`. | The header and the events now agree, and a reader can see the failover from the log alone. This is the exact mismatch that was reported (header `local` vs `turn.start gemini`) — same shape, now labelled. |
+| 3 | **B2's defect is now MEASURED rather than inferred — and it is worse than "static priors".** Every candidate in the auto pool scored the IDENTICAL `0.43836864406779663` (gemini/`gemma-4-26b-a4b-it`, openrouter/`cohere-r7b-12-2024`, deepseek/`deepseek-flash`), so the pick is a tie-break, and a task the router itself had just labelled **`complex`** was fed FIRST to **`gemma-4-26b-a4b-it`** — a small model — and reached `deepseek-flash` only after gemini failed twice (a timeout, then `Gemini tool-calling API error (500)`). | B2's remaining work is not "measure accuracy to refine a ranking"; it is that with equal priors the ranking carries NO information, so a `complex` task is routed by tie-break. The capability scorecard is what makes the scores differ — until then "best in class routing" is decided by candidate order. |
+
+**A console-truthfulness defect found by the same run, and fixed here.** The progress line printed
+`⚙ write_file({confirm: true})` five times and `⚙ edit_file({allow_multiple: false})` four times. Both
+calls were COMPLETE — `summarizeArgs` took the FIRST key the model emitted, which is a boolean default,
+so WHICH FILE was invisible; a line naming `confirm` reads as if the agent were confirming something it
+never wrote. It now prefers the identifying field (`IDENTIFYING_ARG_KEYS`), falling back to the first, and
+is exported so the preference is pinned by a test. (I checked the step checkpoint before believing the
+console: 31 of 36 calls carried full argument sets, and the single argument problem was an `unparseable`
+`plan_todo` that F1 already refuses — so the preview was the defect, not the calls.)
+
+**Honest residual.** The run also shows the step bound still binding: two continuations totalling 85 steps
+for a 1151-character ask, and the delivered answer is a *reference implementation* — it ships seeded
+capability scores and a sample raw table, and says so. The routing history still writes a paired
+`complexity: "unknown"` row beside each resolved one, which is defensible (D5's rule) but makes the file
+harder to read than it needs to be.
+
 ## Bundle 3e — an ask's SHAPE counts, not only its vocabulary (B5 LANDED)
 
 **The defect, measured rather than inferred.** B5's evidence line said "`model explain` baseline"; the
@@ -1139,6 +1175,8 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **B1 / B3 / B4 (Bundle 3b)** | New `learning/capability-evidence.ts` (five parameters, per-parameter sample counts, prior decay, derived tier, `DEFAULT_PRIORS`, rendering); `ModelRegistryEntry.capability` + `recordCapabilityEvidence`/`getCapability` + folds in `recordCall`; the chat turn feeds the turn's derived verdict in; `getModelCapabilities` reads measurement and the id-substring block is DELETED; `model explain` prints the scorecard. | `tests/learning/capability-evidence.test.ts` (new, 16), `tests/learning/auto-router.test.ts` (4 rewritten/added: B1 equality, B4 cold-vs-measured ×2, planner floor) | **LANDED**, live-verified in `model explain` |
 | **A1 (Bundle 3d)** | New `learning/model-identity.ts`: the hand-declared alias table (`declaredAt` + evidence per entry), `identityKey`/`sameModel` (exact + bare id, widened ONLY by declaration), and `identityProvenance`. Wired into `twinKey`/`areTwins` (funded-twin grouping), `route-resolver.ts` `verifiedEquivalent` (the pin-refusal sentence now names the funded twin for the run-D pair), `model explain` (twin set + provenance) and `model list` ("same model, different verdicts"). Identity groups CAPABILITY/legibility only — never routability. | `tests/learning/model-identity.test.ts` (new, 9), `tests/inference/route-resolver.test.ts` (rewritten pair + a new no-guessing pair) | **LANDED**, live-verified in `model list` |
 | **C4 residual (Bundle 4d)** | `tools/tool-loop.ts`: `planContextBlock` + one bounded `system` block at the top of every turn holding the conversation's existing plan (goal, revision, each step id with status and note, the `update`-not-redeclare instruction). Skipped when every step is done (`PLAN_CONTEXT_MAX_STEPS` = 12). | `tests/tools/c4-plan-continuation.test.ts` (+2: no plan ⇒ no block, completed plan ⇒ no block; the cross-turn case now asserts the plan is visible with `1/3 done`) | **LANDED**, measured (`secondTurnSawThePlan: true`) |
+| **console preview (Bundle 8)** | `tools/tool-loop.ts`: `summarizeArgs` prefers the field that IDENTIFIES a call (`IDENTIFYING_ARG_KEYS`: path/filePath/file/paths/command/pattern/query/url/goal/name/question/tool/action/claim) over whichever key the model emitted first, falling back to the first; exported for its test. | `tests/tools/tool-loop.test.ts` (+4) | **LANDED**, found by the live run (five `write_file({confirm: true})` lines) |
+| **B2 (evidence, Bundle 8)** | No code — the live re-run measured the actual defect: every auto-pool candidate scored the identical `0.43836864406779663`, so a `complex` ask was fed to `gemma-4-26b-a4b-it` first and reached `deepseek-flash` only after gemini failed twice. | evidence only (trace `cli-chat-1791364283748.log`, `routing-history.json`) | **MEASURED** — B2's remaining work is that equal priors make the ranking carry no information, not merely that the priors are static |
 | **A5/D3 residual (Bundle 2h)** | `cli/chat.ts`: `turn.start` records `requested` (the resolved pair) instead of a bare `provider`; `turn.end` records `served` from the SAME expression the header uses, plus `requested` when it differs. | `tests/observability/debug-log.test.ts` (+1) | **LANDED**, measured on the trace that showed the mismatch |
 | **B5 (Bundle 3e)** | `learning/hybrid-router.ts`: `analyzeComplexity` takes the higher of the keyword ladder (`complexityFromKeywords`, unchanged) and a measured breadth floor; new `requirementUnits` + `measureTaskBreadth` (exported, so a caller can state WHY) and the twelve coarse `CAPABILITY_AREA_RE` buckets. | `tests/learning/hybrid-router.test.ts` (+5) | **LANDED**, measured before/after against `dist/` (`moderate` → `complex`); four false-positive shapes pinned unchanged |
 | **G1–G4 (Bundle 7)** | New `utils/workspace-path.ts` (the shared path rules) and `web-dashboard/workspace-resolution.ts` (`resolveTurnWorkspace`, `formatWorkspaceNoticeText`); `web-dashboard/server.ts` resolves the turn's workspace through it (attached → session → message → default → none) and returns `workspaceNotice`/`workspacePath`/`workspaceSource`; `web-dashboard/project-context.ts` opens the context with `Workspace: ATTACHED …` and states that an EMPTY attached folder is a normal start; `tools/registry.ts` (`ToolContext.workspaceUnscoped`, the `ask_user` folder ADOPTION, and the G13 suppression standing down while unscoped), `tools/coding-tools.ts` (`unscopedWriteRefusal` on `write_file`/`edit_file`), `web-dashboard/chat-console.ts` + `cli/chat.ts` (the flag reaches the tool context), `web-dashboard/src/api.ts` + `components/ChatPage.tsx` (the notice banner and attaching the resolved folder). | `tests/web-dashboard/workspace-resolution.test.ts` (new, 13), `tests/web-dashboard/project-context.test.ts` (+3), `tests/web-dashboard/chat-api.test.ts` (+3), `tests/tools/unscoped-workspace.test.ts` (new, 9) | **LANDED**, unit + API verified; the live re-run against the rebuilt `dist/` is the remaining proof |

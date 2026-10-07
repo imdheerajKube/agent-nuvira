@@ -23,6 +23,7 @@ import {
   extractFallbackToolCalls,
   fallbackHintForTool,
   makeParallelSuggester,
+  summarizeArgs,
   type LoopTraceEvent,
   type ToolLoopDeps,
   type StepResponse,
@@ -2795,5 +2796,46 @@ describe('tool loop — delivery persistence + named termination (P3)', () => {
 
     expect(result.termination).toBe('no-capable-candidate');
     expect(result.generationFailed).toBe(true);
+  });
+});
+
+// ─── summarizeArgs — the progress line names the right thing ────────────────
+
+/**
+ * MEASURED live (2026-10-07, a routing-design run on the built CLI): the console
+ * printed `⚙ write_file({confirm: true})` five times and `⚙ edit_file({allow_multiple:
+ * false})` four times. Both calls were COMPLETE — the preview took the FIRST key
+ * the model emitted, which is a boolean default, so WHICH FILE was invisible. A
+ * line that names `confirm` instead of the path reads as if the agent were
+ * confirming something it never wrote.
+ */
+describe('summarizeArgs — prefer the field that identifies the call', () => {
+  it('names the PATH of a complete write_file, not its first boolean', () => {
+    expect(
+      summarizeArgs({ confirm: true, content: 'x'.repeat(500), mode: 'overwrite', path: 'ai-router/router_core.py' }),
+    ).toBe('{path: ai-router/router_core.py}');
+    // The exact measured shape that printed `{confirm: true}`.
+    expect(summarizeArgs({ confirm: true })).toBe('{confirm: true}');
+    expect(summarizeArgs({ allow_multiple: false, path: 'a.py' })).toBe('{path: a.py}');
+  });
+
+  it('names the command, the pattern, and a batched read', () => {
+    expect(summarizeArgs({ command: 'python3 router_core.py', confirm: true })).toBe(
+      '{command: python3 router_core.py}',
+    );
+    expect(summarizeArgs({ case_sensitive: false, pattern: 'routeMessage' })).toBe('{pattern: routeMessage}', );
+    expect(summarizeArgs({ limit: 200, paths: ['a.ts', 'b.ts'] })).toBe('{paths: ["a.ts","b.ts"]}');
+  });
+
+  it('still previews an unknown tool, and no arguments at all', () => {
+    // An unfamiliar field is still better than a blank preview.
+    expect(summarizeArgs({ widget: 'w' })).toBe('{widget: w}');
+    expect(summarizeArgs({})).toBe('{}');
+  });
+
+  it('bounds a long value so one huge argument cannot flood the line', () => {
+    const out = summarizeArgs({ command: 'x'.repeat(400) });
+    expect(out.length).toBeLessThan(60);
+    expect(out.endsWith('…}')).toBe(true);
   });
 });

@@ -3853,10 +3853,53 @@ export function classifyToolRefusal(result: string): { gate?: TraceGateName; sum
 }
 
 /** Compact argument preview for the event line. */
-function summarizeArgs(args: Record<string, unknown>): string {
-  const first = Object.entries(args).slice(0, 1)[0];
-  if (!first) return '{}';
-  const [key, value] = first;
+/**
+ * The argument fields that say WHAT a call acts on — the useful half of a
+ * one-field preview, in preference order.
+ *
+ * MEASURED (2026-10-07, live): a routing-design run printed
+ * `⚙ write_file({confirm: true})` five times and `⚙ edit_file({allow_multiple:
+ * false})` four times on its console. Both calls were COMPLETE — the preview
+ * simply took the FIRST key the model happened to emit, which is a boolean
+ * default, so the one thing a watcher needs (WHICH FILE) was invisible. A
+ * progress line that names `confirm` instead of the path is worse than no line:
+ * it looks like the agent is confirming something it never wrote.
+ *
+ * The fallback stays "first entry" so an unknown tool is still previewed rather
+ * than blanked.
+ */
+const IDENTIFYING_ARG_KEYS = [
+  'path',
+  'filePath',
+  'file',
+  'paths',
+  'command',
+  'pattern',
+  'query',
+  'url',
+  'goal',
+  'name',
+  'question',
+  'tool',
+  'action',
+  'claim',
+] as const;
+
+/**
+ * A one-field preview of a tool call's arguments, preferring the IDENTIFYING
+ * field ({@link IDENTIFYING_ARG_KEYS}) over whichever key was emitted first.
+ *
+ * Exported for the test that pins the preference — the bug it fixed was not a
+ * crash but a true statement that named the wrong thing.
+ */
+export function summarizeArgs(args: Record<string, unknown>): string {
+  const entries = Object.entries(args);
+  if (entries.length === 0) return '{}';
+  const picked =
+    IDENTIFYING_ARG_KEYS.map((k) => entries.find(([key]) => key === k)).find(
+      (e): e is [string, unknown] => e !== undefined,
+    ) ?? entries[0];
+  const [key, value] = picked;
   const v = typeof value === 'string' ? value : JSON.stringify(value);
   return `{${key}: ${v.length > 40 ? v.slice(0, 40) + '…' : v}}`;
 }
