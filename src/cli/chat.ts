@@ -89,6 +89,7 @@ import { resolveModelHarnessProfile, shouldSkipNativeTools, isAgenticCapableMode
 import { assertAgenticRoute, setWeakModelConsent, resolveWeakModelPolicy, weakRouteNotice } from '../learning/agentic-route-gate.js';
 import { resolvePromptBudget, measurePromptBudget, formatPromptBudgetBreakdown } from '../learning/prompt-budget.js';
 import { buildTurnReport, formatTurnReport, type TurnReport } from '../learning/turn-report.js';
+import { turnOutcomeObservation } from '../learning/outcome-observation.js';
 import { resolveAdapterDefault, hasCredentials } from '../learning/model-selection.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
 import { sweepTransientFailures, collectionRevivalStore } from '../learning/provider-revival.js';
@@ -1118,6 +1119,32 @@ export class ChatCommand extends BaseCommand {
     // reviewable after the fact (the Trace tab renders it), not only in this
     // turn's return value. Best-effort: a trace write never breaks a turn.
     recordTurnReport(answer.traceId, turnReport);
+    // Feed the MEASURED outcome back into the bandit on the CHAT path too. The
+    // orchestrator has done this for pipeline tasks all along; the chat turn —
+    // the product's most common entry point — never did, so every turn's real
+    // result was thrown away and the router learned from only one of its two
+    // execution models. The signal is the turn report's derived VERIFICATION
+    // verdict, never the model's own account of itself.
+    //
+    // Guarded exactly like the orchestrator: only when this turn was AUTO-routed
+    // (otherwise `getLastProvider` could reward a stale provider noted by an
+    // earlier auto run in this process) and only when bandit learning is on.
+    if (autoMode && this.configManager.getAll().routing?.bandit !== false) {
+      const observation = turnOutcomeObservation(turnReport);
+      if (observation) {
+        try {
+          getAutoRouter().recordOutcome(
+            'chat',
+            message,
+            observation.outcome,
+            this.configManager,
+            observation.outcomeData,
+          );
+        } catch {
+          // Learning is best-effort — never break a turn on a bandit error.
+        }
+      }
+    }
     // E3 — surface a non-trivial report on the console. A plain answer (no
     // plan, nothing changed) produces no summary and stays silent.
     if (turnReport?.summary) {

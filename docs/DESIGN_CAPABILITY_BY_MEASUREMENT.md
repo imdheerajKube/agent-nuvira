@@ -60,6 +60,14 @@ Beta(1,1) cold start. But the real path passes **`undefined`** for all of them �
 caller (the orchestrator ~3324) does too, with an outcome that is just `result.success` ("the agent
 did not throw" — the D2 defect, one layer down).
 
+> **STATUS: FIXED for the chat path (Bundle 3a in the tracker).** The declared type had no parameter
+> for the three honesty fields, so no caller COULD have supplied them; it now takes the bandit's own
+> `Partial<BanditOutcomeData>` and forwards it to both arms, and the chat turn — the product's most
+> common entry point, which had never fed the bandit at all — now records `verificationPassed` from
+> its derived `TurnReport` verdict via the pure mapping in `learning/outcome-observation.ts`.
+> Still open here: `testPassed`, `userAccepted` and a real `qualityScore`, which is why §7 still
+> needs sign-off.
+
 ### 2.3 The harness already DERIVES the honesty signals
 
 | Signal | Derived today in |
@@ -110,11 +118,12 @@ outrank evidence. Nothing else about the model changes because a number arrived 
 
 1. **`CapabilityRecord`** on the registry: the five parameters, a sample count each, the tier, and the
    `source` confidence the registry already uses. Durable across processes (the registry is).
-2. **Observation wiring.** One place per completed turn computes the observation set from evidence
-   that already exists (`TurnReport.verification`, executed `ok` actions, the honesty flags, tokens,
-   latency, `userAccepted`) and calls `recordOutcome(..., outcomeData, ...)` with a REAL payload —
-   replacing today's `undefined` — plus a per-model capability update.
-3. **`recordOutcome` stops discarding `outcomeData`** for the provider arm and the model arm.
+2. **Observation wiring** — **PARTIAL (Bundle 3a)**: the chat turn now derives
+   `verificationPassed` from `TurnReport.verification` and records it. Remaining: `testPassed` from
+   the executed `ok` actions, `userAccepted` from the next-turn signal, `latencyMs`/tokens, and the
+   per-model capability update (which waits on §7).
+3. ~~**`recordOutcome` stops discarding `outcomeData`** for the provider arm and the model arm.~~
+   **LANDED (Bundle 3a)** — including the chat-path wiring that supplies it.
 4. **`getModelCapabilities()` reads the scorecard**: the id-substring block is deleted; the reasoning
    floor is applied to the measured `accuracy` (B4), with the same never-dead-end fallback that
    already exists (`R4 — agentic capability floor`).

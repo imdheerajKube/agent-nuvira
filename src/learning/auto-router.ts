@@ -41,7 +41,12 @@ import { analyzeComplexity, type ComplexityLevel, type ModelCandidate, type Pref
 import { getTaskType, type TaskType } from './model-router.js';
 import { getBenchmarkRuns } from './benchmark.js';
 import { getAgentStats } from './agent-stats.js';
-import { getRouterBandit, DEFAULT_MIN_SAMPLES, type BanditOutcome } from './router-bandit.js';
+import {
+  getRouterBandit,
+  DEFAULT_MIN_SAMPLES,
+  type BanditOutcome,
+  type BanditOutcomeData,
+} from './router-bandit.js';
 import { getRouterPromotion, type ParallelPick, DEFAULT_MIN_PROMOTION_DECISIONS } from './router-promotion.js';
 import { getMlRouter, DEFAULT_ML_K, DEFAULT_ML_MIN_SAMPLES, DEFAULT_ML_STRENGTH } from './ml-router.js';
 import { buildModelCandidates, pickBestModelCandidate, buildFailoverChain, type ModelCandidate as ModelFirstCandidate } from './model-first-router.js';
@@ -2740,13 +2745,22 @@ export class AutoModelRouter {
    * @param outcome    success | failure | escalated
    * @param configManager Optional — used to resolve per-provider pricing
    *                       overrides when computing the cost-adjusted reward
+   * @param outcomeData   The MEASURED outcome telemetry for the reward model —
+   *                       `testPassed` / `userAccepted` / `verificationPassed` /
+   *                       `qualityScore`. Typed as the bandit's own
+   *                       `Partial<BanditOutcomeData>` so the harness cannot
+   *                       collect a signal this path has no parameter for: the
+   *                       three honesty fields previously had nowhere to go, so
+   *                       every caller passed `undefined` and the reward model
+   *                       they feed — the ONLY measured-quality input the router
+   *                       has — was dead on the real path.
    */
   recordOutcome(
     agentType: string,
     taskDescription: string,
     outcome: BanditOutcome,
     configManager?: ConfigManager,
-    outcomeData?: { latencyMs?: number; costUsd?: number; qualityScore?: number },
+    outcomeData?: Partial<BanditOutcomeData>,
     complexityHint?: ComplexityLevel,
   ): void {
     const bandit = getRouterBandit();
@@ -2759,9 +2773,9 @@ export class AutoModelRouter {
     // versa. Mirrors the select-time derivation exactly.
     const learnIntent = analyzeTaskProfile(taskDescription).intent;
     if (complexityHint) {
-      bandit.recordOutcomeWithComplexity(provider, complexityHint, outcome, costScore, undefined, learnIntent);
+      bandit.recordOutcomeWithComplexity(provider, complexityHint, outcome, costScore, outcomeData, learnIntent);
     } else {
-      bandit.recordOutcome(provider, taskDescription, outcome, costScore, undefined, learnIntent);
+      bandit.recordOutcome(provider, taskDescription, outcome, costScore, outcomeData, learnIntent);
     }
 
     // Per-modelId learning: attribute the same outcome to the concrete model
@@ -2769,9 +2783,9 @@ export class AutoModelRouter {
     const model = bandit.getLastModel(agentType);
     if (model) {
       if (complexityHint) {
-        bandit.recordModelOutcomeWithComplexity(model, complexityHint, outcome, costScore, undefined, learnIntent);
+        bandit.recordModelOutcomeWithComplexity(model, complexityHint, outcome, costScore, outcomeData, learnIntent);
       } else {
-        bandit.recordModelOutcome(model, taskDescription, outcome, costScore, undefined, learnIntent);
+        bandit.recordModelOutcome(model, taskDescription, outcome, costScore, outcomeData, learnIntent);
       }
     }
 

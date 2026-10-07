@@ -61,7 +61,7 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 |---|---|---|---|---|---|
 | B1 | S1 | **Capability is inferred from id substrings** (`flash`/`lite`/`mini` penalised; `pro`/`70b` boosted). | `auto-router.ts` `getModelCapabilities()` | Measure capability; keep the name as a weak hint at most | A model whose id contains `flash` is not penalised for it |
 | B2 | S1 | **Static provider baselines outrank real evidence** (`openrouter: 0.95`, `gemini: 0.85`, `local: 0.30`). | Baseline table | Derive from measured per-pair outcomes; decay the statics | Ranking changes when measurements change; two providers with equal measurements rank equally |
-| B3 | S1 | **No measured quality exists anywhere.** The registry tracks latency, tokens, error rate — never capability. | `ModelRegistryEntry`; and re-measured: the bandit ALREADY defines a quality reward (`BanditOutcomeData`) that the real path passes as `undefined` | **DESIGN WRITTEN — see `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`; awaiting the option choice.** The scaffold exists (`BanditOutcomeData`, per-model arms, the TurnReport verdicts); the fix is wiring it, not inventing a scale. **External ranking feeds assessed (§6):** the retired HF Open LLM Leaderboard, the shut-down Papers With Code and the unrelated Graphify repo are unusable, "DeepSeek Hermes" does not exist, and the one genuinely fitting feed is the keyless provider catalogue (`GET openrouter.ai/api/v1/models`) — external values may only ever be a labelled PRIOR for `accuracy`/`cost`/`ecosystem`, never the measured truth. | A pair that consistently fails is demoted by measurement, not by name |
+| B3 | S1 | **No measured quality exists anywhere.** The registry tracks latency, tokens, error rate — never capability. | `ModelRegistryEntry`; and re-measured: the bandit ALREADY defines a quality reward (`BanditOutcomeData`) that the real path passes as `undefined` | **PARTIAL — Bundle 3a LANDED**: the bandit's quality reward now receives the turn's derived `verificationPassed` on the chat path, and `recordOutcome` no longer discards its payload. The scorecard parameters (`testPassed`, `userAccepted`, a real `qualityScore`, and the per-parameter EMAs) are **DESIGNED and awaiting the §7 sign-off** in `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`. **External ranking feeds assessed (§6):** the retired HF Open LLM Leaderboard, the shut-down Papers With Code and the unrelated Graphify repo are unusable, "DeepSeek Hermes" does not exist, and the one genuinely fitting feed is the keyless provider catalogue (`GET openrouter.ai/api/v1/models`) — external values may only ever be a labelled PRIOR for `accuracy`/`cost`/`ecosystem`, never the measured truth. | A pair that consistently fails is demoted by measurement, not by name |
 | B4 | S1 | **Max mode's reasoning floor is name-driven**, so it excludes real models and admits others arbitrarily. | `MAX_CAPABILITY_MIN_REASONING = 0.7` vs `flash`+`lite` = 0.65 | Floor on measured capability | Documented: which models pass/are excluded, and why, from measurements |
 | B5 | S2 | **Complexity is under-rated**: a 4-component full-stack app classifies as `moderate`. | `model explain` baseline | Recalibrate; require an agentic floor for build asks at every complexity | That prompt classifies ≥ `complex` |
 
@@ -134,6 +134,47 @@ compact against the PLAN is a product decision (see "Next bundles").
 | P5 bad model's garbage = success | **D2** | P12 explain ranks unsorted | **D5** |
 | P6 unbounded context growth | **C1** | P13 pin rerouted into pipeline | **E2** |
 | P7 stale answer at budget end | **D1** | | |
+
+## Bundle 3a — the measured outcome reaches the reward (B3 PARTIAL)
+
+**B3. The router had a measured-quality reward and threw the measurement away.** `RouterBandit`
+carries `BanditOutcomeData` — `testPassed`, `userAccepted`, `verificationPassed`, `qualityScore` —
+and `applyReward` folds all four into the reward for BOTH the provider arm and the per-model arm. But
+`AutoModelRouter.recordOutcome` declared its payload as a three-field inline type (`latencyMs`,
+`costUsd`, `qualityScore`) and then forwarded **`undefined`** to every arm, so the honesty fields had
+no parameter to travel through and the reward reduced to a cost-adjusted coin flip on *"the agent did
+not throw"* — the D2 defect one layer down.
+
+**Two defects, one omission.** Fixing the type was not enough on its own:
+
+1. **The parameter did not exist.** The payload type is now the bandit's own
+   `Partial<BanditOutcomeData>`, forwarded intact to the provider and model arms. Without this no
+   caller could have supplied the signal, whatever it knew.
+2. **The chat path never recorded an outcome at all.** The orchestrator has fed the bandit for
+   pipeline tasks all along; `answerOnce` — the CLI, the dashboard console and the gateway, i.e. the
+   product's most common entry point — never did. So the router learned from ONE of its two execution
+   models, and every chat turn's real result was discarded.
+
+**The signal is derived, not narrated.** `learning/outcome-observation.ts` holds the single pure
+mapping from `TurnReport.verification` (itself built from recorded tool/plan evidence) to the learning
+payload, so the translation is one reviewable decision rather than a payload assembled per call site:
+
+| Turn verdict | Learned as | Why |
+|---|---|---|
+| `verified` | success + `verificationPassed: true` | a change was made and observed |
+| `unverified` | success + `verificationPassed: false` | the model DID answer; the reward model's own −0.08 for an unverified success is the calibrated weight. Booking it as a failure would penalise one event twice |
+| `blocked` | **nothing** | a wall the run hit is not a capability verdict about the model |
+| `not-applicable` | **nothing** | a plain answer with nothing to verify is not evidence; a neutral sample would dilute the real ones |
+
+**Measured after.** `tests/learning/outcome-observation.test.ts` (+6) and one in
+`tests/learning/auto-router.test.ts` that pins the forwarding: the same provider, same cost score and
+same outcome, with and without a measured payload — **the reward is strictly lower with it**, which is
+only true if the payload survives the call (it was `undefined` before).
+
+**Honest residual.** `testPassed`, `userAccepted` and a real `qualityScore` are still absent, so the
+reward is a coin flip on verification plus the cost adjustment — better, not complete. That is
+`docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §4 steps 2–4, waiting on the §7 sign-off. And this bundle
+changes LEARNING only: no score, weight or routing order is affected until the scorecard lands.
 
 ## Bundle 5a/5b — disclosed engine changes and assumptions (E1 + E2 LANDED)
 
@@ -532,6 +573,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **D1 (Bundle 2c)** | `tool-loop.ts`: `lastContent` is replaced by a later answer when real work SUCCEEDED since the stored one (the same predicate as `hasProductiveAction`, so they cannot drift), not only when the new text is longer; the stamp is deferred to the next iteration so a step's own tool call cannot expose its answer to the next step's closing wrapper. | `tests/tools/tool-loop.test.ts` (+2, both proven to fail under the old length-only rule) | **LANDED**, field evidence `trace-1791300903944-upblb7` (seq 65 draft vs seq 80/82 corrections) |
 | **D3 (model half) / A5 / D2 (Bundle 2d)** | `reasoning-trace.ts` `endTrace`: the summary names the provider×model PAIR that served the most steps (previously only the provider was derived, beside a requested model), and a `decision` event records any mid-turn detour with per-pair step counts. | `tests/learning/reasoning-trace.test.ts` (+3) | **LANDED**, live-verified (the summary pair equals the run's step pair) |
 | **D5 (Bundle 2e)** | `cli/model.ts` explain: the "Ranked providers" header states the availability-first sort key and quota-parked rows are labelled — the order was already the routing precedence; only the display hid its key. | `tests/cli/model.test.ts` (+1) | **LANDED** |
+| **B3 partial (Bundle 3a)** | `learning/auto-router.ts` `recordOutcome` takes the bandit's own `Partial<BanditOutcomeData>` and forwards it to the provider AND model arms (it discarded `undefined` before); `learning/outcome-observation.ts` is the pure mapping from `TurnReport.verification` to `verificationPassed`; `cli/chat.ts` `answerOnce` now records the turn's outcome (the chat path never fed the bandit at all). | `tests/learning/outcome-observation.test.ts` (+6), `tests/learning/auto-router.test.ts` (+1, proven to depend on the forwarding) | **LANDED** |
 | **E1 / E2 (Bundle 5a/5b)** | `tools/registry.ts` + `tools/ask-user.ts` + `learning/run-trace.ts` + `learning/turn-report.ts` + `cli/chat.ts`: an unattended `ask_user` default is recorded as an ASSUMPTION (never a shown answer), emitted as `autonomy:assumed-default`, and disclosed in a `🤝 decided for you` turn-report block; a pinned ask re-dispatched into the pipeline announces the execution-model change and the pin it carries. | `run-trace` (+2), `turn-report` (+3), `registry` (+2), `ask-user-non-interactive` (+3 assertions), `chat-answer-once-auto-parity` (+1) | **LANDED** |
 | **D4 (Bundle 2g)** | `cli/model.ts`: one `resolveExplainDecision` used by all three explain call sites resolves through the SAME option assembly the runtime uses — it reads the shared circuit breaker and seeds the same NLU `taskIntentHint` (`parseRequestSync` → `resolveDispatch`). Before: explain passed neither, so it could name a provider the runtime would sink or rank a task with a different intent. | `tests/cli/model.test.ts` (+2, both proven to fail when the option is removed) | **LANDED** |
 | **A5 (Bundle 2f)** | `agents/orchestrator.ts`: one `housekeepingCallLLM` helper (planner + memory + trajectory + self-improver) reuses the already-traced LLM in auto mode (no double-record) and wraps once WITH the audit route otherwise (no more `unknown/unknown`); `housekeepingTraceContext()` is the extracted, unit-tested decision. | `tests/agents/orchestrator.test.ts` (+3) | **LANDED**, measured before/after on `nuvira phase execute` (5/5 `unknown` steps → 0) |

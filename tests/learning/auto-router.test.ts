@@ -1164,6 +1164,29 @@ describe('AutoModelRouter.resolve with bandit learning', () => {
     expect(history[1].model).toBeTruthy();
   });
 
+  it('forwards the MEASURED outcome payload to both arms — the reward is no longer a bare coin flip', () => {
+    // The three honesty fields (`testPassed` / `userAccepted` / `verificationPassed`)
+    // had NO parameter to travel through on this path — the declared type did not
+    // include them — so every caller passed `undefined` and the only measured-quality
+    // reward the router has was dead on the real path. Both arms must now see it.
+    const router = new AutoModelRouter();
+    const record = (data?: { verificationPassed?: boolean }) => {
+      // Pin the provider so the two rewards are comparable (same cost score).
+      router.resolve('writer', 'implement a login form', { allowedProviders: ['groq'], useBandit: true });
+      router.recordOutcome('writer', 'implement a login form', 'success', undefined, data);
+    };
+    record(); // no measured payload — the old behaviour
+    record({ verificationPassed: false }); // what a real unverified turn reports
+
+    const providerArm = getRouterBandit().getState().learningHistory.filter((h) => !h.model);
+    const [blind, measured] = providerArm.slice(-2);
+    expect(blind.outcome).toBe('success');
+    expect(measured.outcome).toBe('success');
+    // Same provider, same cost score, same outcome — the ONLY difference is the
+    // measured payload, so the reward must be strictly lower with it.
+    expect(measured.reward).toBeLessThan(blind.reward);
+  });
+
   it('records the per-model prior for the concrete model that served the task', () => {
     const router = new AutoModelRouter();
     router.resolve('writer', 'implement a login form', {
