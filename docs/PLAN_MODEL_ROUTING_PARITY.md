@@ -331,20 +331,24 @@ exists; where it does not, that is stated as the residual rather than implied cl
 10. ~~**Nothing is fed back while the scorecard is unsigned.**~~ **UNBLOCKED — §6 signed off 2026-10-07**:
     the external feed landed (Bundle 16) and its priors now reach `model explain`. What is still missing
     is MEASURED evidence for `accuracy`/`performance` — open items 4 and 9/13.
-11. **Whether a document-delivery turn deserves more than 4096 output tokens** — a cost decision, not a bug.
-12. **A6's "exactly one row" acceptance was too strong**: a headless turn makes 2–3 genuine decisions,
-    so it appends 2–3 rows, all naming the served pair. Accepted by design rather than deduped.
+11. ~~**Whether a document-delivery turn deserves more than 4096 output tokens.**~~ **DECIDED (2026-10-07):
+    keep 4096 with sectioned delivery.** F1's behaviour stays; the cap is not raised.
+12. ~~**A6's "exactly one row" acceptance was too strong.**~~ **CLOSED as accepted**: a headless turn makes
+    2–3 genuine decisions, so it appends 2–3 rows, all naming the served pair. Deduping it was rejected,
+    not deferred — and Bundle 15's pass is re-runnable if the redundancy ever needs cleaning again.
 13. **A detour is made visible, not quality-judged** (D2); a correction is separated from a terse closing
     paragraph by *work since*, not by retraction language (D1); and a non-empty generic non-answer is
     undetectable — all three need a measured-quality signal (B3), never a phrase list.
 14. **`model explain` answers a hypothetical**: it cannot see a continuation's `routingText`, the
     `contextHintTokens`, or the session's failed-provider set, which exist only at runtime.
-15. **Prose-only turns are not nudged to verify** — the G1 nudge keys on edit activity
-    (`needsVerification`) — but such a turn IS disclosed as `unverified` in the report, which is the
-    honesty the requirement was about.
-16. **Historical artefacts keep their old readings**: debug traces already on disk are forward-only for
-    the `requested`/`served` labels, and `child-agent-runtime.ts`'s own `turn.start` records
-    `{ tools, transport }` with no provider (so it never had the mismatch to fix).
+15. ~~**Prose-only turns are not nudged to verify.**~~ **DECIDED (2026-10-07): keep it edit-only.** The
+    user asked how this agent's own harness handles it, and the answer is the same rule — verification
+    runs when work was CHANGED; a prose-only turn is not verified but IS disclosed as `unverified`, which
+    is the honesty the item was about.
+16. ~~**Historical artefacts keep their old readings.**~~ **CLOSED as not-fixable, by nature**: traces
+    already on disk are forward-only for the `requested`/`served` labels, and `child-agent-runtime.ts`'s
+    own `turn.start` records `{ tools, transport }` with no provider — so it never had the mismatch to
+    fix. Nothing here is a defect; only new turns could be relabelled, and they already are.
 
 ### Decisions taken, round 2 (2026-10-07)
 
