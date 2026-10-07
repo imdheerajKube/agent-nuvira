@@ -121,8 +121,8 @@ only variable.
 **Honest limits.** (1) It only catches an artifact that *declares* its omission; a generic non-answer that
 does not say so remains item 13's job (B3). (2) `extractWrittenText` keeps the first 20,000 characters per
 artifact, so an omission notice buried past that in an otherwise-huge file is not read — a 25-word
-placeholder is always well inside it. (3) **F1's sectioned-delivery proof is still outstanding on its own
-terms** (see the paragraph above).
+placeholder is always well inside it. (3) **F1's sectioned-delivery proof is no longer outstanding —
+PROVEN LIVE, Bundle 25** (three `write_file` calls produced one file with every section in order).
 
 **Live re-run of the SAME ask (2026-10-07).** Reproduced in a genuinely empty folder (`/tmp/g-f1b`, `ls
 -A` → 0). This time the model wrote a real **502-word** `DESIGN.md` with **no omission marker anywhere**
@@ -305,6 +305,43 @@ demotion vs an honesty flag forcing `unverified`, and read-before-write / real-c
 **50 files / 1053 passed**, both `tsc --noEmit` clean, all three docs guards, `build:cli`, dashboard bundle.
 One full-suite run showed `tests/parity/scenario-parity.test.ts` failing on a 35 s heavy case; it passes in
 isolation (26/26) and passed on the next full run — recorded as containment contention, not a regression.
+
+---
+
+## Bundle 25 — F1's sectioned-delivery path, PROVEN LIVE (2026-10-07)
+
+**Why this section exists.** Since Bundle 6 this file has carried one line: *"the live re-run of the failing
+ask ("deliver the document", now in sections) is the remaining proof"*. The mechanism was unit- and
+loop-tested, but never driven by a real model through the real `write_file` — so the fix rested on tests
+that could, in principle, agree with a mechanism the live path never reached. That gap is now closed.
+
+**The ask (live, `/tmp/g-f1c`, empty dir):** *"Create NOTES.md in this folder. Write section 1
+(Introduction), about 150 words, with write_file. Then use write_file with mode:\"append\" to add section 2
+(Design) and again for section 3 (Operations) … Do NOT overwrite; the final file must contain all three
+sections in order."*
+
+**What happened — the sectioned path, end to end:**
+
+- **Three `write_file` calls** in the log — one overwrite, then two appends — and the plan tracked them
+  `1/4 → 2/4 → 3/4 → 4/4 done`.
+- **One file, all three sections in order.** `NOTES.md` is 2,796 bytes / 449 words containing
+  `# Introduction`, `## Design`, `## Operations`, each with real prose — no section replaced another.
+- **No truncation, no malformed-call refusal, no data loss.** None of the Bundle 6 symptoms (empty
+  arguments, `finish_reason: "length"`, a re-sent identical call) appeared, because the payload never had to
+  fit in one output.
+- **The model verified the append semantics itself:** *"Section 1 is still intact at the top, so the appends
+  landed after it rather than replacing it."* That is the affordance doing exactly what it was added for.
+
+The turn still reported `unverified` (no observing tool ran) — correct and unchanged: this proof is about
+the DELIVERY path, not about verification.
+
+**What this does and does not prove.** It proves the sectioned/append delivery works live through the real
+registry, which is what the F1 fix promised and could not previously demonstrate. It does not prove the
+ORIGINAL failing ask now succeeds unattended — that run was 81 steps against a payload that did not fit, and
+reproducing it needs a document large enough to exceed the output cap AND a model that chooses the sectioned
+route on its own. Here the route was requested explicitly, so what is proven is that the affordance is real
+and works, not that a model reaches for it unprompted — the latter remains a prompt/behaviour question, not
+a harness one.
 
 ---
 
@@ -770,14 +807,16 @@ exists; where it does not, that is stated as the residual rather than implied cl
    approved OpenRouter catalogue now supplies both as LABELLED priors (opt-in, default OFF,
    `NUVIRA_CATALOG_FEED` in the CLI and the dashboard's Process Env page). `accuracy`, `performance` and
    `robustness` remain measurement-only by design — see the Bundle 16 limits.
-6. **F1's live re-run — RUN; the failure it exposed is now DETECTED (Bundle 19), while the sectioned-delivery
-   proof itself remains outstanding.** Bundle 19's artifact-honesty flag fires on the measured placeholder
+6. **F1's live re-run — RUN; the failure it exposed is now DETECTED (Bundle 19), and the sectioned-delivery
+   path is now PROVEN LIVE (Bundle 25).** Bundle 19's artifact-honesty flag fires on the measured placeholder
    (proven end-to-end in `tool-loop.test.ts`), the verdict on such a turn is now `unverified` rather than a
    silent success, and the flag quotes the file's own admission. **The two transports that were not
    covered are now covered — Bundle 22**: the **JSON-fallback transport** reports absent arguments (and
    surfaces a truncated block instead of dropping it silently), and the **Gemini wire** reports an absent
    `args`. The Gemini ambiguity (an absent `args` could be a legitimate no-argument call) is resolved by
-   making the refusal SCHEMA-AWARE: a tool with no required argument is not refused.
+   making the refusal SCHEMA-AWARE: a tool with no required argument is not refused. **And the outstanding
+   proof is now in: a live turn drove `write_file` once and `mode:"append"` twice and produced ONE file with
+   all three sections in order — see Bundle 25.**
 7. ~~**C3's live parity re-run** (the probe count dropping) is deferred.~~ **CLOSED — measured live
    (2026-10-07)**: a real turn asked to run `python3 --version` twice recorded the repeat, and the model's own
    report says it worked — *"the harness detected it as a repeat and declined to re-execute it, returning the
@@ -1165,10 +1204,11 @@ and the ask was to add seven more sections. So the truncation was STRUCTURAL, no
 could have delivered that document in one call, and the only correct harness response is to make the
 sectioned path the obvious one — which is what `mode: "append"`, the refusal text and the nudge now do.
 
-**Honest residual.** The JSON-fallback transport (a model asked to emit the tool call as text) and the
-Gemini wire (whose function calls carry structured `args`, so "empty" is ambiguous) are not covered; the
-live re-run of the failing ask ("deliver the document", now in sections) is the remaining proof; and
-one smaller observation from the same ten traces is recorded but NOT fixed — the question of whether a
+**Honest residual (both items now CLOSED, kept here as history).** The JSON-fallback transport and the
+Gemini wire are **covered — Bundle 22** (the refusal is schema-aware); and the live re-run of the sectioned
+path is **DONE — Bundle 25** (a real turn drove `write_file` once plus `mode:"append"` twice and produced
+one file with all three sections in order). One smaller observation from the same ten traces is recorded
+but NOT fixed — the question of whether a
 document-delivery turn should get a larger output budget than 4096 tokens (a cost decision, not a bug).
 The other one, the provider-label mismatch, is **LANDED (Bundle 2h)** — see below.
 
