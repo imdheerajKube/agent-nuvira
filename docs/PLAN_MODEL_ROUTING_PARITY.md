@@ -117,8 +117,8 @@ compact against the PLAN is a product decision (see "Next bundles").
 
 | # | Sev | Issue | Evidence | Fix | Acceptance |
 |---|---|---|---|---|---|
-| E1 | S2 | **An unattended `ask_user` silently picks option 1** on a real architectural fork and never discloses it. | Run A ×3, Run B ×2 (FAISS vs Milvus) | Disclose every auto-picked decision in the final answer | The answer lists each decision taken on the user's behalf |
-| E2 | S2 | **A pinned chat ask is re-routed into the multi-agent pipeline** by NLU (85% "create"). | Run D | A pin must not silently change the execution model | A pinned chat ask runs the pinned path, or says why it did not |
+| E1 | S2 | **An unattended `ask_user` silently picks option 1** on a real architectural fork and never discloses it. | Run A ×3, Run B ×2 (FAISS vs Milvus); measured: the pick was filed as a SHOWN ask WITH an answer, byte-identical to a real reply | **LANDED** (Bundle 5a): an unattended pick is now an ASSUMPTION — recorded separately from an answer, emitted as `autonomy:assumed-default`, disclosed in the turn report, and never handed back as "the answer you have" | The run's report lists each decision taken on the user's behalf, and no surface can read it as the user's answer |
+| E2 | S2 | **A pinned chat ask is re-routed into the multi-agent pipeline** by NLU (85% "create"). | Run D | **LANDED** (Bundle 5b): the no-model pipeline fallback still fires (it is a legitimate fallback), but it now SAYS the execution model changed and that the pin is the pair carried over, on both CLI paths. | A pinned chat ask runs the pinned path, or says why it did not |
 | E3 | S2 | **Provider inventory disagrees.** `model list` omits `deepseek` and reports NIM as missing a key, while the router ranks both. | Baseline | **LANDED** — the cause was a hand-written array: `const builtinTypes = ['local','groq','nim','gemini','openrouter']`, while the router derives its set from the catalog + configured ids. Both now read the same source. | `model list` and the router agree on which providers exist and their availability |
 
 ---
@@ -134,6 +134,44 @@ compact against the PLAN is a product decision (see "Next bundles").
 | P5 bad model's garbage = success | **D2** | P12 explain ranks unsorted | **D5** |
 | P6 unbounded context growth | **C1** | P13 pin rerouted into pipeline | **E2** |
 | P7 stale answer at budget end | **D1** | | |
+
+## Bundle 5a/5b — disclosed engine changes and assumptions (E1 + E2 LANDED)
+
+**E1 — an unattended auto-pick was recorded as the user's own answer.** `ask_user` renders a
+question; with no TTY (a piped run, CI, a headless turn) `renderAskUser` falls back to choice 1 so the
+agent can proceed. The tool then did `runTrace.recordAsk(question, true, picked)` — a **shown ask WITH
+an answer**, byte-identical to a real reply — and returned `User answered: <choice>`. So a decision
+nobody made was indistinguishable from one they made, on every surface derived from it, and the only
+disclosure was a `custom` note ASKING the model to mention it (which the measured runs did not).
+
+**The fix — an assumption is its own kind of fact.**
+
+| Change | Why it is the real cause |
+|---|---|
+| `AskUserAnswer.unattended?: boolean`; `renderAskUser`'s no-TTY branch sets it (the injected dashboard/gateway renderers can too). | The information existed at the one place that knew it and was thrown away immediately. |
+| The tool files an unattended answer with **`runTrace.recordAssumption()`**, not `recordAsk`, emits **`autonomy:assumed-default`**, and words the result "…was ASSUMED — it is NOT their answer…". | The record is what every downstream surface reads; making it a different record is what makes "the user decided" and "the harness decided" separable at all. |
+| `RunTrace` gains `assumptions` + `assumptionLines()`; an assumption is NEVER counted as a shown ask and `priorAnswer()` never returns it. | Otherwise the loop's repeat-nudge would hand it back as "the answer you have" — the exact mechanism that turned a default into a decision. |
+| `TurnReport.assumptions` + a `🤝 decided for you` block in `formatTurnReport`, and the summary is non-null whenever one exists. | The report is rendered only when it has a summary, so an assumption on an otherwise-quiet turn would have stayed invisible — the silence the defect was about. |
+
+**E2 — a pinned ask silently changed its execution model.** When the chat tool loop generated nothing,
+`answerOnce` re-dispatched the ask into the multi-agent pipeline (a legitimate fallback) without
+saying so, so a pinned turn could be reported against a run that was no longer the engine the user
+chose. Both CLI paths now disclose it, naming the pin that is carried over:
+`⤵️ the chat turn produced no answer on <provider> / <model> — running this ask in the multi-agent
+pipeline instead (a different execution model, on the same pinned pair)`. The fallback itself is
+unchanged — the defect was the silence, not the fallback.
+
+**Measured after.** `tests/learning/run-trace.test.ts` (+2), `tests/learning/turn-report.test.ts`
+(+3), `tests/tools/registry.test.ts` (+2), `tests/tools/ask-user-non-interactive.test.ts` (+3
+assertions), `tests/cli/chat-answer-once-auto-parity.test.ts` (+1). `tests/tools` + `tests/learning`
+**155 files / 2,844 tests**; `tests/cli` **62 files / 769 tests**.
+
+**Honest residual.** The pipeline fallback on the CLI's `prompt` branch discloses via `logger.info`
+(the branch is console-driven) while `answerOnce` uses `onProgress`; a caller that renders neither
+still would not see it. And nothing yet REPLACES the model's own wording — the report is printed
+beside the answer, so a model that claims "you chose X" is contradicted by the report rather than
+prevented. Both are deliberate: the fix makes the fact recorded and visible, which is the part the
+harness can guarantee.
 
 ## Bundle 2g — `explain` resolves through the runtime's own assembly (D4 LANDED)
 
@@ -494,6 +532,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **D1 (Bundle 2c)** | `tool-loop.ts`: `lastContent` is replaced by a later answer when real work SUCCEEDED since the stored one (the same predicate as `hasProductiveAction`, so they cannot drift), not only when the new text is longer; the stamp is deferred to the next iteration so a step's own tool call cannot expose its answer to the next step's closing wrapper. | `tests/tools/tool-loop.test.ts` (+2, both proven to fail under the old length-only rule) | **LANDED**, field evidence `trace-1791300903944-upblb7` (seq 65 draft vs seq 80/82 corrections) |
 | **D3 (model half) / A5 / D2 (Bundle 2d)** | `reasoning-trace.ts` `endTrace`: the summary names the provider×model PAIR that served the most steps (previously only the provider was derived, beside a requested model), and a `decision` event records any mid-turn detour with per-pair step counts. | `tests/learning/reasoning-trace.test.ts` (+3) | **LANDED**, live-verified (the summary pair equals the run's step pair) |
 | **D5 (Bundle 2e)** | `cli/model.ts` explain: the "Ranked providers" header states the availability-first sort key and quota-parked rows are labelled — the order was already the routing precedence; only the display hid its key. | `tests/cli/model.test.ts` (+1) | **LANDED** |
+| **E1 / E2 (Bundle 5a/5b)** | `tools/registry.ts` + `tools/ask-user.ts` + `learning/run-trace.ts` + `learning/turn-report.ts` + `cli/chat.ts`: an unattended `ask_user` default is recorded as an ASSUMPTION (never a shown answer), emitted as `autonomy:assumed-default`, and disclosed in a `🤝 decided for you` turn-report block; a pinned ask re-dispatched into the pipeline announces the execution-model change and the pin it carries. | `run-trace` (+2), `turn-report` (+3), `registry` (+2), `ask-user-non-interactive` (+3 assertions), `chat-answer-once-auto-parity` (+1) | **LANDED** |
 | **D4 (Bundle 2g)** | `cli/model.ts`: one `resolveExplainDecision` used by all three explain call sites resolves through the SAME option assembly the runtime uses — it reads the shared circuit breaker and seeds the same NLU `taskIntentHint` (`parseRequestSync` → `resolveDispatch`). Before: explain passed neither, so it could name a provider the runtime would sink or rank a task with a different intent. | `tests/cli/model.test.ts` (+2, both proven to fail when the option is removed) | **LANDED** |
 | **A5 (Bundle 2f)** | `agents/orchestrator.ts`: one `housekeepingCallLLM` helper (planner + memory + trajectory + self-improver) reuses the already-traced LLM in auto mode (no double-record) and wraps once WITH the audit route otherwise (no more `unknown/unknown`); `housekeepingTraceContext()` is the extracted, unit-tested decision. | `tests/agents/orchestrator.test.ts` (+3) | **LANDED**, measured before/after on `nuvira phase execute` (5/5 `unknown` steps → 0) |
 | **A6 / A2 (Bundle 1c; A5/D3/D4 completed in Bundles 2f/2d/2g)** | `chat.ts` `execute` honours `defaultProvider: "auto"`; the non-auto fallback installs the served pair on `session`; the pinned path consults `strictPinRefusal`; `preferredModelsFor` drops a "verified" row whose own error says the model does not exist; entitlement failures survive a listing and a prune. | `tests/cli/chat-answer-once-auto-parity.test.ts` (+2, the CLI entry), `tests/learning/model-registry.test.ts` (+2), `tests/learning/model-selection.test.ts` (+1) | **LANDED + live-verified**: routing rows 0→2–3 on `-t`; strict pin 402 bodies 1→0. See "Bundle 1c". |
@@ -524,4 +563,4 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 2. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D4/D5/A5 landed in Bundles 2c–2g**): make the system's account of itself true.
 3. **Bundle 3 — capability by measurement** (B1–B5): the root cause. **Blocked on a decision, not on analysis:** the design (data sources, three options, failure modes, acceptance tests) is written in `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` and the recommended option is B (measured outcomes over a decaying static prior, with the id-substring terms REMOVED rather than capped).
 4. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **Begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
-5. **Bundle 5 — autonomy & inventory** (E1–E3, B5, D6).
+5. **Bundle 5 — autonomy & inventory** (**PARTIAL: E1/E2 landed in Bundle 5a/5b; E3 + D6 landed in Bundles 2a/2b; B5 is part of Bundle 3**).

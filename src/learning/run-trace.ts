@@ -141,6 +141,25 @@ interface AskRecord {
   at: number;
 }
 
+/**
+ * One decision the run made ON THE USER'S BEHALF because no human was reachable.
+ *
+ * Why this record exists: `ask_user` renders a question and, with no TTY (a piped
+ * run, CI, a headless turn), falls back to choice 1 so the agent can proceed. That
+ * fallback was then recorded as a SHOWN ask WITH an answer — byte-identical to a
+ * real reply — so nothing could tell the two apart and the delivered answer could
+ * read as a decision the user never made (observed live: "I have selected
+ * Python/Qt" after a silent default). An assumption is recorded here, separately
+ * from `asks`, so every surface can disclose what was decided for the user without
+ * asking the model to remember to say it.
+ */
+interface AssumptionRecord {
+  question: string;
+  /** What the run went with instead of an answer. */
+  assumed: string;
+  at: number;
+}
+
 /** One tool call that was REFUSED (a gate, not a provider error). */
 interface RefusalRecord {
   tool: string;
@@ -195,6 +214,11 @@ export interface RunTraceSnapshot {
   mutations: number;
   /** The distinct files changed. */
   paths: string[];
+  /**
+   * Decisions the run took ON THE USER'S BEHALF because nobody was reachable,
+   * one line each (deduped, oldest first). Empty on a turn the user drove.
+   */
+  assumptions: string[];
 }
 
 /**
@@ -207,6 +231,7 @@ export interface RunTraceSnapshot {
  */
 export class RunTrace {
   private asks: AskRecord[] = [];
+  private assumptions: AssumptionRecord[] = [];
   private refusals: RefusalRecord[] = [];
   private failures: FailureRecord[] = [];
   private mutations: MutationRecord[] = [];
@@ -233,6 +258,43 @@ export class RunTrace {
       at: Date.now(),
     });
     if (this.asks.length > MAX_TRACE_ENTRIES) this.asks.shift();
+  }
+
+  /**
+   * Record a decision taken on the user's behalf because nobody was reachable.
+   *
+   * Deliberately NOT `recordAsk`: an assumption is not a question the user
+   * answered, and filing it as one is what let a silent default read as the
+   * user's own choice on every surface downstream.
+   */
+  recordAssumption(question: string, assumed: string): void {
+    this.assumptions.push({
+      question: String(question ?? ''),
+      assumed: String(assumed ?? ''),
+      at: Date.now(),
+    });
+    if (this.assumptions.length > MAX_TRACE_ENTRIES) this.assumptions.shift();
+  }
+
+  /** How many decisions the run took on the user's behalf. */
+  assumptionCount(): number {
+    return this.assumptions.length;
+  }
+
+  /**
+   * The assumptions as disclosure lines, deduped and oldest first — the exact
+   * text a surface prints so "what did it decide for me?" is answerable.
+   */
+  assumptionLines(): string[] {
+    const lines: string[] = [];
+    const seen = new Set<string>();
+    for (const a of this.assumptions) {
+      const line = `assumed "${a.assumed}" for: ${a.question}`;
+      if (seen.has(line)) continue;
+      seen.add(line);
+      lines.push(line);
+    }
+    return lines;
   }
 
   /** Prior refusals of the SAME tool for the SAME reason. */
@@ -351,6 +413,7 @@ export class RunTrace {
       refusals: this.refusals.length,
       mutations: this.mutations.length,
       paths: this.distinctMutationPaths(),
+      assumptions: this.assumptionLines(),
     };
   }
 

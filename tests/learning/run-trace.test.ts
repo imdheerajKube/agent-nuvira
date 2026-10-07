@@ -34,6 +34,35 @@ const LIVE_ASKS = [
   'Run a JavaScript syntax check (node -c script.js)?',
 ];
 
+describe('RunTrace — assumptions are not answers (E1)', () => {
+  it('files a decision made for the user separately from an answer', () => {
+    const t = new RunTrace();
+    t.recordAssumption('Which database?', 'Postgres');
+
+    expect(t.assumptionCount()).toBe(1);
+    expect(t.snapshot().assumptions).toEqual(['assumed "Postgres" for: Which database?']);
+    // The load-bearing part: an assumption must NOT read as a question the user
+    // answered, or the loop hands it back as "the answer you have" and the turn
+    // reports a choice the user never made.
+    expect(t.snapshot().shownAsks).toBe(0);
+    expect(t.snapshot().asks).toBe(0);
+    expect(t.priorAnswer('Which database?')).toBeUndefined();
+  });
+
+  it('dedupes repeated lines but counts every assumption', () => {
+    const t = new RunTrace();
+    t.recordAssumption('Which database?', 'Postgres');
+    t.recordAssumption('Which database?', 'Postgres');
+    t.recordAssumption('Which queue?', 'Redis');
+
+    expect(t.assumptionCount()).toBe(3);
+    expect(t.snapshot().assumptions).toEqual([
+      'assumed "Postgres" for: Which database?',
+      'assumed "Redis" for: Which queue?',
+    ]);
+  });
+});
+
 describe('questionShape + isSameQuestion — recognising a REAL repeat', () => {
   it('collapses the four variants a live turn asked to one question', () => {
     const first = questionShape(LIVE_ASKS[0]);

@@ -260,6 +260,13 @@ export interface AskUserAnswer {
   index: number | number[];
   /** Free text when the user typed a custom answer. */
   custom?: string;
+  /**
+   * E1 — true when NO human answered and the renderer took choice 1 so the turn
+   * could proceed (no TTY: a piped run, CI, a headless turn). An unattended
+   * answer is an ASSUMPTION, and every surface must be able to tell it apart from
+   * a real reply — otherwise a decision the user never made is reported as theirs.
+   */
+  unattended?: boolean;
 }
 
 /**
@@ -883,6 +890,22 @@ registerTool({
     const render = ctx.askUser || (await import('./ask-user.js')).renderAskUser;
     const answer = await render(question, choices, multi_select);
     const picked = Array.isArray(answer.answer) ? answer.answer.join(', ') : answer.answer;
+    // E1 — an UNATTENDED answer is an ASSUMPTION, not the user's word. Recorded
+    // as one (never as a shown ask with an answer, which is what made a silent
+    // default indistinguishable from a real reply), emitted so the turn can
+    // disclose it, and worded to the model as an assumption so its answer cannot
+    // claim the user chose it.
+    if (answer.unattended) {
+      ctx.runTrace?.recordAssumption(question, picked);
+      ctx.emit?.('autonomy:assumed-default', { question, assumed: picked }, 'tool-loop');
+      return (
+        `No user was reachable to answer, so "${picked}" was ASSUMED — it is NOT their answer. ` +
+        (answer.custom ??
+          `In your written answer, tell the user the question you would have asked and the assumption ` +
+            `you made (e.g. "I assumed ${picked} — tell me if you would prefer something else"), then continue with it.`) +
+        ' Do not record it as a user decision or re-ask the same question.'
+      );
+    }
     // Recorded SHOWN and with the answer, so the trace can hand both back when
     // the agent tries to ask it a second time (and so a self-report can say what
     // the user actually replied, instead of "asked 4×, no answer recorded").

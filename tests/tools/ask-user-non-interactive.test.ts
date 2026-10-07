@@ -42,6 +42,10 @@ describe('renderAskUser — non-interactive (no TTY)', () => {
     expect(inquirerPrompt).not.toHaveBeenCalled();
     expect(answer.answer).toBe('Update implementation');
     expect(answer.index).toBe(0);
+    // E1 — flagged so the TOOL files it as an assumption rather than a user
+    // answer. Without this the default was recorded byte-identically to a real
+    // reply, which is how a decision the user never made reached the answer.
+    expect(answer.unattended).toBe(true);
   });
 
   it('tells the model to DISCLOSE the question + assumption, not to silently decide', async () => {
@@ -87,6 +91,7 @@ describe('renderAskUser — non-interactive (no TTY)', () => {
     expect(inquirerPrompt).not.toHaveBeenCalled();
     expect(answer.answer).toEqual(['Update implementation']);
     expect(answer.index).toEqual([0]);
+    expect(answer.unattended).toBe(true);
   });
 
   it('does not crash when no choices were supplied', async () => {
@@ -115,8 +120,10 @@ describe('renderAskUser — interactive (TTY)', () => {
     expect(inquirerPrompt).toHaveBeenCalledTimes(1);
     expect(answer.answer).toBe('Cancel');
     expect(answer.index).toBe(1);
-    // An interactive answer carries no \"no user\" notice.
+    // An interactive answer carries no \"no user\" notice, and is NOT an
+    // assumption — a real reply must never be filed as one.
     expect(answer.custom).toBeUndefined();
+    expect(answer.unattended).toBeUndefined();
   });
 
   // C1 — the user's real answer is sometimes none of the offered choices.

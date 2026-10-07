@@ -65,6 +65,13 @@ export interface TurnReport {
   changedPaths: string[];
   verification: TurnVerification;
   flags: TurnReportFlags;
+  /**
+   * E1 — decisions the run took ON THE USER'S BEHALF because nobody was
+   * reachable (an unattended `ask_user` default), one line each. Recorded
+   * evidence, never the model's narration: a turn may not read as a decision the
+   * user made when the harness made it for them.
+   */
+  assumptions: string[];
   /** One deterministic sentence for the console/trace, or null when trivial. */
   summary: string | null;
 }
@@ -79,6 +86,8 @@ export interface BuildTurnReportInput {
   /** Distinct files changed this turn (from the run trace). */
   changedPaths?: readonly string[];
   flags?: TurnReportFlags;
+  /** E1 — recorded decisions taken on the user's behalf (see TurnReport). */
+  assumptions?: readonly string[];
 }
 
 function hasAnyFlag(flags: TurnReportFlags): boolean {
@@ -102,6 +111,7 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
   const toolCalls = [...(input.toolCalls ?? [])];
   const successfulToolCalls = [...(input.successfulToolCalls ?? [])];
   const changedPaths = [...new Set(input.changedPaths ?? [])];
+  const assumptions = [...new Set(input.assumptions ?? [])];
 
   const plan = input.plan ?? null;
   const steps: TurnReportStep[] = plan
@@ -153,7 +163,14 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
     }
   }
 
-  const summary = buildSummary({ planned: Boolean(plan), stepCounts, verification, mutations: input.mutations ?? 0, changedPaths });
+  const summary = buildSummary({
+    planned: Boolean(plan),
+    stepCounts,
+    verification,
+    mutations: input.mutations ?? 0,
+    changedPaths,
+    assumptions,
+  });
 
   return {
     goal: input.goal,
@@ -166,6 +183,7 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
     changedPaths,
     verification,
     flags,
+    assumptions,
     summary,
   };
 }
@@ -176,6 +194,7 @@ function buildSummary(input: {
   verification: TurnVerification;
   mutations: number;
   changedPaths: string[];
+  assumptions: string[];
 }): string | null {
   const parts: string[] = [];
   if (input.planned) {
@@ -187,9 +206,19 @@ function buildSummary(input: {
   } else if (input.mutations > 0) {
     parts.push(`${input.mutations} change(s)`);
   }
+  // E1 — an assumption is always worth saying: it is a decision the USER did not
+  // make, and it must not be silent even on a turn that changed nothing.
+  if (input.assumptions.length > 0) {
+    parts.push(`${input.assumptions.length} decision(s) made for you`);
+  }
   parts.push(`verification: ${input.verification}`);
   // Nothing informative at all (a plain answer with no plan and no changes).
-  if (!input.planned && input.mutations === 0 && input.verification === 'not-applicable') {
+  if (
+    !input.planned &&
+    input.mutations === 0 &&
+    input.verification === 'not-applicable' &&
+    input.assumptions.length === 0
+  ) {
     return null;
   }
   return parts.join(' · ');
@@ -205,6 +234,13 @@ export function formatTurnReport(report: TurnReport): string {
   for (const s of report.steps.slice(0, 20)) {
     const icon = s.status === 'done' ? '✅' : s.status === 'running' ? '🔄' : s.status === 'blocked' ? '⛔' : '⬜';
     lines.push(`   ${icon} ${s.description}${s.note ? ` — ${s.note}` : ''}${s.evidence ? ` (${s.evidence})` : ''}`);
+  }
+  // E1 — disclose every decision taken on the user's behalf, from the recorded
+  // assumptions. Printed even when the report has no summary parts of its own.
+  if (report.assumptions.length > 0) {
+    lines.push('   🤝 decided for you — nobody was reachable to answer:');
+    for (const a of report.assumptions.slice(0, 10)) lines.push(`      • ${a}`);
+    if (report.assumptions.length > 10) lines.push(`      • …and ${report.assumptions.length - 10} more`);
   }
   if (report.verification === 'unverified') {
     lines.push('   ⚠️ UNVERIFIED — a change or claim was not confirmed by any observation.');

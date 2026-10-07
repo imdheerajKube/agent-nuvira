@@ -137,6 +137,40 @@ describe('ChatCommand.answerOnce — no explicit provider/model honors defaultPr
     expect(out.provider).toBe('groq');
   });
 
+  it('E2 — a pinned ask re-dispatched into the pipeline SAYS SO instead of flipping engines silently', async () => {
+    // Falling back to the multi-agent pipeline when the chat loop generated
+    // nothing is legitimate — but it changes the EXECUTION MODEL, so it must be
+    // disclosed. Silence here is the same defect as an unattended auto-pick
+    // reported as the user's own choice: the user is owed the reason, and the
+    // fact that their pin is the pair carried over.
+    const provider = mockProvider();
+    vi.spyOn(ChatCommand.prototype as unknown as Proto, 'getProvider').mockResolvedValue({ type: 'groq', provider });
+    const routeMessageAuto = vi.spyOn(ChatCommand.prototype as unknown as Proto, 'routeMessageAuto');
+    vi.spyOn(ChatCommand.prototype as unknown as { runChatAnswer: Function }, 'runChatAnswer').mockResolvedValue({
+      content: '',
+      followups: [],
+      generationFailed: true,
+      toolCalls: [],
+      successfulToolCalls: [],
+    });
+    mockRunPipelineTool.mockClear();
+
+    const progress: string[] = [];
+    const out = await (new ChatCommand() as unknown as { answerOnce: Function }).answerOnce(
+      'write a file called e2-probe.txt saying hi',
+      { provider: 'groq', model: 'mock-model', onProgress: (m: string) => progress.push(m) },
+    );
+
+    // The engine change happened…
+    expect(mockRunPipelineTool).toHaveBeenCalledTimes(1);
+    expect(String(out.content)).toBe('pipeline ran');
+    // …and was not silent: the pin is still pinned, and the reader is told.
+    expect(routeMessageAuto).not.toHaveBeenCalled();
+    const line = progress.find((m) => m.includes('multi-agent pipeline instead'));
+    expect(line).toBeTruthy();
+    expect(line).toContain('the same pinned pair');
+  });
+
   it('WS5 — REFUSES a turn it cannot isolate, and never re-dispatches it to the pipeline', async () => {
     const provider = mockProvider();
     vi.spyOn(ChatCommand.prototype as unknown as Proto, 'getProvider').mockResolvedValue({ type: 'groq', provider });

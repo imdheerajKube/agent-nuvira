@@ -1040,6 +1040,17 @@ export class ChatCommand extends BaseCommand {
     // dispatching it here would run the ask on another engine entirely — the one
     // path that can run it UNISOLATED while the caller asked for isolation.
     if (answer.generationFailed && !answer.refused && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
+      // E2 — this CHANGES THE EXECUTION MODEL: the ask leaves the single chat tool
+      // loop and runs as a multi-agent pipeline. Falling back is legitimate
+      // (nothing was generated), but it must never be silent. A pinned ask that
+      // flips engines without saying so is the same defect as an unattended
+      // auto-pick reported as the user's own choice: the user is owed the reason
+      // and the fact that their pin is the pair being carried over.
+      opts.onProgress?.(
+        `   ⤵️ the chat turn produced no answer on ${provider.name}${model ? ` / ${model}` : ''} — ` +
+          `running this ask in the multi-agent pipeline instead (a different execution model` +
+          `${autoMode ? '' : ', on the same pinned pair'})`,
+      );
       const r = await runPipelineTool(message, this.configManager, { provider: type, model, board: false });
       // `success`, not `error`: a pipeline that RAN and failed reports its
       // outcome in `summary` and only sometimes sets `error`, so keying off
@@ -1086,6 +1097,10 @@ export class ChatCommand extends BaseCommand {
         successfulToolCalls: answer.successfulToolCalls,
         mutations: answer.runTrace?.mutations,
         changedPaths: answer.runTrace?.paths,
+        // E1 — decisions the harness took on the user's behalf (an unattended
+        // ask_user default), so the report discloses them instead of letting the
+        // answer read as a choice the user made.
+        assumptions: answer.runTrace?.assumptions,
         flags: {
           unverifiedActionClaim: answer.unverifiedActionClaim,
           unverifiedEdit: answer.unverifiedEdit,
@@ -1383,6 +1398,12 @@ export class ChatCommand extends BaseCommand {
       // WS5 — never on a REFUSED turn: the pipeline would run it in the real tree
       // (see the guard in `answerOnce`).
       if (answer.generationFailed && !answer.refused && dispatchDecision.dispatch && !dispatchDecision.needConfirm) {
+        // E2 — same rule as `answerOnce`: the engine changes here, so say so.
+        logger.info(
+          `   ⤵️ the chat turn produced no answer on ${provider.name}${model ? ` / ${model}` : ''} — ` +
+            `running this ask in the multi-agent pipeline instead (a different execution model` +
+            `${autoMode ? '' : ', on the same pinned pair'})`,
+        );
         await runDeveloperMode(prompt, this.configManager, { provider: type, model });
         // After pipeline execution, show followups and continue conversation
         // (don't just return — keep user engaged with next steps)

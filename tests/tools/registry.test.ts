@@ -37,6 +37,7 @@ import {
   type ToolContext,
 } from '../../src/tools/registry.js';
 import { toolsetForTool } from '../../src/tools/toolsets.js';
+import { RunTrace } from '../../src/learning/run-trace.js';
 import { z } from 'zod';
 
 describe('registry — registration', () => {
@@ -287,6 +288,51 @@ describe('registry — pipeline tool run (build + E3c task tools)', () => {
       const out = await getTool(name)!.run({}, ctx);
       expect(out, name).toContain('requires a goal');
     }
+  });
+});
+
+describe('registry — ask_user files an unattended default as an ASSUMPTION (E1)', () => {
+  const ARGS = {
+    question: 'Which database?',
+    choices: [{ label: 'Postgres' }, { label: 'Mongo' }],
+    multi_select: false,
+  };
+
+  it('records the no-TTY default as an assumption, never as a user answer', async () => {
+    // The live defect: with no human reachable the renderer picks choice 1, and
+    // the tool filed it as a SHOWN ask with an answer — byte-identical to a real
+    // reply — so the answer could read as a decision the user never made.
+    const runTrace = new RunTrace();
+    const events: Array<{ event: string; data: unknown }> = [];
+    const out = await getTool('ask_user')!.run(ARGS, {
+      configManager: {},
+      runTrace,
+      emit: (event: string, data: unknown) => events.push({ event, data }),
+      // an unattended renderer, exactly as renderAskUser answers with no TTY
+      askUser: async () => ({ answer: 'Postgres', index: 0, unattended: true }),
+    } as unknown as ToolContext);
+
+    expect(out).toContain('ASSUMED');
+    expect(out).toContain('NOT their answer');
+    expect(out).not.toContain('User answered:');
+    expect(runTrace.assumptionCount()).toBe(1);
+    expect(runTrace.snapshot().shownAsks).toBe(0);
+    expect(runTrace.snapshot().assumptions[0]).toContain('assumed "Postgres"');
+    expect(events.map((e) => e.event)).toContain('autonomy:assumed-default');
+  });
+
+  it('still records a real reply as a shown answer, with no assumption', async () => {
+    const runTrace = new RunTrace();
+    const out = await getTool('ask_user')!.run(ARGS, {
+      configManager: {},
+      runTrace,
+      askUser: async () => ({ answer: 'Mongo', index: 1 }),
+    } as unknown as ToolContext);
+
+    expect(out).toContain('User answered: Mongo');
+    expect(runTrace.snapshot().shownAsks).toBe(1);
+    expect(runTrace.assumptionCount()).toBe(0);
+    expect(runTrace.snapshot().assumptions).toEqual([]);
   });
 });
 

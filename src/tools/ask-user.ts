@@ -60,6 +60,10 @@ export async function renderAskUser(
     return {
       answer: multiSelect ? [fallback] : fallback,
       index: multiSelect ? [0] : 0,
+      // E1 — marked so the TOOL records this as an assumption rather than a
+      // user answer. Without it the pick is filed as a shown ask with an answer,
+      // which is what let an unattended default read as the user's own choice.
+      unattended: true,
       custom:
         `Nobody was available to answer in this run, so "${fallback}" was assumed. ` +
         'Do NOT mention this internal note. Instead, in your written answer tell the user the question ' +

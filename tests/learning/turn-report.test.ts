@@ -113,3 +113,30 @@ describe('formatTurnReport', () => {
     expect(formatTurnReport(r)).toContain('BLOCKED');
   });
 });
+
+describe('assumptions taken on the user\'s behalf (E1)', () => {
+  const ASSUMED = 'assumed "Postgres" for: Which database?  (nobody was reachable to answer)';
+
+  it('is never silent, even on a turn that changed nothing', () => {
+    // The whole defect was silence: a plain answer where the harness had decided
+    // something for the user produced NO summary, so the disclosure block (which
+    // chat renders only when a summary exists) never printed.
+    const r = buildTurnReport({ goal: 'say hi', toolCalls: [], successfulToolCalls: [], assumptions: [ASSUMED] });
+    expect(r.summary).not.toBeNull();
+    expect(r.summary).toContain('1 decision(s) made for you');
+    expect(r.assumptions).toEqual([ASSUMED]);
+  });
+
+  it('renders the decision, not just a count', () => {
+    const r = buildTurnReport({ goal: 'build it', assumptions: [ASSUMED] });
+    const text = formatTurnReport(r);
+    expect(text).toContain('decided for you');
+    expect(text).toContain('assumed "Postgres" for: Which database?');
+  });
+
+  it('stays silent when the user drove the turn', () => {
+    const r = buildTurnReport({ goal: 'say hi' });
+    expect(r.assumptions).toEqual([]);
+    expect(r.summary).toBeNull();
+  });
+});
