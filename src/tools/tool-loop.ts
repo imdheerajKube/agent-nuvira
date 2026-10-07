@@ -1430,6 +1430,23 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   const thread: ToolMessage[] = [...messages];
   /** Serving pairs the loop has already told the model about, oldest first. */
   const routeFeedState = { pairs: [] as string[] };
+  // ── C4 residual: the plan the conversation ALREADY has is shown, not hidden ──
+  // The C4 experiment measured the shape of this failure: the plan store keeps the
+  // plan (and now carries its progress across a re-declaration), but the model was
+  // never SHOWN it — the store was read only to answer "does a plan exist". So a
+  // later turn could not reference "step 3 is done" (which the tool's own
+  // description promises) and re-declared the plan instead. Handing the plan back
+  // at the top of every turn makes the carried progress visible and names the one
+  // correct move (update), instead of relying on the model to guess that a plan is
+  // already tracked.
+  //
+  // Bounded, and only when there is work left: a finished plan is not re-shown, and
+  // a long plan is capped rather than allowed to dominate the context it exists to
+  // protect.
+  const existingPlan = context.planStore?.snapshot?.() ?? null;
+  if (existingPlan && existingPlan.steps.length > 0 && existingPlan.steps.some((s) => s.status !== 'done')) {
+    thread.push({ role: 'system', content: planContextBlock(existingPlan) });
+  }
   // ── Stage 2: answer a question ABOUT the run from the run ────────────────
   // The live audit's worst moment was the user asking "why are you asking me
   // this again and again?" and the turn replying with an edit plan — not through
@@ -3705,6 +3722,40 @@ function previewToolResult(result: string, max = 200): string {
  * Returns null when the result is an ordinary tool/runtime error, so the caller
  * keeps its own wording rather than inventing a cause.
  */
+/** How many steps of an existing plan are re-shown to the model (bounded). */
+export const PLAN_CONTEXT_MAX_STEPS = 12;
+
+/**
+ * The block that hands the model the plan its own conversation already tracks.
+ *
+ * Written to make the correct next move obvious rather than merely possible: the
+ * step ids are given verbatim (so `update` can address them), the statuses are the
+ * stored truth, and the one thing a model tends to do instead — declare the plan
+ * again — is named as wrong, because a re-declaration under the same goal now
+ * carries progress but still replaces the step LIST the user is watching.
+ */
+export function planContextBlock(plan: {
+  goal: string;
+  steps: Array<{ id: string; description: string; status: string; note?: string }>;
+  revision: number;
+}): string {
+  const shown = plan.steps.slice(0, PLAN_CONTEXT_MAX_STEPS);
+  const hidden = plan.steps.length - shown.length;
+  const lines = shown.map(
+    (s) => `  - ${s.id} [${s.status}] ${s.description}${s.note ? ` — ${s.note}` : ''}`,
+  );
+  const open = plan.steps.filter((s) => s.status !== 'done').length;
+  return [
+    `📋 The plan this conversation is already tracking (${plan.steps.length - open}/${plan.steps.length} done, revision ${plan.revision}):`,
+    `  goal: ${plan.goal}`,
+    ...lines,
+    ...(hidden > 0 ? [`  … and ${hidden} more step(s).`] : []),
+    `Advance THIS plan: call \`plan_todo\` with action "update", the step id above and its new status. ` +
+      'Do NOT declare it again with action "create" — the checklist the user is watching is this one, and ' +
+      're-declaring replaces its steps. Work the next open step.',
+  ].join('\n');
+}
+
 /**
  * The refusal a tool call gets when its ARGUMENTS never arrived.
  *

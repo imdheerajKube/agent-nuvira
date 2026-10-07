@@ -87,6 +87,26 @@ function runLoop(opts: Partial<ToolLoopOptions> & { context: ToolContext }, d: T
 }
 
 describe('C4 experiment — what happens to the plan across a continuation', () => {
+  it('C. a turn with no plan gets no plan block (the reminder only exists when there IS one)', async () => {
+    const store = new PlanStore();
+    const requests: unknown[][] = [];
+    const d = deps([DONE('hello')], [], requests);
+    await runLoop({ context: { configManager: {}, planStore: store } }, d);
+    const first = JSON.stringify(requests[0] ?? []);
+    expect(first).not.toContain('already tracking');
+    expect(first).not.toContain('Advance THIS plan');
+  });
+
+  it('D. a COMPLETED plan is not re-shown (no noise for finished work)', async () => {
+    const store = new PlanStore();
+    store.create('ship it', [{ id: 's1', description: 'do s1' }]);
+    store.update('s1', 'done');
+    const requests: unknown[][] = [];
+    const d = deps([DONE('all done already')], [], requests);
+    await runLoop({ context: { configManager: {}, planStore: store } }, d);
+    expect(JSON.stringify(requests[0] ?? [])).not.toContain('already tracking');
+  });
+
   it('A. CONTINUATION within one turn: the plan is carried, a second CREATE is refused', async () => {
     const store = new PlanStore();
     const results: string[] = [];
@@ -151,13 +171,16 @@ describe('C4 experiment — what happens to the plan across a continuation', () 
     await runLoop({ context: { configManager: {}, planStore: store } }, d2);
     const afterTurn2 = view(store);
 
-    // Was the EXISTING plan visible to the model when turn 2 STARTED? Measured on
+    // Is the EXISTING plan visible to the model when turn 2 STARTS? Measured on
     // the FIRST request of the turn, not on the whole thread (a later request in
     // the same turn carries the tool results the model itself produced, which
-    // would flatter the answer). The store is read by the loop only to decide
-    // whether a plan EXISTS (the "declare a plan first" gate).
+    // would flatter the answer).
+    //
+    // Before the fix this was FALSE — the store was read only to answer "does a
+    // plan exist" — and that is why a later turn re-declared its plan. It is now
+    // shown, with the step ids and the one correct move (update).
     const firstRequestText = JSON.stringify(requests2[0] ?? []);
-    const planVisible = firstRequestText.includes('ship it') || firstRequestText.includes('do s1');
+    const planVisible = firstRequestText.includes('ship it') && firstRequestText.includes('s1');
 
     // eslint-disable-next-line no-console
     console.log(
@@ -177,7 +200,16 @@ describe('C4 experiment — what happens to the plan across a continuation', () 
     expect(afterTurn1.steps[0].status).toBe('done');
     // FIXED: the re-declaration keeps the work that was already done, and says so.
     expect(afterTurn2.steps[0].status).toBe('done');
+    // (New in Bundle 4d: the turn STARTED knowing the plan — see the assertions
+    // on `planVisible` below.)
     expect(afterTurn2.steps.slice(1).every((s) => s.status === 'pending')).toBe(true);
     expect(results2.join('\n')).toContain('♻️ Carried 1 step(s)');
+    // The plan is SHOWN at the start of the turn, with its ids, its real statuses
+    // and the instruction that advancing it is an update.
+    expect(planVisible).toBe(true);
+    expect(firstRequestText).toContain('already tracking');
+    expect(firstRequestText).toContain('1/3 done');
+    expect(firstRequestText).toContain('Advance THIS plan');
+    expect(firstRequestText).toContain('Do NOT declare it again');
   });
 });
