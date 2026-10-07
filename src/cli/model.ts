@@ -47,6 +47,8 @@ import {
   type RoutingDimension,
 } from '../learning/auto-router.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
+import { parseRequestSync } from '../nlu/parser.js';
+import { resolveDispatch } from '../nlu/actions.js';
 import { recordRoutingDecision, getExplainSnapshots, type RoutingHistoryEntry, type RoutingSnapshot } from '../learning/routing-history.js';
 import { diffRoutingDecisions, formatDecisionDiff } from '../learning/decision-diff.js';
 import {
@@ -55,6 +57,7 @@ import {
   type RouterBanditState,
 } from '../learning/router-bandit.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
+import { getProviderFallback } from '../learning/provider-fallback.js';
 import {
   getRouterPromotion,
   DEFAULT_MIN_PROMOTION_DECISIONS,
@@ -761,7 +764,7 @@ export class ModelCommand extends BaseCommand {
     since?: string,
   ): Record<string, unknown> {
     const toJSON = (t: string, agent: string): Record<string, unknown> => {
-      const d = router.resolve(agent, t, buildAutoResolveOptions(this.configManager), this.configManager);
+      const d = this.resolveExplainDecision(router, agent, t);
       const snapshot = this.buildSnapshot(d);
       // Record the explain snapshot for the dashboard audit trail + usage stats
       // (JSON mode returns early in showExplain, so this is the only hook here)
@@ -851,6 +854,52 @@ export class ModelCommand extends BaseCommand {
   }
 
   /**
+   * D4 — resolve an explain decision through the SAME options the RUNTIME uses.
+   *
+   * `chat.ts` layers two things on top of the shared resolve-options assembly
+   * before calling the router, and `explain` passed neither:
+   *
+   * - `circuitBreakerStatus`, which is what SUNKS a provider sitting in a
+   *   cooling-down circuit breaker. Without it every row looked healthy and
+   *   `explain` could name a provider the runtime would never serve.
+   * - the NLU `taskIntentHint`, which the runtime derives from the same task
+   *   string via `parseRequestSync`/`resolveDispatch` and which overrides the
+   *   profile's intent (e.g. a creative ask), so the two could classify one
+   *   task differently.
+   *
+   * Sharing the assembly is the only way the two can agree: both divergences
+   * were options the explain path never passed. The NLU derivation is
+   * deterministic in the task text, so seeding it here is reproducing the
+   * runtime's assembly, not guessing.
+   */
+  private resolveExplainDecision(router: AutoModelRouter, agentType: string, task: string) {
+    let circuitBreakerStatus: Array<{ provider: string; cooldownRemaining: number }> = [];
+    try {
+      circuitBreakerStatus = getProviderFallback(this.configManager).getCircuitBreakerStatus();
+    } catch {
+      // Best-effort — a breaker read must never break `explain`.
+    }
+    // Same NLU seed as the runtime: one parser call on the same text, so an
+    // intent the runtime honours is never invisible to `explain`.
+    let taskIntentHint: ReturnType<typeof resolveDispatch>['taskIntentHint'];
+    try {
+      taskIntentHint = resolveDispatch(parseRequestSync(task)).taskIntentHint;
+    } catch {
+      // Best-effort — a parse failure must never break `explain`.
+    }
+    return router.resolve(
+      agentType,
+      task,
+      {
+        ...buildAutoResolveOptions(this.configManager),
+        circuitBreakerStatus,
+        ...(taskIntentHint ? { taskIntentHint } : {}),
+      },
+      this.configManager,
+    );
+  }
+
+  /**
    * Build a RoutingSnapshot from a live decision — the ranked breakdown with
    * dimensions and governance context, persisted with explain decisions so
    * `--since` can diff two snapshots (P3-M3.3).
@@ -935,7 +984,7 @@ export class ModelCommand extends BaseCommand {
    */
   private renderRoutingDecisionDiff(router: AutoModelRouter, agentType: string, task: string, ref: string): void {
     const prev = this.resolveExplainRef(ref);
-    const decision = router.resolve(agentType, task, buildAutoResolveOptions(this.configManager), this.configManager);
+    const decision = this.resolveExplainDecision(router, agentType, task);
     const snapshot = this.buildSnapshot(decision);
     recordRoutingDecision({
       source: 'explain',
@@ -968,7 +1017,7 @@ export class ModelCommand extends BaseCommand {
 
   /** Render a single routing decision (compact or detailed). */
   private renderRoutingDecision(router: AutoModelRouter, agentType: string, task: string, compact = false): void {
-    const decision = router.resolve(agentType, task, buildAutoResolveOptions(this.configManager), this.configManager);
+    const decision = this.resolveExplainDecision(router, agentType, task);
     // Record the explain snapshot for the dashboard audit trail + usage stats
     recordRoutingDecision({
       source: 'explain',

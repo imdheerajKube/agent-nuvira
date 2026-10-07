@@ -17,6 +17,12 @@ import { join } from 'node:path';
 import { ModelCommand } from '../../src/cli/model.js';
 import { getRouterBandit, resetRouterBandit } from '../../src/learning/router-bandit.js';
 import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
+import { getProviderFallback } from '../../src/learning/provider-fallback.js';
+import { getAutoRouter } from '../../src/learning/auto-router.js';
+import { buildAutoResolveOptions } from '../../src/learning/resolve-options.js';
+import { parseRequestSync } from '../../src/nlu/parser.js';
+import { resolveDispatch } from '../../src/nlu/actions.js';
+import type { ConfigManager } from '../../src/config/manager.js';
 
 // ─── Isolate routing-history writes (explain records decisions) ────────────
 // The explain command now records routing decisions to the history store, which
@@ -72,6 +78,64 @@ describe('ModelCommand explain', () => {
     expect(output).toContain('Fallback chain');
     // M2.1: the capability-fit chip renders on the default (gate-ON) path.
     expect(output).toContain('fit');
+  });
+
+  it('feeds the circuit breaker into the decision, exactly like the runtime (D4)', () => {
+    // The runtime passes `circuitBreakerStatus` to the router, so a provider in a
+    // cooling-down breaker is SUNK by the walk. `explain` called the router
+    // without it, so it could name a provider the runtime would never serve.
+    // Only a decision that RECEIVED the status can mark a provider as cooling,
+    // which is what this asserts.
+    runCommand(['explain', 'warmup']); // ensure the ProviderFallback singleton exists
+    const fb = getProviderFallback();
+    fb.resetCircuitBreaker();
+    try {
+      for (let i = 0; i < 3; i += 1) fb.recordFailure('groq');
+      const output = runCommand(['explain', 'implement a login form']);
+      expect(output).toContain('(circuit-breaker cooldown)');
+    } finally {
+      fb.resetCircuitBreaker();
+    }
+  });
+
+  it('seeds the same NLU task-intent the runtime does, so intent-sensitive routing agrees (D4)', () => {
+    // The runtime derives a routing task-intent from the SAME text with the NLU
+    // parser and passes it as `taskIntentHint`. For prompts where the router's
+    // own text analysis disagrees (measured: "repair the broken import in
+    // loop.ts" — the router reads `coding`, the NLU reads `debugging`) that hint
+    // CHANGES the ranking. `explain` must resolve through the same assembly, or
+    // it audits a route the runtime would never take.
+    const cmd = new ModelCommand();
+    const cm = (cmd as unknown as { configManager: ConfigManager }).configManager;
+    const router = getAutoRouter();
+    const base = buildAutoResolveOptions(cm);
+    const task = 'repair the broken import in loop.ts';
+    const hint = resolveDispatch(parseRequestSync(task)).taskIntentHint;
+    expect(hint).toBe('debugging'); // fixture sanity: the divergence must exist
+
+    const proj = (d: ReturnType<typeof router.resolve>) =>
+      JSON.stringify({
+        t: d.taskType,
+        c: d.complexity,
+        p: `${d.provider}/${d.model}`,
+        r: d.ranked.map((x) => `${x.provider}:${x.score.toFixed(4)}`),
+      });
+    const withoutHint = router.resolve('chat', task, { ...base, circuitBreakerStatus: [] }, cm);
+    const withHint = router.resolve(
+      'chat',
+      task,
+      { ...base, circuitBreakerStatus: [], taskIntentHint: hint },
+      cm,
+    );
+    // The hint is load-bearing here — otherwise the assertion below is vacuous.
+    expect(proj(withoutHint)).not.toBe(proj(withHint));
+
+    const explainDecision = (
+      cmd as unknown as {
+        resolveExplainDecision: (r: typeof router, a: string, t: string) => ReturnType<typeof router.resolve>;
+      }
+    ).resolveExplainDecision(router, 'chat', task);
+    expect(proj(explainDecision)).toBe(proj(withHint));
   });
 
   it('states the availability-first ordering the ranked list is sorted by (D5)', () => {

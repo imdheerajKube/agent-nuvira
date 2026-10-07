@@ -83,7 +83,7 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 | D1 | S1 | **Stale final answer at budget exhaustion.** Run A claimed FAISS "never executed" after its own trace verified it (seq 68) and after it corrected the claim (seq 80–82). | Run A trace `trace-1791300903944-upblb7` (delivered 4,024 chars, seq 65) | **LANDED** (Bundle 2c): `lastContent` is replaced by a later answer when real work SUCCEEDED since the stored one — not only when the new text is longer | The delivered answer is the run's own last word after real work |
 | D2 | S1 | **A useless response is recorded `success: true`.** `local/deepseek-coder:latest` returned a generic non-answer; the step logged success. | Run A seq 14 | **PARTIAL** (Bundle 2d): the DETOUR is now recorded; an empty response is already a failure (G10). The *generic non-answer* half is not detectable without a measured-quality signal (B3) | A mid-turn model detour is visible in the trace as a detour |
 | D3 | S1 | **The trace summary `provider` is wrong** (`groq` while all 81 steps say `deepseek`). | Runs A & B | **LANDED** (Bundle 2d): the summary derives the provider×model PAIR that served the most steps — the provider half was landed earlier but the model was left as requested, so the printed pair could never have run | Summary == the pair that served the most steps |
-| D4 | S2 | **`model explain` does not predict the runtime.** | `gemini-3.1-flash-lite` vs `deepseek-flash` | Share the resolution path | explain's winner == the model a real turn uses, for the same input |
+| D4 | S2 | **`model explain` does not predict the runtime.** | `gemini-3.1-flash-lite` vs `deepseek-flash`; and, measured in code, the explain path passed **neither** option `chat.ts` layers on the shared assembly (`circuitBreakerStatus`, the NLU `taskIntentHint`) | **LANDED** (Bundle 2g): `explain` resolves through the same option assembly the runtime does — one `resolveExplainDecision` that reads the shared circuit breaker and the same NLU intent seed. Bundle 1c had already made the runtime *call the auto router at all*; this closes the option divergence that remained. | explain's winner == the model a real turn uses, for the same input text — including when a provider is cooling down and when the NLU intent overrides the text classification |
 | D5 | S3 | **`model explain`'s ranks are not sorted by its own scores.** | `0.351, 0.465, 0.397, 0.396` | **CAUSE FOUND — not the original reading.** `ranked` IS sorted (and a test asserts descending score). The sort key is *availability first*: cooldown rows sink, then quota-parked, then score — so a cooling-down provider with a HIGHER raw score renders BELOW a healthy lower-scored one, under a header that says "Ranked providers" with only `score` beside each row. Run A had cooldowns from its own failed calls, which is exactly that shape. | **LANDED** (Bundle 2e): the header names the availability-first key, and a quota-parked row is labelled (it had no note at all) | The displayed order is explained by the header; the ranking itself was already correct |
 | D6 | S2 | **The fallback chain offers non-routable pairs.** `groq/allam-2-7b` (verified but `lastError=rate-limit`) and `~`-prefixed OpenRouter alias ids (all `unverified`) appear as fallbacks. | `model explain` output + registry | **LANDED** — the offered chain now obeys the same gate the pick does: a proven-dead (`unavailable`) pair is dropped, an unproven one is labelled. | No offered pair is `unavailable`; every offered pair with no proof says so |
 
@@ -108,6 +108,54 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 | P5 bad model's garbage = success | **D2** | P12 explain ranks unsorted | **D5** |
 | P6 unbounded context growth | **C1** | P13 pin rerouted into pipeline | **E2** |
 | P7 stale answer at budget end | **D1** | | |
+
+## Bundle 2g — `explain` resolves through the runtime's own assembly (D4 LANDED)
+
+**D4. `model explain` could name a provider the runtime would never serve.** Bundle 1c closed the
+large half — `execute` did not engage the auto router at all, so the runtime and `explain` were two
+different rankers. What remained was subtler, and only visible when the two call sites are read side
+by side: **`chat.ts` layers two options on the shared `buildAutoResolveOptions` assembly, and
+`explain` passed neither.**
+
+- **`circuitBreakerStatus`.** The runtime reads the shared circuit breaker
+  (`getProviderFallback(configManager).getCircuitBreakerStatus()`) and hands it to the router, whose
+  sort **SINKS** a cooling-down provider. `explain` called `router.resolve(agent, task,
+  buildAutoResolveOptions(...))` with no status, so *every* row looked healthy and explain could
+  print a winner the walk would have deprioritised — and, before Bundle 2e, could not even show the
+  `(circuit-breaker cooldown)` tag, because nothing set `inCooldown`.
+- **The NLU `taskIntentHint`.** The runtime parses the same text (`parseRequestSync` →
+  `resolveDispatch`) and seeds the router's task intent, which overrides the profile's own text
+  classification. `explain` seeded nothing, so for a task where the two disagree it ranked a
+  different provider set. This is not hypothetical: measured on `"repair the broken import in
+  loop.ts"`, the router's own analysis reads `coding` while the NLU reads `debugging`, and the hint
+  drops `local` from the ranking (`gemini:0.4384, bedrock:0.4125, deepseek:0.4096, groq:0.3992,
+  openrouter:0.3022` vs the unhinted list which also carries `local:0.3396`).
+
+**The fix.** One private `resolveExplainDecision(router, agentType, task)` — the resolution path is
+shared instead of restated. It reads the breaker best-effort (in a `try/catch`, so a breaker read can
+never break `explain`), derives the NLU intent seed from the same text, and merges both into
+`buildAutoResolveOptions`. All three explain call sites go through it: `buildExplainJSON` (the
+`--json` scripting surface), `renderRoutingDecisionDiff`, and `renderRoutingDecision`.
+
+**Measured after — and both halves proven NON-VACUOUS, not asserted.**
+`tests/cli/model.test.ts` (+2):
+
+- the circuit-breaker test drives `recordFailure('groq')` three times (into cooldown) and asserts the
+  explain output contains `(circuit-breaker cooldown)`. **Removing `circuitBreakerStatus` fails it**
+  verbatim: `expected '… Auto Model Routing — Explain …' to contain '(circuit-breaker cooldown)'`.
+- the NLU test asserts the explain decision equals the runtime assembly **including** the hint, and —
+  so the assertion cannot pass by accident — first asserts the hinted and unhinted rankings
+  **differ** for the fixture prompt. **Removing the intent seed fails it** verbatim:
+  `expected '{"t":"default","c":"moderate","p":"gemini/gemini-2.0-flash","r":["gemini:0.4384",
+  "bedrock:0.4125","deepseek:0.4096","groq:0.3992","openrouter:0.3022"]}' to be '…,"groq:0.3992",
+  "local:0.3396","openrouter:0.3022"]}'`.
+
+**Honest residual.** `explain` now shares the runtime's *option assembly*, which is what made the two
+disagree; it still answers a hypothetical (`model explain <task>`) and so cannot see the pieces of a
+real turn's routing input that only exist at runtime — a continuation's `routingText` (the prior
+software ask), `contextHintTokens`, and the session's failed-provider set. The acceptance criterion
+is met for the same input text: given one task string, `explain`'s winner is the winner the walk
+would take, including cooldown and NLU-intent effects.
 
 ## Bundle 2f — the pipeline's housekeeping steps are named, not `unknown` (A5 LANDED)
 
@@ -420,8 +468,9 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **D1 (Bundle 2c)** | `tool-loop.ts`: `lastContent` is replaced by a later answer when real work SUCCEEDED since the stored one (the same predicate as `hasProductiveAction`, so they cannot drift), not only when the new text is longer; the stamp is deferred to the next iteration so a step's own tool call cannot expose its answer to the next step's closing wrapper. | `tests/tools/tool-loop.test.ts` (+2, both proven to fail under the old length-only rule) | **LANDED**, field evidence `trace-1791300903944-upblb7` (seq 65 draft vs seq 80/82 corrections) |
 | **D3 (model half) / A5 / D2 (Bundle 2d)** | `reasoning-trace.ts` `endTrace`: the summary names the provider×model PAIR that served the most steps (previously only the provider was derived, beside a requested model), and a `decision` event records any mid-turn detour with per-pair step counts. | `tests/learning/reasoning-trace.test.ts` (+3) | **LANDED**, live-verified (the summary pair equals the run's step pair) |
 | **D5 (Bundle 2e)** | `cli/model.ts` explain: the "Ranked providers" header states the availability-first sort key and quota-parked rows are labelled — the order was already the routing precedence; only the display hid its key. | `tests/cli/model.test.ts` (+1) | **LANDED** |
+| **D4 (Bundle 2g)** | `cli/model.ts`: one `resolveExplainDecision` used by all three explain call sites resolves through the SAME option assembly the runtime uses — it reads the shared circuit breaker and seeds the same NLU `taskIntentHint` (`parseRequestSync` → `resolveDispatch`). Before: explain passed neither, so it could name a provider the runtime would sink or rank a task with a different intent. | `tests/cli/model.test.ts` (+2, both proven to fail when the option is removed) | **LANDED** |
 | **A5 (Bundle 2f)** | `agents/orchestrator.ts`: one `housekeepingCallLLM` helper (planner + memory + trajectory + self-improver) reuses the already-traced LLM in auto mode (no double-record) and wraps once WITH the audit route otherwise (no more `unknown/unknown`); `housekeepingTraceContext()` is the extracted, unit-tested decision. | `tests/agents/orchestrator.test.ts` (+3) | **LANDED**, measured before/after on `nuvira phase execute` (5/5 `unknown` steps → 0) |
-| **A6 / A2 / A5 / D3 / D4 (Bundle 1c)** | `chat.ts` `execute` honours `defaultProvider: "auto"`; the non-auto fallback installs the served pair on `session`; the pinned path consults `strictPinRefusal`; `preferredModelsFor` drops a "verified" row whose own error says the model does not exist; entitlement failures survive a listing and a prune. | `tests/cli/chat-answer-once-auto-parity.test.ts` (+2, the CLI entry), `tests/learning/model-registry.test.ts` (+2), `tests/learning/model-selection.test.ts` (+1) | **LANDED + live-verified**: routing rows 0→2–3 on `-t`; strict pin 402 bodies 1→0. See "Bundle 1c". |
+| **A6 / A2 (Bundle 1c; A5/D3/D4 completed in Bundles 2f/2d/2g)** | `chat.ts` `execute` honours `defaultProvider: "auto"`; the non-auto fallback installs the served pair on `session`; the pinned path consults `strictPinRefusal`; `preferredModelsFor` drops a "verified" row whose own error says the model does not exist; entitlement failures survive a listing and a prune. | `tests/cli/chat-answer-once-auto-parity.test.ts` (+2, the CLI entry), `tests/learning/model-registry.test.ts` (+2), `tests/learning/model-selection.test.ts` (+1) | **LANDED + live-verified**: routing rows 0→2–3 on `-t`; strict pin 402 bodies 1→0. See "Bundle 1c". |
 
 ## Non-goals
 
@@ -446,7 +495,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 
 1. **Bundle 1 — identity & routability** (A1–A4): the release blocker. Until a pinned/model choice
    is pre-flighted and named, every routing number in the product is unverifiable.
-2. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D5/A5 landed in Bundles 2c–2f**): make the system's account of itself true.
+2. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D4/D5/A5 landed in Bundles 2c–2g**): make the system's account of itself true.
 3. **Bundle 3 — capability by measurement** (B1–B4): the root cause.
 4. **Bundle 4 — context discipline** (C1, C3–C5): the 2.85× gap.
 5. **Bundle 5 — autonomy & inventory** (E1–E3, B5, D6).
