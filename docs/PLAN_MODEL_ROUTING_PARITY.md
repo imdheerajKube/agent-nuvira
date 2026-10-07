@@ -344,10 +344,41 @@ sectioned path the obvious one — which is what `mode: "append"`, the refusal t
 **Honest residual.** The JSON-fallback transport (a model asked to emit the tool call as text) and the
 Gemini wire (whose function calls carry structured `args`, so "empty" is ambiguous) are not covered; the
 live re-run of the failing ask ("deliver the document", now in sections) is the remaining proof; and
-two smaller observations from the same ten traces are recorded but NOT fixed — the provider-label
-mismatch in one log header (`backend.provider: local` while the turn started on `gemini`), and the
-question of whether a document-delivery turn should get a larger output budget than 4096 tokens (a cost
-decision, not a bug).
+one smaller observation from the same ten traces is recorded but NOT fixed — the question of whether a
+document-delivery turn should get a larger output budget than 4096 tokens (a cost decision, not a bug).
+The other one, the provider-label mismatch, is **LANDED (Bundle 2h)** — see below.
+
+## Bundle 2h — the log says which pair ANSWERED, and which was ASKED FOR (A5/D3's last face, LANDED)
+
+**The measurement.** One of the ten dashboard traces opened with
+`# backend.provider: local` / `# backend.model: qwen2.5:0.5b` / `# backend.transport: json` and its very
+first event read `turn.start {"provider":"gemini"}`. Neither value was computed wrongly, which is why
+this survived the A5/D3 work: the HEADER is written at close from `lastAttempt` (so it names the pair that
+ACTUALLY served — the local model, whose 169,165-char answer is in that same log), while `turn.start`
+named the pair the turn was CONFIGURED with, before the provider walk had run.
+
+**Why that is still a defect.** A lone `provider` key inside an event called `turn.start` reads as "the
+turn started on gemini", and a bug report is read by people, not by the code that wrote it. The two fields
+asked different questions and used the same word for the answer.
+
+**The fix.** Each field now says which question it answers:
+
+- `turn.start` carries `requested` — the pair the surface resolved (`gemini/gemini-3.1-flash-lite`).
+- `turn.end` carries `served`, computed from the SAME expression the header is given (`servedProvider` /
+  `servedModel`, both taken from `lastAttempt ?? session`), plus `requested` only when it differs. So a
+  reader can tell a straight run from a failover without cross-referencing the header, and the header and
+  the event stream can no longer drift — the drift was possible only because one fact was computed twice.
+
+**Measured / verified.** Full root suite **462 passed | 2 skipped, 8453 passed | 19 skipped, 0 failed**;
+`tests/observability tests/cli tests/parity` **69 files / 875 tests**; `tsc --noEmit` clean; `build:cli` +
+the four docs guards + `verify:commands` (336/336) + `dashboard:bundle:check` green. New test in
+`tests/observability/debug-log.test.ts` (+1) writes the log exactly as `cli/chat.ts` does and pins the
+contract: the header's provider equals the event's `served`, and the misleading shape
+(`turn.start {"provider": …`) is asserted ABSENT.
+
+**Honest residual.** The existing ten traces on disk still read the old way; only new turns carry the
+labels. And the child agent's own log event (`child-agent-runtime.ts`) records `{ tools, transport }` with
+no provider at all, so it never had this mismatch to fix.
 
 ## Bundle 3e — an ask's SHAPE counts, not only its vocabulary (B5 LANDED)
 
@@ -1108,6 +1139,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **B1 / B3 / B4 (Bundle 3b)** | New `learning/capability-evidence.ts` (five parameters, per-parameter sample counts, prior decay, derived tier, `DEFAULT_PRIORS`, rendering); `ModelRegistryEntry.capability` + `recordCapabilityEvidence`/`getCapability` + folds in `recordCall`; the chat turn feeds the turn's derived verdict in; `getModelCapabilities` reads measurement and the id-substring block is DELETED; `model explain` prints the scorecard. | `tests/learning/capability-evidence.test.ts` (new, 16), `tests/learning/auto-router.test.ts` (4 rewritten/added: B1 equality, B4 cold-vs-measured ×2, planner floor) | **LANDED**, live-verified in `model explain` |
 | **A1 (Bundle 3d)** | New `learning/model-identity.ts`: the hand-declared alias table (`declaredAt` + evidence per entry), `identityKey`/`sameModel` (exact + bare id, widened ONLY by declaration), and `identityProvenance`. Wired into `twinKey`/`areTwins` (funded-twin grouping), `route-resolver.ts` `verifiedEquivalent` (the pin-refusal sentence now names the funded twin for the run-D pair), `model explain` (twin set + provenance) and `model list` ("same model, different verdicts"). Identity groups CAPABILITY/legibility only — never routability. | `tests/learning/model-identity.test.ts` (new, 9), `tests/inference/route-resolver.test.ts` (rewritten pair + a new no-guessing pair) | **LANDED**, live-verified in `model list` |
 | **C4 residual (Bundle 4d)** | `tools/tool-loop.ts`: `planContextBlock` + one bounded `system` block at the top of every turn holding the conversation's existing plan (goal, revision, each step id with status and note, the `update`-not-redeclare instruction). Skipped when every step is done (`PLAN_CONTEXT_MAX_STEPS` = 12). | `tests/tools/c4-plan-continuation.test.ts` (+2: no plan ⇒ no block, completed plan ⇒ no block; the cross-turn case now asserts the plan is visible with `1/3 done`) | **LANDED**, measured (`secondTurnSawThePlan: true`) |
+| **A5/D3 residual (Bundle 2h)** | `cli/chat.ts`: `turn.start` records `requested` (the resolved pair) instead of a bare `provider`; `turn.end` records `served` from the SAME expression the header uses, plus `requested` when it differs. | `tests/observability/debug-log.test.ts` (+1) | **LANDED**, measured on the trace that showed the mismatch |
 | **B5 (Bundle 3e)** | `learning/hybrid-router.ts`: `analyzeComplexity` takes the higher of the keyword ladder (`complexityFromKeywords`, unchanged) and a measured breadth floor; new `requirementUnits` + `measureTaskBreadth` (exported, so a caller can state WHY) and the twelve coarse `CAPABILITY_AREA_RE` buckets. | `tests/learning/hybrid-router.test.ts` (+5) | **LANDED**, measured before/after against `dist/` (`moderate` → `complex`); four false-positive shapes pinned unchanged |
 | **G1–G4 (Bundle 7)** | New `utils/workspace-path.ts` (the shared path rules) and `web-dashboard/workspace-resolution.ts` (`resolveTurnWorkspace`, `formatWorkspaceNoticeText`); `web-dashboard/server.ts` resolves the turn's workspace through it (attached → session → message → default → none) and returns `workspaceNotice`/`workspacePath`/`workspaceSource`; `web-dashboard/project-context.ts` opens the context with `Workspace: ATTACHED …` and states that an EMPTY attached folder is a normal start; `tools/registry.ts` (`ToolContext.workspaceUnscoped`, the `ask_user` folder ADOPTION, and the G13 suppression standing down while unscoped), `tools/coding-tools.ts` (`unscopedWriteRefusal` on `write_file`/`edit_file`), `web-dashboard/chat-console.ts` + `cli/chat.ts` (the flag reaches the tool context), `web-dashboard/src/api.ts` + `components/ChatPage.tsx` (the notice banner and attaching the resolved folder). | `tests/web-dashboard/workspace-resolution.test.ts` (new, 13), `tests/web-dashboard/project-context.test.ts` (+3), `tests/web-dashboard/chat-api.test.ts` (+3), `tests/tools/unscoped-workspace.test.ts` (new, 9) | **LANDED**, unit + API verified; the live re-run against the rebuilt `dist/` is the remaining proof |
 | **F1 (Bundle 6)** | `inference/interface.ts` (`ToolArgumentsError`, `finishReason`), `inference/tools.ts` (`parseToolCallArguments` used by both the streaming and one-shot paths), `inference/native-tools.ts` (Anthropic wire), `tools/tool-loop.ts` (`malformedToolCallRefusal` + `malformedCallNudge` + the planning-phase refusal), `tools/child-agent-runtime.ts` (same refusal in the forked loop), `tools/coding-tools.ts` + `tools/registry.ts` (`write_file` `mode: "append"`), `learning/reasoning-trace.ts` (the `malformed-call` gate name). | `tests/tools/malformed-tool-call.test.ts` (new, 5), `tests/inference/tools-stream.test.ts` (+3: truncated, empty, healthy+finishReason), `tests/tools/coding-tools.test.ts` (+2: append sections, overwrite default) | **LANDED**, unit + loop verified; the live re-run of the failing ask is the remaining proof |

@@ -1928,7 +1928,20 @@ export class ChatCommand extends BaseCommand {
       ...(ctxOverrides?.debugSession ? { session: ctxOverrides.debugSession } : {}),
       backend: { engine: 'loop', provider: session.type, ...(session.model ? { model: session.model } : {}) },
     });
-    debugLog?.event('turn.start', { provider: session.type });
+    // ── The pair this surface RESOLVED is not the pair that served ───────────
+    // MEASURED (2026-10-07): one log read `# backend.provider: local` /
+    // `# backend.model: qwen2.5:0.5b` while its own first event said
+    // `turn.start {"provider":"gemini"}`. Neither field was computed wrongly —
+    // the header names the pair that ACTUALLY served (via `lastAttempt`, updated
+    // by the provider walk and written at close) and this event named the pair
+    // the turn was CONFIGURED with, before any walk. But a lone `provider` field
+    // in an event called `turn.start` reads as "the turn started on gemini", so
+    // the honest fix is to say which question each field answers: this one is the
+    // REQUESTED route, and `turn.end` now carries the served one from the same
+    // expression as the header, so the two can never disagree.
+    debugLog?.event('turn.start', {
+      requested: session.model ? `${session.type}/${session.model}` : session.type,
+    });
 
     // WS3 (#25) — the turn's span root, when span export is on (else null). Same
     // identity as the log's: one surface, one conversation, one turn.
@@ -3060,11 +3073,18 @@ export class ChatCommand extends BaseCommand {
     // affect the answer.
     if (debugLog) {
       const servedModel = this.lastAttempt?.model ?? session.model;
+      // ONE expression for the served pair, used by BOTH the header and the
+      // `turn.end` event — so "what the header says" and "what the events say"
+      // is a single fact rather than two that can drift (the A5/D3 class of
+      // defect, in its last remaining face).
+      const servedProvider = this.lastAttempt?.provider ?? session.type;
       debugLog.backendOf({
-        provider: this.lastAttempt?.provider ?? session.type,
+        provider: servedProvider,
         ...(servedModel ? { model: servedModel } : {}),
         transport: result.transport ?? null,
       });
+      const requested = session.model ? `${session.type}/${session.model}` : session.type;
+      const served = servedModel ? `${servedProvider}/${servedModel}` : servedProvider;
       debugLog.event('turn.end', {
         generationFailed: result.generationFailed === true,
         cancelled: result.cancelled === true,
@@ -3072,6 +3092,11 @@ export class ChatCommand extends BaseCommand {
         contentChars: result.content.length,
         toolCalls: result.toolCalls?.length ?? 0,
         findings: findings.length,
+        // The pair that answered, and (only when it differs) the pair the turn
+        // asked for — a reader can then tell a straight run from a failover
+        // without cross-referencing the header.
+        served,
+        ...(served === requested ? {} : { requested }),
       });
       const notice = debugLogNotice(ctxOverrides?.debugSurface ?? 'cli-chat', debugLog.write());
       if (notice) logger.info(notice);

@@ -126,6 +126,37 @@ describe('WS2 debug log — header', () => {
     expect(parseDebugLogHeader('# provider: groq\n')).toBeNull();
   });
 
+  it('the REQUESTED route is labelled, and the SERVED pair agrees with the header', () => {
+    // MEASURED (2026-10-07): one real log read `# backend.provider: local` /
+    // `# backend.model: qwen2.5:0.5b` while its own first event said
+    // `turn.start {"provider":"gemini"}`. Neither was computed wrongly — the
+    // header names the pair that ACTUALLY served (written at close) and the event
+    // named the pair the turn was CONFIGURED with. But a lone `provider` key in
+    // an event called `turn.start` reads as "the turn started on gemini".
+    //
+    // So the naming is the contract, and this pins it, writing the log exactly
+    // as `cli/chat.ts` does: `turn.start` carries `requested`, and `turn.end`
+    // carries the served pair from the SAME value the header is given.
+    const log = new SessionDebugLog({ surface: 'cli-chat', dir: null });
+    log.event('turn.start', { requested: 'gemini/gemini-3.1-flash-lite' });
+    const servedProvider = 'local';
+    const servedModel = 'qwen2.5:0.5b';
+    log.backendOf({ provider: servedProvider, model: servedModel });
+    log.event('turn.end', {
+      served: `${servedProvider}/${servedModel}`,
+      requested: 'gemini/gemini-3.1-flash-lite',
+    });
+    const text = log.render();
+
+    // The header and the event state ONE fact.
+    const header = parseDebugLogHeader(text)!;
+    expect(header.provider).toBe(servedProvider);
+    expect(text).toContain('turn.end {"served":"local/qwen2.5:0.5b"');
+    // And the misleading shape is gone: a `turn.start` with a bare `provider`.
+    expect(text).not.toMatch(/turn\.start \{"provider"/);
+    expect(text).toContain('turn.start {"requested":"gemini/gemini-3.1-flash-lite"}');
+  });
+
   it('learns the backend as the turn runs, and the LAST value wins', () => {
     // The whole reason the file is written at close: the provider walk mutates
     // the route mid-turn, so a header captured at turn start is wrong exactly
