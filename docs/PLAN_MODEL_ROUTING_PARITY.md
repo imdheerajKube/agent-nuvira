@@ -50,6 +50,55 @@ mistakes are the ones the product makes:
 
 ---
 
+## Bundle 15 — the one-shot hygiene pass, and what it found (LANDED)
+
+**The requirement (user, 2026-10-07, verbatim):** *"Add a one-shot registry hygiene pass to drop the
+bogus rows already on disk and the paired complexity:unknown routing rows."* Run against the real
+profile with the user's approval ("Yes — both, with a backup").
+
+**The registry half already existed and was one name short.** `scripts/prune-test-registry-rows.mjs`
+was written for exactly this, and it had been reporting *"no test-origin rows found"* while
+`groq|wire-stub-model` sat in the registry as `status: verified`, `requests: 0`. It is seeded by
+`src/parity/wire-fixtures.ts` (four fixtures), and `model-first-router.ts` already names this exact id
+as a stub to ignore **at ranking time** — the row on disk is the residue that rule cannot reach.
+Added by EXACT NAME (`wire-stub-model`), not a substring, because the script's own docblock records
+that an earlier `/test|…/` regex matched every `-la-**test**` … every `-latest` alias in the registry
+and flagged 25 real OpenRouter ids. Result: **568 → 567 rows**, backup written.
+
+**The routing-history half needed measuring before deleting anything.** 23 of 500 rows carry
+`complexity: "unknown"`, written by `route-resolver` for "a route resolved to provider/model" with a
+synthetic task string. Deleting the category wholesale would have been wrong: measured against the
+resolved rows, **19 have a companion row with a real complexity** (one decision recorded twice) and
+**4 do not** — and the 4 are stable at every window tried (19/4 at 60s and again at 24h), so they are
+the ONLY record of those decisions. New `scripts/prune-routing-history-rows.mjs` therefore removes a row
+only when its companion exists, keeps the other 4 and prints why.
+
+It also found a second class the item did not name: **43 rows carry a bare `score: 0` with no
+`scoreBasis`** — the pre-B2-a sentinel (`cli/chat.ts` copied the walk's `decision.score`; `route-resolver`
+wrote a literal `0` for "never ranked"). B2-a made the field optional and stopped both new writes; these
+are the rows it could not reach. The number is DROPPED and the ROW IS KEPT, because the row is a real
+routing decision and the number did not decide anything.
+
+| | Before | After |
+|---|---|---|
+| registry rows | 568 (incl. `groq\|wire-stub-model`, verified) | **567**, fixture gone |
+| routing-history rows | 500 (23 unknown) | **481** (4 unknown, all genuinely unpaired) |
+| bare `score: 0`, no basis | **43** | **0** |
+| rows with a real score | 455 | **455** (nothing real was touched) |
+| backups | — | one per store, `.bak-<ISO>` next to the file |
+
+**A new script rather than an edit to the old one**, matching its naming and flags (`--apply`, `--file`,
+dry-run by default): the two scripts own different stores with different rules. The routing-history pass
+also takes `--window`. It was self-tested on a synthetic 5-row file (one paired-unknown, one lonely-unknown,
+one bare-0 known, one real known) before it was pointed at real data — the paired row went, the real twin's
+`0.42` survived, and the two sentinels cleared.
+
+**Honest limit.** The two-writer pattern is NOT a bug to fix here: A6 chose it (its acceptance asserts
+2–3 rows per headless turn, all naming the served pair), so redundant pairs will re-accumulate and this
+pass is re-runnable rather than final.
+
+---
+
 ## Bundle 14 — the memory dir has no cross-process lock (LANDED)
 
 **The requirement (user, 2026-10-07, verbatim):** *"Fix the model registry's cross-process locking
@@ -152,11 +201,16 @@ exists; where it does not, that is stated as the residual rather than implied cl
    longer flush its whole-map snapshot over what a peer learned. Two honest limits are recorded there
    (the lock is best-effort by design, and same-entry conflicts between two live writers still resolve
    last-writer-wins).
-2. **The bogus rows already on disk** (`groq|wire-stub-model`) are not migrated. F2 stops new ones and
-   F4 stops the not-found ones being ranked; no one-shot hygiene pass exists.
-3. **`routing-history` still writes a paired `complexity: 'unknown'` row** next to each resolved one
-   (`route-resolver.ts`: `request.complexity || 'unknown'`). Deliberately correct per the non-goal —
-   the layer genuinely cannot know — but it makes the file harder to read than it needs to be.
+2. ~~**The bogus rows already on disk** (`groq|wire-stub-model`) are not migrated.~~ **CLOSED — Bundle 15**:
+   the fixture id was added to the prune script's name list (by exact name, per its own doctrine) after
+   confirming it is seeded by `src/parity/wire-fixtures.ts`, and the row is gone from the real registry
+   (568 → 567, with a backup).
+3. ~~**`routing-history` still writes a paired `complexity: 'unknown'` row** next to each resolved one.~~
+   **CLOSED on disk — Bundle 15**: 19 measured-redundant rows removed and 43 bare `score: 0` sentinels
+   cleared. Two honest notes: the 4 UNPAIRED unknown rows were deliberately KEPT (they are the only
+   record of those decisions), and the two-writer pattern itself is **A6's intended behaviour** (its
+   acceptance counts 2–3 rows per headless turn), so redundant rows will re-accumulate — the pass is
+   re-runnable, not a one-time cure.
 4. **`testPassed`, `userAccepted` and a real `qualityScore` are still absent** from the bandit payload,
    so the reward remains a veto on verification plus a cost adjustment — better, not complete.
 5. **`cost` and `ecosystem` have declared priors but no measured feed.**
@@ -186,12 +240,22 @@ exists; where it does not, that is stated as the residual rather than implied cl
     the `requested`/`served` labels, and `child-agent-runtime.ts`'s own `turn.start` records
     `{ tools, transport }` with no provider (so it never had the mismatch to fix).
 
-### BLOCKED on a user decision
+### Decisions taken, round 2 (2026-10-07)
 
-- **`DESIGN_CAPABILITY_BY_MEASUREMENT.md` §6 sign-off** — the three open questions. B2's fix removed the
-  *explanation* for the wrong pick, but **ranking QUALITY** (open items 4, 5, 9, 13) still rests on priors
-  rather than real per-model capability feeds.
-- **C1/C5** needed a decision, got one, and is landed — no follow-up decision outstanding.
+- **`DESIGN_CAPABILITY_BY_MEASUREMENT.md` §6 — APPROVED: the OpenRouter catalogue feed**
+  (`GET /api/v1/models`, keyless), which is §6.3's own recommendation and the only source in the survey
+  that attaches to a pair without an identity guess. It feeds `cost` + `ecosystem` only. The user added
+  one requirement: ship it **opt-in and OFF by default**, with an **environment variable surfaced in the
+  CLI and the dashboard** so it can be switched on without editing code.
+- **Open item 11 (output budget)** — DECIDED: keep 4096 with sectioned delivery (F1's behaviour).
+- **Open item 15 (verification nudge)** — DECIDED: keep it edit-only. The user asked how this agent's own
+  harness handles it; the answer is the same rule — verification runs when work was CHANGED, a prose-only
+  turn is not verified but its unverified status is disclosed. That disclosure is what the item was about.
+- **Open items 9 + 13 (measured quality)** — DECIDED: scope as its own bundle, on top of the `accuracy`
+  samples the feed work begins filling.
+- **Open items 2 + 3 (hygiene)** — APPROVED and RUN against the real profile: see Bundle 15.
+
+No decision is outstanding. What remains open is work, not a question.
 
 ### Corrections made by this pass
 

@@ -213,10 +213,13 @@ With Code, or Graphify — and do not populate any score from data whose names c
 3. **`MIN_SAMPLES_FOR_EVIDENCE = 5`** and a LINEAR decay to zero prior weight by
    `PRIOR_FULL_SAMPLES = 10` — implemented exactly so, with both constants and their rationale in
    `capability-evidence.ts`.
-4. **External feeds** — the recommendation stands and is unimplemented: the provider catalogue only
-   (for `cost`/`ecosystem`), opt-in, never on the routing path. No leaderboard was integrated, so the
-   TTL/opt-in/identity-mapping machinery in §6.2 has nothing to guard yet — and `cost`'s prior is
-   `undefined` (printed `n/a`) rather than a guess, because pricing belongs to a provider ACCOUNT.
+4. **External feeds — APPROVED and now being implemented (2026-10-07, user's "I approve openrouter based
+   approach").** The provider catalogue only (for `cost`/`ecosystem`), never on the routing path, with
+   every rule in §6.2 applied: prior-only, cached with a TTL, identity-mapped or dropped, provenance
+   printed, opt-in. One requirement the user ADDED: the opt-in must be an **environment variable surfaced
+   in both the CLI and the dashboard**, so it can be switched on without editing code. No leaderboard was
+   integrated. `cost`'s prior stays `undefined` (printed `n/a`) until the feed supplies one, because
+   pricing belongs to a provider ACCOUNT.
 
 ### What landed, precisely
 
@@ -228,4 +231,4 @@ With Code, or Graphify — and do not populate any score from data whose names c
 | §4.2 observation wiring | **PARTIAL** — `verificationPassed` (chat turn) + robustness/performance (every `recordCall`) fold in; `testPassed` and `userAccepted` do not (the turn report carries no per-action `ok` today). |
 | §4.4 floor on measured accuracy | **LANDED** — the floor reads the scorecard; the id-substring block is deleted. |
 | §4.5 `model explain` | **LANDED** — parameter, value, basis and sample count; `n/a` when there is no prior. |
-| §4.6 B5 (complexity) | **OPEN** — `analyzeComplexity` is untouched. |
+| §4.6 B5 (complexity) | **LANDED (Bundle 3e)** — `analyzeComplexity` now takes the higher of the keyword ladder and a measured breadth floor. This row said OPEN for several bundles after it landed; corrected 2026-10-07. |

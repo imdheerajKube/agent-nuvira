@@ -56,6 +56,11 @@ const FIXTURE_NAMES = [
   'test',
   'mock-model',
   'dummy-model',
+  // Seeded by the provider-WIRE harness (`src/parity/wire-fixtures.ts`, four
+  // fixtures) and left `status: verified` with `requests: 0` on this machine.
+  // `model-first-router.ts` already names this exact id as a stub to ignore at
+  // ranking time (F4); the row on disk is the residue that rule cannot reach.
+  'wire-stub-model',
 ];
 
 function registryPath() {
@@ -118,9 +123,9 @@ function main() {
 
   if (!apply) {
     console.log('DRY RUN — nothing written. Re-run with --apply to remove these rows.');
-    console.log('⚠️  Stop the dashboard and the gateway first: both hold the registry in');
-    console.log('   memory and persist() writes the whole map back, which would re-add these');
-    console.log('   rows from their own copy.');
+    console.log('   (No need to stop the dashboard/gateway: since Bundle 14 the registry');
+    console.log('    merges against its boot snapshot, so a live process adopts this file\u2019s');
+    console.log('    absence for any row it has not changed itself.)');
     return 0;
   }
 
