@@ -2570,6 +2570,88 @@ describe('tool loop — mid-turn model handoff (P2)', () => {
     expect(result.modelHandoffs).toBe(1);
   });
 
+  // ─── C5 — the thread must fit the model that ANSWERS ─────────────────────
+  //
+  // `threadBudgetChars` is resolved by the caller ONCE, before the loop starts,
+  // from the pair the turn began on. A handoff installs a DIFFERENT pair, and
+  // the handoff that overflows is the one DOWN to a smaller window — the caller
+  // had looked that window up and was still holding the failed model's budget.
+  it('re-fits the thread budget to the model a handoff installed', async () => {
+    let model = 'A';
+    const onEvent = vi.fn();
+    // An over-large OLD tool result: big enough that a 30K budget must trim it.
+    const bigResult = 'x'.repeat(40_000);
+    const callModel = vi.fn(
+      async (): Promise<StepResponse> =>
+        model === 'A'
+          ? { content: '', toolCalls: [] }
+          : { content: 'B answered it.', toolCalls: [] },
+    );
+    const requestModelSwitch = vi.fn(async () => {
+      model = 'B';
+      return true;
+    });
+    const threadBudgetAfterSwitch = vi.fn(() => 30_000);
+
+    const result = await runToolLoop({
+      messages: [
+        { role: 'user', content: 'do the work' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: {} }] },
+        { role: 'tool', content: bigResult, toolCallId: 'c1' },
+        ...Array.from({ length: 6 }, (_, i) => ({ role: 'assistant' as const, content: `filler ${i}` })),
+      ],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), onEvent, requestModelSwitch, threadBudgetAfterSwitch },
+      // The budget the turn BEGAN with — large enough that nothing is trimmed yet.
+      threadBudgetChars: 5_000_000,
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.content).toBe('B answered it.');
+    // Re-resolved exactly once, at the switch.
+    expect(threadBudgetAfterSwitch).toHaveBeenCalledTimes(1);
+    // The change is DISCLOSED, both numbers named — a budget can decide whether a
+    // turn fits, so a reader must be able to see it move.
+    expect(onEvent.mock.calls.map((c) => String(c[0])).some((l) => l.includes('5000K → 30K'))).toBe(true);
+    // ...and APPLIED: the replacement model's own prompt carries the trimmed
+    // result, not the 40K one the failed model was given.
+    const lastThread = callModel.mock.calls.at(-1)![0] as Array<{ role: string; content: string }>;
+    const toolMsg = lastThread.find((m) => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg!.content.length).toBeLessThan(bigResult.length);
+  });
+
+  it('leaves the budget alone when the caller reports no window after a switch', async () => {
+    // `undefined` must never silently shrink a thread: an unknown window is not
+    // evidence of a small one.
+    let model = 'A';
+    const callModel = vi.fn(
+      async (): Promise<StepResponse> =>
+        model === 'A' ? { content: '', toolCalls: [] } : { content: 'B answered it.', toolCalls: [] },
+    );
+    const requestModelSwitch = vi.fn(async () => {
+      model = 'B';
+      return true;
+    });
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: {
+        callModel,
+        executeTool: vi.fn(),
+        requestModelSwitch,
+        threadBudgetAfterSwitch: () => undefined,
+      },
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.content).toBe('B answered it.');
+    expect(result.modelHandoffs).toBe(1);
+  });
+
   it('drops the failed model\'s private reasoning on handoff, keeping it on a same-model retry', async () => {
     // A handoff replaces the MODEL. `reasoningContent` is provider-private: the
     // wire layer echoes it back on the assistant message, which some reasoning

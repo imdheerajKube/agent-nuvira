@@ -46,12 +46,15 @@ import {
   MIN_CONTEXT_BUDGET,
   CONTEXT_HEADROOM_PCT,
   CHARS_PER_TOKEN,
-  THREAD_BUDGET_FLOOR_CHARS,
+  MIN_THREAD_BUDGET_CHARS,
   MAX_THREAD_BUDGET_CHARS,
   DEFAULT_CONTEXT_FILES,
   DEFAULT_CONTEXT_FILE_CHARS,
   MAX_CONTEXT_FILE_CHARS,
 } from '../../src/learning/context-budget.js';
+// The CALLER's default, from its own module — the budget this resolver must now
+// be able to go BELOW for a small known window (C1/C5).
+import { DEFAULT_THREAD_BUDGET_CHARS } from '../../src/tools/tool-loop.js';
 
 describe('resolveContextBudget', () => {
   it("uses the model's REAL window instead of the 128K hardcode", () => {
@@ -150,19 +153,42 @@ describe('resolveThreadBudgetChars (T2 — loop thread budget)', () => {
     entries.set('gemini|big', 1_048_576);
     const chars = resolveThreadBudgetChars({ provider: 'gemini', model: 'big' });
     expect(chars).toBe(MAX_THREAD_BUDGET_CHARS);
-    expect(chars!).toBeGreaterThan(THREAD_BUDGET_FLOOR_CHARS);
+    expect(chars!).toBeGreaterThan(DEFAULT_THREAD_BUDGET_CHARS);
   });
 
   it('a 128K window converts to its real char budget', () => {
     entries.set('local|mid', 131_072);
     const chars = resolveThreadBudgetChars({ provider: 'local', model: 'mid' });
     expect(chars).toBe(Math.floor(131_072 * (1 - CONTEXT_HEADROOM_PCT) * CHARS_PER_TOKEN));
-    expect(chars!).toBeGreaterThan(THREAD_BUDGET_FLOOR_CHARS);
+    expect(chars!).toBeGreaterThan(DEFAULT_THREAD_BUDGET_CHARS);
   });
 
-  it('never SHRINKS below the loop default for a small window', () => {
+  // ─── C1/C5 — the WINDOW decides, in BOTH directions ──────────────────────
+  //
+  // This block used to assert the opposite, and the assertion was the defect:
+  // "never SHRINKS below the loop default for a small window" pinned a 32K-token
+  // model to a 200,000-char budget (~44K tokens) — 1.4× its own window, from the
+  // lookup that had just established the window. A mid-turn handoff to a smaller
+  // model could therefore overflow the window the router already knew about.
+  it('FITS a small window instead of handing it the loop default', () => {
     entries.set('local|small', 32_768);
-    expect(resolveThreadBudgetChars({ provider: 'local', model: 'small' })).toBe(THREAD_BUDGET_FLOOR_CHARS);
+    const chars = resolveThreadBudgetChars({ provider: 'local', model: 'small' });
+    expect(chars).toBe(Math.floor(32_768 * (1 - CONTEXT_HEADROOM_PCT) * CHARS_PER_TOKEN));
+    // The whole point: it is now BELOW the caller's default, and below the
+    // window it was derived from.
+    expect(chars!).toBeLessThan(DEFAULT_THREAD_BUDGET_CHARS);
+    // ...and below the model's OWN window converted to characters, which is the
+    // property the old never-shrink rule violated.
+    expect(chars!).toBeLessThan(Math.floor(32_768 * CHARS_PER_TOKEN));
+  });
+
+  it('never shrinks below the sanity floor, even for a degenerate window', () => {
+    // A window this small is a registry error rather than a model; trimming to
+    // near-zero would destroy the turn, so one small floor survives the change.
+    entries.set('local|tiny', 512);
+    const chars = resolveThreadBudgetChars({ provider: 'local', model: 'tiny' });
+    expect(chars).toBe(MIN_THREAD_BUDGET_CHARS);
+    expect(MIN_THREAD_BUDGET_CHARS).toBeLessThan(DEFAULT_THREAD_BUDGET_CHARS);
   });
 });
 

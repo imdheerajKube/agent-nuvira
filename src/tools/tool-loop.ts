@@ -417,6 +417,23 @@ export interface ToolLoopDeps {
    * behaviour, byte for byte.
    */
   requestModelSwitch?(reason: UnusableResponseKind): Promise<boolean> | boolean;
+  /**
+   * C5 — RE-FIT THE THREAD TO THE MODEL THAT NOW ANSWERS.
+   *
+   * `threadBudgetChars` (see `LoopOptions`) is resolved ONCE by the caller —
+   * before this loop starts, from the pair the turn began on. But
+   * `requestModelSwitch` may install a DIFFERENT pair mid-turn, and the handoff
+   * that actually overflows is the one to a SMALLER window: the caller had just
+   * looked that window up, and the budget in hand was computed from the model
+   * that just returned nothing.
+   *
+   * The caller owns the session, so the caller — not the loop — knows which
+   * model is now serving and re-resolves its window. A NUMBER replaces the
+   * budget; `undefined` KEEPS the current one, so an unknown window can never
+   * silently shrink a thread. Omitted (mocks, sub-agent children, older
+   * callers) → the budget stays exactly as resolved, byte for byte.
+   */
+  threadBudgetAfterSwitch?(): number | undefined;
   /** Log a loop event (board note / console line). Defaults to logger.info. */
   onEvent?(line: string): void;
 }
@@ -1470,7 +1487,9 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         'instead. Do not answer a question about your own process with a plan for the work.',
     });
   }
-  const budgetChars = opts.threadBudgetChars ?? DEFAULT_THREAD_BUDGET_CHARS;
+  // C5 — `let`, not `const`: a mid-turn handoff can install a different model, and
+  // the budget must follow it (see `threadBudgetAfterSwitch`).
+  let budgetChars = opts.threadBudgetChars ?? DEFAULT_THREAD_BUDGET_CHARS;
   // P3d — per-turn parallel suggester: after 2+ successful independent gather
   // steps, one advisory delegate suggestion fires (bounded, deterministic).
   const parallel = makeParallelSuggester();
@@ -1824,6 +1843,23 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           }
           if (switched) {
             modelHandoffs += 1;
+            // ── C5 — RE-FIT THE THREAD TO THE MODEL THAT NOW ANSWERS ──────
+            // `budgetChars` was resolved before this loop started, from the pair
+            // the turn BEGAN on — and the handoff worth catching is the one to a
+            // SMALLER window, which is precisely the case that overflows. The
+            // caller knows the session, so it re-resolves; `undefined` keeps the
+            // budget (an unknown window must not silently shrink the thread).
+            // The trim runs at the TOP of the next iteration, before the call, so
+            // a NEW budget is applied to the very next request — and when it is
+            // smaller, that trim is what makes the handoff fit.
+            const refitted = deps.threadBudgetAfterSwitch?.();
+            if (typeof refitted === 'number' && refitted > 0 && refitted !== budgetChars) {
+              deps.onEvent?.(
+                `   📐 thread budget re-fitted for the handoff model: ` +
+                  `${Math.round(budgetChars / 1000)}K → ${Math.round(refitted / 1000)}K chars.`,
+              );
+              budgetChars = refitted;
+            }
             // P3 — the ATTEMPT budget: the empty completion that triggered this
             // handoff, and the first call to the replacement model, are not the
             // user's work — grant the step credit so a run against a couple of

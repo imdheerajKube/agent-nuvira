@@ -2755,6 +2755,12 @@ export class ChatCommand extends BaseCommand {
           callModel: callModelWithTrace,
           // P2 — the empty-response handoff (see `requestModelSwitch` above).
           requestModelSwitch,
+          // C5 — `requestModelSwitch` installs the replacement on `session`, so
+          // re-resolve the thread budget from the session AFTER a handoff: a
+          // handoff to a smaller window is the case that overflows, and the
+          // budget in hand was computed from the model that just failed.
+          threadBudgetAfterSwitch: () =>
+            resolveThreadBudgetChars({ provider: session.type, model: session.model }),
           executeTool: async (name, args, ctx) => {
             const tool = getTool(name);
             if (!tool) throw new Error(`Unknown tool: ${name}`);

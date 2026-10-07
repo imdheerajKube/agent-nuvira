@@ -69,12 +69,39 @@ export const CHARS_PER_TOKEN = 4.5;
 export const MAX_THREAD_BUDGET_CHARS = 4_000_000;
 
 /**
- * The tool-loop's own default thread budget (`DEFAULT_THREAD_BUDGET_CHARS` in
- * `tools/tool-loop.ts`). Kept here as a floor so this resolver can only ever
- * RAISE the budget: below it the caller's default is already the safer choice,
- * and shrinking it would change behavior for every small-window model.
+ * THERE IS NO UNIVERSAL NEVER-SHRINK FLOOR (C1/C5, decided with the user).
+ *
+ * This module used to export `THREAD_BUDGET_FLOOR_CHARS = 200_000` and apply it
+ * as `Math.max(FLOOR, windowDerivedChars)`, so the resolver could only ever
+ * RAISE a budget. A model whose REAL window was 32,768 tokens was therefore
+ * handed 200,000 chars (~44K tokens) of thread — **1.4× its own window**, from
+ * the very lookup that had just established that window. That is C5: the floor
+ * made a KNOWN window unenforceable, so a mid-turn handoff to a smaller model
+ * could overflow the window we already knew about. (Measured against the old
+ * rule: a 32K window returned 200,000.)
+ *
+ * The user's decision, and the reason no floor may sit above the window: the
+ * thread is fitted to the model that is ANSWERING, because what makes a model
+ * hallucinate is losing the ask. The protections that preserve perspective are
+ * RULES in `trimThreadBudget`, not a budget number — the system prompt, the
+ * FIRST user message, the last `RECENT_KEEP` messages and the work digest are
+ * never touched, and only OLD TOOL OUTPUT is ever shrunk. So a large-window
+ * model is deliberately left to use its window, and a small-window model gets a
+ * thread that fits it.
+ *
+ * The UNKNOWN case is unchanged and is still the dominant one: no window → this
+ * resolver returns `undefined` and the caller keeps its own default
+ * (`DEFAULT_THREAD_BUDGET_CHARS` in `tools/tool-loop.ts`, also 200,000).
  */
-export const THREAD_BUDGET_FLOOR_CHARS = 200_000;
+
+/**
+ * The smallest thread we will ask a model to work in (~4.4K tokens at 4.5
+ * chars/token). A window recorded BELOW this is a registry error rather than a
+ * real model, and trimming a thread to near-zero would destroy the turn — so
+ * this is the one floor that survives, and it is deliberately far below the
+ * 200,000 it replaces.
+ */
+export const MIN_THREAD_BUDGET_CHARS = 20_000;
 
 /** Default per-prompt file-context caps (today's constants) for unknown models. */
 export const DEFAULT_CONTEXT_FILES = 10;
@@ -205,16 +232,19 @@ export function resolveMaxOutputTokens(input: BudgetInput = {}): number {
  * model. Returns `undefined` when the window is UNKNOWN so the caller keeps
  * `DEFAULT_THREAD_BUDGET_CHARS` untouched ("unknown → unchanged", the same
  * discipline as `resolveContextBudget`); a known window converts its token
- * budget to characters so a 1M-token model is not trimmed to a 128K keyhole.
+ * budget to characters so a 1M-token model is not trimmed to a 128K keyhole —
+ * and, since C1/C5, so a 32K-token model is not handed a 44K-token thread.
+ *
+ * The WINDOW decides in BOTH directions. The old `Math.max(FLOOR, chars)` is
+ * what made a known small window unenforceable; see the note on
+ * `MIN_THREAD_BUDGET_CHARS` above.
  */
 export function resolveThreadBudgetChars(input: BudgetInput = {}): number | undefined {
   const budget = resolveContextBudget(input);
   if (budget.source === 'default') return undefined;
   const basis = budget.window ?? budget.budget;
   const chars = Math.floor(basis * (1 - CONTEXT_HEADROOM_PCT) * CHARS_PER_TOKEN);
-  // Never shrink: at or below the loop's own default, return the default value
-  // so the caller's behavior is byte-identical.
-  return Math.max(THREAD_BUDGET_FLOOR_CHARS, Math.min(MAX_THREAD_BUDGET_CHARS, chars));
+  return Math.max(MIN_THREAD_BUDGET_CHARS, Math.min(MAX_THREAD_BUDGET_CHARS, chars));
 }
 
 /**
