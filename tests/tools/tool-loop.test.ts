@@ -25,6 +25,7 @@ import {
   makeParallelSuggester,
   summarizeArgs,
   detectSelfDeclaredOmission,
+  detectUnverifiedFileClaim,
   type LoopTraceEvent,
   type ToolLoopDeps,
   type StepResponse,
@@ -3019,5 +3020,78 @@ describe('summarizeArgs — prefer the field that identifies the call', () => {
     const out = summarizeArgs({ command: 'x'.repeat(400) });
     expect(out.length).toBeLessThan(60);
     expect(out.endsWith('…}')).toBe(true);
+  });
+});
+
+describe('Bundle 20 — a file claim no write backs (the /tmp/g-book defect)', () => {
+  // The verbatim reply from the live run: an empty directory, zero writes, and a
+  // confident "it is saved". Nothing else in the harness could see this turn.
+  const LIVE_GBOOK_CLAIM =
+    'The guide has been written and saved as GUIDE.md. The file now contains a full ~5,000-word technical guide, and all sections are completely filled in.';
+
+  it('flags a completed file claim when the turn wrote nothing', () => {
+    expect(
+      detectUnverifiedFileClaim(LIVE_GBOOK_CLAIM, {
+        mutatedPaths: [],
+        successfulToolCalls: ['read_file', 'suggest_followups'],
+      }),
+    ).toBe(true);
+  });
+
+  it('stays silent the moment the turn actually wrote the file', () => {
+    // Judged on the turn's OWN record, not its vocabulary: a real write exempts it.
+    expect(
+      detectUnverifiedFileClaim(LIVE_GBOOK_CLAIM, {
+        mutatedPaths: ['GUIDE.md'],
+        successfulToolCalls: ['write_file'],
+      }),
+    ).toBe(false);
+  });
+
+  it('stays silent for a heredoc or edit that the loop cannot see', () => {
+    // A `run_terminal` heredoc, an `edit_file`, an executed snippet: the run's
+    // record cannot contradict the claim, so the guard must not fire.
+    for (const tool of ['run_terminal', 'edit_file', 'run_cli', 'apply_patch', 'code_execution']) {
+      expect(
+        detectUnverifiedFileClaim(LIVE_GBOOK_CLAIM, {
+          mutatedPaths: [],
+          successfulToolCalls: [tool],
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it('does not fire on honest code turns, reads, or future promises', () => {
+    const noWrite = { mutatedPaths: [], successfulToolCalls: ['run_terminal'] };
+    // A code turn that only reports what it observed.
+    expect(detectUnverifiedFileClaim('Updated the parser and the tests pass.', noWrite)).toBe(false);
+    // Reading is not writing (the `read_file` case from the live trace).
+    expect(detectUnverifiedFileClaim('I have read the guide you attached.', noWrite)).toBe(false);
+    // A promise is not a completed claim — NON_CLAIM_CONTEXT_RE excludes it.
+    expect(detectUnverifiedFileClaim("I'll write the file now.", noWrite)).toBe(false);
+    // A negation is not a claim.
+    expect(detectUnverifiedFileClaim('The file has not been written yet.', noWrite)).toBe(false);
+  });
+
+  it('does not overlap the delivery-claim detector (sends vs writes)', () => {
+    const noWrite = { mutatedPaths: [], successfulToolCalls: [] };
+    // "I have sent it" is a delivery claim, not a file-write claim.
+    expect(detectUnverifiedFileClaim('I have sent the report to Alex.', noWrite)).toBe(false);
+  });
+
+  it('fires on a real turn that claims a saved file and wrote nothing', async () => {
+    // The live /tmp/g-book shape: a directed work request, a model that writes
+    // nothing, and a closing reply that says the file is saved. The zero-action
+    // gate nudges once; the fabricated claim survives to the final answer. This
+    // is the backstop for asks the authored-artifact classifier does not cover.
+    const deps = mockDeps([
+      { content: 'The refactor has been written and saved to math.js.', toolCalls: [] },
+      { content: 'All changes are saved to math.js and test.js now contains the tests.', toolCalls: [] },
+    ]);
+    const result = await runToolLoop({ messages: [{ role: 'user', content: WORK_ASK }], context: ctx, deps });
+    // Judged on what the turn DID: no write-capable tool succeeded, yet the reply
+    // asserts a completed file write — so the deliverable is MISSING, not done.
+    expect(result.unverifiedFileClaim).toBe(true);
+    expect(result.toolCalls ?? []).not.toContain('write_file');
   });
 });

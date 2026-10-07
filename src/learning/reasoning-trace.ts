@@ -172,6 +172,18 @@ export interface TraceOutcome {
    * finished work.
    */
   undeliveredArtifact?: boolean;
+  /**
+   * Bundle 19 — the turn's own file declares its content was omitted, so the
+   * artifact is incomplete however complete the prose reads.
+   */
+  incompleteArtifactClaim?: boolean;
+  /**
+   * Bundle 20 — the answer ASSERTED a file was written and the turn wrote none.
+   * Distinct from `undeliveredArtifact` (a function of the ASK): this is a
+   * function of the turn's own CLAIM, so a fabricated "I saved it" is marked
+   * `incomplete` even when the ask was never recognised as a deliverable.
+   */
+  unverifiedFileClaim?: boolean;
 }
 
 /**
@@ -825,6 +837,8 @@ export function buildTraceOutcome(input: {
   unverifiedEditClaim?: boolean;
   unverifiedBuildClaim?: boolean;
   undeliveredArtifact?: boolean;
+  incompleteArtifactClaim?: boolean;
+  unverifiedFileClaim?: boolean;
 }): TraceOutcome {
   const tools = [...(input.tools ?? [])];
   if (input.cancelled) return { kind: 'cancelled', tools };
@@ -838,7 +852,9 @@ export function buildTraceOutcome(input: {
     input.undeliveredArtifact ||
       input.unfulfilledPromise ||
       input.unverifiedActionClaim ||
-      input.unverifiedBuildClaim,
+      input.unverifiedBuildClaim ||
+      input.incompleteArtifactClaim ||
+      input.unverifiedFileClaim,
   );
   return {
     kind: incomplete ? 'incomplete' : tools.length > 0 ? 'acted' : 'answered',
@@ -850,6 +866,8 @@ export function buildTraceOutcome(input: {
     ...(input.unverifiedEditClaim ? { unverifiedEditClaim: true } : {}),
     ...(input.unverifiedBuildClaim ? { unverifiedBuildClaim: true } : {}),
     ...(input.undeliveredArtifact ? { undeliveredArtifact: true } : {}),
+    ...(input.incompleteArtifactClaim ? { incompleteArtifactClaim: true } : {}),
+    ...(input.unverifiedFileClaim ? { unverifiedFileClaim: true } : {}),
   };
 }
 

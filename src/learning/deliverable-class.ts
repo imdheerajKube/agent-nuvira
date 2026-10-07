@@ -127,6 +127,25 @@ const DOCUMENT_SIGNALS: Array<[RegExp, number]> = [
   [/\b(document|documentation|guide|tutorial|readme)\b[^.]{0,30}\b(write|draft|author|create|prepare|compose)\b/i, 3],
   [/\b(write|writes|writing|draft|author|compose|prepare)\b[^.]{0,30}\b(document|documentation|guide|tutorial|report|essay|article|blog\s+post|letter|chapter)\b/i, 2],
   [/\b(रिपोर्ट|निबंध|लेख|पत्र)\b/, 3],
+  // A creation verb whose DOCUMENT noun is the HEAD of its object — the noun ends
+  // the clause or is followed only by a destination/preposition. This is the
+  // high-precision complement to the two proximity rules above, and it exists
+  // because those two MISS the most ordinary phrasing of a document ask: the
+  // proximity window is 30 characters, while "write a comprehensive technical
+  // guide…" puts the noun 32 characters after the verb and "write a long detailed
+  // technical design document to DESIGN.md" puts it 34 — measured, both classified
+  // `code` (the F1 ask at confidence 0), so `wantsAuthoredArtifact` was false and
+  // NEITHER the deliverable gate NOR `undeliveredArtifact` could apply. A live run
+  // then wrote no file, claimed a "full ~5,000-word guide" on disk, and printed no
+  // warning. Anchoring on what FOLLOWS the noun is what keeps this precise: "write
+  // a test that validates the document parser" has `document` followed by `parser`,
+  // and "write a user manual, then add a CLI flag" has `manual` followed by a
+  // comma, so both stay off the authored path (the second is a genuinely mixed ask
+  // whose code signal must win).
+  [
+    /\b(?:write|writes|writing|draft|author|compose|prepare|create)\b[^.;]{0,60}\b(?:document|documentation|guide|tutorial|report|essay|article|whitepaper|white\s+paper|manual|handbook|thesis|dissertation|specification)\b\s*(?:\([^)]*\)\s*)?(?:$|to\b|into\b|as\b|for\b|in\b|at\b|on\b|about\b|covering\b|describing\b)/i,
+    3,
+  ],
 ];
 
 /** Data-analysis signals. */

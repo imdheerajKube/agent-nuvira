@@ -509,6 +509,8 @@ export function turnCarriesHonestyFlag(result: {
   noActionTaken?: boolean;
   /** Bundle 19 — a file the turn wrote says its own content was omitted. */
   artifactIncomplete?: { path: string; statement: string };
+  /** Bundle 20 — the reply claims a file was written and the turn wrote nothing. */
+  unverifiedFileClaim?: boolean;
 }): boolean {
   return Boolean(
     result.unverifiedActionClaim ||
@@ -518,7 +520,8 @@ export function turnCarriesHonestyFlag(result: {
       result.unverifiedEdit ||
       result.unverifiedEditClaim ||
       result.noActionTaken ||
-      result.artifactIncomplete,
+      result.artifactIncomplete ||
+      result.unverifiedFileClaim,
   );
 }
 
@@ -826,6 +829,13 @@ export class ChatCommand extends BaseCommand {
    * prose reads. Carries the artifact's own words as evidence.
    */
   artifactIncomplete?: { path: string; statement: string };
+  /**
+   * Bundle 20 — the answer ASSERTED a file was written while the turn wrote none
+   * (`The guide has been written and saved as GUIDE.md …`). A function of the turn's
+   * own claim, so it is disclosed even when the ask was never recognised as a
+   * deliverable. Distinct from `undeliveredArtifact`, which keys on the ASK.
+   */
+  unverifiedFileClaim?: boolean;
   provider?: string;
   model?: string;
   /**
@@ -1136,6 +1146,9 @@ export class ChatCommand extends BaseCommand {
           // Bundle 19 — the artifact's own admission travels to the report, so the
           // turn cannot read as finished work on any surface that shows it.
           incompleteArtifactClaim: Boolean(answer.artifactIncomplete),
+          // Bundle 20 — a fabricated "I wrote the file" reaches the report for the
+          // same reason: no surface may read such a turn as finished work.
+          unverifiedFileClaim: Boolean(answer.unverifiedFileClaim),
         },
       });
     } catch {
@@ -1207,6 +1220,10 @@ export class ChatCommand extends BaseCommand {
       unfulfilledPromise: answer.unfulfilledPromise,
       undeliveredArtifact: answer.undeliveredArtifact,
       unverifiedBuildClaim: answer.unverifiedBuildClaim,
+      // Bundle 19/20 — the reliability flags must not be dropped at this
+      // boundary, or a caller re-deriving the verdict would see a clean turn.
+      artifactIncomplete: answer.artifactIncomplete,
+      unverifiedFileClaim: answer.unverifiedFileClaim,
       // WS1 — the findings this turn recorded (empty when it recorded none).
       findings: answer.findings ?? [],
       provider: type,
@@ -1902,6 +1919,11 @@ export class ChatCommand extends BaseCommand {
      * it is incomplete, so the turn must not read as finished work.
      */
     artifactIncomplete?: { path: string; statement: string };
+    /**
+     * Bundle 20 — the answer asserted a file was written while the turn wrote
+     * nothing. Surfaced to the caller so no surface replays it as settled.
+     */
+    unverifiedFileClaim?: boolean;
     /**
      * R2 — the tool transport this turn travelled on (`native` / `json` /
      * `none`), as the loop reported it. Absent only when no loop ran (a cache
@@ -2955,6 +2977,10 @@ export class ChatCommand extends BaseCommand {
       unverifiedEditClaim: result.unverifiedEditClaim,
       undeliveredArtifact: result.undeliveredArtifact,
       unverifiedBuildClaim: result.unverifiedBuildClaim,
+      // Bundle 19/20 — the artifact's own omission, and a file claim no write
+      // backs, both make the turn `incomplete` on the trace (not `answered`).
+      incompleteArtifactClaim: Boolean(result.artifactIncomplete),
+      unverifiedFileClaim: result.unverifiedFileClaim,
     });
     // A cancelled / failed / incomplete turn is NOT a success. `!generationFailed`
     // used to let a cancelled run record `success: true` while its outcome said
@@ -3036,6 +3062,17 @@ export class ChatCommand extends BaseCommand {
       if (result.artifactIncomplete) {
         logger.warn(
           `   ⚠️  The file ${result.artifactIncomplete.path} says its own content was omitted ("${result.artifactIncomplete.statement}") — the artifact is INCOMPLETE, whatever the reply above claims.`,
+        );
+      }
+      // Bundle 20 — the FILE-CLAIM warning. The reply above says a file was
+      // written and the turn's own record says none was. Found live: a turn wrote
+      // nothing and replied "The guide has been written and saved as GUIDE.md …
+      // contains a full ~5,000-word technical guide" — and the user saw no warning,
+      // because the flag that exists for this failure is gated on the ASK and the
+      // ask was not recognised as a deliverable. This one keys on the CLAIM.
+      if (result.unverifiedFileClaim) {
+        logger.warn(
+          '   ⚠️  This reply says a file was written, but NO file was written this turn — treat the deliverable as MISSING, not as done.',
         );
       }
     } catch {
@@ -3168,6 +3205,10 @@ export class ChatCommand extends BaseCommand {
       unfulfilledPromise: result.unfulfilledPromise,
       undeliveredArtifact: result.undeliveredArtifact,
       unverifiedBuildClaim: result.unverifiedBuildClaim,
+      // Bundle 20 — an unbacked file claim (or a self-admitted omission) means
+      // the work did not conclude, so the continuation affordances must appear.
+      incompleteArtifactClaim: Boolean(result.artifactIncomplete),
+      unverifiedFileClaim: result.unverifiedFileClaim,
     });
     const chatFollowups = withContinuationFollowups(result.followups, {
       unfinished: !traceOutcomeSucceeded(chatOutcomeForFollowups),
@@ -3185,6 +3226,10 @@ export class ChatCommand extends BaseCommand {
       unfulfilledPromise: result.unfulfilledPromise,
       undeliveredArtifact: result.undeliveredArtifact,
       unverifiedBuildClaim: result.unverifiedBuildClaim,
+      // Bundle 19/20 — carried to the caller so the honesty flags survive the
+      // return boundary instead of only living in the turn report.
+      artifactIncomplete: result.artifactIncomplete,
+      unverifiedFileClaim: result.unverifiedFileClaim,
       // R2 — the transport this turn travelled on (interactive REPL path).
       transport: result.transport,
       // WS1 — the findings this turn recorded, with their verdicts.

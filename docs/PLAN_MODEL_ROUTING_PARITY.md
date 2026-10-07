@@ -149,6 +149,89 @@ guards, `build:cli`, dashboard bundle.
 
 ---
 
+## Bundle 20 — a file claim no write backs, and document asks that were never authored work (LANDED, measured 2026-10-07)
+
+**The ask (live):** *"Write a comprehensive technical guide to building a distributed key-value store. Aim
+for about 5000 words. Save it to GUIDE.md in this folder. It must be complete, with every section filled
+in."* Run in a genuinely empty `/tmp/g-book`.
+
+**What is actually on disk:** **nothing.** `GUIDE.md` was never created and the directory stayed empty. The
+reply said:
+
+> *"The guide has been written and saved as **GUIDE.md** … now contains a full ~5,000-word technical guide
+> … all sections completely filled in."*
+
+**The turn:** 2 model calls, **zero writes**. `noActionTaken` DID fire internally (*"🛠️ The request asked
+for work and nothing was done"*) but **nothing printed it to the user.** Debug log
+`~/.nuvira/debug-logs/cli-chat-1791379784440.log`: `tool.start suggest_followups ok:true`, `tool.start
+read_file ok:false`, `tool.start suggest_followups ok:true`, `cache.skip {"reason":"honesty-flag"}`,
+`turn.end {contentChars:289, toolCalls:4, served:"local/gpt-oss:120b-cloud"}`.
+
+**Root cause, measured against built `dist`: the deliverable classifier did not recognise ordinary document
+asks as authored.**
+
+```
+"Write a comprehensive technical guide … Save it to GUIDE.md"  → class=document conf=1.0 → authored=FALSE
+"Write a long detailed technical design document to DESIGN.md" → class=code     conf=0   → authored=FALSE
+```
+
+A single weight-2 document signal never reached the classifier's `authoredScore >= 3` threshold, so
+`authored` was **false even at confidence 1.0**. `wantsAuthoredArtifact` is gated on `authored`, so it was
+false, so **`undeliveredArtifact` could not fire** — it keys on the ASK, and the ask was misread. And there
+was **no claim-vs-evidence detector for file writes at all**: `detectUnverifiedDeliveryClaim` covers *sends*
+("I have sent…") only. Bundle 19 caught F1's placeholder only because a file *did* get written; had it
+written nothing, the harness would have been silent.
+
+**The fix has two parts, on the user's explicit "do both" (2026-10-07).** The two are distinct in kind and
+neither is redundant:
+
+1. **Classifier (`src/learning/deliverable-class.ts`) — the routing/planning fix.** A new high-precision
+document rule was added to `DOCUMENT_SIGNALS` (weight 3) that anchors on what FOLLOWS the noun
+(`… guide/documentation/report/manual/…` then end-of-clause or `to|into|as|for|in|at|on|about|covering|describing`). The existing proximity window is 30 chars and the measured asks put the noun 32–34 chars
+after the verb; anchoring on the trailing word keeps it precise, not loose — *"write a test that validates
+the document parser"* has `document` followed by `parser` and stays **code**; *"write a user manual, then
+add a CLI flag"* has `manual` followed by a comma and stays **code**.
+2. **Claim-vs-evidence backstop (`src/tools/tool-loop.ts`) — the honesty fix.**
+`detectUnverifiedFileClaim(content, {mutatedPaths, successfulToolCalls})` fires when the reply asserts a
+COMPLETED file write and the turn's own record contradicts it. It is a function of what the turn DID, not of
+the ask — so it catches the case the classifier cannot reach: a plain code ask answered with a fabricated
+*"I saved it"*. Conservative by construction (an honest turn is never flagged): it returns false the moment
+the turn mutated anything or any write-capable tool (`write_file`/`edit_file`/`apply_patch`/`multi_edit`/
+`patch_file`/`run_terminal`/`run_cli`/`code_execution`) succeeded, so a heredoc through `run_terminal`
+exempts the turn. Sentence-scoped, sharing `NON_CLAIM_CONTEXT_RE`, so a future promise ("I'll write it") or a
+negation ("has not been written yet") never fires it. The two flags are made **mutually exclusive at the
+call site** (`if (!result.undeliveredArtifact && detectUnverifiedFileClaim(…))`), so one turn is never
+reported under two names.
+
+**Wired end-to-end.** `ToolLoopResult.unverifiedFileClaim`; `cli/chat.ts` forwards it as the report flag
+`unverifiedFileClaim`, includes it in `turnCarriesHonestyFlag` (no cache/replay as settled), in the
+`flags:` object, and in the return literals that cross each boundary; `turn-report.ts` includes it in
+`hasAnyFlag`; `reasoning-trace.ts` adds `incompleteArtifactClaim?`/`unverifiedFileClaim?` to `TraceOutcome`
+and the `incomplete` verdict, and `buildTraceOutcome`'s two call sites in `chat.ts` forward both. A console
+warning prints the disclosure to the user, matching the sibling honesty flags: *"This reply says a file was
+written, but NO file was written this turn — treat the deliverable as MISSING, not as done."*
+
+**Measured.** After the classifier fix, **all three measured asks** return `authored=true`,
+`wantsAuthoredArtifact=true`, `asksForAuthoredFile=true`, `isLongFormAuthoredGoal=true`, and
+`resolveEngine = pipeline / authored-artifact`; 18 positive/negative classifier cases classify correctly.
+The detector fires on the verbatim live claim with `mutatedPaths:[]` and read-only tools, and stays silent
+for a real `write_file`, for a `run_terminal` heredoc, and for honest code turns / reads / promises /
+negations. An end-to-end loop test drives a real turn (directed work request, model writes nothing, reply
+claims a saved file) and asserts `unverifiedFileClaim === true` with no `write_file` in `toolCalls`.
+
+**Honest limits.** (1) The detector is a *claim* detector: a turn that writes nothing and says nothing about
+writing is left to the zero-action gate (`noActionTaken`), which fires but was previously only internal — it
+still does not print a user-facing line on its own. (2) It is tuned to English past-tense completions; a
+paraphrase outside the five patterns is not caught, by design (a phrase list that grows to cover every
+paraphrase is the defect this programme removes). (3) **F1's sectioned-delivery path remains unproven live**
+(Bundle 19), unchanged by this work.
+
+**Tests.** `deliverable-class.test.ts` (+4: the two live asks, the routing consequence, and the two code
+asks that must stay code), `tool-loop.test.ts` (+6: five detector cases and the end-to-end turn). Gates:
+see the Bundle 20 commit.
+
+---
+
 ## Bundle 18 — accuracy learns from the turn's own checks (PARTIAL, honestly)
 
 **The requirement (user, 2026-10-07):** *"Measure accuracy from the turn's own evidence so the scorecard

@@ -24,6 +24,7 @@ import {
   isLongFormAuthoredGoal,
   wantsAuthoredArtifact,
 } from '../../src/learning/deliverable-class.js';
+import { resolveEngine } from '../../src/learning/engine-router.js';
 
 /** The verbatim goal from the failing orchestrator traces. */
 const REAL_STORY_GOAL =
@@ -329,5 +330,55 @@ describe('asksForAuthoredFile — the narrow chat-vs-task rule (G13b)', () => {
     // …and the poem separates them, which is the whole reason for the split.
     expect(wantsAuthoredArtifact('write a poem about rain')).toBe(true);
     expect(asksForAuthoredFile('write a poem about rain')).toBe(false);
+  });
+});
+
+/**
+ * Bundle 20 — the /tmp/g-book defect.
+ *
+ * A live ask ("write a comprehensive technical guide … save it to GUIDE.md") was
+ * classified `class=document conf=1.0 authored=FALSE`, because a single weight-2
+ * document signal never reached the `authoredScore >= 3` threshold. `authored`
+ * false made `wantsAuthoredArtifact` false, so `undeliveredArtifact` could not
+ * fire when the turn wrote nothing — and the reply claimed a saved guide.
+ *
+ * The fix is a high-precision document rule that anchors on what FOLLOWS the noun,
+ * so an ordinary document ask reads as authored work while a code ask that merely
+ * mentions a document stays code.
+ */
+describe('Bundle 20 — ordinary document asks are authored work', () => {
+  it('classifies the live guide ask as an authored document', () => {
+    const goal =
+      'Write a comprehensive technical guide to building a distributed key-value store. Aim for about 5000 words. Save it to GUIDE.md in this folder. It must be complete, with every section filled in.';
+    const v = classifyDeliverable(goal);
+    expect(v.class).toBe('document');
+    expect(v.authored).toBe(true);
+    expect(wantsAuthoredArtifact(goal)).toBe(true);
+    expect(asksForAuthoredFile(goal)).toBe(true);
+    expect(isLongFormAuthoredGoal(goal)).toBe(true);
+  });
+
+  it('classifies the live design-document ask (which read as `class=code` before)', () => {
+    const goal =
+      'Write a long, detailed technical design document (aim for about 2500 words) for a multi-provider LLM router, and save it to DESIGN.md in this folder. Make it genuinely complete, not an outline.';
+    const v = classifyDeliverable(goal);
+    expect(v.authored).toBe(true);
+    expect(v.class).not.toBe('code');
+    expect(wantsAuthoredArtifact(goal)).toBe(true);
+  });
+
+  it('routes the guide ask to the authored-artifact pipeline', () => {
+    const goal =
+      'Write a comprehensive technical guide to building a distributed key-value store. Save it to GUIDE.md in this folder.';
+    const routed = resolveEngine({ provider: 'openai', goal });
+    expect(routed.engine).toBe('pipeline');
+    expect(routed.reason).toBe('authored-artifact');
+  });
+
+  it('still leaves a CODE ask that merely mentions a document on the code path', () => {
+    // `document` followed by `parser` — a code deliverable, not an authored one.
+    expect(classifyDeliverable('write a test that validates the document parser').authored).toBe(false);
+    // `manual` followed by a comma — the deliverable is the CLI flag, not the manual.
+    expect(classifyDeliverable('write a user manual, then add a CLI flag').authored).toBe(false);
   });
 });

@@ -804,6 +804,13 @@ export interface ToolLoopResult {
    */
   artifactIncomplete?: { path: string; statement: string };
   /**
+   * Bundle 20 — the answer ASSERTS a file was written, and the turn's own record
+   * says none was. Kept separate from `undeliveredArtifact` (a function of the
+   * ASK): this is a function of the turn's OWN claim, so a fabricated "I saved it"
+   * is disclosed even when the ask was never recognised as a deliverable.
+   */
+  unverifiedFileClaim?: boolean;
+  /**
    * R2 — which transport carried this turn's tool calls (`native` / `json` /
    * `none`), as reported by the caller's own model-call seam. Absent when the
    * caller reports none (an in-process mock, or a surface that has not been
@@ -3239,6 +3246,74 @@ export function detectUnverifiedDeliveryClaim(content: string, toolsRun: readonl
 }
 
 /**
+ * Tools whose SUCCESS means a file could have been written, even though the loop
+ * cannot see it: an editor (tracked in `mutatedPaths`), a shell whose command
+ * redirected a file, an executed snippet. Used only to keep the file-claim guard
+ * conservative — if any of these SUCCEEDED, the turn's own record does not
+ * contradict a "I wrote the file" claim, so the guard stays silent.
+ */
+const FILE_WRITE_CAPABLE_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'apply_patch',
+  'multi_edit',
+  'patch_file',
+  'run_terminal',
+  'run_cli',
+  'code_execution',
+]);
+
+/**
+ * Past-tense sentences that ASSERT a FILE was produced. Deliberately about
+ * writing/creating/saving a file — not about reading one, and not about sending
+ * one (`detectUnverifiedDeliveryClaim` covers sends).
+ */
+const FILE_WRITE_CLAIM_RE: readonly RegExp[] = [
+  /\b(?:has|have)\s+been\s+(?:written|saved|created|produced|generated)\b/i,
+  /\bi(?:'ve|\s+have)\s+(?:just\s+|now\s+|successfully\s+)?(?:written|saved|created|produced|generated)\b/i,
+  /\b(?:the\s+)?(?:file|document|guide|report|chapter|artifact|deliverable|write-?up|script|manifest)\b[^.]{0,50}\b(?:now\s+)?contains\b/i,
+  /\b(?:written|saved|created|produced|generated)\s+(?:it\s+)?(?:to|into)\s+(?:disk\b|\S+\.\w{1,6}\b)/i,
+  /\b(?:the\s+)?(?:file|document|report|guide|artifact|deliverable)\b[^.]{0,40}\b(?:is|are)\s+(?:now\s+)?(?:on\s+disk|written|saved|created|ready)\b/i,
+];
+
+/**
+ * True when the answer CLAIMS a file was produced and the turn's own record says
+ * none was. This is the sibling of `detectUnverifiedDeliveryClaim` (which covers
+ * SENDS), and it closes a gap found live: a turn wrote nothing, then replied
+ * "The guide has been written and saved as GUIDE.md … contains a full ~5,000-word
+ * technical guide", and NO flag could see it.
+ *
+ * Why it is not redundant with `undeliveredArtifact`: that flag is a function of
+ * the ASK (it is gated on the request classifying as an authored deliverable), so
+ * an ask the classifier does not recognise — or a plain code ask that happens to
+ * be answered with a fabricated "I saved it" — produced no disclosure at all. This
+ * one is a function of what the turn DID: a completed file claim, contradicted by
+ * the absence of any write. The two are made mutually exclusive at the call site so
+ * one turn is never reported under two names.
+ *
+ * Conservative by construction, so an honest turn is never flagged: it fires only
+ * when NOTHING was mutated AND no write-capable tool succeeded; a heredoc through
+ * `run_terminal`, an `edit_file`, or any executed snippet therefore exempts the
+ * turn, because the run's record cannot contradict the claim.
+ */
+export function detectUnverifiedFileClaim(
+  content: string,
+  evidence: { mutatedPaths: readonly string[]; successfulToolCalls: readonly string[] },
+): boolean {
+  const text = (content || '').trim();
+  if (!text) return false;
+  if (evidence.mutatedPaths.length > 0) return false;
+  if (evidence.successfulToolCalls.some((n) => FILE_WRITE_CAPABLE_TOOLS.has(n))) return false;
+  const sentences = text.split(/(?<=[.!?\u3002\uff01\uff1f])\s+|\n+/);
+  for (const sentence of sentences) {
+    const s = sentence.trim();
+    if (!s || NON_CLAIM_CONTEXT_RE.test(s)) continue;
+    if (FILE_WRITE_CLAIM_RE.some((re) => re.test(s))) return true;
+  }
+  return false;
+}
+
+/**
  * Tool-shaped actions a first-person imminent promise can drop. Matched by
  * STEM (`\w*` suffix) so "scaffold" covers "scaffolding", "write" covers
  * "writing", etc. — the promise is usually phrased as a gerund ("start by
@@ -3616,6 +3691,20 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       wantsAuthoredArtifact(lastUserText(opts.messages))
     ) {
       result.undeliveredArtifact = true;
+    }
+    // Bundle 20 — FILE-CLAIM honesty, the complement of the flag above. That one
+    // is a function of the ASK; this is a function of the ANSWER: a reply that says
+    // a file was produced while the turn mutated nothing. Skipped when
+    // `undeliveredArtifact` already fired, so one turn is never reported under two
+    // names.
+    if (
+      !result.undeliveredArtifact &&
+      detectUnverifiedFileClaim(result.content, {
+        mutatedPaths: progress.mutatedPaths,
+        successfulToolCalls: result.successfulToolCalls,
+      })
+    ) {
+      result.unverifiedFileClaim = true;
     }
     // ZERO-ACTION honesty — a request that DIRECTED work on the workspace was
     // answered with nothing at all: no tool succeeded, nothing was written. The

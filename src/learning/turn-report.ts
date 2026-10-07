@@ -38,6 +38,12 @@ export interface TurnReportFlags {
    * The artifact admits it is incomplete, so the turn cannot read as finished work.
    */
   incompleteArtifactClaim?: boolean;
+  /**
+   * Bundle 20 — the answer ASSERTS a file was written, and the turn wrote nothing.
+   * A function of the turn's own claim, so it is disclosed even when the ask was
+   * never recognised as an authored deliverable (see `unverifiedFileClaim`).
+   */
+  unverifiedFileClaim?: boolean;
 }
 
 /** One step, with the evidence that its status is honest. */
@@ -138,7 +144,8 @@ function hasAnyFlag(flags: TurnReportFlags): boolean {
       flags.undeliveredArtifact ||
       flags.unfulfilledPromise ||
       flags.noActionTaken ||
-      flags.incompleteArtifactClaim,
+      flags.incompleteArtifactClaim ||
+      flags.unverifiedFileClaim,
   );
 }
 
