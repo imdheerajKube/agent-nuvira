@@ -50,6 +50,44 @@ mistakes are the ones the product makes:
 
 ---
 
+## Bundle 17 — the empty-folder proof, and the banner it was missing (LANDED)
+
+**The requirement (user, 2026-10-07):** *"Prove the Cluster G dashboard flow live: attach an empty
+folder in the UI and watch the turn run rather than ask, and assert the notice banner in the smoke walk."*
+
+This closes Bundle 7's two remaining residuals, which were honest about being unproven rather than
+wrong.
+
+**Half 1 — the turn runs in an empty folder. Proven live.** Real turn, real model, a genuinely empty
+directory (`ls -A` → 0 entries):
+
+| What the ask produced | Evidence |
+|---|---|
+| the file exists | `hello.txt` contains exactly `empty-folder-attach-works` |
+| the agent did NOT refuse or ask anywhere to attach a folder | **0** `ask_user` calls, **0** occurrences of the guard's `Which folder should I work in` |
+| it wrote on the first tool call that mattered | `⚙ write_file({path: hello.txt})`, alongside `list_dir`, `read_file`, `plan_todo` |
+
+That is precisely the behaviour the user reported broken ("agent keep refusing even after i attach the
+folder"): the workspace now reads as ATTACHED, and an attached-but-EMPTY folder is a normal start rather
+than "no project".
+
+**Half 2 — the notice banner is asserted.** The response-level notices were already covered
+(`chat-api.test.ts` asserts them for the session- and message-named sources), but the RENDER was not: the
+`📁` banner is the only place a user learns which folder the work went into, which is the whole subject of
+this cluster. `ChatPage.test.tsx` now drives a real submit and asserts the banner text AND its dismiss
+button, mirroring the routing notice beside it. Dashboard suite: **53 passed** in that file, **419** overall.
+
+**What I did NOT do, and why.** The literal browser walk needs the dashboard's admin password, which is
+already configured on this machine — it is the user's credential, and neither guessing nor resetting it is
+mine to do. The API path is covered by the real-server harness and the banner by the render test above;
+the live turn above is the behaviour proof. One thing the walk would still add is a click-through of the
+`attachProject` chip itself, which remains untested end-to-end.
+
+**Killed after use:** the dashboard I started for this (port 3999, isolated memory dir) was stopped with
+`nuvira dashboard stop`; nothing was left running, and no shared state was written.
+
+---
+
 ## Bundle 16 — the external feed, as approved (LANDED, opt-in and OFF by default)
 
 **The requirement (user, 2026-10-07, verbatim):** *"On point 6 decision i approve openrouter based
@@ -283,8 +321,11 @@ exists; where it does not, that is stated as the residual rather than implied cl
    calls carry structured `args`, so "empty" is ambiguous).
 7. **C3's live parity re-run** (the probe count dropping) is deferred; a duplicate `write_file` **by
    content** is a deliberate non-goal, since content can legitimately change between two writes.
-8. **Cluster G's dashboard live path** — attach an empty folder in the UI and watch the turn run rather
-   than ask — is the remaining proof, and the notice banner is not yet asserted by the browser smoke walk.
+8. ~~**Cluster G's dashboard live path** — attach an empty folder in the UI and watch the turn run rather
+   than ask — is the remaining proof, and the notice banner is not yet asserted by the browser smoke walk.~~
+   **CLOSED — Bundle 17**: proven live in a genuinely empty folder (the file was created, with 0 `ask_user`
+   calls and 0 guard prompts), and the `📁` banner now has a render + dismiss assertion. Bundle 17 records
+   the one thing still untested: a click-through of the `attachProject` chip itself.
 9. **B5's area set is coarse** (twelve hand-written buckets); a measured area set is the refinement, and
    it is the same "measure, do not hand-write" step items 4–5 need.
 10. ~~**Nothing is fed back while the scorecard is unsigned.**~~ **UNBLOCKED — §6 signed off 2026-10-07**:

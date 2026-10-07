@@ -1013,6 +1013,35 @@ describe('ChatPage', () => {
     await waitFor(() => expect(screen.queryByText('new title')).toBeNull());
   });
 
+  it('Cluster G — the workspace notice renders, and one click dismisses it', async () => {
+    // The server resolves the turn's folder (attached → session → message → default) and returns
+    // `workspaceNotice` whenever the answer did NOT come from a folder this chat attached. That notice
+    // is the only place the user learns which folder the work went into — the whole subject of Cluster
+    // G, where an attached-but-empty folder read as "no project" — so it has to actually render, not
+    // just travel in the response. The routing notice beside it has been covered since it existed.
+    mockAuthed('admin');
+    mockChatStream();
+    const send = mockChatSend({
+      ...OK_RESPONSE,
+      workspaceNotice: 'Using the folder named in your message: /tmp/empty-project',
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), {
+      target: { value: 'create the files' },
+    });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText(/Using the folder named in your message/)).toBeTruthy());
+    expect(screen.getByText(/\/tmp\/empty-project/)).toBeTruthy();
+
+    // Per-turn state, like the routing notice: dismissing clears it.
+    fireEvent.click(screen.getByLabelText('Dismiss workspace notice'));
+    await waitFor(() => expect(screen.queryByText(/Using the folder named in your message/)).toBeNull());
+  });
+
   it('WS5 (#27) — the reply card reports what the ledger REPLAYED, which the composer cannot know', async () => {
     // Asking to resume and replaying nothing look identical from the composer, so
     // the card is the only place the distinction can be made — and it states the
