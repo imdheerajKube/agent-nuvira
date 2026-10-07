@@ -27,10 +27,14 @@
  *      `-latest` alias in the registry, which is how 25 real OpenRouter ids got
  *      flagged as junk. Names only.
  *
- * STOP THE DASHBOARD AND GATEWAY FIRST. Both hold the registry in memory and
- * `persist()` writes the WHOLE map back, so a running process re-adds these rows
- * from its own copy moments after this script removes them. The script says so
- * rather than producing a cleanup that silently undoes itself.
+ * A RUNNING DASHBOARD NO LONGER UNDOES THIS (Bundle 14, 2026-10-07). It used to:
+ * each live process held the registry in memory and `persist()` wrote the WHOLE
+ * map back, so it re-added these rows from its own copy moments after this script
+ * removed them. Persist now merges against the boot snapshot, so a process ADOPTS
+ * the file's absence for any row it has not changed itself — the removal sticks
+ * without stopping anything first. (A process that has changed one of these rows
+ * since it booted still wins for that row, on the honest grounds that its
+ * knowledge is newer; that is not a reason to stop it, just to re-run this.)
  *
  * Usage:
  *   node scripts/prune-test-registry-rows.mjs                 # dry run (default)

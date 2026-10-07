@@ -50,6 +50,73 @@ mistakes are the ones the product makes:
 
 ---
 
+## Bundle 14 — the memory dir has no cross-process lock (LANDED)
+
+**The requirement (user, 2026-10-07, verbatim):** *"Fix the model registry's cross-process locking
+race."* Carried over from Bundle 1c's residual list, where it was the one item explicitly left
+unfixed because it needed its own bundle.
+
+**Two defects, both measured, and the second one is not a race between writers at all.**
+
+The dashboard, the gateway, the warmup daemon and any CLI run share one memory dir, and each holds the
+registry in memory and flushes the WHOLE entry map on persist:
+
+1. **Lost updates.** Each process boots with a snapshot, learns its own things, and writes all of it
+   back. The second writer wins entirely, so the first one's learning is gone. Measured: a strict-pin
+   verdict demoted to `credit-exhausted` was back to `unverified` between two runs of the SAME command,
+   which re-armed the very pre-flight F6 had just closed.
+2. **Torn reads.** A plain `writeFileSync` is not atomic, so a reader can parse a truncated document.
+   Every loader here catches that and returns an EMPTY state — which the next persist then writes back,
+   turning one unlucky read into a **wiped registry**. This one needs no second writer at all, and the
+   prune script had been telling operators to stop the dashboard first for exactly this reason.
+
+**The fix.** New `src/utils/atomic-store.ts` — an advisory lock (exclusive `wx` create, stale-break by
+mtime, `Atomics.wait` sleep so a contended lock costs no CPU), `writeFileAtomicSync` (unique temp +
+`rename`), and `stableJson`.
+
+`model-registry.ts` then resolves the lost update WITHOUT touching a single mutator, because the boot
+snapshot already records what this process was told. `mergeRegistryMirror(boot, memory, disk)`:
+
+| Case | Resolution |
+|---|---|
+| an entry this process CHANGED since boot | ours wins (our measurement is later) |
+| an entry it never touched | the file's, because a peer may have learned something |
+| a key present at boot but ABSENT from memory | the deletion wins — otherwise `pruneAbsentModels` would undo itself on the next persist |
+| a key unchanged here but ABSENT from the file | the deletion wins — otherwise a peer's prune or `reset` resurrects |
+| a key in neither boot nor memory, but on disk | adopted — it is a peer's new row |
+
+Comparison uses `stableJson`, not a bare deep-equal: two entries built by different code paths can be
+structurally identical yet serialize with different key order, which would read as "changed" and clobber
+the peer. `reset()` passes `{ replace: true }` so a user-invoked wipe is a wipe rather than a merge —
+`nuvira models reset` must not silently do nothing under a live dashboard.
+
+**This also removes a documented limitation elsewhere.** `scripts/prune-test-registry-rows.mjs` says
+*"STOP THE DASHBOARD AND GATEWAY FIRST … a running process re-adds these rows from its own copy moments
+after this script removes them"*. That caveat was this defect, described from the outside; a row the
+script deletes is now deleted, because a process that did not change the row adopts the file's absence.
+
+| | Before | After |
+|---|---|---|
+| A peer's persist, for a row it never saw | row **dropped** | row kept |
+| A stale peer's persist after a demotion | verdict reverted to `verified` | demotion kept |
+| A peer's prune, as seen by a process that booted earlier | row **resurrected** | stays deleted |
+| A reader during a write | can parse a truncated document → empty state → wipe | never sees a partial file |
+
+**Tests.** `tests/utils/atomic-store.test.ts` (new, 9: exclusive lock, stale break, no fresh-lock break,
+the degrade-not-skip contract, atomic write, `stableJson` order-independence) and
+`tests/learning/model-registry-cross-process.test.ts` (new, 11). **Four of the eleven were proven
+load-bearing** by restoring the old whole-map write, which failed exactly the four that describe the
+defect (the dropped row, the reverted demotion, the adopted row, the resurrected prune) and no others.
+
+**Honest limits.** (1) The lock is best-effort BY DESIGN — a section that cannot take it still runs and
+reports `heldLock: false`, because refusing to persist would trade a rare lost update for a certain lost
+learning. (2) Same-entry conflicts between two live writers still resolve last-writer-wins; there is no
+per-entry revision clock, so the earlier of two contentious writes to ONE pair can still be dropped.
+(3) Only the registry (and its vector mirror) got this treatment: `routing-history` appends and
+`chat-console` persists its own store, and neither is merge-on-write.
+
+---
+
 ## Closure validation — every identified item, checked against the code (2026-10-07)
 
 **Why this section exists.** A row that says "LANDED" is not evidence. This is a pass over *every*
@@ -76,13 +143,15 @@ exists; where it does not, that is stated as the residual rather than implied cl
 | **B5** — a four-component ask rated `moderate` | `requirementUnits` + `measureTaskBreadth` + the breadth floor, exported so a caller can state WHY | `hybrid-router.test.ts` |
 | **Bundle 12** — "chat ignores the router's `requiresVerification`" | **the finding was wrong and is corrected (commit `29b7ee1f`).** The gate already exists — `requireVerification` (`tool-loop.ts`), the bounded G1 nudge, `unverifiedEdit`, and the verdict rendered in the turn report — and because **nobody sets the flag**, the DEFAULT-ENFORCING gate is what runs. Only `parity/wire-fixtures.ts` sets it `false`, deliberately, for deterministic wire recording | `tool-loop.test.ts`, `turn-report.test.ts` |
 | **A1 proper**, **F5 (chat pre-flight)**, **D5 (ranking-key header)** | all three landed in earlier bundles (`sameModel()` + `DECLARED_MODEL_ALIASES`; `strictPinRefusal` called from the chat tool loop; the header names its sort key) while this file still listed them as open — corrected in the three edits below | `model-identity.test.ts`, `route-resolver.test.ts`, `cli/model.test.ts` |
+| **The registry's cross-process race (Bundle 14)** | new `utils/atomic-store.ts` (advisory lock + atomic write + `stableJson`) and `mergeRegistryMirror` in `model-registry.ts`: the read-merge-write runs under the lock and the publish is a `rename`, so a process can no longer flush a whole-map snapshot over its peers | `atomic-store.test.ts` (new, 9), `model-registry-cross-process.test.ts` (new, 11; 4 of them proven to FAIL under the old write) |
 
 ### OPEN — the defect is NOT fixed
 
-1. **The registry has no cross-process locking.** No lock code exists (`flock`/`lockSync`/`withFileLock`
-   return nothing). The measured race — a dashboard, a gateway and an `eval run` rewriting
-   `~/.nuvira/memory/model-registry.json` concurrently, flipping a strict-pin verdict — is a candidate
-   for its own bundle. F6 closed the two in-code paths that did it; the file race is untouched.
+1. ~~**The registry has no cross-process locking.**~~ **CLOSED — Bundle 14** (see its section): the
+   read-merge-write now runs under an advisory lock and the publication is atomic, so a process can no
+   longer flush its whole-map snapshot over what a peer learned. Two honest limits are recorded there
+   (the lock is best-effort by design, and same-entry conflicts between two live writers still resolve
+   last-writer-wins).
 2. **The bogus rows already on disk** (`groq|wire-stub-model`) are not migrated. F2 stops new ones and
    F4 stops the not-found ones being ranked; no one-shot hygiene pass exists.
 3. **`routing-history` still writes a paired `complexity: 'unknown'` row** next to each resolved one

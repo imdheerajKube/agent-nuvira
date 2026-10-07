@@ -38,6 +38,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import {envBuff, resolveNuviraHome} from '../config/paths';
 import { formatCount } from '../utils/format.js';
+import { stableJson, withFileLockSync, writeFileAtomicSync } from '../utils/atomic-store.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -496,6 +497,74 @@ function emptyState(): ModelRegistryData {
   return { version: CURRENT_VERSION, entries: {}, updatedAt: Date.now() };
 }
 
+/** A deep copy of registry state, so a snapshot cannot be mutated through aliasing. */
+function cloneRegistryData(data: ModelRegistryData): ModelRegistryData {
+  return JSON.parse(JSON.stringify(data)) as ModelRegistryData;
+}
+
+/**
+ * Merge three views of the registry into the one that should be on disk.
+ *
+ * The problem it solves, measured (2026-10-07): the singleton loads the mirror
+ * once at construction and `persist()` writes its WHOLE entry map back, so a
+ * long-lived process flushes a snapshot of every model it never touched —
+ * silently reverting what the dashboard, the gateway or a CLI run verified in
+ * the meantime. On this machine that flipped a strict-pin verdict from
+ * `credit-exhausted` back to `unverified` between two runs of one command, which
+ * re-armed the exact pre-flight F6 had just closed.
+ *
+ * The resolution needs no bookkeeping in the mutators, because `boot` already
+ * records what this process was told:
+ *
+ *  - an entry this process CHANGED since boot (`memory` differs from `boot`) is
+ *    this process's knowledge, and wins;
+ *  - an entry it never touched is whatever `disk` now holds, because another
+ *    process may have learned something about it;
+ *  - an entry present at boot but ABSENT from `memory` was deliberately dropped
+ *    (`pruneAbsentModels`), so the deletion wins — otherwise the prune would
+ *    undo itself the moment the next persist re-added it from disk;
+ *  - an entry in neither `boot` nor `memory` but on `disk` is a peer's new row,
+ *    and is adopted.
+ *
+ * Comparing with `stableJson` (not a bare deep-equal) is deliberate: two entries
+ * built by different code paths can be structurally identical yet serialize with
+ * different key order, which would read as "changed" and clobber the peer.
+ */
+export function mergeRegistryMirror(
+  boot: ModelRegistryData,
+  memory: ModelRegistryData,
+  disk: ModelRegistryData,
+): ModelRegistryData {
+  const entries: Record<string, ModelRegistryEntry> = {};
+  const keys = new Set([
+    ...Object.keys(boot.entries),
+    ...Object.keys(memory.entries),
+    ...Object.keys(disk.entries),
+  ]);
+  for (const key of keys) {
+    const mine = memory.entries[key];
+    const base = boot.entries[key];
+    const theirs = disk.entries[key];
+    if (!mine) {
+      if (base) continue; // this process removed it — the deletion is the update
+      if (theirs) entries[key] = theirs; // a peer's new row
+      continue;
+    }
+    const changedHere = !base || stableJson(mine) !== stableJson(base);
+    if (changedHere) {
+      entries[key] = mine;
+      continue;
+    }
+    // Unchanged HERE, so the file decides — including its ABSENCE. Re-adding a
+    // key the file no longer has would resurrect a peer's deletion (a prune, or
+    // a `reset`), which is the same lost-update bug pointing the other way.
+    if (theirs === undefined) continue;
+    entries[key] = theirs;
+  }
+  // Scalars (version, updatedAt) come from this process; only the entry map merges.
+  return { ...disk, ...memory, entries };
+}
+
 /**
  * Aggregate raw action-telemetry entries into the per-action dashboard view.
  * Pure + sync — the dashboard server calls this on the raw JSONL lines, and
@@ -650,6 +719,13 @@ export function aggregateActionTelemetry(
  */
 export class ModelRegistry {
   private data: ModelRegistryData;
+  /**
+   * The registry as this process loaded it, kept so `persist()` can tell WHICH
+   * entries this process actually changed (see `mergeRegistryMirror`). Without
+   * it, a persist flushes every entry it merely READ back over whatever other
+   * processes have learned since — the measured lost-update bug.
+   */
+  private bootSnapshot: ModelRegistryData;
   /** Cached VectorStore for the enterprise mirror (null until first mirror). */
   private vectorStore: VectorStore | null = null;
   /** Whether the vector mirror has been confirmed usable. */
@@ -659,6 +735,7 @@ export class ModelRegistry {
 
   constructor() {
     this.data = this.loadMirror();
+    this.bootSnapshot = cloneRegistryData(this.data);
   }
 
   // ─── Synchronous read path (lightning fast — no I/O, no network) ─────────
@@ -2027,6 +2104,7 @@ export class ModelRegistry {
    */
   reloadFromMirror(): void {
     this.data = this.loadMirror();
+    this.bootSnapshot = cloneRegistryData(this.data);
   }
 
   /**
@@ -2034,12 +2112,31 @@ export class ModelRegistry {
    * the VectorStore namespace asynchronously (best-effort, auto-tiers to JSON
    * when FAISS/native aren't installed — so it can never throw).
    */
-  private persist(): void {
+  private persist(opts: { replace?: boolean } = {}): void {
     this.data.updatedAt = Date.now();
     const dir = memoryDir();
+    const path = mirrorPath();
     try {
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(mirrorPath(), JSON.stringify(this.data, null, 2), 'utf-8');
+      mkdirSync(dir, { recursive: true });
+      // The read-merge-write runs UNDER the lock, so two processes cannot
+      // interleave it: the second one to run re-reads what the first wrote and
+      // merges rather than overwriting. `writeFileAtomicSync` then makes the
+      // publication all-or-nothing, so a concurrent READER can never parse a
+      // half-written file (which every loader here turns into an empty state
+      // that the next persist would write back).
+      const merged = withFileLockSync(`${path}.lock`, () => {
+        // A deliberate wipe (`reset`) must not adopt a peer's concurrent row —
+        // the operator asked for an empty registry, so it is written as-is.
+        const next = opts.replace
+          ? this.data
+          : mergeRegistryMirror(this.bootSnapshot, this.data, this.loadMirror());
+        writeFileAtomicSync(path, JSON.stringify(next, null, 2));
+        return next;
+      });
+      // Adopt the merge, and re-baseline: this process's view is now the file's,
+      // so the NEXT persist compares against it instead of against boot.
+      this.data = merged.value;
+      this.bootSnapshot = cloneRegistryData(this.data);
     } catch {
       // Best-effort — a failed mirror write must never break routing.
     }
@@ -2061,27 +2158,32 @@ export class ModelRegistry {
   private mirrorToVector(dir: string): void {
     try {
       const indexPath = join(dir, 'vectors-model-registry.json');
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      let entries: Record<string, VectorEntry> = {};
-      try {
-        if (existsSync(indexPath)) {
-          const raw = JSON.parse(readFileSync(indexPath, 'utf-8')) as {
-            entries?: Record<string, VectorEntry>;
-          };
-          if (raw && typeof raw === 'object' && raw.entries && typeof raw.entries === 'object') {
-            entries = raw.entries;
+      mkdirSync(dir, { recursive: true });
+      // Same cross-process shape as `persist()`: the read-merge-write is one
+      // critical section, and the publication is atomic. Two processes mirroring
+      // this namespace concurrently would otherwise drop each other's snapshot.
+      withFileLockSync(`${indexPath}.lock`, () => {
+        let entries: Record<string, VectorEntry> = {};
+        try {
+          if (existsSync(indexPath)) {
+            const raw = JSON.parse(readFileSync(indexPath, 'utf-8')) as {
+              entries?: Record<string, VectorEntry>;
+            };
+            if (raw && typeof raw === 'object' && raw.entries && typeof raw.entries === 'object') {
+              entries = raw.entries;
+            }
           }
+        } catch {
+          // Corrupt/missing file — start from an empty index.
         }
-      } catch {
-        // Corrupt/missing file — start from an empty index.
-      }
-      entries[VECTOR_SNAPSHOT_ID] = {
-        id: VECTOR_SNAPSHOT_ID,
-        vector: [1], // 1-dim placeholder — we never search, only store.
-        metadata: { snapshot: this.data },
-        createdAt: Date.now(),
-      };
-      writeFileSync(indexPath, JSON.stringify({ entries, version: 2 }, null, 2), 'utf-8');
+        entries[VECTOR_SNAPSHOT_ID] = {
+          id: VECTOR_SNAPSHOT_ID,
+          vector: [1], // 1-dim placeholder — we never search, only store.
+          metadata: { snapshot: this.data },
+          createdAt: Date.now(),
+        };
+        writeFileAtomicSync(indexPath, JSON.stringify({ entries, version: 2 }, null, 2));
+      });
       this.vectorMirrored = true;
     } catch {
       this.vectorMirrored = false;
@@ -2216,7 +2318,8 @@ export class ModelRegistry {
   /** Clear the registry (CLI / tests). */
   reset(): void {
     this.data = emptyState();
-    this.persist(); // persist() also overwrites the vector snapshot with the empty state.
+    // Also overwrites the vector snapshot with the empty state.
+    this.persist({ replace: true });
   }
 }
 
