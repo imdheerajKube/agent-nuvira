@@ -308,6 +308,49 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 24 — B5's breadth measurer reads the ask, not the harness's own banners (item 9, LANDED 2026-10-07)
+
+**What item 9 asked for.** "A measured area set" to replace B5's twelve hand-written buckets — the same
+"measure, do not hand-write" step items 4–5 need. So the first thing to do was actually MEASURE the set
+against real data rather than argue about it.
+
+**What the measurement found (500 real goals, `~/.nuvira/memory/routing-history.json`).**
+
+| Reading | Value |
+|---|---|
+| goals with ≥ 3 named areas | **30 / 500** |
+| goals the breadth floor raises (`units ≥ 3 && areas ≥ 3`) | **20 / 500** |
+| areas that NEVER fire | **`realtime` (0)** |
+| dominant area | `integration` — **98 hits** |
+
+**The real defect was in the INPUT, not the set.** 66 of the 500 goals carry a bracketed banner the product
+ADDS ITSELF — `[Origin: …]` (`gateway/registry.ts:1778`) and `[Image: …]` (`gateway/inbound-media.ts:283`) —
+and `measureTaskBreadth` was matching that scaffolding as if it were the user's requirements. `integration`
+matches `whatsapp`/`telegram`/`slack`, so every WhatsApp-originated turn scored an extra area of work from a
+sentence the user never wrote: **`integration` 98 → 35 once the banners are ignored (63 of 98 were the
+harness's own text)**, and the banners also added **64 spurious requirement units** (825 → 761) because a
+banner's `:` is a list separator the unit splitter keys on. A measurer that counts its own text measures
+itself, not the ask.
+
+**The fix — targeted, because the naive version was measured WRONG.** `stripInjectedContext` removes only the
+known banner prefixes (`Origin` / `Image` / `Attached` / `File`) and is applied inside `requirementUnits` and
+`measureTaskBreadth`, so every caller (chat, orchestrator, plan, `model explain`, the gateway) gets a clean
+measurement. A blanket `\[…\]` strip was tried first and MEASURED to also remove genuine user text — it
+wrongly dropped **12 real `frontend` hits** — so it was rejected: the precise rule trades one false signal
+for nothing instead of for another.
+
+**Why the SET itself stays hand-written.** A learned area set can only be validated against a LABELED corpus,
+and none exists — complexity is the router's own output, so validating against it would be circular. That is
+the same missing ground truth items 4 and 13 need. What COULD be measured is whether the measurer reads the
+ask or reads itself, and that is what changed.
+
+**Tests.** `hybrid-router.test.ts` (+2: a banner-laden goal measures identically to the same goal without its
+banners and never gains `integration`, while the same vocabulary in the user's OWN ask still counts; and the
+strip leaves genuine bracketed text like `[TODO: later]` intact). **Gates.** root suite **465 files / 8561
+passed / 0 failed**, `verify:commands` **341/341**, all three docs guards, `build:cli`, dashboard bundle.
+
+---
+
 ## Bundle 23 — the artifact measured against the ask (item 13's honest half, LANDED 2026-10-07)
 
 **Why this and not a quality score.** Item 13's remaining half is the non-empty generic non-answer. The
@@ -730,8 +773,18 @@ exists; where it does not, that is stated as the residual rather than implied cl
    **CLOSED — Bundle 17**: proven live in a genuinely empty folder (the file was created, with 0 `ask_user`
    calls and 0 guard prompts), and the `📁` banner now has a render + dismiss assertion. Bundle 17 records
    the one thing still untested: a click-through of the `attachProject` chip itself.
-9. **B5's area set is coarse** (twelve hand-written buckets); a measured area set is the refinement, and
-   it is the same "measure, do not hand-write" step items 4–5 need.
+9. **B5's area set is coarse** (twelve hand-written buckets). **MEASURED — Bundle 24, and the measurement
+   found a real defect in the INPUT rather than the set.** Run over all 500 goals in
+   `~/.nuvira/memory/routing-history.json`: the set fires on 30 goals with ≥ 3 areas (the floor fires on 20),
+   and **`realtime` never fires at all**. The defect: 66 goals carry a bracketed banner the HARNESS itself
+   injects (`[Origin: …]` from the gateway, `[Image: …]` from inbound media), and matching that scaffolding as
+   if it were the user's ask inflated the dominant area — `integration`, which matches
+   `whatsapp`/`telegram`/`slack` — from **35 genuine hits to 98 (63 of 98 were the harness's own text)** and
+   added **64 spurious requirement units** (a banner's `:` is a list separator). The measurer was counting
+   itself. Fixed by `stripInjectedContext` (targeted, because a blanket `[…]` strip was measured to remove 12
+   REAL `frontend` hits). What REMAINS open: replacing the hand-written set with a LEARNED one, which needs a
+   labeled corpus that does not exist — the same missing ground truth as items 4/13, so the set stays
+   hand-written on purpose and the honest available step was made instead.
 10. ~~**Nothing is fed back while the scorecard is unsigned.**~~ **UNBLOCKED — §6 signed off 2026-10-07**:
     the external feed landed (Bundle 16) and its priors now reach `model explain`. What is still missing
     is MEASURED evidence for `accuracy`/`performance` — open items 4 and 9/13.

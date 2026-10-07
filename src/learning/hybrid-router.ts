@@ -148,6 +148,19 @@ const COMPLEXITY_KEYWORDS: Record<ComplexityLevel, RegExp[]> = {
  * (twelve areas, one regex each) — the question is "how many different kinds of
  * work", not "how many words are in my list", and a finer set would start
  * counting synonyms as subsystems.
+ *
+ * ITEM 9 — MEASURED AGAINST THE REAL CORPUS, AND WHAT IT FOUND. Run over all 500
+goals in `~/.nuvira/memory/routing-history.json`, this set fired on 30 goals with
+≥ 3 areas (the breadth floor fires on 20). The measurement also found a real
+defect: 66 of those goals carry a bracketed banner the HARNESS itself injects
+(`[Origin: …]` from the gateway, `[Image: …]` from inbound media), and matching
+that scaffolding as if it were the user's requirements inflated the dominant area
+— `integration`, which matches `whatsapp`/`telegram`/`slack` — from 35 genuine
+hits to 98. **63 of 98 were the harness's own text.** The fix is below
+(`stripInjectedContext`); the SET itself stays hand-written on purpose, because a
+learned set can only be validated against a labeled corpus and none exists (the
+same missing ground truth as items 4/13) — what CAN be measured is whether the
+measurer is reading the ask or reading itself, and that is what changed.
  */
 const CAPABILITY_AREA_RE: ReadonlyArray<readonly [string, RegExp]> = [
   ['ingestion', /upload|ingest|import|parse|extract\s+(?:text|data|content)|attachment/i],
@@ -174,7 +187,7 @@ const CAPABILITY_AREA_RE: ReadonlyArray<readonly [string, RegExp]> = [
  * times would inflate every ask that mentions a list.
  */
 export function requirementUnits(text: string): string[] {
-  return (text ?? '')
+  return stripInjectedContext(text)
     .split(/[:;\n]|(?:^|\s)[-*\u2022]\s|(?:^|\s)\d+[.)]\s/)
     .map((u) => u.trim())
     // A fragment this short is a label or a lead-in ("Requirements"), not a unit.
@@ -182,17 +195,43 @@ export function requirementUnits(text: string): string[] {
 }
 
 /**
+ * Item 9 — strip the harness's OWN injected context before measuring an ask.
+ *
+ * MEASURED over the 500 real goals in `routing-history.json`: 66 carry a bracketed
+ * banner this product adds itself — `[Origin: …]` (`gateway/registry.ts`) and
+ * `[Image: …]` (`gateway/inbound-media.ts`). Counting those as the user's
+ * requirements inflated the dominant area, `integration` (which matches
+ * `whatsapp`/`telegram`/`slack`), from **35 genuine hits to 98 — 63 of 98 were the
+ * harness's own scaffolding** — and added **64 spurious requirement units**, because
+ * a banner's `:` is a list separator. A measurer that counts its own text measures
+ * itself, not the ask.
+ *
+ * Deliberately TARGETED to the known banner prefixes: a blanket `[…⇒` strip also
+ * removed genuine user text (measured: it wrongly dropped 12 real `frontend` hits),
+ * which would trade one false signal for another.
+ */
+const INJECTED_CONTEXT_RE = /\[(?:Origin|Image|Attached|File):[^\]]*\]/g;
+
+export function stripInjectedContext(text: string): string {
+  return (text ?? '').replace(INJECTED_CONTEXT_RE, ' ');
+}
+
+/**
  * MEASURED breadth: how many requirement units, and how many distinct areas of
  * work. Exported so a test (and any future explain surface) can state WHY a
  * level was reached instead of asserting it blindly.
+ *
+ * Item 9 — measured on the ask, never on the harness's own injected banners (see
+ * `stripInjectedContext`).
  */
 export function measureTaskBreadth(text: string): {
   units: number;
   areas: number;
   areaNames: string[];
 } {
-  const areaNames = CAPABILITY_AREA_RE.filter(([, re]) => re.test(text ?? '')).map(([name]) => name);
-  return { units: requirementUnits(text ?? '').length, areas: areaNames.length, areaNames };
+  const clean = stripInjectedContext(text);
+  const areaNames = CAPABILITY_AREA_RE.filter(([, re]) => re.test(clean)).map(([name]) => name);
+  return { units: requirementUnits(clean).length, areas: areaNames.length, areaNames };
 }
 
 /**

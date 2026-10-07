@@ -11,6 +11,7 @@ import {
   analyzeComplexity,
   isSmallTalk,
   measureTaskBreadth,
+  stripInjectedContext,
   buildFallbackChain,
   checkBudget,
   checkConsensus,
@@ -227,6 +228,29 @@ describe('analyzeComplexity', () => {
       expect(analyzeComplexity('build a todo app with React and localStorage')).toBe('moderate');
       expect(analyzeComplexity('create a user dashboard component')).toBe('moderate');
       expect(analyzeComplexity('write an essay on elephants for class 4 student')).toBe('moderate');
+    });
+
+    it('measures the ASK, not the harness\'s own injected banners (item 9)', () => {
+      // MEASURED over 500 real goals: 63 of 98 `integration` hits were the
+      // gateway's own `[Origin: …]` banner, and banners added 64 spurious units
+      // (a banner's `:` is a list separator).
+      const withBanners =
+        'List with price\n\n[Origin: WhatsApp (Baileys bridge) chat 9199@s.whatsapp.net — reply and use gateway_send]\n\n[Image: inbound-image.jpg — saved at /tmp/x.jpg]';
+      expect(measureTaskBreadth(withBanners)).toEqual(measureTaskBreadth('List with price'));
+      expect(measureTaskBreadth(withBanners).areaNames).not.toContain('integration');
+      // The SAME vocabulary in the USER's own ask still counts.
+      expect(
+        measureTaskBreadth('add a WhatsApp notification; build the dashboard; add login').areaNames,
+      ).toContain('integration');
+    });
+
+    it('strips only the known banner prefixes, never genuine bracketed text', () => {
+      // A blanket `[…]` strip was measured to remove real user text (it wrongly
+      // dropped 12 real `frontend` hits), which would trade one false for another.
+      expect(stripInjectedContext('fix the bug [TODO: later] then deploy')).toContain('[TODO: later]');
+      const stripped = stripInjectedContext('[Origin: x] the real ask');
+      expect(stripped).not.toContain('[Origin:');
+      expect(stripped).toContain('the real ask');
     });
 
     it('never talks the router DOWN from urgency', () => {
