@@ -418,6 +418,29 @@ cheaper turn is not by itself a better one. What is proven is narrower and still
 FIRST pick now serves the ask, so nothing is paid for a model that cannot answer it. Whether this ask should
 produce a file remains a product question, not a routing one.
 
+**The delivery was READ, not keyword-counted.** A first pass counted `complexity` 0 times and looked like a
+missed requirement; reading it shows the axis is modelled under other words — `taskType: 'coding' |
+'reasoning' | 'vision' | 'generic'` scored by `capabilityScore(inst.capability, request.taskType)`. So the
+ask's "task type — coding, reasoning, image" IS covered, and the word-count was an artifact of vocabulary,
+not a gap. (Recorded because the wrong reading was one step from being written down as a defect.)
+
+### OPEN, found by this run — a flag the pipeline acts on and the chat surface ignores
+
+This ask's own decision line says **`verification`**, i.e. the router graded it `requiresVerification: true`.
+The turn then ran no verification at all (2 tool calls, `findings: 0`, no `verify_requirement` call).
+
+| surface | what it does with `requiresVerification` |
+|---|---|
+| `agents/orchestrator.ts:3578` | **acts on it** — `followUpAgentType = 'reviewer'; verificationPass = true`, i.e. the pipeline appends a whole reviewer pass |
+| `agents/agents/planner.ts:234` | reads it into the planner's routing context |
+| `cli/chat.ts:4161-4163` | **propagates it into the returned `taskProfile` and nothing branches on it** — the only occurrences in the chat path are the type, a `false` default, and this copy |
+
+So the same decision that buys a reviewer pass in the pipeline is inert on the chat surface. `verify_requirement`
+is MODEL-REQUESTED (a tool in the chat toolset, prompted with "if a request's completeness is uncertain, call
+`verify_requirement` first"), so the model simply chose not to — that part is model behaviour, not a missing
+gate. Whether chat SHOULD enforce the flag it was handed is a **product decision with a real cost** (an extra
+verification pass on every qualifying chat turn), so it is recorded rather than implemented unilaterally.
+
 ## Bundle 11 — a row may not borrow a score it did not earn (B2-a LANDED)
 
 **What was wrong.** `RoutingHistoryEntry.score` is documented as *"Router composite score of the pick"*,
