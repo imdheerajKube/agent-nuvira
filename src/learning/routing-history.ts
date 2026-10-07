@@ -29,6 +29,20 @@ import { homedir } from 'node:os';
 export type RoutingSource = 'explain' | 'benchmark' | 'eval' | 'chat' | 'orchestrator';
 
 /**
+ * The scale a recorded `score` is on.
+ *
+ * Two scales decide a walk and they are NOT interchangeable: the auto-router
+ * ranks PROVIDERS by a weighted composite, while `buildModelCandidates` ranks
+ * MODELS. Comparing one against the other is meaningless, so a row states which
+ * it used (see `RoutingHistoryEntry.score`).
+ */
+export type RoutingScoreBasis =
+  /** The auto-router's provider-level weighted composite for this task. */
+  | 'provider'
+  /** A model-level candidate score from `buildModelCandidates`. */
+  | 'model';
+
+/**
  * A full routing-decision snapshot — the ranked candidate list with scores and
  * the decision context, captured at decision time. Recorded for `explain`
  * decisions so `model explain --since <ref>` (P3-M3.3) can diff two decisions
@@ -82,8 +96,34 @@ export interface RoutingHistoryEntry {
   provider: string;
   /** Selected model within that provider */
   model: string;
-  /** Router composite score of the pick (0–1) */
-  score: number;
+  /**
+   * The score of THIS row's own pick — and ONLY this row's pick.
+   *
+   * B2-a, measured live. There are two scales in play: the auto-router's
+   * provider-level COMPOSITE (`decision.score`) and the model-level candidate
+   * score from `buildModelCandidates`. `cli/chat.ts` used to write
+   * `score: decision.score` onto EVERY row of a failover walk, so three
+   * different pairs appeared to share one number — measured:
+   * `0.43836864406779663` on gemini/`gemma-4-26b-a4b-it`,
+   * openrouter/`cohere/command-r7b-12-2024` and deepseek/`deepseek-flash`, while
+   * the provider scores `model explain` prints for that same ask are
+   * `local 0.438` / `gemini 0.438`. A reader could only conclude the models had
+   * tied — and that is exactly the wrong inference the Bundle 8 live run drew
+   * ("equal priors, so the ranking carries no information"), when the
+   * model-level scores were in fact ORDERED at 0.9206 / 0.77 / 0.597148.
+   *
+   * So a row carries its own pick's score or nothing: an audit record may not
+   * borrow a number from a different pair, and may not invent one for an
+   * ordering placeholder. `scoreBasis` names the scale, because the two scales
+   * are not comparable and a column that silently mixes them is the same defect
+   * wearing a different hat.
+   */
+  score?: number;
+  /**
+   * Which scale `score` is on. Present whenever `score` is meant to be read or
+   * compared; absent alongside an absent `score`.
+   */
+  scoreBasis?: RoutingScoreBasis;
   /**
    * Full decision snapshot (ranked candidates + context) — recorded for
    * `explain` decisions to power `model explain --since` (P3-M3.3). Optional:

@@ -61,7 +61,7 @@ import { getModelRegistry } from '../learning/model-registry.js';
 import { costSince } from '../learning/cost-tracker.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
 import { startWarmupDaemon } from '../learning/model-warmup.js';
-import { recordRoutingDecision } from '../learning/routing-history.js';
+import { recordRoutingDecision, type RoutingScoreBasis } from '../learning/routing-history.js';
 import { shouldConfirmFailover, promptFailoverChoice } from './failover-prompt.js';
 import { runSingleShotAuto } from './failover-runner.js';
 import { buildAutoResolveOptions } from '../learning/resolve-options.js';
@@ -4039,9 +4039,25 @@ export class ChatCommand extends BaseCommand {
       crossPipelineMemory: false,
       registryCheck: false,
     });
-    const chatCandidates: Array<{ provider: string; model: string }> = [];
+    // B2-a — each candidate carries the score OF ITS OWN PAIR, when the pool had
+    // a real measurement for it, plus the scale that score is on. It used to
+    // carry nothing at all and every row was recorded with `decision.score`, so
+    // three different pairs shared one provider-level number (measured live:
+    // `0.43836864406779663` on gemini/gemma-4-26b-a4b-it,
+    // openrouter/cohere/command-r7b-12-2024 and deepseek/deepseek-flash).
+    const chatCandidates: Array<{
+      provider: string;
+      model: string;
+      score?: number;
+      scoreBasis?: RoutingScoreBasis;
+    }> = [];
     const seenPairs = new Set<string>();
-    const pushCandidate = (prov: string, mdl?: string): void => {
+    const pushCandidate = (
+      prov: string,
+      mdl?: string,
+      score?: number,
+      scoreBasis?: RoutingScoreBasis,
+    ): void => {
       if (!prov || excluded.has(prov) || registryBlocked.has(prov)) return;
       const model = mdl && mdl !== 'default' ? mdl : 'default';
       // Model-scoped session exclusion — only THIS model, never its siblings.
@@ -4056,7 +4072,13 @@ export class ChatCommand extends BaseCommand {
       // already ranks healthy models first, so the parked pick is only ever a
       // last resort that the repair then fixes.
       seenPairs.add(key);
-      chatCandidates.push({ provider: prov, model });
+      chatCandidates.push({
+        provider: prov,
+        model,
+        // Only a labelled measurement travels: an ordering placeholder must not
+        // reach the audit trail as if it described this pair.
+        ...(scoreBasis ? { score, scoreBasis } : {}),
+      });
     };
     // The pool itself is the SAME one the orchestrator/tool/sub-agent path
     // walks: primary → model-first TIERED pool (same model on other providers,
@@ -4080,7 +4102,7 @@ export class ChatCommand extends BaseCommand {
       complexity: decision.complexity,
       configManager: this.configManager,
     });
-    for (const c of pool) pushCandidate(c.provider, c.model);
+    for (const c of pool) pushCandidate(c.provider, c.model, c.score, c.scoreBasis);
 
     // Unique provider list (what callers use for their own failover) — derived
     // from the pair list so it stays consistent with what is actually tried.
@@ -4107,7 +4129,12 @@ export class ChatCommand extends BaseCommand {
             task: message,
             verifyOnDemand: isMaxCapability(this.configManager),
           })).model;
-          // Record the actually-used route for the dashboard audit trail
+          // Record the actually-used route for the dashboard audit trail.
+          // B2-a — the score belongs to THE PAIR THIS ROW NAMES. `decision.score`
+          // describes the router's own pick; a walked alternate has its own score
+          // (`candidate.score`, a model-level measurement from the tiered pool) or
+          // none at all (an ordering placeholder / a recalled pair). Writing the
+          // decision's number here is what made a walk look like a tie.
           recordRoutingDecision({
             source: 'chat',
             agentType: 'chat',
@@ -4115,7 +4142,9 @@ export class ChatCommand extends BaseCommand {
             complexity: decision.complexity,
             provider: candidate.provider,
             model,
-            score: decision.score,
+            ...(candidate.scoreBasis
+              ? { score: candidate.score, scoreBasis: candidate.scoreBasis }
+              : {}),
             agenticCapable: isAgenticCapableModel(model, candidate.provider),
             overrideReason: decision.overrideReason,
             ...(opts?.fallbackFrom ? { fallbackFrom: opts.fallbackFrom } : {}),
@@ -4149,6 +4178,10 @@ export class ChatCommand extends BaseCommand {
     const usableProvider =
       [decision.provider, ...decision.ranked.map((r) => r.provider)]
         .find((p) => !isActiveExclusion(p) && !registryBlocked.has(p)) || decision.provider;
+    // B2-a — this row names `decision.model` possibly on a DIFFERENT provider
+    // than the decision's (`usableProvider`), so the decision's composite does
+    // not describe it. The pair was never ranked as a whole; record it bare
+    // rather than attaching a number that belongs to another provider.
     recordRoutingDecision({
       source: 'chat',
       agentType: 'chat',
@@ -4156,7 +4189,6 @@ export class ChatCommand extends BaseCommand {
       complexity: decision.complexity,
       provider: usableProvider,
       model: decision.model,
-      score: decision.score,
       agenticCapable: isAgenticCapableModel(decision.model, usableProvider),
       overrideReason: decision.overrideReason,
       ...(opts?.fallbackFrom ? { fallbackFrom: opts.fallbackFrom } : {}),

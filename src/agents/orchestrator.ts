@@ -3991,7 +3991,11 @@ export class Orchestrator {
                 complexity: decision.complexity,
                 provider: decision.provider,
                 model: workingModel ?? decision.model,
-                score: decision.score,
+                // B2-a — this block runs only when the model was REPAIRED
+                // (`workingModel !== decision.model`), so `decision.score`
+                // describes the model that was replaced. The repaired model was
+                // substituted, never ranked: record it with no score rather than
+                // with a number that belongs to a different model.
               });
             } catch {
               // Audit is best-effort — never break the LLM call over telemetry

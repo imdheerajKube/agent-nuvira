@@ -133,6 +133,45 @@ describe('buildDeepFailoverPool — the ONE pool every entry path walks', () => 
     }
   });
 
+  // ─── B2-a — the pool says which of its numbers are EVIDENCE ─────────────
+  //
+  // Two scales ride in `score`: the router's provider-level COMPOSITE and the
+  // model-first tier's model-level candidate score. They are not comparable, and
+  // the last-resort entries are not measurements at all — they are ordering
+  // placeholders. A consumer that writes an audit row must be able to tell these
+  // apart from the pool ALONE: guessing from the value ("is it exactly 0.5?") is
+  // a heuristic over numbers that mean different things on different scales.
+  it('labels which scores are measurements, and names the scale', () => {
+    const config = makeConfig();
+    const decision = resolveDecision(config);
+    const pool = buildDeepFailoverPool(decision, {
+      taskDescription: GOAL,
+      complexity: decision.complexity,
+      configManager: config,
+    });
+
+    // The router's own pick: its composite IS this pair's score.
+    expect(pool[0]).toMatchObject({
+      provider: decision.provider,
+      model: decision.model,
+      score: decision.score,
+      scoreBasis: 'provider',
+    });
+
+    // A label is only ever one of the two real scales...
+    for (const c of pool) {
+      if (c.scoreBasis) expect(['provider', 'model']).toContain(c.scoreBasis);
+    }
+    // ...the tiered layer really does contribute model-scale measurements (so
+    // this is not asserting over a pool of one)...
+    expect(pool.some((c) => c.scoreBasis === 'model')).toBe(true);
+    // ...and an UNLABELLED score is one of the ordering placeholders, never a
+    // measurement that would reach an audit record as if it described a pair.
+    for (const c of pool.filter((x) => !x.scoreBasis)) {
+      expect([0.5, 0.1, 0.05]).toContain(c.score);
+    }
+  });
+
   it('reaches SEVERAL models per provider (no one-model-per-provider dead end)', () => {
     const config = makeConfig();
     const decision = resolveDecision(config);

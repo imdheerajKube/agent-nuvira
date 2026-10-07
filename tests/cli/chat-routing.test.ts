@@ -25,6 +25,8 @@ import { setVectorBackendOverride, resetVectorBackendSelection } from '../../src
 // ─── Module-level mocks ─────────────────────────────────────────────────────
 
 const mockSpotCheck = vi.hoisted(() => vi.fn().mockResolvedValue('verified'));
+/** B2-a — the recorded audit rows, observable instead of discarded. */
+const mockRecordRoutingDecision = vi.hoisted(() => vi.fn());
 const mockRefreshRegistry = vi.hoisted(() => vi.fn().mockResolvedValue({ providersProbed: [], modelsListed: 0, verified: 0, unavailable: 0, skipped: 0, errors: 0 }));
 const mockResolveProvider = vi.hoisted(() => vi.fn());
 const mockRouterResolve = vi.hoisted(() => vi.fn());
@@ -91,7 +93,9 @@ vi.mock('../../src/learning/routing-history.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/learning/routing-history.js')>();
   return {
     ...actual,
-    recordRoutingDecision: () => {},
+    // B2-a — captured rather than discarded, so the audit trail the walk writes
+    // can be asserted on (it is what a reader/dashboard actually sees).
+    recordRoutingDecision: (...args: unknown[]) => mockRecordRoutingDecision(...args),
   };
 });
 
@@ -400,5 +404,51 @@ describe('ChatCommand — mid-turn handoff plumbing (fix_model_routing)', () => 
     // No routingText → not a continuation → the router's own pick stands.
     const routed = await cmd.routeMessageAuto('build the app');
     expect(routed.type).toBe('gemini');
+  });
+
+  // ─── B2-a — a row may not borrow a score it did not earn ────────────────
+  //
+  // The walk writes `score: decision.score` onto EVERY row, so three different
+  // pairs appeared to share one provider-level number. Measured live:
+  // `0.43836864406779663` on gemini/gemma-4-26b-a4b-it,
+  // openrouter/cohere/command-r7b-12-2024 and deepseek/deepseek-flash — which a
+  // reader can only interpret as a tie, and which is exactly the wrong
+  // inference the Bundle 8 live run drew. The score now belongs to the pair the
+  // row names, and the scale it is on is stated.
+  it('a walked row never borrows the decision score it did not earn', async () => {
+    const cmd = new ChatCommand() as any;
+    mockRecordRoutingDecision.mockClear();
+    await cmd.routeMessageAuto('build the app');
+
+    // The winner's own row: this score legitimately IS this pair's (the router
+    // ranked it and picked it).
+    const winnerRow = mockRecordRoutingDecision.mock.calls
+      .map((c) => c[0] as any)
+      .find((r) => r.provider === 'gemini' && r.model === 'gemini-2.5-flash');
+    expect(winnerRow).toBeDefined();
+    expect(winnerRow.score).toBe(0.8);
+    expect(winnerRow.scoreBasis).toBe('provider');
+
+    // Force the walk past the winner onto a different pair.
+    cmd.sessionFailedModels.set('gemini|gemini-2.5-flash', Date.now() + 120_000);
+    mockRecordRoutingDecision.mockClear();
+    const routed = await cmd.routeMessageAuto('build the app', [], {
+      noCache: true,
+      fallbackFrom: 'gemini',
+    });
+    expect(routed.type).toBe('groq');
+
+    const rows = mockRecordRoutingDecision.mock.calls.map((c) => c[0] as any);
+    // A row for the pair that ACTUALLY answered must be here, or the assertion
+    // below would pass vacuously.
+    expect(rows.some((r) => r.provider === 'groq')).toBe(true);
+    // THE FIX: no row claims the decision's composite unless it names the
+    // decision's own pair.
+    expect(rows.filter((r) => r.score === 0.8 && r.provider !== 'gemini')).toEqual([]);
+    // And a score is never written without its scale, because the provider
+    // composite and the model-level candidate score are not comparable.
+    for (const r of rows) {
+      if (r.score !== undefined) expect(['provider', 'model']).toContain(r.scoreBasis);
+    }
   });
 });

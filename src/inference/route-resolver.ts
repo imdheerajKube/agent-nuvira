@@ -231,7 +231,10 @@ export function reportSubstitution(input: {
       complexity: 'simple',
       provider: input.providerType,
       model: input.served,
-      score: 0,
+      // B2-a — no score, because this layer never scored a candidate. `0` was
+      // the old sentinel for that, and absence is the honest way to say it now
+      // that the field is optional: a real ranking score of 0 and "never ranked"
+      // must not share a value.
     });
   } catch {
     // Best-effort — audit is not allowed to break the call.
@@ -404,8 +407,10 @@ export async function resolveRoute(request: RouteRequest): Promise<ResolvedRoute
     // The normal resolution used to record NOTHING, so a run that never
     // substituted left no trace of which model served it. Same row shape the
     // substitution path writes, so the two can never disagree about the model.
-    // `score` is 0 because this layer never scored a candidate — a fabricated
-    // score would read as a real ranking decision in `model explain --since`.
+    // `score` is OMITTED because this layer never scored a candidate — a
+    // fabricated score would read as a real ranking decision in `model explain
+    // --since`, and B2-a makes "never ranked" sayable instead of encoding it as
+    // a 0 that could equally be a genuine score.
     const pair = `${providerType}::${served}`;
     if (served && !reportedRoutes.has(pair)) {
       reportedRoutes.add(pair);
@@ -418,7 +423,7 @@ export async function resolveRoute(request: RouteRequest): Promise<ResolvedRoute
           complexity: request.complexity || 'unknown',
           provider: providerType,
           model: served,
-          score: 0,
+          // B2-a — see the note above: never ranked, so no score.
         });
       } catch {
         // Best-effort — audit is not allowed to break the call.

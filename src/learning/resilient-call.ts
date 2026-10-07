@@ -48,7 +48,7 @@ import {
 import { sweepTransientFailures } from './provider-revival.js';
 import { getProviderFallback, recordRegistrySuccess } from './provider-fallback.js';
 import { ProviderFactory } from '../inference/factory.js';
-import { recordRoutingDecision } from './routing-history.js';
+import { recordRoutingDecision, type RoutingScoreBasis } from './routing-history.js';
 import { EventNames, getEventBus } from '../observability/event-bus.js';
 import { logger } from '../utils/logger.js';
 import type { ConfigManager } from '../config/manager.js';
@@ -72,7 +72,23 @@ type FailureKind =
 export interface FailoverCandidate {
   provider: string;
   model: string;
+  /**
+   * The number this pool is ORDERED by. For the router's own pick and the
+   * model-first tier this is a measurement; for the last-resort chain entries
+   * below it is a placeholder that exists only to keep them at the end.
+   */
   score: number;
+  /**
+   * B2-a — set ONLY when `score` is a real ranking measurement for THIS pair,
+   * and it names the scale. Absent means `score` is an ordering placeholder and
+   * carries no evidence: it must never be written into an audit record as if it
+   * described the pair (see `RoutingHistoryEntry.score`). The pool is the only
+   * layer that knows the difference, so it labels it here rather than leaving
+   * every consumer to guess from the value (0.1 and 0.5 are not self-evident,
+   * and a threshold would be a heuristic over numbers that mean different
+   * things on different scales).
+   */
+  scoreBasis?: RoutingScoreBasis;
 }
 
 /**
@@ -1030,11 +1046,12 @@ export function buildDeepFailoverPool(
   const { taskDescription, complexity, configManager } = opts;
   const candidates: FailoverCandidate[] = [];
 
-  // Primary candidate
+  // Primary candidate — the router's own pick, so its composite IS this pair's.
   candidates.push({
     provider: decision.provider,
     model: decision.model,
     score: decision.score,
+    scoreBasis: 'provider',
   });
 
   // ── TIERED FAILOVER: capability-based with quota pre-check ────────────
@@ -1069,6 +1086,7 @@ export function buildDeepFailoverPool(
             provider: fc.provider,
             model: fc.model,
             score: fc.score,
+            scoreBasis: 'model',
           });
         }
       }
@@ -1096,6 +1114,8 @@ export function buildDeepFailoverPool(
       // Keep the chain's own order meaningful: the router already ranked these
       // (primary picks before alternates, reserve last). A real model from the
       // chain outranks a bare provider placeholder.
+      // A placeholder, deliberately: the chain's ORDER is meaningful, its number
+      // is not evidence about the pair. Hence no `scoreBasis`.
       score: model === 'default' ? 0.05 : 0.5,
     });
   }
@@ -1110,6 +1130,7 @@ export function buildDeepFailoverPool(
       provider: ranked.provider,
       model: 'default', // Will be resolved at call time
       score: ranked.score,
+      scoreBasis: 'provider',
     });
   }
 
@@ -1121,7 +1142,8 @@ export function buildDeepFailoverPool(
       candidates.push({
         provider: fb,
         model: 'default',
-        score: 0.1, // Low score — these are last-resort
+        // A placeholder — last-resort ordering only, no `scoreBasis`.
+        score: 0.1,
       });
     }
   } catch {

@@ -204,7 +204,13 @@ export async function runSingleShotAuto(opts: SingleShotAutoOptions): Promise<st
             complexity: first.complexity,
             provider: candidateType,
             model: candidateModel!,
-            score: first.score,
+            // B2-a — `first.score` is the WINNER's composite, and this branch
+            // runs only when a DIFFERENT provider answered (`candidateType !==
+            // first.type`). The alternate was never scored on that scale, so it
+            // is recorded without one instead of borrowing the winner's.
+            ...(candidateType === first.type
+              ? { score: first.score, scoreBasis: 'provider' as const }
+              : {}),
           });
         } else if (key && keyAttempts.length > 1) {
           // Primary provider answered — but only after key rotation.
