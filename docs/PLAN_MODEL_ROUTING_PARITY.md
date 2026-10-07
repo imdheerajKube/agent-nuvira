@@ -478,22 +478,37 @@ missed requirement; reading it shows the axis is modelled under other words — 
 ask's "task type — coding, reasoning, image" IS covered, and the word-count was an artifact of vocabulary,
 not a gap. (Recorded because the wrong reading was one step from being written down as a defect.)
 
-### OPEN, found by this run — a flag the pipeline acts on and the chat surface ignores
+### CLOSED — the flag looked inert, and the gate that already covers it was two files away
 
-This ask's own decision line says **`verification`**, i.e. the router graded it `requiresVerification: true`.
-The turn then ran no verification at all (2 tool calls, `findings: 0`, no `verify_requirement` call).
+**This section first recorded a gap that does not exist.** The reading was: this ask's decision line says
+**`verification`**, the turn ran none (2 tool calls, `findings: 0`), and `cli/chat.ts` only propagates
+`requiresVerification` into its returned `taskProfile` — so the same decision that buys a reviewer pass in the
+pipeline (`agents/orchestrator.ts:3578`) looked inert in chat. A second, weaker gate was written for it.
 
-| surface | what it does with `requiresVerification` |
-|---|---|
-| `agents/orchestrator.ts:3578` | **acts on it** — `followUpAgentType = 'reviewer'; verificationPass = true`, i.e. the pipeline appends a whole reviewer pass |
-| `agents/agents/planner.ts:234` | reads it into the planner's routing context |
-| `cli/chat.ts:4161-4163` | **propagates it into the returned `taskProfile` and nothing branches on it** — the only occurrences in the chat path are the type, a `false` default, and this copy |
+**Reading the loop before landing it found the real thing.** `tools/tool-loop.ts` already carries a
+verification gate (G1, `opts.requireVerification`, **default ON**) that is stronger than what was being added:
+it spends ONE bounded nudge when the turn MUTATED and observed nothing, decides that from
+`assessEditActivity(progress.successfulToolCalls, progress.verificationEvidence, progress.mutatedPaths)`, names
+the project's strongest check via `verificationNudgeFor(ctx.cwd, path)` rather than describing a preference
+order, bumps `stepLimit` so the nudge is not paid for out of the turn's own budget, and leaves
+`ToolLoopResult.unverifiedEdit` as the residual. A self-review gate covers the substantial-turn case where the
+change WAS observed. The honest verdict is already surfaced too: `TurnReport.verification` renders as
+`verification: unverified` in the summary and gets its own line in `render()`.
 
-So the same decision that buys a reviewer pass in the pipeline is inert on the chat surface. `verify_requirement`
-is MODEL-REQUESTED (a tool in the chat toolset, prompted with "if a request's completeness is uncertain, call
-`verify_requirement` first"), so the model simply chose not to — that part is model behaviour, not a missing
-gate. Whether chat SHOULD enforce the flag it was handed is a **product decision with a real cost** (an extra
-verification pass on every qualifying chat turn), so it is recorded rather than implemented unilaterally.
+The second gate was **reverted, not committed**.
+
+**Why the router's flag does not need to reach the loop.** The existing gate keys off EVIDENCE — *did this turn
+change something and leave it unobserved?* — while `requiresVerification` is a PREDICTION about the task. Where
+they disagree, evidence is right, and it cannot be fooled by a keyword (which is exactly what Bundle 13 shows a
+keyword classifier doing). It also explains the observed turn without any defect: **that turn mutated
+NOTHING** — `skill` and `suggest_followups` are not `MUTATION_TOOLS` — so `needsVerification` was false and
+there was no change to observe. Demanding verification of a turn that changed nothing would spend a step
+verifying nothing, which is the speculative action worth avoiding.
+
+**What genuinely remains open is narrower, and low-value by this evidence.** A `requiresVerification` ask that
+mutates nothing still gets no chat-side consequence. Given the gate above, making it consequential would mean
+forcing work on turns with nothing to check — so it stays unimplemented, and this note exists so the same
+duplicate gate is not written twice.
 
 ## Bundle 11 — a row may not borrow a score it did not earn (B2-a LANDED)
 
