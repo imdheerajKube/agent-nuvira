@@ -40,10 +40,14 @@ export function turnOutcomeObservation(
   report: TurnReport | null | undefined,
 ): TurnOutcomeObservation | null {
   if (!report) return null;
+  // ACCURACY EVIDENCE — the turn's own checks, when it ran any. `checksPassed` is
+  // tri-state precisely so that "nobody checked" contributes no `testPassed` sample:
+  // a plain question and a failing test suite must not teach the same lesson.
+  const checkData = report.checksPassed === undefined ? {} : { testPassed: report.checksPassed };
   switch (report.verification) {
     case 'verified':
       // A change was made and an observation followed it.
-      return { outcome: 'success', outcomeData: { verificationPassed: true } };
+      return { outcome: 'success', outcomeData: { verificationPassed: true, ...checkData } };
     case 'unverified':
       // The turn ran, and its work could not be confirmed (an edit with no
       // observation, an honesty flag, or an unobserved mutation). Booked as a
@@ -51,7 +55,7 @@ export function turnOutcomeObservation(
       // the model DID answer, and the reward model's own penalty for an
       // unverified success is the calibrated weight for exactly this shape.
       // Calling it a failure outright would double-penalise one event.
-      return { outcome: 'success', outcomeData: { verificationPassed: false } };
+      return { outcome: 'success', outcomeData: { verificationPassed: false, ...checkData } };
     default:
       // 'blocked' — a step could not complete (often environmental, not the
       // model's doing). 'not-applicable' — nothing checkable happened. Neither

@@ -50,6 +50,46 @@ mistakes are the ones the product makes:
 
 ---
 
+## Bundle 18 — accuracy learns from the turn's own checks (PARTIAL, honestly)
+
+**The requirement (user, 2026-10-07):** *"Measure accuracy from the turn's own evidence so the scorecard
+stops resting on priors"* (open items 4 and 13).
+
+**`testPassed` is now recorded, and it needed NO new plumbing.** `ToolLoopResult` already carries
+`toolCalls` ("includes refused/unknown/failed calls") and `successfulToolCalls`, and `cli/chat.ts` already
+passes BOTH to `buildTurnReport`. So the failure side was derivable as a **multiset difference** — the
+report now carries `failedToolCalls`, and it cannot drift from either list because it is computed from
+them.
+
+**The check verdict is TRI-STATE, and that is the point.** `checksPassed` is `undefined` when no
+verification tool ran, `true` when one ran and none failed, and `false` when one was attempted and failed.
+Collapsing "nobody checked" into `false` would have booked a plain question as a failure and taught the
+router exactly what a failing test suite teaches — a fabricated signal of the same family this programme
+exists to remove. `outcome-observation.ts` forwards `testPassed` only when the field is defined, so a turn
+with no check contributes no accuracy sample rather than a negative one.
+
+**Measured, not asserted:**
+
+| Turn | `failedToolCalls` | `checksPassed` | forwarded |
+|---|---|---|---|
+| `edit_file` + `run_terminal` (both ok) | `[]` | `true` | `testPassed: true` |
+| `edit_file` + `run_terminal` (check failed) | `['run_terminal']` | `false` | `testPassed: false` |
+| `run_terminal` twice, succeeded once | `['run_terminal']` | `false` | `testPassed: false` (multiset-aware) |
+| `read_file` only | `[]` | `undefined` | nothing recorded |
+
+**Tests.** `turn-report.test.ts` (+5) and `outcome-observation.test.ts` (+3); **2 of the latter proven
+load-bearing** by removing the forwarding, which failed exactly those two and no others. Gates: root suite
+**465 files / 8520 passed / 0 failed**, `verify:commands` **341/341** (up from 336 — Bundle 16's new
+subcommands), all four docs guards, `build:cli`, dashboard bundle.
+
+**Still open, and what each needs.** `userAccepted` requires a NEXT-TURN signal — the honest form is "the
+user's following message did not re-ask for the same thing and did not correct the work", which needs a
+correction detector before it can be recorded without guessing (D1's residual is the same problem).
+`qualityScore` needs a measured scale, which is item 13's bundle. Neither is a wiring problem; both are
+"do not write a number nobody measured".
+
+---
+
 ## Bundle 17 — the empty-folder proof, and the banner it was missing (LANDED)
 
 **The requirement (user, 2026-10-07):** *"Prove the Cluster G dashboard flow live: attach an empty
@@ -310,8 +350,9 @@ exists; where it does not, that is stated as the residual rather than implied cl
    record of those decisions), and the two-writer pattern itself is **A6's intended behaviour** (its
    acceptance counts 2–3 rows per headless turn), so redundant rows will re-accumulate — the pass is
    re-runnable, not a one-time cure.
-4. **`testPassed`, `userAccepted` and a real `qualityScore` are still absent** from the bandit payload,
-   so the reward remains a veto on verification plus a cost adjustment — better, not complete.
+4. **`testPassed` — CLOSED (Bundle 18). `userAccepted` and a real `qualityScore` remain absent** from the
+   bandit payload, so the reward is still a veto on verification plus a cost adjustment — better, not
+   complete. Bundle 18 states what each of the two would need.
 5. ~~**`cost` and `ecosystem` have declared priors but no measured feed.**~~ **CLOSED — Bundle 16**: the
    approved OpenRouter catalogue now supplies both as LABELLED priors (opt-in, default OFF,
    `NUVIRA_CATALOG_FEED` in the CLI and the dashboard's Process Env page). `accuracy`, `performance` and

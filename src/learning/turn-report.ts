@@ -61,6 +61,23 @@ export interface TurnReport {
   stepCounts: TurnReportStepCounts;
   toolCalls: string[];
   successfulToolCalls: string[];
+  /**
+   * Tools that were ATTEMPTED and did not succeed — a refusal, an unknown tool, a
+   * failed run. Derived as `toolCalls − successfulToolCalls`, so it costs no extra
+   * plumbing and cannot drift from either list.
+   */
+  failedToolCalls: string[];
+  /**
+   * ACCURACY EVIDENCE (B2/B3 wiring) — did the turn's own CHECKS pass?
+   *
+   * `undefined` when NO verification tool ran, and that distinction is the whole
+   * reason this is tri-state rather than a boolean: "nobody checked" is not "the
+   * check failed". Booking the former as a failure would penalise a turn that was
+   * never asked to prove anything, which is the same kind of invented signal this
+   * programme exists to remove — a plain question and a failing test suite must not
+   * teach the router the same lesson.
+   */
+  checksPassed?: boolean;
   mutations: number;
   changedPaths: string[];
   verification: TurnVerification;
@@ -152,6 +169,24 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
   const observed = successfulToolCalls.some((t) => VERIFICATION_TOOLS.has(t));
   const flagsSet = hasAnyFlag(flags);
 
+  // A tool counts as failed when it was attempted and is not in the success list.
+  // Multiset-safe: a call that appears once in each (ran twice, failed once) is a
+  // failure, because something the run tried DID fail.
+  const attemptedCounts = new Map<string, number>();
+  for (const name of toolCalls) attemptedCounts.set(name, (attemptedCounts.get(name) ?? 0) + 1);
+  for (const name of successfulToolCalls) {
+    attemptedCounts.set(name, (attemptedCounts.get(name) ?? 0) - 1);
+  }
+  const failedToolCalls: string[] = [];
+  for (const [name, remaining] of attemptedCounts) {
+    if (remaining > 0) failedToolCalls.push(name);
+  }
+
+  // Only CHECKS decide this, and only when at least one ran (see `checksPassed`).
+  const checksRan = observed || failedToolCalls.some((t) => VERIFICATION_TOOLS.has(t));
+  const checksBroke = failedToolCalls.some((t) => VERIFICATION_TOOLS.has(t));
+  const checksPassed = checksRan ? observed && !checksBroke : undefined;
+
   let verification: TurnVerification;
   if (stepCounts.blocked > 0) {
     verification = 'blocked';
@@ -197,6 +232,8 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
     stepCounts,
     toolCalls,
     successfulToolCalls,
+    failedToolCalls,
+    ...(checksPassed === undefined ? {} : { checksPassed }),
     mutations: input.mutations ?? 0,
     changedPaths,
     verification,

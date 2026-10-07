@@ -59,3 +59,44 @@ describe('turnOutcomeObservation — what the router learns from a turn', () => 
     }
   });
 });
+
+describe('testPassed — the check’s own result, forwarded as evidence', () => {
+  it('forwards a check that RAN and passed', () => {
+    const r = buildTurnReport({
+      goal: 'fix bug',
+      toolCalls: ['edit_file', 'run_terminal'],
+      successfulToolCalls: ['edit_file', 'run_terminal'],
+      mutations: 1,
+    });
+    expect(turnOutcomeObservation(r)).toEqual({
+      outcome: 'success',
+      outcomeData: { verificationPassed: true, testPassed: true },
+    });
+  });
+
+  it('forwards a check that FAILED — the reward model needs the negative too', () => {
+    const r = buildTurnReport({
+      goal: 'fix bug',
+      toolCalls: ['edit_file', 'run_terminal'],
+      successfulToolCalls: ['edit_file'],
+      mutations: 1,
+    });
+    expect(turnOutcomeObservation(r)!.outcomeData.testPassed).toBe(false);
+  });
+
+  it('records NO testPassed sample when nothing was checked', () => {
+    // An unverified turn with no check in it at all: the verdict is still recorded,
+    // but a `testPassed: false` here would be a made-up failure.
+    const r = buildTurnReport({
+      goal: 'edit it',
+      toolCalls: ['edit_file'],
+      successfulToolCalls: ['edit_file'],
+      mutations: 1,
+      flags: { unverifiedEdit: true },
+    });
+    expect(r.verification).toBe('unverified');
+    const obs = turnOutcomeObservation(r)!;
+    expect('testPassed' in obs.outcomeData).toBe(false);
+    expect(obs.outcomeData.verificationPassed).toBe(false);
+  });
+});

@@ -14,6 +14,58 @@ function plan(steps: Array<{ id: string; description: string; status: Plan['step
   return { goal: 'do the thing', steps, revision: 1, updatedAt: Date.now() };
 }
 
+describe('buildTurnReport — the accuracy evidence the router learns from (B2/B3 wiring)', () => {
+  it('derives failedToolCalls as the difference between attempted and successful', () => {
+    const r = buildTurnReport({
+      goal: 'edit and check',
+      toolCalls: ['edit_file', 'run_terminal', 'run_terminal'],
+      successfulToolCalls: ['edit_file', 'run_terminal'],
+    });
+    // Attempted twice, succeeded once: the run TRIED to check and the second attempt
+    // did not succeed. The difference is multiset-aware, so it cannot be silently
+    // rounded to "all fine" by a dedupe.
+    expect(r.failedToolCalls).toEqual(['run_terminal']);
+  });
+
+  it('leaves checksPassed UNDEFINED when no check ran — never `false`', () => {
+    // "Nobody checked" is not "the check failed". Booking the former as a failure
+    // would penalise a turn that was never asked to prove anything.
+    const r = buildTurnReport({
+      goal: 'answer a question',
+      toolCalls: ['read_file'],
+      successfulToolCalls: ['read_file'],
+    });
+    expect(r.checksPassed).toBeUndefined();
+    expect(r.failedToolCalls).toEqual([]);
+  });
+
+  it('reports checksPassed true when a check ran and succeeded', () => {
+    const r = buildTurnReport({
+      goal: 'fix bug',
+      toolCalls: ['edit_file', 'run_terminal'],
+      successfulToolCalls: ['edit_file', 'run_terminal'],
+      mutations: 1,
+    });
+    expect(r.checksPassed).toBe(true);
+  });
+
+  it('reports checksPassed false when a check was attempted and failed', () => {
+    const r = buildTurnReport({
+      goal: 'fix bug',
+      toolCalls: ['edit_file', 'run_terminal'],
+      successfulToolCalls: ['edit_file'],
+      mutations: 1,
+    });
+    expect(r.checksPassed).toBe(false);
+    expect(r.failedToolCalls).toEqual(['run_terminal']);
+  });
+
+  it('is false when the only check failed, even with nothing mutated', () => {
+    const r = buildTurnReport({ goal: 'run the tests', toolCalls: ['run_terminal'], successfulToolCalls: [] });
+    expect(r.checksPassed).toBe(false);
+  });
+});
+
 describe('buildTurnReport — verification verdict', () => {
   it('is not-applicable and silent for a plain answer', () => {
     const r = buildTurnReport({ goal: 'say hi', toolCalls: [], successfulToolCalls: [] });
