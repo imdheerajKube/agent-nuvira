@@ -50,6 +50,48 @@ mistakes are the ones the product makes:
 
 ---
 
+## Bundle 19 — F1's live re-run produced a PLACEHOLDER deliverable (OPEN, measured 2026-10-07)
+
+**What F1's remaining proof was supposed to show:** an oversized-document ask is delivered in SECTIONS
+(`write_file` with `mode: "append"`) rather than truncated. Run live, and it shows something worse.
+
+**The ask:** *"Write a long, detailed technical design document (aim for about 2500 words) … to DESIGN.md
+… Make it genuinely complete, not an outline."* The turn reported success and offered three followups.
+
+**What is actually on disk:** 191 bytes / **25 words**, containing
+
+```
+## 1. Introduction ... (full content omitted for brevity) ...
+```
+
+So the model wrote a document that ANNOUNCES the content and then omits it — a placeholder wearing the
+deliverable's clothes — and the turn's own verification did not catch it. Its stated check was *"Read the
+file back with `read_file` (full content, no truncation) to confirm that: All required sections are
+present"*, which is true of a list of headings and says nothing about whether any section has content.
+
+**Why this is the most useful result of the pass.** It is item 13's premise, measured rather than argued:
+the failure mode is not an empty answer or a refusal — both of which the harness already detects — but a
+NON-EMPTY GENERIC NON-ANSWER, which no deterministic flag can see. `unverifiedEdit` cannot fire (a file
+was written and the turn did read it back); there is content, so nothing is "undelivered"; and the model's
+claim is about sections, not results. Detecting this needs a measured-quality signal (B3), which is exactly
+why that item exists and why it must not be replaced with a phrase list: the honest detector compares the
+delivered artifact against the ask, not the prose against a list of suspect words.
+
+**It also means the sectioned-delivery path was never exercised**, so F1's live proof is still outstanding
+on its own terms — the model never tried to deliver a long document in sections; it tried to avoid writing
+one. The harness cannot make a model write 2500 words, but it can stop a turn from reporting one.
+
+**Two smaller observations from the same run.** The turn made **2 `ask_user` calls** in a headless run (both
+took their unattended defaults, and E1's disclosure covers that correctly). And the delivered file is
+`DESIGN.md` with a BOM-free UTF-8 name containing non-breaking hyphens (`Multi‑Provider`) — cosmetic, noted
+only because `write_file` round-tripped it faithfully.
+
+**Status: OPEN.** A fix needs the measured-quality signal (item 13) or a deterministic
+artifact-versus-ask check; neither is a one-line change, and guessing one from prose is the defect this
+programme removes.
+
+---
+
 ## Bundle 18 — accuracy learns from the turn's own checks (PARTIAL, honestly)
 
 **The requirement (user, 2026-10-07):** *"Measure accuracy from the turn's own evidence so the scorecard
@@ -357,9 +399,9 @@ exists; where it does not, that is stated as the residual rather than implied cl
    approved OpenRouter catalogue now supplies both as LABELLED priors (opt-in, default OFF,
    `NUVIRA_CATALOG_FEED` in the CLI and the dashboard's Process Env page). `accuracy`, `performance` and
    `robustness` remain measurement-only by design — see the Bundle 16 limits.
-6. **F1's live re-run of the oversized-document ask is the remaining proof**, and F1 does not cover the
-   **JSON-fallback transport** (a model asked to emit the call as text) or the **Gemini wire** (whose
-   calls carry structured `args`, so "empty" is ambiguous).
+6. **F1's live re-run — RUN, AND IT FAILED, in a way worth its own bundle (see Bundle 19).** F1 does not
+   cover the **JSON-fallback transport** (a model asked to emit the call as text) or the **Gemini wire**
+   (whose calls carry structured `args`, so "empty" is ambiguous).
 7. ~~**C3's live parity re-run** (the probe count dropping) is deferred.~~ **CLOSED — measured live
    (2026-10-07)**: a real turn asked to run `python3 --version` twice recorded the repeat, and the model's own
    report says it worked — *"the harness detected it as a repeat and declined to re-execute it, returning the
