@@ -1063,11 +1063,25 @@ registerTool({
     const { action, goal, steps, id, status, note } = planTodoSchema.parse(args);
     const { defaultPlanStore } = await import('./plan-store.js');
     const store: import('./plan-store.js').PlanStoreLike = ctx.planStore ?? defaultPlanStore();
+    // C4 — a re-declaration of the SAME goal carries the progress of the steps it
+    // re-declares (see PlanStore.create). Disclosed rather than silent: a model
+    // that re-declared the plan to RESET it must be told that the harness kept a
+    // step's status, or it will keep working around a step it believes is pending.
+    let carriedNote = '';
     if (action === 'create') {
       if (!goal || !steps || steps.length === 0) {
         return 'Error: plan_todo create needs goal + steps (id + description each).';
       }
+      const before = store.snapshot?.() ?? null;
       store.create(goal, steps);
+      const after = store.snapshot?.() ?? null;
+      const carried = (after?.steps ?? []).filter((s) => s.status !== 'pending');
+      if (before?.goal === after?.goal && carried.length > 0) {
+        carriedNote =
+          `\n♻️ Carried ${carried.length} step(s) already progressed from this goal's previous plan: ` +
+          `${carried.map((s) => `${s.id} (${s.status})`).join(', ')}. ` +
+          `Leave them as they are, or call update with status "pending" if you really mean to redo them.`;
+      }
     } else if (id && status) {
       // A1 — never accept an update that matched nothing. Silently returning
       // the unchanged plan reads as success to the model (and as tracking to
@@ -1108,7 +1122,7 @@ registerTool({
         ctx.emit?.('plan:changed', snapshot);
       }
     }
-    return store.toText ? store.toText() : `Plan updated (${action}).`;
+    return (store.toText ? store.toText() : `Plan updated (${action}).`) + carriedNote;
   },
 });
 

@@ -75,6 +75,95 @@ describe('PlanStore', () => {
     expect(store.snapshot()!.steps).toHaveLength(1);
   });
 
+  // ── C4 — a re-declaration must not silently discard finished work ─────────
+  describe('create carries progress for the SAME goal (C4)', () => {
+    it('keeps a completed step completed when the plan is re-declared', () => {
+      const store = new PlanStore();
+      store.create('Ship the release', [
+        { id: 's1', description: 'Write the changelog' },
+        { id: 's2', description: 'Tag the release' },
+        { id: 's3', description: 'Publish the package' },
+      ]);
+      store.update('s1', 'done', 'changelog written');
+      store.update('s2', 'running');
+
+      // The measured failure: the model declares its plan again in a LATER turn.
+      const again = store.create('Ship the release', [
+        { id: 's1', description: 'Write the changelog' },
+        { id: 's2', description: 'Tag the release' },
+        { id: 's3', description: 'Publish the package' },
+      ]);
+
+      expect(again.steps.find((s) => s.id === 's1')).toMatchObject({ status: 'done', note: 'changelog written' });
+      expect(again.steps.find((s) => s.id === 's2')?.status).toBe('running');
+      expect(again.steps.find((s) => s.id === 's3')?.status).toBe('pending');
+      // The re-declaration is still a real revision — it is not silent.
+      expect(again.revision).toBe(4);
+    });
+
+    it('carries by description when the ids changed too, but only on an exact match', () => {
+      const store = new PlanStore();
+      store.create('Ship the release', [
+        { id: 's1', description: 'Write the CHANGELOG.' },
+        { id: 's2', description: 'Tag the release' },
+      ]);
+      store.update('s1', 'done');
+
+      const again = store.create('Ship the release', [
+        { id: 'a1', description: 'write the changelog' },
+        { id: 'a2', description: 'Tag the release candidate' },
+      ]);
+      expect(again.steps.find((s) => s.id === 'a1')?.status).toBe('done');
+      // A reworded step is a CORRECTION, not the same step: it starts fresh.
+      expect(again.steps.find((s) => s.id === 'a2')?.status).toBe('pending');
+    });
+
+    it('a correction still applies: new steps arrive pending and dropped ones disappear', () => {
+      const store = new PlanStore();
+      store.create('Ship the release', [
+        { id: 's1', description: 'Write the changelog' },
+        { id: 's2', description: 'Tag the release' },
+      ]);
+      store.update('s1', 'done');
+      const again = store.create('Ship the release', [
+        { id: 's1', description: 'Write the changelog' },
+        { id: 's4', description: 'Announce the release' },
+      ]);
+      expect(again.steps.map((s) => s.id)).toEqual(['s1', 's4']);
+      expect(again.steps.find((s) => s.id === 's4')?.status).toBe('pending');
+    });
+
+    it('progress stays overridable: the model can put a carried step back to pending', () => {
+      const store = new PlanStore();
+      store.create('Ship the release', [{ id: 's1', description: 'Write the changelog' }]);
+      store.update('s1', 'done');
+      store.create('Ship the release', [{ id: 's1', description: 'Write the changelog' }]);
+      expect(store.snapshot()!.steps[0].status).toBe('done');
+      store.update('s1', 'pending', 'the changelog relies on a change that was reverted');
+      expect(store.snapshot()!.steps[0].status).toBe('pending');
+    });
+
+    it('does NOT carry across a different goal — a new plan is a new plan', () => {
+      const store = new PlanStore();
+      store.create('Ship the release', [{ id: 's1', description: 'Write the changelog' }]);
+      store.update('s1', 'done');
+      const other = store.create('Fix the login bug', [{ id: 's1', description: 'Write the changelog' }]);
+      expect(other.steps[0].status).toBe('pending');
+    });
+
+    it('a single previous step cannot be carried onto two new steps', () => {
+      const store = new PlanStore();
+      store.create('Go', [{ id: 's1', description: 'Do the thing' }]);
+      store.update('s1', 'done');
+      const again = store.create('Go', [
+        { id: 's1', description: 'Do the thing' },
+        { id: 's2', description: 'Do the thing' },
+      ]);
+      expect(again.steps[0].status).toBe('done');
+      expect(again.steps[1].status).toBe('pending');
+    });
+  });
+
   it('renders a readable checklist with counts and status icons', () => {
     const store = new PlanStore();
     store.create('Fix the failing test', [

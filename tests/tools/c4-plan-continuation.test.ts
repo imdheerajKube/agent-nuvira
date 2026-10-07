@@ -134,7 +134,7 @@ describe('C4 experiment — what happens to the plan across a continuation', () 
     expect(after.steps.map((s) => s.id)).toEqual(['s1', 's2', 's3']);
   });
 
-  it('B. ACROSS TURNS (the promise the tool description makes): a re-declaration REPLACES the plan', async () => {
+  it('B. ACROSS TURNS (the promise the tool description makes): a re-declaration CARRIES the progress', async () => {
     const store = new PlanStore();
     const results1: string[] = [];
     const requests1: unknown[][] = [];
@@ -175,7 +175,9 @@ describe('C4 experiment — what happens to the plan across a continuation', () 
         ),
     );
     expect(afterTurn1.steps[0].status).toBe('done');
-    // Measured fact: the re-declaration resets the work that was already done.
-    expect(afterTurn2.steps.every((s) => s.status === 'pending')).toBe(true);
+    // FIXED: the re-declaration keeps the work that was already done, and says so.
+    expect(afterTurn2.steps[0].status).toBe('done');
+    expect(afterTurn2.steps.slice(1).every((s) => s.status === 'pending')).toBe(true);
+    expect(results2.join('\n')).toContain('♻️ Carried 1 step(s)');
   });
 });

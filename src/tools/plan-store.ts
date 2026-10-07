@@ -115,6 +115,15 @@ function isTerminal(status: PlanStepStatus): boolean {
   return status === 'done' || status === 'blocked';
 }
 
+/**
+ * A step description reduced to what makes two declarations the same step:
+ * case, inner whitespace and a trailing full stop are the model's phrasing, not
+ * its meaning. Used only as the FALLBACK when a carried step's id changed too.
+ */
+function normalizeDescription(description: string): string {
+  return description.trim().replace(/\s+/g, ' ').replace(/[.;]+$/, '').toLowerCase();
+}
+
 /** The one status glyph, shared by every renderer so they cannot drift. */
 function statusIcon(status: PlanStepStatus): string {
   if (status === 'done') return '✅';
@@ -207,19 +216,55 @@ export class PlanStore implements PlanStoreLike {
   }
 
   /**
-   * Create (or REPLACE) the plan. Idempotent: re-declaring steps is the
-   * model's way to correct course — a fresh declaration supersedes the old.
+   * Create (or REPLACE) the plan — CARRYING the progress a re-declaration must
+   * not silently discard.
+   *
+   * The measured failure (C4's experiment, `/tmp/nuvira-logs/c4-experiment.log`):
+   * a run declared its plan and completed step 1; in a LATER turn it declared the
+   * plan again — the per-turn planner guard resets at the turn boundary, and the
+   * model is never shown the plan it already has — and `create` set every step
+   * back to `pending`, turning finished work back into outstanding work (measured:
+   * revision 2 with `s1 done` ⇒ revision 3 with all three `pending`).
+   *
+   * The rule, deliberately narrow:
+   *   - a DIFFERENT goal is a NEW plan: the old one is replaced wholesale, exactly
+   *     as before (the course-correction behaviour the existing test pins);
+   *   - an UNCHANGED goal carries a step's status + note by ID, and failing that by
+   *     an identical (normalized) description — so a genuine correction still
+   *     applies (new steps arrive `pending`, dropped steps disappear) while
+   *     finished work survives a re-declaration;
+   *   - progress stays OVERRIDABLE: the model can `update` a carried step back to
+   *     `pending` when it really means to redo it, and the `plan_todo` result says
+   *     what was carried, so nothing happens silently.
    */
   create(goal: string, steps: Array<{ id: string; description: string }>): Plan {
-    const cleanSteps = (steps ?? []).map((s, i) => ({
-      id: String(s?.id ?? `step-${i + 1}`),
-      description: String(s?.description ?? '').trim(),
-      status: 'pending' as PlanStepStatus,
-    })).filter((s) => s.description.length > 0);
+    const nextGoal = String(goal ?? '').trim() || '(untitled plan)';
+    const previous = this.plan;
+    const carry = previous && previous.goal === nextGoal ? previous.steps : [];
+    const taken = new Set<string>();
+    const cleanSteps = (steps ?? [])
+      .map((s, i) => ({
+        id: String(s?.id ?? `step-${i + 1}`),
+        description: String(s?.description ?? '').trim(),
+      }))
+      .filter((s) => s.description.length > 0)
+      .map((s) => {
+        const byId = carry.find((p) => !taken.has(p.id) && p.id === s.id);
+        const wanted = normalizeDescription(s.description);
+        const match =
+          byId ?? carry.find((p) => !taken.has(p.id) && normalizeDescription(p.description) === wanted);
+        if (!match) return { ...s, status: 'pending' as PlanStepStatus };
+        taken.add(match.id);
+        return {
+          ...s,
+          status: match.status,
+          ...(match.note ? { note: match.note } : {}),
+        };
+      });
     this.plan = {
-      goal: String(goal ?? '').trim() || '(untitled plan)',
+      goal: nextGoal,
       steps: cleanSteps,
-      revision: (this.plan?.revision ?? 0) + 1,
+      revision: (previous?.revision ?? 0) + 1,
       updatedAt: Date.now(),
     };
     this.onChange?.(this.snapshot());
