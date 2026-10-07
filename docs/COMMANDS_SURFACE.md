@@ -241,6 +241,26 @@ Set the capability mode: config capability set <balanced|max>
 
 Restore the default capability mode (balanced)
 
+### `nuvira config catalog-feed`
+
+Show or change the OpenRouter catalogue feed (cost/ecosystem priors only)
+
+### `nuvira config catalog-feed show`
+
+Show whether the catalogue feed is on, and how old its snapshot is
+
+### `nuvira config catalog-feed set`
+
+Enable or disable: config catalog-feed set <on|off>
+
+### `nuvira config catalog-feed unset`
+
+Remove the setting, restoring the default (off)
+
+### `nuvira config catalog-feed refresh`
+
+Fetch a fresh catalogue snapshot now (never runs during a turn)
+
 ### `nuvira cache`
 
 Manage inference cache
@@ -1511,4 +1531,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*485 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*490 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

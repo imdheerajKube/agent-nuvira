@@ -239,6 +239,7 @@ export const DEFAULT_PRIORS: Record<CapabilityParameter, number | undefined> = {
 export function capabilityLines(
   record: CapabilityRecord | undefined,
   priors: Partial<Record<CapabilityParameter, number>> = {},
+  priorLabels: Partial<Record<CapabilityParameter, { source: string; fetchedAt: number }>> = {},
 ): string[] {
   return (['accuracy', 'performance', 'cost', 'robustness', 'ecosystem'] as CapabilityParameter[]).map(
     (p) => {
@@ -251,8 +252,22 @@ export function capabilityLines(
       }
       const { value, samples, source } = effectiveParameter(record, p, prior);
       const pct = Math.round(value * 100);
-      const basis = source === 'measured' ? 'measured' : 'prior';
+      // §6.2 rule 4: a borrowed number must say WHERE it was borrowed from, so a reader can tell an
+      // observation from a prior. An unlabelled prior still prints the bare `prior` it always did —
+      // the label is added, never substituted.
+      const basis = source === 'measured' ? 'measured' : describePrior(p, priorLabels);
       return `${p} ${pct} (${basis}${samples > 0 ? `, n=${samples}` : ''})`;
     },
   );
+}
+
+/** `prior` alone, or `prior: <source>, <date>` when the prior came from somewhere nameable. */
+function describePrior(
+  p: CapabilityParameter,
+  labels: Partial<Record<CapabilityParameter, { source: string; fetchedAt: number }>>,
+): string {
+  const label = labels[p];
+  if (!label) return 'prior';
+  const day = new Date(label.fetchedAt).toISOString().slice(0, 10);
+  return `prior: ${label.source}, ${day}`;
 }

@@ -144,6 +144,18 @@ export const PROCESS_ENV_VARS: readonly ProcessEnvVarSpec[] = [
     cliEquivalent: 'nuvira execute --no-session-recall  ·  memory.sessionRecall in buffconfig.json',
   },
   {
+    name: 'NUVIRA_CATALOG_FEED',
+    label: 'Provider catalogue priors',
+    group: 'turn',
+    kind: 'flag',
+    rule: 'asks',
+    description:
+      'Fetch OpenRouter\u2019s public model catalogue out-of-band and use it for two PRIORS the harness cannot measure cold: `cost` (from real pricing) and `ecosystem` (from advertised tool support). A prior is replaced by measurement as samples accumulate, is printed with its source, and never outranks evidence.',
+    unsetMeans:
+      'OFF (the default). Nothing is fetched; cost prints n/a and ecosystem keeps its declared prior.',
+    cliEquivalent: 'nuvira config catalog-feed set on  ·  nuvira config catalog-feed refresh',
+  },
+  {
     name: 'NUVIRA_EXTRACT_MAX_CHARS',
     label: 'Document extraction budget',
     group: 'turn',

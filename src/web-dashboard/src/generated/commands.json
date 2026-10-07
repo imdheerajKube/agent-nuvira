@@ -2,7 +2,7 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 282,
+  "commandCount": 287,
   "groupCount": 55,
   "groups": [
     {
@@ -289,6 +289,31 @@
         {
           "name": "config capability unset",
           "description": "Restore the default capability mode (balanced)",
+          "flags": []
+        },
+        {
+          "name": "config catalog-feed",
+          "description": "Show or change the OpenRouter catalogue feed (cost/ecosystem priors only)",
+          "flags": []
+        },
+        {
+          "name": "config catalog-feed show",
+          "description": "Show whether the catalogue feed is on, and how old its snapshot is",
+          "flags": []
+        },
+        {
+          "name": "config catalog-feed set",
+          "description": "Enable or disable: config catalog-feed set <on|off>",
+          "flags": []
+        },
+        {
+          "name": "config catalog-feed unset",
+          "description": "Remove the setting, restoring the default (off)",
+          "flags": []
+        },
+        {
+          "name": "config catalog-feed refresh",
+          "description": "Fetch a fresh catalogue snapshot now (never runs during a turn)",
           "flags": []
         }
       ]

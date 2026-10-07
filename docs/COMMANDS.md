@@ -472,7 +472,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
 
 - **Objective:** Bound how much the agent reads/writes in one call, and choose how much
   REASONING it buys versus how much it saves.
-- **Command:** `nuvira config limit list` · `nuvira config limit set <name> <value>` · `nuvira config limit unset <name>` · `nuvira config capability show` · `nuvira config capability set <balanced|max>` · `nuvira config capability unset`
+- **Command:** `nuvira config limit list` · `nuvira config limit set <name> <value>` · `nuvira config limit unset <name>` · `nuvira config capability show` · `nuvira config capability set <balanced|max>` · `nuvira config capability unset` · `nuvira config catalog-feed show` · `nuvira config catalog-feed set <on|off>` · `nuvira config catalog-feed unset` · `nuvira config catalog-feed refresh`
 - **Examples:**
   ```bash
   nuvira config limit list                          # every size limit + its default
@@ -482,7 +482,18 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira config capability set max                   # cost is not a concern: strongest model,
                                                      # no cost ceilings, longest loop budget
   nuvira config capability unset                     # restore the balanced default
+  nuvira config catalog-feed                        # is the catalogue feed on, and how old is its snapshot?
+  nuvira config catalog-feed set on                 # allow cost/ecosystem PRIORS from the provider catalogue
+  nuvira config catalog-feed refresh                # fetch a fresh snapshot now (never done during a turn)
+  nuvira config catalog-feed unset                  # back to the default (off)
   ```
+- **Catalogue feed:** `OFF` by default. When on, Agent-Nuvira fetches OpenRouter's public model
+  catalogue **out-of-band** and uses it for two priors it cannot measure cold: `cost` (from real
+  pricing) and `ecosystem` (from advertised tool support). A prior is replaced by measurement as
+  samples accumulate, is printed with its source in `nuvira model explain`, and never outranks
+  evidence. Nothing is fetched during a turn, so routing never waits on — or fails because of — a
+  third-party call. It writes `NUVIRA_CATALOG_FEED`, the same switch the dashboard's Process Env
+  page offers.
 - **Capability mode:** `balanced` (the default) uses the best model for complex/critical work
   and cheaper models for simple work, escalating when a stall is detected. `max` routes every
   turn to a strong model (a reasoning floor — not merely a paid one), allows paid models, and

@@ -70,7 +70,9 @@ import {
   capabilityLines,
   deriveTier,
   effectiveParameter,
+  type CapabilityParameter,
 } from '../learning/capability-evidence.js';
+import { externalPriorsFor } from '../learning/catalog-feed.js';
 import { getProviderFallback } from '../learning/provider-fallback.js';
 import {
   getRouterPromotion,
@@ -1186,20 +1188,34 @@ export class ModelCommand extends BaseCommand {
       const registry = getModelRegistry();
       const base = router.getCapabilities(decision.provider);
       const record = registry.getCapability(decision.provider, decision.model);
-      const priors: { accuracy: number; performance: number } = {
+      // §6 — the external catalogue supplies `cost`/`ecosystem` PRIORS only (never measurements), and
+      // only while the feed is switched on; `externalPriorsFor` enforces that gate itself. Each one
+      // carries the source it came from, so the scorecard can print a borrowed number AS borrowed.
+      const external = externalPriorsFor(decision.provider, decision.model);
+      const externalPriors: Partial<Record<CapabilityParameter, number>> = {};
+      const priorLabels: Partial<
+        Record<CapabilityParameter, { source: string; fetchedAt: number }>
+      > = {};
+      for (const p of external) {
+        externalPriors[p.parameter] = p.value;
+        priorLabels[p.parameter] = { source: p.source, fetchedAt: p.fetchedAt };
+      }
+      const priors: Partial<Record<CapabilityParameter, number>> = {
         accuracy: base.reasoning,
         performance: base.speed,
+        ...externalPriors,
       };
       // `accuracy`'s prior is the provider's own declared baseline (the same one
-      // the router's floor uses); the others use the declared defaults.
-      const view = (parameter: 'accuracy' | 'robustness' | 'ecosystem') =>
+      // the router's floor uses); anything the feed supplied beats the declared default, so the TIER
+      // below is derived from the same value the line above prints — they cannot disagree.
+      const view = (parameter: CapabilityParameter) =>
         parameter === 'accuracy'
           ? effectiveParameter(record, 'accuracy', base.reasoning)
-          : effectiveParameter(record, parameter, DEFAULT_PRIORS[parameter] ?? 0);
+          : effectiveParameter(record, parameter, priors[parameter] ?? DEFAULT_PRIORS[parameter] ?? 0);
       console.log('');
       logger.highlight('  ── Capability scorecard (measured) ──');
       console.log(`   ${decision.provider}/${decision.model}`);
-      for (const line of capabilityLines(record, priors)) console.log(`     ${line}`);
+      for (const line of capabilityLines(record, priors, priorLabels)) console.log(`     ${line}`);
       console.log(`     tier ${deriveTier({ accuracy: view('accuracy'), robustness: view('robustness'), ecosystem: view('ecosystem') })}`);
       console.log('     (0 samples = the declared prior; values fold in real turns, calls and latencies — never from the model id)');
     } catch {

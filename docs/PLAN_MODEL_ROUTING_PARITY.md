@@ -50,6 +50,67 @@ mistakes are the ones the product makes:
 
 ---
 
+## Bundle 16 — the external feed, as approved (LANDED, opt-in and OFF by default)
+
+**The requirement (user, 2026-10-07, verbatim):** *"On point 6 decision i approve openrouter based
+approach … go with first option ship opt in, Off by Default — and add environment variable in CLI and
+Dashboard (for user to turn On or Off)."*
+
+**What that maps to.** §6.3's own recommendation was the OpenRouter catalogue
+(`GET /api/v1/models`, keyless), the only source in §6's survey that attaches to a pair **without an
+identity guess** — two leaderboards in that survey are retired, one is unrelated, and one's sample names
+cannot be verified at all. It feeds `cost` and `ecosystem`, and nothing else.
+
+**New `src/learning/catalog-feed.ts` — §6.2's five rules, each as code rather than a promise:**
+
+| Rule | How it is enforced |
+|---|---|
+| Prior only | every value carries `source` + `fetchedAt` + the FACT it came from; `capabilityLines` prints it as `prior: openrouter catalogue, 2026-10-07` |
+| Never on the routing path | no routing module imports it, and a test asserts that for six of them; the fetch is `await`ed only by the CLI and dashboard |
+| Identity-mapped or unused | matching goes through A1's `sameModel` — exact, bare-id, or a DECLARED alias; unmatched rows are dropped |
+| Provenance printed | see row 1 — an unlabelled prior still prints the bare `prior` it always did |
+| Opt-in with a TTL | `NUVIRA_CATALOG_FEED`, checked **at the point of use** so a forgetful consumer cannot use a switched-off feed; an expired snapshot is treated as ABSENT, not as a slightly-wrong prior |
+
+**Two derivations, and one deliberate omission.** `cost` reuses the router's OWN `computeCostScore`, so a
+catalogue number lands on the same scale as a measured one instead of a second, private scale (the
+per-1K/per-MTok mix-up is already in this file; the conversion happens exactly once, at parse).
+`ecosystem` comes from the tool-support fact only, and its values are deliberately **below 0.7**: §7.2
+decided that a catalogue fact must not promote a pair into `Frontier`, because an advertised parameter is
+not us having WATCHED a tool call. The **context window is NOT scored** — it already reaches routing as
+`contextWindowTokens` from the `listModels` probe, so a second 0–1 curve would be a number nobody measured.
+
+**The reader vocabulary matches its declared rule exactly.** `catalogFeedEnabled` accepts `1`/`true`/`yes`
+— precisely the dashboard's `asks` rule — and NOT `on`. The dashboard states a rule per variable, so a
+reader that accepted more would make that page misdescribe it, which is the one thing the page exists not
+to do. `nuvira config catalog-feed set on` writes the canonical `1`.
+
+**Surfaced where the user asked.** `nuvira config catalog-feed show|set on|unset|refresh` (mirroring
+`config capability`, writing the same `~/.nuvira/.env` all three processes read), and
+`NUVIRA_CATALOG_FEED` registered in `PROCESS_ENV_VARS` so it appears on the dashboard's Process Env page.
+That registry's own doctrine — *"a variable that nothing consumes would be a control that silently does
+nothing"* — is satisfied: `catalogFeedEnabled` reads it. Its `CURATED` mirror in the dashboard API test
+caught the addition, which is what that guard is for.
+
+**Verified live, against the real endpoint:** 465 catalogue models cached; `openrouter/deepseek/deepseek-v4.1-flash`
+→ `cost 0.93` + `ecosystem 0.6` (tools advertised), and — the headline — **`deepseek/deepseek-flash`, a
+different id string under a different provider, gets the SAME priors through the declared alias table**,
+while `local/gpt-oss:120b-cloud` gets **none** (no catalogue row; no guess). `model explain` on the local
+pick prints `cost n/a` and `ecosystem 50 (prior)`, which is the honest answer for a pair the catalogue
+does not contain.
+
+**Tests.** `tests/learning/catalog-feed.test.ts` (new, 18: the gate's exact vocabulary, per-token→per-1K
+conversion, TTL-as-absence, corrupt cache, declared-alias mapping, the `ecosystem < 0.7` invariant, the
+hard-fail-to-no-prior paths, and the not-imported-by-any-routing-module check). Gates: root suite
+**8510 passed**, dashboard **419**, both tsc runs, all four docs guards, `verify:commands` 336/336.
+
+**Honest limits.** (1) `cost`/`ecosystem` are the ONLY parameters a catalogue can supply — `accuracy`,
+`performance` and `robustness` stay measurement-only, so the ranking still rests on priors until samples
+exist (open items 4 and 9/13). (2) A pair absent from the catalogue gets no prior even when the same model
+is served elsewhere — the price is the identity rule working. (3) The `ecosystem` mapping is a stated
+calibration (0.6 / 0.25), not a measurement.
+
+---
+
 ## Bundle 15 — the one-shot hygiene pass, and what it found (LANDED)
 
 **The requirement (user, 2026-10-07, verbatim):** *"Add a one-shot registry hygiene pass to drop the
@@ -213,7 +274,10 @@ exists; where it does not, that is stated as the residual rather than implied cl
    re-runnable, not a one-time cure.
 4. **`testPassed`, `userAccepted` and a real `qualityScore` are still absent** from the bandit payload,
    so the reward remains a veto on verification plus a cost adjustment — better, not complete.
-5. **`cost` and `ecosystem` have declared priors but no measured feed.**
+5. ~~**`cost` and `ecosystem` have declared priors but no measured feed.**~~ **CLOSED — Bundle 16**: the
+   approved OpenRouter catalogue now supplies both as LABELLED priors (opt-in, default OFF,
+   `NUVIRA_CATALOG_FEED` in the CLI and the dashboard's Process Env page). `accuracy`, `performance` and
+   `robustness` remain measurement-only by design — see the Bundle 16 limits.
 6. **F1's live re-run of the oversized-document ask is the remaining proof**, and F1 does not cover the
    **JSON-fallback transport** (a model asked to emit the call as text) or the **Gemini wire** (whose
    calls carry structured `args`, so "empty" is ambiguous).
@@ -223,8 +287,9 @@ exists; where it does not, that is stated as the residual rather than implied cl
    than ask — is the remaining proof, and the notice banner is not yet asserted by the browser smoke walk.
 9. **B5's area set is coarse** (twelve hand-written buckets); a measured area set is the refinement, and
    it is the same "measure, do not hand-write" step items 4–5 need.
-10. **Nothing is fed back while the scorecard is unsigned**: B1–B5 change LEARNING only, so no score,
-    weight or routing order moves until it lands.
+10. ~~**Nothing is fed back while the scorecard is unsigned.**~~ **UNBLOCKED — §6 signed off 2026-10-07**:
+    the external feed landed (Bundle 16) and its priors now reach `model explain`. What is still missing
+    is MEASURED evidence for `accuracy`/`performance` — open items 4 and 9/13.
 11. **Whether a document-delivery turn deserves more than 4096 output tokens** — a cost decision, not a bug.
 12. **A6's "exactly one row" acceptance was too strong**: a headless turn makes 2–3 genuine decisions,
     so it appends 2–3 rows, all naming the served pair. Accepted by design rather than deduped.

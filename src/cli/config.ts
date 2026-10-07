@@ -39,6 +39,12 @@ import {
 } from '../config/limits.js';
 import { deleteEnvValue, saveEnvValue } from '../skills/secret-capture.js';
 import {
+  CATALOG_FEED_ENV,
+  catalogFeedEnabled,
+  loadCatalogSnapshot,
+  refreshCatalogFeed,
+} from '../learning/catalog-feed.js';
+import {
   DEFAULT_CAPABILITY_MODE,
   parseCapabilityMode,
   resolveCapabilityMode,
@@ -79,6 +85,7 @@ export class ConfigCommand extends BaseCommand {
       .addCommand(this.createServiceCommand())
       .addCommand(this.createLimitCommand())
       .addCommand(this.createCapabilityCommand())
+      .addCommand(this.catalogFeedCommand())
       .action(() => {
         // Show current config when no subcommand is given
         this.displayConfig();
@@ -1374,6 +1381,109 @@ export class ConfigCommand extends BaseCommand {
       .action(() => this.unsetCapability());
 
     return capability;
+  }
+
+  /**
+   * The opt-in switch for the external catalogue feed (`docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §6).
+   *
+   * It is an ENV VAR rather than a setting because that is what the user asked for: the same value has
+   * to be readable by the CLI, the dashboard process and the gateway, and `~/.nuvira/.env` is the one
+   * place all three already agree on (the same mechanism `config capability` uses).
+   */
+  private catalogFeedCommand(): Command {
+    const feed = new Command('catalog-feed').description(
+      'Show or change the OpenRouter catalogue feed (cost/ecosystem priors only)',
+    );
+
+    feed
+      .command('show', { isDefault: true })
+      .description('Show whether the catalogue feed is on, and how old its snapshot is')
+      .action(() => this.showCatalogFeed());
+
+    feed
+      .command('set')
+      .description('Enable or disable: config catalog-feed set <on|off>')
+      .argument('<state>', 'on | off')
+      .action((state: string) => this.setCatalogFeed(state));
+
+    feed
+      .command('unset')
+      .description('Remove the setting, restoring the default (off)')
+      .action(() => this.unsetCatalogFeed());
+
+    feed
+      .command('refresh')
+      .description('Fetch a fresh catalogue snapshot now (never runs during a turn)')
+      .action(() => void this.refreshCatalogFeedNow());
+
+    return feed;
+  }
+
+  private showCatalogFeed(): void {
+    const enabled = catalogFeedEnabled();
+    const snapshot = loadCatalogSnapshot();
+    console.log('\n  Catalogue feed (cost + ecosystem priors)');
+    console.log(`    ${enabled ? 'ON' : 'OFF  (default)'}`);
+    console.log(
+      enabled
+        ? '    → cost and ecosystem take a PRIOR from the provider catalogue until real samples exist.'
+        : '    → nothing is fetched; cost prints n/a and ecosystem keeps its declared prior.',
+    );
+    if (snapshot) {
+      const ageH = Math.round((Date.now() - snapshot.fetchedAt) / 3_600_000);
+      console.log(
+        `    snapshot: ${Object.keys(snapshot.models).length} model(s) from ${snapshot.source}, ${ageH}h old`,
+      );
+    } else {
+      console.log('    snapshot: none cached (or expired — an expired snapshot is treated as absent)');
+    }
+    console.log(`\n  Values come from ${CATALOG_FEED_ENV} (or the BUFF_ alias), stored in ~/.nuvira/.env.`);
+    console.log('  Never used during a turn: only this command and the dashboard fetch it.\n');
+  }
+
+  private setCatalogFeed(state: string): void {
+    const parsed = state.trim().toLowerCase();
+    if (!['on', 'off', 'enable', 'disable', 'true', 'false', '1', '0'].includes(parsed)) {
+      logger.error(`Unknown state '${state}'. Use \`config catalog-feed set on|off\`.`);
+      return;
+    }
+    const on = ['on', 'enable', 'true', '1'].includes(parsed);
+    const result = saveEnvValue(CATALOG_FEED_ENV, on ? '1' : '0');
+    if (!result.success) {
+      logger.error(`Could not write ${CATALOG_FEED_ENV} to the env file (${result.reason ?? 'unknown'}).`);
+      return;
+    }
+    console.log(
+      `\n  ✅ ${CATALOG_FEED_ENV} = ${on ? '1' : '0'} — ${on ? 'on' : 'off'}.\n` +
+        (on
+          ? `  Run \`nuvira config catalog-feed refresh\` to fetch the first snapshot; until then there is no prior.\n`
+          : '  Existing snapshots are ignored while this is off.\n'),
+    );
+  }
+
+  private unsetCatalogFeed(): void {
+    const result = deleteEnvValue(CATALOG_FEED_ENV);
+    if (!result.success) {
+      logger.error(`Could not remove ${CATALOG_FEED_ENV} (${result.reason ?? 'unknown'}).`);
+      return;
+    }
+    console.log(`\n  ✅ ${CATALOG_FEED_ENV} removed — the default (off) applies again.\n`);
+  }
+
+  private async refreshCatalogFeedNow(): Promise<void> {
+    console.log('\n  Fetching the provider catalogue…');
+    const result = await refreshCatalogFeed();
+    if (!result.ok) {
+      logger.error(`Catalogue fetch failed: ${result.reason}`);
+      console.log('  Nothing changed — routing is unaffected either way.\n');
+      return;
+    }
+    console.log(
+      `\n  ✅ Cached ${Object.keys(result.snapshot.models).length} catalogue model(s).\n` +
+        (catalogFeedEnabled()
+          ? '\n'
+          : `  Note: the feed is OFF (${CATALOG_FEED_ENV} unset), so these priors are stored but not used yet.\n`),
+    );
   }
 
   private showCapability(): void {
