@@ -9,6 +9,7 @@ import { join } from 'node:path';
 
 import {
   analyzeComplexity,
+  measureTaskBreadth,
   buildFallbackChain,
   checkBudget,
   checkConsensus,
@@ -178,6 +179,66 @@ describe('analyzeComplexity', () => {
   it('detects keywords embedded in longer words', () => {
     // "deployment" contains "deploy" — the regex tests for /deploy/i which matches
     expect(analyzeComplexity('running the deployment script')).toBe('critical');
+  });
+
+  // ── B5 — the ask's SHAPE, not only its vocabulary ───────────────────────────
+  //
+  // The keyword ladder reads words, and words are a poor proxy for size. The
+  // measured case is the parity task itself: it names four separable subsystems
+  // and eight technologies and rated `moderate`, because the only keyword that
+  // matched was `build`. Nobody writes "architect" when they write a
+  // requirements list. These tests pin the added signal AND its limits.
+  describe('B5 — breadth floor (the shape of a multi-part ask)', () => {
+    /** The parity task, verbatim from the run-A measurement. */
+    const FOUR_COMPONENT_ASK =
+      'Build a knowledge base web app where users can: upload documents (PDF, TXT, Markdown); ' +
+      'automatically extract embeddings (FAISS or Milvus); query the knowledge base using an LLM ' +
+      '(via adapters like Groq, Gemini, DeepSeek); view results in a React dashboard.';
+
+    it('rates the four-component full-stack ask at least complex', () => {
+      expect(analyzeComplexity(FOUR_COMPONENT_ASK)).toBe('complex');
+    });
+
+    it('states WHY, in measurements rather than adjectives', () => {
+      const b = measureTaskBreadth(FOUR_COMPONENT_ASK);
+      expect(b.units).toBeGreaterThanOrEqual(3);
+      expect(b.areas).toBeGreaterThanOrEqual(3);
+      // The areas are the subsystems the ask actually names.
+      expect(b.areaNames).toContain('ingestion');
+      expect(b.areaNames).toContain('embeddings');
+      expect(b.areaNames).toContain('frontend');
+    });
+
+    it('counts an ENUMERATED ask, not a listed one', () => {
+      // One requirement that happens to list three file types is ONE unit —
+      // splitting on commas or "and" would inflate every ask that mentions a
+      // list, which is the false positive this threshold exists to avoid.
+      expect(measureTaskBreadth('support PDF, TXT and Markdown uploads').units).toBe(1);
+      // Two structural units do not reach the floor either — even when they name
+      // three different areas of work.
+      expect(measureTaskBreadth('build a login page; add an email notification')).toMatchObject({
+        units: 2,
+      });
+      expect(analyzeComplexity('build a login page; add an email notification')).toBe('moderate');
+    });
+
+    it('does NOT inflate an ordinary multi-technology request', () => {
+      expect(analyzeComplexity('build a todo app with React and localStorage')).toBe('moderate');
+      expect(analyzeComplexity('create a user dashboard component')).toBe('moderate');
+      expect(analyzeComplexity('write an essay on elephants for class 4 student')).toBe('moderate');
+    });
+
+    it('never talks the router DOWN from urgency', () => {
+      // The floor may only RAISE a level: breadth establishes size, and `critical`
+      // is about blast radius, which size alone does not imply.
+      expect(
+        analyzeComplexity(
+          'deploy to production: migrate the schema; add the API endpoint; wire the React dashboard',
+        ),
+      ).toBe('critical');
+      // And a narrow ask stays narrow even when it names one area of work.
+      expect(analyzeComplexity('refactor the login function')).toBe('simple');
+    });
   });
 });
 

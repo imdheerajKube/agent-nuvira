@@ -130,12 +130,128 @@ const COMPLEXITY_KEYWORDS: Record<ComplexityLevel, RegExp[]> = {
 };
 
 /**
+ * The separable AREAS of work an ask names.
+ *
+ * B5 — WHY BREADTH IS MEASURED AT ALL. The keyword ladder below reads
+ * VOCABULARY, and vocabulary is a poor proxy for size. The measured case: the
+ * parity task *"Build a knowledge base web app where users can: upload documents
+ * (PDF, TXT, Markdown); automatically extract embeddings (FAISS or Milvus); query
+ * the knowledge base using an LLM (via adapters like Groq, Gemini, DeepSeek); view
+ * results in a React dashboard."* names FOUR separable subsystems and eight
+ * technologies, and rated `moderate` — because the only keyword that matched was
+ * `build`, which is a `moderate` word. `/architecture/` never appears; nobody
+ * writes "architect" when they write a requirements list.
+ *
+ * So the ask's SHAPE is measured too: how many distinct areas of work it names.
+ * An ask that spans ingestion, embeddings, retrieval/generation and a UI is not a
+ * moderate task whatever verb introduces it. The area set is deliberately coarse
+ * (twelve areas, one regex each) — the question is "how many different kinds of
+ * work", not "how many words are in my list", and a finer set would start
+ * counting synonyms as subsystems.
+ */
+const CAPABILITY_AREA_RE: ReadonlyArray<readonly [string, RegExp]> = [
+  ['ingestion', /upload|ingest|import|parse|extract\s+(?:text|data|content)|attachment/i],
+  ['embeddings', /embedding|vector|faiss|milvus|pinecone|chroma|weaviate|semantic\s+(?:search|index)|training|fine[- ]?tun/i],
+  ['generation', /\bllm\b|gpt|claude|gemini|deepseek|groq|openai|anthropic|prompt|rag\b|adapter/i],
+  ['retrieval', /retriev|rank|relevance|\bindex(?:ing)?\b|\bsearch\b|quer(?:y|ies)/i],
+  ['frontend', /dashboard|front[- ]?end|\bui\b|\bux\b|react|vue|svelte|component|screen|\bpage\b|html|css/i],
+  ['backend', /\bapi\b|\bserver\b|endpoint|back[- ]?end|rest\b|graphql|\bservice\b|\broute[s]?\b/i],
+  ['persistence', /database|storage|persist|\bschema\b|migration|\bsql\b|postgres|mongo|sqlite|redis|\btable[s]?\b/i],
+  ['auth', /auth|login|sign[- ]?up|permission|\brole[s]?\b|session|token|oauth/i],
+  ['realtime', /realtime|real[- ]time|websocket|\bsocket\b|stream|pubsub|\bqueue\b|worker|\bjob[s]?\b|cron/i],
+  ['testing', /\btest[s]?\b|\bspec[s]?\b|coverage|vitest|jest|pytest|e2e|assertion/i],
+  ['deploy', /deploy|docker|kubernetes|\bci\/cd\b|pipeline|container|cloud|\baws\b|\bgcp\b|azure|infrastructure/i],
+  ['integration', /webhook|integration|third[- ]party|payment|stripe|\bemail\b|\bsms\b|notification|slack|whatsapp|telegram/i],
+];
+
+/**
+ * The requirement UNITS an ask enumerates: its list items.
+ *
+ * Split on the separators that structure a request (a colon that introduces a
+ * list, semicolons, newlines, bullet markers, numbered markers) and keep the
+ * substantive ones. Deliberately NOT split on "and" or commas — "PDF, TXT,
+ * Markdown" is ONE requirement with three file types, and counting it three
+ * times would inflate every ask that mentions a list.
+ */
+export function requirementUnits(text: string): string[] {
+  return (text ?? '')
+    .split(/[:;\n]|(?:^|\s)[-*\u2022]\s|(?:^|\s)\d+[.)]\s/)
+    .map((u) => u.trim())
+    // A fragment this short is a label or a lead-in ("Requirements"), not a unit.
+    .filter((u) => u.length >= 10);
+}
+
+/**
+ * MEASURED breadth: how many requirement units, and how many distinct areas of
+ * work. Exported so a test (and any future explain surface) can state WHY a
+ * level was reached instead of asserting it blindly.
+ */
+export function measureTaskBreadth(text: string): {
+  units: number;
+  areas: number;
+  areaNames: string[];
+} {
+  const areaNames = CAPABILITY_AREA_RE.filter(([, re]) => re.test(text ?? '')).map(([name]) => name);
+  return { units: requirementUnits(text ?? '').length, areas: areaNames.length, areaNames };
+}
+
+/**
+ * The breadth FLOOR: the level an ask's size alone justifies, or null.
+ *
+ * Both thresholds must be met — three or more enumerated requirements spanning
+ * three or more areas of work — and requiring BOTH is what keeps this from firing
+ * on an ordinary request that merely mentions several technologies ("build a todo
+ * app with React and localStorage" is one requirement and one area, so `moderate`
+ * stays right) or that enumerates a single area at length ("read a CSV; print a
+ * table; write a JSON file" is 4 units but 0 named areas).
+ *
+ * Measured at both thresholds, then chosen: `areas >= 4` missed a four-component
+ * ask that named Stripe + Postgres + React + email (5 units, exactly 3 areas), and
+ * every false-positive shape above has units 1 or 2, so the looser area bar costs
+ * nothing. It cannot reach `critical` in any case: breadth establishes SIZE, and
+ * `critical` is about urgency and blast radius, which size alone does not imply.
+ */
+function breadthFloor(text: string): ComplexityLevel | null {
+  const { units, areas } = measureTaskBreadth(text);
+  if (units >= 3 && areas >= 3) return 'complex';
+  return null;
+}
+
+/** Ordering so two levels can be compared (a floor may only RAISE a level). */
+const LEVEL_RANK: Record<ComplexityLevel, number> = {
+  trivial: 0,
+  simple: 1,
+  moderate: 2,
+  complex: 3,
+  critical: 4,
+};
+
+/**
  * Analyze a task description or user goal to determine its complexity level.
+ *
+ * Two signals, and the HIGHER one wins:
+ * 1. the keyword ladder (vocabulary — what the ask says),
+ * 2. the breadth floor (shape — how much separable work it enumerates).
+ *
+ * B5, measured before/after: the parity task above rated `moderate` on the
+ * ladder alone (only `build` matched) and rates `complex` with the shape
+ * measured (4 units, 5 areas: ingestion / embeddings / generation+retrieval /
+ * frontend / persistence). The floor can only RAISE a level — a task whose words
+ * already say `critical` still says `critical`, because size must never talk the
+ * router down from urgency.
  *
  * @param text — The task description or user goal
  * @returns The detected complexity level
  */
 export function analyzeComplexity(text: string): ComplexityLevel {
+  const fromKeywords = complexityFromKeywords(text ?? '');
+  const floor = breadthFloor(text ?? '');
+  if (floor && LEVEL_RANK[floor] > LEVEL_RANK[fromKeywords]) return floor;
+  return fromKeywords;
+}
+
+/** The keyword ladder, unchanged — the vocabulary half of the decision. */
+function complexityFromKeywords(text: string): ComplexityLevel {
   // Check critical first (highest priority)
   for (const keyword of COMPLEXITY_KEYWORDS.critical) {
     if (keyword.test(text)) return 'critical';

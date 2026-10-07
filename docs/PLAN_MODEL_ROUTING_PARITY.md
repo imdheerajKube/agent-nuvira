@@ -71,7 +71,7 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 | B2 | S1 | **Static provider baselines outrank real evidence** (`openrouter: 0.95`, `gemini: 0.85`, `local: 0.30`). | Baseline table | Derive from measured per-pair outcomes; decay the statics | Ranking changes when measurements change; two providers with equal measurements rank equally |
 | B3 | S1 | **No measured quality exists anywhere.** The registry tracks latency, tokens, error rate — never capability. | `ModelRegistryEntry`; and re-measured: the bandit ALREADY defines a quality reward (`BanditOutcomeData`) that the real path passes as `undefined` | **LANDED for the scorecard (Bundle 3b)**: `ModelRegistryEntry.capability` holds the five parameters with per-parameter sample counts, folded from real turns and calls, and the router reads them. Bundle 3a had already restored the bandit's quality reward (`recordOutcome` no longer discards its payload; the chat path feeds `verificationPassed`). **Still absent:** `testPassed`, `userAccepted`, a real `qualityScore`, and a measured feed for `cost`/`ecosystem`. **External ranking feeds assessed (§6):** the retired HF Open LLM Leaderboard, the shut-down Papers With Code and the unrelated Graphify repo are unusable, "DeepSeek Hermes" does not exist, and the one genuinely fitting feed is the keyless provider catalogue (`GET openrouter.ai/api/v1/models`) — external values may only ever be a labelled PRIOR for `accuracy`/`cost`/`ecosystem`, never the measured truth. | **MET**: a pair that consistently fails is demoted by measurement, not by name — `PRIOR_FULL_SAMPLES` unverified turns move `getModelCapabilities` below the floor. |
 | B4 | S1 | **Max mode's reasoning floor is name-driven**, so it excludes real models and admits others arbitrarily. | `MAX_CAPABILITY_MIN_REASONING = 0.7` vs `flash`+`lite` = 0.65 | **LANDED (Bundle 3b)**: the floor is applied to measured accuracy; a cold pair is judged by its provider baseline (no name), and `PRIOR_FULL_SAMPLES` failing turns demote it. | **MET**: the `flash-lite`/`72b` fixtures that used to be floored by NAME are now eligible cold and floored by MEASUREMENT — asserted in both directions. |
-| B5 | S2 | **Complexity is under-rated**: a 4-component full-stack app classifies as `moderate`. | `model explain` baseline | Recalibrate; require an agentic floor for build asks at every complexity | That prompt classifies ≥ `complex` |
+| B5 | S2 | **Complexity is under-rated**: a 4-component full-stack app classifies as `moderate`. | **MEASURED directly** (not from `model explain`): the run-A parity ask against the built `dist/` rated `moderate` — its only matching keyword was `build`, a `moderate` word, because nobody writes "architect" when they write a requirements list. | **LANDED (Bundle 3e)** — `analyzeComplexity` now takes the HIGHER of two signals: the keyword ladder (vocabulary) and a measured BREADTH floor (shape: ≥ 3 enumerated requirement units spanning ≥ 3 distinct areas of work). | That prompt classifies ≥ `complex` — **MET** (measured `moderate` → `complex`), with four false-positive shapes pinned as unchanged |
 
 ## Cluster C — Context & execution discipline (S1/S2 — where the 2.85× gap lives)
 
@@ -349,6 +349,62 @@ mismatch in one log header (`backend.provider: local` while the turn started on 
 question of whether a document-delivery turn should get a larger output budget than 4096 tokens (a cost
 decision, not a bug).
 
+## Bundle 3e — an ask's SHAPE counts, not only its vocabulary (B5 LANDED)
+
+**The defect, measured rather than inferred.** B5's evidence line said "`model explain` baseline"; the
+machine says something simpler and worse. Against the built `dist/`, the run-A parity ask — *"Build a
+knowledge base web app where users can: upload documents … automatically extract embeddings (FAISS or
+Milvus) … query the knowledge base using an LLM … view results in a React dashboard"* — rated
+**`moderate`**, because the ONLY keyword that matched was `build`, a `moderate` word. `/architecture|architect|
+design system/`, the `complex` trigger, never appears: nobody writes "architect" in a requirements list.
+
+**The fix.** `analyzeComplexity` now takes the HIGHER of two signals, and only ever raises:
+
+1. **Vocabulary** — the keyword ladder, unchanged and extracted to `complexityFromKeywords`.
+2. **Shape** — `measureTaskBreadth`: the count of enumerated requirement UNITS × the count of distinct
+   AREAS of work, floored at `complex` when `units ≥ 3 && areas ≥ 3`.
+
+Both halves are deliberate:
+
+- **Units** split on the separators that structure a request (a colon introducing a list, semicolons,
+  newlines, bullet/numbered markers) and never on `and` or a comma. "PDF, TXT, Markdown" is ONE
+  requirement with three file types, and counting it three times is the inflation this threshold exists
+  to avoid.
+- **Areas** are twelve coarse buckets (ingestion / embeddings / generation / retrieval / frontend /
+  backend / persistence / auth / realtime / testing / deploy / integration). The question is "how many
+  different KINDS of work", not "how many words are in my list" — a fine-grained set would start scoring
+  synonyms as subsystems.
+- **Both bars, not one.** Measured at `areas ≥ 4` first, then loosened to `≥ 3`: the stricter bar missed a
+  second four-component ask (Stripe + Postgres + email receipts + a React dashboard — 5 units, exactly 3
+  areas), and every false-positive shape has 1–2 units, so the looser area bar costs nothing.
+- **It cannot reach `critical`.** Breadth establishes SIZE; `critical` is about urgency and blast radius,
+  which size alone does not imply.
+
+**Before / after — measured with the built `dist/` (before = the shipped build, after = the rebuilt one).**
+
+| Ask | Before | After |
+|---|---|---|
+| run-A parity ask — upload / embeddings / LLM query / React dashboard | `moderate` | **`complex`** |
+| invoicing tool — Stripe payments / Postgres / email receipts / React dashboard | `moderate` | **`complex`** |
+| 3-part CLI — read a CSV; print a summary table; write a JSON file | `moderate` | `moderate` (4 units, 0 named areas) |
+| one requirement that lists three file types (`PDF, TXT and Markdown uploads`) | `moderate` | `moderate` (1 unit) |
+| two units (`build a login page; add an email notification`) | `moderate` | `moderate` (2 units, 3 areas) |
+| ordinary multi-tech (`build a todo app with React and localStorage`) | `moderate` | `moderate` (1 unit) |
+
+**Measured / verified.** Full root suite **462 passed | 2 skipped, 8452 passed | 19 skipped, 0 failed**;
+focused `tests/learning tests/inference tests/tools tests/cli tests/agents` **300 files / 5473 tests**;
+`tsc --noEmit` clean; `build:cli` + all four docs guards + `verify:commands` (336/336) +
+`dashboard:bundle:check` green. New tests in `tests/learning/hybrid-router.test.ts` (+5): the measured
+ask rates `complex`; the breadth measurement is asserted directly (units, areas, and the area NAMES)
+so the level can never be asserted blindly; a listed-but-not-enumerated ask is one unit; the four
+false-positive shapes stay `moderate`; and a `critical` ask is never talked DOWN by its size.
+
+**Honest residual.** The area list is coarse by construction, so a genuinely four-component ask that
+names no vocabulary from all three buckets can still land at `moderate` (the 3-part CLI row above is
+exactly that, and `moderate` is the right answer for it). A measured area set — derived from what real
+runs touched — would replace the hand-written twelve, and is the same "measured wins" step B2 still
+needs.
+
 ## Bundle 7 — a workspace the user gave us is a workspace we use (Cluster G LANDED)
 
 **The user's own design, which is what landed** (verbatim): *"we can gently ask before file write if
@@ -568,7 +624,7 @@ ones. `blocked` is likewise silent — a wall the run hit is not a verdict about
 - **B2** — the static provider baselines (`openrouter 0.95`, `gemini 0.85`, `local 0.30`) are now only
   the cold-start PRIOR, but they still outrank each other with no evidence. Measuring per-provider
   accuracy to replace them is the next step, and the same mechanism now supports it.
-- **B5** — complexity under-rating (`analyzeComplexity`) is untouched.
+- **B5** — **LANDED (Bundle 3e, below)**: complexity now reads the ask's SHAPE as well as its vocabulary, so a four-component ask rates `complex` instead of `moderate`. The area set is deliberately coarse (twelve areas) and the floor can only RAISE a level; a finer set is a later refinement, not a gap.
 - `userAccepted` and a real `qualityScore` are still absent from the bandit payload; `testPassed` is
   not yet folded (the turn report does not carry per-action `ok` today). `cost` and `ecosystem` have
   declared priors but no measured feed yet.
@@ -1052,6 +1108,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **B1 / B3 / B4 (Bundle 3b)** | New `learning/capability-evidence.ts` (five parameters, per-parameter sample counts, prior decay, derived tier, `DEFAULT_PRIORS`, rendering); `ModelRegistryEntry.capability` + `recordCapabilityEvidence`/`getCapability` + folds in `recordCall`; the chat turn feeds the turn's derived verdict in; `getModelCapabilities` reads measurement and the id-substring block is DELETED; `model explain` prints the scorecard. | `tests/learning/capability-evidence.test.ts` (new, 16), `tests/learning/auto-router.test.ts` (4 rewritten/added: B1 equality, B4 cold-vs-measured ×2, planner floor) | **LANDED**, live-verified in `model explain` |
 | **A1 (Bundle 3d)** | New `learning/model-identity.ts`: the hand-declared alias table (`declaredAt` + evidence per entry), `identityKey`/`sameModel` (exact + bare id, widened ONLY by declaration), and `identityProvenance`. Wired into `twinKey`/`areTwins` (funded-twin grouping), `route-resolver.ts` `verifiedEquivalent` (the pin-refusal sentence now names the funded twin for the run-D pair), `model explain` (twin set + provenance) and `model list` ("same model, different verdicts"). Identity groups CAPABILITY/legibility only — never routability. | `tests/learning/model-identity.test.ts` (new, 9), `tests/inference/route-resolver.test.ts` (rewritten pair + a new no-guessing pair) | **LANDED**, live-verified in `model list` |
 | **C4 residual (Bundle 4d)** | `tools/tool-loop.ts`: `planContextBlock` + one bounded `system` block at the top of every turn holding the conversation's existing plan (goal, revision, each step id with status and note, the `update`-not-redeclare instruction). Skipped when every step is done (`PLAN_CONTEXT_MAX_STEPS` = 12). | `tests/tools/c4-plan-continuation.test.ts` (+2: no plan ⇒ no block, completed plan ⇒ no block; the cross-turn case now asserts the plan is visible with `1/3 done`) | **LANDED**, measured (`secondTurnSawThePlan: true`) |
+| **B5 (Bundle 3e)** | `learning/hybrid-router.ts`: `analyzeComplexity` takes the higher of the keyword ladder (`complexityFromKeywords`, unchanged) and a measured breadth floor; new `requirementUnits` + `measureTaskBreadth` (exported, so a caller can state WHY) and the twelve coarse `CAPABILITY_AREA_RE` buckets. | `tests/learning/hybrid-router.test.ts` (+5) | **LANDED**, measured before/after against `dist/` (`moderate` → `complex`); four false-positive shapes pinned unchanged |
 | **G1–G4 (Bundle 7)** | New `utils/workspace-path.ts` (the shared path rules) and `web-dashboard/workspace-resolution.ts` (`resolveTurnWorkspace`, `formatWorkspaceNoticeText`); `web-dashboard/server.ts` resolves the turn's workspace through it (attached → session → message → default → none) and returns `workspaceNotice`/`workspacePath`/`workspaceSource`; `web-dashboard/project-context.ts` opens the context with `Workspace: ATTACHED …` and states that an EMPTY attached folder is a normal start; `tools/registry.ts` (`ToolContext.workspaceUnscoped`, the `ask_user` folder ADOPTION, and the G13 suppression standing down while unscoped), `tools/coding-tools.ts` (`unscopedWriteRefusal` on `write_file`/`edit_file`), `web-dashboard/chat-console.ts` + `cli/chat.ts` (the flag reaches the tool context), `web-dashboard/src/api.ts` + `components/ChatPage.tsx` (the notice banner and attaching the resolved folder). | `tests/web-dashboard/workspace-resolution.test.ts` (new, 13), `tests/web-dashboard/project-context.test.ts` (+3), `tests/web-dashboard/chat-api.test.ts` (+3), `tests/tools/unscoped-workspace.test.ts` (new, 9) | **LANDED**, unit + API verified; the live re-run against the rebuilt `dist/` is the remaining proof |
 | **F1 (Bundle 6)** | `inference/interface.ts` (`ToolArgumentsError`, `finishReason`), `inference/tools.ts` (`parseToolCallArguments` used by both the streaming and one-shot paths), `inference/native-tools.ts` (Anthropic wire), `tools/tool-loop.ts` (`malformedToolCallRefusal` + `malformedCallNudge` + the planning-phase refusal), `tools/child-agent-runtime.ts` (same refusal in the forked loop), `tools/coding-tools.ts` + `tools/registry.ts` (`write_file` `mode: "append"`), `learning/reasoning-trace.ts` (the `malformed-call` gate name). | `tests/tools/malformed-tool-call.test.ts` (new, 5), `tests/inference/tools-stream.test.ts` (+3: truncated, empty, healthy+finishReason), `tests/tools/coding-tools.test.ts` (+2: append sections, overwrite default) | **LANDED**, unit + loop verified; the live re-run of the failing ask is the remaining proof |
 | **C4 (Bundle 4c)** | `tools/plan-store.ts` `PlanStore.create` carries status + note for a step re-declared under the SAME goal (by id, else by an identical normalized description); a different goal still replaces wholesale. `tools/registry.ts` `plan_todo` create announces what it carried and how to override it. | `tests/tools/plan-store.test.ts` (+6: carry by id, carry by description, exact-match-only, correction still applies, explicit reset, one previous step never carried twice, no carry across a different goal) and `tests/tools/c4-plan-continuation.test.ts` (the cross-turn scenario, now asserting `1/3 done` + the carried note) | **LANDED**, measured before/after; showing the plan to the model is the recorded residual |
@@ -1088,4 +1145,4 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 3. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D4/D5/A5 landed in Bundles 2c–2g**): make the system's account of itself true.
 4. **Bundle 3 — capability by measurement** (B1–B5): the root cause. **Design re-written to the parameter-based scorecard you specified** (accuracy / performance / cost / robustness / ecosystem + a derived tier + a rank, each fed from measurement during task execution) — see `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`. Awaiting sign-off on the three open questions in its §6.
 5. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **C6 LANDED (Bundle 4a)**, **C3 LANDED (Bundle 4b)**, **C4 EXPERIMENT RUN** (its section, above): a continuation does not re-derive the plan — a LATER TURN does, and `create` resets completed steps while the model is never shown the plan. **The fix LANDED (Bundle 4c + 4d)**: the carried progress + disclosure, AND the plan is now shown at turn start (`planContextBlock`, bounded to 12 steps and skipped once every step is done). **F1 LANDED (Bundle 6)** — found live in the dashboard traces, not on the original list: a tool call whose arguments did not arrive was executed as `{}` (134 empty calls across the last two big turns), so it is now refused with the real cause and the sectioned-delivery alternative, and `write_file` can append. **Cluster G LANDED (Bundle 7)** — also found live, while the user was blocked on it: an attached-but-empty folder read as "no project", a folder the CHAT had attached was forgotten when the request did not resend it, a folder the user TYPED was discarded, and an unscoped turn could write into the dashboard process's own cwd; the workspace decision now lives in one tested place, the priority is attached → session → message → configured default → none, and a write with no folder ASKS where instead of guessing. Next: the C1/C5 budget policy. **C1 begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
-6. **Bundle 5 — autonomy & inventory** (**PARTIAL: E1/E2 landed in Bundle 5a/5b; E3 + D6 landed in Bundles 2a/2b; B5 is part of Bundle 3**).
+6. **Bundle 5 — autonomy & inventory** (**PARTIAL: E1/E2 landed in Bundle 5a/5b; E3 + D6 landed in Bundles 2a/2b; B5 LANDED in Bundle 3e**).
