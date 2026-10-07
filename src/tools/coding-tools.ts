@@ -35,7 +35,7 @@
  * called them before changes behavior.
  */
 
-import { chmod, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { recordArtifact } from './artifact-append.js';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -730,25 +730,38 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
   );
 }
 
-/** ─── write_file (create / overwrite, confirmation-gated) ───────────────── */
+/** ─── write_file (create / overwrite / append, confirmation-gated) ────────── */
 
 export interface WriteFileArgs {
   path: string;
   content: string;
+  /**
+   * `overwrite` (default) replaces the file; `append` adds to the end.
+   *
+   * WHY APPEND EXISTS (measured 2026-10-07). A dashboard turn asked to "deliver
+   * complete document" emitted `write_file` 61 times and failed 59 of them: the
+   * document was larger than a single model output, so the arguments arrived
+   * empty and there was no way to build the file up in pieces — the tool could
+   * only overwrite. The model kept re-sending the same impossible call until the
+   * step bound. Append is that missing affordance: section one creates the file,
+   * every later section appends, and the deliverable is still ONE file.
+   */
+  mode?: 'overwrite' | 'append';
   confirm?: boolean;
 }
 
 /**
- * Write the full content of a file (create or overwrite). Parent dirs are
- * created. Deny-first on the path — the target may not exist yet, so the
- * gate realpaths the nearest EXISTING ancestor (catches symlinked-parent
- * escapes) instead of the target itself.
+ * Write the content of a file — create, overwrite, or APPEND (see
+ * {@link WriteFileArgs.mode}). Parent dirs are created. Deny-first on the path —
+ * the target may not exist yet, so the gate realpaths the nearest EXISTING
+ * ancestor (catches symlinked-parent escapes) instead of the target itself.
  */
 export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promise<string> {
   const gated = await gateWrite(ctx.cwd, args.path);
   if (!gated.ok) return `write_file: ${gated.reason}`;
 
   const existed = existsSync(gated.abs);
+  const append = args.mode === 'append';
 
   // ── G13: the gate needs to know WHAT the user asked for ────────────────────
   // The gate was binary — confirm or refuse — so a run whose ask was "write a
@@ -793,7 +806,8 @@ export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promi
 
   try {
     await mkdir(dirname(gated.abs), { recursive: true });
-    await writeFile(gated.abs, args.content, 'utf-8');
+    if (append) await appendFile(gated.abs, args.content, 'utf-8');
+    else await writeFile(gated.abs, args.content, 'utf-8');
   } catch (err) {
     return `write_file: write failed on '${gated.rel}': ${(err as Error).message}`;
   }
@@ -807,7 +821,9 @@ export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promi
     path: gated.abs,
     sizeBytes: Buffer.byteLength(args.content, 'utf-8'),
   });
-  const outcome = `write_file: ${existed ? 'overwrote' : 'created'} '${gated.rel}' (${args.content.length} chars).`;
+  const outcome = append
+    ? `write_file: appended to '${gated.rel}' (${args.content.length} chars added).`
+    : `write_file: ${existed ? 'overwrote' : 'created'} '${gated.rel}' (${args.content.length} chars).`;
   if (!decidedAutonomously) return outcome;
   // Reported, never silent: the model must tell the user what it decided, or
   // the judgment call is indistinguishable from a bug.

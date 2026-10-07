@@ -75,6 +75,7 @@ import {
 } from '../learning/run-trace.js';
 import { wantsAuthoredArtifact } from '../learning/deliverable-class.js';
 import { normalizeFollowups, type FollowupSuggestion } from './followup-utils.js';
+import type { ToolArgumentsError } from '../inference/interface.js';
 // The capability mode (balanced | max) — `max` widens the loop's own reasoning
 // budget as well as routing, so "cost is not a concern" means the agent may
 // keep working through a long build instead of stopping at the default bound.
@@ -323,6 +324,14 @@ export interface StepResponse {
     arguments: Record<string, unknown>;
     /** Provider-owned opaque data echoed back on replay (Gemini thoughtSignature). */
     providerMeta?: Record<string, unknown>;
+    /**
+     * Why the arguments are USELESS — set by the adapter when the call's
+     * argument payload never arrived or could not be parsed (see
+     * `inference/interface.ts` `ToolArgumentsError`). The loop REFUSES such a
+     * call instead of executing it with an empty object; the measured cost of
+     * executing it is 59 silent retries in one dashboard turn.
+     */
+    argumentsError?: ToolArgumentsError;
   }>;
   /**
    * The model's `reasoning_content` for this step, when it returned one. Carried
@@ -330,6 +339,13 @@ export interface StepResponse {
    * its own prior reasoning back — see {@link ToolMessage.reasoningContent}.
    */
   reasoningContent?: string;
+  /**
+   * The provider's `finish_reason` for this step, when it reported one.
+   * `'length'` means the response was cut at the output-token cap — the reason a
+   * call's arguments can arrive empty or truncated, and the fact the refusal in
+   * `malformedToolCallRefusal` quotes instead of guessing.
+   */
+  finishReason?: string;
   /**
    * Which transport ACTUALLY carried this step's tool calls, in the same
    * vocabulary the subagent child announces
@@ -1236,6 +1252,12 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
 
   const followups: FollowupSuggestion[] = [];
   const toolCallsRun: string[] = [];
+  // A call whose arguments never ARRIVED is not a call the model made: it is a
+  // payload that did not fit in one model output (measured: 59 of them in one
+  // turn). Counted per turn so the loop can escalate, and once-nudged so the
+  // escalation itself cannot loop.
+  let malformedToolCalls = 0;
+  let malformedCallNudges = 0;
   // S5 — the plan_todo loop guard is split by ACTION (see the guard below):
   // repeated CREATES were the observed planner loop; UPDATES are the tracking
   // that keeps the user's checklist honest. Counted across the whole turn, like
@@ -2238,6 +2260,20 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             `Call tool_search with {"action":"load","toolset":"${ownerToolset?.name ?? ''}"} first — its tools become callable immediately.`,
         };
       }
+      if (call.argumentsError) {
+        // C — the call was never made: the argument payload did not arrive.
+        // Refusing here is the whole point: executing it as `{}` reported a tool
+        // call that "ran" with no input, hid the real cause (an output-budget
+        // truncation) from the model, and burned 59 round trips in one turn.
+        malformedToolCalls += 1;
+        return {
+          call,
+          refuse: malformedToolCallRefusal(
+            { name: call.name, argumentsError: call.argumentsError },
+            { finishReason: response.finishReason, attempt: malformedToolCalls },
+          ),
+        };
+      }
       if (!isToolEnabled(call.name, context.configManager)) {
         // I1 execution gate: a disabled tool is rejected at runtime even if
         // the model hallucinated its name — the toggle is never cosmetic.
@@ -2768,6 +2804,24 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // right after the step's results are in the thread, and the next model
     // step sees it. Bounded once per turn and keyed on the action so the same
     // repeat cannot trigger it twice.
+    // ── A payload that does not fit in one output ────────────────────────────
+    // The refusal above already says so per call; this adds ONE mid-turn nudge
+    // naming the delivery strategy, because a model stuck re-emitting a too-large
+    // call needs the alternative, not a third identical error.
+    if (malformedToolCalls >= 3 && malformedCallNudges < 1) {
+      malformedCallNudges += 1;
+      stepLimit += 1;
+      deps.onEvent?.(
+        `   📦 ${malformedToolCalls} calls arrived with no usable arguments — telling the model to build the artifact in sections.`,
+      );
+      traceEvent({
+        kind: 'gate',
+        gate: 'malformed-call',
+        summary: `${malformedToolCalls} tool calls this turn carried no usable arguments (payload larger than one model output) — one bounded nudge to deliver in sections`,
+      });
+      thread.push({ role: 'user', content: malformedCallNudge(malformedToolCalls) });
+    }
+
     if (diagnosisNudges < 1) {
       const repeated = runTrace.repeatedFailure();
       if (repeated && repeated.times >= 2) {
@@ -3651,6 +3705,61 @@ function previewToolResult(result: string, max = 200): string {
  * Returns null when the result is an ordinary tool/runtime error, so the caller
  * keeps its own wording rather than inventing a cause.
  */
+/**
+ * The refusal a tool call gets when its ARGUMENTS never arrived.
+ *
+ * Measured defect (dashboard session `4e2b0e51…-1791349543186`, 2026-10-07): the
+ * goal "deliver complete document" produced **59 `write_file` calls with empty
+ * arguments**, plus 14 `run_terminal` and 2 `code_execution` — 73 of the turn's 81
+ * calls. Each one was executed as `{}`, so the model's feedback was
+ * `write_file: path is required`, which names the wrong problem: the model HAD
+ * asked for a write, with a payload (a whole design document) that could not fit
+ * in one output. It diagnosed "my calls were emitted empty", retried 59 times,
+ * and the turn ended `bounded: true` with no document. Two things were missing
+ * and both are here: the REAL cause, and a way to succeed at all.
+ *
+ * The refusal is `Error:`-prefixed because the call genuinely did not run — the
+ * loop's honest accounting (successful calls, mutations, verification) depends
+ * on that prefix, so a call that never reached a tool is never counted as one.
+ */
+export function malformedToolCallRefusal(
+  call: { name: string; argumentsError: ToolArgumentsError },
+  opts: { finishReason?: string; attempt?: number } = {},
+): string {
+  const attempt = opts.attempt ?? 1;
+  const cause =
+    call.argumentsError === 'empty'
+      ? 'the call arrived with NO arguments at all'
+      : "the call's arguments arrived incomplete and could not be parsed";
+  const why =
+    opts.finishReason === 'length'
+      ? 'the provider stopped this step at its output-token limit (finish_reason: "length"), so the payload was cut off before the arguments were complete'
+      : 'this is what a payload too large to emit in ONE step looks like on the wire — nothing was lost on this side';
+  const escape =
+    'Send the payload in PIECES instead of one call: `write_file` the FIRST section, then call `write_file` again ' +
+    'with mode:"append" for each further section (or write a smaller file and grow it with `edit_file`). ' +
+    'Do NOT re-send this call unchanged — it cannot succeed, and every attempt is a full round trip.';
+  const escalation =
+    attempt >= 3
+      ? ` (This is time ${attempt} this turn that a call arrived with no usable arguments — change the SHAPE of the call, not its wording.)`
+      : '';
+  return `Error: ${call.name}: NOT run — ${cause}, so the tool never saw your input. Reason: ${why}. ${escape}${escalation}`;
+}
+
+/**
+ * The one bounded mid-turn nudge for the same defect, pushed after the results of
+ * the step that produced it — so a model that keeps re-sending a payload too large
+ * for one output is told the strategy, not merely that it failed again.
+ */
+export function malformedCallNudge(attempts: number): string {
+  return (
+    `Your last ${attempts} tool call(s) this turn arrived WITHOUT usable arguments — the payload did not fit in one ` +
+    'model output and was cut off. Nothing is wrong with your plan; the DELIVERY shape is. Build the artifact in ' +
+    'sections: `write_file` the first part, then `write_file` with mode:"append" for each next part (keep each call ' +
+    'under ~120 lines). Do not repeat the single large call.'
+  );
+}
+
 export function classifyToolRefusal(result: string): { gate?: TraceGateName; summary: string } | null {
   const text = result || '';
   if (

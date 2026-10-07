@@ -621,8 +621,12 @@ const editFileSchema = z.object({
 
 /** P0.3 — write_file tool args: create/overwrite a file (confirmed). */
 const writeFileSchema = z.object({
-  path: z.string().describe('Path to write, relative to the workspace root (parent directories are created as needed). Overwrites existing content.'),
-  content: z.string().describe('The FULL new file content (replaces any existing content).'),
+  path: z.string().describe('Path to write, relative to the workspace root (parent directories are created as needed). Overwrites existing content unless mode is "append".'),
+  content: z.string().describe('The new file content. With mode "overwrite" (default) this REPLACES the file; with mode "append" it is added to the end. Keep any SINGLE call small enough to emit (well under ~150 lines): a payload too large for one model output arrives empty and cannot be sent at all.'),
+  mode: z
+    .enum(['overwrite', 'append'])
+    .default('overwrite')
+    .describe('Use "append" to build a large document or file in SECTIONS across several calls: the first call creates it (mode "overwrite" or "append" — same thing when the file does not exist yet), then every further section appends. This is the supported way to deliver something bigger than one model output; a single oversized call cannot be delivered.'),
   confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed this write via ask_user. CREATING a new file the request asked for needs no confirmation — it is applied directly. Refused without it only when it would REPLACE content that already exists.'),
 });
 
@@ -1029,7 +1033,7 @@ registerTool({
 
 registerTool({
   name: 'write_file',
-  description: 'Create a new file or overwrite one with full content (parent directories are created). State-changing: confirm with the user via ask_user first, then retry with confirm:true.',
+  description: 'Create a new file, overwrite one, or APPEND a section to one (parent directories are created). Use mode "append" to deliver a large document or file in sections across several calls — a payload too large for one model output cannot be sent at all, so split it. State-changing: confirm with the user via ask_user first, then retry with confirm:true.',
   category: 'workflow',
   inputSchema: writeFileSchema,
   endsAgentStep: false,

@@ -686,7 +686,7 @@ async function runToolLoop(
   // a file that was never written. Imported lazily for the same reason
   // `extractFallbackToolCalls` is: `tool-loop.ts` pulls in the registry and the
   // event bus.
-  const { classifyToolRefusal, detectFailedBuildSuccessClaim } = await import('./tool-loop.js');
+  const { classifyToolRefusal, detectFailedBuildSuccessClaim, malformedToolCallRefusal } = await import('./tool-loop.js');
   // A3 Part 2 — the build-honesty detector is the in-process loop's own (imported,
   // never reimplemented), so a delegated run that watched a build FAIL and then
   // reported success is flagged across the fork exactly as an in-process turn is.
@@ -811,6 +811,22 @@ async function runToolLoop(
     });
 
     for (const call of response.toolCalls) {
+      // A call whose ARGUMENTS never arrived is not a call the child made — the
+      // payload did not fit in one model output. Refuse it with the real cause and
+      // the sectioned-delivery alternative, exactly as the in-process loop does;
+      // executing it as `{}` is the defect measured in a live dashboard turn (73
+      // of 81 calls arrived empty and 59 identical retries were burned on one
+      // write that could never fit).
+      if (call.argumentsError) {
+        const refusal = malformedToolCallRefusal(
+          { name: call.name, argumentsError: call.argumentsError },
+          { finishReason: response.finishReason },
+        );
+        loop.debug?.event('tool.refused', { tool: call.name, reason: 'arguments-missing' });
+        loop.send({ type: 'progress', phase: 'tool_result', tool: call.name, ok: false, llmCalls, toolCalls });
+        messages.push({ role: 'tool', content: refusal, toolCallId: call.id });
+        continue;
+      }
       if (!allowed.includes(call.name)) {
         loop.debug?.event('tool.refused', { tool: call.name });
         messages.push({

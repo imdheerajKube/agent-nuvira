@@ -73,6 +73,29 @@ export interface ToolCallRequest {
   arguments: string;
 }
 
+/**
+ * Why a tool call's arguments could not be used. Absent on a call whose
+ * arguments arrived and parsed.
+ *
+ * THE MEASURED COST OF NOT HAVING THIS (2026-10-07). A dashboard session
+ * (`~/.nuvira/debug-logs/dashboard-chat-4e2b0e51-…-1791349543186.log`) answering
+ * "deliver complete document" emitted **59 `write_file` calls whose arguments
+ * arrived empty**, plus 14 `run_terminal` and 2 `code_execution` — 73 of the
+ * turn's 81 calls. Every one of them was parsed with the defensive
+ * `JSON.parse(raw || '{}')` fallback, so the tool received a VALID-LOOKING empty
+ * argument object: the failure the model saw was `write_file: path is required`,
+ * which says nothing about the real cause (the document was too large for the
+ * model's output budget, so the arguments were cut off / never emitted). The
+ * turn burned 16 minutes, 81 steps and 59 identical retries and ended
+ * `bounded: true` with no document. Two lies compounded: the wire layer replaced
+ * "the arguments did not arrive" with `{}`, and the loop then executed it.
+ *
+ *  - `empty`       — no argument bytes arrived at all.
+ *  - `unparseable` — bytes arrived but were not a JSON object (typically
+ *                    TRUNCATED by the model's max output tokens).
+ */
+export type ToolArgumentsError = 'empty' | 'unparseable';
+
 /** A parsed tool call (arguments is an object). */
 export interface ToolCall {
   id: string;
@@ -80,6 +103,13 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
   /** See {@link ToolCallRequest.providerMeta} — echoed back verbatim on replay. */
   providerMeta?: Record<string, unknown>;
+  /**
+   * Set when the arguments did NOT arrive (see {@link ToolArgumentsError}).
+   * `arguments` is `{}` in that case, and callers MUST NOT execute the call as
+   * if the model had asked for "no arguments" — the loop refuses it and says the
+   * real cause.
+   */
+  argumentsError?: ToolArgumentsError;
 }
 
 /** The JSON-schema form of a tool handed to native tool-calling providers. */
@@ -102,6 +132,14 @@ export interface ToolCallResponse {
    * next request can replay it — see {@link ToolMessage.reasoningContent}.
    */
   reasoningContent?: string;
+  /**
+   * The provider's `finish_reason` for this choice, when the endpoint reported
+   * one. `'length'` is the one that MATTERS: it means the response was cut off by
+   * the model's output-token budget — which is how a tool call whose arguments
+   * were too large arrives empty or truncated (see {@link ToolArgumentsError}).
+   * Carried so the loop can say WHY instead of guessing.
+   */
+  finishReason?: string;
 }
 
 /**

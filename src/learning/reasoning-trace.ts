@@ -242,7 +242,15 @@ export type TraceGateName =
   // same one. A gate name because it is a bounded decision the loop made about
   // its own run — and the record that makes "why did this turn move models?"
   // answerable from the trace instead of inferred from a missing line.
-  | 'handoff';
+  | 'handoff'
+  // MALFORMED TOOL CALL (2026-10-07): a tool call arrived with NO usable
+  // arguments — the payload did not fit in one model output and was cut off — so
+  // the call was REFUSED rather than executed as `{}`, and after the third one
+  // the loop spent a bounded nudge telling the model to deliver in sections. A
+  // gate name because it is a bounded decision about the run's own behaviour; the
+  // measured reason it exists is a turn that burned 81 steps and 59 identical
+  // retries without ever naming the real cause.
+  | 'malformed-call';
 
 /**
  * A NON-LLM fact about a turn: a tool call, a gate decision, or a refusal.

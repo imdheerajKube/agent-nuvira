@@ -91,6 +91,93 @@ describe('chatCompletionsWithToolsStream', () => {
     expect(tokens).toEqual(['Reading the file.']);
   });
 
+  // ── The measured defect: a payload too large for one output ───────────────
+  // Dashboard session `4e2b0e51…-1791349543186` (2026-10-07): 59 `write_file`
+  // calls arrived with EMPTY arguments and were parsed to `{}` — so the tool ran
+  // with nothing and reported "path is required", which names the wrong problem.
+  // The wire now SAYS why, and reports the provider's finish_reason.
+  /** One SSE data line from an object — avoids hand-escaped JSON in the cases below. */
+  const line = (obj: unknown): string => `data: ${JSON.stringify(obj)}`;
+  /** A chunk carrying tool-call argument fragments for index 0. */
+  const argChunk = (name: string, argumentsSoFar: string): string =>
+    line({
+      choices: [
+        {
+          delta: {
+            role: 'assistant',
+            tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name, arguments: argumentsSoFar } }],
+          },
+        },
+      ],
+    });
+
+  it('reports a TRUNCATED argument payload instead of silently emptying it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseResponse(
+          argChunk('write_file', '{"path":"doc.md","content":"# Title\n'),
+          // The output cap lands mid-string: the arguments are cut off.
+          line({ choices: [{ delta: {}, finish_reason: 'length' }] }),
+          'data: [DONE]',
+        ),
+      ),
+    );
+
+    const result = await chatCompletionsWithToolsStream(
+      { baseUrl: 'https://example.test/v1', headers: {}, model: 'm', messages: MESSAGES, tools: TOOLS },
+      () => {},
+    );
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].argumentsError).toBe('unparseable');
+    expect(result.toolCalls[0].arguments).toEqual({});
+    expect(result.finishReason).toBe('length');
+  });
+
+  it('reports a call whose arguments never arrived at all as empty', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseResponse(
+          argChunk('write_file', ''),
+          line({ choices: [{ delta: {}, finish_reason: 'length' }] }),
+          'data: [DONE]',
+        ),
+      ),
+    );
+
+    const result = await chatCompletionsWithToolsStream(
+      { baseUrl: 'https://example.test/v1', headers: {}, model: 'm', messages: MESSAGES, tools: TOOLS },
+      () => {},
+    );
+
+    expect(result.toolCalls[0].argumentsError).toBe('empty');
+    expect(result.finishReason).toBe('length');
+  });
+
+  it('marks nothing and reports the finish reason on a healthy call', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseResponse(
+          argChunk('read_file', '{"path":"src/a.ts"}'),
+          line({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }),
+          'data: [DONE]',
+        ),
+      ),
+    );
+
+    const result = await chatCompletionsWithToolsStream(
+      { baseUrl: 'https://example.test/v1', headers: {}, model: 'm', messages: MESSAGES, tools: TOOLS },
+      () => {},
+    );
+
+    expect(result.toolCalls[0].argumentsError).toBeUndefined();
+    expect(result.toolCalls[0].arguments).toEqual({ path: 'src/a.ts' });
+    expect(result.finishReason).toBe('tool_calls');
+  });
+
   it('forwards the endpoint-reported usage to onCost (measured cost)', async () => {
     const onCost = vi.fn();
     vi.stubGlobal(

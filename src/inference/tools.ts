@@ -9,7 +9,7 @@
  * parsed tool calls with `arguments` as an object (never a string).
  */
 
-import type { ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
+import type { ToolArgumentsError, ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
 import { attachHttpContext } from './http-error.js';
 import { parseSSELine } from './sse.js';
 
@@ -23,6 +23,8 @@ interface WireToolCall {
 interface WireResponse {
   choices?: Array<{
     message?: { content?: string | null; tool_calls?: WireToolCall[]; reasoning_content?: string | null };
+    /** `'length'` = the provider cut the response at the output-token cap. */
+    finish_reason?: string | null;
   }>;
   /** Endpoint-reported token usage (and, for OpenRouter, the exact cost). */
   usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
@@ -58,26 +60,56 @@ export function buildWireMessages(messages: ToolMessage[]): Array<Record<string,
   });
 }
 
+/**
+ * Parse an OpenAI-wire arguments string, SAYING WHY when it cannot be used.
+ *
+ * The old contract was `{}` on any failure, which made a call whose arguments
+ * never arrived indistinguishable from a call that legitimately asked for
+ * nothing — see {@link ToolArgumentsError} for the measured cost of that. This
+ * keeps the `{}` (callers still get a usable object) but reports the reason
+ * alongside it, so the loop can refuse the call and name the real cause.
+ */
+export function parseToolCallArguments(raw: string | undefined): {
+  args: Record<string, unknown>;
+  error?: ToolArgumentsError;
+} {
+  const text = (raw ?? '').trim();
+  if (!text) return { args: {}, error: 'empty' };
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return { args: parsed as Record<string, unknown> };
+    }
+    return { args: {}, error: 'unparseable' };
+  } catch {
+    // Non-JSON argument bytes mean the JSON was cut off — the signature of an
+    // output-token truncation, not of a model that "forgot" its arguments.
+    return { args: {}, error: 'unparseable' };
+  }
+}
+
 /** Parse the wire response into ToolCallResponse (arguments as objects). */
 export function parseToolCallResponse(data: WireResponse): ToolCallResponse {
   const message = data.choices?.[0]?.message;
   const content = message?.content || '';
   const toolCalls: ToolCallResponse['toolCalls'] = [];
   for (const tc of message?.tool_calls || []) {
-    let args: Record<string, unknown> = {};
-    try {
-      args = JSON.parse(tc.function.arguments || '{}');
-    } catch {
-      args = {};
-    }
-    toolCalls.push({ id: tc.id, name: tc.function.name, arguments: args });
+    const { args, error } = parseToolCallArguments(tc.function.arguments);
+    toolCalls.push({ id: tc.id, name: tc.function.name, arguments: args, ...(error ? { argumentsError: error } : {}) });
   }
   // Capture reasoning so the caller can replay it (DeepSeek thinking mode).
   const reasoningContent =
     typeof message?.reasoning_content === 'string' && message.reasoning_content
       ? message.reasoning_content
       : undefined;
-  return { content, toolCalls, ...(reasoningContent ? { reasoningContent } : {}) };
+  const finishReason =
+    typeof data.choices?.[0]?.finish_reason === 'string' ? data.choices[0].finish_reason : undefined;
+  return {
+    content,
+    toolCalls,
+    ...(reasoningContent ? { reasoningContent } : {}),
+    ...(finishReason ? { finishReason } : {}),
+  };
 }
 
 /**
@@ -288,6 +320,11 @@ export async function chatCompletionsWithToolsStream(
   // (stream_options.include_usage convention) so onCost records MEASURED cost
   // instead of a length-based estimate — the generateStream parity pattern.
   let streamUsage: { promptTokens?: number; completionTokens?: number; costUsd?: number } | undefined;
+  // The provider's own verdict on WHY it stopped. `'length'` is the one the
+  // caller needs: a tool call whose arguments were cut off by the output budget
+  // must be reported as TRUNCATED, not as a call the model sent with no
+  // arguments (see ToolArgumentsError).
+  let finishReason: string | undefined;
   /**
    * True once the body has produced a server-sent-event line we understood.
    *
@@ -322,6 +359,8 @@ export async function chatCompletionsWithToolsStream(
       if (data !== '[DONE]') {
         try {
           const parsed = JSON.parse(data) as WireStreamChunk;
+          const chunkFinish = parsed?.choices?.[0]?.finish_reason;
+          if (typeof chunkFinish === 'string' && chunkFinish) finishReason = chunkFinish;
           const reasoningDelta = parsed?.choices?.[0]?.delta?.reasoning_content;
           if (typeof reasoningDelta === 'string' && reasoningDelta) reasoningParts.push(reasoningDelta);
           if (
@@ -380,13 +419,8 @@ export async function chatCompletionsWithToolsStream(
 
   const parsedCalls: ToolCallResponse['toolCalls'] = [];
   for (const acc of toolCalls) {
-    let args: Record<string, unknown> = {};
-    try {
-      args = JSON.parse(acc.argumentsRaw || '{}');
-    } catch {
-      args = {};
-    }
-    parsedCalls.push({ id: acc.id, name: acc.name, arguments: args });
+    const { args, error } = parseToolCallArguments(acc.argumentsRaw);
+    parsedCalls.push({ id: acc.id, name: acc.name, arguments: args, ...(error ? { argumentsError: error } : {}) });
   }
   const content = contentParts.join('');
   if (opts.onCost) {
@@ -401,5 +435,10 @@ export async function chatCompletionsWithToolsStream(
     }
   }
   const reasoningContent = reasoningParts.join('');
-  return { content, toolCalls: parsedCalls, ...(reasoningContent ? { reasoningContent } : {}) };
+  return {
+    content,
+    toolCalls: parsedCalls,
+    ...(reasoningContent ? { reasoningContent } : {}),
+    ...(finishReason ? { finishReason } : {}),
+  };
 }

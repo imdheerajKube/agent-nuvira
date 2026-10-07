@@ -419,6 +419,36 @@ describe('write_file — create / overwrite (confirmation-gated)', () => {
     expect(await runReadFile({ path: 'README.md' }, ctx)).toContain('# twice');
   });
 
+  // The deliverable that a single call cannot carry: section one creates the
+  // file, every later section APPENDS, and the result is one file. Without this
+  // the measured dashboard turn re-sent the same impossible write 59 times.
+  it('APPENDS sections to one file (mode: "append") — the way a large document lands', async () => {
+    const { ctx } = makeWorkspace();
+    const first = await runWriteFile(
+      { path: 'doc/design.md', content: '# Design\n', mode: 'append', confirm: true },
+      ctx,
+    );
+    expect(first).toContain('appended');
+    const second = await runWriteFile(
+      { path: 'doc/design.md', content: '## Routing\n', mode: 'append', confirm: true },
+      ctx,
+    );
+    expect(second).toContain('appended');
+    // ONE file, in order — not two overlapping writes (read_file numbers lines).
+    const read = await runReadFile({ path: 'doc/design.md' }, ctx);
+    expect(read).toContain('2 lines');
+    expect(read).toContain('# Design');
+    expect(read).toContain('## Routing');
+  });
+
+  it('mode defaults to overwrite — an append-less call still replaces', async () => {
+    const { ctx } = makeWorkspace();
+    await runWriteFile({ path: 'notes.md', content: 'one', confirm: true }, ctx);
+    await runWriteFile({ path: 'notes.md', content: 'two', confirm: true }, ctx);
+    expect(await runReadFile({ path: 'notes.md' }, ctx)).toContain('two');
+    expect(await runReadFile({ path: 'notes.md' }, ctx)).not.toContain('one');
+  });
+
   it('deny-first: refuses .. traversal, absolute paths, and symlinked parents', async () => {
     const { dir, ctx } = makeWorkspace();
     // A symlinked directory inside the workspace pointing outside.

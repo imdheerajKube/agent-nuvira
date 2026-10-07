@@ -42,21 +42,41 @@
  *   no id concept — they only need internal consistency within one thread.
  */
 
-import type { ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
+import type { ToolArgumentsError, ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
 
 // ─── Shared: defensive JSON argument parsing ────────────────────────────────
 
+/**
+ * Parse an OpenAI-wire arguments JSON string → object, SAYING WHY when it
+ * cannot be used ({@link ToolArgumentsError}).
+ *
+ * The old contract degraded a malformed argument string to `{}` "because the
+ * model retries in-loop" — the measured cost of that assumption was 73 of one
+ * turn's 81 calls arriving with empty arguments and 59 identical retries, since
+ * a call with `{}` looks to the tool exactly like a call that asked for nothing
+ * and names no cause the model can act on. The `{}` is kept (callers still get an
+ * object) and the reason is reported alongside it.
+ */
+export function parseToolArgumentsWithError(argumentsJson: string | undefined): {
+  args: Record<string, unknown>;
+  error?: ToolArgumentsError;
+} {
+  const text = (argumentsJson ?? '').trim();
+  if (!text) return { args: {}, error: 'empty' };
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return { args: parsed as Record<string, unknown> };
+    }
+    return { args: {}, error: 'unparseable' };
+  } catch {
+    return { args: {}, error: 'unparseable' };
+  }
+}
+
 /** Parse an OpenAI-wire arguments JSON string → object ({} on any failure). */
 export function parseToolArguments(argumentsJson: string | undefined): Record<string, unknown> {
-  if (!argumentsJson) return {};
-  try {
-    const parsed = JSON.parse(argumentsJson) as unknown;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
+  return parseToolArgumentsWithError(argumentsJson).args;
 }
 
 // ─── Gemini ─────────────────────────────────────────────────────────────────
@@ -461,10 +481,12 @@ export class AnthropicToolStreamAccumulator {
     for (const b of this.blocks) {
       if (b.type === 'text' && b.text) content += b.text;
       if (b.type === 'tool_use' && b.name) {
+        const { args, error } = parseToolArgumentsWithError(b.inputJson);
         toolCalls.push({
           id: b.id || `call_${toolCalls.length + 1}`,
           name: b.name,
-          arguments: parseToolArguments(b.inputJson || '{}'),
+          arguments: args,
+          ...(error ? { argumentsError: error } : {}),
         });
       }
     }

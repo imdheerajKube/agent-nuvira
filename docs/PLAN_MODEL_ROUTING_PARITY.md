@@ -263,6 +263,75 @@ at least `COST_NOTICE_USD` (1¢) gets a line of its own, since a long prompt on 
 exactly the expense nobody sees. Absence of a ledger entry produces NO cost field at all: `$0.000000`
 would claim the turn was free.
 
+## Cluster F — a payload that does not fit (found live in the dashboard traces, 2026-10-07)
+
+Not on the original 34-defect list: found by reading the last ten dashboard-chat session logs after the
+user reported "some serious bug is there".
+
+| # | Sev | Issue | Evidence | Fix | Acceptance |
+|---|---|---|---|---|---|
+| F1 | **S1** | **A tool call whose ARGUMENTS never arrived is parsed to `{}` and EXECUTED.** The wire layer's defensive `JSON.parse(raw \|\| '{}')` turns "the payload was cut off" into a valid-looking call with no arguments; the loop then runs it, the model is told `write_file: path is required` (the WRONG cause), and nothing offers a way to deliver a payload larger than one model output. | Two of the last ten dashboard sessions, same ask ("deliver complete document" / "retry"): **`write_file` 75 EMPTY calls** (`cp-a7d0878f9953`, 09:59, 81 steps) and **59 EMPTY calls** (`cp-ab3949f5cc0c`, 10:52, 81 steps, 15 min, `bounded: true`, **no document**); 73 of that turn's 81 calls arrived empty. The model diagnosed it itself ("my calls were emitted empty") and retried the identical call 59 times. | **LANDED (Bundle 6)** — see below | A call whose arguments did not arrive is REFUSED (never executed as `{}`), the refusal names the real cause (quoting `finish_reason: "length"` when the provider said so) and the sectioned-delivery alternative, and after three the loop spends ONE bounded nudge on the strategy |
+
+## Bundle 6 — a call whose arguments never arrived (F1 LANDED)
+
+**What the traces showed.** The two most recent turns that asked for a deliverable are the same ask twice
+(the user retried because the first failed). Measured from their step checkpoints:
+
+| Trace | Steps | Calls that arrived EMPTY | Outcome |
+|---|---|---|---|
+| `cp-a7d0878f9953` — goal "retry", 09:59 | 81 | `write_file` **75** | no document |
+| `cp-ab3949f5cc0c` — goal "yes deliver complete document", 10:52 | 81 (164 events, 16 min) | `write_file` **59**, `run_terminal` 14, `code_execution` 2 | `bounded: true`, 583-char answer, no document |
+
+In the second one the six calls that DID carry arguments were trivial (`read_file`, `list_dir`, a
+`write_file _probe.md` with 5 bytes of content) — every call that had to carry the DOCUMENT arrived empty.
+The model reasoned its way to the right diagnosis on its own ("Root cause: my `write_file` calls were
+emitted empty — I never actually passed the `path` and `content` arguments") and still could not recover,
+because there was no way to say it: the tool only overwrote, and no surface told it to build the file in
+sections.
+
+**The two lies.**
+
+1. `src/inference/tools.ts` (streaming and one-shot) and `src/inference/native-tools.ts` parsed the
+   arguments with `JSON.parse(raw || '{}')` and a bare `catch { args = {} }`. A truncated or absent
+   payload became a valid empty argument object, so the CALL looked real.
+2. The loop then executed it, so the accounting (successful calls, mutations, verification) and the
+   model's own feedback both described a call the model never really made.
+
+**What landed (Bundle 6).**
+
+- `ToolArgumentsError = 'empty' | 'unparseable'` on the parsed tool call plus `finishReason` on the
+  response (`inference/interface.ts`); `parseToolCallArguments` is the one shared parser (exported from
+  `inference/tools.ts`, used by the streaming and one-shot paths, and by `native-tools.ts` for the
+  Anthropic wire), so the answer to "did these arguments arrive?" is produced once and reported, never
+  swallowed.
+- The tool loop REFUSES such a call before execution: `Error: <tool>: NOT run — the call arrived with NO
+  arguments at all … Reason: the provider stopped this step at its output-token limit (finish_reason:
+  "length")… Send the payload in PIECES instead of one call: `write_file` the FIRST section, then call
+  `write_file` again with mode:"append" for each further section … Do NOT re-send this call unchanged`.
+  `Error:`-prefixed on purpose — the call did not run, and the loop's honest accounting keys on that.
+- After the THIRD such call in a turn, one bounded nudge (`malformed-call` gate) states the delivery
+  strategy outright, instead of a fourth identical error.
+- `write_file` gains `mode: "overwrite" | "append"` (the missing affordance): section one creates the
+  document, every later section appends, and the deliverable is still ONE file. Its description and schema
+  now say that a single oversized call cannot be delivered at all.
+- The forked subagent's own loop (`child-agent-runtime.ts`) refuses the same way, with the same words — a
+  delegated run must not be able to execute the call the parent just refused.
+
+**Why the payload never fit (measured on this machine).** Every configured provider carries
+`maxTokens: 4096` (`~/.nuvira/nuviraconfig.json` — nim, openrouter, groq, bedrock, local; gemini 8192).
+4096 output tokens is roughly 3,000 words, while the draft the model was extending was already 241 lines
+and the ask was to add seven more sections. So the truncation was STRUCTURAL, not a model slip: no prompt
+could have delivered that document in one call, and the only correct harness response is to make the
+sectioned path the obvious one — which is what `mode: "append"`, the refusal text and the nudge now do.
+
+**Honest residual.** The JSON-fallback transport (a model asked to emit the tool call as text) and the
+Gemini wire (whose function calls carry structured `args`, so "empty" is ambiguous) are not covered; the
+live re-run of the failing ask ("deliver the document", now in sections) is the remaining proof; and
+two smaller observations from the same ten traces are recorded but NOT fixed — the provider-label
+mismatch in one log header (`backend.provider: local` while the turn started on `gemini`), and the
+question of whether a document-delivery turn should get a larger output budget than 4096 tokens (a cost
+decision, not a bug).
+
 ## Bundle 4b — one probe per fact per run (C3 LANDED)
 
 **The defect, measured by line number.** Run A's proxy log asked the SAME three facts twice inside one
@@ -891,6 +960,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **C6 (Bundle 4a)** | `learning/turn-report.ts` `TurnReport.cost` + `formatCost` + `COST_NOTICE_USD` + summary/console rendering; `cli/chat.ts` takes the ledger window before the first provider call and passes it to the report. | `tests/learning/turn-report.test.ts` (+5) | **LANDED**, unit-verified; live, a cheap CLI turn is silent BY DESIGN (the block needs a summary, and the summary needs ≥ 1¢ — a live `chat` turn on `deepseek-flash` correctly printed nothing) |
 | **B1 / B3 / B4 (Bundle 3b)** | New `learning/capability-evidence.ts` (five parameters, per-parameter sample counts, prior decay, derived tier, `DEFAULT_PRIORS`, rendering); `ModelRegistryEntry.capability` + `recordCapabilityEvidence`/`getCapability` + folds in `recordCall`; the chat turn feeds the turn's derived verdict in; `getModelCapabilities` reads measurement and the id-substring block is DELETED; `model explain` prints the scorecard. | `tests/learning/capability-evidence.test.ts` (new, 16), `tests/learning/auto-router.test.ts` (4 rewritten/added: B1 equality, B4 cold-vs-measured ×2, planner floor) | **LANDED**, live-verified in `model explain` |
 | **A1 (Bundle 3d)** | New `learning/model-identity.ts`: the hand-declared alias table (`declaredAt` + evidence per entry), `identityKey`/`sameModel` (exact + bare id, widened ONLY by declaration), and `identityProvenance`. Wired into `twinKey`/`areTwins` (funded-twin grouping), `route-resolver.ts` `verifiedEquivalent` (the pin-refusal sentence now names the funded twin for the run-D pair), `model explain` (twin set + provenance) and `model list` ("same model, different verdicts"). Identity groups CAPABILITY/legibility only — never routability. | `tests/learning/model-identity.test.ts` (new, 9), `tests/inference/route-resolver.test.ts` (rewritten pair + a new no-guessing pair) | **LANDED**, live-verified in `model list` |
+| **F1 (Bundle 6)** | `inference/interface.ts` (`ToolArgumentsError`, `finishReason`), `inference/tools.ts` (`parseToolCallArguments` used by both the streaming and one-shot paths), `inference/native-tools.ts` (Anthropic wire), `tools/tool-loop.ts` (`malformedToolCallRefusal` + `malformedCallNudge` + the planning-phase refusal), `tools/child-agent-runtime.ts` (same refusal in the forked loop), `tools/coding-tools.ts` + `tools/registry.ts` (`write_file` `mode: "append"`), `learning/reasoning-trace.ts` (the `malformed-call` gate name). | `tests/tools/malformed-tool-call.test.ts` (new, 5), `tests/inference/tools-stream.test.ts` (+3: truncated, empty, healthy+finishReason), `tests/tools/coding-tools.test.ts` (+2: append sections, overwrite default) | **LANDED**, unit + loop verified; the live re-run of the failing ask is the remaining proof |
 | **C4 (Bundle 4c)** | `tools/plan-store.ts` `PlanStore.create` carries status + note for a step re-declared under the SAME goal (by id, else by an identical normalized description); a different goal still replaces wholesale. `tools/registry.ts` `plan_todo` create announces what it carried and how to override it. | `tests/tools/plan-store.test.ts` (+6: carry by id, carry by description, exact-match-only, correction still applies, explicit reset, one previous step never carried twice, no carry across a different goal) and `tests/tools/c4-plan-continuation.test.ts` (the cross-turn scenario, now asserting `1/3 done` + the carried note) | **LANDED**, measured before/after; showing the plan to the model is the recorded residual |
 | **C3 (Bundle 4b)** | New `tools/command-memo.ts`: `splitCommandChain` (refuses pipes/redirects/substitutions/globs), `commandMemoKind` (`probe` \| `idempotent` \| `null`), `memoKeyFor`/`lookupMemo`/`storeMemo`/`memoNotice`, and the per-run `RunCommandMemo`; `ToolContext.commandMemo` created once per run by the tool loop; `run_terminal` consults it after the DENY check (returning the earlier output with a `↺ not re-run` header) and stores only SUCCESSFUL results. | `tests/tools/command-memo.test.ts` (new, 24: pure classification, combined→individual coverage, one-by-one never satisfies a combined ask, failure-not-remembered, per-run isolation, directory scoping, the make-a-re-spawn-fail proof, and a real-loop wiring test) | **LANDED**, unit + real-loop verified; the live parity re-run is the remaining proof |
 | **D7 (Bundle 3c)** | New `learning/pair-entitlement.ts` + registry exports: the verdict on whether the ACCOUNT serving a pair can be called (`funded`/`unknown`/`stalled`/`refused`), the entitlement partition applied to the model-first pool after scoring, the refusal gate in `pushFallback`, and a re-check of the PRIMARY pick that rescues to a funded twin. `cli/model.ts` prints the twin set. | `tests/learning/pair-entitlement.test.ts` (new, 20), `tests/learning/auto-router.test.ts` (amended, pick asserted) | **LANDED**, live-verified in `model explain` |
@@ -924,5 +994,5 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 2. **Bundle 1 — identity & routability** (A1–A4): A2/A3/A4 **LANDED** (see their rows). **A1 decided by the user ("go ahead with all 3"): option A, the declared alias table** (seeded from this machine's registry), plus twin grouping in `model list`/`model explain`; identity groups CAPABILITY only and never routability. Next up.
 3. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D4/D5/A5 landed in Bundles 2c–2g**): make the system's account of itself true.
 4. **Bundle 3 — capability by measurement** (B1–B5): the root cause. **Design re-written to the parameter-based scorecard you specified** (accuracy / performance / cost / robustness / ecosystem + a derived tier + a rank, each fed from measurement during task execution) — see `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`. Awaiting sign-off on the three open questions in its §6.
-5. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **C6 LANDED (Bundle 4a)**, **C3 LANDED (Bundle 4b)**, **C4 EXPERIMENT RUN** (its section, above): a continuation does not re-derive the plan — a LATER TURN does, and `create` resets completed steps while the model is never shown the plan. **The fix LANDED (Bundle 4c)**: the carried progress + disclosure above; the model still is not SHOWN the plan at turn start (recorded residual). Next: the C1/C5 budget policy. **C1 begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
+5. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **C6 LANDED (Bundle 4a)**, **C3 LANDED (Bundle 4b)**, **C4 EXPERIMENT RUN** (its section, above): a continuation does not re-derive the plan — a LATER TURN does, and `create` resets completed steps while the model is never shown the plan. **The fix LANDED (Bundle 4c)**: the carried progress + disclosure above; the model still is not SHOWN the plan at turn start (recorded residual). **F1 LANDED (Bundle 6)** — found live in the dashboard traces, not on the original list: a tool call whose arguments did not arrive was executed as `{}` (134 empty calls across the last two big turns), so it is now refused with the real cause and the sectioned-delivery alternative, and `write_file` can append. Next: the C1/C5 budget policy. **C1 begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
 6. **Bundle 5 — autonomy & inventory** (**PARTIAL: E1/E2 landed in Bundle 5a/5b; E3 + D6 landed in Bundles 2a/2b; B5 is part of Bundle 3**).
