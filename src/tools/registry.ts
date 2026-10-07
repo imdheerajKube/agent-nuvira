@@ -244,6 +244,29 @@ export interface ToolContext {
    * a direct call or a bare test context simply skips the provenance check.
    */
   executedActions?: import('../findings/verdicts.js').ExecutedAction[];
+  /**
+   * C3 — the commands this RUN already answered, so a probe is never re-run.
+   *
+   * The measured defect: one live run asked the same three facts twice inside a
+   * single turn — one combined probe (`python3 --version; node --version; npm
+   * --version`) and then the same three individually — and ran
+   * `python3 -m venv backend/.venv` twice, leaving two virtualenvs on disk. Each
+   * repeat costs a round trip, a tool slot in the context window, and a step of
+   * the model's attention on a question it already had answered.
+   *
+   * The model cannot hold that memory across a long thread (threads get trimmed,
+   * which is what a context window is FOR); the harness can, because it is the
+   * thing that ran the command and holds its output. So the memo lives here, on
+   * the tool context, and its lifetime IS the run's — nothing is written to disk,
+   * so the next run sees the workspace with fresh eyes.
+   *
+   * Created once per run by the tool loop (see `src/tools/tool-loop.ts`). Absent
+   * (a direct tool call, a bare test context) means no memoization at all, which
+   * is exactly the old behaviour. What may be memoized — pure probes and
+   * idempotent setup only, never installs, never a failure — is decided in
+   * `src/tools/command-memo.ts`.
+   */
+  commandMemo?: import('./command-memo.js').RunCommandMemo;
 }
 
 /** A clarify-style choice. */

@@ -42,6 +42,7 @@ import type { UnusableResponseKind } from '../learning/response-usability.js';
 // P7 — the identical-command guard's memory. The loop drops it when a WRITE is
 // applied, so a repaired project can re-run its own check (see the context below).
 import { resetTerminalFailureStreaks } from './run-terminal.js';
+import { createRunCommandMemo } from './command-memo.js';
 // WS6 (#28) — the declared fault seam. `faultAt` is a null check when this
 // process declared no fault (`NUVIRA_INJECT_FAULT`), so an ordinary turn is
 // unaffected.
@@ -1344,6 +1345,15 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // The run's own behaviour, so a gate can refuse to RE-ASK a question the
     // user already answered (see learning/run-trace.ts).
     runTrace,
+    // C3 — the commands THIS run already answered.
+    //
+    // Created here, so its lifetime is exactly the tool loop's: one answer's
+    // worth of steps, discarded after. That is the honest granularity — a probe
+    // (`node --version`) is a fact about this run's environment, while
+    // idempotent setup (`mkdir -p out`) is only safely skippable while the run
+    // that created the directory is still going. A caller may inject its own
+    // memo (a test, or a longer-lived session scope), and then it is honoured.
+    commandMemo: context.commandMemo ?? createRunCommandMemo(),
   };
 
   // Resolve the tool set — stable JSON schemas for every native step

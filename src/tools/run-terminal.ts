@@ -46,6 +46,7 @@ import { decideStateChange } from '../learning/autonomy-policy.js';
 import { envelopeCoversAction } from '../learning/intent-envelope.js';
 import { applyProjectEnvironment, guardCommandEnvironment } from '../utils/project-env.js';
 import { formatEffectVerdict, isBuildCommand, verifyBuildEffect } from '../utils/effect-verification.js';
+import { lookupMemo, memoNotice, storeMemo } from './command-memo.js';
 
 /** Cap on how much terminal output is fed back to the model. */
 const MAX_OUTPUT_CHARS = 6000;
@@ -468,6 +469,35 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
       `Tell the user, and suggest the safe alternative (or that they run it themselves).`
     );
   }
+
+  // ── C3: ONE PROBE PER FACT PER RUN ────────────────────────────────────────
+  // The measured defect (see src/tools/command-memo.ts): a single run asked the
+  // same three facts twice — a combined probe and then the three individually —
+  // and created `backend/.venv` twice. The model cannot remember what it already
+  // ran; the harness can, because it ran it. So before spending a round trip,
+  // ask the memo.
+  //
+  // The consult sits after the DENY check (a denied command never ran, so it can
+  // never be in the memo) and BEFORE every other gate, and that ordering is the
+  // point: the memo only holds commands that ALREADY ran successfully in THIS
+  // run, under these same gates and this same context — so there is nothing left
+  // for the confirm gate to decide. The one thing this must never do is let a
+  // memo hit stand in for a command that would have been refused: it cannot, for
+  // the reason just given. Failures are never stored (a non-zero exit is
+  // retryable by definition), so a repaired project is never told "already done".
+  // Scoped to the directory the run is in: `clone_repo` changes `ctx.cwd`
+  // mid-run, and a fact learned in one tree is not a fact about another.
+  const memoWhere = ctx.cwd || process.cwd();
+  const memoHit = lookupMemo(ctx.commandMemo, command, memoWhere);
+  if (memoHit) {
+    ctx.emit?.('terminal:memoized', {
+      command,
+      answeredBy: memoHit.entry.command,
+      parts: memoHit.parts,
+    }, 'tool-loop');
+    return memoNotice(command, memoHit);
+  }
+
   // ── Project interpreter canonicalization + pre-run environment guard ──────
   // The live Aukat_check failure: a build ran against an interpreter that did
   // NOT have the project's own dependencies (PyQt6), produced a broken bundle,
@@ -622,6 +652,13 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
     }
     if (verdict.status === 'verified') effectNote = `\n${formatEffectVerdict(verdict)}`;
   }
+
+  // C3 — remember what a SUCCESSFUL run answered (whole command + every fact it
+  // established), so the same question in the same run is answered from the
+  // output above instead of a second spawn. A timeout is a failure like any
+  // other, and `Error:`-prefixed output is a refusal or a crash — neither is a
+  // fact worth remembering.
+  if (!timedOut && !output.startsWith('Error:')) storeMemo(ctx.commandMemo, command, output, memoWhere);
 
   if (!decidedAutonomously) return outputWithNotes + effectNote + envNote + remediationNote + autoApplyNote;
   // Reported, never silent — a judgment call the user cannot see is

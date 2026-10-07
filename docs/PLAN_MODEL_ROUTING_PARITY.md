@@ -79,7 +79,7 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 |---|---|---|---|---|---|
 | C1 | S1 | **Context grows unbounded.** 128,482 chars / **1,192,115 input tokens** in one turn. | Run A trace | **RE-MEASURED — see the note below; the reading is wrong in the same way D5's was.** Deterministic compaction and a work digest already exist; neither ever FIRED in run A. The open item is the budget *policy*, not a missing mechanism. | A run of the same task stays within a stated input-token budget (measured baseline: a 82-step run peaked at 31,189 input tokens per step) |
 | C2 | S1 | **Definitive failures are retried.** 3 Planner attempts against a 402. | Run D log | **LANDED** (see below) | A 402 consumes zero repair attempts |
-| C3 | S2 | **Redundant rediscovery.** Version probes 3–4×; two `venv`s created (`/tmp/test/.venv` *and* `/tmp/test/backend/.venv`). | **CONFIRMED by line numbers** (see the note below): the same 3 facts probed as 1 combined + 3 individual invocations, and `python3 -m venv backend/.venv` issued at proxy-log lines 222 AND 232 | Reuse probe results; verify the write landed before redoing it | One probe per fact per run |
+| C3 | S2 | **Redundant rediscovery.** Version probes 3–4×; two `venv`s created (`/tmp/test/.venv` *and* `/tmp/test/backend/.venv`). | **CONFIRMED by line numbers** (see the note below): the same 3 facts probed as 1 combined + 3 individual invocations, and `python3 -m venv backend/.venv` issued at proxy-log lines 222 AND 232 | Reuse probe results; verify the write landed before redoing it | **LANDED (Bundle 4b)**: `tools/command-memo.ts` + `ToolContext.commandMemo` (one per run) — a pure probe or an idempotent setup command already answered in this run is answered from the memo (`↺ run_terminal: not re-run …`) instead of spawning; combined probes cover the individual facts they established; failures are never remembered and the consult sits after DENY, so it can never widen what may run. | **MET**: `tests/tools/command-memo.test.ts` (new, 22) — including a test that makes a genuine re-spawn observably FAIL (a directory replaced by a file) and shows nothing runs, and a REAL-loop test that both steps share one memo. The write-landed half is met for the measured setup commands; a duplicate `write_file` of identical content stays a non-goal. The live parity re-run is the remaining proof — see the section. |
 | C4 | S2 | **Plan durability across continuations.** 4 continuations; the plan is re-derived rather than carried. | Run A | **RE-MEASURED — NOT ESTABLISHED by the artefacts on disk** (see the note below): the 12 `plan_todo` calls arrive in bursts milliseconds apart, which is several calls in ONE model response, not evidence of a continuation re-deriving the plan. The stated experiment comes first. | Continuation N re-reads the plan rather than re-planning |
 | C5 | S2 | **No context fit on model handoff** — the whole thread is handed over, which would overflow a smaller model. | `tool-loop.ts` handoff | Fit-to-window by dropping the oldest turns; never rewrite | Handoff to a small-window model never overflows |
 | C6 | S3 | **Cost is not attributed per step in the user-facing output.** Total token burn is invisible until the trace is read. | Run A/B comparison | **LANDED (Bundle 4a)**: the turn report carries the spend read from the persisted ledger over the turn's own time window (`costSince` — a timestamp window, so a continuation or a resumed turn in a fresh process still reports its own), rendered as `💰 cost: $0.0234 / 1.19M tok (82 calls)`; a trivial-looking turn that spent ≥ `COST_NOTICE_USD` (1¢) gets a summary line of its own instead of staying silent. | **MET**: `tests/learning/turn-report.test.ts` (+5) — the measured run-A shape (1,192,115 tokens / 82 calls) reports, a half-cent chat answer does not shout, and a turn with no recorded call says nothing at all (absence is not "free"). |
@@ -236,6 +236,63 @@ reply is noise — the opposite of making spend visible. The exception: a trivia
 at least `COST_NOTICE_USD` (1¢) gets a line of its own, since a long prompt on an expensive model is
 exactly the expense nobody sees. Absence of a ledger entry produces NO cost field at all: `$0.000000`
 would claim the turn was free.
+
+## Bundle 4b — one probe per fact per run (C3 LANDED)
+
+**The defect, measured by line number.** Run A's proxy log asked the SAME three facts twice inside one
+turn: line 3 is ONE combined probe (`python3 --version; node --version; npm --version`) and lines 4–6
+are the same three issued INDIVIDUALLY — four shell invocations for three facts. The same run issued
+`python3 -m venv backend/.venv` at lines 222 AND 232, and both `/tmp/test/.venv` and
+`/tmp/test/backend/.venv` exist on disk. Every repeat costs a round trip, a tool slot in the context
+window (the currency of the 2.85× gap), and a step of the model's attention on a question it already had
+answered.
+
+**Why the harness must fix it, not the prompt.** Across a long thread the model cannot be relied on to
+remember what it ran — that is what a context window is for, and prompts get trimmed. The harness CAN:
+it is the thing that ran the command and holds its output. So the discipline lives in the tool layer.
+
+**What landed.** New `src/tools/command-memo.ts` (pure) plus its wiring:
+
+- `splitCommandChain` decomposes a chain on `;` / `&&` / newline and REFUSES anything with a pipe
+  (including `||`), a redirect, a substitution, a subshell or a glob — refusing is always safe, the
+  command simply runs as before;
+- `commandMemoKind` classifies a part as `probe` (`node --version`, `which uv`, `pwd`, `uname -a`) or
+  `idempotent` (`python3 -m venv <dir>`, `mkdir -p <dir>`, `touch <file>`) and returns `null` for
+  everything else;
+- `lookupMemo` answers "this exact command again" and "this fact was already established by SOME command
+  this run" — the measured shape (one combined probe, then the facts individually). A hit requires EVERY
+  part of the incoming command to be covered by the SAME earlier command, so two separate one-fact runs
+  can never be glued into one reply as if a single run had produced them;
+- `ToolContext.commandMemo` carries the memo; the tool loop creates ONE per run
+  (`context.commandMemo ?? createRunCommandMemo()`), so its lifetime is the run's and nothing is written
+  to disk — the next run sees the workspace with fresh eyes;
+- `run_terminal` consults the memo after the DENY check and returns the earlier output with a leading
+  `↺ run_terminal: not re-run — …already answered in THIS run by \`<cmd>\`` instead of spawning, and
+  stores the result of a SUCCESSFUL run (whole command + every fact it established).
+
+**Three deliberate judgements.**
+
+1. **The consult sits after DENY and before every other gate.** The memo only ever holds commands that
+   ALREADY ran successfully in THIS run under these same gates in this same context, so there is nothing
+   left for the confirm gate to decide — and a memo hit can never stand in for a command that would have
+   been refused, because a refused command was never stored.
+2. **Never memoized, each for a reason:** `npm`/`pip install` (repeating is harmless, SKIPPING is not — a
+   second install after a manifest edit is exactly when it is needed, and the tool cannot see the
+   difference); `git add`/`cp`/`mv`/`rm` (they interact with files created in between, so the second call
+   is not the same question); a bare `mkdir` (it FAILS on the second call — memoizing would turn an error
+   the model may be relying on into a silent success); anything composed or globby (never decomposed);
+   anything `confirm`/`deny`-classified that the model cannot re-authorize.
+3. **Failures are never remembered.** A non-zero exit (or a timeout) is retryable by definition — the
+   model may have just fixed the cause — so only a successful result is stored.
+
+**Honest residual.** The second half of C3's acceptance ("verify the write landed before redoing it")
+is covered here only for the idempotent SETUP commands that caused the measured duplicate (`venv`,
+`mkdir -p`); a duplicate `write_file` of the same content is a separate, deliberate non-goal — content
+can legitimately change between two writes in a way a version string cannot. And the live parity re-run
+(the end-to-end proof that the probe count drops) is deferred to the next full run, since a live turn is
+the only way to observe it and it costs a real budget; the unit suite plus the REAL-loop test (a scripted
+turn runs `run_terminal` through the actual loop twice and the second call is answered from the memo)
+is what stands in until then.
 
 ## Bundle 3b — capability by measurement, and the name stops counting (B1/B3/B4 LANDED)
 
@@ -773,6 +830,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **C6 (Bundle 4a)** | `learning/turn-report.ts` `TurnReport.cost` + `formatCost` + `COST_NOTICE_USD` + summary/console rendering; `cli/chat.ts` takes the ledger window before the first provider call and passes it to the report. | `tests/learning/turn-report.test.ts` (+5) | **LANDED**, unit-verified; live, a cheap CLI turn is silent BY DESIGN (the block needs a summary, and the summary needs ≥ 1¢ — a live `chat` turn on `deepseek-flash` correctly printed nothing) |
 | **B1 / B3 / B4 (Bundle 3b)** | New `learning/capability-evidence.ts` (five parameters, per-parameter sample counts, prior decay, derived tier, `DEFAULT_PRIORS`, rendering); `ModelRegistryEntry.capability` + `recordCapabilityEvidence`/`getCapability` + folds in `recordCall`; the chat turn feeds the turn's derived verdict in; `getModelCapabilities` reads measurement and the id-substring block is DELETED; `model explain` prints the scorecard. | `tests/learning/capability-evidence.test.ts` (new, 16), `tests/learning/auto-router.test.ts` (4 rewritten/added: B1 equality, B4 cold-vs-measured ×2, planner floor) | **LANDED**, live-verified in `model explain` |
 | **A1 (Bundle 3d)** | New `learning/model-identity.ts`: the hand-declared alias table (`declaredAt` + evidence per entry), `identityKey`/`sameModel` (exact + bare id, widened ONLY by declaration), and `identityProvenance`. Wired into `twinKey`/`areTwins` (funded-twin grouping), `route-resolver.ts` `verifiedEquivalent` (the pin-refusal sentence now names the funded twin for the run-D pair), `model explain` (twin set + provenance) and `model list` ("same model, different verdicts"). Identity groups CAPABILITY/legibility only — never routability. | `tests/learning/model-identity.test.ts` (new, 9), `tests/inference/route-resolver.test.ts` (rewritten pair + a new no-guessing pair) | **LANDED**, live-verified in `model list` |
+| **C3 (Bundle 4b)** | New `tools/command-memo.ts`: `splitCommandChain` (refuses pipes/redirects/substitutions/globs), `commandMemoKind` (`probe` \| `idempotent` \| `null`), `memoKeyFor`/`lookupMemo`/`storeMemo`/`memoNotice`, and the per-run `RunCommandMemo`; `ToolContext.commandMemo` created once per run by the tool loop; `run_terminal` consults it after the DENY check (returning the earlier output with a `↺ not re-run` header) and stores only SUCCESSFUL results. | `tests/tools/command-memo.test.ts` (new, 22: pure classification, combined→individual coverage, one-by-one never satisfies a combined ask, failure-not-remembered, per-run isolation, the make-a-re-spawn-fail proof, and a real-loop wiring test) | **LANDED**, unit + real-loop verified; the live parity re-run is the remaining proof |
 | **D7 (Bundle 3c)** | New `learning/pair-entitlement.ts` + registry exports: the verdict on whether the ACCOUNT serving a pair can be called (`funded`/`unknown`/`stalled`/`refused`), the entitlement partition applied to the model-first pool after scoring, the refusal gate in `pushFallback`, and a re-check of the PRIMARY pick that rescues to a funded twin. `cli/model.ts` prints the twin set. | `tests/learning/pair-entitlement.test.ts` (new, 20), `tests/learning/auto-router.test.ts` (amended, pick asserted) | **LANDED**, live-verified in `model explain` |
 | **E1 / E2 (Bundle 5a/5b)** | `tools/registry.ts` + `tools/ask-user.ts` + `learning/run-trace.ts` + `learning/turn-report.ts` + `cli/chat.ts`: an unattended `ask_user` default is recorded as an ASSUMPTION (never a shown answer), emitted as `autonomy:assumed-default`, and disclosed in a `🤝 decided for you` turn-report block; a pinned ask re-dispatched into the pipeline announces the execution-model change and the pin it carries. | `run-trace` (+2), `turn-report` (+3), `registry` (+2), `ask-user-non-interactive` (+3 assertions), `chat-answer-once-auto-parity` (+1) | **LANDED** |
 | **D4 (Bundle 2g)** | `cli/model.ts`: one `resolveExplainDecision` used by all three explain call sites resolves through the SAME option assembly the runtime uses — it reads the shared circuit breaker and seeds the same NLU `taskIntentHint` (`parseRequestSync` → `resolveDispatch`). Before: explain passed neither, so it could name a provider the runtime would sink or rank a task with a different intent. | `tests/cli/model.test.ts` (+2, both proven to fail when the option is removed) | **LANDED** |
@@ -804,5 +862,5 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 2. **Bundle 1 — identity & routability** (A1–A4): A2/A3/A4 **LANDED** (see their rows). **A1 decided by the user ("go ahead with all 3"): option A, the declared alias table** (seeded from this machine's registry), plus twin grouping in `model list`/`model explain`; identity groups CAPABILITY only and never routability. Next up.
 3. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D4/D5/A5 landed in Bundles 2c–2g**): make the system's account of itself true.
 4. **Bundle 3 — capability by measurement** (B1–B5): the root cause. **Design re-written to the parameter-based scorecard you specified** (accuracy / performance / cost / robustness / ecosystem + a derived tier + a rank, each fed from measurement during task execution) — see `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`. Awaiting sign-off on the three open questions in its §6.
-5. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **C6 LANDED (Bundle 4a)**. **C3 is next** (one probe per fact per run; verify a write landed before redoing it), then **C4's experiment**. **C1 begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
+5. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **C6 LANDED (Bundle 4a)**, **C3 LANDED (Bundle 4b)**. **C4's experiment is next** (stated experiment: force a continuation and compare the plan store's `revision`/step identities before and after — do NOT design a fix first), then the C1/C5 budget policy. **C1 begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
 6. **Bundle 5 — autonomy & inventory** (**PARTIAL: E1/E2 landed in Bundle 5a/5b; E3 + D6 landed in Bundles 2a/2b; B5 is part of Bundle 3**).
