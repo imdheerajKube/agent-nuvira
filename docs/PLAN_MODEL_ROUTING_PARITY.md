@@ -71,8 +71,8 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 |---|---|---|---|---|---|
 | C1 | S1 | **Context grows unbounded.** 128,482 chars / **1,192,115 input tokens** in one turn. | Run A trace | **RE-MEASURED — see the note below; the reading is wrong in the same way D5's was.** Deterministic compaction and a work digest already exist; neither ever FIRED in run A. The open item is the budget *policy*, not a missing mechanism. | A run of the same task stays within a stated input-token budget (measured baseline: a 82-step run peaked at 31,189 input tokens per step) |
 | C2 | S1 | **Definitive failures are retried.** 3 Planner attempts against a 402. | Run D log | **LANDED** (see below) | A 402 consumes zero repair attempts |
-| C3 | S2 | **Redundant rediscovery.** Version probes 3–4×; two `venv`s created (`/tmp/test/.venv` *and* `/tmp/test/backend/.venv`). | Run A log + filesystem | Reuse probe results; verify the write landed before redoing it | One probe per fact per run |
-| C4 | S2 | **Plan durability across continuations.** 4 continuations; the plan is re-derived rather than carried. | Run A | Continuations resume the plan | Continuation N re-reads the plan rather than re-planning |
+| C3 | S2 | **Redundant rediscovery.** Version probes 3–4×; two `venv`s created (`/tmp/test/.venv` *and* `/tmp/test/backend/.venv`). | **CONFIRMED by line numbers** (see the note below): the same 3 facts probed as 1 combined + 3 individual invocations, and `python3 -m venv backend/.venv` issued at proxy-log lines 222 AND 232 | Reuse probe results; verify the write landed before redoing it | One probe per fact per run |
+| C4 | S2 | **Plan durability across continuations.** 4 continuations; the plan is re-derived rather than carried. | Run A | **RE-MEASURED — NOT ESTABLISHED by the artefacts on disk** (see the note below): the 12 `plan_todo` calls arrive in bursts milliseconds apart, which is several calls in ONE model response, not evidence of a continuation re-deriving the plan. The stated experiment comes first. | Continuation N re-reads the plan rather than re-planning |
 | C5 | S2 | **No context fit on model handoff** — the whole thread is handed over, which would overflow a smaller model. | `tool-loop.ts` handoff | Fit-to-window by dropping the oldest turns; never rewrite | Handoff to a small-window model never overflows |
 | C6 | S3 | **Cost is not attributed per step in the user-facing output.** Total token burn is invisible until the trace is read. | Run A/B comparison | Surface per-turn cost | A turn reports its own token spend |
 
@@ -101,6 +101,40 @@ model-window-aware, but `THREAD_BUDGET_FLOOR_CHARS = 200_000` means it can only 
 so a run may grow to ~44K input tokens before the first trim fires — and that trim is oldest-first
 truncation, not plan-preserving compaction. Whether to lower the floor, compact proactively, or
 compact against the PLAN is a product decision (see "Next bundles").
+
+### Re-measurement — C3 confirmed, C4 sharpened (the operational cost of run A)
+
+Counted from run A's own artefacts — its debug log (`~/.nuvira/debug-logs/cli-chat-1791300903906.log`,
+247 events) and the proxy log (`/tmp/nuvira-logs/runA.log`) — rather than re-read from the original
+report, whose numbers nobody could check.
+
+| Run A, measured | Value |
+|---|---|
+| LLM steps / tool calls | 82 / **119** (≈1.45 calls per step) |
+| By tool | `write_file` 42 · `run_terminal` 37 · `plan_todo` 12 · `edit_file` 9 · `finding` 7 · `ask_user` 3 · `glob` 3 · `browser` 2 · `list_dir`/`delegate`/`tool_search`/`suggest_followups` 1 each |
+| FAILED tool calls | **10 of 119** — `run_terminal` 9, `write_file` 1 |
+| Input / output tokens | 1,192,115 / 2,462 (delivered answer 4,024 chars) |
+
+**C3 — CONFIRMED, and sharper than the report had it.** The turn asked the SAME three facts twice: line
+3 of the proxy log is one COMBINED probe (`python3 --version; node --version; npm --version`) and lines
+4–6 are the same three probes issued INDIVIDUALLY — 4 invocations for 3 facts, in one turn. The venv
+claim is also confirmed on both the log and the filesystem: `python3 -m venv backend/.venv` is issued at
+line 222 and again at line 232, and `/tmp/test/.venv` **and** `/tmp/test/backend/.venv` both exist. So
+"one probe per fact per run" is a real, countable defect — not a stylistic complaint.
+
+**C4 — SHARPENED, deliberately not confirmed.** `plan_todo` was called **12** times, in bursts (2 at
+15:35:46/48, six within 2 ms at 15:38:48, four within 1 ms at 15:42:27). Milliseconds apart means several
+`plan_todo` calls inside ONE model response — the normal way the model declares steps — so this evidence
+CANNOT distinguish "the plan was re-derived after a continuation" from "the model updated its own plan".
+The original claim ("4 continuations; the plan is re-derived rather than carried") is therefore **not
+established by what is on disk**, and the fix must not be designed from it. The experiment that would
+settle it is stated here so it is not lost: run one turn that forces a continuation, and compare the
+plan store's `revision`/step identities before and after — a re-derivation replaces the steps, a carry
+increments the revision.
+
+**C6 (per-turn cost) has a clean home now.** The turn report already exists and is rendered per turn; the
+spend above shows why it belongs there — 1,192,115 input tokens for a 2,462-token answer is invisible in
+the delivered output and only readable from the trace.
 
 ## Cluster D — Truthfulness of what the system says (S1)
 
