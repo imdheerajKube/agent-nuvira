@@ -57,6 +57,13 @@ import {
   type RouterBanditState,
 } from '../learning/router-bandit.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
+import { getModelRegistry } from '../learning/model-registry.js';
+import {
+  ENTITLEMENT_LABEL,
+  areTwins,
+  classifyPairEntitlement,
+  entitlementNote,
+} from '../learning/pair-entitlement.js';
 import { getProviderFallback } from '../learning/provider-fallback.js';
 import {
   getRouterPromotion,
@@ -1082,6 +1089,38 @@ export class ModelCommand extends BaseCommand {
 
     logger.success(`  Decision: ${decision.provider}/${decision.model}`);
     console.log(`  ${decision.explanation}`);
+
+    // D7 — PAIR ENTITLEMENT (2026-10-07). Rank said WHICH model; it never said
+    // whether this ACCOUNT may call it. The reported case was four providers
+    // offering one model where only one key had access — identical ranks, so the
+    // decision was not explainable from the ranking at all. Print the verdict for
+    // the chosen pair, and every same-model twin on another provider with ITS
+    // OWN verdict, so "why this provider and not that one" is answerable from the
+    // output instead of from the registry file. Twins are grouped by the honest
+    // exact/bare-id rule (`areTwins`), and each verdict is read from its own row —
+    // never inherited from a sibling.
+    try {
+      const registry = getModelRegistry();
+      const chosenEntry = registry.getEntry(decision.provider, decision.model);
+      const chosen = classifyPairEntitlement(chosenEntry);
+      const twins = registry
+        .getTrackedProviders()
+        .flatMap((p) => registry.getAllModelsForProvider(p))
+        .filter((e) => e.provider !== decision.provider && areTwins(e.model, decision.model));
+      if (chosen !== 'funded' || twins.length > 0) {
+        console.log('');
+        logger.highlight('  ── Pair entitlement ──');
+        console.log(
+          `   ${ENTITLEMENT_LABEL[chosen]} ${decision.provider}/${decision.model} — ${entitlementNote(chosen, chosenEntry)}`,
+        );
+        for (const t of twins) {
+          const e = classifyPairEntitlement(t);
+          console.log(`   ${ENTITLEMENT_LABEL[e]} ${t.provider}/${t.model} — ${entitlementNote(e, t)}`);
+        }
+      }
+    } catch {
+      // Best-effort — an audit section must never break `model explain`.
+    }
 
     // M2.4: governance transparency — show policy-eliminated providers so the
     // user sees WHY a provider is absent from the ranking (not just that it

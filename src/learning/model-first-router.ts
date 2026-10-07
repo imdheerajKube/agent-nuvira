@@ -17,6 +17,7 @@
  */
 
 import { getModelRegistry, type ModelRegistryEntry } from './model-registry.js';
+import { classifyPairEntitlement, orderByEntitlement, type PairEntitlement } from './pair-entitlement.js';
 import { getCatalogProvider, type CatalogProviderEntry, CATALOG_PROVIDER_IDS } from '../inference/provider-catalog.js';
 import { analyzeComplexity, type ComplexityLevel } from './hybrid-router.js';
 import { getTaskType, type TaskType } from './model-router.js';
@@ -54,6 +55,13 @@ export interface ModelCandidate {
   };
   /** Human-readable explanation. */
   reason: string;
+  /**
+   * Whether the router MAY call this pair — read from this pair's OWN registry
+   * row (see `learning/pair-entitlement.ts`). Scored dimensions rank a model;
+   * this one says whether the call can happen at all. Kept on the candidate so
+   * the pool can be ordered by it and so `model explain` can print it.
+   */
+  entitlement?: PairEntitlement;
   /** Registry entry for additional metadata. */
   entry?: ModelRegistryEntry;
   /** Catalog entry for pricing/context. */
@@ -431,6 +439,7 @@ export function buildModelCandidates(
         provider: providerId,
         score,
         dimensions: dims,
+        entitlement: classifyPairEntitlement(modelEntry),
         reason: reasons.length > 0 ? reasons.join(', ') : 'default',
         entry: modelEntry,
         catalog: catalog || undefined,
@@ -438,10 +447,21 @@ export function buildModelCandidates(
     }
   }
 
-  // Sort by score (best first)
+  // Sort by score (best first)…
   candidates.sort((a, b) => b.score - a.score);
 
-  return candidates;
+  // …then, and ONLY then, let PAIR ENTITLEMENT reorder the pool.
+  //
+  // WHY AFTER THE SCORE SORT. The scored dimensions answer "which model is the
+  // better choice"; entitlement answers "may this account be called at all".
+  // Folding entitlement INTO the score would let a large enough capability or
+  // cost advantage buy a call the registry already knows is refused — measured:
+  // the run-D pin was refused and the same model was funded on another provider
+  // 6 seconds later. As a stable PARTITION it cannot: every funded pair precedes
+  // every refused one, while equal-entitlement candidates keep the score order
+  // the weights produced. Nothing is removed, so "reject only when nothing is
+  // left" still holds — the refused twins are simply the last thing tried.
+  return orderByEntitlement(candidates, (c) => c.entitlement ?? 'unknown');
 }
 
 /**
@@ -558,6 +578,13 @@ export function isCandidateAvailable(candidate: ModelCandidate): boolean {
   // Check quota parking from registry entry
   if (candidate.entry) {
     if (candidate.entry.quotaParkedUntil > Date.now()) return false;
+    // A REFUSED pair (the account cannot serve it: credit-exhausted / auth /
+    // billing, or the id does not exist there) is not available — retrying it
+    // buys a guaranteed failed round trip. `status === 'unavailable'` alone did
+    // not catch it, because the registry deliberately does NOT demote a
+    // `verified` entry on a later entitlement refusal (a top-up repairs it), so
+    // such a pair reads `verified` with a `402` in `lastError`.
+    if (classifyPairEntitlement(candidate.entry) === 'refused') return false;
     if (candidate.entry.status === 'unavailable') return false;
   }
   // Check if model is a non-chat model (filtered in scoring but double-check)

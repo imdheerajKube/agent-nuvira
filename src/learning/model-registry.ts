@@ -401,25 +401,26 @@ function entryKey(provider: string, model: string): string {
  * this endpoint", never a permission/per-account answer (a 403 or a quota
  * denial can be repaired, so the pair must stay reachable).
  */
-/**
- * Does an `unavailable` REASON mean the provider/model pair cannot exist?
- *
- * Deliberately narrow: it must be an explicit "this model does not exist on
- * this endpoint", never a permission/per-account answer (a 403 or a quota
- * denial can be repaired, so the pair must stay reachable).
- */
 const MODEL_NOT_FOUND_REASON_RE = /model not found|not in live model list|does not exist|no such model|model_not_found/i;
 
 /**
- * Is this entry a DEAD PAIR?
+ * Is this entry a NONEXISTENT pair — the provider cannot serve this id at all?
  *
  * The flag is the primary signal, but the reason check heals data written
  * BEFORE the flag existed (and by any surface): an entry sitting at
  * `unavailable` with a not-found reason IS a retired pair, and without this the
  * live `local/gemini-3.1-flash-lite` entry would keep being offered until it
  * failed one more time.
+ *
+ * EXPORTED for `learning/pair-entitlement.ts`, which needs the SAME verdict the
+ * dead-pair machinery uses. Two predicates for one question is how the registry
+ * and the router start disagreeing about which pairs are offerable.
  */
-function isDeadEntry(e: ModelRegistryEntry): boolean {
+export function isNonexistentPair(e: {
+  deadPair?: boolean;
+  status?: string;
+  lastError?: string;
+}): boolean {
   if (e.deadPair) return true;
   return e.status === 'unavailable' && MODEL_NOT_FOUND_REASON_RE.test(e.lastError ?? '');
 }
@@ -439,8 +440,10 @@ function isDeadEntry(e: ModelRegistryEntry): boolean {
  * Narrow on purpose: transient refusals (`rate-limit`, quota parks, 5xx) are
  * NOT entitlement failures — a listing, a park expiry or a recovered key may
  * legitimately re-open those, and `quotaParkedUntil` already models the clock.
+ *
+ * EXPORTED for `learning/pair-entitlement.ts` — see `isNonexistentPair`.
  */
-function isEntitlementFailure(lastError: string | undefined | null): boolean {
+export function isEntitlementFailure(lastError: string | undefined | null): boolean {
   if (!lastError) return false;
   if (MODEL_NOT_FOUND_REASON_RE.test(lastError)) return false;
   const t = lastError.toLowerCase();
@@ -713,7 +716,7 @@ export class ModelRegistry {
   getDeadPairs(): Array<{ provider: string; model: string }> {
     const out: Array<{ provider: string; model: string }> = [];
     for (const e of Object.values(this.data.entries)) {
-      if (isDeadEntry(e)) out.push({ provider: e.provider, model: e.model });
+      if (isNonexistentPair(e)) out.push({ provider: e.provider, model: e.model });
     }
     return out;
   }
@@ -722,7 +725,7 @@ export class ModelRegistry {
   isDeadPair(provider: string, model: string | undefined): boolean {
     if (!model || model === 'default') return false;
     const entry = this.data.entries[entryKey(provider, model)];
-    return !!entry && isDeadEntry(entry);
+    return !!entry && isNonexistentPair(entry);
   }
 
   /** Providers that currently have at least one verified, usable model. Sync. */

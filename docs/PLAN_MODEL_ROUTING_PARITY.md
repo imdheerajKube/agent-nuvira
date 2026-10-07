@@ -210,6 +210,81 @@ reward is a coin flip on verification plus the cost adjustment — better, not c
 `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §4 steps 2–4, waiting on the §7 sign-off. And this bundle
 changes LEARNING only: no score, weight or routing order is affected until the scorecard lands.
 
+## Bundle 3c — a provider can list a model it cannot serve (D7 LANDED)
+
+**The requirement (user, 2026-10-07, verbatim):** *"suppose we have 4 providers and everyone provides
+deepseek, only one provider's key actually provides deepseek where as the user has not purchased model
+access on the other providers or there is no free tokens offered by those providers — in that scenario
+when selection happens based on ranking (rank of a model can be same), the agent should only pick, or
+only be allowed to access, the one which has genuine token budget available, than going for rounds
+unnecessarily for models offered by providers which actually do not have access to the model on their
+platform."*
+
+**Ranking cannot express this, and it must not try.** Rank is a property of the MODEL; access is a
+property of the ACCOUNT serving it. Four twins share one rank by construction, so the decision is not
+explainable from the ranking at all — and folding access into the score would let a cost or capability
+advantage buy a call that is certain to fail.
+
+**The registry already knew; nothing asked.** `ModelRegistryEntry` holds `status`, `lastError`,
+`deadPair` and `quotaParkedUntil` per provider × model, and `model-registry.ts` already owned two
+predicates (`isEntitlementFailure`, the not-found check). What did not exist was one answer to *"may the
+router call THIS PAIR"* asked **before** the call instead of after it.
+
+### What was built
+
+| Piece | Change |
+|---|---|
+| `learning/pair-entitlement.ts` (new) | The four-state verdict — `funded` / `unknown` / `stalled` / `refused` — plus the pick order (`funded < unknown < stalled < refused`), `orderByEntitlement` (a **stable partition**, never a filter), `twinKey`/`areTwins`, `resolveFundedTwin`, and the printed labels/notes. |
+| `model-registry.ts` | `isNonexistentPair` (was private `isDeadEntry`) and `isEntitlementFailure` are **exported**, so the classifier and the dead-pair machinery read the same vocabulary instead of drifting into two answers for one question. |
+| `model-first-router.ts` | `buildModelCandidates` annotates each candidate with `entitlement` and applies the entitlement partition **after** the score sort, so the model-first override starts on a pair that can be called. `isCandidateAvailable` now also refuses a pair whose ACCOUNT was refused. |
+| `auto-router.ts` | `pushFallback` drops a refused pair (D6's `status === 'unavailable'` check could not see a `verified` latch carrying a `402`). The **PRIMARY pick** is re-checked against this pair's own row; on a refusal the router takes a funded twin of the same model, else the best non-refused provider, and states the rescue in `explanation`. |
+| `cli/model.ts` | `model explain` prints a **Pair entitlement** block: the chosen pair's verdict, and every same-model twin on another provider with ITS OWN verdict. |
+
+### Doctrine (the three rules that make it correct)
+
+1. **Per PAIR, never per model.** `openrouter`'s exhausted credits and `deepseek`'s funded account are
+   facts about two ACCOUNTS. A twin never inherits a sibling's verdict — that is F6 (an availability
+   verdict erased by unrelated evidence) wearing a new hat, and it is why identity may group capability
+   but never routability (`DESIGN_MODEL_IDENTITY.md` §2).
+2. **A refusal is a NO while an alternative exists.** `stalled` is the opposite case — a quota park or an
+   aged-out proof clears by itself — so it stays eligible and simply sinks. `unknown` outranks `stalled`,
+   because "no budget right now" is the exact thing this bundle exists not to spend a round on.
+3. **Never dead-end.** `orderByEntitlement` is a partition; refused pairs are still in the pool, last. If
+   every twin is refused the pick stands — *"use every model we can actually call; reject only when
+   nothing is left"* survives.
+
+**One flaw found in the fix itself, and it matters.** The first cut checked the refusal *before* the
+status, so an entry with a lingering `credit-exhausted` in `lastError` read as refused. But
+`markVerified` deliberately **preserves** `lastError` across a success (it rebuilds the entry and keeps
+`existing?.lastError`), so after a user tops up their credits and the next call works, the row is
+`verified` + `credit-exhausted` while the model is being served. That would have skipped the very account
+we had just proved works — the same defect class (a stale verdict outranking fresh evidence) pointing the
+other way. `status` is therefore checked first, and an entitlement refusal only counts while the entry is
+still in the state that refusal produced — the registry's own guard in `markListed`.
+
+### Measured
+
+- **The D6 fixture itself proved the pick defect.** Re-measured on the existing test fixture (2026-10-07):
+  before this bundle `resolve()` chose **`gemini/gemini-2.5-flash`** — the pair the registry had just
+  proven dead with a 404 — while the fallback chain (correctly, since D6) started on `groq`. A chain-level
+  gate could never cover that, because provider ranking runs before the pair is consulted at all. The test
+  is amended to assert on the PICK as well as the chain, and `groq` now carries a second verified model so
+  the non-empty-chain assertion still has something to assert about.
+- **Non-vacuous reproduction of the user's case.** Funded-but-degraded `openrouter` (score 0.5289, health
+  0.007) against a pristine but **parked** `groq` (0.536, quota 0): scoring alone starts on `groq` — the
+  twin with no budget — while the entitlement order starts on `openrouter`. The test asserts the raw-score
+  relationship too, so it fails loudly rather than becoming a tautology if weights shift.
+- **Live, real registry** (`model explain`, this machine): `✅ funded gemini/gemini-3.1-flash-lite` /
+  `⛔ refused groq/gemini-3.1-flash-lite — the provider says this model does not exist on this endpoint` /
+  `❔ untried openrouter/google/gemini-3.1-flash-lite` — the reported shape, now legible in the output.
+
+**Honest residual.** The registry learns a refusal from a REAL call, so the first encounter still pays one
+failed round trip (`recordCall` → `credit-exhausted`); what changed is that every later turn routes around
+it, and that the failed pair can no longer be the primary pick while a funded twin exists.
+
+**Tests.** `tests/learning/pair-entitlement.test.ts` (new, 20 — classifier, order, twins, the reported
+four-provider scenario, and the non-vacuous case above); `tests/learning/auto-router.test.ts` D6/D7 amended.
+
 ## Bundle 5a/5b — disclosed engine changes and assumptions (E1 + E2 LANDED)
 
 **E1 — an unattended auto-pick was recorded as the user's own answer.** `ask_user` renders a
@@ -608,6 +683,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **D3 (model half) / A5 / D2 (Bundle 2d)** | `reasoning-trace.ts` `endTrace`: the summary names the provider×model PAIR that served the most steps (previously only the provider was derived, beside a requested model), and a `decision` event records any mid-turn detour with per-pair step counts. | `tests/learning/reasoning-trace.test.ts` (+3) | **LANDED**, live-verified (the summary pair equals the run's step pair) |
 | **D5 (Bundle 2e)** | `cli/model.ts` explain: the "Ranked providers" header states the availability-first sort key and quota-parked rows are labelled — the order was already the routing precedence; only the display hid its key. | `tests/cli/model.test.ts` (+1) | **LANDED** |
 | **B3 partial (Bundle 3a)** | `learning/auto-router.ts` `recordOutcome` takes the bandit's own `Partial<BanditOutcomeData>` and forwards it to the provider AND model arms (it discarded `undefined` before); `learning/outcome-observation.ts` is the pure mapping from `TurnReport.verification` to `verificationPassed`; `cli/chat.ts` `answerOnce` now records the turn's outcome (the chat path never fed the bandit at all). | `tests/learning/outcome-observation.test.ts` (+6), `tests/learning/auto-router.test.ts` (+1, proven to depend on the forwarding) | **LANDED** |
+| **D7 (Bundle 3c)** | New `learning/pair-entitlement.ts` + registry exports: the verdict on whether the ACCOUNT serving a pair can be called (`funded`/`unknown`/`stalled`/`refused`), the entitlement partition applied to the model-first pool after scoring, the refusal gate in `pushFallback`, and a re-check of the PRIMARY pick that rescues to a funded twin. `cli/model.ts` prints the twin set. | `tests/learning/pair-entitlement.test.ts` (new, 20), `tests/learning/auto-router.test.ts` (amended, pick asserted) | **LANDED**, live-verified in `model explain` |
 | **E1 / E2 (Bundle 5a/5b)** | `tools/registry.ts` + `tools/ask-user.ts` + `learning/run-trace.ts` + `learning/turn-report.ts` + `cli/chat.ts`: an unattended `ask_user` default is recorded as an ASSUMPTION (never a shown answer), emitted as `autonomy:assumed-default`, and disclosed in a `🤝 decided for you` turn-report block; a pinned ask re-dispatched into the pipeline announces the execution-model change and the pin it carries. | `run-trace` (+2), `turn-report` (+3), `registry` (+2), `ask-user-non-interactive` (+3 assertions), `chat-answer-once-auto-parity` (+1) | **LANDED** |
 | **D4 (Bundle 2g)** | `cli/model.ts`: one `resolveExplainDecision` used by all three explain call sites resolves through the SAME option assembly the runtime uses — it reads the shared circuit breaker and seeds the same NLU `taskIntentHint` (`parseRequestSync` → `resolveDispatch`). Before: explain passed neither, so it could name a provider the runtime would sink or rank a task with a different intent. | `tests/cli/model.test.ts` (+2, both proven to fail when the option is removed) | **LANDED** |
 | **A5 (Bundle 2f)** | `agents/orchestrator.ts`: one `housekeepingCallLLM` helper (planner + memory + trajectory + self-improver) reuses the already-traced LLM in auto mode (no double-record) and wraps once WITH the audit route otherwise (no more `unknown/unknown`); `housekeepingTraceContext()` is the extracted, unit-tested decision. | `tests/agents/orchestrator.test.ts` (+3) | **LANDED**, measured before/after on `nuvira phase execute` (5/5 `unknown` steps → 0) |
@@ -634,8 +710,9 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 
 ## Next bundles (in order)
 
-1. **Bundle 1 — identity & routability** (A1–A4): A2/A3/A4 **LANDED** (see their rows); **A1 is the one remaining design item** — options in `docs/DESIGN_MODEL_IDENTITY.md`.
-2. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D4/D5/A5 landed in Bundles 2c–2g**): make the system's account of itself true.
-3. **Bundle 3 — capability by measurement** (B1–B5): the root cause. **Design re-written to the parameter-based scorecard you specified** (accuracy / performance / cost / robustness / ecosystem + a derived tier + a rank, each fed from measurement during task execution) — see `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`. Awaiting sign-off on the three open questions in its §6.
-4. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **Begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
-5. **Bundle 5 — autonomy & inventory** (**PARTIAL: E1/E2 landed in Bundle 5a/5b; E3 + D6 landed in Bundles 2a/2b; B5 is part of Bundle 3**).
+1. **Bundle 3c — pair entitlement** (D7): **LANDED** (see its section) — the model-first pool, the offered chain and the primary pick now all refuse a pair whose ACCOUNT was refused, and tie-break to the funded twin.
+2. **Bundle 1 — identity & routability** (A1–A4): A2/A3/A4 **LANDED** (see their rows). **A1 decided by the user ("go ahead with all 3"): option A, the declared alias table** (seeded from this machine's registry), plus twin grouping in `model list`/`model explain`; identity groups CAPABILITY only and never routability. Next up.
+3. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D4/D5/A5 landed in Bundles 2c–2g**): make the system's account of itself true.
+4. **Bundle 3 — capability by measurement** (B1–B5): the root cause. **Design re-written to the parameter-based scorecard you specified** (accuracy / performance / cost / robustness / ecosystem + a derived tier + a rank, each fed from measurement during task execution) — see `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`. Awaiting sign-off on the three open questions in its §6.
+5. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **Begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
+6. **Bundle 5 — autonomy & inventory** (**PARTIAL: E1/E2 landed in Bundle 5a/5b; E3 + D6 landed in Bundles 2a/2b; B5 is part of Bundle 3**).

@@ -51,7 +51,8 @@ import { getRouterPromotion, type ParallelPick, DEFAULT_MIN_PROMOTION_DECISIONS 
 import { getMlRouter, DEFAULT_ML_K, DEFAULT_ML_MIN_SAMPLES, DEFAULT_ML_STRENGTH } from './ml-router.js';
 import { buildModelCandidates, pickBestModelCandidate, buildFailoverChain, type ModelCandidate as ModelFirstCandidate } from './model-first-router.js';
 import { pickBestModel, topModelCandidates } from './model-scoring.js';
-import { getModelRegistry } from './model-registry.js';
+import { getModelRegistry, type ModelRegistryEntry } from './model-registry.js';
+import { areTwins, classifyPairEntitlement } from './pair-entitlement.js';
 // R4: the agentic capability floor needs the same "too small to hold a tool
 // loop" judgement the harness uses. model-harness.ts imports nothing, so this
 // adds no cycle risk to the router.
@@ -2397,6 +2398,80 @@ export class AutoModelRouter {
       // Best-effort — model-first must never break routing
     }
 
+    // ── PAIR ENTITLEMENT: is the pick ALLOWED to be called? (D7) ────────────
+    // The user's rule, verbatim: "suppose we have 4 providers and everyone
+    // provides deepseek — only one provider's key actually provides deepseek,
+    // where as the user has not purchased model access on the other providers or
+    // there is no free tokens offered by those providers… the rank of a model can
+    // be the same, but the agent should only pick, or only be allowed to access,
+    // the one which has a genuine token budget available, rather than going for
+    // rounds unnecessarily."
+    //
+    // Ranking cannot express that, and it should not try: rank is a property of
+    // the MODEL, while access is a property of the ACCOUNT serving it. So the
+    // pick made above is re-checked against the registry's OWN evidence for
+    // exactly this pair, and when that evidence is a refusal the router looks for
+    // the same model on a provider that can actually serve it. Two ordered
+    // attempts, then out:
+    //   1. a FUNDED TWIN of the same model (the reported case: identical rank,
+    //      one funded account) — chosen through `getAllUsablePairs()`, which is
+    //      built on the SAME `isUsable()` gate routing uses, so this can never
+    //      name a pair the router would itself reject;
+    //   2. otherwise the top-ranked provider whose served pair is not refused, so
+    //      a dead pin on one provider does not cost a round trip before the
+    //      fallback walk starts.
+    // If neither exists the original pick stands — a refusal we cannot route
+    // around must not become "return no route at all".
+    let entitlementRescue: { from: string; to: string; why: string } | undefined;
+    try {
+      const registry = getModelRegistry();
+      if (classifyPairEntitlement(registry.getEntry(provider, model)) === 'refused') {
+        const from = `${provider}/${model}`;
+        const fundedTwin = registry
+          .getAllUsablePairs()
+          .find((p) => p.provider !== provider && areTwins(p.model, model));
+        if (fundedTwin) {
+          provider = fundedTwin.provider;
+          model = fundedTwin.model;
+          entitlementRescue = {
+            from,
+            to: `${provider}/${model}`,
+            why: 'the pinned pair is refused by its account; the same model is funded here',
+          };
+        } else {
+          const alternative = scored.find((s) => {
+            if (s.inCooldown) return false;
+            if (s.provider === provider) return false;
+            try {
+              return (
+                classifyPairEntitlement(
+                  registry.getEntry(s.provider, this.resolveModel(s.provider, agentType, configManager, taskDescription)),
+                ) !== 'refused'
+              );
+            } catch {
+              return false;
+            }
+          });
+          if (alternative) {
+            provider = alternative.provider;
+            model = this.resolveModel(provider, agentType, configManager, taskDescription);
+            entitlementRescue = {
+              from,
+              to: `${provider}/${model}`,
+              why: 'the selected pair is refused by its account; this provider is not',
+            };
+          }
+        }
+        if (entitlementRescue && options.verbose) {
+          logger.warn(
+            `  ⛔ Pair entitlement: ${entitlementRescue.from} cannot serve this model — using ${entitlementRescue.to} (${entitlementRescue.why})`,
+          );
+        }
+      }
+    } catch {
+      // Best-effort — the entitlement gate must never break routing.
+    }
+
     // Note the decision so outcome recording (recordOutcome) can reward the
     // provider that actually served the task.
     if (options.useBandit) {
@@ -2470,6 +2545,18 @@ export class AutoModelRouter {
      *
      * The reserve passes below already label themselves this way; passes 1–3 did
      * not, which is where the unproven ids leaked in.
+     *
+     * D7 (2026-10-07) — THE PAIR'S RIGHT TO BE CALLED, not just its status.
+     * The gate above reads `status`, and `status` cannot see the case the user
+     * reported: four providers offer the same model, one key has access to it,
+     * and the other three have no model access and no free tokens. A refusal like
+     * that does NOT demote a `verified` entry (the registry keeps the latch
+     * because a top-up repairs it), so such a pair reads `verified` with a `402`
+     * in `lastError` — offerable by the old check. `classifyPairEntitlement`
+     * decides from the EVIDENCE (this pair's own row) instead, and a refused pair
+     * is not offered at all while anything else can be. Read it per PAIR: twins
+     * on different providers are different ACCOUNTS with opposite verdicts, and
+     * neither inherits the other's.
      */
     const pushFallback = (
       s: ScoredProvider,
@@ -2478,15 +2565,20 @@ export class AutoModelRouter {
     ): void => {
       const key = `${s.provider}|${model}`;
       if (seenFallback.has(key)) return;
-      let status: string | undefined;
+      let entry: ModelRegistryEntry | undefined;
       try {
-        status = getModelRegistry().getEntry(s.provider, model)?.status;
+        entry = getModelRegistry().getEntry(s.provider, model);
       } catch {
         // Best-effort — the reachability gate must never break routing.
       }
-      if (status === 'unavailable') return;
+      const entitlement = classifyPairEntitlement(entry);
+      // A refusal is a NO (D7); an `unavailable` entry for any other reason is
+      // the reachability NO the D6 gate already encoded.
+      if (entitlement === 'refused' || entry?.status === 'unavailable') return;
       seenFallback.add(key);
-      const unproven = status === undefined || status === 'unverified';
+      const unproven = entitlement === 'unknown';
+      const stalledNote =
+        entitlement === 'stalled' ? ' (stalled — proven once, not servable right now)' : '';
       fallbackChain.push({
         provider: s.provider,
         model,
@@ -2496,10 +2588,10 @@ export class AutoModelRouter {
         reason: unproven
           ? `Fallback (unverified — not yet proven${alternate ? `, alternate model on ${s.provider}` : `: ${s.provider}`})`
           : alternate
-            ? `Fallback (alternate model on ${s.provider})`
+            ? `Fallback (alternate model on ${s.provider})${stalledNote}`
             : s.inCooldown
-              ? `Fallback (in cooldown): ${s.provider}`
-              : `Fallback: ${s.provider}`,
+              ? `Fallback (in cooldown): ${s.provider}${stalledNote}`
+              : `Fallback: ${s.provider}${stalledNote}`,
       });
     };
     const modelsFor = (s: ScoredProvider): string[] =>
@@ -2606,6 +2698,9 @@ export class AutoModelRouter {
       taskProfile,
     ) +
       (weakModelForAgenticAsk ? ' | ⚠ weak-model fallback (no capable provider free)' : '') +
+      (entitlementRescue
+        ? ` | ⛔ ${entitlementRescue.from} is refused by its account — served by ${entitlementRescue.to}`
+        : '') +
       // P6 — say what actually happened. A cold-start or stale store gets NO
       // claim of learning: the deterministic ranking stands, and the user is told
       // that instead of being told "learned" about a prior nobody has ever

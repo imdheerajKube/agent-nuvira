@@ -646,9 +646,10 @@ describe('AutoModelRouter.resolve', () => {
     }
   });
 
-  it('D6 — the offered chain never recommends a pair the registry has proven dead', () => {
+  it('D6/D7 — neither the PICK nor the offered chain recommends a pair the registry has proven dead', () => {
     const registry = getModelRegistry();
     registry.markVerified('groq', 'llama-3.3-70b-versatile', 'spot-check', 200);
+    registry.markVerified('groq', 'openai/gpt-oss-120b', 'spot-check', 200);
     registry.markVerified('gemini', 'gemini-2.5-flash', 'spot-check', 200);
     registry.markVerified('local', 'llama3.2:1b', 'spot-check', 50);
     // A pair a REAL call already proved dead on this provider (the live shape:
@@ -662,10 +663,19 @@ describe('AutoModelRouter.resolve', () => {
       allowedProviders: ['groq', 'gemini', 'local'],
     });
 
+    // D7 (measured on THIS fixture, 2026-10-07): before the pair gate existed the
+    // PICK was `gemini/gemini-2.5-flash` — the pair the registry had just proven
+    // dead — and the chain (correctly, since D6) started on groq. So the chain was
+    // fixed while the first call of every turn still went to a pair that could not
+    // answer. Provider ranking runs before the pair is consulted at all, which is
+    // why a chain-level gate could never cover this.
+    expect(registry.getEntry(decision.provider, decision.model)?.status).not.toBe('unavailable');
     for (const c of decision.fallbackChain) {
       expect(registry.getEntry(c.provider, c.model)?.status).not.toBe('unavailable');
     }
-    // The gate must not empty the chain — "reject only when nothing is left."
+    // The gate must not empty the chain while a callable pair remains — "reject
+    // only when nothing is left." `groq` keeps a second verified model precisely
+    // so this assertion is about the gate and not about the fixture.
     expect(decision.fallbackChain.length).toBeGreaterThan(0);
   });
 
