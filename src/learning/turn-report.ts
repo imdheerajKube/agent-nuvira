@@ -72,6 +72,21 @@ export interface TurnReport {
    * user made when the harness made it for them.
    */
   assumptions: string[];
+  /**
+   * C6 — what the turn COST, from the persisted cost ledger (tokens, USD, calls).
+   *
+   * The programme's measured run A spent **1,192,115 input tokens in 82 steps** and
+   * the turn reported none of it: the only economy figure anywhere was a session
+   * total, so a single expensive turn was invisible and the ratio that mattered
+   * (484 input tokens per output token) could not be seen at all. A cost you have
+   * to go and compute is a cost nobody watches.
+   *
+   * Read from the LEDGER, not from a counter: a continuation or a resumed turn runs
+   * in a fresh process, and only a timestamp window survives that. Absent when no
+   * call was recorded at all (a turn that never reached a provider has no cost to
+   * report — `0` would read as "it was free").
+   */
+  cost?: { usd: number; tokens: number; calls: number };
   /** One deterministic sentence for the console/trace, or null when trivial. */
   summary: string | null;
 }
@@ -88,6 +103,8 @@ export interface BuildTurnReportInput {
   flags?: TurnReportFlags;
   /** E1 — recorded decisions taken on the user's behalf (see TurnReport). */
   assumptions?: readonly string[];
+  /** C6 — the turn's measured cost from the ledger (see `TurnReport.cost`). */
+  cost?: { usd: number; tokens: number; calls: number };
 }
 
 function hasAnyFlag(flags: TurnReportFlags): boolean {
@@ -170,6 +187,7 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
     mutations: input.mutations ?? 0,
     changedPaths,
     assumptions,
+    cost: input.cost,
   });
 
   return {
@@ -184,6 +202,9 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
     verification,
     flags,
     assumptions,
+    // C6 — carried only when the ledger had something to report (absence is not
+    // "free", it is "nothing recorded": see the field's doc).
+    ...(input.cost ? { cost: input.cost } : {}),
     summary,
   };
 }
@@ -195,6 +216,7 @@ function buildSummary(input: {
   mutations: number;
   changedPaths: string[];
   assumptions: string[];
+  cost?: { usd: number; tokens: number; calls: number };
 }): string | null {
   const parts: string[] = [];
   if (input.planned) {
@@ -219,9 +241,36 @@ function buildSummary(input: {
     input.verification === 'not-applicable' &&
     input.assumptions.length === 0
   ) {
-    return null;
+    // C6 — except when the turn actually SPENT something. The cost is the one
+    // thing a trivial-looking turn can still be wrong about (a long prompt on an
+    // expensive model), and it is exactly the number run A had no way to see.
+    return input.cost && input.cost.usd >= COST_NOTICE_USD ? formatCost(input.cost) : null;
   }
+  if (input.cost) parts.push(formatCost(input.cost));
   return parts.join(' · ');
+}
+
+/**
+ * C6 — the spend at which a turn's cost is worth saying out loud on its own.
+ *
+ * A cent: below it, a chat answer's cost is noise; at or above it, the turn bought
+ * something real and the user should see the price without asking. Stated here
+ * rather than inline so the threshold is a decision, not a magic number.
+ */
+export const COST_NOTICE_USD = 0.01;
+
+/** `$0.0042 / 12.3K tok (3 calls)` — the turn's measured spend, one line. */
+export function formatCost(cost: { usd: number; tokens: number; calls: number }): string {
+  const usd = cost.usd >= 0.01 ? `$${cost.usd.toFixed(4)}` : `$${cost.usd.toFixed(6)}`;
+  // Millions are the scale that matters here: the measured run A burned 1,192,115
+  // input tokens, and `1192.1K` reads as noise where `1.19M` reads as a number.
+  const tokens =
+    cost.tokens >= 1_000_000
+      ? `${(cost.tokens / 1_000_000).toFixed(2)}M tok`
+      : cost.tokens >= 1000
+        ? `${(cost.tokens / 1000).toFixed(1)}K tok`
+        : `${cost.tokens} tok`;
+  return `cost: ${usd} / ${tokens} (${cost.calls} call${cost.calls === 1 ? '' : 's'})`;
 }
 
 /** A compact, human-readable close-out block for the console / chat surface. */
@@ -242,6 +291,9 @@ export function formatTurnReport(report: TurnReport): string {
     for (const a of report.assumptions.slice(0, 10)) lines.push(`      • ${a}`);
     if (report.assumptions.length > 10) lines.push(`      • …and ${report.assumptions.length - 10} more`);
   }
+  // C6 — the price of the turn, from the ledger. Printed after the work, because
+  // "what it did" and "what it cost" are the two things a user judges a turn on.
+  if (report.cost) lines.push(`   💰 ${formatCost(report.cost)}`);
   if (report.verification === 'unverified') {
     lines.push('   ⚠️ UNVERIFIED — a change or claim was not confirmed by any observation.');
   } else if (report.verification === 'blocked') {

@@ -58,6 +58,7 @@ import {
 } from '../learning/exhaustion-report.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
+import { costSince } from '../learning/cost-tracker.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
 import { startWarmupDaemon } from '../learning/model-warmup.js';
 import { recordRoutingDecision } from '../learning/routing-history.js';
@@ -894,6 +895,12 @@ export class ChatCommand extends BaseCommand {
           taskProfile?: { intent?: string; requiresVerification?: boolean };
         }
       | undefined;
+    // C6 — the turn's economy window, taken before the FIRST provider call. The
+    // turn report states what THIS turn cost from the persisted ledger; a
+    // continuation or a resumed turn runs in a fresh process, so a session
+    // counter would report zero for it (`costSince` reads timestamps instead).
+    const turnCostSince = Date.now();
+
     let routedText: string | undefined;
     if (autoMode) {
       // Intent-aware escalation: a bare "yes"/"do it" continuing software work
@@ -1102,6 +1109,12 @@ export class ChatCommand extends BaseCommand {
         // ask_user default), so the report discloses them instead of letting the
         // answer read as a choice the user made.
         assumptions: answer.runTrace?.assumptions,
+        // C6 — what the turn cost, from the ledger, so an expensive turn is visible
+        // where the turn is described instead of only in a session total.
+        cost: (() => {
+          const spend = costSince(turnCostSince);
+          return { usd: spend.costUsd, tokens: spend.tokens, calls: spend.requests };
+        })(),
         flags: {
           unverifiedActionClaim: answer.unverifiedActionClaim,
           unverifiedEdit: answer.unverifiedEdit,
