@@ -102,6 +102,10 @@ static tables are still useful for day one, so each parameter follows the same r
 The measured value and its sample count are both stored, so `model explain` can say
 `accuracy 78 (n=14)` — a number a reader can weigh — instead of a bare float.
 
+An external feed is the SAME mechanism with a different source label (§6): it supplies a prior value
+for a pair with no samples, it is printed as a prior rather than as measurement, and it can never
+outrank evidence. Nothing else about the model changes because a number arrived from the network.
+
 ## 4. What has to be built (the wiring)
 
 1. **`CapabilityRecord`** on the registry: the five parameters, a sample count each, the tier, and the
@@ -134,7 +138,56 @@ purpose; this changes *how the harness judges* a pair, not which model it prefer
 | B5 | The 4-component full-stack prompt classifies ≥ `complex`. |
 | — | A turn with `verification: blocked` contributes no accuracy sample (it is not evidence about the model). |
 
-## 6. Open questions for sign-off
+## 6. External ranking feeds — assessed (checked 2026-10-07)
+
+You asked whether the public model-ranking sources found online can be used for the scorecard. I
+checked each one before designing anything against it, because a feed that is retired, unrelated, or
+non-existent is a dependency that fails silently. **Two are dead, one is unrelated to ranking, one
+name in the sample data does not exist, and one is genuinely useful — but it is not the kind of feed
+the list describes.**
+
+| Source (as proposed) | What it actually is today | Can it feed the scorecard? |
+|---|---|---|
+| **Open LLM Leaderboard (Hugging Face)** | **RETIRED and archived.** The 2024–2025 board was archived (last updated Oct 2025) and HF announced the retirement in Mar 2025. Only open-weight models were ever covered — no GPT/Claude/Gemini rows. | Only as a FROZEN snapshot for open-weight models. It cannot be a live feed, and it cannot score most of the pairs this router routes to. |
+| **Chatbot Arena / LMArena** | **Live.** Elo/Bradley-Terry scores from crowdsourced human battles; a HF Space renders it and the battle datasets are released. There is **no documented keyless JSON API for the leaderboard itself** — the Space and the datasets are the routes, and their licences/ToS must be checked before any redistribution or commercial use. | Yes, as a **human-preference prior for `accuracy`**, behind a flag. Two caveats: arena ids are vendor-facing display names (they do not match our pairs — see A1 identity), and "prefers this chat answer" is not "can drive a 82-step tool loop". |
+| **Papers With Code — Leaderboards** | **SHUT DOWN (July 2025, by Meta)**; the domain now redirects to Hugging Face. | **No.** There is no feed to consume. |
+| **DeepSeek / Awesome-DeepSeek-Agent (GitHub)** | Not a ranking source in any form I can find. Note also that **"DeepSeek Hermes" does not exist** — Hermes is a Nous Research family, not DeepSeek. The same applies to the sample scorecard (`GPT-6.1 Sol`, `Claude Opus 5.5`): the **SHAPE** is exactly right and is what §3 adopts, but the names and numbers do not come from any leaderboard I can verify. | **No.** This is precisely why §3.2 lets a prior be replaced by measurement and requires a sample count beside every number: a plausible-looking score that nobody measured is the defect, not the fix. |
+| **Graphify Labs / Graphify repo** | Real project (`Graphify-Labs/graphify`) — a **codebase knowledge-graph / coding-agent** tool. It does not publish model rankings, compatibility scores or "parsing performance" for models. | **No.** Consuming it as an ecosystem signal would be inventing a data source. |
+
+### 6.1 The feed that DOES fit (and it is not a leaderboard)
+
+`GET https://openrouter.ai/api/v1/models` — **keyless, documented, per-model, machine-readable**: it
+returns each catalogue model's pricing, `context_length` and `supported_parameters` for the *exact
+ids we route to*. That is the same class of input the registry already ingests from its `listModels`
+probe, and it is the only external value here that attaches to a pair **without** an identity guess.
+It feeds `cost` (pricing), `ecosystem` (context window, tool/reasoning support) and nothing else.
+
+### 6.2 The rules for ANY external feed (non-negotiable)
+
+1. **Prior only, and `accuracy` only.** An offline benchmark is a snapshot of *a different task* —
+   multiple-choice questions, human chat preference, static code problems. Our premise is that this
+   harness's own outcomes are the signal that matters. A prior may inform a pair with 0 samples; it
+   may never outrank measured evidence (§3.2).
+2. **Never on the routing path at runtime.** Fetched out-of-band, cached with a timestamp, and
+   hard-failing to "no prior" — a routing decision must never wait on, or fail because of, a network
+   call to a third party.
+3. **Identity-mapped or unused.** An external row attaches to a pair only through the declared
+   identity mapping (A1). Unmatched rows are dropped, never fuzzy-matched — matching by name is the
+   defect this programme exists to remove.
+4. **Provenance is printed.** `model explain` must distinguish `accuracy 78 (measured, n=14)` from
+   `accuracy 78 (prior: LMArena, 2026-09-01)`. A reader has to be able to tell an observation from a
+   borrowed number.
+5. **Opt-in, with a documented TTL.** Default OFF. A stale prior is worse than none, so an expired
+   entry is treated as absent rather than kept.
+
+### 6.3 Recommendation
+
+Adopt the **shape** (§3) and fill it with our own measurements, and if an external feed is used at
+all, use the **provider catalogue** (6.1) for `cost`/`ecosystem`. Treat LMArena as an optional
+`accuracy` prior behind the flag in 6.2. Do not integrate the retired HF leaderboard, the dead Papers
+With Code, or Graphify — and do not populate any score from data whose names cannot be verified.
+
+## 7. Open questions for sign-off
 
 1. **Parameter weights** — how much does each of the five move the final rank? The sample JSON gives
    equal-looking weight; I would keep them explicit and tunable rather than equal-by-accident.
@@ -142,3 +195,6 @@ purpose; this changes *how the harness judges* a pair, not which model it prefer
    it from the measured set and treat it as static metadata only?
 3. **`MIN_SAMPLES_FOR_EVIDENCE`** and the prior's decay rate — these decide how long a wrong static
    can outrank evidence. They need a stated default (I would use 5 samples and a linear decay).
+4. **External feeds (§6)** — do you want the optional `accuracy` prior at all, and if so, is
+   LMArena an acceptable source given its licence and that human chat preference is not agentic
+   tool-use? My recommendation is the provider catalogue only, and no leaderboard.
