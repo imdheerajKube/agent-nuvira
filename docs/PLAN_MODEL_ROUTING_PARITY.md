@@ -50,6 +50,90 @@ mistakes are the ones the product makes:
 
 ---
 
+## Closure validation — every identified item, checked against the code (2026-10-07)
+
+**Why this section exists.** A row that says "LANDED" is not evidence. This is a pass over *every*
+item identified in this programme, re-checked against `src/` (not against this file), and it corrected
+three residuals that this file still called OPEN several bundles after they were fixed — which is how a
+closed item gets re-opened and, worse, how a real one gets assumed closed.
+
+**Method.** (1) A "closed" item must name a **symbol that exists in `src/`**, not just a row. (2) The
+**test that pins it** is re-run: 11 suites / **505 passed**, plus `npx tsc --noEmit` clean (the last three
+commits touch only this file, so the code under test is HEAD's). (3) A live artefact is cited where one
+exists; where it does not, that is stated as the residual rather than implied closed.
+
+### CLOSED — symbol present, test pins it
+
+| Item | Proof in code | Pinned by |
+|---|---|---|
+| **B2** — `reasoningNeed` read from the substring `'hi'` | `isSmallTalk` (`hybrid-router.ts`), imported by `model-first-router.ts` and `model-scoring.ts`; no live `includes('hi')` remains (the four remaining hits are the comments explaining the bug) | `hybrid-router.test.ts`, `router-scoring-truthfulness.test.ts` |
+| **C1/C5** — a 200K never-shrink thread floor | `MIN_THREAD_BUDGET_CHARS` replaced `THREAD_BUDGET_FLOOR_CHARS` (gone); the window decides in BOTH directions; `threadBudgetAfterSwitch` re-fits at a mid-turn handoff and is wired to the session | `context-budget.test.ts` (18), `tool-loop.test.ts` |
+| **B2-a** — the audit row carried a number that decided nothing | `scoreBasis` on `RoutingHistoryEntry`, set **only** for real measurements in `resilient-call.ts`; chat carries each candidate's own score/basis; `orchestrator`/`failover-runner`/`route-resolver` no longer attach a foreign score or the `0` sentinel | `chat-routing.test.ts` (spy; proven load-bearing), `shared-failover-pool.test.ts` |
+| **Bundle 13** — the same substring class in the intent rules | every intent alternation is word-bounded with the inflections it wants (`fix|fixes|fixed|fixing|fixer|fixup`, `plan|plans|ned|ning|ner`), so `prefix`/`fixture`/`ecosystem`/`plant` no longer decide the intent | `auto-router.test.ts` |
+| **Bundle 8** — the console preview named the wrong argument | `IDENTIFYING_ARG_KEYS` in `tool-loop.ts` (exported) | `tool-loop.test.ts` |
+| **Bundle 2h** — the log header and its own `turn.start` named different pairs | `turn.start { requested }` / `turn.end { served }`, the latter from the SAME expression the header uses | `debug-log.test.ts` |
+| **Cluster G (G1–G4)** — an attached empty folder read as "no project", an attached folder was forgotten, a typed folder was discarded, an unscoped turn could write into the dashboard's own cwd | `utils/workspace-path.ts` + `web-dashboard/workspace-resolution.ts` (one resolution point, priority attached → session → message → default → none); `unscopedWriteRefusal` on both write tools; `ask_user` adopts a folder from the reply | `workspace-resolution.test.ts` (13), `project-context.test.ts`, `unscoped-workspace.test.ts` (9) |
+| **B5** — a four-component ask rated `moderate` | `requirementUnits` + `measureTaskBreadth` + the breadth floor, exported so a caller can state WHY | `hybrid-router.test.ts` |
+| **Bundle 12** — "chat ignores the router's `requiresVerification`" | **the finding was wrong and is corrected (commit `29b7ee1f`).** The gate already exists — `requireVerification` (`tool-loop.ts`), the bounded G1 nudge, `unverifiedEdit`, and the verdict rendered in the turn report — and because **nobody sets the flag**, the DEFAULT-ENFORCING gate is what runs. Only `parity/wire-fixtures.ts` sets it `false`, deliberately, for deterministic wire recording | `tool-loop.test.ts`, `turn-report.test.ts` |
+| **A1 proper**, **F5 (chat pre-flight)**, **D5 (ranking-key header)** | all three landed in earlier bundles (`sameModel()` + `DECLARED_MODEL_ALIASES`; `strictPinRefusal` called from the chat tool loop; the header names its sort key) while this file still listed them as open — corrected in the three edits below | `model-identity.test.ts`, `route-resolver.test.ts`, `cli/model.test.ts` |
+
+### OPEN — the defect is NOT fixed
+
+1. **The registry has no cross-process locking.** No lock code exists (`flock`/`lockSync`/`withFileLock`
+   return nothing). The measured race — a dashboard, a gateway and an `eval run` rewriting
+   `~/.nuvira/memory/model-registry.json` concurrently, flipping a strict-pin verdict — is a candidate
+   for its own bundle. F6 closed the two in-code paths that did it; the file race is untouched.
+2. **The bogus rows already on disk** (`groq|wire-stub-model`) are not migrated. F2 stops new ones and
+   F4 stops the not-found ones being ranked; no one-shot hygiene pass exists.
+3. **`routing-history` still writes a paired `complexity: 'unknown'` row** next to each resolved one
+   (`route-resolver.ts`: `request.complexity || 'unknown'`). Deliberately correct per the non-goal —
+   the layer genuinely cannot know — but it makes the file harder to read than it needs to be.
+4. **`testPassed`, `userAccepted` and a real `qualityScore` are still absent** from the bandit payload,
+   so the reward remains a veto on verification plus a cost adjustment — better, not complete.
+5. **`cost` and `ecosystem` have declared priors but no measured feed.**
+6. **F1's live re-run of the oversized-document ask is the remaining proof**, and F1 does not cover the
+   **JSON-fallback transport** (a model asked to emit the call as text) or the **Gemini wire** (whose
+   calls carry structured `args`, so "empty" is ambiguous).
+7. **C3's live parity re-run** (the probe count dropping) is deferred; a duplicate `write_file` **by
+   content** is a deliberate non-goal, since content can legitimately change between two writes.
+8. **Cluster G's dashboard live path** — attach an empty folder in the UI and watch the turn run rather
+   than ask — is the remaining proof, and the notice banner is not yet asserted by the browser smoke walk.
+9. **B5's area set is coarse** (twelve hand-written buckets); a measured area set is the refinement, and
+   it is the same "measure, do not hand-write" step items 4–5 need.
+10. **Nothing is fed back while the scorecard is unsigned**: B1–B5 change LEARNING only, so no score,
+    weight or routing order moves until it lands.
+11. **Whether a document-delivery turn deserves more than 4096 output tokens** — a cost decision, not a bug.
+12. **A6's "exactly one row" acceptance was too strong**: a headless turn makes 2–3 genuine decisions,
+    so it appends 2–3 rows, all naming the served pair. Accepted by design rather than deduped.
+13. **A detour is made visible, not quality-judged** (D2); a correction is separated from a terse closing
+    paragraph by *work since*, not by retraction language (D1); and a non-empty generic non-answer is
+    undetectable — all three need a measured-quality signal (B3), never a phrase list.
+14. **`model explain` answers a hypothetical**: it cannot see a continuation's `routingText`, the
+    `contextHintTokens`, or the session's failed-provider set, which exist only at runtime.
+15. **Prose-only turns are not nudged to verify** — the G1 nudge keys on edit activity
+    (`needsVerification`) — but such a turn IS disclosed as `unverified` in the report, which is the
+    honesty the requirement was about.
+16. **Historical artefacts keep their old readings**: debug traces already on disk are forward-only for
+    the `requested`/`served` labels, and `child-agent-runtime.ts`'s own `turn.start` records
+    `{ tools, transport }` with no provider (so it never had the mismatch to fix).
+
+### BLOCKED on a user decision
+
+- **`DESIGN_CAPABILITY_BY_MEASUREMENT.md` §6 sign-off** — the three open questions. B2's fix removed the
+  *explanation* for the wrong pick, but **ranking QUALITY** (open items 4, 5, 9, 13) still rests on priors
+  rather than real per-model capability feeds.
+- **C1/C5** needed a decision, got one, and is landed — no follow-up decision outstanding.
+
+### Corrections made by this pass
+
+| Was marked | Actually | Evidence |
+|---|---|---|
+| "A1 proper is open — `verifiedEquivalent()` is an exact bare-id match" | **CLOSED in Bundle 3d** | `verifiedEquivalent` calls `sameModel()`; the run-D pair is declared in `DECLARED_MODEL_ALIASES` |
+| "the chat path bypasses the pre-flight (still open)" | **CLOSED in Bundle 1c (F5)** | the chat tool loop calls `strictPinRefusal`; the bundle's own table records 402 bodies 1 → 0 and 2× refusal before any request |
+| "D5 — Left OPEN (S3)" | **CLOSED in Bundle 2e** | the header names its sort key and quota-parked rows are tagged; the ranking is unchanged |
+
+---
+
 ## Cluster A — Model identity & routability (S1, blocking)
 
 Nothing else can be trusted until a model can be *named* and its *reachability* is consulted.
@@ -1345,9 +1429,10 @@ circuit-breaker-cooldown rows sink, then quota-parked, then score. A cooling-dow
 higher raw score therefore renders BELOW a healthy lower-scored one, in a table whose header says
 "Ranked providers" and whose only quantitative column is `score`. Run A had cooldowns from its own
 failed calls, which is exactly that shape — so the original reading was wrong about *why* and right
-that the output misleads. Left **OPEN** (S3): it is display-only, and the honest fix is to state the
-grouping (or make the displayed order the displayed metric) rather than to change the ranking,
-which the selection logic depends on.
+that the output misleads. **CLOSED in Bundle 2e** (this "Left OPEN (S3)" marker was stale): the header
+now names its own key — `ordered availability-first — cooling-down, then quota-parked, then score
+within each group` — and a quota-parked row is tagged `(quota-parked)`, which is exactly the "state
+the grouping" fix below. The ranking itself is unchanged, because the selection logic depends on it.
 
 | | Before | After |
 |---|---|---|
@@ -1414,9 +1499,12 @@ now with a mechanism and a fix.
 
 ### Residuals — still OPEN (do not read this bundle as "closed")
 
-- **A1 proper is open.** `verifiedEquivalent()` is an exact **bare-id** match; the measured pair
-  (`deepseek/deepseek-v4.1-flash` vs the verified `deepseek-flash`) still shares no bare id, so it
-  honestly suggests nothing. A real identity layer is still the fix; family guessing is not.
+- **A1 proper — CLOSED (Bundle 3d); this bullet was STALE and is corrected here.** `verifiedEquivalent()`
+  is no longer a bare-id match: it consults `sameModel()`/`identityKey()`, and the measured run-D pair
+  is *declared* in `DECLARED_MODEL_ALIASES` (`canonical 'deepseek-v4.1-flash'`, members `deepseek-flash`
+  and `deepseek/deepseek-v4.1-flash`), so the pin-refusal sentence now names the funded twin. Verified
+  in code 2026-10-07: `route-resolver.ts:296` → `sameModel`, declaration at `model-identity.ts:64`.
+  Family guessing is still forbidden — the table is **declared**, never inferred.
 - **A6's acceptance wording was too strong.** It said "exactly one row". A headless turn makes
   **2–3 genuine decisions** (the initial route for the header, then the message route), so it
   appends 2–3 rows — all naming the same served pair. Left as-is rather than invent a dedupe that
@@ -1436,10 +1524,10 @@ now with a mechanism and a fix.
 | # | What changed | What it does |
 |---|---|---|
 | **A2** | `route-resolver.ts`: before resolving, a **strict** pin to a pair the registry marks `unavailable` is refused, naming the reason. Guarded by a test that asserts the provider's `listModels` is **never called**. | Fails fast with the cause instead of after a provider round trip. Wording deliberately retains `strict model mode` / `forbids substituting`, because `error-repair.ts` classifies on those phrases. |
-| **A1 (minimal)** | `model-registry.ts` `getAllUsablePairs()` + `verifiedEquivalent()`: an exact **bare-id** match on another provider is named as the alternative. | Answers "the same model works over there". Deliberately NO family guessing: the measured pair (`deepseek/deepseek-v4.1-flash` vs the verified `deepseek-flash`) does **not** share a bare id, so it honestly suggests nothing rather than asserting they are the same model. A real identity layer is still A1 proper and stays open. |
+| **A1 (minimal)** | `model-registry.ts` `getAllUsablePairs()` + `verifiedEquivalent()`: an exact **bare-id** match on another provider is named as the alternative. | Answers "the same model works over there". Deliberately NO family guessing: the measured pair (`deepseek/deepseek-v4.1-flash` vs the verified `deepseek-flash`) does **not** share a bare id, so it honestly suggests nothing rather than asserting they are the same model. A real identity layer is A1 proper, **LANDED in Bundle 3d** (the declared alias table above) — this row is kept for history. |
 | **A3 (partial)** | The pre-flight reads the **same** `isUsable()` gate routing uses, via the registry. | The reachability verdict is now consulted on this path, not only displayed. |
 
-### MEASURED RESIDUAL — the chat path bypasses the pre-flight (still open)
+### MEASURED RESIDUAL — the chat path bypassed the pre-flight (CLOSED in Bundle 1c; kept for history)
 
 Re-running the strict pin after the fix shows **both** behaviours in one log:
 
@@ -1452,6 +1540,11 @@ model elsewhere. This is the **same layer gap as A6**, and the two should be fix
 missing chat-path resolution point explains *both* the absent audit row and the un-pre-flighted pin.
 
 Acceptance for closing it: the same strict-pin run logs **no** 402 body at all.
+
+**RESOLVED (Bundle 1c, F5).** The chat tool loop now consults the same gate — `cli/chat.ts:3311`
+(`strictPinRefusal(session.type, session.model)`) — and the acceptance is met, not argued: the table
+above records **strict-pin `402` bodies 1 → 0** and **"Refusing to call …" 2× before any request**
+(chat tool loop + pipeline), verified live 2026-10-07. This heading was left several bundles stale.
 
 ## Bundle 1 — identity, routability & definitive failures (LANDED)
 
@@ -1533,5 +1626,5 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 2. **Bundle 1 — identity & routability** (A1–A4): A2/A3/A4 **LANDED** (see their rows). **A1 decided by the user ("go ahead with all 3"): option A, the declared alias table** (seeded from this machine's registry), plus twin grouping in `model list`/`model explain`; identity groups CAPABILITY only and never routability. Next up.
 3. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D4/D5/A5 landed in Bundles 2c–2g**): make the system's account of itself true.
 4. **Bundle 3 — capability by measurement** (B1–B5): the root cause. **Design re-written to the parameter-based scorecard you specified** (accuracy / performance / cost / robustness / ecosystem + a derived tier + a rank, each fed from measurement during task execution) — see `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`. Awaiting sign-off on the three open questions in its §6 — **but note B5 LANDED (Bundle 3e) and B2's measured cause LANDED (Bundle 9)**: the reason a `complex` ask went to a small model first was NOT the static priors, it was `reasoningNeed` read from the substring `'hi'`, so the scorecard is now needed for RANKING QUALITY, not to explain that pick.
-5. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **C6 LANDED (Bundle 4a)**, **C3 LANDED (Bundle 4b)**, **C4 EXPERIMENT RUN** (its section, above): a continuation does not re-derive the plan — a LATER TURN does, and `create` resets completed steps while the model is never shown the plan. **The fix LANDED (Bundle 4c + 4d)**: the carried progress + disclosure, AND the plan is now shown at turn start (`planContextBlock`, bounded to 12 steps and skipped once every step is done). **F1 LANDED (Bundle 6)** — found live in the dashboard traces, not on the original list: a tool call whose arguments did not arrive was executed as `{}` (134 empty calls across the last two big turns), so it is now refused with the real cause and the sectioned-delivery alternative, and `write_file` can append. **Cluster G LANDED (Bundle 7)** — also found live, while the user was blocked on it: an attached-but-empty folder read as "no project", a folder the CHAT had attached was forgotten when the request did not resend it, a folder the user TYPED was discarded, and an unscoped turn could write into the dashboard process's own cwd; the workspace decision now lives in one tested place, the priority is attached → session → message → configured default → none, and a write with no folder ASKS where instead of guessing. **C1/C5 LANDED (Bundle 10)** — the policy was decided with the user and implemented: the 200K never-shrink FLOOR was the defect (it made a known window unenforceable, and the budget never followed a mid-turn handoff), so the window now decides in both directions, the protections stay as rules, and `MIN_THREAD_BUDGET_CHARS` guards only against a degenerate window. Next: the B2-a audit-`score` residual, and the capability-scorecard feed sign-off.
+5. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **C6 LANDED (Bundle 4a)**, **C3 LANDED (Bundle 4b)**, **C4 EXPERIMENT RUN** (its section, above): a continuation does not re-derive the plan — a LATER TURN does, and `create` resets completed steps while the model is never shown the plan. **The fix LANDED (Bundle 4c + 4d)**: the carried progress + disclosure, AND the plan is now shown at turn start (`planContextBlock`, bounded to 12 steps and skipped once every step is done). **F1 LANDED (Bundle 6)** — found live in the dashboard traces, not on the original list: a tool call whose arguments did not arrive was executed as `{}` (134 empty calls across the last two big turns), so it is now refused with the real cause and the sectioned-delivery alternative, and `write_file` can append. **Cluster G LANDED (Bundle 7)** — also found live, while the user was blocked on it: an attached-but-empty folder read as "no project", a folder the CHAT had attached was forgotten when the request did not resend it, a folder the user TYPED was discarded, and an unscoped turn could write into the dashboard process's own cwd; the workspace decision now lives in one tested place, the priority is attached → session → message → configured default → none, and a write with no folder ASKS where instead of guessing. **C1/C5 LANDED (Bundle 10)** — the policy was decided with the user and implemented: the 200K never-shrink FLOOR was the defect (it made a known window unenforceable, and the budget never followed a mid-turn handoff), so the window now decides in both directions, the protections stay as rules, and `MIN_THREAD_BUDGET_CHARS` guards only against a degenerate window. **B2-a LANDED (Bundle 11)**, and **Bundle 13** swept the same substring class through the intent rules. Next: the capability-scorecard feed sign-off (§6), then the OPEN items in the closure-validation table at the top of this file.
 6. **Bundle 5 — autonomy & inventory** (**PARTIAL: E1/E2 landed in Bundle 5a/5b; E3 + D6 landed in Bundles 2a/2b; B5 LANDED in Bundle 3e**).
