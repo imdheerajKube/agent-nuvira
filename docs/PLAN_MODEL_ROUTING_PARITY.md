@@ -382,6 +382,42 @@ contract: the header's provider equals the event's `served`, and the misleading 
 labels. And the child agent's own log event (`child-agent-runtime.ts`) records `{ tools, transport }` with
 no provider at all, so it never had this mismatch to fix.
 
+## Bundle 12 — the parity ask, re-run end-to-end on the rebuilt `dist`
+
+**What was run.** The user's own routing-design ask, verbatim, through the built CLI in a COPY of his
+project folder (`/tmp/g-live-parity`), detached so the launcher returns immediately:
+`python3 tmp/run-detached.py /tmp/nuvira-logs/g-live-parity.log node dist/index.js chat "$(cat task.txt)"`.
+**His own folder is provably untouched** — both files hash identically before and after
+(`Router_Design.md b5dbbdd385d87a657413ba1e994fcd59`, `Design_Doc.md cdd9316d89676541d0468e002c8392c2`),
+and the copy's two files are byte-identical to his.
+
+**It delivered**: `turn.end {"generationFailed":false,"cancelled":false,"bounded":false,"contentChars":13607,"toolCalls":2,"findings":0,"served":"local/gpt-oss:120b-cloud"}` in **19s**
+(10:48:38.412Z → 10:48:57.542Z), one model call, no failover. Trace
+`~/.nuvira/debug-logs/cli-chat-1791370118412.log` (6 events).
+
+**What the BEFORE/AFTER comparison actually shows.** The Bundle 8 run of the same ask bought the router's
+capability to serve it with TWO provider failures:
+
+| | Bundle 8 run (before B2) | this run (after B2) |
+|---|---|---|
+| first pick | `gemini/gemma-4-26b-a4b-it` — a ~4B-active model, for an ask the router had graded `complex` | **`local/gpt-oss:120b-cloud`** (120B) |
+| failovers before an answer | 2 — a gemini timeout, then `Gemini tool-calling API error (500)` | **0** (`turn.start` and `turn.end` name the SAME pair; the routing row carries no `fallbackFrom`) |
+| wall clock / model calls | 4m16s / 36 | **19s / 1** |
+
+**B2-a is confirmed in the live record.** The new row is
+`{"complexity":"complex","provider":"local","model":"gpt-oss:120b-cloud","score":0.43836864406779663,"scoreBasis":"provider","overrideReason":"model-first"}`
+— the score now belongs to the pair the row names, and says which scale it is on. The older rows for the
+same ask still show the borrowed `0.4383…` on gemini/openrouter/deepseek with no `scoreBasis`: correct,
+because entries written before the fix must load unchanged.
+
+**What this run does NOT prove, stated plainly.** It answered the design ask IN CHAT (13,607 chars) with two
+tool calls — `skill` and `suggest_followups` — and wrote no files, where the Bundle 8 run wrote and ran a
+Python module. The two are therefore NOT comparable on depth of work: the ask says "write a best in class
+routing…" and the folder already holds the user's own design docs, so a design answer is on-target, but a
+cheaper turn is not by itself a better one. What is proven is narrower and still worth having: the router's
+FIRST pick now serves the ask, so nothing is paid for a model that cannot answer it. Whether this ask should
+produce a file remains a product question, not a routing one.
+
 ## Bundle 11 — a row may not borrow a score it did not earn (B2-a LANDED)
 
 **What was wrong.** `RoutingHistoryEntry.score` is documented as *"Router composite score of the pick"*,
@@ -475,11 +511,26 @@ UNKNOWN-window path: no window → the resolver returns `undefined` → the call
 |---|---|---|---|
 | **C1/C5 (Bundle 10)** | `learning/context-budget.ts`: `THREAD_BUDGET_FLOOR_CHARS` (200,000, a universal never-shrink floor) replaced by `MIN_THREAD_BUDGET_CHARS` (20,000, a degenerate-window sanity floor); `resolveThreadBudgetChars` returns `Math.max(MIN, Math.min(MAX, windowDerived))`, so the window decides in BOTH directions. `tools/tool-loop.ts`: new optional `deps.threadBudgetAfterSwitch?()`, `budgetChars` becomes `let`, and the P2 handoff re-fits and discloses. `cli/chat.ts`: the hook wired to the session. | `tests/learning/context-budget.test.ts` (the small-window test inverted to assert FIT, plus a degenerate-window floor case), `tests/tools/tool-loop.test.ts` (+2: the refit is applied AND disclosed — **proven load-bearing**, the assertion fails with `expected 40000 to be less than 40000` when the hook is absent; and `undefined` leaves the budget untouched) | **LANDED**, measured on the registry (31 of 496 chat models were given more thread than their own window) |
 
-**Residuals, stated honestly.** If the registry records a window SMALLER than the model really has, the
-thread is now trimmed to that smaller figure — the answer is trusting measurement over advertisement
-(B1/B3/B4's scorecard), not a larger floor. And `trimThreadBudget`'s oldest-first pass is still
-TRUNCATION rather than plan-aware selection; with the plan visible at turn start (Bundle 4d) and the work
-digest retained, the facts that decide the work survive it.
+**Residuals, stated honestly — and the first one is now MEASURED rather than assumed.**
+
+If the registry records a window SMALLER than the model really has, the thread is now trimmed to that
+smaller figure, so the input to this fix had to be checked before it could be trusted. Measured against
+**OpenRouter's live keyless catalogue** (`GET openrouter.ai/api/v1/models`, HTTP 200) for every one of our
+486 openrouter entries that carries a window: **465 matched the advertised `context_length` EXACTLY, 0
+differed**, and 21 are no longer in the catalogue (models the provider has since dropped — they keep a
+window, which is inert because the dead-pair/plausibility filters already exclude them). So the values are
+not corrupted by our own parsing; they are the provider's own number. Where a per-model window is absent
+the resolver uses a PROVIDER-level estimate, and that is deliberate and documented in the adapters —
+`groq-adapter.ts` states that Groq's `/models` endpoint exposes no window, so its 131K is an estimate from
+the static docs, not a guess we invented. (That check also killed a tempting wrong hypothesis: Groq's
+`GROQ_MODEL_MAX_TOKENS` table is MAX OUTPUT tokens, not a window, so it must not be read as evidence about
+one.) The blast radius of the change is correspondingly narrow: of the 31 affected models, all are
+openrouter entries, and on this machine groq — the provider that actually serves — resolves 501K chars,
+well ABOVE the old floor, so its behaviour is unchanged.
+
+And `trimThreadBudget`'s oldest-first pass is still TRUNCATION rather than plan-aware selection; with the
+plan visible at turn start (Bundle 4d) and the work digest retained, the facts that decide the work
+survive it.
 
 ## Bundle 9 — the reasoning tier was read from a SUBSTRING (B2's real root cause, LANDED)
 
