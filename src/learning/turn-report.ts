@@ -195,6 +195,32 @@ function hasAnyFlag(flags: TurnReportFlags): boolean {
 }
 
 /**
+ * Bundle 21 — is this the authored-document read-back case?
+ *
+ * The ONE translation of "documents are verified by read-back", shared so the
+ * tool loop (which SETS `unverifiedEdit`) and the turn report (which DELIVERS the
+ * verdict) cannot drift: a file written and then READ BACK for an authored ask.
+ * The read must FOLLOW the write — reading an unrelated file is not evidence about
+ * this deliverable — and it is deliberately NOT generalised to code, where a
+ * read-back proves nothing about behaviour.
+ */
+export function isAuthoredReadBack(goal: string, successfulToolCalls: readonly string[]): boolean {
+  let authoredAsk = false;
+  try {
+    authoredAsk = wantsAuthoredArtifact(goal ?? '');
+  } catch {
+    authoredAsk = false;
+  }
+  if (!authoredAsk) return false;
+  const lastMutationIdx = successfulToolCalls.reduce(
+    (acc, t, i) => (MUTATION_TOOLS.has(t) ? i : acc),
+    -1,
+  );
+  if (lastMutationIdx < 0) return false;
+  return successfulToolCalls.slice(lastMutationIdx + 1).some((t) => READBACK_TOOLS.has(t));
+}
+
+/**
  * Build the report from recorded evidence. Never throws; unknown inputs are
  * treated as absent rather than guessed.
  */
@@ -229,19 +255,7 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
   // An authored-document ask whose file was written and then READ BACK — but only
   // when the read followed the write (a read of an unrelated file is not evidence
   // about this deliverable). See the verdict doc for why this is NOT `verified`.
-  const authoredAsk = (() => {
-    try {
-      return wantsAuthoredArtifact(input.goal ?? '');
-    } catch {
-      return false;
-    }
-  })();
-  const lastMutationIdx = successfulToolCalls.reduce(
-    (acc, t, i) => (MUTATION_TOOLS.has(t) ? i : acc),
-    -1,
-  );
-  const readBack =
-    lastMutationIdx >= 0 && successfulToolCalls.slice(lastMutationIdx + 1).some((t) => READBACK_TOOLS.has(t));
+  const authoredReadBack = isAuthoredReadBack(input.goal ?? '', successfulToolCalls);
   const unfinishedFlag = UNFINISHED_FLAGS.some((k) => Boolean(flags[k]));
 
   // A tool counts as failed when it was attempted and is not in the success list.
@@ -271,7 +285,7 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
     // than "mostly fine". A bare `unverifiedEdit` is deliberately excluded — see
     // `UNFINISHED_FLAGS`.
     verification = 'unverified';
-  } else if (mutated && !observed && authoredAsk && readBack) {
+  } else if (mutated && !observed && authoredReadBack) {
     // The authored deliverable exists and was read back. This is delivery
     // evidence, never a completeness check — hence its own label.
     verification = 'delivered-and-read-back';

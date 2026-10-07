@@ -3196,3 +3196,69 @@ describe('Bundle 23 (item 13) — the artifact measured against the ask', () => 
     }
   });
 });
+
+describe('Bundle 21/25 — the authored read-back demotes the edit-verification flag', () => {
+  // Applied WHERE THE FLAG IS SET, so the trace outcome, the console warning, the
+  // working-state ledger and the turn report all agree. Measured live: a turn that
+  // wrote and read back GUIDE.md recorded `unverifiedEdit: true` on the trace while
+  // its turn report said `delivered-and-read-back`.
+
+  it('does NOT set unverifiedEdit for an authored write-then-read-back', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-arback-'));
+    try {
+      const deps = mockDeps(
+        [
+          {
+            content: '',
+            toolCalls: [
+              { id: 'w1', name: 'write_file', arguments: { path: 'GUIDE.md', content: '# Guide\n\nReal prose about stores.' } },
+            ],
+          },
+          { content: '', toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'GUIDE.md' } }] },
+          { content: 'Saved to GUIDE.md.', toolCalls: [] },
+        ],
+        realExecute,
+      );
+      const result = await runToolLoop({
+        messages: [
+          { role: 'user', content: 'Write a comprehensive technical guide to key-value stores. Save it to GUIDE.md in this folder.' },
+        ],
+        context: { ...ctx, cwd: workdir, writesAuthorized: true },
+        deps,
+        requireVerification: false,
+        requirePlan: false,
+      });
+      // The read-back IS the meaningful check for a document — no unverified flag.
+      expect(result.unverifiedEdit).toBeUndefined();
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('KEEPS the flag for a CODE turn — read-back is not verification for code', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-codeback-'));
+    try {
+      const deps = mockDeps(
+        [
+          {
+            content: '',
+            toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: 'utils.ts', content: 'export const add = (a:number,b:number)=>a+b;' } }],
+          },
+          { content: '', toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'utils.ts' } }] },
+          { content: 'Written to utils.ts.', toolCalls: [] },
+        ],
+        realExecute,
+      );
+      const result = await runToolLoop({
+        messages: [{ role: 'user', content: 'Add a helper function and save it to utils.ts' }],
+        context: { ...ctx, cwd: workdir, writesAuthorized: true },
+        deps,
+        requireVerification: false,
+        requirePlan: false,
+      });
+      expect(result.unverifiedEdit).toBe(true);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+});

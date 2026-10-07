@@ -308,6 +308,39 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 26 — one verdict for the authored read-back, on every surface (LANDED 2026-10-07)
+
+**The defect, found by reading a live trace.** Bundle 21 decided that an authored document written and then
+READ BACK gets the verdict `delivered-and-read-back` — never `unverified`. But the demotion lived only in
+`buildTurnReport`, while the trace, the console warning and the working-state ledger all read the raw
+`unverifiedEdit` flag that the tool loop SETS. So a live turn (`/tmp/g-book3`) that wrote and read back
+`GUIDE.md` recorded `outcome.unverifiedEdit: true` on its trace AND printed *"Files were changed this turn
+but no verification ran — the change is unverified"* — while its own turn report said
+`delivered-and-read-back`. Two surfaces, one turn, opposite verdicts. That is the A5 class of defect (a fact
+reported differently per component), one layer down.
+
+**The fix — applied where the FLAG is set, not per consumer.** `isAuthoredReadBack(goal, successfulToolCalls)`
+is now the single translation, exported from `turn-report.ts` and used by BOTH the loop and the report:
+
+- `tools/tool-loop.ts` sets `unverifiedEdit` / `unverifiedEditClaim` only when the turn is NOT an authored
+  read-back. Because every consumer reads those flags, the trace outcome, the console warning, the
+  working-state ledger and the turn report now agree **without a per-surface conditional** — the alternative
+  (suppressing at each consumer) is exactly how the divergence happened in the first place.
+- `turn-report.ts` keeps the verdict branch, now built on the shared helper, so the semantics cannot drift
+  between the two callers.
+
+The helper is deliberately the same rule Bundle 21 chose: the read must FOLLOW the write, the ask must be an
+authored deliverable, and it does NOT generalise to code (read-back proves nothing about behaviour). Code
+turns keep the flag — pinned by test.
+
+**Tests.** `tool-loop.test.ts` (+2, both directions): an authored write-then-read-back leaves
+`unverifiedEdit` absent, and a CODE write-then-read-back keeps it `true` — so the change cannot be satisfied
+by simply never setting the flag. **Gates.** root suite **465 files / 8563 passed / 0 failed**,
+`verify:commands` **341/341**, all three docs guards, `build:cli`, dashboard bundle. No cycle from the new
+import (`turn-report` → `plan-store` is a TYPE-only import, erased at compile).
+
+---
+
 ## Bundle 25 — F1's sectioned-delivery path, PROVEN LIVE (2026-10-07)
 
 **Why this section exists.** Since Bundle 6 this file has carried one line: *"the live re-run of the failing
@@ -861,7 +894,17 @@ exists; where it does not, that is stated as the residual rather than implied cl
     named is now caught by measuring the delivered file against the request — a factual comparison, not a
     phrase list. What remains is the non-answer that neither self-declares nor misses a stated magnitude
     (a fluent, on-length document that is simply generic), which is still B3's job and needs a quality
-    signal that does not yet exist.
+    signal that does not yet exist. **Status (round 3, 2026-10-07): NOT implemented, deliberately.** Every
+    deterministic signal available for the generic-on-length case is either a phrase list (judging quality
+    from vocabulary — the defect this programme removes) or requires a stoplist/technology vocabulary that
+    is itself hand-written. The alternative — a named-entity/coverage check — needs an "is this a concrete
+    term" judgement, which is the same hand-writing one layer down, and it has NO measured failure behind
+    it yet: none of the live runs (g-book, g-book2, g-book3, g-f1b, g-f1c) produced a fluent, on-length,
+    generic document. Shipping a detector for a failure that has not been observed, using a rule the
+    doctrine forbids, would add noise rather than a signal. The honest next step is to COLLECT the case:
+    when an authored artifact is delivered at ≥ the stated magnitude (so the shortfall check is silent) and
+    the turn still reads as a miss, record it — that corpus is what a quality signal must be fit to, and it
+    is the same missing ground truth the learned area set (item 9) needs.
 14. ~~**`model explain` answers a hypothetical**: it cannot see a continuation's `routingText`, the
     `contextHintTokens`, or the session's failed-provider set, which exist only at runtime.~~
     **CLOSED — Bundle 21**: `--context-tokens <n>` feeds the context preflight the token count the runtime

@@ -74,6 +74,7 @@ import {
   type RunTraceSnapshot,
 } from '../learning/run-trace.js';
 import { wantsAuthoredArtifact } from '../learning/deliverable-class.js';
+import { isAuthoredReadBack } from '../learning/turn-report.js';
 import { parseLongFormTarget, countWords } from '../learning/long-form.js';
 import { normalizeFollowups, type FollowupSuggestion } from './followup-utils.js';
 import type { ToolArgumentsError } from '../inference/interface.js';
@@ -3743,10 +3744,26 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       progress.verificationEvidence,
       progress.mutatedPaths,
     );
-    if (activity.needsVerification) {
+    // Bundle 21/25 — the authored-document demotion, applied WHERE THE FLAGS ARE
+    // SET so every surface agrees without a per-caller conditional: the trace
+    // outcome, the console warning, the working-state ledger and the turn report all
+    // read these two flags. For an authored deliverable that was written and then
+    // READ BACK, the read-back IS the meaningful check — a code-style "no observing
+    // run" verdict would contradict the `delivered-and-read-back` verdict the report
+    // deliberately produces. Measured live: a turn that wrote and read back GUIDE.md
+    // recorded `unverifiedEdit: true` on the trace while its report said
+    // `delivered-and-read-back`.
+    const authoredReadBack = isAuthoredReadBack(
+      lastUserText(opts.messages),
+      result.successfulToolCalls,
+    );
+    if (activity.needsVerification && !authoredReadBack) {
       result.unverifiedEdit = true;
     }
-    if (detectUnverifiedEditClaim(result.content, activity.mutations, activity.verifications)) {
+    if (
+      detectUnverifiedEditClaim(result.content, activity.mutations, activity.verifications) &&
+      !authoredReadBack
+    ) {
       result.unverifiedEditClaim = true;
     }
     // Bundle 19 — ARTIFACT honesty. A file the turn wrote says its own content was
