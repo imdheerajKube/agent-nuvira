@@ -971,6 +971,8 @@
           "description": "Explain Auto model routing — why a provider/model would be picked for a task",
           "flags": [
             "--agent <agent>",
+            "--context-tokens <context_tokens>",
+            "--exclude-provider <exclude_provider>",
             "--json",
             "--since <since>"
           ]

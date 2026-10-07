@@ -142,7 +142,7 @@ function isTurnReport(value: unknown): value is TurnReport {
     typeof r.stepCounts === 'object' &&
     typeof r.stepCounts.total === 'number' &&
     typeof r.verification === 'string' &&
-    ['verified', 'unverified', 'blocked', 'not-applicable'].includes(r.verification) &&
+    ['verified', 'unverified', 'blocked', 'not-applicable', 'delivered-and-read-back'].includes(r.verification) &&
     (r.summary === null || typeof r.summary === 'string') &&
     Array.isArray(r.changedPaths) &&
     !!r.flags &&

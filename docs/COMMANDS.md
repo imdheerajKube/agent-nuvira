@@ -613,14 +613,22 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ### 5.4 Understand routing decisions
 
 - **Objective:** See *why* a provider/model would be picked for a task (Auto router).
-- **Command:** `nuvira model explain [-a <agent>] [-j] [--since <time>]` · `nuvira model bandit` · `nuvira model ml` · `nuvira model quota`
+- **Command:** `nuvira model explain [-a <agent>] [-j] [--since <time>] [--context-tokens <n>] [--exclude-provider <provider>]` · `nuvira model bandit` · `nuvira model ml` · `nuvira model quota`
 - **Examples:**
   ```bash
   nuvira model explain -a writer --json
+  nuvira model explain "refactor the router" --context-tokens 120000 --exclude-provider groq
   nuvira model bandit -j                 # Thompson-sampling state per provider × complexity
   nuvira model ml -j                     # ML task-similarity router state
   nuvira model quota -j                  # token/request/cost ledger per provider × model
   ```
+- **First-timer detail:** `explain` is offline, so it cannot see a live session's own
+  state. Two runtime-only inputs change the pick, and you can supply them to reproduce a
+  real decision: the prompt token count the turn would have seen (`--context-tokens`, the
+  context-preflight basis) and a provider that already failed this session
+  (`--exclude-provider`, repeatable — it sinks by scoring exactly as a live failure does).
+  The header always states which inputs were in force, so an offline answer is never read
+  as the live one.
 
 ### 5.5 Provider health
 

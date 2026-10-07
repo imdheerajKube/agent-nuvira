@@ -160,6 +160,71 @@ describe('ModelCommand explain', () => {
     expect(proj(explainDecision)).toBe(proj(withHint));
   });
 
+  // ─── Item 14 — runtime-only inputs `explain` could not see ────────────────
+
+  it('sinks a caller-named excluded provider exactly as a live session failure does (item 14)', () => {
+    // A session's failed-provider set exists only at runtime, so `explain` could
+    // name a provider the session had already parked. `--exclude-provider` folds
+    // it in as an active cooldown, which SUNKS it by scoring — the same channel
+    // the runtime uses. Only a decision that RECEIVED the exclusion can mark it
+    // cooling, so `inCooldown` is the assertion, not a comparison of winners.
+    const cmd = new ModelCommand();
+    const router = getAutoRouter();
+    const task = 'implement a login form';
+    const excluded = (
+      cmd as unknown as {
+        resolveExplainDecision: (
+          r: typeof router,
+          a: string,
+          t: string,
+          runtime?: { contextTokens?: number; excludeProviders?: string[] },
+        ) => ReturnType<typeof router.resolve>;
+      }
+    ).resolveExplainDecision(router, 'chat', task, { excludeProviders: ['groq'] });
+    expect(excluded.ranked.some((r) => r.provider === 'groq' && r.inCooldown)).toBe(true);
+  });
+
+  it('makes the context preflight read the runtime token count, not the task estimate (item 14)', () => {
+    // The context-fit signal decides the pickup from `contextHintTokens`; without
+    // it `explain` estimates from the task text, so a decision made with a large
+    // history could be audited against a route the runtime never took.
+    const cmd = new ModelCommand();
+    const router = getAutoRouter();
+    const task = 'implement a login form';
+    const resolve = (
+      cmd as unknown as {
+        resolveExplainDecision: (
+          r: typeof router,
+          a: string,
+          t: string,
+          runtime?: { contextTokens?: number; excludeProviders?: string[] },
+        ) => ReturnType<typeof router.resolve>;
+      }
+    ).resolveExplainDecision.bind(cmd);
+    // Fixture sanity: the preflight must exist for the basis to be observable.
+    expect(resolve(router, 'chat', task, {}).contextPreflight?.basis).toBe('task');
+    expect(resolve(router, 'chat', task, { contextTokens: 200_000 }).contextPreflight?.basis).toBe('hint');
+    expect(resolve(router, 'chat', task, { contextTokens: 200_000 }).contextPreflight?.estimatedPromptTokens).toBe(200_000);
+  });
+
+  it('parses the runtime-input flags and discloses what the decision could not see (item 14)', () => {
+    const output = runCommand(['explain', 'implement a login form', '--context-tokens', '12345', '--exclude-provider', 'groq']);
+    // The disclosure names the inputs in force — so an offline answer is never
+    // read as a live one.
+    expect(output).toContain('~12345 tokens');
+    expect(output).toContain('excluded providers: groq');
+    expect(output).toContain('--exclude-provider');
+  });
+
+  it('discloses the empty runtime inputs when none are given, and reports them in --json (item 14)', () => {
+    const human = runCommand(['explain', 'implement a login form']);
+    expect(human).toContain('excluded providers: none');
+    const json = runCommand(['explain', 'implement a login form', '--json', '--context-tokens', '4096', '--exclude-provider', 'groq']);
+    expect(json).toContain('"runtimeInputs"');
+    expect(json).toContain('"excludedProviders"');
+    expect(json).toContain('4096');
+  });
+
   it('states the availability-first ordering the ranked list is sorted by (D5)', () => {
     // The list is sorted availability-first (cooling-down → quota-parked → score
     // within each group), which IS the routing precedence, but only `score` was

@@ -228,7 +228,68 @@ paraphrase is the defect this programme removes). (3) **F1's sectioned-delivery 
 
 **Tests.** `deliverable-class.test.ts` (+4: the two live asks, the routing consequence, and the two code
 asks that must stay code), `tool-loop.test.ts` (+6: five detector cases and the end-to-end turn). Gates:
-see the Bundle 20 commit.
+root suite **465 files / 8535 passed / 0 failed**, `verify:commands` **341/341**, all three docs guards,
+`build:cli`, dashboard bundle.
+
+---
+
+## Bundle 21 — `model explain` sees the runtime, and the authored-document verdict (LANDED, 2026-10-07)
+
+**Two round-2 decisions, both from the user, landed together.**
+
+### Item 14 — `model explain` no longer answers a hypothetical
+
+**The defect.** `model explain` is offline and sees neither a continuation's routing text, the
+`contextHintTokens`, nor the session's failed-provider set — all of which exist only at runtime and all of
+which change the pick. Asked to explain a route, it explained a route the session might never take.
+`resolveExplainDecision` already seeded the NLU hint and the circuit breaker (D4); these two were the rest.
+
+**The fix, on the user's chosen scope ("add flags to reproduce them").** `--context-tokens <n>` supplies the
+prompt token count the runtime saw, so the context preflight's basis reads `hint` instead of estimating from
+the task. `--exclude-provider <provider>` (repeatable) folds a session-failed provider into
+`circuitBreakerStatus` as an active cooldown, so the router SUNKS it by scoring — the same channel a live
+failure uses, not a parallel notion of "excluded". A continuation's `routingText` needs no new flag: it is
+the positional `[task]` itself, because that is the text routing scores.
+
+**Disclosed, not implied.** The header now always states which runtime inputs were in force
+(`context ~N tokens · excluded providers: …`) and points at the flags, so an offline answer is never read as
+the live one. `--json` carries the same as `runtimeInputs { contextTokens, excludedProviders }`, so a script
+can tell a hypothetical from a reproduced decision. Documented in `docs/COMMANDS.md` (5.4) and regenerated
+into `COMMANDS_SURFACE.md`.
+
+### The authored-document verdict — `delivered-and-read-back`, never `verified`
+
+**The decision (option 3, user-confirmed).** For an AUTHORED DOCUMENT the meaningful check is that the file
+EXISTS at the promised path and was read back — and its verdict must be LABELLED, because read-back proves a
+file is present, **not** that a section has content (F1's read-back "confirmed all sections are present" —
+true of a list of headings). So `TurnVerification` gains `delivered-and-read-back`, distinct from `verified`.
+
+**The rule.** `buildTurnReport` computes the verdict from the goal (`wantsAuthoredArtifact`, Bundle 20) plus
+the recorded tool order: the turn mutated an authored deliverable and a READ tool (`read_file`/`open_file`/
+`view_file`) ran **after** the last write. For CODE nothing changes — read-back is not in `VERIFICATION_TOOLS`
+and never makes code `verified`.
+
+**Why `unverifiedEdit` could not simply win.** A write+read-back turn sets `unverifiedEdit` (read-back is not
+an observing run), and a naive "any flag → unverified" would have silenced the new verdict entirely. So a
+bare `unverifiedEdit` is DEMOTED for the authored read-back case, while every honesty flag that means the
+turn is not finished work (`unverifiedEditClaim`, `unverifiedBuildClaim`, `undeliveredArtifact`,
+`unfulfilledPromise`, `noActionTaken`, `incompleteArtifactClaim`, `unverifiedFileClaim`) still forces
+`unverified`. That is stated in one `UNFINISHED_FLAGS` list so the precedence is a decision, not an accident.
+
+**Neutral to learning, by design.** `foldVerification` already folds only `verified`/`unverified`; the new
+value contributes NOTHING to `accuracy`, extended through `capability-evidence.ts`, `model-registry.ts`, the
+dashboard `types.ts` and the `api.ts` verdict whitelist. Existence is not quality, so folding it either way
+would invent a signal the evidence does not carry.
+
+**Tests.** `model.test.ts` (+4: excluded provider sunk by `inCooldown`, context-preflight basis `task→hint`,
+the flag surface, and the empty-input/JSON disclosure); `turn-report.test.ts` (+4: the authored read-back
+labelled and rendered with "NOT a completeness check", code staying `unverified`, the `unverifiedEdit`
+demotion vs an honesty flag forcing `unverified`, and read-before-write / real-check-still-wins).
+
+**Gates.** root suite **465 files / 8543 passed / 0 failed**, `verify:commands` **341/341**, dashboard suite
+**50 files / 1053 passed**, both `tsc --noEmit` clean, all three docs guards, `build:cli`, dashboard bundle.
+One full-suite run showed `tests/parity/scenario-parity.test.ts` failing on a 35 s heavy case; it passes in
+isolation (26/26) and passed on the next full run — recorded as containment contention, not a regression.
 
 ---
 
@@ -576,8 +637,13 @@ exists; where it does not, that is stated as the residual rather than implied cl
     Bundle 19**: a non-answer that *says* its own content was omitted is now caught deterministically — the
     artifact reporting its own incompleteness is a factual self-statement, not a quality word-list. What
     remains is the non-answer that does NOT self-declare, which is still B3's job.
-14. **`model explain` answers a hypothetical**: it cannot see a continuation's `routingText`, the
-    `contextHintTokens`, or the session's failed-provider set, which exist only at runtime.
+14. ~~**`model explain` answers a hypothetical**: it cannot see a continuation's `routingText`, the
+    `contextHintTokens`, or the session's failed-provider set, which exist only at runtime.~~
+    **CLOSED — Bundle 21**: `--context-tokens <n>` feeds the context preflight the token count the runtime
+    saw, and `--exclude-provider <p>` (repeatable) folds a session-failed provider in as an active cooldown,
+    which SUNKS it by scoring exactly as a live failure does. A continuation's `routingText` is the positional
+    `[task]` itself (that is what routing scores), so it is supplied by passing it. The header now always
+    states which runtime inputs were in force, so an offline answer is never read as the live one.
 15. ~~**Prose-only turns are not nudged to verify.**~~ **DECIDED (2026-10-07): keep it edit-only.** The
     user asked how this agent's own harness handles it, and the answer is the same rule — verification
     runs when work was CHANGED; a prose-only turn is not verified but IS disclosed as `unverified`, which
@@ -601,6 +667,12 @@ exists; where it does not, that is stated as the residual rather than implied cl
 - **Open items 9 + 13 (measured quality)** — DECIDED: scope as its own bundle, on top of the `accuracy`
   samples the feed work begins filling.
 - **Open items 2 + 3 (hygiene)** — APPROVED and RUN against the real profile: see Bundle 15.
+- **Open item 6's doc-verification half (round 2, 2026-10-07)** — DECIDED, option 3, and the user confirmed
+  the label: for an AUTHORED DOCUMENT the meaningful check is **existence at the promised path + read-back**, and
+  its verdict is a **new label `delivered-and-read-back` — never `verified`**. Read-back proves a file is
+  present, not that a section has content. For CODE nothing changes: read-back is not verification. The
+  capability feeds treat the new verdict as NEUTRAL (neither reward nor penalty), because existence is not
+  quality. See Bundle 21.
 
 No decision is outstanding. What remains open is work, not a question.
 

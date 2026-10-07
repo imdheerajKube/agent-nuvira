@@ -15,14 +15,51 @@
  */
 
 import type { Plan, PlanStepStatus } from '../tools/plan-store.js';
+import { wantsAuthoredArtifact } from './deliverable-class.js';
 
-/** The honesty verdict for a turn's outcome. */
-export type TurnVerification = 'verified' | 'unverified' | 'blocked' | 'not-applicable';
+/**
+ * The honesty verdict for a turn's outcome.
+ *
+ * `delivered-and-read-back` (2026-10-07, user decision) is the AUTHORED-DOCUMENT
+ * verdict and is deliberately NOT `verified`: for a document the meaningful check
+ * is that the file EXISTS at the promised path and was read back — which read-back
+ * confirms a file is present, NOT that a section has content. It is labelled so it
+ * can never read as a completeness proof, and the capability feeds treat it as
+ * NEUTRAL (neither reward nor penalty), because it proves existence, not quality.
+ */
+export type TurnVerification = 'verified' | 'unverified' | 'blocked' | 'not-applicable' | 'delivered-and-read-back';
 
 /** Tools whose success is evidence that a change was OBSERVED. */
 const VERIFICATION_TOOLS = new Set(['run_terminal', 'test', 'browser', 'run_cli', 'run_tests']);
 /** Tools that MUTATE the workspace. */
 const MUTATION_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch', 'multi_edit']);
+/**
+ * Tools that READ a file back. Only meaningful for the authored-document verdict
+ * below, where the run's own read of the file it wrote is the deliverable evidence.
+ * For CODE this is NOT verification (`VERIFICATION_TOOLS` decides that), which is
+ * why it is a separate set and never folded into `observed`.
+ */
+const READBACK_TOOLS = new Set(['read_file', 'open_file', 'view_file']);
+
+/**
+ * The flags that mean a turn is NOT finished work, whatever else it did.
+ *
+ * `unverifiedEdit` is deliberately NOT here. For a CODE turn it stays a hard
+ * `unverified` (below); for an AUTHORED DOCUMENT the read-back IS the meaningful
+ * check, so the flag is demoted to the `delivered-and-read-back` verdict instead of
+ * forcing `unverified` — that is the user's 2026-10-07 decision, and putting it here
+ * would silently override it.
+ */
+const UNFINISHED_FLAGS: ReadonlyArray<keyof TurnReportFlags> = [
+  'unverifiedActionClaim',
+  'unverifiedEditClaim',
+  'unverifiedBuildClaim',
+  'undeliveredArtifact',
+  'unfulfilledPromise',
+  'noActionTaken',
+  'incompleteArtifactClaim',
+  'unverifiedFileClaim',
+];
 
 /** The run's honesty flags, carried so the report can never hide one. */
 export interface TurnReportFlags {
@@ -181,6 +218,23 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
   const mutated = (input.mutations ?? 0) > 0 || successfulToolCalls.some((t) => MUTATION_TOOLS.has(t));
   const observed = successfulToolCalls.some((t) => VERIFICATION_TOOLS.has(t));
   const flagsSet = hasAnyFlag(flags);
+  // An authored-document ask whose file was written and then READ BACK — but only
+  // when the read followed the write (a read of an unrelated file is not evidence
+  // about this deliverable). See the verdict doc for why this is NOT `verified`.
+  const authoredAsk = (() => {
+    try {
+      return wantsAuthoredArtifact(input.goal ?? '');
+    } catch {
+      return false;
+    }
+  })();
+  const lastMutationIdx = successfulToolCalls.reduce(
+    (acc, t, i) => (MUTATION_TOOLS.has(t) ? i : acc),
+    -1,
+  );
+  const readBack =
+    lastMutationIdx >= 0 && successfulToolCalls.slice(lastMutationIdx + 1).some((t) => READBACK_TOOLS.has(t));
+  const unfinishedFlag = UNFINISHED_FLAGS.some((k) => Boolean(flags[k]));
 
   // A tool counts as failed when it was attempted and is not in the success list.
   // Multiset-safe: a call that appears once in each (ran twice, failed once) is a
@@ -203,9 +257,19 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
   let verification: TurnVerification;
   if (stepCounts.blocked > 0) {
     verification = 'blocked';
+  } else if (unfinishedFlag) {
+    // A single UNFINISHED flag is enough: the run said something its evidence did
+    // not support (or did nothing at all), so the whole turn is UNVERIFIED rather
+    // than "mostly fine". A bare `unverifiedEdit` is deliberately excluded — see
+    // `UNFINISHED_FLAGS`.
+    verification = 'unverified';
+  } else if (mutated && !observed && authoredAsk && readBack) {
+    // The authored deliverable exists and was read back. This is delivery
+    // evidence, never a completeness check — hence its own label.
+    verification = 'delivered-and-read-back';
   } else if (flagsSet) {
-    // A single honesty flag is enough: the run said something its evidence did
-    // not support, so the whole turn is UNVERIFIED rather than "mostly fine".
+    // The residual case: a bare `unverifiedEdit` (or any flag on a turn that did
+    // not mutate). It is still an unverified turn.
     verification = 'unverified';
   } else if (mutated && !observed) {
     verification = 'unverified';
@@ -346,6 +410,10 @@ export function formatTurnReport(report: TurnReport): string {
   if (report.cost) lines.push(`   💰 ${formatCost(report.cost)}`);
   if (report.verification === 'unverified') {
     lines.push('   ⚠️ UNVERIFIED — a change or claim was not confirmed by any observation.');
+  } else if (report.verification === 'delivered-and-read-back') {
+    lines.push(
+      '   📄 DELIVERED-AND-READ-BACK — the document exists and was read back. This is NOT a completeness check.',
+    );
   } else if (report.verification === 'blocked') {
     lines.push('   ⛔ BLOCKED — at least one step could not complete.');
   }

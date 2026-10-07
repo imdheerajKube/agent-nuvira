@@ -198,6 +198,32 @@ const EXPLAIN_SAMPLES: Array<{ label: string; task: string }> = [
   { label: '🔴 critical', task: 'deploy to production with zero downtime' },
 ];
 
+/** Repeatable `--exclude-provider <provider>` collector. */
+function collectProvider(value: string, previous: string[]): string[] {
+  previous.push(value);
+  return previous;
+}
+
+/**
+ * Item 14 — the runtime-only inputs `model explain` otherwise cannot see. A
+ * live turn carries a context-payload token count and a set of providers that
+ * already failed THIS SESSION; without them `explain` answers a hypothetical.
+ * These are the two a user can reproduce offline.
+ */
+interface ExplainRuntimeInputs {
+  /** Prompt tokens the runtime would have seen (context preflight basis). */
+  contextTokens?: number;
+  /** Providers failed this session — sunk by scoring, as the runtime does. */
+  excludeProviders?: string[];
+}
+
+/**
+ * A session failure sinks a provider by scoring exactly like a live cooldown
+ * (`circuitBreakerStatus`). Any positive value parks it, so this is not a real
+ * duration — it says "this provider is out for this decision".
+ */
+const SESSION_EXCLUDE_COOLDOWN_MS = 60_000;
+
 // ─── ModelCommand ───────────────────────────────────────────────────────────
 
 export class ModelCommand extends BaseCommand {
@@ -239,7 +265,17 @@ export class ModelCommand extends BaseCommand {
       .option('-a, --agent <type>', 'Agent type to route for (default: chat)', 'chat')
       .option('-j, --json', 'Output as JSON (for scripting and CI)', false)
       .option('--since <ref>', 'P3-M3.3: diff against a previous decision — an explain id, @n (nth most recent explain), or an epoch-ms timestamp', undefined)
-      .action((task: string | undefined, opts: { agent?: string; json?: boolean; since?: string }) => this.showExplain(task, opts));
+      .option('--context-tokens <n>', 'Item 14: the prompt token count the runtime would have seen (context preflight basis) — reproduce a decision made with a large history', undefined)
+      .option('--exclude-provider <provider>', 'Item 14: a provider already failed THIS SESSION, repeatable — it sinks by scoring exactly as the runtime excludes it', collectProvider, [] as string[])
+      .action((task: string | undefined, opts: { agent?: string; json?: boolean; since?: string; contextTokens?: string; excludeProvider?: string[] }) =>
+        this.showExplain(task, {
+          agent: opts.agent,
+          json: opts.json,
+          since: opts.since,
+          contextTokens: opts.contextTokens !== undefined ? Number(opts.contextTokens) : undefined,
+          excludeProviders: opts.excludeProvider,
+        }),
+      );
 
     cmd
       .command('health')
@@ -711,13 +747,20 @@ export class ModelCommand extends BaseCommand {
 
   // ── Subcommand: explain ───────────────────────────────────────────────
 
-  private showExplain(task: string | undefined, opts: { agent?: string; json?: boolean; since?: string }): void {
+  private showExplain(
+    task: string | undefined,
+    opts: { agent?: string; json?: boolean; since?: string } & ExplainRuntimeInputs,
+  ): void {
     const router = getAutoRouter();
     const agentType = opts.agent || 'chat';
+    const runtime: ExplainRuntimeInputs = {
+      contextTokens: opts.contextTokens,
+      excludeProviders: opts.excludeProviders,
+    };
 
     if (opts.json) {
       try {
-        console.log(JSON.stringify(this.buildExplainJSON(router, agentType, task, opts.since), null, 2));
+        console.log(JSON.stringify(this.buildExplainJSON(router, agentType, task, opts.since, runtime), null, 2));
       } catch (err) {
         // A PII/governance policy block must not crash the JSON contract —
         // emit a machine-readable error object instead.
@@ -736,6 +779,18 @@ export class ModelCommand extends BaseCommand {
     console.log('');
     logger.highlight('═══  Auto Model Routing — Explain  ═══');
     console.log('');
+    // Item 14 — say plainly what this decision could NOT see, so an offline
+    // answer is never read as the live one. `explain` has no session: a
+    // continuation's routing text and the session's failed-provider set exist
+    // only at runtime, and both change the pick.
+    logger.info(
+      `Runtime inputs: context ${runtime.contextTokens !== undefined ? `~${runtime.contextTokens} tokens` : '(estimated from the task)'} · ` +
+        `excluded providers: ${runtime.excludeProviders?.length ? runtime.excludeProviders.join(', ') : 'none'}`,
+    );
+    logger.info(
+      'A live session also carries its own failed-provider set; pass --exclude-provider to reproduce it, and --context-tokens to match a large history.',
+    );
+    console.log('');
 
     if (task) {
       logger.info(`Task: "${task}"  ·  Agent: ${agentType}`);
@@ -744,9 +799,9 @@ export class ModelCommand extends BaseCommand {
         // P3-M3.3: `--since <ref>` renders a before → after diff against a
         // previous explain snapshot instead of the full decision view.
         if (opts.since) {
-          this.renderRoutingDecisionDiff(router, agentType, task, opts.since);
+          this.renderRoutingDecisionDiff(router, agentType, task, opts.since, runtime);
         } else {
-          this.renderRoutingDecision(router, agentType, task);
+          this.renderRoutingDecision(router, agentType, task, false, runtime);
         }
       } catch (err) {
         // A PII/governance policy block renders cleanly (with the audit trail)
@@ -770,7 +825,7 @@ export class ModelCommand extends BaseCommand {
     for (const s of EXPLAIN_SAMPLES) {
       logger.highlight(`  ${s.label} — "${s.task}"`);
       try {
-        this.renderRoutingDecision(router, agentType, s.task, true);
+        this.renderRoutingDecision(router, agentType, s.task, true, runtime);
       } catch (err) {
         // A single sample that violates a PII/governance policy renders the
         // block inline and keeps walking the remaining samples.
@@ -815,9 +870,10 @@ export class ModelCommand extends BaseCommand {
     agentType: string,
     task: string | undefined,
     since?: string,
+    runtime: ExplainRuntimeInputs = {},
   ): Record<string, unknown> {
     const toJSON = (t: string, agent: string): Record<string, unknown> => {
-      const d = this.resolveExplainDecision(router, agent, t);
+      const d = this.resolveExplainDecision(router, agent, t, runtime);
       const snapshot = this.buildSnapshot(d);
       // Record the explain snapshot for the dashboard audit trail + usage stats
       // (JSON mode returns early in showExplain, so this is the only hook here)
@@ -894,6 +950,12 @@ export class ModelCommand extends BaseCommand {
           : undefined,
         pricing,
         explanation: d.explanation,
+        // Item 14 — the runtime inputs this decision was reproduced with, so a
+        // script can tell a hypothetical from a reproduced live decision.
+        runtimeInputs: {
+          contextTokens: runtime.contextTokens,
+          excludedProviders: runtime.excludeProviders ?? [],
+        },
         ...(diff ? { diff } : {}),
       };
     };
@@ -925,12 +987,28 @@ export class ModelCommand extends BaseCommand {
    * deterministic in the task text, so seeding it here is reproducing the
    * runtime's assembly, not guessing.
    */
-  private resolveExplainDecision(router: AutoModelRouter, agentType: string, task: string) {
+  private resolveExplainDecision(
+    router: AutoModelRouter,
+    agentType: string,
+    task: string,
+    runtime: ExplainRuntimeInputs = {},
+  ) {
     let circuitBreakerStatus: Array<{ provider: string; cooldownRemaining: number }> = [];
     try {
       circuitBreakerStatus = getProviderFallback(this.configManager).getCircuitBreakerStatus();
     } catch {
       // Best-effort — a breaker read must never break `explain`.
+    }
+    // Item 14 — the session's failed-provider set exists only at runtime, so
+    // `explain` could not see it and could name a provider the session had
+    // already parked. Fold each caller-named exclusion in as an active cooldown:
+    // the router sinks it by scoring, exactly as it sinks a live failure.
+    if (runtime.excludeProviders?.length) {
+      const byProvider = new Map(circuitBreakerStatus.map((c) => [c.provider, c.cooldownRemaining]));
+      for (const p of runtime.excludeProviders) {
+        byProvider.set(p, Math.max(byProvider.get(p) ?? 0, SESSION_EXCLUDE_COOLDOWN_MS));
+      }
+      circuitBreakerStatus = [...byProvider].map(([provider, cooldownRemaining]) => ({ provider, cooldownRemaining }));
     }
     // Same NLU seed as the runtime: one parser call on the same text, so an
     // intent the runtime honours is never invisible to `explain`.
@@ -944,7 +1022,10 @@ export class ModelCommand extends BaseCommand {
       agentType,
       task,
       {
-        ...buildAutoResolveOptions(this.configManager),
+        // Item 14 — the context preflight is part of the pickup, so the token
+        // count the runtime saw must reach it; otherwise `explain` estimates
+        // from the task and can name a different provider under a large history.
+        ...buildAutoResolveOptions(this.configManager, { contextHintTokens: runtime.contextTokens }),
         circuitBreakerStatus,
         ...(taskIntentHint ? { taskIntentHint } : {}),
       },
@@ -1035,9 +1116,15 @@ export class ModelCommand extends BaseCommand {
    * P3-M3.3: resolve the previous explain decision and render the before →
    * after diff for the current decision (which is also recorded).
    */
-  private renderRoutingDecisionDiff(router: AutoModelRouter, agentType: string, task: string, ref: string): void {
+  private renderRoutingDecisionDiff(
+    router: AutoModelRouter,
+    agentType: string,
+    task: string,
+    ref: string,
+    runtime: ExplainRuntimeInputs = {},
+  ): void {
     const prev = this.resolveExplainRef(ref);
-    const decision = this.resolveExplainDecision(router, agentType, task);
+    const decision = this.resolveExplainDecision(router, agentType, task, runtime);
     const snapshot = this.buildSnapshot(decision);
     recordRoutingDecision({
       source: 'explain',
@@ -1069,8 +1156,14 @@ export class ModelCommand extends BaseCommand {
   }
 
   /** Render a single routing decision (compact or detailed). */
-  private renderRoutingDecision(router: AutoModelRouter, agentType: string, task: string, compact = false): void {
-    const decision = this.resolveExplainDecision(router, agentType, task);
+  private renderRoutingDecision(
+    router: AutoModelRouter,
+    agentType: string,
+    task: string,
+    compact = false,
+    runtime: ExplainRuntimeInputs = {},
+  ): void {
+    const decision = this.resolveExplainDecision(router, agentType, task, runtime);
     // Record the explain snapshot for the dashboard audit trail + usage stats
     recordRoutingDecision({
       source: 'explain',

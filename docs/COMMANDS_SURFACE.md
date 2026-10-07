@@ -718,7 +718,7 @@ Show model routing recommendations
 
 Explain Auto model routing — why a provider/model would be picked for a task
 
-   - flags: `--agent <agent>, --json, --since <since>`
+   - flags: `--agent <agent>, --context-tokens <context_tokens>, --exclude-provider <exclude_provider>, --json, --since <since>`
 ### `nuvira model health`
 
 Quick health check for the currently active provider

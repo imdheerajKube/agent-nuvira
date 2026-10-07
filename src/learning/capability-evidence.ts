@@ -111,11 +111,21 @@ function foldEMA(score: ParameterScore | undefined, observation: number): Parame
 
 /**
  * Fold a turn's verification verdict into `accuracy`. `blocked`/
- * `not-applicable`/absent contribute nothing at all (see the header).
+ * `not-applicable`/`delivered-and-read-back`/absent contribute nothing at all (see
+ * the header). `delivered-and-read-back` is NEUTRAL on purpose: it proves an authored
+ * document exists and was read back, not that it is correct or complete, so folding
+ * it either way would invent a quality signal the evidence does not carry.
  */
 export function foldVerification(
   record: CapabilityRecord,
-  verification: 'verified' | 'unverified' | 'blocked' | 'not-applicable' | undefined | null,
+  verification:
+    | 'verified'
+    | 'unverified'
+    | 'blocked'
+    | 'not-applicable'
+    | 'delivered-and-read-back'
+    | undefined
+    | null,
   now: number = Date.now(),
 ): CapabilityRecord {
   if (verification !== 'verified' && verification !== 'unverified') return record;

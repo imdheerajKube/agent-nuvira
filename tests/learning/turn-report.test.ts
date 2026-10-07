@@ -176,6 +176,81 @@ describe('buildTurnReport — verification verdict', () => {
   });
 });
 
+describe('buildTurnReport — the authored-document verdict (option 3, 2026-10-07)', () => {
+  // The user chose: an authored document that EXISTS at the promised path and was
+  // READ BACK gets its own verdict, LABELLED so it can never read as complete.
+  const AUTHORED_GOAL =
+    'Write a comprehensive technical guide to building a distributed key-value store. Save it to GUIDE.md in this folder.';
+
+  it('labels an authored document that was written and read back — never `verified`', () => {
+    const r = buildTurnReport({
+      goal: AUTHORED_GOAL,
+      toolCalls: ['write_file', 'read_file'],
+      successfulToolCalls: ['write_file', 'read_file'],
+      mutations: 1,
+      changedPaths: ['GUIDE.md'],
+    });
+    expect(r.verification).toBe('delivered-and-read-back');
+    expect(r.summary).toContain('verification: delivered-and-read-back');
+    const formatted = formatTurnReport(r);
+    expect(formatted).toContain('📄 DELIVERED-AND-READ-BACK');
+    // The label must say what it is NOT, or it would read as a completeness proof.
+    expect(formatted).toContain('NOT a completeness check');
+    expect(formatted).not.toContain('UNVERIFIED');
+  });
+
+  it('does NOT generalise to CODE — read-back is not verification for code', () => {
+    const r = buildTurnReport({
+      goal: 'fix the parser bug',
+      toolCalls: ['edit_file', 'read_file'],
+      successfulToolCalls: ['edit_file', 'read_file'],
+      mutations: 1,
+      changedPaths: ['parser.ts'],
+    });
+    expect(r.verification).toBe('unverified');
+  });
+
+  it('demotes a bare unverifiedEdit for an authored read-back, but NOT the honesty flags', () => {
+    // `unverifiedEdit` alone: the read-back IS the meaningful check for a document,
+    // so the verdict is the labelled one.
+    const demoted = buildTurnReport({
+      goal: AUTHORED_GOAL,
+      toolCalls: ['write_file', 'read_file'],
+      successfulToolCalls: ['write_file', 'read_file'],
+      mutations: 1,
+      flags: { unverifiedEdit: true },
+    });
+    expect(demoted.verification).toBe('delivered-and-read-back');
+    // An artifact-honesty flag still wins: the file admits it is incomplete, which
+    // read-back cannot erase.
+    const forced = buildTurnReport({
+      goal: AUTHORED_GOAL,
+      toolCalls: ['write_file', 'read_file'],
+      successfulToolCalls: ['write_file', 'read_file'],
+      mutations: 1,
+      flags: { incompleteArtifactClaim: true },
+    });
+    expect(forced.verification).toBe('unverified');
+  });
+
+  it('requires the read to FOLLOW the write, and a real check still beats it', () => {
+    // A read BEFORE the write is not a read-back of the deliverable.
+    const notReadBack = buildTurnReport({
+      goal: AUTHORED_GOAL,
+      successfulToolCalls: ['read_file', 'write_file'],
+      mutations: 1,
+    });
+    expect(notReadBack.verification).toBe('unverified');
+    // A real verification tool that ran still yields `verified`.
+    const realCheck = buildTurnReport({
+      goal: AUTHORED_GOAL,
+      successfulToolCalls: ['write_file', 'read_file', 'run_terminal'],
+      mutations: 1,
+    });
+    expect(realCheck.verification).toBe('verified');
+  });
+});
+
 describe('formatTurnReport', () => {
   it('renders steps and an explicit UNVERIFIED warning', () => {
     const r = buildTurnReport({

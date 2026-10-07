@@ -934,7 +934,7 @@ export interface ResumeOutcome {
 // ─── Turn Report Types (Workstream E) ──────────────────────────────────────
 
 /** The honesty verdict for a turn's outcome (mirrors `learning/turn-report.ts`). */
-export type TurnVerification = 'verified' | 'unverified' | 'blocked' | 'not-applicable';
+export type TurnVerification = 'verified' | 'unverified' | 'blocked' | 'not-applicable' | 'delivered-and-read-back';
 
 /**
  * E — the derived plan → track → verify → report artifact for one chat turn.

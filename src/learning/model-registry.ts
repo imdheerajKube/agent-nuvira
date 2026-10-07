@@ -1223,7 +1223,7 @@ export class ModelRegistry {
     provider: string,
     model: string,
     observation: {
-      verification?: 'verified' | 'unverified' | 'blocked' | 'not-applicable';
+      verification?: 'verified' | 'unverified' | 'blocked' | 'not-applicable' | 'delivered-and-read-back';
       ok?: boolean;
       latencyMs?: number;
       now?: number;
@@ -1268,7 +1268,7 @@ export class ModelRegistry {
   recordCapabilityEvidence(
     provider: string,
     model: string,
-    verification: 'verified' | 'unverified' | 'blocked' | 'not-applicable',
+    verification: 'verified' | 'unverified' | 'blocked' | 'not-applicable' | 'delivered-and-read-back',
   ): void {
     this.foldCapability(provider, model, { verification });
   }
