@@ -182,11 +182,18 @@ export interface TraceOutcome {
    * Distinct from `undeliveredArtifact` (a function of the ASK): this is a
    * function of the turn's own CLAIM, so a fabricated "I saved it" is marked
    * `incomplete` even when the ask was never recognised as a deliverable.
+   */  unverifiedFileClaim?: boolean;
+  /**
+   * Bundle 23 (item 13) — the ask named a magnitude and the written artifact is
+   * far short of it. The delivered file is not what was asked for, so the turn did
+   * not conclude.
    */
-  unverifiedFileClaim?: boolean;
+  artifactShortfall?: boolean;
 }
 
 /**
+
+
  * Which gate made a decision, or refused one.
  *
  * `confirmation` is the family the G18 audit could not see at all: a tool that
@@ -839,6 +846,7 @@ export function buildTraceOutcome(input: {
   undeliveredArtifact?: boolean;
   incompleteArtifactClaim?: boolean;
   unverifiedFileClaim?: boolean;
+  artifactShortfall?: boolean;
 }): TraceOutcome {
   const tools = [...(input.tools ?? [])];
   if (input.cancelled) return { kind: 'cancelled', tools };
@@ -854,7 +862,8 @@ export function buildTraceOutcome(input: {
       input.unverifiedActionClaim ||
       input.unverifiedBuildClaim ||
       input.incompleteArtifactClaim ||
-      input.unverifiedFileClaim,
+      input.unverifiedFileClaim ||
+      input.artifactShortfall,
   );
   return {
     kind: incomplete ? 'incomplete' : tools.length > 0 ? 'acted' : 'answered',
@@ -868,6 +877,7 @@ export function buildTraceOutcome(input: {
     ...(input.undeliveredArtifact ? { undeliveredArtifact: true } : {}),
     ...(input.incompleteArtifactClaim ? { incompleteArtifactClaim: true } : {}),
     ...(input.unverifiedFileClaim ? { unverifiedFileClaim: true } : {}),
+    ...(input.artifactShortfall ? { artifactShortfall: true } : {}),
   };
 }
 

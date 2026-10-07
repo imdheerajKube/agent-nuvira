@@ -59,6 +59,7 @@ const UNFINISHED_FLAGS: ReadonlyArray<keyof TurnReportFlags> = [
   'noActionTaken',
   'incompleteArtifactClaim',
   'unverifiedFileClaim',
+  'artifactShortfall',
 ];
 
 /** The run's honesty flags, carried so the report can never hide one. */
@@ -81,6 +82,12 @@ export interface TurnReportFlags {
    * never recognised as an authored deliverable (see `unverifiedFileClaim`).
    */
   unverifiedFileClaim?: boolean;
+  /**
+   * Bundle 23 (item 13) — the ask named a magnitude and the written artifact is
+   * far short of it. A factual comparison of the file against the request, so it
+   * makes the turn `unverified` rather than reading as finished work.
+   */
+  artifactShortfall?: boolean;
 }
 
 /** One step, with the evidence that its status is honest. */
@@ -182,7 +189,8 @@ function hasAnyFlag(flags: TurnReportFlags): boolean {
       flags.unfulfilledPromise ||
       flags.noActionTaken ||
       flags.incompleteArtifactClaim ||
-      flags.unverifiedFileClaim,
+      flags.unverifiedFileClaim ||
+      flags.artifactShortfall,
   );
 }
 

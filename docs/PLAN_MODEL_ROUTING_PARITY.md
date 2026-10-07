@@ -231,6 +231,21 @@ asks that must stay code), `tool-loop.test.ts` (+6: five detector cases and the 
 root suite **465 files / 8535 passed / 0 failed**, `verify:commands` **341/341**, all three docs guards,
 `build:cli`, dashboard bundle.
 
+**Live re-run of the SAME ask (2026-10-07, `/tmp/g-book2`, empty dir).** The defect did NOT reproduce, and
+that is the fix working: the model **wrote a real `GUIDE.md`** (16,791 bytes / 2,276 words, 20 sections, no
+omission marker anywhere). Two honest readings:
+
+- **The classifier fix changed the turn.** The previous run declared no plan, wrote nothing and claimed a
+  saved guide; this one wrote the file. The ask is now recognised as an authored deliverable, so the turn
+  no longer ends in a plan-less no-op.
+- **The honesty flags were accurate, and silent where they should be.** `unverifiedFileClaim`
+  correctly did NOT fire (a file WAS written), `artifactIncomplete` correctly did NOT fire (no omission
+  marker), and the existing `unverifiedEdit` DID fire — *"Files were changed this turn but no verification
+  ran"* — because no observing tool ran. The live NEGATIVE case, exactly as intended.
+- **One new, honest observation:** the reply says *"written to approximately 5,000 words"* while the file is
+  2,276 words, and no flag compares the delivered artifact against the ask's stated magnitude. That is
+  item 13's remaining half (see Bundle 23), not a regression.
+
 ---
 
 ## Bundle 21 — `model explain` sees the runtime, and the authored-document verdict (LANDED, 2026-10-07)
@@ -290,6 +305,54 @@ demotion vs an honesty flag forcing `unverified`, and read-before-write / real-c
 **50 files / 1053 passed**, both `tsc --noEmit` clean, all three docs guards, `build:cli`, dashboard bundle.
 One full-suite run showed `tests/parity/scenario-parity.test.ts` failing on a 35 s heavy case; it passes in
 isolation (26/26) and passed on the next full run — recorded as containment contention, not a regression.
+
+---
+
+## Bundle 23 — the artifact measured against the ask (item 13's honest half, LANDED 2026-10-07)
+
+**Why this and not a quality score.** Item 13's remaining half is the non-empty generic non-answer. The
+programme's doctrine forbids answering it with a phrase list (that judges whether work is GOOD from a
+model's vocabulary — the exact defect the programme exists to remove), so the honest signal compares the
+DELIVERED ARTIFACT against the ASK. This bundle lands the one such comparison that is fully deterministic:
+**size against a magnitude the user explicitly stated.**
+
+**The live evidence.** The Bundle 20 re-run (`/tmp/g-book2`) wrote a real `GUIDE.md` of **2,276 words** for
+an ask of *"about 5000 words"*, and the reply said *"written to approximately 5,000 words"*. The file
+existed, so `undeliveredArtifact` and `unverifiedFileClaim` were (correctly) silent, and no flag compared
+the file to the request. That is the gap this closes.
+
+**The rule.** `detectArtifactShortfall(ask, artifact)` (`tools/tool-loop.ts`) parses an EXPLICIT magnitude
+from the ask with the existing `parseLongFormTarget`, counts the written file's words, and returns a
+shortfall only when the file is under `ARTIFACT_SHORTFALL_RATIO` (0.5) of the stated target. Deliberately
+narrow:
+
+- **Only an explicit number counts.** The parser's own source string is quoted (`"5000 words"`), so the
+  `book`/`novel` default-chapter branch — which INVENTS a magnitude — is excluded. Measuring a document
+  against a number the user never said would be the same class of bug this programme removes.
+- **Only a SINGLE written artifact is measured.** An append/sectioned delivery cannot be summed from these
+  records without risking a false "short", so it is left alone.
+- **An empty file is not a shortfall** — that is `undeliveredArtifact`/`artifactIncomplete`'s job.
+- **Half, not 90%.** "About 5000 words" delivered as 4,200 is a tighter draft, not a shortfall; an
+  over-eager guard gets ignored, so the bar is a material miss.
+
+**Wired end-to-end, like its siblings.** `ToolLoopResult.artifactShortfall = { path, deliveredWords,
+ targetWords, source }`; `cli/chat.ts` forwards it as the report flag `artifactShortfall`, adds it to
+`turnCarriesHonestyFlag` (no cache/replay as settled), the `flags:` object, both return literals and both
+`buildTraceOutcome` call sites, and prints a warning that QUOTES the numbers (*"GUIDE.md has ~2,276 words,
+but the request asked for ~5,000 ("5000 words")…"*); `turn-report.ts` includes it in `hasAnyFlag` and
+`UNFINISHED_FLAGS` so such a turn is `unverified`, and `reasoning-trace.ts` carries it into the `incomplete`
+verdict.
+
+**Tests.** `tool-loop.test.ts` (+5: the detector's positive, the meets-the-ask negatives, the
+no-invented-magnitude negatives, the empty file, and a real turn that wrote a far-too-short deliverable);
+`turn-report.test.ts` (+1: the flag forces `unverified`); `chat-cache-honesty.test.ts` `#30` (+2 so the
+guard's "classifies EVERY flag" name stays true — this also back-filled `unverifiedFileClaim`, which
+Bundle 20 had left unlisted).
+
+**Honest limits.** (1) It measures SIZE against a stated number, not quality — a fluent, on-length document
+that is generic still passes, and that remains B3. (2) It only fires on an explicit magnitude; an ask of
+"write a long document" is not measured. (3) A sectioned/append delivery is not measured at all (the
+single-artifact bound above).
 
 ---
 
@@ -681,8 +744,12 @@ exists; where it does not, that is stated as the residual rather than implied cl
     paragraph by *work since*, not by retraction language (D1); and a non-empty generic non-answer is
     undetectable — all three need a measured-quality signal (B3), never a phrase list. **Narrowed by
     Bundle 19**: a non-answer that *says* its own content was omitted is now caught deterministically — the
-    artifact reporting its own incompleteness is a factual self-statement, not a quality word-list. What
-    remains is the non-answer that does NOT self-declare, which is still B3's job.
+    artifact reporting its own incompleteness is a factual self-statement, not a quality word-list.
+    **Narrowed again by Bundle 23**: an artifact materially SHORTER than a magnitude the ask explicitly
+    named is now caught by measuring the delivered file against the request — a factual comparison, not a
+    phrase list. What remains is the non-answer that neither self-declares nor misses a stated magnitude
+    (a fluent, on-length document that is simply generic), which is still B3's job and needs a quality
+    signal that does not yet exist.
 14. ~~**`model explain` answers a hypothetical**: it cannot see a continuation's `routingText`, the
     `contextHintTokens`, or the session's failed-provider set, which exist only at runtime.~~
     **CLOSED — Bundle 21**: `--context-tokens <n>` feeds the context preflight the token count the runtime

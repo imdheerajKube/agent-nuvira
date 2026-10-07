@@ -74,6 +74,7 @@ import {
   type RunTraceSnapshot,
 } from '../learning/run-trace.js';
 import { wantsAuthoredArtifact } from '../learning/deliverable-class.js';
+import { parseLongFormTarget, countWords } from '../learning/long-form.js';
 import { normalizeFollowups, type FollowupSuggestion } from './followup-utils.js';
 import type { ToolArgumentsError } from '../inference/interface.js';
 // The capability mode (balanced | max) — `max` widens the loop's own reasoning
@@ -810,6 +811,16 @@ export interface ToolLoopResult {
    * is disclosed even when the ask was never recognised as a deliverable.
    */
   unverifiedFileClaim?: boolean;
+  /**
+   * Bundle 23 (item 13) — the ask NAMED a magnitude ("about 5000 words", "a 100
+   * page story") and this turn's written artifact is far short of it. A factual
+   * comparison of the delivered file against the REQUEST — not a judgement of its
+   * quality — which is why it is a shortfall of a stated number and never a phrase
+   * list. Carries the measurement as evidence. Only set for a SINGLE written
+   * artifact: an append/sectioned delivery cannot be measured from these records
+   * without risking a false "short".
+   */
+  artifactShortfall?: { path: string; deliveredWords: number; targetWords: number; source: string };
   /**
    * R2 — which transport carried this turn's tool calls (`native` / `json` /
    * `none`), as reported by the caller's own model-call seam. Absent when the
@@ -3348,6 +3359,48 @@ export function detectUnverifiedFileClaim(
  * "writing", etc. — the promise is usually phrased as a gerund ("start by
  * scaffolding").
  */
+/**
+ * Bundle 23 (item 13) — how far short of a stated magnitude counts as a miss.
+ * Half, deliberately: "about 5000 words" delivered as 4,200 is a tighter draft,
+ * not a shortfall, and an over-eager version of this flag would be ignored like
+ * every other noisy guard. Under half is materially not what was asked for.
+ */
+export const ARTIFACT_SHORTFALL_RATIO = 0.5;
+
+/**
+ * Compare a written artifact against an EXPLICIT magnitude the ask named.
+ *
+ * This is item 13's honest half: the delivered artifact is measured AGAINST THE
+ * REQUEST, deterministically, instead of judging quality from a model's
+ * vocabulary. It fires only when the ask states a number ("about 5000 words",
+ * "a 100 page story") — a plain "write a long document" names no magnitude, so
+ * there is nothing to compare against and this must not invent one.
+ *
+ * Returns null unless the file is under `ARTIFACT_SHORTFALL_RATIO` of the target,
+ * so an honest document is never flagged. An empty file returns null too — a
+ * missing artifact is the omission/undelivered gates' job, not a shortfall's.
+ */
+export function detectArtifactShortfall(
+  ask: string,
+  artifact: { path: string; content: string },
+): { path: string; deliveredWords: number; targetWords: number; source: string } | null {
+  const target = parseLongFormTarget(ask || '');
+  // Only an EXPLICIT magnitude counts: `source` is the quoted number the parser
+  // matched, while the default-book branch (a book with no number in the ask) has
+  // no quotes — inventing a target there would measure the document against a
+  // number the user never said.
+  if (!target || !target.source.startsWith('"')) return null;
+  const deliveredWords = countWords(artifact.content);
+  if (deliveredWords === 0) return null;
+  if (deliveredWords >= target.wordsTarget * ARTIFACT_SHORTFALL_RATIO) return null;
+  return {
+    path: artifact.path,
+    deliveredWords,
+    targetWords: target.wordsTarget,
+    source: target.source,
+  };
+}
+
 const INTENT_ACTION_STEM =
   '(?:creat|writ|build|scaffold|implement|generat|add|edit|updat|modif|refactor|run|execut|install|configur|read|inspect|send|post|upload|deploy|publish|fetch|search|apply|fix|delet|remov|mov|renam|copi|compil|set\\s+up)';
 
@@ -3706,6 +3759,16 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
         result.artifactIncomplete = { path: artifact.path, statement };
         break;
       }
+    }
+    // Bundle 23 (item 13) — ARTIFACT-VS-ASK honesty. When the ask named an explicit
+    // magnitude and the turn wrote a SINGLE artifact far short of it, the delivered
+    // file is not what was asked for. Skipped when the artifact already admits its
+    // own omission (that is the stronger, self-incriminating signal), and bounded to
+    // one artifact because an append/sectioned delivery cannot be measured here
+    // without risking a false "short".
+    if (!result.artifactIncomplete && progress.authoredArtifacts.length === 1) {
+      const shortfall = detectArtifactShortfall(lastUserText(opts.messages), progress.authoredArtifacts[0]);
+      if (shortfall) result.artifactShortfall = shortfall;
     }
     // G13b — DELIVERABLE honesty, the same way and for the same reason: the
     // flag is a function of what the turn DID, never of configuration. A turn

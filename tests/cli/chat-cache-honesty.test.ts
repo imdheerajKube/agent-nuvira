@@ -165,6 +165,14 @@ describe('#30 — turnCarriesHonestyFlag classifies every honesty flag', () => {
     // a silently unprotected one: it would still pass while the flag went
     // unclassified in `turnCarriesHonestyFlag`.
     expect(turnCarriesHonestyFlag({ artifactIncomplete: { path: 'DESIGN.md', statement: 'content omitted' } })).toBe(true);
+    // Bundle 20 — a reply that claims a file no write backs.
+    expect(turnCarriesHonestyFlag({ unverifiedFileClaim: true })).toBe(true);
+    // Bundle 23 — an artifact far short of a magnitude the ask named.
+    expect(
+      turnCarriesHonestyFlag({
+        artifactShortfall: { path: 'GUIDE.md', deliveredWords: 500, targetWords: 5000, source: '"5000 words"' },
+      }),
+    ).toBe(true);
   });
 
   it('is false for a clean turn', () => {

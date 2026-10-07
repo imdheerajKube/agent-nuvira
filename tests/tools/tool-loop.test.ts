@@ -26,6 +26,7 @@ import {
   summarizeArgs,
   detectSelfDeclaredOmission,
   detectUnverifiedFileClaim,
+  detectArtifactShortfall,
   type LoopTraceEvent,
   type ToolLoopDeps,
   type StepResponse,
@@ -3130,5 +3131,68 @@ describe('Bundle 6 / item 6 — the JSON-fallback transport reports missing argu
   it('leaves a brace-matched but malformed block silent (a typo is not a call)', () => {
     const { calls } = extractFallbackToolCalls('text {"tool":"suggest_followups","arguments":{"followups":[{"prompt":"x"},]}}');
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('Bundle 23 (item 13) — the artifact measured against the ask', () => {
+  const SHORT = 'Distributed key-value stores replicate data across nodes. '.repeat(5); // ~45 words
+
+  it('flags a file far short of an EXPLICIT magnitude the ask named', () => {
+    const s = detectArtifactShortfall('Write a guide. Aim for about 5000 words. Save it to GUIDE.md', {
+      path: 'GUIDE.md',
+      content: SHORT,
+    });
+    expect(s?.path).toBe('GUIDE.md');
+    expect(s?.targetWords).toBe(5000);
+    expect(s?.deliveredWords).toBeLessThan(100);
+  });
+
+  it('does NOT flag a file that meets the ask', () => {
+    const long = 'word '.repeat(4000);
+    expect(detectArtifactShortfall('write about 5000 words to A.md', { path: 'A.md', content: long })).toBeNull();
+    // A tighter draft (60% of the target) is not a shortfall.
+    expect(
+      detectArtifactShortfall('write about 5000 words to A.md', { path: 'A.md', content: 'word '.repeat(3000) }),
+    ).toBeNull();
+  });
+
+  it('does NOT invent a magnitude the ask never named', () => {
+    // "a long document" names no number — there is nothing to measure against.
+    expect(detectArtifactShortfall('write a long document to A.md', { path: 'A.md', content: SHORT })).toBeNull();
+    // A bare "book" gets a DEFAULT chapter count internally; that is not the ask.
+    expect(detectArtifactShortfall('write a book about the sea to A.md', { path: 'A.md', content: SHORT })).toBeNull();
+  });
+
+  it('leaves an EMPTY artifact to the omission/undelivered gates', () => {
+    expect(detectArtifactShortfall('write about 5000 words to A.md', { path: 'A.md', content: '' })).toBeNull();
+  });
+
+  it('flags a real turn that wrote a far-too-short deliverable', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-shortfall-'));
+    try {
+      const ask =
+        'Write a comprehensive technical guide to building a distributed key-value store. Aim for about 5000 words. Save it to GUIDE.md in this folder.';
+      const deps = mockDeps(
+        [
+          {
+            content: '',
+            toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: 'GUIDE.md', content: SHORT } }],
+          },
+          { content: 'The guide has been written and saved as GUIDE.md.', toolCalls: [] },
+        ],
+        realExecute,
+      );
+      const result = await runToolLoop({
+        messages: [{ role: 'user', content: ask }],
+        context: { ...ctx, cwd: workdir, writesAuthorized: true },
+        deps,
+        requireVerification: false,
+        requirePlan: false,
+      });
+      expect(result.artifactShortfall?.path).toBe('GUIDE.md');
+      expect(result.artifactShortfall?.targetWords).toBe(5000);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
   });
 });

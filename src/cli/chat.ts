@@ -511,6 +511,8 @@ export function turnCarriesHonestyFlag(result: {
   artifactIncomplete?: { path: string; statement: string };
   /** Bundle 20 — the reply claims a file was written and the turn wrote nothing. */
   unverifiedFileClaim?: boolean;
+  /** Bundle 23 — the ask named a magnitude and the written artifact is far short. */
+  artifactShortfall?: { path: string; deliveredWords: number; targetWords: number; source: string };
 }): boolean {
   return Boolean(
     result.unverifiedActionClaim ||
@@ -521,7 +523,8 @@ export function turnCarriesHonestyFlag(result: {
       result.unverifiedEditClaim ||
       result.noActionTaken ||
       result.artifactIncomplete ||
-      result.unverifiedFileClaim,
+      result.unverifiedFileClaim ||
+      result.artifactShortfall,
   );
 }
 
@@ -836,6 +839,12 @@ export class ChatCommand extends BaseCommand {
    * deliverable. Distinct from `undeliveredArtifact`, which keys on the ASK.
    */
   unverifiedFileClaim?: boolean;
+  /**
+   * Bundle 23 — the ask named an explicit magnitude ("about 5000 words") and the
+   * single file this turn wrote is far short of it, measured from the artifact.
+   * Includes the measurement so the warning can state the numbers.
+   */
+  artifactShortfall?: { path: string; deliveredWords: number; targetWords: number; source: string };
   provider?: string;
   model?: string;
   /**
@@ -1149,6 +1158,9 @@ export class ChatCommand extends BaseCommand {
           // Bundle 20 — a fabricated "I wrote the file" reaches the report for the
           // same reason: no surface may read such a turn as finished work.
           unverifiedFileClaim: Boolean(answer.unverifiedFileClaim),
+          // Bundle 23 — a file far short of the stated magnitude is the same:
+          // the delivered artifact is not what was asked for.
+          artifactShortfall: Boolean(answer.artifactShortfall),
         },
       });
     } catch {
@@ -1224,6 +1236,7 @@ export class ChatCommand extends BaseCommand {
       // boundary, or a caller re-deriving the verdict would see a clean turn.
       artifactIncomplete: answer.artifactIncomplete,
       unverifiedFileClaim: answer.unverifiedFileClaim,
+      artifactShortfall: answer.artifactShortfall,
       // WS1 — the findings this turn recorded (empty when it recorded none).
       findings: answer.findings ?? [],
       provider: type,
@@ -1924,6 +1937,11 @@ export class ChatCommand extends BaseCommand {
      * nothing. Surfaced to the caller so no surface replays it as settled.
      */
     unverifiedFileClaim?: boolean;
+    /**
+     * Bundle 23 — the ask named a magnitude and the written file is far short of
+     * it. Carries the measurement so a caller can state the gap.
+     */
+    artifactShortfall?: { path: string; deliveredWords: number; targetWords: number; source: string };
     /**
      * R2 — the tool transport this turn travelled on (`native` / `json` /
      * `none`), as the loop reported it. Absent only when no loop ran (a cache
@@ -2978,10 +2996,11 @@ export class ChatCommand extends BaseCommand {
       undeliveredArtifact: result.undeliveredArtifact,
       unverifiedBuildClaim: result.unverifiedBuildClaim,
       // Bundle 19/20 — the artifact's own omission, and a file claim no write
-      // backs, both make the turn `incomplete` on the trace (not `answered`).
-      incompleteArtifactClaim: Boolean(result.artifactIncomplete),
+      // backs, both make the turn `incomplete` on the trace (not `answered`).      incompleteArtifactClaim: Boolean(result.artifactIncomplete),
       unverifiedFileClaim: result.unverifiedFileClaim,
+      artifactShortfall: Boolean(result.artifactShortfall),
     });
+
     // A cancelled / failed / incomplete turn is NOT a success. `!generationFailed`
     // used to let a cancelled run record `success: true` while its outcome said
     // `cancelled`, so nothing downstream offered to continue it.
@@ -3073,6 +3092,15 @@ export class ChatCommand extends BaseCommand {
       if (result.unverifiedFileClaim) {
         logger.warn(
           '   ⚠️  This reply says a file was written, but NO file was written this turn — treat the deliverable as MISSING, not as done.',
+        );
+      }
+      // Bundle 23 (item 13) — the ARTIFACT-VS-ASK warning. The ask named a
+      // magnitude and the file this turn wrote is far short of it; the numbers are
+      // quoted so the reader sees the gap rather than a verdict.
+      if (result.artifactShortfall) {
+        const s = result.artifactShortfall;
+        logger.warn(
+          `   ⚠️  ${s.path} has ~${s.deliveredWords} words, but the request asked for ~${s.targetWords} (${s.source}) — the deliverable is materially SHORT of what was asked.`,
         );
       }
     } catch {
@@ -3209,6 +3237,7 @@ export class ChatCommand extends BaseCommand {
       // the work did not conclude, so the continuation affordances must appear.
       incompleteArtifactClaim: Boolean(result.artifactIncomplete),
       unverifiedFileClaim: result.unverifiedFileClaim,
+      artifactShortfall: Boolean(result.artifactShortfall),
     });
     const chatFollowups = withContinuationFollowups(result.followups, {
       unfinished: !traceOutcomeSucceeded(chatOutcomeForFollowups),
@@ -3230,6 +3259,7 @@ export class ChatCommand extends BaseCommand {
       // return boundary instead of only living in the turn report.
       artifactIncomplete: result.artifactIncomplete,
       unverifiedFileClaim: result.unverifiedFileClaim,
+      artifactShortfall: result.artifactShortfall,
       // R2 — the transport this turn travelled on (interactive REPL path).
       transport: result.transport,
       // WS1 — the findings this turn recorded, with their verdicts.

@@ -146,6 +146,16 @@ describe('buildTurnReport — verification verdict', () => {
     expect(r.verification).toBe('unverified');
   });
 
+  it('is unverified when the written artifact is far short of the ask (Bundle 23)', () => {
+    const r = buildTurnReport({
+      goal: 'Write a guide. Aim for about 5000 words. Save it to GUIDE.md',
+      successfulToolCalls: ['write_file'],
+      mutations: 1,
+      flags: { artifactShortfall: true },
+    });
+    expect(r.verification).toBe('unverified');
+  });
+
   it('is blocked when a plan step is blocked, and annotates done steps', () => {
     const r = buildTurnReport({
       goal: 'ship it',
