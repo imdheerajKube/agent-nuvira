@@ -66,6 +66,39 @@ describe('buildTurnReport — the accuracy evidence the router learns from (B2/B
   });
 });
 
+describe('buildTurnReport — an artifact that admits it is incomplete (Bundle 19)', () => {
+  it('makes the turn UNVERIFIED, so no surface reads it as finished work', () => {
+    // Measured: a 25-word file saying "full content omitted for brevity" was reported
+    // as a complete design document. The artifact's own admission must reach the
+    // verdict, not just the log.
+    const r = buildTurnReport({
+      goal: 'write the design document',
+      toolCalls: ['write_file', 'read_file'],
+      successfulToolCalls: ['write_file', 'read_file'],
+      mutations: 1,
+      changedPaths: ['DESIGN.md'],
+      flags: { incompleteArtifactClaim: true },
+    });
+    expect(r.verification).toBe('unverified');
+    expect(r.summary).toContain('verification: unverified');
+  });
+
+  it('leaves a COMPLETE artifact alone', () => {
+    // Byte-for-byte the same inputs as the flagged case ABOVE, minus the flag, so
+    // the automated verdict is the only variable. (It previously used `read_file`
+    // as its observation, but `read_file` is not in VERIFICATION_TOOLS, so the
+    // turn read `unverified` for a reason that had nothing to do with Bundle 19.)
+    const r = buildTurnReport({
+      goal: 'write the design document',
+      toolCalls: ['write_file', 'run_terminal'],
+      successfulToolCalls: ['write_file', 'run_terminal'],
+      mutations: 1,
+      changedPaths: ['DESIGN.md'],
+    });
+    expect(r.verification).toBe('verified');
+  });
+});
+
 describe('buildTurnReport — verification verdict', () => {
   it('is not-applicable and silent for a plain answer', () => {
     const r = buildTurnReport({ goal: 'say hi', toolCalls: [], successfulToolCalls: [] });

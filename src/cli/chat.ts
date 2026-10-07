@@ -507,6 +507,8 @@ export function turnCarriesHonestyFlag(result: {
   unverifiedEdit?: boolean;
   unverifiedEditClaim?: boolean;
   noActionTaken?: boolean;
+  /** Bundle 19 — a file the turn wrote says its own content was omitted. */
+  artifactIncomplete?: { path: string; statement: string };
 }): boolean {
   return Boolean(
     result.unverifiedActionClaim ||
@@ -515,7 +517,8 @@ export function turnCarriesHonestyFlag(result: {
       result.unverifiedBuildClaim ||
       result.unverifiedEdit ||
       result.unverifiedEditClaim ||
-      result.noActionTaken,
+      result.noActionTaken ||
+      result.artifactIncomplete,
   );
 }
 
@@ -816,6 +819,13 @@ export class ChatCommand extends BaseCommand {
    * Surfaces must not present such a turn as finished work.
    */
   unverifiedBuildClaim?: boolean;
+  /**
+   * Bundle 19 — a file this turn WROTE declares that its own content was omitted
+   * (`## 1. Introduction ... (full content omitted for brevity) ...`). The artifact
+   * admits it is incomplete, so the turn is not finished work however complete its
+   * prose reads. Carries the artifact's own words as evidence.
+   */
+  artifactIncomplete?: { path: string; statement: string };
   provider?: string;
   model?: string;
   /**
@@ -1123,6 +1133,9 @@ export class ChatCommand extends BaseCommand {
           undeliveredArtifact: answer.undeliveredArtifact,
           unfulfilledPromise: answer.unfulfilledPromise,
           noActionTaken: answer.noActionTaken,
+          // Bundle 19 — the artifact's own admission travels to the report, so the
+          // turn cannot read as finished work on any surface that shows it.
+          incompleteArtifactClaim: Boolean(answer.artifactIncomplete),
         },
       });
     } catch {
@@ -1882,6 +1895,13 @@ export class ChatCommand extends BaseCommand {
     undeliveredArtifact?: boolean;
     /** A3 Part 2 — a build ran, failed, and the answer claimed it worked. */
     unverifiedBuildClaim?: boolean;
+    /**
+     * Bundle 19 — a file this turn WROTE declares that its own content was omitted
+     * (measured: a 25-word "design document" reading `## 1. Introduction ... (full
+     * content omitted for brevity) ...`, reported as complete). The artifact admits
+     * it is incomplete, so the turn must not read as finished work.
+     */
+    artifactIncomplete?: { path: string; statement: string };
     /**
      * R2 — the tool transport this turn travelled on (`native` / `json` /
      * `none`), as the loop reported it. Absent only when no loop ran (a cache

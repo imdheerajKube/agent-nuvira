@@ -798,6 +798,12 @@ export interface ToolLoopResult {
    */
   unverifiedBuildClaim?: boolean;
   /**
+   * Bundle 19 — a file this turn WROTE declares that its own content was omitted.
+   * The turn's artifact says it is incomplete, so no surface may read the turn as
+   * finished work. Carries the path and the artifact's own words as evidence.
+   */
+  artifactIncomplete?: { path: string; statement: string };
+  /**
    * R2 — which transport carried this turn's tool calls (`native` / `json` /
    * `none`), as reported by the caller's own model-call seam. Absent when the
    * caller reports none (an in-process mock, or a surface that has not been
@@ -1153,6 +1159,12 @@ export interface ToolLoopProgress {
   deliveryConfirmed: boolean;
   /** Session 4 — paths mutated successfully this turn (for verification relevance). */
   mutatedPaths: string[];
+  /**
+   * Bundle 19 — the CONTENT of every file this turn successfully wrote or edited, so
+   * the turn can be judged on its own ARTIFACT rather than on its prose. Bounded in
+   * both size and count (see `AUTHORED_ARTIFACT_MAX*`).
+   */
+  authoredArtifacts: Array<{ tool: string; path: string; content: string }>;
   /** Session 4 — successful verification calls (args + result) to judge relevance. */
   verificationEvidence: ToolCallEvidence[];
   /**
@@ -2686,6 +2698,15 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           const p = a?.path ?? a?.file_path ?? a?.file;
           if (typeof p === 'string' && p) {
             progress.mutatedPaths.push(p);
+            // Bundle 19 — keep what was WRITTEN, so the turn can be judged on its
+            // artifact. Capped: a turn cannot grow the loop's memory without bound.
+            if (progress.authoredArtifacts.length < AUTHORED_ARTIFACT_MAX) {
+              progress.authoredArtifacts.push({
+                tool: call.name,
+                path: p,
+                content: extractWrittenText(call.arguments),
+              });
+            }
             // Stage 2 — the run's own record of what it CHANGED, so a self-report
             // can answer "what have you been doing" from data rather than from a
             // re-read of the transcript.
@@ -3302,6 +3323,77 @@ export function detectUnfulfilledIntentPromise(content: string): boolean {
   return false;
 }
 
+// ─── Bundle 19 — an artifact that declares ITSELF incomplete ────────────────
+/**
+ * Statements an ARTIFACT makes about being incomplete — read from the file the turn
+ * WROTE, never from the model's prose.
+ *
+ * WHY THIS EXISTS (measured 2026-10-07). Asked for a ~2500-word design document, a
+ * real turn wrote 25 words to `DESIGN.md` and reported success. The file contained
+ * `## 1. Introduction ... (full content omitted for brevity) ...` — it announced the
+ * content and then omitted it — and its own verification ("read the file back and
+ * confirm all sections are present") is true of a list of headings. No existing flag
+ * could see it: `unverifiedEdit` needs an unobserved mutation (the file WAS read
+ * back), `undeliveredArtifact` needs nothing written (a file exists), and there is
+ * content, so nothing is empty.
+ *
+ * WHY THIS IS NOT A "PHRASE LIST" IN THE SENSE THIS PROGRAMME REMOVES. Those decide
+ * whether work is GOOD, from a model's vocabulary. This reads a factual statement the
+ * artifact makes about itself — the same distinction as `unfulfilledPromise` (an
+ * announced action) and `detectUnverifiedDeliveryClaim` (a claim contradicted by the
+ * run). A document saying "content omitted" is not a quality judgement; it is the
+ * artifact reporting its own incompleteness.
+ *
+ * DELIBERATELY NARROW. Each pattern requires an OMISSION word bound to content or a
+ * section. The bare word `placeholder` is NOT matched (HTML `placeholder=` attributes
+ * would fire on ordinary code), and neither is a bare `TODO` — a TODO is a plan for
+ * later work, not a claim that this file is finished.
+ */
+const ARTIFACT_OMISSION_RE: readonly RegExp[] = [
+  /\(\s*(?:the\s+)?(?:full\s+)?content\s+omitted/i,
+  /\bcontent\s+(?:is\s+|was\s+)?omitted\s+for\s+(?:brevity|space|length|conciseness|readability)\b/i,
+  /\bomitted\s+for\s+(?:brevity|space|length|conciseness|readability)\b/i,
+  /\b(?:the\s+)?(?:rest|remainder)\s+of\s+(?:this\s+)?(?:document|report|article|file)\s+(?:is|are|was|were)?\s*(?:omitted|not\s+included|intentionally\s+left\s+out)/i,
+  // A section RANGE may sit between the noun and the adverb/verb: the measured
+  // "Sections 2-9 intentionally omitted." failed the adjacency form that only
+  // allowed whitespace there. The range is optional, so "Content omitted." and
+  // "Details omitted." still match; a bare prose "omits" does not.
+  /\b(?:sections?|content|details?)\s+(?:\d+(?:\s*[-–—]\s*\d+)?\s+)?(?:intentionally\s+|deliberately\s+)?omitted\b/i,
+  /\bplaceholder\s+for\s+(?:the\s+)?(?:full|actual|real|complete)\s+(?:content|document|section|report|article)\b/i,
+];
+
+/**
+ * The statement an artifact makes about its own incompleteness, or `null`.
+ * Returns the MATCHED TEXT so the report can quote what the file said about itself.
+ */
+export function detectSelfDeclaredOmission(text: string): string | null {
+  const body = text || '';
+  if (!body) return null;
+  for (const re of ARTIFACT_OMISSION_RE) {
+    const m = body.match(re);
+    if (m?.[0]) return m[0].trim();
+  }
+  return null;
+}
+
+/** Cap on the content kept per artifact, and on how many are kept, so a long turn cannot grow the loop's memory. */
+const AUTHORED_ARTIFACT_MAX_CHARS = 20_000;
+const AUTHORED_ARTIFACT_MAX = 40;
+
+/**
+ * The text a mutation call WROTE, from whichever field carries it. `''` when the call
+ * carries no literal body (an append by path, a patch with no text).
+ */
+function extractWrittenText(args: unknown): string {
+  if (!args || typeof args !== 'object') return '';
+  const a = args as Record<string, unknown>;
+  for (const key of ['content', 'new_string', 'newText', 'text', 'body', 'patch']) {
+    const v = a[key];
+    if (typeof v === 'string' && v) return v.slice(0, AUTHORED_ARTIFACT_MAX_CHARS);
+  }
+  return '';
+}
+
 // ─── Build honesty (A3 Part 2) ──────────────────────────────────────────────
 /**
  * Past-tense sentences that ASSERT a BUILD, or its artifact, came out good.
@@ -3450,6 +3542,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     successfulToolCalls: [],
     deliveryConfirmed: false,
     mutatedPaths: [],
+    authoredArtifacts: [],
     verificationEvidence: [],
     executedActions: [],
   };
@@ -3498,6 +3591,17 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     }
     if (detectUnverifiedEditClaim(result.content, activity.mutations, activity.verifications)) {
       result.unverifiedEditClaim = true;
+    }
+    // Bundle 19 — ARTIFACT honesty. A file the turn wrote says its own content was
+    // omitted, so the turn is NOT finished work however complete its prose reads.
+    // Judged on the artifact, never on the model's vocabulary, and recorded with the
+    // artifact's own words so a reader can see exactly what it admitted.
+    for (const artifact of progress.authoredArtifacts) {
+      const statement = detectSelfDeclaredOmission(artifact.content);
+      if (statement) {
+        result.artifactIncomplete = { path: artifact.path, statement };
+        break;
+      }
     }
     // G13b — DELIVERABLE honesty, the same way and for the same reason: the
     // flag is a function of what the turn DID, never of configuration. A turn

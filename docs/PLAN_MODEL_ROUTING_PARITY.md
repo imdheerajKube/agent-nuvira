@@ -50,7 +50,7 @@ mistakes are the ones the product makes:
 
 ---
 
-## Bundle 19 — F1's live re-run produced a PLACEHOLDER deliverable (OPEN, measured 2026-10-07)
+## Bundle 19 — an artifact that admits its own omission is no longer delivered as finished work (LANDED, measured 2026-10-07)
 
 **What F1's remaining proof was supposed to show:** an oversized-document ask is delivered in SECTIONS
 (`write_file` with `mode: "append"`) rather than truncated. Run live, and it shows something worse.
@@ -86,9 +86,42 @@ took their unattended defaults, and E1's disclosure covers that correctly). And 
 `DESIGN.md` with a BOM-free UTF-8 name containing non-breaking hyphens (`Multi‑Provider`) — cosmetic, noted
 only because `write_file` round-tripped it faithfully.
 
-**Status: OPEN.** A fix needs the measured-quality signal (item 13) or a deterministic
-artifact-versus-ask check; neither is a one-line change, and guessing one from prose is the defect this
-programme removes.
+**The fix, and why it is NOT the phrase list this programme removes.** A deterministic check now reads the
+ARTIFACT the turn wrote and fires when the artifact makes a factual statement about its OWN incompleteness
+(`detectSelfDeclaredOmission`, `src/tools/tool-loop.ts`). That distinction is the whole justification: a
+"quality" phrase list judges whether work is GOOD from a model's vocabulary, which is the defect the
+programme removes; this reads a self-incriminating `content omitted` the same way the harness already
+reads an announced-but-undelivered action (`unfulfilledPromise`) or a delivery claim its own ledger
+contradicts (`detectUnverifiedDeliveryClaim`). The detector is deliberately narrow — six patterns, each
+binding an OMISSION word to content or a section — and the bare words `placeholder` and `TODO` are NOT
+matched (an HTML `placeholder=` attribute and a forward-looking TODO would both fire on ordinary code).
+
+**Wired end-to-end, not just detected.** `ToolLoopResult.artifactIncomplete = { path, statement }` carries
+the artifact's own words; `cli/chat.ts` forwards it as the report flag `incompleteArtifactClaim`;
+`turn-report.ts` includes it in `hasAnyFlag`; and `turnCarriesHonestyFlag` marks such a turn as one that
+must not be cached or replayed as settled. So the measured turn is now readable as `unverified` on every
+surface, and the flag quotes the file's own admission rather than an assertion about it.
+
+**Measured.** A turn whose only file was the 25-word placeholder now yields
+`artifactIncomplete = { path: 'DESIGN.md', statement: '(full content omitted…' }`. The first test run FAILED
+and found a real gap in the detector: `Sections 2-9 intentionally omitted.` did not match, because the
+adjacency form allowed only whitespace between the noun and the verb and this form puts a section RANGE
+there. The regex was widened — `Sections?` + an optional numeric range + an optional adverb + `omitted` —
+and the test kept, not weakened. The turn-report verdict for such a turn flips `verified` → `unverified`
+on the flag ALONE: the negative test is the positive case byte-for-byte minus the flag, so the flag is the
+only variable.
+
+**Honest limits.** (1) It only catches an artifact that *declares* its omission; a generic non-answer that
+does not say so remains item 13's job (B3). (2) `extractWrittenText` keeps the first 20,000 characters per
+artifact, so an omission notice buried past that in an otherwise-huge file is not read — a 25-word
+placeholder is always well inside it. (3) **F1's sectioned-delivery proof is still outstanding on its own
+terms** (see the paragraph above).
+
+**Tests.** `tool-loop.test.ts` (+3: the detector's positives and negatives, the flagged turn, and the same
+turn minus the placeholder) and `turn-report.test.ts` (+2); the `#30` guard whose name claims it classifies
+EVERY honesty flag gained the new one, so a future flag omitted there is no longer silently unprotected.
+Gates: root suite **465 files / 8525 passed / 0 failed**, `verify:commands` **341/341**, all four docs
+guards, `build:cli`, dashboard bundle.
 
 ---
 
@@ -399,9 +432,12 @@ exists; where it does not, that is stated as the residual rather than implied cl
    approved OpenRouter catalogue now supplies both as LABELLED priors (opt-in, default OFF,
    `NUVIRA_CATALOG_FEED` in the CLI and the dashboard's Process Env page). `accuracy`, `performance` and
    `robustness` remain measurement-only by design — see the Bundle 16 limits.
-6. **F1's live re-run — RUN, AND IT FAILED, in a way worth its own bundle (see Bundle 19).** F1 does not
-   cover the **JSON-fallback transport** (a model asked to emit the call as text) or the **Gemini wire**
-   (whose calls carry structured `args`, so "empty" is ambiguous).
+6. **F1's live re-run — RUN; the failure it exposed is now DETECTED (Bundle 19), while the sectioned-delivery
+   proof itself remains outstanding.** Bundle 19's artifact-honesty flag fires on the measured placeholder
+   (proven end-to-end in `tool-loop.test.ts`), the verdict on such a turn is now `unverified` rather than a
+   silent success, and the flag quotes the file's own admission. Still not covered: the **JSON-fallback
+   transport** (a model asked to emit the call as text) and the **Gemini wire** (whose calls carry
+   structured `args`, so "empty" is ambiguous).
 7. ~~**C3's live parity re-run** (the probe count dropping) is deferred.~~ **CLOSED — measured live
    (2026-10-07)**: a real turn asked to run `python3 --version` twice recorded the repeat, and the model's own
    report says it worked — *"the harness detected it as a repeat and declined to re-execute it, returning the
@@ -429,7 +465,10 @@ exists; where it does not, that is stated as the residual rather than implied cl
     not deferred — and Bundle 15's pass is re-runnable if the redundancy ever needs cleaning again.
 13. **A detour is made visible, not quality-judged** (D2); a correction is separated from a terse closing
     paragraph by *work since*, not by retraction language (D1); and a non-empty generic non-answer is
-    undetectable — all three need a measured-quality signal (B3), never a phrase list.
+    undetectable — all three need a measured-quality signal (B3), never a phrase list. **Narrowed by
+    Bundle 19**: a non-answer that *says* its own content was omitted is now caught deterministically — the
+    artifact reporting its own incompleteness is a factual self-statement, not a quality word-list. What
+    remains is the non-answer that does NOT self-declare, which is still B3's job.
 14. **`model explain` answers a hypothetical**: it cannot see a continuation's `routingText`, the
     `contextHintTokens`, or the session's failed-provider set, which exist only at runtime.
 15. ~~**Prose-only turns are not nudged to verify.**~~ **DECIDED (2026-10-07): keep it edit-only.** The

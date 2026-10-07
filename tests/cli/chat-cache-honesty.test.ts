@@ -160,6 +160,11 @@ describe('#30 — turnCarriesHonestyFlag classifies every honesty flag', () => {
     expect(turnCarriesHonestyFlag({ unverifiedEdit: true })).toBe(true);
     expect(turnCarriesHonestyFlag({ unverifiedEditClaim: true })).toBe(true);
     expect(turnCarriesHonestyFlag({ noActionTaken: true })).toBe(true);
+    // Bundle 19 — a file the turn wrote admits its own content was omitted. The
+    // guard's name claims it classifies EVERY flag, so a new flag omitted here is
+    // a silently unprotected one: it would still pass while the flag went
+    // unclassified in `turnCarriesHonestyFlag`.
+    expect(turnCarriesHonestyFlag({ artifactIncomplete: { path: 'DESIGN.md', statement: 'content omitted' } })).toBe(true);
   });
 
   it('is false for a clean turn', () => {

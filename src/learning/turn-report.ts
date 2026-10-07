@@ -33,6 +33,11 @@ export interface TurnReportFlags {
   undeliveredArtifact?: boolean;
   unfulfilledPromise?: boolean;
   noActionTaken?: boolean;
+  /**
+   * Bundle 19 — a file this turn WROTE declares that its own content was omitted.
+   * The artifact admits it is incomplete, so the turn cannot read as finished work.
+   */
+  incompleteArtifactClaim?: boolean;
 }
 
 /** One step, with the evidence that its status is honest. */
@@ -132,7 +137,8 @@ function hasAnyFlag(flags: TurnReportFlags): boolean {
       flags.unverifiedBuildClaim ||
       flags.undeliveredArtifact ||
       flags.unfulfilledPromise ||
-      flags.noActionTaken,
+      flags.noActionTaken ||
+      flags.incompleteArtifactClaim,
   );
 }
 

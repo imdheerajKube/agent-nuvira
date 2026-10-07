@@ -24,6 +24,7 @@ import {
   fallbackHintForTool,
   makeParallelSuggester,
   summarizeArgs,
+  detectSelfDeclaredOmission,
   type LoopTraceEvent,
   type ToolLoopDeps,
   type StepResponse,
@@ -1137,6 +1138,105 @@ describe('tool loop — authorized-work nudge', () => {
     await runToolLoop({ messages: [{ role: 'user', content: STORY_ASK }], context: ctx, deps });
 
     expect(deps.callModel).toHaveBeenCalledTimes(2);
+  });
+
+  // ─── Bundle 19 — an artifact that says its own content was omitted ──────────
+
+  it('detects an artifact that declares its own content omitted, and only that', () => {
+    // The measured case: a 25-word "design document" that announced its content and
+    // then omitted it, reported as complete.
+    expect(
+      detectSelfDeclaredOmission('## 1. Introduction ... (full content omitted for brevity) ...'),
+    ).toBeTruthy();
+    expect(detectSelfDeclaredOmission('Sections 2-9 intentionally omitted.')).toBeTruthy();
+
+    // NEGATIVE CASES, which matter more than the positive one: this detector reads
+    // the ARTIFACT, so it must not fire on ordinary code or ordinary prose.
+    // An HTML attribute is not an admission of incompleteness.
+    expect(detectSelfDeclaredOmission('<input placeholder="Search the docs" />')).toBeNull();
+    // A TODO is a plan for later work, not a claim that this file is finished.
+    expect(detectSelfDeclaredOmission('// TODO: implement the parser\nfunction parse() {}')).toBeNull();
+    // A real document that uses the word plainly.
+    expect(detectSelfDeclaredOmission('The contract omits the optional timeout field.')).toBeNull();
+    expect(detectSelfDeclaredOmission('# Release notes\n\nEverything below shipped.')).toBeNull();
+  });
+
+  it('flags a turn whose OWN file admits its content was omitted', async () => {
+    // Judged on the artifact, never on the model's vocabulary: the file the turn
+    // wrote says it is incomplete, so the turn is not finished work.
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-placeholder-'));
+    try {
+      const deps = mockDeps(
+        [
+          {
+            content: '',
+            toolCalls: [
+              {
+                id: 'w1',
+                name: 'write_file',
+                arguments: {
+                  path: 'DESIGN.md',
+                  content: '## 1. Introduction ... (full content omitted for brevity) ...',
+                },
+              },
+            ],
+          },
+          { content: 'The design document is complete and all sections are present.', toolCalls: [] },
+        ],
+        realExecute,
+      );
+      const result = await runToolLoop({
+        messages: [{ role: 'user', content: 'Write a long design document to DESIGN.md' }],
+        context: { ...ctx, cwd: workdir, writesAuthorized: true },
+        deps,
+        requireVerification: false,
+        // `requirePlan:false` isolates THIS gate. Without it the E2 plan gate
+        // refuses the single `write_file`, the turn's second step is the final
+        // answer, and the artifact is never written — so `artifactIncomplete`
+        // was `undefined` for a reason that had nothing to do with Bundle 19.
+        requirePlan: false,
+      });
+
+      expect(result.artifactIncomplete?.path).toBe('DESIGN.md');
+      expect(result.artifactIncomplete?.statement).toContain('content omitted');
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('does NOT flag a turn whose file is genuinely complete', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-complete-'));
+    try {
+      const deps = mockDeps(
+        [
+          {
+            content: '',
+            toolCalls: [
+              {
+                id: 'w1',
+                name: 'write_file',
+                arguments: { path: 'DESIGN.md', content: '# Router design\n\nFull architecture, decisions and trade-offs.' },
+              },
+            ],
+          },
+          { content: 'Written to DESIGN.md.', toolCalls: [] },
+        ],
+        realExecute,
+      );
+      const result = await runToolLoop({
+        messages: [{ role: 'user', content: 'Write the design document to DESIGN.md' }],
+        context: { ...ctx, cwd: workdir, writesAuthorized: true },
+        deps,
+        requireVerification: false,
+        // Same isolation as the positive case: without it the write is refused by
+        // the plan gate and this negative passes for the wrong reason.
+        requirePlan: false,
+      });
+
+      expect(result.artifactIncomplete).toBeUndefined();
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
   });
 
   it('keeps real work delivered when the request authorized it (nudge only when nothing was done)', async () => {
