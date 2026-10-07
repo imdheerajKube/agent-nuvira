@@ -102,6 +102,13 @@ the artifact's own words; `cli/chat.ts` forwards it as the report flag `incomple
 must not be cached or replayed as settled. So the measured turn is now readable as `unverified` on every
 surface, and the flag quotes the file's own admission rather than an assertion about it.
 
+**A wiring gap found on review, and closed.** As first wired, the flag changed only the INTERNAL verdict:
+`artifactIncomplete` was carried and classified, but nothing printed it, so the reader still saw a
+confident "the design document is complete" reply with no sign of the admission inside the file. `cli/chat.ts`
+now emits the console warning its three sibling honesty flags have, quoting the artifact's own words —
+*"The file DESIGN.md says its own content was omitted (…)"* — so the disclosure reaches the user, not just
+the report and the cache.
+
 **Measured.** A turn whose only file was the 25-word placeholder now yields
 `artifactIncomplete = { path: 'DESIGN.md', statement: '(full content omitted…' }`. The first test run FAILED
 and found a real gap in the detector: `Sections 2-9 intentionally omitted.` did not match, because the
@@ -116,6 +123,23 @@ does not say so remains item 13's job (B3). (2) `extractWrittenText` keeps the f
 artifact, so an omission notice buried past that in an otherwise-huge file is not read — a 25-word
 placeholder is always well inside it. (3) **F1's sectioned-delivery proof is still outstanding on its own
 terms** (see the paragraph above).
+
+**Live re-run of the SAME ask (2026-10-07).** Reproduced in a genuinely empty folder (`/tmp/g-f1b`, `ls
+-A` → 0). This time the model wrote a real **502-word** `DESIGN.md` with **no omission marker anywhere**
+(`grep -i 'omitted|placeholder|brevity'` → no match). Two things follow, and both matter:
+
+- **The flag did NOT fire on a real document** — the live negative case. The detector does not cry wolf on
+  a genuine 500-word design doc, which is the failure mode of every phrase-list guard.
+- **The turn was still disclosed `unverified`** by the EXISTING flag: its verification was `read_file` +
+  `finding`, neither of which is a verification tool, so the harness said *"Files were changed this turn
+  but no verification ran"* even though the model's own prose claimed it had *"performed a content check
+  confirming … there is no placeholder text"*. That is the honesty working as designed.
+
+**What this run does NOT prove.** Model nondeterminism means the placeholder itself was not re-produced
+live, so the flag's live FIRE rests on the integration test that drives the real `write_file` through the
+real registry — the mechanism end-to-end minus the model's choice — rather than on a second lucky run. The
+string that F1 measured is asserted directly against `detectSelfDeclaredOmission`, and the turn it produced
+is asserted through the loop. Recorded rather than glossed.
 
 **Tests.** `tool-loop.test.ts` (+3: the detector's positives and negatives, the flagged turn, and the same
 turn minus the placeholder) and `turn-report.test.ts` (+2); the `#30` guard whose name claims it classifies

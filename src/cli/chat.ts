@@ -3027,6 +3027,17 @@ export class ChatCommand extends BaseCommand {
           '   ⚠️  A build command FAILED this turn and no later build succeeded, but the reply reports success — treat the build as UNVERIFIED.',
         );
       }
+      // Bundle 19 — the ARTIFACT-honesty warning. The file this turn wrote says its
+      // own content was omitted, so the prose above describes a document that is not
+      // on disk. The artifact's OWN WORDS are quoted, so the reader sees the evidence
+      // (a specific line the file contains) rather than a verdict they must trust.
+      // Without this the flag only changed the internal verdict; the user still saw
+      // a confident "complete" reply with no sign of the admission inside it.
+      if (result.artifactIncomplete) {
+        logger.warn(
+          `   ⚠️  The file ${result.artifactIncomplete.path} says its own content was omitted ("${result.artifactIncomplete.statement}") — the artifact is INCOMPLETE, whatever the reply above claims.`,
+        );
+      }
     } catch {
       // Best-effort.
     }
