@@ -46,6 +46,7 @@ import { resetRouterBandit, getRouterBandit, DEFAULT_MIN_SAMPLES } from '../../s
 import { resetRouterPromotion, getRouterPromotion } from '../../src/learning/router-promotion.js';
 import { resetMlRouter, getMlRouter } from '../../src/learning/ml-router.js';
 import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-registry.js';
+import { PRIOR_FULL_SAMPLES } from '../../src/learning/capability-evidence.js';
 import { PROVIDER_CONTEXT_WINDOWS } from '../../src/learning/model-selection.js';
 import { CATALOG_PROVIDER_IDS, isCatalogKeyless } from '../../src/inference/provider-catalog.js';
 
@@ -1673,31 +1674,60 @@ describe('C4 — verification reasoning floor', () => {
     } as any;
   }
 
-  it('penalizes STACKED fast-tier markers, so flash-lite falls below a single flash', () => {
+  it('B1 — the model ID contributes NOTHING to capability, at equal evidence', () => {
+    // Before Bundle 3b this test asserted the OPPOSITE: stacked fast-tier words
+    // (`flash` + `lite`) cost 0.2 of reasoning per word, so `flash-lite` fell
+    // below the 0.7 floor while a single `flash` stayed above it. That made the
+    // floor a spelling test — and this programme's own report fell into it, calling
+    // DeepSeek V4.1 Flash weak *because of the word in its id* while the model
+    // served an 82-step build (correction C-2). The names are no longer evidence:
+    // at zero samples both ids are exactly the provider baseline.
     const router = new AutoModelRouter();
+    const base = router.getCapabilities('gemini');
     const flash = router.getModelCapabilities('gemini', 'gemini-3.1-flash');
     const flashLite = router.getModelCapabilities('gemini', 'gemini-3.1-flash-lite');
-    // One fast-tier word, two fast-tier words — the stacked id is weaker.
-    expect(flashLite.reasoning).toBeLessThan(flash.reasoning);
-    // …and below the C4 floor, while a single-flash id stays above it.
-    expect(flashLite.reasoning).toBeLessThan(0.7);
-    expect(flash.reasoning).toBeGreaterThanOrEqual(0.7);
+    expect(flashLite).toEqual(flash);
+    expect(flash.reasoning).toBe(base.reasoning);
+    // Parameter size and frontier keywords are names too — the same rule holds
+    // across both, including the id that used to earn a +0.45 boost.
+    expect(router.getModelCapabilities('local', 'qwen3-72b-instruct')).toEqual(
+      router.getModelCapabilities('local', 'llama3:1b'),
+    );
   });
 
-  it('eliminates a fast-lite served model for a build-debug ask and serves the strong provider', () => {
+  it('B4 — the floor acts on MEASURED accuracy, not on a fast-tier name', () => {
     const configManager = makeConfig({
       gemini: { model: 'gemini-3.1-flash-lite' },
       openrouter: { model: 'openai/gpt-4o' },
     });
-    const decision = new AutoModelRouter().resolve(
+    const task = 'The app build is broken; it crashes with ModuleNotFoundError. Fix the build.';
+
+    // COLD START: an id alone is not evidence, so the fast-lite pair is NOT
+    // floored out for its spelling. A floor that excludes by name is the defect;
+    // excluding by measurement is the fix.
+    const cold = new AutoModelRouter().resolve(
       'writer',
-      'The app build is broken; it crashes with ModuleNotFoundError. Fix the build.',
+      task,
       { allowedProviders: ['gemini', 'openrouter'] },
       configManager,
     );
-    // gemini's served model is the fast tier → floored out; openrouter survives.
-    expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(false);
-    expect(decision.provider).toBe('openrouter');
+    expect(cold.ranked.some((s) => s.provider === 'gemini')).toBe(true);
+
+    // MEASURED: once the harness has watched this pair fail to verify its work,
+    // the floor does its job and the task goes to the stronger provider.
+    const registry = getModelRegistry();
+    registry.markListed('gemini', ['gemini-3.1-flash-lite']);
+    for (let i = 0; i < PRIOR_FULL_SAMPLES; i++) {
+      registry.recordCapabilityEvidence('gemini', 'gemini-3.1-flash-lite', 'unverified');
+    }
+    const measured = new AutoModelRouter().resolve(
+      'writer',
+      task,
+      { allowedProviders: ['gemini', 'openrouter'] },
+      configManager,
+    );
+    expect(measured.ranked.some((s) => s.provider === 'gemini')).toBe(false);
+    expect(measured.provider).toBe('openrouter');
   });
 
   it('does NOT apply the floor to a plain coding ask (a fast model is still allowed)', () => {
@@ -1742,19 +1772,35 @@ describe('G5 — planning reasoning floor', () => {
     } as any;
   }
 
-  it('floors a fast-lite served model for the planner and serves the strong provider', () => {
+  it('floors a planner pair by its MEASUREMENT, not by a fast-lite name', () => {
     const configManager = makeConfig({
       gemini: { model: 'gemini-3.1-flash-lite' },
       openrouter: { model: 'openai/gpt-4o' },
     });
-    const decision = new AutoModelRouter().resolve(
-      'planner',
-      'implement a login form',
-      { allowedProviders: ['gemini', 'openrouter'] },
-      configManager,
-    );
-    expect(decision.ranked.some((s) => s.provider === 'gemini')).toBe(false);
-    expect(decision.provider).toBe('openrouter');
+    const decide = () =>
+      new AutoModelRouter().resolve(
+        'planner',
+        'implement a login form',
+        { allowedProviders: ['gemini', 'openrouter'] },
+        configManager,
+      );
+
+    // COLD START: the planner floor still applies to the provider baseline, and
+    // gemini's (0.85) clears it — so a flash-lite id is eligible. Excluding it for
+    // its NAME was the defect (B1); the planner's leverage is a reason to MEASURE
+    // the pair, not to read its spelling.
+    expect(decide().ranked.some((s) => s.provider === 'gemini')).toBe(true);
+
+    // MEASURED: once that pair has a record of not verifying its work, the
+    // planner floor does its job and the plan goes to the stronger provider.
+    const registry = getModelRegistry();
+    registry.markListed('gemini', ['gemini-3.1-flash-lite']);
+    for (let i = 0; i < PRIOR_FULL_SAMPLES; i++) {
+      registry.recordCapabilityEvidence('gemini', 'gemini-3.1-flash-lite', 'unverified');
+    }
+    const measured = decide();
+    expect(measured.ranked.some((s) => s.provider === 'gemini')).toBe(false);
+    expect(measured.provider).toBe('openrouter');
   });
 
   it('does NOT floor the same goal for a non-planner agent (writer keeps the fast model)', () => {
@@ -2164,62 +2210,65 @@ describe('AutoModelRouter.resolve governance (M2.4 admin policy)', () => {
     }, configManager)).toThrow(/Governance/);
   });
 
-  it('MODEL-LEVEL GATING — minReasoning judges the served model, not the provider baseline', () => {
-    // A provider whose catalog baseline reasoning is weak must NOT be
-    // eliminated when the model it will serve for this task carries
-    // strong-model evidence (a large-parameter frontier id). The configured
-    // pin is the served model the gate judges.
+  it('MODEL-LEVEL GATING — minReasoning judges the served model by its MEASUREMENT', () => {
+    // COLD START: local's baseline reasoning is 0.30, and no id can talk it past a
+    // 0.55 floor any more. Before Bundle 3b a `qwen3-72b` id earned a +0.45
+    // parameter-size boost and survived — for its NAME. That is the behaviour B1
+    // removes: a pin with no track record is judged by the provider it runs on.
     const pinStrong = makeConfig({}, { local: { model: 'qwen3-72b-instruct' } });
+    const killedCold = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      minReasoning: 0.55,
+    }, pinStrong);
+    expect(killedCold.ranked.find((s) => s.provider === 'local')).toBeUndefined();
+
+    // MEASURED: the same pair, having actually verified its work, clears the
+    // floor — a track record is the thing that earns eligibility.
+    const registry = getModelRegistry();
+    registry.markListed('local', ['qwen3-72b-instruct']);
+    for (let i = 0; i < PRIOR_FULL_SAMPLES; i++) {
+      registry.recordCapabilityEvidence('local', 'qwen3-72b-instruct', 'verified');
+    }
     const survived = new AutoModelRouter().resolve('writer', 'implement a login form', {
-      minReasoning: 0.55, // local baseline is 0.30 — the OLD gate would kill it
+      minReasoning: 0.55,
     }, pinStrong);
     expect(survived.ranked.find((s) => s.provider === 'local')).toBeDefined();
-
-    // Conversely, the same provider pinned to a tiny fast model IS eliminated
-    // (the served model cannot meet the reasoning floor).
-    const pinWeak = makeConfig({}, { local: { model: 'llama3:1b' } });
-    const killed = new AutoModelRouter().resolve('writer', 'implement a login form', {
-      minReasoning: 0.55,
-    }, pinWeak);
-    expect(killed.ranked.find((s) => s.provider === 'local')).toBeUndefined();
   });
 
-  it('MODEL-LEVEL GATING — minSpeed judges the served model (flash/instant raise speed)', () => {
-    // Gemini's baseline speed is 0.80. Pinned to a speed-optimized model id
-    // ('flash'/'lite' → +0.15 speed evidence) the SERVED speed 0.95 clears a
-    // 0.9 floor the baseline would fail; pinned to a heavyweight id (no speed
-    // evidence) it is eliminated. Same provider, same floor — only the model
-    // decides.
+  it('MODEL-LEVEL GATING — minSpeed judges the served model by its MEASURED performance', () => {
+    // Gemini's baseline speed is 0.80, so a 0.9 floor eliminates it on a cold
+    // start; a `flash-lite` id no longer grants +0.15 of speed evidence for its
+    // spelling. What clears the floor is having been measured FAST.
     const pinFast = makeConfig({}, { gemini: { model: 'gemini-2.0-flash-lite' } });
+    const coldOut = new AutoModelRouter().resolve('writer', 'implement a login form', {
+      minSpeed: 0.9,
+    }, pinFast);
+    expect(coldOut.ranked.find((s) => s.provider === 'gemini')).toBeUndefined();
+
+    const registry = getModelRegistry();
+    for (let i = 0; i < PRIOR_FULL_SAMPLES; i++) {
+      registry.recordCall('gemini', 'gemini-2.0-flash-lite', true, undefined, 'chat', 300);
+    }
     const fastOk = new AutoModelRouter().resolve('writer', 'implement a login form', {
       minSpeed: 0.9,
     }, pinFast);
     expect(fastOk.ranked.find((s) => s.provider === 'gemini')).toBeDefined();
 
-    const pinHeavy = makeConfig({}, { gemini: { model: 'deepseek-r1-large-max' } });
-    const heavyOut = new AutoModelRouter().resolve('writer', 'implement a login form', {
-      minSpeed: 0.9,
-    }, pinHeavy);
-    expect(heavyOut.ranked.find((s) => s.provider === 'gemini')).toBeUndefined();
+    // The old third case here — a "heavyweight" id (`deepseek-r1-large-max`)
+    // eliminated by the same floor — is GONE ON PURPOSE: it asserted that the id
+    // is evidence. It is not (B1). The two cases above are the honest pair: an
+    // unmeasured model is judged by its provider, a measured one by its record.
   });
 
-  it('getModelCapabilities refines from model-id evidence and clamps conservatively', () => {
+  it('getModelCapabilities returns the provider baseline for every id with no measurements', () => {
     const router = new AutoModelRouter();
     const base = router.getCapabilities('local');
-    // 72b frontier-family id raises reasoning above the weak local baseline.
-    const strong = router.getModelCapabilities('local', 'qwen3-72b-instruct');
-    expect(strong.reasoning).toBeGreaterThan(base.reasoning);
-    expect(strong.reasoning).toBeLessThanOrEqual(1);
-    // 1b tiny id lowers reasoning and raises speed.
-    const tiny = router.getModelCapabilities('local', 'llama3:1b');
-    expect(tiny.reasoning).toBeLessThan(base.reasoning);
-    expect(tiny.speed).toBeGreaterThan(base.speed);
-    // Unknown/default ids return the baseline unchanged.
-    const unchanged = router.getModelCapabilities('local', 'default');
-    expect(unchanged.reasoning).toBe(base.reasoning);
-    expect(unchanged.speed).toBe(base.speed);
-    const unknownId = router.getModelCapabilities('local', 'totally-unknown-model');
-    expect(unknownId.reasoning).toBe(base.reasoning);
+    // No model-id signal survives (B1) — not size, not tier words, not frontier
+    // keywords. Every id with no measurement is its provider, exactly.
+    for (const id of ['qwen3-72b-instruct', 'llama3:1b', 'gpt-4o', 'totally-unknown-model']) {
+      expect(router.getModelCapabilities('local', id), id).toEqual(base);
+    }
+    // The sentinel is not a model: it returns the baseline too, unchanged.
+    expect(router.getModelCapabilities('local', 'default')).toEqual(base);
   });
 
   it('PII hard-gate THROWS when a PII task matches but every provider violates privacy (never serves a violator)', () => {

@@ -65,6 +65,12 @@ import {
   entitlementNote,
 } from '../learning/pair-entitlement.js';
 import { identityKey, identityProvenance } from '../learning/model-identity.js';
+import {
+  DEFAULT_PRIORS,
+  capabilityLines,
+  deriveTier,
+  effectiveParameter,
+} from '../learning/capability-evidence.js';
 import { getProviderFallback } from '../learning/provider-fallback.js';
 import {
   getRouterPromotion,
@@ -1165,6 +1171,37 @@ export class ModelCommand extends BaseCommand {
           console.log(`   ${ENTITLEMENT_LABEL[e]} ${t.provider}/${t.model} — ${entitlementNote(e, t)}`);
         }
       }
+    } catch {
+      // Best-effort — an audit section must never break `model explain`.
+    }
+
+    // Bundle 3b — CAPABILITY BY MEASUREMENT. The scorecard the decision was made
+    // from, in the terms the user asked for: five named parameters, each with its
+    // SAMPLE COUNT, so a number can be weighed instead of trusted. A parameter on
+    // 0 samples is the declared prior by definition (`capability-evidence.ts`),
+    // which is why it is labelled rather than hidden — a bare number with no
+    // basis was the defect, and the same number printed as "prior" is honest.
+    try {
+      const router = getAutoRouter();
+      const registry = getModelRegistry();
+      const base = router.getCapabilities(decision.provider);
+      const record = registry.getCapability(decision.provider, decision.model);
+      const priors: { accuracy: number; performance: number } = {
+        accuracy: base.reasoning,
+        performance: base.speed,
+      };
+      // `accuracy`'s prior is the provider's own declared baseline (the same one
+      // the router's floor uses); the others use the declared defaults.
+      const view = (parameter: 'accuracy' | 'robustness' | 'ecosystem') =>
+        parameter === 'accuracy'
+          ? effectiveParameter(record, 'accuracy', base.reasoning)
+          : effectiveParameter(record, parameter, DEFAULT_PRIORS[parameter] ?? 0);
+      console.log('');
+      logger.highlight('  ── Capability scorecard (measured) ──');
+      console.log(`   ${decision.provider}/${decision.model}`);
+      for (const line of capabilityLines(record, priors)) console.log(`     ${line}`);
+      console.log(`     tier ${deriveTier({ accuracy: view('accuracy'), robustness: view('robustness'), ecosystem: view('ecosystem') })}`);
+      console.log('     (0 samples = the declared prior; values fold in real turns, calls and latencies — never from the model id)');
     } catch {
       // Best-effort — an audit section must never break `model explain`.
     }

@@ -46,6 +46,13 @@ import type { ModelDescriptor } from '../inference/interface.js';
 import type { ReasoningCapability, ReasoningShape } from '../config/types.js';
 import { reasoningCapabilityFromAdvertised } from '../inference/reasoning-effort.js';
 import { isNonChatModel } from '../inference/model-catalog.js';
+import {
+  emptyCapabilityRecord,
+  foldCallOutcome,
+  foldLatency,
+  foldVerification,
+  type CapabilityRecord,
+} from './capability-evidence.js';
 import { getQuotaLedger } from './quota-ledger.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import type { ConfigManager } from '../config/manager.js';
@@ -144,6 +151,18 @@ export interface ModelRegistryEntry {
    * so a provider that later adds the model re-earns its place automatically.
    */
   deadPair?: boolean;
+  /**
+   * The measured capability scorecard for THIS pair (Bundle 3b, B1–B4).
+   *
+   * Five named parameters, each 0–100 with its own sample count, folded from what
+   * the harness OBSERVED while doing real work — never from the model's id. Absent
+   * or sample-free means "nothing measured", which reports as the declared prior
+   * (see `learning/capability-evidence.ts`), so a cold registry behaves exactly as
+   * it did before this field existed. Model metadata like the token EMAs above:
+   * it survives every availability write, because an auth failure says nothing
+   * about how well the model answered.
+   */
+  capability?: CapabilityRecord;
   /** Where the current status came from. */
   source: ModelRegistrySource;
   /** Human reason for `unavailable` (e.g. '403 permission denied'). */
@@ -1009,6 +1028,7 @@ export class ModelRegistry {
         quotaParkedUntil: existing?.quotaParkedUntil || 0,
         reasoningCapability,
         source: 'probe',
+        capability: existing?.capability,
         lastError: existing?.lastError,
         // The provider's OWN model list is authoritative about what it serves:
         // a pair that appears in a fresh list is not a dead pair, so the flag is
@@ -1093,6 +1113,11 @@ export class ModelRegistry {
       // Reasoning-parameter support is model metadata, independent of the verify
       // event — it survives a re-verify exactly like contextWindowTokens does.
       reasoningCapability: existing?.reasoningCapability,
+      // Bundle 3b: the measured scorecard is model metadata too. A verification
+      // proves the pair ANSWERS; it says nothing about how well it does the work,
+      // so the accuracy samples must not be reset by it (nor by any availability
+      // flip — see markListed/markUnavailable).
+      capability: existing?.capability,
     };
     this.persist();
     // A GENUINE promotion (was not verified → now verified) is a state change
@@ -1108,6 +1133,72 @@ export class ModelRegistry {
     if (action) {
       this.appendActionLog({ timestamp: now, action, provider, model, outcome: 'verified', latencyMs, costUsd, callId });
     }
+  }
+
+  /**
+   * Fold one observation into this pair's capability scorecard (Bundle 3b).
+   *
+   * Silent and best-effort by design: a scorecard write must never fail a call or
+   * an availability write. The record is model metadata — created on first
+   * observation, never reset by an availability flip (see `markVerified`).
+   */
+  private foldCapability(
+    provider: string,
+    model: string,
+    observation: {
+      verification?: 'verified' | 'unverified' | 'blocked' | 'not-applicable';
+      ok?: boolean;
+      latencyMs?: number;
+      now?: number;
+    },
+  ): void {
+    if (isSentinelModel(model)) return;
+    try {
+      const key = entryKey(provider, model);
+      const entry = this.data.entries[key];
+      if (!entry) return;
+      const now = observation.now ?? Date.now();
+      let record = entry.capability ?? emptyCapabilityRecord(now);
+      if (observation.verification !== undefined) {
+        record = foldVerification(record, observation.verification, now);
+      }
+      if (observation.ok !== undefined) {
+        record = foldCallOutcome(record, observation.ok, now);
+      }
+      if (observation.latencyMs !== undefined) {
+        record = foldLatency(record, observation.latencyMs, now);
+      }
+      if (record === entry.capability) return;
+      entry.capability = record;
+      this.persist();
+    } catch {
+      // Best-effort — the scorecard is learning, never a gate.
+    }
+  }
+
+  /**
+   * Record a completed TURN's verification verdict for a pair (Bundle 3b).
+   *
+   * The accuracy parameter's real feed: `TurnReport.verification` is derived from
+   * recorded tool/plan evidence and cannot be talked up by the model, so the
+   * sample this writes is an observation rather than a claim. `blocked` and
+   * `not-applicable` contribute NOTHING — a wall the run hit, and a turn with
+   * nothing to check, are both silent about the model.
+   *
+   * A pair with no entry yet is skipped rather than invented: the scorecard hangs
+   * off a registry row, and creating one from a turn would claim the pair exists.
+   */
+  recordCapabilityEvidence(
+    provider: string,
+    model: string,
+    verification: 'verified' | 'unverified' | 'blocked' | 'not-applicable',
+  ): void {
+    this.foldCapability(provider, model, { verification });
+  }
+
+  /** This pair's measured scorecard, or undefined when nothing was measured. */
+  getCapability(provider: string, model: string): CapabilityRecord | undefined {
+    return this.data.entries[entryKey(provider, model)]?.capability;
   }
 
   /**
@@ -1205,6 +1296,7 @@ export class ModelRegistry {
       reasoningCapability: existing?.reasoningCapability,
       quotaParkedUntil: Math.max(existing?.quotaParkedUntil || 0, quotaParkedUntil),
       source,
+      capability: existing?.capability,
       lastError: reason,
       // A "model not found" answer is definitive for this provider × model, so
       // the pair is retired from every candidate pool (see `deadPair`). The flag
@@ -1392,6 +1484,13 @@ export class ModelRegistry {
     if (ok) {
       this.markVerified(provider, model, 'telemetry', latencyMs, action, costUsd, callId);
       this.data.entries[key].lastUsedAt = now;
+      // Bundle 3b: every real call is also capability evidence — how the pair held
+      // up (robustness) and how fast it answered (performance). Folded HERE (the
+      // single telemetry entry point) and AFTER markVerified, because markVerified
+      // is what creates the row for a pair's first-ever call — folding earlier
+      // would silently drop the first observation of every model. Availability is
+      // not touched: this is evidence about the model, not a status write.
+      this.foldCapability(provider, model, { ok, latencyMs, now });
       // P4 M4.4: a clean success heals mid-stream flakiness (the provider
       // demonstrably finishes). Decay the EMA toward 0 — never hard-reset,
       // so a single success doesn't erase a flaky streak. markVerified already
@@ -1487,6 +1586,9 @@ export class ModelRegistry {
     }
     this.data.entries[key] = entry;
     this.persist();
+    // Bundle 3b — a FAILED call is capability evidence too (robustness), and the
+    // row now exists on both paths (markVerified above, or the entry built here).
+    this.foldCapability(provider, model, { ok, latencyMs, now });
     if (flipped) this.emitUpdated([provider], `telemetry failure (${errorType})`, 'telemetry');
     if (action) {
       this.appendActionLog({

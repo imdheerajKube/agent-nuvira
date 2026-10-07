@@ -1143,6 +1143,22 @@ export class ChatCommand extends BaseCommand {
         } catch {
           // Learning is best-effort — never break a turn on a bandit error.
         }
+        // Bundle 3b: the SAME derived verdict also feeds the capability
+        // scorecard's accuracy parameter for the pair that actually served the
+        // turn. One translation of "did the work verify", two consumers — rather
+        // than a second, parallel notion of success that could drift from it.
+        // `blocked`/`not-applicable` write nothing (see the registry method).
+        try {
+          if (type && model) {
+            getModelRegistry().recordCapabilityEvidence(
+              type,
+              model,
+              turnReport?.verification ?? 'not-applicable',
+            );
+          }
+        } catch {
+          // Learning is best-effort — never break a turn on a scorecard write.
+        }
       }
     }
     // E3 — surface a non-trivial report on the console. A plain answer (no

@@ -53,6 +53,7 @@ import { buildModelCandidates, pickBestModelCandidate, buildFailoverChain, type 
 import { pickBestModel, topModelCandidates } from './model-scoring.js';
 import { getModelRegistry, type ModelRegistryEntry } from './model-registry.js';
 import { areTwins, classifyPairEntitlement } from './pair-entitlement.js';
+import { effectiveParameter } from './capability-evidence.js';
 // R4: the agentic capability floor needs the same "too small to hold a tool
 // loop" judgement the harness uses. model-harness.ts imports nothing, so this
 // adds no cycle risk to the router.
@@ -1352,96 +1353,55 @@ export class AutoModelRouter {
   /**
    * MODEL-LEVEL capability refinement (model-first-router parity): the
    * provider's capability profile is a BASELINE — the model actually served
-   * may be much stronger or weaker. Refines the provider caps with evidence
-   * from the model id the router will serve for THIS task (resolveModel:
+   * may be much stronger or weaker. Refines the provider caps with MEASURED
+   * evidence about the model the router will serve for THIS task (resolveModel:
    * the configured pin, or the task-resolved best model via pickBestModel).
    *
-   * Evidence signals (all derived from the model id + registry measurements,
-   * no network):
-   *   - parameter-size hints: larger parameter counts (70b > 13b > 8b > 3b/1b)
-   *     raise reasoning; tiny param counts lower it;
-   *   - tier words: 'large'/'max'/'opus'/'70b'/… raise; 'mini'/'tiny'/'small'/
-   *     'instant'/'flash'/'nano'/'lite' lower reasoning (flash/instant also
-   *     RAISE speed — they are speed-optimized models);
-   *   - frontier-keyword families (gpt-4/5-class, claude-3/4-class,
-   *     gemini-2-class, deepseek-r1, llama-70b) raise reasoning;
-   *   - registry latency: a model measured much slower than its provider
-   *     baseline suggests a heavyweight (raises reasoning, lowers speed) and
-   *     vice versa.
+   * B1/B4 (Bundle 3b, 2026-10-07) — THE NAME NO LONGER CONTRIBUTES ANYTHING.
    *
-   * Deliberately CONSERVATIVE: adjustments clamp to ±0.35 and never cross the
-   * 0..1 bounds; an unknown model id returns the provider baseline unchanged
-   * (the gate then behaves exactly as before — no behavior change for
-   * unresolvable evidence). Deterministic: same inputs → same caps.
+   * What used to be here: a fast-tier word list (`mini`/`tiny`/`small`/`nano`/
+   * `lite`/`instant`/`flash`/`turbo`/`haiku`) SUBTRACTING 0.1 per word, a
+   * slow-tier list (`large`/`max`/`opus`/`pro`/`ultra`/`frontier`) adding 0.15, a
+   * parameter-size table (`70b` +0.45 … `≤4b` −0.2), and frontier-family
+   * keywords (+0.2). All of it is REMOVED, not capped: a capped name hint is
+   * still a name judgement, and the programme's own investigation fell into the
+   * trap — it called DeepSeek V4.1 Flash weak *because of the word "flash"*
+   * while that model served an 82-step build. It also made max mode's reasoning
+   * floor a spelling test, so `gemini-3.1-flash-lite` was excluded for its name
+   * and a 70B id on a weak provider was admitted for its name.
+   *
+   * What replaces it: the MEASURED scorecard (`learning/capability-evidence.ts`),
+   * stored per provider × model in the registry. `accuracy` replaces the id
+   * reasoning hints and `performance` replaces the id speed hints, both blended
+   * against this provider's declared baseline as the cold-start PRIOR:
+   *
+   *   - 0 samples → the provider baseline, byte-for-byte. Nothing that has never
+   *     been measured changes behaviour, and two ids differing only by a tier
+   *     word score IDENTICALLY (B1's acceptance) because the prior is
+   *     provider-level and cannot see the id;
+   *   - ≥ MIN_SAMPLES → the measured value, with the prior's weight decaying to
+   *     zero by `PRIOR_FULL_SAMPLES`.
+   *
+   * B4 follows from that: max mode's floor is now applied to measured accuracy,
+   * so a pair is excluded for what it has DONE, not for what it is called.
    */
   getModelCapabilities(provider: string, model: string | undefined): ProviderCapabilities {
     const base = { ...this.getCapabilities(provider) };
     if (!model || model === 'default') return base;
-    const m = model.toLowerCase();
-
-    let reasoningAdj = 0;
-    let speedAdj = 0;
-
-    // Parameter-size evidence. The >=60B boost is deliberately large enough to
-    // lift a genuine 70B model on a WEAK provider baseline (local 0.30 + 0.45 =
-    // 0.75) over the C4 verification reasoning floor — otherwise a capable local
-    // 70B model would be dropped for a build-debug ask while a cloud fast-lite
-    // model slips through. It never affects SCORING (this method feeds the
-    // constraint gate only), just who is eligible.
-    const params = /(\d+(?:\.\d+)?)b(?:\b|-|$)/.exec(m);
-    if (params) {
-      const b = parseFloat(params[1]);
-      if (b >= 60) reasoningAdj += 0.45;
-      else if (b >= 30) reasoningAdj += 0.15;
-      else if (b >= 12) reasoningAdj += 0.05;
-      else if (b <= 4) {
-        reasoningAdj -= 0.2;
-        speedAdj += 0.15; // tiny models are fast
-      }
-    }
-
-    // Tier-word evidence. A fast-tier word LOWERS reasoning and RAISES speed;
-    // STACKED fast-tier markers are penalized PER WORD, so `gemini-3.1-flash-lite`
-    // (flash + lite) lands below the C4 verification reasoning floor while a
-    // single `-flash` id stays above it. This stacked-token penalty is what makes
-    // "don't serve a flash-lite model for a build-debug ask" expressible as a
-    // reasoning floor rather than a brittle id denylist.
-    const SLOW_TIER = /\b(large|max|opus|pro|ultra|frontier)\b/;
-    const FAST_TIER = /\b(mini|tiny|small|nano|lite|instant|flash|turbo|haiku)\b/g;
-    if (SLOW_TIER.test(m)) reasoningAdj += 0.15;
-    const fastTierHits = m.match(FAST_TIER)?.length ?? 0;
-    if (fastTierHits > 0) {
-      reasoningAdj -= 0.1 * fastTierHits;
-      speedAdj += 0.15;
-    }
-
-    // Frontier-family evidence (keyword match on the id).
-    if (/\b(gpt-[45]|o[134](?:-|$)|claude-[34]|gemini-2|deepseek-r1|qwen3|qwen-3)\b/.test(m) ||
-        /gpt-4|gpt-5|claude-3|claude-4|gemini-2/.test(m)) {
-      reasoningAdj += 0.2;
-    }
-
-    // Registry latency evidence: measured latency far from the provider
-    // baseline's implied speed. 0.5s ≈ fast tier, 10s+ ≈ heavyweight.
     try {
-      const entry = getModelRegistry().getEntry(provider, model);
-      if (entry?.latencyMs) {
-        if (entry.latencyMs >= 10_000) {
-          reasoningAdj += 0.1;
-          speedAdj -= 0.1;
-        } else if (entry.latencyMs <= 800) {
-          speedAdj += 0.1;
-        }
-      }
+      const record = getModelRegistry().getCapability(provider, model);
+      const accuracy = effectiveParameter(record, 'accuracy', base.reasoning);
+      const performance = effectiveParameter(record, 'performance', base.speed);
+      return {
+        ...base,
+        reasoning: Math.min(1, Math.max(0, accuracy.value)),
+        speed: Math.min(1, Math.max(0, performance.value)),
+      };
     } catch {
-      // Registry unavailable — id evidence only.
+      // Registry unavailable — the provider baseline stands (never a race for a
+      // capability read: the gate must behave exactly as it did before).
+      return base;
     }
-
-    return {
-      ...base,
-      reasoning: Math.min(1, Math.max(0, base.reasoning + reasoningAdj)),
-      speed: Math.min(1, Math.max(0, base.speed + speedAdj)),
-    };
   }
 
   /**

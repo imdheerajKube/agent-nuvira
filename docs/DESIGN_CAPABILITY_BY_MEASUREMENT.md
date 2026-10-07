@@ -1,6 +1,9 @@
 # DESIGN — Capability by measurement (Bundle 3, B1–B5)
 
-**Status: proposal, awaiting sign-off. Nothing here is implemented.**
+**Status: §1–§5 LANDED (Bundle 3b, 2026-10-07) — the scorecard exists, the id-substring block is gone,
+and the reasoning floor acts on measurement. §6 remains a recommendation (no external feed integrated).
+§7 records the decisions taken. Implementation: `src/learning/capability-evidence.ts` +
+`ModelRegistryEntry.capability` + `AutoModelRouter.getModelCapabilities()` + `model explain`.**
 
 Bundle 3 of `PLAN_MODEL_ROUTING_PARITY.md` is the programme's root cause: *the router judges a
 model's capability from its name*. This document replaced its first draft after the user specified
@@ -196,14 +199,33 @@ all, use the **provider catalogue** (6.1) for `cost`/`ecosystem`. Treat LMArena 
 `accuracy` prior behind the flag in 6.2. Do not integrate the retired HF leaderboard, the dead Papers
 With Code, or Graphify — and do not populate any score from data whose names cannot be verified.
 
-## 7. Open questions for sign-off
+## 7. Decisions taken (2026-10-07, on the user's "go ahead with all 3")
 
-1. **Parameter weights** — how much does each of the five move the final rank? The sample JSON gives
-   equal-looking weight; I would keep them explicit and tunable rather than equal-by-accident.
-2. **`ecosystem`** — accept the split above (measured tool-calling + declared catalog facts), or drop
-   it from the measured set and treat it as static metadata only?
-3. **`MIN_SAMPLES_FOR_EVIDENCE`** and the prior's decay rate — these decide how long a wrong static
-   can outrank evidence. They need a stated default (I would use 5 samples and a linear decay).
-4. **External feeds (§6)** — do you want the optional `accuracy` prior at all, and if so, is
-   LMArena an acceptable source given its licence and that human chat preference is not agentic
-   tool-use? My recommendation is the provider catalogue only, and no leaderboard.
+1. **Parameter weights** — left EXPLICIT and unweighted for now: the record stores five independent
+   parameters, and the router reads `accuracy` (replacing the id reasoning hints) and `performance`
+   (replacing the id speed hints). A blended `overall_rank` was deliberately NOT introduced, because
+   a single weighted number would hide which parameter moved — the thing this bundle exists to make
+   visible. Weights are a later calibration, once parameters have samples.
+2. **`ecosystem`** — kept, with the split as designed: measured tool-calling when observed, declared
+   catalog facts otherwise. On a cold start it carries `DEFAULT_PRIORS.ecosystem = 0.5`, which keeps a
+   pair OUT of the `Frontier` tier (that needs ≥ 0.7) — a pair we have never watched call a tool is not
+   a frontier agent model.
+3. **`MIN_SAMPLES_FOR_EVIDENCE = 5`** and a LINEAR decay to zero prior weight by
+   `PRIOR_FULL_SAMPLES = 10` — implemented exactly so, with both constants and their rationale in
+   `capability-evidence.ts`.
+4. **External feeds** — the recommendation stands and is unimplemented: the provider catalogue only
+   (for `cost`/`ecosystem`), opt-in, never on the routing path. No leaderboard was integrated, so the
+   TTL/opt-in/identity-mapping machinery in §6.2 has nothing to guard yet — and `cost`'s prior is
+   `undefined` (printed `n/a`) rather than a guess, because pricing belongs to a provider ACCOUNT.
+
+### What landed, precisely
+
+| § | State |
+|---|---|
+| §3.1 parameters + tier | **LANDED** — `CapabilityRecord`, `deriveTier`, `capabilityLines`. |
+| §3.2 prior rule | **LANDED** — 0 samples returns the prior byte-for-byte; the decay is linear. |
+| §4.1 `CapabilityRecord` | **LANDED** — on `ModelRegistryEntry`, preserved across every availability write. |
+| §4.2 observation wiring | **PARTIAL** — `verificationPassed` (chat turn) + robustness/performance (every `recordCall`) fold in; `testPassed` and `userAccepted` do not (the turn report carries no per-action `ok` today). |
+| §4.4 floor on measured accuracy | **LANDED** — the floor reads the scorecard; the id-substring block is deleted. |
+| §4.5 `model explain` | **LANDED** — parameter, value, basis and sample count; `n/a` when there is no prior. |
+| §4.6 B5 (complexity) | **OPEN** — `analyzeComplexity` is untouched. |

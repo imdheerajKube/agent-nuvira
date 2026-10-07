@@ -67,10 +67,10 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 
 | # | Sev | Issue | Evidence | Fix | Acceptance |
 |---|---|---|---|---|---|
-| B1 | S1 | **Capability is inferred from id substrings** (`flash`/`lite`/`mini` penalised; `pro`/`70b` boosted). | `auto-router.ts` `getModelCapabilities()` | Measure capability; keep the name as a weak hint at most | A model whose id contains `flash` is not penalised for it |
+| B1 | S1 | **Capability is inferred from id substrings** (`flash`/`lite`/`mini` penalised; `pro`/`70b` boosted). | `auto-router.ts` `getModelCapabilities()` | **LANDED (Bundle 3b)**: the id-substring block is DELETED, not capped — a capped name hint is still a name judgement. `getModelCapabilities` reads the measured scorecard (`learning/capability-evidence.ts`) with the provider baseline as the cold-start prior. | **MET**: `getModelCapabilities` returns the provider baseline for every id at zero samples (`flash` vs `flash-lite`, `72b` vs `1b`, unknown ids all object-equal). |
 | B2 | S1 | **Static provider baselines outrank real evidence** (`openrouter: 0.95`, `gemini: 0.85`, `local: 0.30`). | Baseline table | Derive from measured per-pair outcomes; decay the statics | Ranking changes when measurements change; two providers with equal measurements rank equally |
-| B3 | S1 | **No measured quality exists anywhere.** The registry tracks latency, tokens, error rate — never capability. | `ModelRegistryEntry`; and re-measured: the bandit ALREADY defines a quality reward (`BanditOutcomeData`) that the real path passes as `undefined` | **PARTIAL — Bundle 3a LANDED**: the bandit's quality reward now receives the turn's derived `verificationPassed` on the chat path, and `recordOutcome` no longer discards its payload. The scorecard parameters (`testPassed`, `userAccepted`, a real `qualityScore`, and the per-parameter EMAs) are **DESIGNED and awaiting the §7 sign-off** in `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`. **External ranking feeds assessed (§6):** the retired HF Open LLM Leaderboard, the shut-down Papers With Code and the unrelated Graphify repo are unusable, "DeepSeek Hermes" does not exist, and the one genuinely fitting feed is the keyless provider catalogue (`GET openrouter.ai/api/v1/models`) — external values may only ever be a labelled PRIOR for `accuracy`/`cost`/`ecosystem`, never the measured truth. | A pair that consistently fails is demoted by measurement, not by name |
-| B4 | S1 | **Max mode's reasoning floor is name-driven**, so it excludes real models and admits others arbitrarily. | `MAX_CAPABILITY_MIN_REASONING = 0.7` vs `flash`+`lite` = 0.65 | Floor on measured capability | Documented: which models pass/are excluded, and why, from measurements |
+| B3 | S1 | **No measured quality exists anywhere.** The registry tracks latency, tokens, error rate — never capability. | `ModelRegistryEntry`; and re-measured: the bandit ALREADY defines a quality reward (`BanditOutcomeData`) that the real path passes as `undefined` | **LANDED for the scorecard (Bundle 3b)**: `ModelRegistryEntry.capability` holds the five parameters with per-parameter sample counts, folded from real turns and calls, and the router reads them. Bundle 3a had already restored the bandit's quality reward (`recordOutcome` no longer discards its payload; the chat path feeds `verificationPassed`). **Still absent:** `testPassed`, `userAccepted`, a real `qualityScore`, and a measured feed for `cost`/`ecosystem`. **External ranking feeds assessed (§6):** the retired HF Open LLM Leaderboard, the shut-down Papers With Code and the unrelated Graphify repo are unusable, "DeepSeek Hermes" does not exist, and the one genuinely fitting feed is the keyless provider catalogue (`GET openrouter.ai/api/v1/models`) — external values may only ever be a labelled PRIOR for `accuracy`/`cost`/`ecosystem`, never the measured truth. | **MET**: a pair that consistently fails is demoted by measurement, not by name — `PRIOR_FULL_SAMPLES` unverified turns move `getModelCapabilities` below the floor. |
+| B4 | S1 | **Max mode's reasoning floor is name-driven**, so it excludes real models and admits others arbitrarily. | `MAX_CAPABILITY_MIN_REASONING = 0.7` vs `flash`+`lite` = 0.65 | **LANDED (Bundle 3b)**: the floor is applied to measured accuracy; a cold pair is judged by its provider baseline (no name), and `PRIOR_FULL_SAMPLES` failing turns demote it. | **MET**: the `flash-lite`/`72b` fixtures that used to be floored by NAME are now eligible cold and floored by MEASUREMENT — asserted in both directions. |
 | B5 | S2 | **Complexity is under-rated**: a 4-component full-stack app classifies as `moderate`. | `model explain` baseline | Recalibrate; require an agentic floor for build asks at every complexity | That prompt classifies ≥ `complex` |
 
 ## Cluster C — Context & execution discipline (S1/S2 — where the 2.85× gap lives)
@@ -217,6 +217,66 @@ only true if the payload survives the call (it was `undefined` before).
 reward is a coin flip on verification plus the cost adjustment — better, not complete. That is
 `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §4 steps 2–4, waiting on the §7 sign-off. And this bundle
 changes LEARNING only: no score, weight or routing order is affected until the scorecard lands.
+
+## Bundle 3b — capability by measurement, and the name stops counting (B1/B3/B4 LANDED)
+
+**The root cause.** `getModelCapabilities()` judged a model from its ID: a fast-tier word
+(`mini`/`tiny`/`small`/`nano`/`lite`/`instant`/`flash`/`turbo`/`haiku`) SUBTRACTED 0.1 per word, a
+slow-tier word added 0.15, a parameter-size table gave `70b` +0.45 and `≤4b` −0.2, and frontier-family
+keywords added 0.2. Nothing anywhere had measured whether a model is any good — so max mode's reasoning
+floor was a **spelling test**, and this programme's own report fell into the trap it was reporting: it
+called DeepSeek V4.1 Flash weak *because of the word "flash"* while that model served an 82-step build
+(correction C-2).
+
+**What was built.** `learning/capability-evidence.ts` (pure) defines the five parameters
+(`accuracy` / `performance` / `cost` / `robustness` / `ecosystem`), each scored 0–100 with its own
+sample count, plus the prior rule, the tier derivation and the rendering. `ModelRegistryEntry` gains a
+`capability` record — model metadata like the token EMAs, so it survives every availability write
+(an auth failure says nothing about how well the model answered). `recordCall` folds real calls
+(robustness, performance) and `recordCapabilityEvidence` folds a turn's verdict (accuracy); the chat
+turn writes both from the ONE derived `TurnReport.verification` it already computes for the bandit.
+`getModelCapabilities()` now reads that record and nothing else, and `model explain` prints the
+scorecard with each number's basis and sample count.
+
+### The prior rule (§3.2) — why this could land safely
+
+| Samples | Reported value |
+|---|---|
+| 0 | the provider's declared baseline, **byte-for-byte** — nothing unmeasured changes behaviour |
+| 1 … 9 | the measurement blended with the prior, whose weight decays linearly |
+| ≥ 10 (`PRIOR_FULL_SAMPLES`) | the measurement |
+
+`MIN_SAMPLES_FOR_EVIDENCE = 5` decides when a value is *labelled* measured rather than a prior. Both
+constants are stated in code with their rationale — the design called the decay rate a calibration
+decision, not a constant to bury.
+
+**The honest limit, as designed:** a turn that verified nothing contributes **no** accuracy sample
+(not a neutral 50), so a run that never checks its work gets no accuracy evidence rather than good
+ones. `blocked` is likewise silent — a wall the run hit is not a verdict about the model.
+
+### Measured / verified
+
+- **B1 (name contributes nothing)** — `getModelCapabilities` returns the provider baseline for EVERY
+  id at zero samples, including `gemini-3.1-flash-lite` vs `gemini-3.1-flash`, `qwen3-72b-instruct` vs
+  `llama3:1b`, and an unknown id. Test asserts object equality.
+- **B4 (the floor acts on measurement)** — the two tests that used to assert the opposite were
+  REWRITTEN, not deleted: a `flash-lite`/`qwen3-72b` pair is now eligible on a cold start, is floored
+  out once the harness has measured it failing (`PRIOR_FULL_SAMPLES` unverified turns), and a measured-
+  fast pair clears a `minSpeed` floor that its provider baseline would fail.
+- **Live** (`model explain`, this machine): `accuracy 85 (prior)` / `cost n/a (no prior declared,
+  nothing measured)` / `tier Balanced` for the served pair — no number without a basis.
+
+### Still open (honest scope)
+
+- **B2** — the static provider baselines (`openrouter 0.95`, `gemini 0.85`, `local 0.30`) are now only
+  the cold-start PRIOR, but they still outrank each other with no evidence. Measuring per-provider
+  accuracy to replace them is the next step, and the same mechanism now supports it.
+- **B5** — complexity under-rating (`analyzeComplexity`) is untouched.
+- `userAccepted` and a real `qualityScore` are still absent from the bandit payload; `testPassed` is
+  not yet folded (the turn report does not carry per-action `ok` today). `cost` and `ecosystem` have
+  declared priors but no measured feed yet.
+- **No external feed was integrated** — §6's recommendation (provider catalogue only, opt-in, never on
+  the routing path) stands and is not needed for any of the above.
 
 ## Bundle 3c — a provider can list a model it cannot serve (D7 LANDED)
 
@@ -691,6 +751,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **D3 (model half) / A5 / D2 (Bundle 2d)** | `reasoning-trace.ts` `endTrace`: the summary names the provider×model PAIR that served the most steps (previously only the provider was derived, beside a requested model), and a `decision` event records any mid-turn detour with per-pair step counts. | `tests/learning/reasoning-trace.test.ts` (+3) | **LANDED**, live-verified (the summary pair equals the run's step pair) |
 | **D5 (Bundle 2e)** | `cli/model.ts` explain: the "Ranked providers" header states the availability-first sort key and quota-parked rows are labelled — the order was already the routing precedence; only the display hid its key. | `tests/cli/model.test.ts` (+1) | **LANDED** |
 | **B3 partial (Bundle 3a)** | `learning/auto-router.ts` `recordOutcome` takes the bandit's own `Partial<BanditOutcomeData>` and forwards it to the provider AND model arms (it discarded `undefined` before); `learning/outcome-observation.ts` is the pure mapping from `TurnReport.verification` to `verificationPassed`; `cli/chat.ts` `answerOnce` now records the turn's outcome (the chat path never fed the bandit at all). | `tests/learning/outcome-observation.test.ts` (+6), `tests/learning/auto-router.test.ts` (+1, proven to depend on the forwarding) | **LANDED** |
+| **B1 / B3 / B4 (Bundle 3b)** | New `learning/capability-evidence.ts` (five parameters, per-parameter sample counts, prior decay, derived tier, `DEFAULT_PRIORS`, rendering); `ModelRegistryEntry.capability` + `recordCapabilityEvidence`/`getCapability` + folds in `recordCall`; the chat turn feeds the turn's derived verdict in; `getModelCapabilities` reads measurement and the id-substring block is DELETED; `model explain` prints the scorecard. | `tests/learning/capability-evidence.test.ts` (new, 16), `tests/learning/auto-router.test.ts` (4 rewritten/added: B1 equality, B4 cold-vs-measured ×2, planner floor) | **LANDED**, live-verified in `model explain` |
 | **A1 (Bundle 3d)** | New `learning/model-identity.ts`: the hand-declared alias table (`declaredAt` + evidence per entry), `identityKey`/`sameModel` (exact + bare id, widened ONLY by declaration), and `identityProvenance`. Wired into `twinKey`/`areTwins` (funded-twin grouping), `route-resolver.ts` `verifiedEquivalent` (the pin-refusal sentence now names the funded twin for the run-D pair), `model explain` (twin set + provenance) and `model list` ("same model, different verdicts"). Identity groups CAPABILITY/legibility only — never routability. | `tests/learning/model-identity.test.ts` (new, 9), `tests/inference/route-resolver.test.ts` (rewritten pair + a new no-guessing pair) | **LANDED**, live-verified in `model list` |
 | **D7 (Bundle 3c)** | New `learning/pair-entitlement.ts` + registry exports: the verdict on whether the ACCOUNT serving a pair can be called (`funded`/`unknown`/`stalled`/`refused`), the entitlement partition applied to the model-first pool after scoring, the refusal gate in `pushFallback`, and a re-check of the PRIMARY pick that rescues to a funded twin. `cli/model.ts` prints the twin set. | `tests/learning/pair-entitlement.test.ts` (new, 20), `tests/learning/auto-router.test.ts` (amended, pick asserted) | **LANDED**, live-verified in `model explain` |
 | **E1 / E2 (Bundle 5a/5b)** | `tools/registry.ts` + `tools/ask-user.ts` + `learning/run-trace.ts` + `learning/turn-report.ts` + `cli/chat.ts`: an unattended `ask_user` default is recorded as an ASSUMPTION (never a shown answer), emitted as `autonomy:assumed-default`, and disclosed in a `🤝 decided for you` turn-report block; a pinned ask re-dispatched into the pipeline announces the execution-model change and the pin it carries. | `run-trace` (+2), `turn-report` (+3), `registry` (+2), `ask-user-non-interactive` (+3 assertions), `chat-answer-once-auto-parity` (+1) | **LANDED** |
