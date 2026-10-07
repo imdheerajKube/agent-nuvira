@@ -293,6 +293,50 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 22 — the empty-arguments refusal reaches every transport (item 6's residual, LANDED 2026-10-07)
+
+**The residual.** Bundle 6 refused a tool call whose arguments never arrived, but the flag was set ONLY by
+`parseToolCallArguments`, which the OpenAI wires (`inference/tools.ts`) and the Anthropic wire
+(`native-tools.ts`) call. Two transports still built a call with `{}` and no flag, so the refusal never
+fired there and the call was executed as a genuine empty one:
+
+- **JSON-fallback** (`extractFallbackToolCalls`, `tools/tool-loop.ts`) — the transport where the model emits
+the call as TEXT. A block that carried no `arguments` object, and a truncated block, both produced no signal.
+- **Gemini** (`parseGeminiToolResponse` and the streaming `generateToolsStreamOnce`) — both mapped
+  `fc.args ?? {}`, so a call with no arguments looked identical to a call that legitimately asked for none.
+
+**The fix.**
+
+- The fallback extractor now reports what it saw: absent or non-object `arguments` → `'empty'` /`'unparseable'`,
+  and a **quoted block with no closing brace** (the truncation signature on a text transport) is surfaced as
+  an `'unparseable'` call — with the tool's name, captured from the marker — so the loop can name the
+  truncation cause instead of dropping the block in silence. A brace-matched but unparseable block (a
+  model's own JSON typo) still yields NO call, deliberately, so a typo cannot become a phantom refusal.
+- Both Gemini paths report an absent `args` as `'empty'`; an explicit `{}` is NOT flagged.
+- **The refusal is now SCHEMA-AWARE.** This is what resolves the Gemini ambiguity the item named: an absent
+  `args` could be a legitimate no-argument call (`list_dir`), so the loop refuses `'empty'` only when the
+  tool's own JSON schema declares a required argument (`toolRequiresArguments`, read from the tool registry,
+  never hand-kept). `'unparseable'` is refused unconditionally — a truncated payload is never a legitimate
+  no-argument call. A schema that cannot be read falls back to refusing, which is the prior behaviour.
+
+**Tests.** `tool-loop.test.ts` (+5: fallback absent/non-object/well-formed/truncated, and the malformed block
+staying silent); `malformed-tool-call.test.ts` (+3: a no-argument tool not refused, a required-argument tool
+still refused, and an unparseable call refused even for a no-argument tool); `native-tools.test.ts` (+1:
+Gemini one-shot absent-vs-explicit) and `gemini-adapter.test.ts` (+1: the streaming path, driven through
+`generateToolsStream` with a mocked SSE body).
+
+**Gates.** root suite **465 files / 8553 passed / 0 failed**, `verify:commands` **341/341**, all three docs
+guards, `build:cli`, dashboard bundle.
+
+**Honest limits.** (1) The fallback truncation path is exercised by UNIT tests of the extractor plus the
+loop's existing refusal tests — not by a live run on the fallback transport, because forcing that
+nondeterministically is not something a test can do reliably. (2) `'unparseable'` from a fallback block
+carries the name only when the `{"tool":"<name>"` marker was intact; a block cut off before the name is
+still dropped (nothing identifies it as a call). (3) A Gemini `MAX_TOKENS` cut-off drops required KEYS from
+`args` rather than the whole object, which the tool's own schema validation reports — that path is unchanged.
+
+---
+
 ## Bundle 18 — accuracy learns from the turn's own checks (PARTIAL, honestly)
 
 **The requirement (user, 2026-10-07):** *"Measure accuracy from the turn's own evidence so the scorecard
@@ -603,9 +647,11 @@ exists; where it does not, that is stated as the residual rather than implied cl
 6. **F1's live re-run — RUN; the failure it exposed is now DETECTED (Bundle 19), while the sectioned-delivery
    proof itself remains outstanding.** Bundle 19's artifact-honesty flag fires on the measured placeholder
    (proven end-to-end in `tool-loop.test.ts`), the verdict on such a turn is now `unverified` rather than a
-   silent success, and the flag quotes the file's own admission. Still not covered: the **JSON-fallback
-   transport** (a model asked to emit the call as text) and the **Gemini wire** (whose calls carry
-   structured `args`, so "empty" is ambiguous).
+   silent success, and the flag quotes the file's own admission. **The two transports that were not
+   covered are now covered — Bundle 22**: the **JSON-fallback transport** reports absent arguments (and
+   surfaces a truncated block instead of dropping it silently), and the **Gemini wire** reports an absent
+   `args`. The Gemini ambiguity (an absent `args` could be a legitimate no-argument call) is resolved by
+   making the refusal SCHEMA-AWARE: a tool with no required argument is not refused.
 7. ~~**C3's live parity re-run** (the probe count dropping) is deferred.~~ **CLOSED — measured live
    (2026-10-07)**: a real turn asked to run `python3 --version` twice recorded the repeat, and the model's own
    report says it worked — *"the harness detected it as a repeat and declined to re-execute it, returning the

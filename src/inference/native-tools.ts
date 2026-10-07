@@ -260,6 +260,12 @@ export function parseGeminiToolResponse(data: GeminiToolResponse): ToolCallRespo
         id: `call_${toolCalls.length + 1}`,
         name: p.functionCall.name,
         arguments: p.functionCall.args ?? {},
+        // Item 6 — Gemini carries structured `args`, so an ABSENT `args` is the
+        // empty-payload signature. Flagged here; the loop decides whether the
+        // tool actually requires arguments, so a legitimate no-arg call is not
+        // refused. (A `MAX_TOKENS` cut-off drops required keys rather than the
+        // whole object, which the tool's own schema validation reports.)
+        ...(p.functionCall.args === undefined ? { argumentsError: 'empty' as const } : {}),
         // Carried, never interpreted — see GeminiPart.thoughtSignature.
         ...(p.thoughtSignature ? { providerMeta: { thoughtSignature: p.thoughtSignature } } : {}),
       });

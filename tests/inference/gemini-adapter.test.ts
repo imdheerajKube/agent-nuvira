@@ -144,6 +144,27 @@ describe('GeminiAdapter', () => {
     });
   });
 
+  describe('generateToolsStream — item 6 empty-args flag', () => {
+    it('flags a streamed functionCall with NO args as an empty payload', async () => {
+      const sse =
+        'data: ' +
+        JSON.stringify({ candidates: [{ content: { parts: [{ functionCall: { name: 'write_file' } }] } }] }) +
+        '\n';
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(sse));
+          controller.close();
+        },
+      });
+      mockFetch.mockResolvedValue({ ok: true, body, headers: new Headers() });
+
+      const adapter = new GeminiAdapter(baseConfig);
+      const result = await adapter.generateToolsStream([], [], undefined, () => {});
+      expect(result.toolCalls[0]).toMatchObject({ name: 'write_file', arguments: {}, argumentsError: 'empty' });
+    });
+  });
+
   describe('isAvailable', () => {
     it('should return true when API key is set', async () => {
       const adapter = new GeminiAdapter(baseConfig);

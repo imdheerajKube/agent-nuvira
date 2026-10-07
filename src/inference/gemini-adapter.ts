@@ -478,6 +478,10 @@ export class GeminiAdapter implements InferenceProvider {
       id: `call_${i + 1}`,
       name: fc.name,
       arguments: fc.args ?? {},
+      // Item 6 — same rule as the one-shot path: an ABSENT `args` is the
+      // empty-payload signature, and the loop only refuses it when the tool
+      // requires arguments.
+      ...(fc.args === undefined ? { argumentsError: 'empty' as const } : {}),
       // Must survive the round trip: Gemini requires its own thoughtSignature
       // back on the next turn's functionCall part (see ToolCallRequest).
       ...(fc.thoughtSignature ? { providerMeta: { thoughtSignature: fc.thoughtSignature } } : {}),

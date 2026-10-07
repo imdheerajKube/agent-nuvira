@@ -3095,3 +3095,40 @@ describe('Bundle 20 — a file claim no write backs (the /tmp/g-book defect)', (
     expect(result.toolCalls ?? []).not.toContain('write_file');
   });
 });
+
+describe('Bundle 6 / item 6 — the JSON-fallback transport reports missing arguments', () => {
+  // The fallback transport is TEXT: the model emits the call as JSON in prose, so
+  // "did the arguments arrive?" must be answered by the extractor. Before this, a
+  // fallback call with no arguments became `{}` and was executed, and a TRUNCATED
+  // one was dropped in silence — neither told the model the real cause.
+
+  it('flags a fallback call whose arguments never arrived', () => {
+    const { calls } = extractFallbackToolCalls('Sure.\n{"tool":"write_file"}');
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe('write_file');
+    expect(calls[0].argumentsError).toBe('empty');
+  });
+
+  it('flags a non-object arguments value as unparseable', () => {
+    const { calls } = extractFallbackToolCalls('{"tool":"write_file","arguments":["not","an","object"]}');
+    expect(calls[0].argumentsError).toBe('unparseable');
+  });
+
+  it('does NOT flag a well-formed fallback call', () => {
+    const { calls } = extractFallbackToolCalls('{"tool":"write_file","arguments":{"path":"a.md","content":"hi"}}');
+    expect(calls[0].argumentsError).toBeUndefined();
+    expect(calls[0].arguments).toEqual({ path: 'a.md', content: 'hi' });
+  });
+
+  it('surfaces a TRUNCATED fallback call instead of dropping it in silence', () => {
+    const { calls } = extractFallbackToolCalls('{"tool":"write_file","arguments":{"path":"GUIDE.md","content":"# Intro');
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe('write_file');
+    expect(calls[0].argumentsError).toBe('unparseable');
+  });
+
+  it('leaves a brace-matched but malformed block silent (a typo is not a call)', () => {
+    const { calls } = extractFallbackToolCalls('text {"tool":"suggest_followups","arguments":{"followups":[{"prompt":"x"},]}}');
+    expect(calls).toHaveLength(0);
+  });
+});

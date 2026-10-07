@@ -157,6 +157,20 @@ describe('Gemini mapping', () => {
     ]);
   });
 
+  it('flags a functionCall with NO args as an empty payload (item 6)', () => {
+    // Gemini carries structured `args`, so an ABSENT one is the empty-payload
+    // signature — the loop then decides whether the tool requires arguments.
+    const absent = parseGeminiToolResponse({
+      candidates: [{ content: { parts: [{ functionCall: { name: 'write_file' } }] } }],
+    });
+    expect(absent.toolCalls[0]).toMatchObject({ name: 'write_file', arguments: {}, argumentsError: 'empty' });
+    // An EXPLICIT empty object is not flagged — only an absent one is.
+    const explicit = parseGeminiToolResponse({
+      candidates: [{ content: { parts: [{ functionCall: { name: 'list_dir', args: {} } }] } }],
+    });
+    expect(explicit.toolCalls[0].argumentsError).toBeUndefined();
+  });
+
   it('parseGeminiToolResponse tolerates an empty body', () => {
     expect(parseGeminiToolResponse({})).toEqual({ content: '', toolCalls: [] });
   });

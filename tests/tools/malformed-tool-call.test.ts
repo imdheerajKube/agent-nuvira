@@ -136,4 +136,59 @@ describe('a tool call with no arguments is refused, not executed as {}', () => {
     await runToolLoop({ messages: [{ role: 'user', content: 'read it' }], context: ctx, deps });
     expect(deps.executeTool).toHaveBeenCalledTimes(1);
   });
+
+  // ─── item 6 — the empty-arguments refusal is SCHEMA-AWARE ────────────────────
+
+  it('does NOT refuse a legitimate no-argument call (item 6, the Gemini wire)', async () => {
+    // `list_dir` declares no required argument, so `{}` is a real call. The Gemini
+    // wire omits an empty `args` object, which now reports `argumentsError: 'empty'`
+    // — a blanket refusal would reject a genuine no-argument call.
+    const requests: unknown[][] = [];
+    const deps = scripted(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'list_dir', arguments: {}, argumentsError: 'empty' }] },
+        { content: 'Checked.', toolCalls: [] },
+      ],
+      requests,
+    );
+    // `requirePlan: false` isolates THIS gate — the plan gate also refuses the
+    // first workspace call, which would make the test pass for the wrong reason.
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'list the directory' }],
+      context: ctx,
+      deps,
+      requirePlan: false,
+    });
+    expect(deps.executeTool).toHaveBeenCalled();
+    const thread = JSON.stringify(requests.at(-1));
+    expect(thread).not.toContain('NOT run');
+  });
+
+  it('still refuses an empty call to a tool that REQUIRES arguments', async () => {
+    const requests: unknown[][] = [];
+    const deps = scripted(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'write_file', arguments: {}, argumentsError: 'empty' }] },
+        { content: 'Splitting it up.', toolCalls: [] },
+      ],
+      requests,
+    );
+    await runToolLoop({ messages: [{ role: 'user', content: 'deliver the document' }], context: ctx, deps });
+    expect(deps.executeTool).not.toHaveBeenCalled();
+    expect(JSON.stringify(requests.at(-1))).toContain('NO arguments at all');
+  });
+
+  it('refuses an UNPARSEABLE call even when the tool needs no arguments', async () => {
+    // A truncated payload is never a legitimate no-argument call.
+    const requests: unknown[][] = [];
+    const deps = scripted(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'list_dir', arguments: {}, argumentsError: 'unparseable' }] },
+        { content: 'ok', toolCalls: [] },
+      ],
+      requests,
+    );
+    await runToolLoop({ messages: [{ role: 'user', content: 'list the directory' }], context: ctx, deps });
+    expect(JSON.stringify(requests.at(-1))).toContain('could not be parsed');
+  });
 });

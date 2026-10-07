@@ -856,6 +856,15 @@ export function extractFallbackToolCalls(content: string): { text: string; calls
       // A QUOTED tool block with no closing brace: the model was cut off
       // mid-call. Everything from the marker on is leaked scaffolding, not
       // answer text — strip it and stop (nothing valid can follow).
+      //
+      // Item 6 — surface it as an UNPARSEABLE call when we saw the tool's name,
+      // so the loop refuses it with the truncation cause and the sectioned path.
+      // Dropping it silently (the old behaviour) is how a cut-off delivery failed
+      // with nothing to tell the model why.
+      const name = /^\s*\(?\s*\{\s*"tool"\s*:\s*"([^"]+)"/.exec(cleaned.slice(m.index))?.[1];
+      if (name) {
+        calls.push({ id: `call_${calls.length + 1}`, name, arguments: {}, argumentsError: 'unparseable' });
+      }
       cleaned = cleaned.slice(0, m.index);
       strippedAny = true;
       break;
@@ -869,16 +878,27 @@ export function extractFallbackToolCalls(content: string): { text: string; calls
     startsAt.lastIndex = m.index;
     strippedAny = true;
     try {
-      const parsed = JSON.parse(block) as { tool?: string; arguments?: Record<string, unknown> };
+      const parsed = JSON.parse(block) as { tool?: string; arguments?: unknown };
       if (parsed.tool && typeof parsed.tool === 'string') {
+        // Item 6 — the fallback transport is TEXT, so "did the arguments arrive?"
+        // is decided HERE. A block that parses but carries no `arguments` object
+        // is the empty-payload signature; flagging it lets the loop refuse it with
+        // the REAL cause instead of executing `{}` and answering "path is required".
+        const rawArgs = parsed.arguments;
+        const isPlainObject =
+          rawArgs !== null && typeof rawArgs === 'object' && !Array.isArray(rawArgs);
         calls.push({
           id: `call_${calls.length + 1}`,
           name: parsed.tool,
-          arguments: parsed.arguments && typeof parsed.arguments === 'object' ? parsed.arguments : {},
+          arguments: isPlainObject ? (rawArgs as Record<string, unknown>) : {},
+          ...(isPlainObject ? {} : { argumentsError: rawArgs === undefined ? ('empty' as const) : ('unparseable' as const) }),
         });
       }
     } catch {
-      // Unparseable block — dropped from the answer, no tool call.
+      // A brace-MATCHED but unparseable block (the model's own JSON typo, e.g. a
+      // trailing comma) is dropped from the answer, no call — a truncation has no
+      // closing brace and is handled above. Item 6 covers the truncated case there;
+      // this stays silent by design so a typo cannot become a phantom refusal.
     }
   }
   // ── Pass 2: our tool's ARGUMENTS keyed by our own tool NAME ─────────────
@@ -2332,8 +2352,17 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             `Call tool_search with {"action":"load","toolset":"${ownerToolset?.name ?? ''}"} first — its tools become callable immediately.`,
         };
       }
-      if (call.argumentsError) {
-        // C — the call was never made: the argument payload did not arrive.
+      if (
+        call.argumentsError &&
+        // 'unparseable' is unambiguous: argument bytes ARRIVED and could not be
+        // used, which is the shape of a truncation. 'empty' is only a defect
+        // when the tool actually REQUIRES an argument — a schema with no required
+        // field is legitimately callable with none, and the Gemini wire omits an
+        // empty `args` object, so a blanket refusal there would be a FALSE refusal
+        // of a real no-argument call (git, plan_todo). Item 6.
+        (call.argumentsError === 'unparseable' || toolRequiresArguments(call.name))
+      ) {
+        // F1 — the call was never made: the argument payload did not arrive.
         // Refusing here is the whole point: executing it as `{}` reported a tool
         // call that "ran" with no input, hid the real cause (an output-budget
         // truncation) from the model, and burned 59 round trips in one turn.
@@ -4024,6 +4053,35 @@ export function malformedToolCallRefusal(
       ? ` (This is time ${attempt} this turn that a call arrived with no usable arguments — change the SHAPE of the call, not its wording.)`
       : '';
   return `Error: ${call.name}: NOT run — ${cause}, so the tool never saw your input. Reason: ${why}. ${escape}${escalation}`;
+}
+
+/**
+ * Whether a tool's schema declares at least one REQUIRED argument (item 6).
+ *
+ * This is what lets the empty-arguments refusal reach the JSON-fallback and
+ * Gemini wires without refusing a legitimate no-argument call: a `git` or
+ * `plan_todo` call with `{}` is a real call, but a `write_file` with `{}` is a
+ * truncated one. Read from the tool's own JSON schema (derived from its zod
+ * schema, never hand-kept), so a tool added later is judged by what it declares.
+ * When the schema cannot be read the answer is conservative (`true`): a
+ * malformed payload is the more likely cause, and the refusal is guidance, not a
+ * wall — the model can still retry with arguments.
+ */
+function toolRequiresArguments(name: string): boolean {
+  try {
+    const [schema] = toolJsonSchemas([name]);
+    // An unregistered name is not a call to honour — refuse, as before.
+    if (!schema) return true;
+    const required = (schema.parameters as { required?: unknown }).required;
+    // No `required` key means the tool declares no required argument, so an empty
+    // payload IS a legitimate call (list_dir). An empty array means the same.
+    if (Array.isArray(required)) return required.length > 0;
+    return false;
+  } catch {
+    // A schema that cannot be read is treated conservatively: a malformed payload
+    // is the more likely cause, and the refusal is guidance the model can act on.
+    return true;
+  }
 }
 
 /**
