@@ -382,6 +382,60 @@ contract: the header's provider equals the event's `served`, and the misleading 
 labels. And the child agent's own log event (`child-agent-runtime.ts`) records `{ tools, transport }` with
 no provider at all, so it never had this mismatch to fix.
 
+## Bundle 13 — the same substring class, swept across the intent rules
+
+**Why a sweep.** B2's cause was one unanchored `desc.includes('hi')`. The question this bundle answers is
+whether that was the only one, and the answer had to be MEASURED rather than assumed — a sweep that
+"fixes" things which never misbehave is churn, and a sweep that misses one leaves the bug class alive.
+
+**Demonstrated against the built `dist` — the fragments were real.** `analyzeTaskProfile` decided its
+intent from unanchored alternations, so a fragment of an ordinary word chose the route:
+
+| ask | before | after |
+|---|---|---|
+| "add a **prefix** constant to the config" | `debugging` + verification + **openrouter** escalation | `coding` |
+| "create a **fixture** file for the tests" | `debugging` + verification + openrouter | `coding` |
+| "rename the **suffix** field in src/config.ts" | `debugging` + verification + openrouter | `coding` |
+| "the provider **ecosystem** should be considered" | `architecture` + verification + **gemini** escalation | `coding` |
+| "**plant** a tree in the garden" | `planning` | `coding` |
+
+`fix` inside prefix/fixture/suffix is the same defect as `hi` inside this/which. The fix is a boundary PLUS
+the inflections the rule wants, because a bare `\b` does not help when the fragment STARTS the word —
+`\bfix\w*\b` still matches "fixture", so `fix` is spelled out (`fix|fixes|fixed|fixing|fixer|fixup`) and
+`plan` likewise (so `plant` is not a plan). Same rules, same ORDER (which the code documents as the
+contract), same intents.
+
+**The narrowing that the sweep exposed.** Bounding the verification rule raised a question the old
+`verify|verification` alternation had hidden: should the PAST PARTICIPLE count? It must not — "the build was
+verified" is a STATUS REPORT, not a verification task, and must not buy a reviewer pass. Measured over the
+161 distinct tasks in the local routing history:
+
+| spelling | real tasks whose intent changed |
+|---|---|
+| `\bverif\w*\b` (naive bounding) | **1** — a past-tense status message, wrongly promoted to `verification` |
+| `\bverif(?:y|ies|ying|ication|ications)\b` (ask forms only) | **0** |
+
+So the conservative spelling is the one that fixes the fragment bug **without moving a single real
+decision**, and the target is pinned by tests in both directions.
+
+**The complexity ladder was measured too, and needs NO change.** `COMPLEXITY_KEYWORDS` carries the same
+class of fragment (`api` inside "capital"/"rapid", `auth` inside "author", `move` inside "remove"). Their
+impact is nil today: the `api`/`auth` rule sits in `moderate`, which is ALSO the ladder's fallback, so
+matching by accident lands on the same answer; and `move` inside "remove" downgrades "remove the unused
+import" to `simple`, which is a fair reading of that ask (asserted unchanged). Recorded as measured-no-
+impact rather than churned.
+
+| Item | What changed | Tests | Status |
+|---|---|---|---|
+| **B2 sweep (Bundle 13)** | `learning/auto-router.ts`: the six intent rules (`migration`, `architecture` + its negative lookahead, `verification`, `security`, `debugging`, `planning`) match whole words with their intended inflections. | `tests/learning/auto-router.test.ts` (+2: the five demonstrated misclassifications, and the real words + inflections still firing, including the past-participle decision) | **LANDED**, measured before/after on the built `dist`: 161 real tasks, **0 changed** |
+
+**One environment note, so it is not mistaken for a regression.** During the sweep a full-suite run reported
+2 failures in `tests/cli/parity.test.ts` (durations 35s and 130s), whose own output showed
+`local failed (empty-response) — trying next candidate`. Re-run ALONE, that file passed **7/7 in 86s** with
+the change applied, and the next full-suite run was green (8473 passed, 0 failed). Those harnesses drive
+real provider turns on five surfaces, so they can be starved when 464 files run at once on one machine —
+recorded as a load-sensitivity of the harness, not a defect in the sweep.
+
 ## Bundle 12 — the parity ask, re-run end-to-end on the rebuilt `dist`
 
 **What was run.** The user's own routing-design ask, verbatim, through the built CLI in a COPY of his

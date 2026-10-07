@@ -442,6 +442,55 @@ describe('analyzeTaskProfile', () => {
     expect(profile.escalationTarget).toBeUndefined();
   });
 
+  // ─── The intent rules match WHOLE WORDS (the B2 sweep) ──────────────────
+  //
+  // These rules were unanchored alternations, so a FRAGMENT of an ordinary word
+  // decided the intent — the same class of defect as B2's `desc.includes('hi')`.
+  // Every case below was DEMONSTRATED against the built `dist` before the fix:
+  // `prefix`/`fixture`/`suffix` all produced `debugging` (because `fix` is inside
+  // them), earning a verification pass and an openrouter escalation.
+  it('is not fooled by words that merely CONTAIN a rule keyword', () => {
+    const spells = [
+      'add a prefix constant to the config',
+      'create a fixture file for the tests',
+      'rename the suffix field in src/config.ts',
+    ];
+    for (const text of spells) {
+      const profile = analyzeTaskProfile(text);
+      expect(profile.intent, `${JSON.stringify(text)} was misread`).toBe('coding');
+      expect(profile.requiresVerification).toBe(false);
+      expect(profile.escalationTarget).toBeUndefined();
+    }
+    // `system` inside `ecosystem` is not a system-design ask either.
+    expect(analyzeTaskProfile('the provider ecosystem should be considered').intent).toBe('coding');
+    // ...and `plan` inside `plant` is not a plan.
+    expect(analyzeTaskProfile('plant a tree in the garden').intent).toBe('coding');
+  });
+
+  it('still fires on the real words, including their inflections', () => {
+    // The other half of the contract: bounding must not lose genuine matches.
+    expect(analyzeTaskProfile('fix the failing build').intent).toBe('debugging');
+    expect(analyzeTaskProfile('fixes the failing build').intent).toBe('debugging');
+    expect(analyzeTaskProfile('design the schema for the app').intent).toBe('architecture');
+    // NOT 'plan the migration' — ORDER IS THE CONTRACT, and the migration rule
+    // precedes the planning rule, so that ask is legitimately `migration`.
+    expect(analyzeTaskProfile('plan the database schema work').intent).toBe('planning');
+    expect(analyzeTaskProfile('plan the migration').intent).toBe('migration');
+    expect(analyzeTaskProfile('the migration is done').intent).toBe('migration');
+    // The bounding exposed a choice the old `verify|verification` alternation hid:
+    // should the PAST PARTICIPLE count? It must not. "the build was verified" is a
+    // STATUS REPORT, not a verification task, and it must not buy a reviewer pass
+    // and an openrouter escalation. Measured: bounding to the ASK forms changes
+    // the intent of ZERO of the 161 tasks in the local routing history, whereas a
+    // bare `\bverif\w*\b` changed one past-tense status message — so the
+    // conservative spelling is the one that fixes the fragment bug without moving
+    // any real decision.
+    expect(analyzeTaskProfile('verify the build on the runner').intent).toBe('verification');
+    expect(analyzeTaskProfile('verifying the build').intent).toBe('verification');
+    expect(analyzeTaskProfile('verification of the build').intent).toBe('verification');
+    expect(analyzeTaskProfile('the build was verified on the runner').intent).toBe('coding');
+  });
+
   /**
    * The router had the SAME object-blindness the NLU had: every rule keyed off a
    * surface word and never asked what that word was ABOUT. So a diet/exercise

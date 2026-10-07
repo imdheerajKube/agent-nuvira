@@ -1210,7 +1210,23 @@ export function analyzeTaskProfile(taskDescription: string): TaskProfile {
     };
   }
 
-  if (/migrat(e|ion)|upgrade|refactor|pipeline|deployment/.test(text)) {
+  // ── THE INTENT RULES MATCH WHOLE WORDS (B2 sweep) ───────────────────────
+  //
+  // These were unanchored alternations, so a FRAGMENT of an ordinary word
+  // decided the intent. Demonstrated against the built `dist`: "add a **prefix**
+  // constant to the config" and "create a **fixture** file for the tests" both
+  // classified as `debugging` (because `fix` is inside them), earning a
+  // verification pass and an openrouter escalation; "the provider **ecosystem**"
+  // classified as `architecture` (`system` inside it) with a gemini escalation;
+  // "**plant** a tree" classified as `planning`. It is the same class of defect
+  // as B2's `desc.includes('hi')` — a substring is not a word.
+  //
+  // The fix is a boundary PLUS the inflections the rule actually wants, because a
+  // bare `\b` does not help when the fragment sits at the START of a word:
+  // `\bfix\w*\b` still matches "fixture". So `fix` is spelled out
+  // (`fix|fixes|fixed|fixing|fixer|fixup`) and `plan` likewise (so `plant` is not
+  // a plan). Nothing else changed — same rules, same ORDER, same intents.
+  if (/\bmigrat(?:e|ion)\w*\b|\bupgrade\w*\b|\brefactor\w*\b|\bpipeline\w*\b|\bdeployment\w*\b/.test(text)) {
     return {
       intent: 'migration',
       requiresVerification: true,
@@ -1219,7 +1235,10 @@ export function analyzeTaskProfile(taskDescription: string): TaskProfile {
     };
   }
 
-  if (/architect|architecture|design|system|microservice|platform/.test(text) && !/outline|plan|roadmap|strategy/.test(text)) {
+  if (
+    /\barchitect\w*\b|\bdesign\w*\b|\bsystem\w*\b|\bmicroservice\w*\b|\bplatform\w*\b/.test(text) &&
+    !/\b(?:outline|plan|roadmap|strategy)\w*\b/.test(text)
+  ) {
     return {
       intent: 'architecture',
       requiresVerification: true,
@@ -1228,7 +1247,15 @@ export function analyzeTaskProfile(taskDescription: string): TaskProfile {
     };
   }
 
-  if (/verify|verification|validate|rollout|deploy|production|launch|release/.test(text)) {
+  // `verif(?:y|ies|ying|ication|ications)` — the ASK forms — and deliberately NOT
+  // `verified`. Bounding this rule surfaced why: a bare `\bverif\w*\b` would also
+  // match the past participle, and "the build was verified" is a STATUS REPORT,
+  // not a verification task, so it must not buy a reviewer pass and an
+  // openrouter escalation. Measured: that narrower spelling changes the intent of
+  // ZERO of the 161 tasks in the local routing history, where `\bverif\w*\b`
+  // changed one (a past-tense status message) — so the conservative form is the
+  // one that fixes the fragment bug without moving any real decision.
+  if (/\bverif(?:y|ies|ying|ication|ications)\b|\bvalidat\w*\b|\brollout\w*\b|\bdeploy\w*\b|\bproduction\w*\b|\blaunch\w*\b|\brelease\w*\b/.test(text)) {
     return {
       intent: 'verification',
       requiresVerification: true,
@@ -1237,7 +1264,7 @@ export function analyzeTaskProfile(taskDescription: string): TaskProfile {
     };
   }
 
-  if (/security|audit|vulnerab|threat|exploit/.test(text)) {
+  if (/\bsecurit\w*\b|\baudit\w*\b|\bvulnerab\w*\b|\bthreat\w*\b|\bexploit\w*\b/.test(text)) {
     return {
       intent: 'security',
       requiresVerification: true,
@@ -1246,7 +1273,7 @@ export function analyzeTaskProfile(taskDescription: string): TaskProfile {
     };
   }
 
-  if (/debug|bug|error|fix|trace/.test(text)) {
+  if (/\bdebug\w*\b|\bbug\w*\b|\berror\w*\b|\bfix(?:es|ed|ing|er|up)?\b|\btrace\w*\b/.test(text)) {
     return {
       intent: 'debugging',
       // C4 — a debug/build-fix task is not done until the fix is OBSERVED to
@@ -1261,7 +1288,7 @@ export function analyzeTaskProfile(taskDescription: string): TaskProfile {
     };
   }
 
-  if (/plan|outline|roadmap|strategy/.test(text)) {
+  if (/\bplan(?:s|ned|ning|ner)?\b|\boutline\w*\b|\broadmap\w*\b|\bstrateg\w*\b/.test(text)) {
     return {
       intent: 'planning',
       requiresVerification: false,
