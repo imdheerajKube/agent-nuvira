@@ -69,12 +69,38 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 
 | # | Sev | Issue | Evidence | Fix | Acceptance |
 |---|---|---|---|---|---|
-| C1 | S1 | **Context grows unbounded.** 128,482 chars / **1,192,115 input tokens** in one turn. | Run A trace | Compaction with an explicit budget; keep the plan, drop the transcript | A run of the same task stays within a stated input-token budget |
+| C1 | S1 | **Context grows unbounded.** 128,482 chars / **1,192,115 input tokens** in one turn. | Run A trace | **RE-MEASURED — see the note below; the reading is wrong in the same way D5's was.** Deterministic compaction and a work digest already exist; neither ever FIRED in run A. The open item is the budget *policy*, not a missing mechanism. | A run of the same task stays within a stated input-token budget (measured baseline: a 82-step run peaked at 31,189 input tokens per step) |
 | C2 | S1 | **Definitive failures are retried.** 3 Planner attempts against a 402. | Run D log | **LANDED** (see below) | A 402 consumes zero repair attempts |
 | C3 | S2 | **Redundant rediscovery.** Version probes 3–4×; two `venv`s created (`/tmp/test/.venv` *and* `/tmp/test/backend/.venv`). | Run A log + filesystem | Reuse probe results; verify the write landed before redoing it | One probe per fact per run |
 | C4 | S2 | **Plan durability across continuations.** 4 continuations; the plan is re-derived rather than carried. | Run A | Continuations resume the plan | Continuation N re-reads the plan rather than re-planning |
 | C5 | S2 | **No context fit on model handoff** — the whole thread is handed over, which would overflow a smaller model. | `tool-loop.ts` handoff | Fit-to-window by dropping the oldest turns; never rewrite | Handoff to a small-window model never overflows |
 | C6 | S3 | **Cost is not attributed per step in the user-facing output.** Total token burn is invisible until the trace is read. | Run A/B comparison | Surface per-turn cost | A turn reports its own token spend |
+
+### Re-measurement — C1 (the "unbounded context" reading) 
+
+Measured from the recorded trace `trace-1791300903944-upblb7`, per-step `inputTokens` for all 82 steps:
+**2,587 → 31,189, monotone**, sum **1,192,115**, output sum **2,462** (input:output ≈ **484:1**). Three
+corrections follow, and they change what the fix is:
+
+1. **The 1,192,115 figure is a SUM over 82 steps, not one prompt.** Every step resends the thread, so
+   the average step carried ~14.5K input tokens. Reading the total as "one context" is what made the
+   growth look unbounded.
+2. **Compaction exists and is deterministic — it simply never fired.** `trimThreadBudget`
+   (`DEFAULT_THREAD_BUDGET_CHARS = 200_000` ≈ 44K tokens) collapses the OLDEST tool results to a
+   500-char stub, then to a bare stub, and never touches the system prompt, the first user message or
+   the last 6 messages; `buildWorkDigest` keeps the facts that matter (files changed, commands with
+   their verdicts) in a single digest refreshed in place. In run A the thread peaked at **31,189
+   tokens ≈ 140K chars — ~70% of the budget**, so the trim was never reached.
+3. **The thread persists across continuations, which is why the curve is monotone.** One tool-loop
+   turn may run `maxSteps + 4 × continuationSteps` ≈ **80** steps (82 observed) and it is ONE thread
+   growing — so the shape to bound is a single long thread, not a summarisation failure.
+
+The real open question is therefore the budget **policy**, not a missing mechanism:
+`resolveThreadBudgetChars` is wired into both loops (`chat.ts`, `loop-executor.ts`) and is
+model-window-aware, but `THREAD_BUDGET_FLOOR_CHARS = 200_000` means it can only ever RAISE a budget,
+so a run may grow to ~44K input tokens before the first trim fires — and that trim is oldest-first
+truncation, not plan-preserving compaction. Whether to lower the floor, compact proactively, or
+compact against the PLAN is a product decision (see "Next bundles").
 
 ## Cluster D — Truthfulness of what the system says (S1)
 
@@ -497,5 +523,5 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
    is pre-flighted and named, every routing number in the product is unverifiable.
 2. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D4/D5/A5 landed in Bundles 2c–2g**): make the system's account of itself true.
 3. **Bundle 3 — capability by measurement** (B1–B4): the root cause.
-4. **Bundle 4 — context discipline** (C1, C3–C5): the 2.85× gap.
+4. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **Begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
 5. **Bundle 5 — autonomy & inventory** (E1–E3, B5, D6).
