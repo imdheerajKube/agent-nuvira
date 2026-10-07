@@ -397,6 +397,26 @@ that is generic still passes, and that remains B3. (2) It only fires on an expli
 "write a long document" is not measured. (3) A sectioned/append delivery is not measured at all (the
 single-artifact bound above).
 
+**Live re-runs (2) of the same ask, and what they showed.**
+
+- `/tmp/g-book2` (before this bundle): one `write_file`, **2,276 words** for "about 5000 words" (45.5%) — the
+  shape this bundle exists to catch.
+- `/tmp/g-book3` (after): the model ran `list_dir` → `write_file` → `read_file` and produced **2,640 words**
+  (52.8%) — **above the 0.5 bar, so the shortfall correctly stayed SILENT.** That is the conservative
+  threshold doing its job (a 53% draft is a tight document, not a material miss), and it is recorded as an
+  honest NEGATIVE: the live FIRE rests on the integration test that drives the real `write_file`, because
+  model length is not deterministic and forcing a sub-half run is not something a re-run can promise.
+- **A live positive for Bundle 21.** The same `/tmp/g-book3` turn wrote AND READ BACK `GUIDE.md`
+  (`read_file` ok:true after the write), which is exactly the authored-document case: its verdict is
+  `delivered-and-read-back`, and the turn was not cached (`cache.skip {"reason":"honesty-flag"}` in
+  `~/.nuvira/debug-logs/cli-chat-1791389976996.log`).
+- **One residual, recorded not changed:** that turn's trace `outcome` still carries the raw
+  `unverifiedEdit: true` with kind `acted`, while its turn report reads `delivered-and-read-back`. Judged
+  DEFENSIBLE rather than fixed — `unverifiedEdit` is a raw flag with its own literal meaning ("a change had
+  no observing run", which IS true here), the report is the verdict layer, and the trace stores the full
+  report on `trace.turnReport` — so the surfaces do not actually contradict each other on a single field.
+  Noted for a future consistency pass.
+
 ---
 
 ## Bundle 22 — the empty-arguments refusal reaches every transport (item 6's residual, LANDED 2026-10-07)
