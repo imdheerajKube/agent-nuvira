@@ -53,6 +53,7 @@
  */
 
 import { DEFAULT_STALE_MS, isEntitlementFailure, isNonexistentPair } from './model-registry.js';
+import { identityKey, sameModel } from './model-identity.js';
 
 /**
  * What the registry says about ONE provider × model pair's right to be called.
@@ -204,24 +205,23 @@ export function entitlementNote(entitlement: PairEntitlement, entry?: Entitlemen
  * The model id two rows must share before they are treated as the same model
  * offered by different providers — the "twins" the user's rule is about.
  *
- * Deliberately an EXACT comparison after stripping a `vendor/` prefix, the same
- * honest rule `verifiedEquivalent()` uses: `deepseek-flash` and
- * `deepseek/deepseek-flash` are one model; `deepseek-flash` and
- * `deepseek-v4.1-flash` are NOT, however much they look alike (asserting that
- * from their spelling is the name-based judgement this programme removes). A
- * declared alias table may later widen this — it may never make it fuzzy.
+ * A1 (2026-10-07): the rule is now `learning/model-identity.ts` — an EXACT
+ * comparison against a bare or `vendor/`-prefixed id, WIDENED by the DECLARED
+ * alias table and never by similarity. That widening is what relates
+ * `openrouter/deepseek/deepseek-v4.1-flash` to `deepseek/deepseek-flash` (the two
+ * rows a run-D 402 pin needed related), while `deepseek-flash` and
+ * `deepseek-v4-flash` stay separate because no declaration relates them.
+ *
+ * Grouping is the only thing identity does here. A verdict is still read from
+ * each twin's OWN row — see the doctrine at the top of this file.
  */
 export function twinKey(model: string): string {
-  const id = (model ?? '').trim().toLowerCase();
-  const slash = id.lastIndexOf('/');
-  return slash >= 0 ? id.slice(slash + 1) : id;
+  return identityKey(model);
 }
 
 /** Do these two model ids name the same model served by different providers? */
 export function areTwins(a: string, b: string): boolean {
-  const ka = twinKey(a);
-  const kb = twinKey(b);
-  return !!ka && ka === kb;
+  return sameModel(a, b);
 }
 
 /** One twin in a same-model group, with the verdict read from ITS OWN row. */

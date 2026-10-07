@@ -325,13 +325,34 @@ describe('resolveRoute — A2: a proven-dead pin is refused before any network c
     ).rejects.toThrow(/deepseek\/some-model/);
   });
 
-  it('honestly offers no equivalent when the bare ids differ (no family guessing)', async () => {
-    // The measured pair: `deepseek/deepseek-v4.1-flash` vs the verified
-    // `deepseek-flash`. They are NOT the same bare id, so claiming they are the
-    // same model would be a guess — a worse failure than suggesting nothing.
+  it('names the EQUIVALENT for a DECLARED alias the bare-id rule cannot join (A1)', async () => {
+    // The measured pair, now related by declaration: `deepseek/deepseek-v4.1-flash`
+    // (the run-D pin, `credit-exhausted` on openrouter) and the verified
+    // `deepseek-flash`. They share no bare id, so before A1 this honestly said
+    // "no known equivalent" — leaving the operator to discover by hand that the
+    // same model was funded on another provider.
     const registry = getModelRegistry();
     registry.recordCall('openrouter', 'deepseek/deepseek-v4.1-flash', false, 'credit-exhausted', 'chat');
     registry.markVerified('deepseek', 'deepseek-flash', 'probe');
+
+    await expect(
+      resolveRoute({
+        providerType: 'openrouter',
+        provider: fakeProvider(['deepseek/deepseek-v4.1-flash']),
+        model: 'deepseek/deepseek-v4.1-flash',
+        strict: true,
+      }),
+    ).rejects.toThrow(/deepseek\/deepseek-flash/);
+  });
+
+  it('honestly offers no equivalent when ids merely LOOK alike (no family guessing)', async () => {
+    // `deepseek-v4-flash` and `deepseek-v4.1-flash` are both DeepSeek and both
+    // "flash", one version apart — and they are NOT the same model. Asserting
+    // otherwise from their spelling is the name-based judgement this programme
+    // exists to remove, so the refusal must still say "no known equivalent".
+    const registry = getModelRegistry();
+    registry.recordCall('openrouter', 'deepseek/deepseek-v4.1-flash', false, 'credit-exhausted', 'chat');
+    registry.markVerified('deepseek', 'deepseek/deepseek-v4-flash', 'probe');
 
     await expect(
       resolveRoute({

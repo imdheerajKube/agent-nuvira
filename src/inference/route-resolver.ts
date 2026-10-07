@@ -43,6 +43,7 @@ import { logger } from '../utils/logger.js';
 import { recordRoutingDecision, type RoutingSource } from '../learning/routing-history.js';
 import { recordTraceEvent } from '../learning/reasoning-trace.js';
 import { getModelRegistry } from '../learning/model-registry.js';
+import { identityKey, sameModel } from '../learning/model-identity.js';
 
 /** Who is asking — used only for the audit record's wording. */
 export type RouteSource = 'orchestrator' | 'chat' | 'publish' | 'failover' | 'cli' | (string & {});
@@ -276,27 +277,25 @@ function definitiveVerdict(
 /**
  * The same model, verified somewhere else (A1), or `undefined`.
  *
- * Matched on the model's BARE id — everything after the last `/`, with a
- * leading `~` (the provider's alias marker) stripped. That is a deliberately
- * EXACT comparison, not a family guess: suggesting a "similar" model the user
- * did not ask for is a worse failure than suggesting nothing, because the pin
- * exists precisely to name one. Measured case: the requested
- * `deepseek/deepseek-v4.1-flash` and the verified `deepseek-flash` do NOT share a
- * bare id, so this honestly returns `undefined` rather than guessing that they
- * are the same model. A real identity layer (A1 proper) is what would let it
- * answer, and it is tracked as open.
+ * A1 LANDED (2026-10-07): identity is now answered by `learning/model-identity.ts`
+ * — an EXACT comparison against a bare or `vendor/`-prefixed id, widened only by
+ * the DECLARED alias table. That is what lets this answer its own motivating
+ * case: the requested `deepseek/deepseek-v4.1-flash` (the run-D pin, proven dead
+ * on `openrouter`) and the `verified` `deepseek-flash` are declared as one model,
+ * so the refusal sentence can now say where the SAME model does work.
+ *
+ * Still never a family guess: no similarity, no prefix matching, no vendor
+ * heuristics. An id in no declaration falls back to the bare-id rule, so an
+ * unknown relationship reads as "no known equivalent" rather than as a wrong
+ * suggestion — suggesting a "similar" model the user did not ask for is a worse
+ * failure than suggesting nothing, because the pin exists precisely to name one.
  */
 function verifiedEquivalent(model: string, excludeProvider: string): string | undefined {
   try {
-    const bare = model.replace(/^~/, '').split('/').pop() ?? model;
-    if (!bare) return undefined;
+    if (!identityKey(model)) return undefined;
     const match = getModelRegistry()
       .getAllUsablePairs()
-      .find(
-        (p) =>
-          p.provider !== excludeProvider &&
-          (p.model.replace(/^~/, '').split('/').pop() ?? p.model) === bare,
-      );
+      .find((p) => p.provider !== excludeProvider && sameModel(p.model, model));
     return match ? `${match.provider}/${match.model}` : undefined;
   } catch {
     return undefined;

@@ -174,12 +174,16 @@ describe('ordering — a funded twin beats a refused one even when the refused o
 
 describe('twins — the same model on different providers', () => {
   it('groups an exact id and a vendor-prefixed one, and refuses to guess from spelling', () => {
-    expect(twinKey('deepseek/deepseek-flash')).toBe('deepseek-flash');
+    expect(twinKey('deepseek/deepseek-flash')).toBe(twinKey('deepseek-flash'));
     expect(areTwins('deepseek/deepseek-flash', 'deepseek-flash')).toBe(true);
-    // These are NOT one model, however alike they look. Asserting otherwise from
-    // the name is the judgement this programme exists to remove (A1 handles true
-    // aliases through a DECLARED table, never by string similarity).
-    expect(areTwins('deepseek-flash', 'deepseek-v4.1-flash')).toBe(false);
+    // A1: the DECLARED alias table joins the pair the bare-id rule cannot — the
+    // two rows a run-D 402 pin needed related. Grouping only; each twin's verdict
+    // still comes from its own row.
+    expect(areTwins('deepseek/deepseek-v4.1-flash', 'deepseek-flash')).toBe(true);
+    // …and similarity alone never joins anything. These are NOT one model,
+    // however alike they look; asserting otherwise from the name is the
+    // judgement this programme exists to remove.
+    expect(areTwins('deepseek-flash', 'deepseek-v4-flash')).toBe(false);
     expect(areTwins('', '')).toBe(false);
   });
 

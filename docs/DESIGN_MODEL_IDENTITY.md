@@ -1,6 +1,9 @@
 # DESIGN — Model identity above the provider pair (A1)
 
-**Status: options, no recommendation made yet — written because you asked to see them first.**
+**Status: DECIDED and LANDED (2026-10-07). The user chose option A — the declared alias table —
+seeded from this machine's registry.** Implementation: `src/learning/model-identity.ts`
+(`identityKey` / `sameModel` / `declaredAliasFor` / `identityProvenance`). The options below are kept
+as the record of what was weighed.
 
 ## 1. The defect
 
@@ -82,15 +85,29 @@ Accept that cross-provider twins are unknowable and just improve the naming of a
 
 ## 4. Where the choice lands in code
 
-Regardless of the option: `src/learning/model-registry.ts` gains the canonical-id lookup, used by
-(a) `verifiedEquivalent` / the pin-refusal message (name the equivalent pair), (b) the
-`model explain` / `model list` rendering (group twins so opposite verdicts are explicable), and — only
-if you choose to — (c) the scorecard from `DESIGN_CAPABILITY_BY_MEASUREMENT.md` as a cross-provider
-capability prior. **(c) is the only place identity may touch scoring, and it must never touch
-routability.**
+Regardless of the option: the canonical-id lookup is used by (a) `verifiedEquivalent` /
+`strictPinRefusal` (name the equivalent pair), (b) the `model explain` / `model list` rendering
+(group twins so opposite verdicts are explicable), and — only if you choose to — (c) the scorecard
+from `DESIGN_CAPABILITY_BY_MEASUREMENT.md` as a cross-provider capability prior. **(c) is the only
+place identity may touch scoring, and it must never touch routability.**
 
-## 5. What I need from you
+## 4b. LANDED — option A (`src/learning/model-identity.ts`)
 
-Which option — **A**, **B**, **C**, or **D**? If A or C, I also need one decision on content: whether
-I should seed the table from the pairs already visible in this machine's registry (the DeepSeek twin
-above, plus whatever else the registry shows), or leave the table empty for you to populate.
+| Where | What it does |
+|---|---|
+| `DECLARED_MODEL_ALIASES` | A tiny hand-checked table, each entry carrying `declaredAt` + the evidence it rests on. Seeded with one entry: `deepseek-v4.1-flash` = `deepseek-flash` (DeepSeek's own API id) = `deepseek/deepseek-v4.1-flash` (OpenRouter's catalogue id). |
+| `identityKey` / `sameModel` | Exact id (or bare id after the `vendor/` prefix, `~` alias marker stripped), widened by the table and **never** by similarity. An undeclared id keeps the bare-id rule, so the table can only fail toward "unknown", never toward a wrong grouping. |
+| `declaredAliasFor` / `identityProvenance` | The provenance line `model explain` prints, so a reader can tell a DECLARED grouping from a DERIVED one. |
+| `pair-entitlement.ts` `twinKey`/`areTwins` | Twin grouping for the funded-twin rule now uses the same identity key. Grouping only — each twin's verdict still comes from its **own** registry row (the rule in §2). |
+| `route-resolver.ts` `verifiedEquivalent` | The pin-refusal sentence can now name the funded twin for the case that motivated A1: a `deepseek/deepseek-v4.1-flash` pin refused on `openrouter` now answers "the same model is verified on `deepseek/deepseek-flash`". |
+| `cli/model.ts` | `model explain` prints the twin set **and** its provenance; `model list` prints a "same model, different verdicts" section for identity groups whose verdicts disagree — the opposite-verdict pairs the table previously made invisible. |
+
+**What it deliberately does NOT do.** No verdict is copied across twins (see §2 — that is F6), no
+family/prefix/similarity matching, and identity is never consulted to decide whether a provider can
+serve a request. `deepseek-v4-flash` and `deepseek-v4.1-flash` remain different models.
+
+## 5. The decision record
+
+The user chose **A**, seeded from this machine's registry. Option C's suggest-and-confirm surface and
+option B's metadata derivation remain unbuilt on purpose: neither is needed while the table is small
+enough to review by eye, and both would add a way to invent identity rather than declare it.

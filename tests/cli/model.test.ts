@@ -29,8 +29,23 @@ import type { ConfigManager } from '../../src/config/manager.js';
 // writes to ~/.nuvira by default. Redirect it to a temp dir so tests stay hermetic.
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
 const tmpMemoryDir = mkdtempSync(join(TMP_BASE, 'buff-model-test-'));
+const PRIOR_CAPABILITY_MODE = process.env.NUVIRA_CAPABILITY_MODE;
 beforeAll(() => {
   process.env.NUVIRA_MEMORY_DIR = join(tmpMemoryDir, '.nuvira', 'memory');
+  // The FIXTURE pins the capability mode (measured 2026-10-07).
+  //
+  // `AutoModelRouter.resolve()`'s `taskIntentHint` reaches the ranking through a
+  // HARD reasoning floor: a `debugging`/`creative`/`verification` intent requires
+  // a served model above `MAX_CAPABILITY_MIN_REASONING` (0.7). The D4 test below
+  // depends on that floor being the DIFFERENCE between the router's own
+  // text-derived read ("repair the broken import in loop.ts" → `coding`, no
+  // floor) and the NLU hint (`debugging`, floor) — which is only measurable in
+  // `balanced`. Under an ambient `max` (the developer's `~/.nuvira/.env`) the
+  // router had ALREADY applied the same 0.7 floor, so the hint's floor added
+  // nothing, the two rankings were identical, and the test failed: it was
+  // measuring the machine's config, not the code. Same trap as the registry note
+  // above, same fix — make the input explicit.
+  process.env.NUVIRA_CAPABILITY_MODE = 'balanced';
   // Seed fake API keys so the router sees MULTIPLE usable providers. Without
   // them (fresh ~/.nuvira in CI), only 'local' has credentials → the explain
   // decision has a winner but an EMPTY fallback chain, and the JSON assertions
@@ -44,6 +59,8 @@ afterAll(() => {
   delete process.env.NUVIRA_MEMORY_DIR;
   delete process.env.GROQ_API_KEY;
   delete process.env.GEMINI_API_KEY;
+  if (PRIOR_CAPABILITY_MODE === undefined) delete process.env.NUVIRA_CAPABILITY_MODE;
+  else process.env.NUVIRA_CAPABILITY_MODE = PRIOR_CAPABILITY_MODE;
   rmSync(tmpMemoryDir, { recursive: true, force: true });
 });
 
@@ -128,6 +145,11 @@ describe('ModelCommand explain', () => {
       cm,
     );
     // The hint is load-bearing here — otherwise the assertion below is vacuous.
+    // Its channel is the reasoning FLOOR (`debugging` requires a strong served
+    // model), so the divergence is a provider entering/leaving the ranking: the
+    // weak local candidate is present without the hint and floored out with it.
+    // This only holds while no OTHER floor is already in force, which is why the
+    // capability mode is pinned in `beforeAll`.
     expect(proj(withoutHint)).not.toBe(proj(withHint));
 
     const explainDecision = (

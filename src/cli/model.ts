@@ -64,6 +64,7 @@ import {
   classifyPairEntitlement,
   entitlementNote,
 } from '../learning/pair-entitlement.js';
+import { identityKey, identityProvenance } from '../learning/model-identity.js';
 import { getProviderFallback } from '../learning/provider-fallback.js';
 import {
   getRouterPromotion,
@@ -438,6 +439,43 @@ export class ModelCommand extends BaseCommand {
       console.log('');
       logger.success(`Active: ${active.provider}/${active.model}`);
       console.log(`  (set ${new Date(active.updatedAt).toLocaleString()})`);
+    }
+
+    // ── A1: the SAME model, opposite verdicts ──────────────────────────────
+    // Two rows for one model can disagree completely (`openrouter` refuses a
+    // model `deepseek` serves), and the table above shows only each provider's own
+    // default — so the pair was invisible. Print only the groups whose verdicts
+    // genuinely DISAGREE: same identity, different answer about whether it can be
+    // called. Each verdict is read from its own row (identity groups capability
+    // and legibility, never availability).
+    try {
+      const registry = getModelRegistry();
+      const rows = registry.getTrackedProviders().flatMap((p) => registry.getAllModelsForProvider(p));
+      const groups = new Map<string, typeof rows>();
+      for (const r of rows) {
+        const key = identityKey(r.model);
+        if (!key) continue;
+        const list = groups.get(key);
+        if (list) list.push(r);
+        else groups.set(key, [r]);
+      }
+      const mixed = [...groups.values()].filter(
+        (g) => new Set(g.map((r) => classifyPairEntitlement(r))).size > 1,
+      );
+      if (mixed.length > 0) {
+        console.log('');
+        logger.highlight('  ── The same model, different verdicts (A1) ──');
+        for (const g of mixed.slice(0, 5)) {
+          console.log(`   ${g[0].model}`);
+          for (const r of g) {
+            const e = classifyPairEntitlement(r);
+            console.log(`     ${ENTITLEMENT_LABEL[e]} ${r.provider} — ${entitlementNote(e, r)}`);
+          }
+        }
+        if (mixed.length > 5) console.log(`   … and ${mixed.length - 5} more.`);
+      }
+    } catch {
+      // Best-effort — this section must never break `model list`.
     }
 
     console.log('');
@@ -1113,6 +1151,15 @@ export class ModelCommand extends BaseCommand {
         console.log(
           `   ${ENTITLEMENT_LABEL[chosen]} ${decision.provider}/${decision.model} — ${entitlementNote(chosen, chosenEntry)}`,
         );
+        if (twins.length > 0) {
+          // WHERE the grouping came from: a declared alias is an assertion, the
+          // bare-id rule is a derivation, and a reader must be able to tell them
+          // apart (`learning/model-identity.ts`).
+          const provenance = identityProvenance(decision.model);
+          console.log(
+            `   (grouped as the same model${provenance ? ` — ${provenance}` : ' — exact/bare id rule'})`,
+          );
+        }
         for (const t of twins) {
           const e = classifyPairEntitlement(t);
           console.log(`   ${ENTITLEMENT_LABEL[e]} ${t.provider}/${t.model} — ${entitlementNote(e, t)}`);
