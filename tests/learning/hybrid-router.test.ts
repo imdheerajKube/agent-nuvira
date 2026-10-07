@@ -9,6 +9,7 @@ import { join } from 'node:path';
 
 import {
   analyzeComplexity,
+  isSmallTalk,
   measureTaskBreadth,
   buildFallbackChain,
   checkBudget,
@@ -238,6 +239,55 @@ describe('analyzeComplexity', () => {
       ).toBe('critical');
       // And a narrow ask stays narrow even when it names one area of work.
       expect(analyzeComplexity('refactor the login function')).toBe('simple');
+    });
+  });
+
+  // ─── B2 — small talk is a word, and it is the whole message ───────────────
+  //
+  // The router decides `reasoningNeed` from this predicate, and `reasoningNeed`
+  // flips the candidate weights (cost 0.30 / capabilityFit 0.15 when `low`) and
+  // INVERTS capabilityFit to prefer small models. It used to be three substring
+  // tests — `desc.includes('hi')` — so every task containing `this`, `which`,
+  // `anything`, `nothing`, `architecture` or `crashing` was demoted: measured
+  // 81 of the 160 distinct tasks in the local routing history rated `low` and
+  // only 2 rated `high`. These pin both halves of the corrected rule.
+  describe('B2 — isSmallTalk', () => {
+    it('recognises a message that is only a greeting', () => {
+      for (const text of ['hi', 'hello', 'hey', 'Hey there!', 'hi there', 'hello, how are you?', 'hi and thanks', 'good morning']) {
+        expect(isSmallTalk(text), `expected ${JSON.stringify(text)} to be small talk`).toBe(true);
+      }
+    });
+
+    it('does NOT fire on words that merely CONTAIN a greeting', () => {
+      // The measured false positives, verbatim from the routing history.
+      const measured = [
+        'this will work as a model facilitator',
+        'create a code level dependency diagram which depicts',
+        'you never answered anything',
+        'change hot key to ctrl+shift+t',
+        'i selected text but nothing happened',
+        'the app is crashing on launch',
+        'graphify the report',
+        'architecture review',
+      ];
+      for (const text of measured) {
+        expect(isSmallTalk(text), `expected ${JSON.stringify(text)} NOT to be small talk`).toBe(false);
+      }
+    });
+
+    it('does NOT fire on a real ask that opens with a greeting', () => {
+      // The intent is "do not provision a frontier model to answer hi", not
+      // "ignore the rest of the message because it said hi first".
+      expect(isSmallTalk('hi, build me a RAG pipeline')).toBe(false);
+      expect(isSmallTalk('hello, fix the failing build')).toBe(false);
+      expect(isSmallTalk('hey can you refactor the router')).toBe(false);
+    });
+
+    it('treats a bare acknowledgement as ordinary text, not small talk', () => {
+      // `ok` carries no greeting; it is routed on its own merits.
+      expect(isSmallTalk('ok')).toBe(false);
+      expect(isSmallTalk('')).toBe(false);
+      expect(isSmallTalk('what is next')).toBe(false);
     });
   });
 });

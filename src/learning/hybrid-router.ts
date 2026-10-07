@@ -250,6 +250,48 @@ export function analyzeComplexity(text: string): ComplexityLevel {
   return fromKeywords;
 }
 
+/**
+ * Is this message NOTHING BUT a greeting?
+ *
+ * B2 — WHY A PREDICATE AND NOT THREE `includes()` CALLS. Both
+ * `estimateTaskRequirements` implementations used to decide this with
+ * `desc.includes('hello') || desc.includes('hi') || desc.includes('greeting')`,
+ * and `'hi'` is a SUBSTRING of `this`, `which`, `anything`, `nothing`,
+ * `shift`, `crashing`, `architecture`, `graphify`… Measured against the 160
+ * distinct tasks in `~/.nuvira/memory/routing-history.json`: **77 of them**
+ * matched the substring while containing no greeting at all, and 81/160 landed
+ * on `reasoningNeed: 'low'` (only 2 on `'high'`). `low` is not cosmetic — it
+ * flips the candidate weights to cost 0.30 / capabilityFit 0.15 and inverts
+ * `capabilityFit` to PREFER small models, so a multi-provider engineering ask
+ * was ranked `gemini/gemma-4-26b-a4b-it` (4B active) #1, `local/qwen2.5:0.5b`
+ * #2, `gemini/allam-2-7b` #3 — the run that then fell through three providers.
+ *
+ * The intent is narrow: answering a bare "hi" should not provision a frontier
+ * model. A greeting BURIED IN A REAL ASK is not that case, and neither is the
+ * word "this". So the test is not "does it contain a greeting word" but "is
+ * there nothing here but a greeting and pleasantries": the greeting is removed
+ * and what remains must be empty or filler. `"hi"` → true; `"hi there!"` →
+ * true; `"hello, how are you?"` → true; `"hi, build me a RAG pipeline"` →
+ * false (that is a task that happens to open politely); `"this will work"` →
+ * false (no greeting word at all).
+ *
+ * Shared from here so the two routers cannot drift apart on it again —
+ * `model-first-router.ts` and `model-scoring.ts` previously carried two copies
+ * of this rule that already disagreed about other phrases.
+ */
+export function isSmallTalk(text: string): boolean {
+  const lower = (text ?? '').toLowerCase();
+  // `\b` on both sides: a greeting is a whole word, never a fragment of one.
+  const greetingRe = /\b(?:hello|hi|hey|howdy|greetings?|good\s+(?:morning|afternoon|evening))\b/g;
+  const stripped = lower.replace(greetingRe, ' ');
+  // No greeting word at all — including "this", "which", "anything".
+  if (stripped === lower) return false;
+  // What is left must be punctuation and pleasantries, nothing that names work.
+  const fillerRe =
+    /^(?:[\s,.!?~\-—–:;'"()\[\]]|"(?:s|t|re|ll|ve|d|m)"|\b(?:there|again|all|everyone|folks|team|buddy|mate|please|pls|thanks|thank|you|thx|and|ok|okay|k|so|just|now|yes|yeah|yep|sure|whats|what's|up|how|are|is|it|going|doing|was|were|been|im|i'm|am)\b)*$/;
+  return fillerRe.test(stripped);
+}
+
 /** The keyword ladder, unchanged — the vocabulary half of the decision. */
 function complexityFromKeywords(text: string): ComplexityLevel {
   // Check critical first (highest priority)

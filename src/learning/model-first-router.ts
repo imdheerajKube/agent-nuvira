@@ -19,7 +19,7 @@
 import { getModelRegistry, type ModelRegistryEntry } from './model-registry.js';
 import { classifyPairEntitlement, orderByEntitlement, type PairEntitlement } from './pair-entitlement.js';
 import { getCatalogProvider, type CatalogProviderEntry, CATALOG_PROVIDER_IDS } from '../inference/provider-catalog.js';
-import { analyzeComplexity, type ComplexityLevel } from './hybrid-router.js';
+import { analyzeComplexity, isSmallTalk, type ComplexityLevel } from './hybrid-router.js';
 import { getTaskType, type TaskType } from './model-router.js';
 import { hasCredentials, preferredModelsFor, KEYLESS_PROVIDERS } from './model-selection.js';
 import { isNonChatModel } from '../inference/model-catalog.js';
@@ -106,7 +106,11 @@ export function estimateTaskRequirements(
   if (desc.includes('security') || desc.includes('audit') || desc.includes('vulnerability')) {
     reasoningNeed = 'high';
   }
-  if (desc.includes('hello') || desc.includes('hi') || desc.includes('greeting')) {
+  // B2 — a greeting is a WHOLE WORD and the WHOLE MESSAGE. The old substring
+  // test (`desc.includes('hi')`) matched `this`/`which`/`anything`, which is how
+  // 81 of 160 recorded tasks ended up on `reasoningNeed: 'low'` and how a
+  // multi-provider engineering ask got ranked a 4B-active model first.
+  if (isSmallTalk(taskDescription)) {
     reasoningNeed = 'low';
   }
 

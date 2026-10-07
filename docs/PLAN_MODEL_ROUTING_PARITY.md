@@ -69,6 +69,8 @@ Nothing else can be trusted until a model can be *named* and its *reachability* 
 |---|---|---|---|---|---|
 | B1 | S1 | **Capability is inferred from id substrings** (`flash`/`lite`/`mini` penalised; `pro`/`70b` boosted). | `auto-router.ts` `getModelCapabilities()` | **LANDED (Bundle 3b)**: the id-substring block is DELETED, not capped — a capped name hint is still a name judgement. `getModelCapabilities` reads the measured scorecard (`learning/capability-evidence.ts`) with the provider baseline as the cold-start prior. | **MET**: `getModelCapabilities` returns the provider baseline for every id at zero samples (`flash` vs `flash-lite`, `72b` vs `1b`, unknown ids all object-equal). |
 | B2 | S1 | **Static provider baselines outrank real evidence** (`openrouter: 0.95`, `gemini: 0.85`, `local: 0.30`). | Baseline table | Derive from measured per-pair outcomes; decay the statics | Ranking changes when measurements change; two providers with equal measurements rank equally |
+| B2 (the MEASURED cause, found by the Bundle 8 live run) | S1 | **The reasoning tier was read from a SUBSTRING.** `estimateTaskRequirements` decided `reasoningNeed` with `desc.includes('hi')` — a substring of **this**/which/anything/nothing/crashing/architecture — so a `complex` ask containing the word "this" was rated as needing LOW reasoning, which set the weights to cost 0.30 / capabilityFit 0.15 and inverted `capabilityFit` to PREFER small models (a ~4B-active model scored **1.0**, cancelling the P6 active-width fix one line later). | `dist/`: the parity ask → `reasoningNeed 'low'`; **81 of 160** distinct tasks in `routing-history.json` rated `low`, **2** rated `high`, and **77** matched only the substring. Ranking: `gemini/gemma-4-26b-a4b-it` #1 at 0.9206. | **LANDED (Bundle 9)** — one exported `isSmallTalk` predicate in `hybrid-router.ts`, shared by both `estimateTaskRequirements` copies: whole-word greeting match, then the remainder must be punctuation and filler only. | **MET** (measured before/after on a rebuilt `dist/`): `low` **81/160 → 17/160**, `high` 2 → 5, substring-only matches 77 → 0; the live ask's #1 becomes `local/gpt-oss:120b-cloud` (cap 1.0) and the ~4B MoE falls to 0.6506 with cap **0.2**. |
+| B2-a | S2 | **The audit trail's `score` does not describe the pair it is written against.** `cli/chat.ts` writes `score: decision.score` (provider-level) on EVERY row of a failover walk, so three different pairs share one number that matches no candidate's own score. | `routing-history.json`: gemini/`gemma-4-26b-a4b-it`, openrouter/`cohere/command-r7b-12-2024` and deepseek/`deepseek-flash` all `0.43836864406779663` — and NO candidate in the 431-model pool scores that. | **OPEN** — the field must carry the PAIR's measured score, or be absent. This is what misled Bundle 8's inference, so it is a correctness problem in the audit record, not cosmetics. | Ranking read from `routing-history.json` alone must agree with the pair that served |
 | B3 | S1 | **No measured quality exists anywhere.** The registry tracks latency, tokens, error rate — never capability. | `ModelRegistryEntry`; and re-measured: the bandit ALREADY defines a quality reward (`BanditOutcomeData`) that the real path passes as `undefined` | **LANDED for the scorecard (Bundle 3b)**: `ModelRegistryEntry.capability` holds the five parameters with per-parameter sample counts, folded from real turns and calls, and the router reads them. Bundle 3a had already restored the bandit's quality reward (`recordOutcome` no longer discards its payload; the chat path feeds `verificationPassed`). **Still absent:** `testPassed`, `userAccepted`, a real `qualityScore`, and a measured feed for `cost`/`ecosystem`. **External ranking feeds assessed (§6):** the retired HF Open LLM Leaderboard, the shut-down Papers With Code and the unrelated Graphify repo are unusable, "DeepSeek Hermes" does not exist, and the one genuinely fitting feed is the keyless provider catalogue (`GET openrouter.ai/api/v1/models`) — external values may only ever be a labelled PRIOR for `accuracy`/`cost`/`ecosystem`, never the measured truth. | **MET**: a pair that consistently fails is demoted by measurement, not by name — `PRIOR_FULL_SAMPLES` unverified turns move `getModelCapabilities` below the floor. |
 | B4 | S1 | **Max mode's reasoning floor is name-driven**, so it excludes real models and admits others arbitrarily. | `MAX_CAPABILITY_MIN_REASONING = 0.7` vs `flash`+`lite` = 0.65 | **LANDED (Bundle 3b)**: the floor is applied to measured accuracy; a cold pair is judged by its provider baseline (no name), and `PRIOR_FULL_SAMPLES` failing turns demote it. | **MET**: the `flash-lite`/`72b` fixtures that used to be floored by NAME are now eligible cold and floored by MEASUREMENT — asserted in both directions. |
 | B5 | S2 | **Complexity is under-rated**: a 4-component full-stack app classifies as `moderate`. | **MEASURED directly** (not from `model explain`): the run-A parity ask against the built `dist/` rated `moderate` — its only matching keyword was `build`, a `moderate` word, because nobody writes "architect" when they write a requirements list. | **LANDED (Bundle 3e)** — `analyzeComplexity` now takes the HIGHER of two signals: the keyword ladder (vocabulary) and a measured BREADTH floor (shape: ≥ 3 enumerated requirement units spanning ≥ 3 distinct areas of work). | That prompt classifies ≥ `complex` — **MET** (measured `moderate` → `complex`), with four false-positive shapes pinned as unchanged |
@@ -380,6 +382,72 @@ contract: the header's provider equals the event's `served`, and the misleading 
 labels. And the child agent's own log event (`child-agent-runtime.ts`) records `{ tools, transport }` with
 no provider at all, so it never had this mismatch to fix.
 
+## Bundle 9 — the reasoning tier was read from a SUBSTRING (B2's real root cause, LANDED)
+
+**Bundle 8 recorded a conclusion this bundle disproves, so it is corrected here rather than left
+standing.** Bundle 8 concluded that B2's defect was "with equal priors the ranking carries NO
+information". The measurement behind that claim was itself read wrong: `0.43836864406779663` is **not** a
+model-level candidate score. It is `decision.score` — the provider-level score — and `cli/chat.ts` writes
+that SAME value onto every row of a walk (`recordRoutingDecision({ …, score: decision.score })` at both
+call sites). The three rows were equal because they were one number copied three times, not because three
+models tied. The model-level pool was never a tie: recomputed for the same ask at `complex`,
+`gemini/gemma-4-26b-a4b-it` scored **0.920624**, `openrouter/cohere/command-r7b-12-2024` **0.77**,
+`deepseek/deepseek-flash` **0.597148**.
+
+**What actually chose the model.** `estimateTaskRequirements` decided `reasoningNeed` with
+`desc.includes('hi')`. `'hi'` is a substring of **this**, which, anything, nothing, shift, crashing,
+architecture, graphify — and the ask contains the word "this" ("…**this** will work as a model facilitator…").
+A task the router had just graded `complex` was therefore graded as needing **low** reasoning, which in
+`buildModelCandidates` does two things:
+
+| consequence | `reasoningNeed: 'low'` | `reasoningNeed: 'high'` |
+|---|---|---|
+| the weights | cost **0.30**, capabilityFit **0.15** | cost 0.10, capabilityFit **0.40** |
+| `capabilityFit` for a ~4B-active model | **1.0** ("prefer small/fast") | **0.2** |
+
+The second row is why the P6 active-width fix looked ineffective: it correctly read
+`gemma-4-26b-a4b-it` as ~4B ACTIVE and capped it at 0.2 for a high-stakes ask, and the `low` tier set it
+back to 1.0 one line later. (The same `low` also neutralised `costPriority`, which the ask trips on the
+word "free" — with high stakes the cost weight is 0.10 regardless.)
+
+**Blast radius, measured against a freshly built `dist/` over the local routing history**
+(`~/.nuvira/memory/routing-history.json`, 160 distinct tasks):
+
+| | before | after |
+|---|---|---|
+| `reasoningNeed` `low` | **81** (51%) | **17** |
+| `reasoningNeed` `high` | **2** | **5** |
+| tasks where the substring `hi` fired but the whole WORD did not | **77 / 160** | 0 |
+
+**Ranking of the same ask, before → after** (431 candidates, fresh `dist/`):
+
+| rank | before | after |
+|---|---|---|
+| #1 | `gemini/gemma-4-26b-a4b-it` 0.9206 (cap **1.0**) | `local/gpt-oss:120b-cloud` 0.9615 (cap 1.0) |
+| #2 | `local/qwen2.5:0.5b` 0.9006 | `groq/openai/gpt-oss-120b` 0.8935 |
+| #3 | `gemini/allam-2-7b` 0.9000 | `local/deepseek-coder:latest` 0.7561 |
+| the live run's first pick | **#1**, cap 1.0 | 0.6506, cap **0.2**, out of the leading group |
+
+**The fix.** `learning/hybrid-router.ts` gains ONE exported predicate, `isSmallTalk`, and both
+`estimateTaskRequirements` copies call it instead of three `includes()` tests. It asks the right question —
+not "does it contain a greeting word" but "is there nothing here but a greeting and pleasantries": the
+greeting is matched on whole words (`\b`), removed, and what REMAINS must be punctuation and filler
+(there, thanks, how, are, you, ok, …). `"hi"` and `"hello, how are you?"` → true; `"hi, build me a RAG
+pipeline"` → false (a real ask that opens politely, which the old rule would have demoted); `"this will
+work"` → false. It lives in `hybrid-router.ts` because both routers already depend on that module, and
+because the two copies had ALREADY drifted apart on other phrases — one home is how they stop.
+
+| Item | What changed | Tests | Status |
+|---|---|---|---|
+| **B2 (Bundle 9)** | `learning/hybrid-router.ts`: new exported `isSmallTalk` (whole word, whole message); `learning/model-first-router.ts` + `learning/model-scoring.ts`: `estimateTaskRequirements` use it in place of `desc.includes('hello') \|\| desc.includes('hi') \|\| desc.includes('greeting')`. | `tests/learning/hybrid-router.test.ts` (+4: recognises bare greetings, rejects the eight measured false positives, rejects a real ask that opens politely, does not treat `ok` as small talk); `tests/learning/router-scoring-truthfulness.test.ts` (+5: the live ask is `high`, the measured strings keep their complexity-implied tier, `hi` is still `low`, the MoE stays ≤ 0.2 on the live ask and ranks BELOW `gemini-3.1-flash-lite`, and the two `estimateTaskRequirements` copies agree) | **LANDED**, measured before/after against a rebuilt `dist/` |
+
+**Residual found while correcting this — OPEN, and it is a TRUTHFULNESS defect, not a routing one.**
+Because `cli/chat.ts` records `score: decision.score` on every row of a walk, the audit trail attributes
+one provider-level number to models that never had it — the live rows show three different pairs sharing
+`0.43836864406779663`, a value that matches NO candidate's model-level score. An audit reader cannot tell
+from `routing-history.json` why a model was chosen. The field must either carry the PAIR's own score or be
+absent ("no guessed value may be written into an audit record"). Recorded as B2-a below.
+
 ## Bundle 8 — the live re-run of the user's own ask (measured, not inferred)
 
 **What was run.** The user's own large routing-design ask (the one from the transcript), against his
@@ -399,7 +467,7 @@ and the capability ingest.
 |---|---|---|
 | 1 | **B5 is confirmed live, not just in a unit test.** `routing-history.json` for this exact ask records `complexity: "complex"`, where the pre-fix ladder rated the same text `moderate`. | The fix that was measured in a script and a test also fires on a real turn through the real router. |
 | 2 | **The A5/D3 log-label fix is confirmed live.** The header reads `backend.provider: deepseek` / `backend.model: deepseek-flash`, the first event is `turn.start {"requested":"gemini/gemma-4-26b-a4b-it"}`, and the last is `turn.end {…,"served":"deepseek/deepseek-flash"}`. | The header and the events now agree, and a reader can see the failover from the log alone. This is the exact mismatch that was reported (header `local` vs `turn.start gemini`) — same shape, now labelled. |
-| 3 | **B2's defect is now MEASURED rather than inferred — and it is worse than "static priors".** Every candidate in the auto pool scored the IDENTICAL `0.43836864406779663` (gemini/`gemma-4-26b-a4b-it`, openrouter/`cohere-r7b-12-2024`, deepseek/`deepseek-flash`), so the pick is a tie-break, and a task the router itself had just labelled **`complex`** was fed FIRST to **`gemma-4-26b-a4b-it`** — a small model — and reached `deepseek-flash` only after gemini failed twice (a timeout, then `Gemini tool-calling API error (500)`). | B2's remaining work is not "measure accuracy to refine a ranking"; it is that with equal priors the ranking carries NO information, so a `complex` task is routed by tie-break. The capability scorecard is what makes the scores differ — until then "best in class routing" is decided by candidate order. |
+| 3 | **B2's defect is now MEASURED rather than inferred.** Every row of the walk carried the IDENTICAL `0.43836864406779663` (gemini/`gemma-4-26b-a4b-it`, openrouter/`cohere-r7b-12-2024`, deepseek/`deepseek-flash`), and a task the router itself had just labelled **`complex`** was fed FIRST to **`gemma-4-26b-a4b-it`** — a small model — reaching `deepseek-flash` only after gemini failed twice (a timeout, then `Gemini tool-calling API error (500)`). | The two halves of this observation had two different causes, and Bundle 9 separates them: the repeated number is `decision.score` copied per row (an audit defect), while the WRONG FIRST PICK is `reasoningNeed: 'low'` from `desc.includes('hi')` matching the word "this" (the routing defect, now fixed). The inference drawn here in Bundle 8 — "the ranking carries no information, so a `complex` task is routed by tie-break" — was WRONG: the model-level scores were 0.9206 / 0.77 / 0.597148, i.e. ordered, just ordered wrongly. |
 
 **A console-truthfulness defect found by the same run, and fixed here.** The progress line printed
 `⚙ write_file({confirm: true})` five times and `⚙ edit_file({allow_multiple: false})` four times. Both
@@ -688,9 +756,15 @@ ones. `blocked` is likewise silent — a wall the run hit is not a verdict about
 
 ### Still open (honest scope)
 
-- **B2** — the static provider baselines (`openrouter 0.95`, `gemini 0.85`, `local 0.30`) are now only
-  the cold-start PRIOR, but they still outrank each other with no evidence. Measuring per-provider
-  accuracy to replace them is the next step, and the same mechanism now supports it.
+- **B2 (root cause) — LANDED (Bundle 9, below)**: the wrong model was picked because `reasoningNeed` was
+  decided by `desc.includes('hi')`, which matches the word "this". The static provider baselines
+  (`openrouter 0.95`, `gemini 0.85`, `local 0.30`) are now only the cold-start PRIOR; measuring
+  per-provider accuracy to replace them remains the follow-up, and the same mechanism supports it.
+- **B2-a — the audit trail's `score` does not describe the pair it is written against.** `cli/chat.ts`
+  records `score: decision.score` (a provider-level number) on every row of a failover walk, so
+  `routing-history.json` shows three different pairs sharing one score that matches no candidate's own
+  score. Turn the field into the PAIR's measured score, or drop it — an audit record may not carry a
+  number that did not decide what it sits next to. No guessed value may be written into an audit record.
 - **B5** — **LANDED (Bundle 3e, below)**: complexity now reads the ask's SHAPE as well as its vocabulary, so a four-component ask rates `complex` instead of `moderate`. The area set is deliberately coarse (twelve areas) and the floor can only RAISE a level; a finer set is a later refinement, not a gap.
 - `userAccepted` and a real `qualityScore` are still absent from the bandit payload; `testPassed` is
   not yet folded (the turn report does not carry per-action `ok` today). `cost` and `ecosystem` have
@@ -1176,7 +1250,8 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **A1 (Bundle 3d)** | New `learning/model-identity.ts`: the hand-declared alias table (`declaredAt` + evidence per entry), `identityKey`/`sameModel` (exact + bare id, widened ONLY by declaration), and `identityProvenance`. Wired into `twinKey`/`areTwins` (funded-twin grouping), `route-resolver.ts` `verifiedEquivalent` (the pin-refusal sentence now names the funded twin for the run-D pair), `model explain` (twin set + provenance) and `model list` ("same model, different verdicts"). Identity groups CAPABILITY/legibility only — never routability. | `tests/learning/model-identity.test.ts` (new, 9), `tests/inference/route-resolver.test.ts` (rewritten pair + a new no-guessing pair) | **LANDED**, live-verified in `model list` |
 | **C4 residual (Bundle 4d)** | `tools/tool-loop.ts`: `planContextBlock` + one bounded `system` block at the top of every turn holding the conversation's existing plan (goal, revision, each step id with status and note, the `update`-not-redeclare instruction). Skipped when every step is done (`PLAN_CONTEXT_MAX_STEPS` = 12). | `tests/tools/c4-plan-continuation.test.ts` (+2: no plan ⇒ no block, completed plan ⇒ no block; the cross-turn case now asserts the plan is visible with `1/3 done`) | **LANDED**, measured (`secondTurnSawThePlan: true`) |
 | **console preview (Bundle 8)** | `tools/tool-loop.ts`: `summarizeArgs` prefers the field that IDENTIFIES a call (`IDENTIFYING_ARG_KEYS`: path/filePath/file/paths/command/pattern/query/url/goal/name/question/tool/action/claim) over whichever key the model emitted first, falling back to the first; exported for its test. | `tests/tools/tool-loop.test.ts` (+4) | **LANDED**, found by the live run (five `write_file({confirm: true})` lines) |
-| **B2 (evidence, Bundle 8)** | No code — the live re-run measured the actual defect: every auto-pool candidate scored the identical `0.43836864406779663`, so a `complex` ask was fed to `gemma-4-26b-a4b-it` first and reached `deepseek-flash` only after gemini failed twice. | evidence only (trace `cli-chat-1791364283748.log`, `routing-history.json`) | **MEASURED** — B2's remaining work is that equal priors make the ranking carry no information, not merely that the priors are static |
+| **B2 (evidence, Bundle 8)** | No code — the live re-run produced the evidence: a `complex` ask was fed to `gemma-4-26b-a4b-it` first and reached `deepseek-flash` only after gemini failed twice. | evidence only (trace `cli-chat-1791364283748.log`, `routing-history.json`) | **MEASURED**; the conclusion drawn from it ("equal priors ⇒ the ranking carries no information") was **WRONG and is corrected in Bundle 9** — the repeated score was the audit trail copying `decision.score`, and the wrong pick came from `desc.includes('hi')` |
+| **B2 (Bundle 9)** | `learning/hybrid-router.ts`: new exported `isSmallTalk` (whole word, whole message); both `estimateTaskRequirements` implementations (`model-first-router.ts`, `model-scoring.ts`) use it instead of `desc.includes('hi')`. | `tests/learning/hybrid-router.test.ts` (+4), `tests/learning/router-scoring-truthfulness.test.ts` (+5) | **LANDED**, measured before/after against a rebuilt `dist/`: `reasoningNeed low` 81/160 → 17/160, and the live ask's first pick moves off the ~4B-active model |
 | **A5/D3 residual (Bundle 2h)** | `cli/chat.ts`: `turn.start` records `requested` (the resolved pair) instead of a bare `provider`; `turn.end` records `served` from the SAME expression the header uses, plus `requested` when it differs. | `tests/observability/debug-log.test.ts` (+1) | **LANDED**, measured on the trace that showed the mismatch |
 | **B5 (Bundle 3e)** | `learning/hybrid-router.ts`: `analyzeComplexity` takes the higher of the keyword ladder (`complexityFromKeywords`, unchanged) and a measured breadth floor; new `requirementUnits` + `measureTaskBreadth` (exported, so a caller can state WHY) and the twelve coarse `CAPABILITY_AREA_RE` buckets. | `tests/learning/hybrid-router.test.ts` (+5) | **LANDED**, measured before/after against `dist/` (`moderate` → `complex`); four false-positive shapes pinned unchanged |
 | **G1–G4 (Bundle 7)** | New `utils/workspace-path.ts` (the shared path rules) and `web-dashboard/workspace-resolution.ts` (`resolveTurnWorkspace`, `formatWorkspaceNoticeText`); `web-dashboard/server.ts` resolves the turn's workspace through it (attached → session → message → default → none) and returns `workspaceNotice`/`workspacePath`/`workspaceSource`; `web-dashboard/project-context.ts` opens the context with `Workspace: ATTACHED …` and states that an EMPTY attached folder is a normal start; `tools/registry.ts` (`ToolContext.workspaceUnscoped`, the `ask_user` folder ADOPTION, and the G13 suppression standing down while unscoped), `tools/coding-tools.ts` (`unscopedWriteRefusal` on `write_file`/`edit_file`), `web-dashboard/chat-console.ts` + `cli/chat.ts` (the flag reaches the tool context), `web-dashboard/src/api.ts` + `components/ChatPage.tsx` (the notice banner and attaching the resolved folder). | `tests/web-dashboard/workspace-resolution.test.ts` (new, 13), `tests/web-dashboard/project-context.test.ts` (+3), `tests/web-dashboard/chat-api.test.ts` (+3), `tests/tools/unscoped-workspace.test.ts` (new, 9) | **LANDED**, unit + API verified; the live re-run against the rebuilt `dist/` is the remaining proof |
@@ -1213,6 +1288,6 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 1. **Bundle 3c — pair entitlement** (D7): **LANDED** (see its section) — the model-first pool, the offered chain and the primary pick now all refuse a pair whose ACCOUNT was refused, and tie-break to the funded twin.
 2. **Bundle 1 — identity & routability** (A1–A4): A2/A3/A4 **LANDED** (see their rows). **A1 decided by the user ("go ahead with all 3"): option A, the declared alias table** (seeded from this machine's registry), plus twin grouping in `model list`/`model explain`; identity groups CAPABILITY only and never routability. Next up.
 3. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D4/D5/A5 landed in Bundles 2c–2g**): make the system's account of itself true.
-4. **Bundle 3 — capability by measurement** (B1–B5): the root cause. **Design re-written to the parameter-based scorecard you specified** (accuracy / performance / cost / robustness / ecosystem + a derived tier + a rank, each fed from measurement during task execution) — see `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`. Awaiting sign-off on the three open questions in its §6.
+4. **Bundle 3 — capability by measurement** (B1–B5): the root cause. **Design re-written to the parameter-based scorecard you specified** (accuracy / performance / cost / robustness / ecosystem + a derived tier + a rank, each fed from measurement during task execution) — see `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`. Awaiting sign-off on the three open questions in its §6 — **but note B5 LANDED (Bundle 3e) and B2's measured cause LANDED (Bundle 9)**: the reason a `complex` ask went to a small model first was NOT the static priors, it was `reasoningNeed` read from the substring `'hi'`, so the scorecard is now needed for RANKING QUALITY, not to explain that pick.
 5. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **C6 LANDED (Bundle 4a)**, **C3 LANDED (Bundle 4b)**, **C4 EXPERIMENT RUN** (its section, above): a continuation does not re-derive the plan — a LATER TURN does, and `create` resets completed steps while the model is never shown the plan. **The fix LANDED (Bundle 4c + 4d)**: the carried progress + disclosure, AND the plan is now shown at turn start (`planContextBlock`, bounded to 12 steps and skipped once every step is done). **F1 LANDED (Bundle 6)** — found live in the dashboard traces, not on the original list: a tool call whose arguments did not arrive was executed as `{}` (134 empty calls across the last two big turns), so it is now refused with the real cause and the sectioned-delivery alternative, and `write_file` can append. **Cluster G LANDED (Bundle 7)** — also found live, while the user was blocked on it: an attached-but-empty folder read as "no project", a folder the CHAT had attached was forgotten when the request did not resend it, a folder the user TYPED was discarded, and an unscoped turn could write into the dashboard process's own cwd; the workspace decision now lives in one tested place, the priority is attached → session → message → configured default → none, and a write with no folder ASKS where instead of guessing. Next: the C1/C5 budget policy. **C1 begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
 6. **Bundle 5 — autonomy & inventory** (**PARTIAL: E1/E2 landed in Bundle 5a/5b; E3 + D6 landed in Bundles 2a/2b; B5 LANDED in Bundle 3e**).

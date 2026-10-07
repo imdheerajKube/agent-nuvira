@@ -28,6 +28,7 @@ import { analyzeComplexity, type ComplexityLevel } from './hybrid-router.js';
 import { getCatalogProvider, type CatalogProviderEntry } from '../inference/provider-catalog.js';
 import { isNonChatModel } from '../inference/model-catalog.js';
 import { logger } from '../utils/logger.js';
+import { isSmallTalk } from './hybrid-router.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -114,7 +115,13 @@ export function estimateTaskRequirements(
   if (desc.includes('creative') || desc.includes('write') || desc.includes('poem')) {
     reasoningNeed = 'high';
   }
-  if (desc.includes('hello') || desc.includes('hi') || desc.includes('greeting')) {
+  // B2 — a greeting is a WHOLE WORD and the WHOLE MESSAGE. The old substring
+  // test (`desc.includes('hi')`) matched `this`/`which`/`anything` in 77 of the
+  // 160 distinct tasks in the local routing history, demoting each to
+  // `reasoningNeed: 'low'` and therefore to cost-dominated weighting that
+  // prefers small models. Shared definition, so this copy can no longer drift
+  // from `model-first-router.ts`'s.
+  if (isSmallTalk(taskDescription)) {
     reasoningNeed = 'low';
   }
 

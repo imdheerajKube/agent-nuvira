@@ -13,6 +13,12 @@
  *      `groq/wire-stub-model` were marked VERIFIED), and counted providers this
  *      machine has no credential for — 538 "models" across 23 "providers" while
  *      17 pairs had ever been verified.
+ *
+ * B2 adds a fourth: the REASONING TIER was decided by `desc.includes('hi')`, a
+ * substring of `this`/`which`/`anything`, so 81 of the 160 distinct tasks in the
+ * local routing history rated `low` (2 rated `high`) and the weights preferred
+ * small models — the `low` tier set the MoE's fit back to 1.0, cancelling the
+ * active-width fix in claim 1.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -24,8 +30,12 @@ import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-r
 import {
   buildModelCandidates,
   countEligibleModels,
+  estimateTaskRequirements,
   isPairPlausible,
 } from '../../src/learning/model-first-router.js';
+import {
+  estimateTaskRequirements as estimateTaskRequirementsProviderFirst,
+} from '../../src/learning/model-scoring.js';
 import { ConfigManager } from '../../src/config/manager.js';
 
 let tempDir: string;
@@ -84,6 +94,96 @@ describe('P6 — capability reads the ACTIVE width of a mixture-of-experts model
     expect(flashLite).toBeGreaterThanOrEqual(0);
     // The live failure was exactly this ordering being the other way round.
     expect(flashLite).toBeLessThan(moe);
+  });
+});
+
+/**
+ * B2 — THE REASONING TIER, MEASURED ON A FRESH CANDIDATE POOL.
+ *
+ * The P6 fix above reads a MoE's ACTIVE width and drops its `capabilityFit` to
+ * 0.2 for a high-stakes ask — and it was being cancelled one step later, because
+ * `estimateTaskRequirements` decided the stakes with `desc.includes('hi')`.
+ * 'hi' is a substring of `this`, `which`, `anything`, `nothing`, `architecture`,
+ * `crashing`…, so the parity ask (a multi-provider routing design that happens
+ * to contain the word "this") was rated `reasoningNeed: 'low'`, which set the
+ * MoE's fit back to 1.0 and made the weights prefer small models. Measured on the
+ * live ask: `gemini/gemma-4-26b-a4b-it` ranked #1 at 0.9206, with
+ * `local/qwen2.5:0.5b` #2 and `gemini/allam-2-7b` #3 — the walk then fell
+ * through three providers. Across the 160 distinct tasks in the local routing
+ * history, 81 rated `low` and 2 rated `high`; 77 of the 160 matched only the
+ * substring.
+ */
+describe('B2 — the reasoning tier is read from a WORD, not a substring', () => {
+  /** The live ask, trimmed to the part that triggered the bug. */
+  const PARITY_ASK =
+    'I want you to write a best in class routing for an Ai Agent; a model can be available on ' +
+    'multiple providers; this will work as a model facilitator to the agent based on task ' +
+    'complexity and task type';
+
+  it('rates a complex engineering ask as needing high reasoning', () => {
+    expect(estimateTaskRequirements(PARITY_ASK, 'complex').reasoningNeed).toBe('high');
+  });
+
+  it('is not moved by prose that merely contains a greeting', () => {
+    // Every one of these was measured in the routing history as a `low` rating.
+    const measurements = [
+      'this will work as a model facilitator',
+      'create a dependency diagram which depicts the modules',
+      'you never answered anything about the last run',
+      'change the hot key to ctrl+shift+t',
+      'nothing happened when i selected text',
+      'the app is crashing on launch',
+      'graphify the report into a diagram',
+      'write the architecture design for the router',
+    ];
+    for (const text of measurements) {
+      expect(
+        estimateTaskRequirements(text, 'complex').reasoningNeed,
+        `expected ${JSON.stringify(text)} to keep the complexity-implied tier`,
+      ).toBe('high');
+    }
+  });
+
+  it('still rates an ask that IS only a greeting as needing low reasoning', () => {
+    // The rule the substring test was reaching for, still enforced.
+    expect(estimateTaskRequirements('hi', 'moderate').reasoningNeed).toBe('low');
+    expect(estimateTaskRequirements('hello, how are you?', 'moderate').reasoningNeed).toBe('low');
+  });
+
+  it('leaves the P6 active-width fix able to do its job on the live ask', () => {
+    const registry = getModelRegistry();
+    registry.markListed('gemini', ['gemma-4-26b-a4b-it', 'gemini-3.1-flash-lite']);
+    registry.markVerified('gemini', 'gemma-4-26b-a4b-it', 'telemetry');
+    registry.markVerified('gemini', 'gemini-3.1-flash-lite', 'telemetry');
+    const candidates = buildModelCandidates(PARITY_ASK, 'complex', undefined, ['gemini']);
+    const moe = candidates.find((c) => c.model === 'gemma-4-26b-a4b-it');
+    const flashLite = candidates.find((c) => c.model === 'gemini-3.1-flash-lite');
+    expect(moe).toBeDefined();
+    expect(flashLite).toBeDefined();
+    // ~4B active width against a high-stakes ask — not a capability match.
+    expect(moe!.dimensions.capabilityFit).toBeLessThanOrEqual(0.2);
+    // ...so the proven mid-tier model outranks the pair the live run picked first.
+    expect(candidates.indexOf(flashLite!)).toBeLessThan(candidates.indexOf(moe!));
+  });
+
+  it('keeps the two `estimateTaskRequirements` copies from drifting apart', () => {
+    // There are two implementations (model-first-router and model-scoring) and
+    // they had already diverged on other phrases. They must at least agree that a
+    // greeting is a word and the whole message, since either can decide a walk.
+    const texts = [
+      PARITY_ASK,
+      'this will work',
+      'hi',
+      'hello, how are you?',
+      'hi, build me a RAG pipeline',
+      'which module owns the retry logic',
+    ];
+    for (const text of texts) {
+      expect(
+        estimateTaskRequirementsProviderFirst(text, 'complex').reasoningNeed,
+        `the two definitions disagree about ${JSON.stringify(text)}`,
+      ).toBe(estimateTaskRequirements(text, 'complex').reasoningNeed);
+    }
   });
 });
 
