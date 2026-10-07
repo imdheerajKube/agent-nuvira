@@ -188,29 +188,41 @@ export function needsProjectAttachment(message: string): boolean {
  * What the user sees instead of a wrong answer.
  *
  * It names the specific failure ("I picked a folder you didn't ask about") and
- * the two ways forward, and it offers suggestions that are actual next actions —
- * a refusal with no way out just looks like the agent broke.
+ * the ways forward, and it offers suggestions that are actual next actions —
+ * an ask with no way out just looks like the agent broke.
+ *
+ * THREE ways forward are named, because all three are now honoured:
+ * the composer's picker, the composer's path box, and — the one this message
+ * used to omit — simply TYPING the folder's absolute path in the next message.
+ * The server adopts a directory the user names in their own message
+ * (`directoryFromMessage`, workspace-resolution.ts), so a user who answers this
+ * ask with "/Users/me/Documents/my-app" gets a scoped turn rather than the same
+ * ask again. THAT repeat was the reported "brutal failure … agent keep refusing
+ * even after i attach the folder".
  */
 export function projectAttachmentPrompt(): string {
   return [
-    "📁 **I need a project folder before I can do that.**",
+    '📁 **Which folder should I work in?**',
     '',
-    'No folder is attached to this chat, so I have no workspace to look at — and I will not',
-    'guess one. Guessing is how "assess this project" ends up describing whatever unrelated',
-    'folder sits in my own working directory.',
+    'No project folder is attached to this chat, so I have no workspace to work in — and I will not',
+    'guess one. Guessing is how "assess this project" ends up describing whatever unrelated folder',
+    'sits in my own working directory.',
     '',
-    '**Attach the folder you mean, then send the message again:**',
-    '1. In the chat composer, find the **Select Project Folder** box (above the message box).',
-    '2. Click **🗂️ Browse** and navigate to your project, then click **Attach** — or paste the',
-    '   folder\'s absolute path (e.g. `/Users/you/Documents/my-app`) into that box and click **Attach**.',
+    '**Give me the folder any of these ways, then send the message again:**',
+    '1. Just type its absolute path in your next message — e.g.',
+    '   `/Users/you/Documents/my-app create the app here`. I will use it.',
+    '2. Or paste that path into the **Select Project Folder** box above the message box and click',
+    '   **Attach**.',
+    '3. Or click **🗂️ Browse**, navigate to the folder, and click **Attach**.',
     '',
     'On some systems your browser then shows a permission prompt for that folder — click **Allow**,',
     'and the folder is attached to this chat. (You can **✕ detach** it any time.)',
     '',
-    'Once a folder is attached, every turn in this chat is scoped to it.',
+    'Once attached, every turn in this chat is scoped to it — and a brand-new EMPTY folder is a',
+    'perfectly good answer: I will create your files inside it.',
     '',
     '_Tip for operators: set a default working directory in **Admin → Provider Configuration →',
-    'Workspace** so unattached turns run somewhere you chose instead of the server\'s own cwd._',
+    'Workspace** and unattached turns run there (with a visible warning) instead of stopping here._',
   ].join('\n');
 }
 

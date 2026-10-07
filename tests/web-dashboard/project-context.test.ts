@@ -130,4 +130,61 @@ describe('buildProjectContext', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // ── Cluster G: an attached folder must never read as "no folder" ────────────
+  //
+  // MEASURED (2026-10-07). The user attached `/Users/dheeraj/Documents/Design
+  // Doc` while it was EMPTY, and the whole description of the workspace the
+  // model received was `Files: 0` + `(no source files)`. It read that as "no
+  // project is attached" and asked the user to attach one — twice in the same
+  // session — and the model's own reasoning in the step checkpoint says so
+  // verbatim ("The project context is 'Design Doc' with 0 files"). The user's
+  // report: "agent keep refusing even after i attach the folder … working was
+  // pathetic", and the sentence they had to type to unblock it: "folder is
+  // attached continue to finish the task".
+
+  it('states the folder is ATTACHED, so it can never read as "no project"', () => {
+    const dir = makeFixture();
+    try {
+      const text = formatProjectText(buildProjectContext(dir)!);
+      expect(text).toMatch(/^Workspace: ATTACHED/);
+      expect(text).toContain(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('says an EMPTY attached folder is a normal start, not a missing project', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'buff-project-empty-'));
+    try {
+      const text = formatProjectText(buildProjectContext(dir)!);
+      expect(text).toContain('Files: 0');
+      expect(text).toMatch(/ATTACHED and EMPTY/i);
+      // The instruction is the point: create the files HERE, do not ask for a
+      // folder that is already attached.
+      expect(text).toMatch(/create the files the user asks for HERE/i);
+      expect(text).toMatch(/do not ask them to attach one/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('labels a workspace that came from somewhere OTHER than an attachment', () => {
+    const dir = makeFixture();
+    try {
+      const bundle = buildProjectContext(dir)!;
+      const text = formatProjectText(bundle, {
+        source: 'default',
+        notice: 'No project folder is attached to this chat.',
+      });
+      expect(text).toMatch(/^Workspace: DEFAULT/);
+      expect(text).toContain('No project folder is attached to this chat.');
+      // The non-attached cases must NOT claim to be the user's own folder.
+      expect(text).not.toMatch(/^Workspace: ATTACHED/);
+      // And an empty-folder warning must not fire when there are files.
+      expect(text).not.toMatch(/ATTACHED and EMPTY/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

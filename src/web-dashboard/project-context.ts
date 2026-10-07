@@ -98,13 +98,59 @@ export function buildProjectContext(
   };
 }
 
-/** The full injected text — what the agent actually reads. */
-export function formatProjectText(bundle: ProjectContextBundle): string {
+export interface FormatProjectTextOptions {
+  /**
+   * Where this folder came from (Cluster G — see workspace-resolution.ts).
+   * `attached` needs no explanation; every other source does, so the model can
+   * tell "the user pointed me here" apart from "I am in an operator's default".
+   */
+  source?: 'attached' | 'session' | 'message' | 'default';
+  /** The one-line account of the workspace (from `resolveTurnWorkspace`). */
+  notice?: string;
+}
+
+/**
+ * The full injected text — what the agent actually reads.
+ *
+ * MEASURED (2026-10-07, Cluster G): an attached folder that happened to be
+ * EMPTY produced a context block whose entire description of the workspace was
+ * `Files: 0` and `(no source files)`. The model read that as "no project is
+ * attached" and asked the user to attach one — twice, in one session — while a
+ * folder was attached the whole time. The user's summary was "agent keep
+ * refusing even after i attach the folder … folder is attached continue to
+ * finish the task" (the sentence they had to type to get it to move).
+ *
+ * So the attachment is now stated in the first line, in the affirmative, and
+ * the empty case says out loud that empty is a normal START rather than a
+ * missing project. A brand-new project folder is the single most likely reason
+ * someone attaches a folder to this chat.
+ */
+export function formatProjectText(
+  bundle: ProjectContextBundle,
+  opts: FormatProjectTextOptions = {},
+): string {
+  const source = opts.source ?? 'attached';
+  const workspaceLine =
+    source === 'attached'
+      ? `Workspace: ATTACHED — ${bundle.path} is this chat's project. Create and edit files INSIDE it.`
+      : `Workspace: ${source.toUpperCase()} — ${bundle.path}${opts.notice ? `\n${opts.notice}` : ''}`;
+  const emptyLine =
+    bundle.fileCount === 0
+      ? [
+          '',
+          '⚠️ This folder is ATTACHED and EMPTY. Empty is the normal starting state of a new',
+          'project: create the files the user asks for HERE, in this folder. Do NOT tell the user',
+          'that no project is attached, and do not ask them to attach one — one is already',
+          'attached at the path above.',
+        ]
+      : [];
   return [
+    workspaceLine,
     `Project: ${bundle.name}`,
     `Path: ${bundle.path}`,
     `Files: ${bundle.fileCount} · Symbols: ${bundle.symbolCount}${bundle.truncated ? ' (map truncated to fit context — use read_file for the rest)' : ''}`,
     `Note: File count includes all source files in this directory and its subdirectories.`,
+    ...emptyLine,
     '',
     '## File tree',
     bundle.fileTree,

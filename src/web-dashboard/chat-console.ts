@@ -55,6 +55,12 @@ export interface ChatEngine {
       /** P4 — attached project dir; the engine recalls its sessions + facts. */
       projectPath?: string;
       /**
+       * Cluster G — this turn has NO workspace. Carried into the tool context so
+       * a write asks WHERE the file goes rather than dropping it in the
+       * dashboard process's own cwd (see `unscopedWriteRefusal`).
+       */
+      unscopedWorkspace?: boolean;
+      /**
        * Session 3 — channel/format POLICY merged into the STABLE (system)
        * layer instead of being re-injected into every user turn. The gateway
        * passes its messaging-app rules here.
@@ -668,6 +674,8 @@ export class ChatConsole {
       model?: string;
       projectContext?: string;
       projectPath?: string;
+      /** Cluster G — no workspace for this turn: writes must ask where. */
+      unscopedWorkspace?: boolean;
       attachments?: ChatAttachment[];
       recordTurn?: boolean;
       /** WS1 — a finding was recorded this turn, with the gate's verdict. */
@@ -793,6 +801,12 @@ export class ChatConsole {
         // P4 — the attached project dir triggers the engine's per-turn recall
         // of that project's prior sessions + facts.
         ...(opts.projectPath ? { projectPath: opts.projectPath } : {}),
+        // Cluster G — this turn has NO workspace (nothing attached, nothing
+        // named in the message, no configured default). The engine carries the
+        // flag into the tool context so a write asks WHERE to put the file
+        // instead of landing in the dashboard process's own cwd, which belongs
+        // to nobody and used to be invisible to the user.
+        ...(opts.unscopedWorkspace ? { unscopedWorkspace: true } : {}),
         // P4 — stream answer tokens to the GUI (the typewriter bubble).
         onToken: (text) => emitTurn({ kind: 'token', text }),
         history: history.map((h) => ({ role: h.role, content: h.content })),

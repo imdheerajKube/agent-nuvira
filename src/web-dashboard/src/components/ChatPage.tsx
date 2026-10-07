@@ -1260,6 +1260,13 @@ export default function ChatPage() {
   const [retryAsk, setRetryAsk] = useState<string | null>(null);
   /** A sentence the server sent about the PIN not holding (see `routingNotice`). */
   const [routingNotice, setRoutingNotice] = useState<string | null>(null);
+  /**
+   * Cluster G — a sentence the server sent about WHERE this turn's workspace
+   * came from, when it was not the folder the user attached (their earlier
+   * attachment, a folder named in the message, or the operator's default).
+   * Shown so a file landing somewhere unexpected is explained, not discovered.
+   */
+  const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null);
   // Resume the session open before a reload when one was stored; otherwise a
   // brand-new id.
   const sessionIdRef = useRef<string>(readPersistedSessionId() ?? newSessionId());
@@ -1905,6 +1912,20 @@ export default function ChatPage() {
       if (r.ok) {
         setMeta(r.generationFailed ? null : `${r.provider ?? 'provider'}${r.model ? ` / ${r.model}` : ' (auto-routed)'}`);
         setRoutingNotice(r.routingNotice ?? null);
+        // Cluster G — where the turn actually ran, when it was not the folder
+        // the user attached. A folder the user named in the message is adopted
+        // SERVER-side, so the composer's chip would otherwise still read
+        // "no folder" while the turn ran inside one; this banner is how the
+        // user learns which.
+        setWorkspaceNotice(r.workspaceNotice ?? null);
+        // Cluster G — the server resolved a workspace from somewhere other than
+        // the composer (a folder named in the message, or this chat's earlier
+        // attachment recovered from the session). ATTACH it, so the chip
+        // highlights the folder the turn actually ran in and the next turn
+        // carries it without asking again.
+        if (r.workspacePath && r.workspacePath !== attachedProject?.path) {
+          void attachProjectRef.current?.(r.workspacePath);
+        }
         // P4 — a failed generation (no usable answer) offers Retry too — but NOT
         // when the server already queued the ask (see `retryQueued`): the retry
         // loop is re-running it and will push the answer here, so a manual
@@ -2729,6 +2750,20 @@ export default function ChatPage() {
                 type="button"
                 aria-label="Dismiss routing notice"
                 onClick={() => setRoutingNotice(null)}
+              >
+                ✕
+              </button>
+            </div>
+          ) : null}
+
+          {workspaceNotice ? (
+            <div className="admin-row-msg chat-routing-notice">
+              <span>📁 {workspaceNotice}</span>{' '}
+              <button
+                className="chat-routing-notice-dismiss"
+                type="button"
+                aria-label="Dismiss workspace notice"
+                onClick={() => setWorkspaceNotice(null)}
               >
                 ✕
               </button>

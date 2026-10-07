@@ -420,6 +420,39 @@ function confirmFirst(tool: string, path: string, what: string): string {
   return `${tool}: state-changing — NOT applied. Ask the user first via ask_user ("Apply ${what} to ${path}?" with a one-line summary), then retry ${tool} with confirm:true once they approve.`;
 }
 
+/**
+ * The message a WRITE returns when the turn has NO workspace at all.
+ *
+ * MEASURED (2026-10-07, Cluster G). A dashboard turn can run with nothing
+ * attached: no folder in the request, none attached earlier in the
+ * conversation, none named in the user's message, and no configured
+ * `dashboard.cwd`. Its `ctx.cwd` then falls back to the directory the DASHBOARD
+ * PROCESS was started from — a deployment directory that belongs to nobody
+ * asking the question. A `write_file` there is the worst of both worlds: the
+ * user cannot see it, cannot find it afterwards, and the agent reports success
+ * on a file in an unrelated tree.
+ *
+ * So the write does NOT happen, and — this is the part that makes it "gently
+ * ask" rather than "refuse" — the result names the exact ask to make and the
+ * three answers that are honoured. It follows the {@link confirmFirst}
+ * precedent: no work, plus the model's precise next move. The alternative,
+ * today's behaviour for an ask that slips past the workspace guard, is a silent
+ * write into the process's own cwd.
+ */
+function unscopedWriteRefusal(tool: string, path: string): string {
+  return [
+    `${tool}: no project folder is attached to this chat, so there is nowhere to put '${path}' — nothing was written.`,
+    '',
+    'Call `ask_user` ONCE and ask which folder to use, offering these ways out:',
+    '  • attach a folder in the dashboard (the **Select Project Folder** box above the composer);',
+    '  • paste the folder\'s absolute path in their reply — then the next write lands inside it;',
+    '  • or confirm they want the file created outside any project.',
+    'Then retry this call with a path INSIDE the folder they name.',
+    '',
+    'Do NOT retry this call unchanged, and do NOT say the file was created — it was not.',
+  ].join('\n');
+}
+
 /** One exact-text replacement (the batched form's unit). */
 export interface EditReplacement {
   old_string: string;
@@ -602,6 +635,9 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
   if (pairs.length === 0) {
     return "edit_file: no replacement given — pass old_string/new_string (single) or replacements[] (batch).";
   }
+  // Cluster G — see `unscopedWriteRefusal`. A dry run reads nothing on disk, so
+  // it stays allowed; anything that would WRITE asks where first.
+  if (ctx.workspaceUnscoped && !dryRun) return unscopedWriteRefusal('edit_file', args.path);
   const gated = await gateReal(ctx.cwd, args.path);
   if (!gated.ok) return failureResult('edit_file', gated.reason);
 
@@ -757,6 +793,12 @@ export interface WriteFileArgs {
  * ancestor (catches symlinked-parent escapes) instead of the target itself.
  */
 export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promise<string> {
+  // Cluster G — the turn has no workspace of the user's, so `ctx.cwd` is the
+  // dashboard process's own directory. Refuse, and tell the model to ASK where
+  // the file should go (see `unscopedWriteRefusal`). Checked BEFORE the path
+  // gate so the model gets the actionable message rather than a boundary denial
+  // about a directory nobody chose.
+  if (ctx.workspaceUnscoped) return unscopedWriteRefusal('write_file', args.path);
   const gated = await gateWrite(ctx.cwd, args.path);
   if (!gated.ok) return `write_file: ${gated.reason}`;
 

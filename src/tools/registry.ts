@@ -28,6 +28,10 @@ import { envBuff } from '../config/paths';
 import { z, toJSONSchema, type ZodType } from 'zod';
 import { ACTION_BY_INTENT } from '../nlu/actions.js';
 import { detectPermissionSeeking, IRREVERSIBLE_ACTION_RE } from '../learning/autonomy-policy.js';
+// Cluster G — a folder the user names in an ask_user reply IS the workspace
+// (see the adoption block in the `ask_user` runner). The rule is the same,
+// conservative one the dashboard server applies to a message.
+import { directoryFromMessage } from '../utils/workspace-path.js';
 import { createFindingTool } from './finding-tool.js';
 import { recordArtifact } from './artifact-append.js';
 import { checkStepArtifacts } from './step-artifact.js';
@@ -85,6 +89,23 @@ export interface ToolContext {
   configManager: any;
   /** Working directory (defaults to process.cwd()). */
   cwd?: string;
+  /**
+   * Cluster G — `true` when `cwd` is NOT a workspace belonging to the user.
+   *
+   * A dashboard turn can run with nothing attached: no folder in the request,
+   * none attached earlier in the conversation, none named in the message, and
+   * no configured `dashboard.cwd`. Its `cwd` then falls back to the dashboard
+   * PROCESS's own directory — a directory that belongs to the deployment, not
+   * to the person asking.
+   *
+   * Writes must not land there silently: `write_file`/`edit_file` refuse with a
+   * message that tells the model to ASK where the file goes (see
+   * `unscopedWriteRefusal` in coding-tools.ts), rather than performing the
+   * write or refusing opaquely. `undefined` — a CLI run, a test, a direct call
+   * — keeps the original behaviour exactly: a CLI turn's `cwd` IS the user's
+   * project.
+   */
+  workspaceUnscoped?: boolean;
   /** Live pipeline board (for pipeline tool runs inside the chat loop). */
   board?: any;
   /** Sink for `suggest_followups` results. */
@@ -885,6 +906,14 @@ registerTool({
     const pending = ctx.pendingConfirmation;
     if (
       !pending &&
+      // Cluster G — an UNSCOPED turn is asking for a required INPUT, not for
+      // permission, and the two can look identical to this heuristic ("which
+      // folder should I create the app in?" reads as permission-seeking).
+      // Suppressing it deadlocks the turn: the user is never asked, so no
+      // folder is ever named, so every retry fails for the same reason — the
+      // "keeps refusing" loop. A missing workspace is not a decision the model
+      // may take on the user's behalf.
+      !ctx.workspaceUnscoped &&
       (ctx.writesAuthorized?.authorized === true || Boolean(ctx.envelope)) &&
       detectPermissionSeeking(question) &&
       !IRREVERSIBLE_ACTION_RE.test(question)
@@ -937,6 +966,32 @@ registerTool({
     // the agent tries to ask it a second time (and so a self-report can say what
     // the user actually replied, instead of "asked 4×, no answer recorded").
     ctx.runTrace?.recordAsk(question, true, picked);
+    // ── Cluster G: the reply may be the FOLDER, and then it is the workspace ──
+    // An unscoped turn asks "which folder should I use?". The user answers by
+    // typing one (the free-text "Other" field, or a label they edited) — and
+    // until now that answer went no further than the model's context: the write
+    // tool would refuse again for the same reason and the user would be asked
+    // the same question a second time. That repeat is the reported "agent keep
+    // refusing even after i attach the folder".
+    //
+    // So a directory in the answer IS adopted: `ctx.cwd` moves to it and the
+    // unscoped flag clears, exactly as `clone_repo` moves `ctx.cwd` after it
+    // clones. `directoryFromMessage` is the same conservative rule the server
+    // applies to a message (absolute, existing, a DIRECTORY), so a reply that
+    // merely mentions a file path cannot relocate the turn.
+    const namedFolder = ctx.workspaceUnscoped
+      ? directoryFromMessage(`${picked}\n${answer.custom ?? ''}`)
+      : undefined;
+    if (namedFolder) {
+      ctx.cwd = namedFolder;
+      ctx.workspaceUnscoped = false;
+      ctx.emit?.('workspace:adopted', { path: namedFolder, source: 'ask_user' }, 'tool-loop');
+      return (
+        `User answered: ${picked}${answer.custom ? ` (custom: ${answer.custom})` : ''}\n` +
+        `Workspace adopted: '${namedFolder}'. This chat now works INSIDE that folder — retry the ` +
+        'write with a path inside it (the previous refusal no longer applies).'
+      );
+    }
     return `User answered: ${picked}${answer.custom ? ` (custom: ${answer.custom})` : ''}`;
   },
 });

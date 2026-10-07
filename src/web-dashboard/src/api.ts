@@ -1730,6 +1730,23 @@ export class DashboardAPI {
          * sentence the GUI shows under the answer, never the answer itself.
          */
         routingNotice?: string;
+        /**
+         * Cluster G — where this turn's workspace came from, when it was NOT the
+         * folder the user attached: the folder this conversation attached
+         * earlier, a folder the user named in the message, or the operator's
+         * configured default. Absent for the attached case, which needs no
+         * caption. The GUI shows it so a file landing somewhere unexpected is
+         * explained rather than discovered.
+         */
+        workspaceNotice?: string;
+        /**
+         * The resolved workspace, when it was not the folder the composer already
+         * had attached — so the client can ATTACH it and show it. A folder the
+         * user typed in a message is one they want to keep working in; without
+         * this the chip stayed empty and the next turn asked for it again.
+         */
+        workspacePath?: string;
+        workspaceSource?: string;
         generationFailed: boolean;
         retryQueued?: boolean;
         /**
@@ -1806,6 +1823,9 @@ export class DashboardAPI {
           provider: typeof d.provider === 'string' ? d.provider : null,
           model: typeof d.model === 'string' ? d.model : null,
           ...(typeof d.routingNotice === 'string' && d.routingNotice ? { routingNotice: d.routingNotice } : {}),
+          ...(typeof d.workspaceNotice === 'string' && d.workspaceNotice ? { workspaceNotice: d.workspaceNotice } : {}),
+          ...(typeof d.workspacePath === 'string' && d.workspacePath ? { workspacePath: d.workspacePath } : {}),
+          ...(typeof d.workspaceSource === 'string' && d.workspaceSource ? { workspaceSource: d.workspaceSource } : {}),
           generationFailed: d.generationFailed === true,
           retryQueued: d.retryQueued === true,
           ...(d.needsProject === true ? { needsProject: true } : {}),

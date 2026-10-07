@@ -1750,6 +1750,15 @@ export class ChatCommand extends BaseCommand {
       askUser?: ToolContext['askUser'];
       onProgress?: (line: string) => void;
       /**
+       * Cluster G — the surface says this turn has NO workspace: the dashboard
+       * attached no folder, the user named none in the message, and no
+       * `dashboard.cwd` is configured. Reaches the tool context as
+       * `workspaceUnscoped`, which makes a write ASK where to put the file
+       * instead of dropping it into `process.cwd()`. The CLI never sets it — a
+       * CLI turn runs in the user's own directory, which is a real workspace.
+       */
+      unscopedWorkspace?: boolean;
+      /**
        * P0.6 — live step cards: called once per tool-call lifecycle.
        * `started` fires BEFORE execution (with the call id + args), `called`
        * after (ok/error + duration + result). The dashboard console forwards
@@ -2273,6 +2282,12 @@ export class ChatCommand extends BaseCommand {
       // P4 — when a project is attached, scope tools to its root so the
       // agent operates inside the project (not the dashboard server's cwd).
       cwd: turnCwd,
+      // Cluster G — the surface's own verdict on whether `turnCwd` is the
+      // user's workspace. `false` means this is an unscoped turn (no attachment,
+      // no folder named in the message, no configured default), so `turnCwd` is
+      // the dashboard process's own directory — a place that belongs to nobody.
+      // A write there must ask; see `unscopedWriteRefusal` in coding-tools.ts.
+      ...(ctxOverrides?.unscopedWorkspace ? { workspaceUnscoped: true } : {}),
       // P7 — is a PERSON watching this turn? It decides `run_terminal`'s DEFAULT
       // command timeout (60s here vs 120s unattended): two minutes of silence in
       // front of someone is not patience, it is a bug — the live run spent four

@@ -1042,6 +1042,93 @@ describe('/api/projects — P3 project attach', () => {
     expect(engine.calls.length).toBe(before);
   });
 
+  // ── Cluster G: a folder the chat already HAS must not be lost ─────────────
+  //
+  // The composer re-sends `projectPath` from React state only, so a reload
+  // mid-conversation (or an attach whose response the UI never received) left the
+  // server folder-less while the conversation still had one — and every turn was
+  // then answered with "I need a project folder". That is the user's report
+  // verbatim: "agent keep refusing even after i attach the folder". A folder this
+  // chat attached earlier is a folder the server can still read back.
+  it('recovers the folder from the SESSION when the request forgot to send it', async () => {
+    const fixture = join(testDir, 'session-proj');
+    mkdirSync(fixture, { recursive: true });
+    writeFileSync(join(fixture, 'main.ts'), 'export const main = 1;\n');
+
+    // Turn 1 carries the folder; the conversation now remembers it.
+    const first = await authedFetch('/api/chat', 'POST', {
+      sessionId: 'session-recall',
+      message: 'what is 2 + 2',
+      projectPath: fixture,
+    });
+    expect(first.status).toBe(200);
+
+    // Turn 2 sends NO projectPath — and the guard must NOT fire.
+    const before = engine.calls.length;
+    const second = await authedFetch('/api/chat', 'POST', {
+      sessionId: 'session-recall',
+      message: 'assess this project',
+      projectPath: null,
+    });
+    expect(second.status).toBe(200);
+    const d = (await second.json()) as { needsProject?: boolean; workspaceNotice?: string };
+    expect(d.needsProject).toBeUndefined();
+    expect(d.workspaceNotice).toMatch(/restored from this conversation/i);
+
+    // The LAST one — an earlier test in this file also asks "assess this project".
+    const call = engine.calls.filter((c) => c.message === 'assess this project').at(-1);
+    expect(call).toBeTruthy();
+    const opts = call?.opts as { projectContext?: string; projectPath?: string };
+    expect(opts?.projectPath).toBe(fixture);
+    expect(opts?.projectContext).toContain('main.ts');
+    // It ran — an un-gated refusal here would be the bug wearing a new hat.
+    expect(engine.calls.length).toBeGreaterThan(before);
+  });
+
+  it('adopts a folder the user NAMED in the message ("path via chat")', async () => {
+    const fixture = join(testDir, 'named-proj');
+    mkdirSync(fixture, { recursive: true });
+    writeFileSync(join(fixture, 'app.ts'), 'export const app = 1;\n');
+
+    const res = await authedFetch('/api/chat', 'POST', {
+      sessionId: 'message-path',
+      message: `create the app in ${fixture}`,
+      projectPath: null,
+    });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as {
+      needsProject?: boolean;
+      workspaceNotice?: string;
+      workspacePath?: string;
+      workspaceSource?: string;
+    };
+    expect(d.needsProject).toBeUndefined();
+    expect(d.workspacePath).toBe(fixture);
+    expect(d.workspaceSource).toBe('message');
+    expect(d.workspaceNotice).toMatch(/named in their message/i);
+
+    const call = engine.calls.find((c) => c.message === `create the app in ${fixture}`);
+    expect((call?.opts as { projectPath?: string } | undefined)?.projectPath).toBe(fixture);
+  });
+
+  it('marks a turn with NO workspace unscoped, so a write asks instead of guessing', async () => {
+    // An ask with no project noun and no file noun slips past the guard (it must —
+    // gating prose was the earlier bug), so the protection has to be at the WRITE.
+    // The flag is what carries "this cwd is nobody's" into the tool context.
+    const res = await authedFetch('/api/chat', 'POST', {
+      sessionId: 'unscoped-turn',
+      message: 'create a react app',
+      projectPath: null,
+    });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { needsProject?: boolean; workspaceNotice?: string };
+    expect(d.needsProject).toBeUndefined();
+    expect(d.workspaceNotice).toMatch(/UNSCOPED/);
+
+    const call = engine.calls.find((c) => c.message === 'create a react app');
+    expect((call?.opts as { unscopedWorkspace?: boolean } | undefined)?.unscopedWorkspace).toBe(true);
+  });
+
   it('lets an ordinary question through with nothing attached', async () => {
     const res = await authedFetch('/api/chat', 'POST', {
       sessionId: 'guard-2',

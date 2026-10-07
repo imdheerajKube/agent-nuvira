@@ -272,6 +272,23 @@ user reported "some serious bug is there".
 |---|---|---|---|---|---|
 | F1 | **S1** | **A tool call whose ARGUMENTS never arrived is parsed to `{}` and EXECUTED.** The wire layer's defensive `JSON.parse(raw \|\| '{}')` turns "the payload was cut off" into a valid-looking call with no arguments; the loop then runs it, the model is told `write_file: path is required` (the WRONG cause), and nothing offers a way to deliver a payload larger than one model output. | Two of the last ten dashboard sessions, same ask ("deliver complete document" / "retry"): **`write_file` 75 EMPTY calls** (`cp-a7d0878f9953`, 09:59, 81 steps) and **59 EMPTY calls** (`cp-ab3949f5cc0c`, 10:52, 81 steps, 15 min, `bounded: true`, **no document**); 73 of that turn's 81 calls arrived empty. The model diagnosed it itself ("my calls were emitted empty") and retried the identical call 59 times. | **LANDED (Bundle 6)** — see below | A call whose arguments did not arrive is REFUSED (never executed as `{}`), the refusal names the real cause (quoting `finish_reason: "length"` when the provider said so) and the sectioned-delivery alternative, and after three the loop spends ONE bounded nudge on the strategy |
 
+## Cluster G — the attached folder (found live, 2026-10-07, while the user was blocked on it)
+
+Not on the original 34-defect list either. Reported verbatim, mid-session: *"if this attach folder is not
+able to handle by agent ( as it is very strangely misbehaving … this is a brutal failure agent keep
+refusing even after i attach the folder and working was pathetic , it appears we degrated this agent by
+our latest changes atleast it was genuine working fine ( except it was facing issues in running command
+terminal etc )."* The suspicion was a regression. **It is not a regression** — it is four independent
+defects in one area, three of them older than the recent work, and the fourth (the empty-folder wording)
+introduced by the P3 project-context feature itself.
+
+| # | Sev | Issue | Evidence | Fix | Acceptance |
+|---|---|---|---|---|---|
+| G1 | **S1** | **An attached folder that is EMPTY reads to the model as "no project is attached".** The whole description of the workspace was `Files: 0` + `(no source files)`, so the model asked the user to attach a folder that was already attached. | `cp-a7d0878f9953` (goal "retry", cwd `/Users/dheeraj/Documents/Design Doc`, 81 steps) — the model's OWN reasoning at step 1: *"The project context is 'Design Doc' with 0 files"*, then two `ask_user` calls and *"the project shows as empty (0 files)"*; the user's unblock sentence in the transcript: *"folder is attached continue to finish the task"*. | **LANDED (Bundle 7)** | The context's first line is `Workspace: ATTACHED — <path> is this chat's project`, and an empty folder says in words that empty is a normal START and that the model must not ask for a folder it already has |
+| G2 | **S1** | **A folder the CHAT already attached was forgotten by the server.** The composer re-sends `projectPath` from React state only, and re-attaching after a resume is async/best-effort — so a reload mid-conversation, or an attach whose response the UI never received, left the server folder-less while the conversation still had one. Every turn after that got "I need a project folder". | `server.ts` computed the workspace from `body.projectPath ?? dashboard.cwd` and **never read the session's stored `projectPath`**; `chat-sessions.json` shows 20 conversations carrying a `projectPath` the request may not resend; `ChatPage.tsx` keeps a manual "re-attach" fallback button precisely because the automatic path can fail. | **LANDED (Bundle 7)** — `resolveTurnWorkspace` consults the session, after the request and before anything else | The test drives turn 1 WITH a path and turn 2 without one, and turn 2 runs instead of refusing |
+| G3 | **S1** | **A folder the user NAMED in the message was thrown away.** `needsProjectAttachment` already treats a typed absolute path as "the user is being specific, do not ask them to attach anything" — and then discarded it instead of running there, so the user's own words could not scope the turn. | The guard's early return: `if (/(?:^|[\s("'`])(?:\/|~\/|https?:\/\/|www\.)/.test(text)) return false;` — then `server.ts` built the workspace from `body.projectPath`/`dashboard.cwd` only. | **LANDED (Bundle 7)** | `create the app in /Users/me/proj` runs with `workspaceSource: "message"`, and the folder is attached to the chat so the next turn keeps it |
+| G4 | **S2** | **An unscoped turn could write into the dashboard PROCESS's own directory.** An ask with no project noun and no file noun slips past the turn guard (it must — gating prose was an earlier bug), so it ran, and `ctx.cwd` fell back to the directory the dashboard was started from — a deployment directory that belongs to nobody asking the question. | `chat.ts`: `const turnScope = ctxOverrides?.projectPath \|\| process.cwd()` reached `ToolContext.cwd` unconditionally. | **LANDED (Bundle 7)** — a write in an unscoped turn refuses with an ASK (where should it go?), and a folder the user then names in their reply is adopted | `write_file`/`edit_file` in an unscoped turn create nothing, in either the server cwd or anywhere else; the reply's directory becomes `ctx.cwd` and the retry lands inside it |
+
 ## Bundle 6 — a call whose arguments never arrived (F1 LANDED)
 
 **What the traces showed.** The two most recent turns that asked for a deliverable are the same ask twice
@@ -331,6 +348,77 @@ two smaller observations from the same ten traces are recorded but NOT fixed —
 mismatch in one log header (`backend.provider: local` while the turn started on `gemini`), and the
 question of whether a document-delivery turn should get a larger output budget than 4096 tokens (a cost
 decision, not a bug).
+
+## Bundle 7 — a workspace the user gave us is a workspace we use (Cluster G LANDED)
+
+**The user's own design, which is what landed** (verbatim): *"we can gently ask before file write if
+folder is not attached and as user gives folder either path via chat or in above browse and select we can
+use it … if default folder is there - configured 0 - proceed with waring as project folder not attached
+creating a folder or file in default folder."* Each clause is a row below.
+
+**Where it lands.** All four defects live in ONE decision — "what workspace is this turn about?" — so
+that decision now exists in exactly one tested place, and the call site only carries it out:
+
+- **`src/utils/workspace-path.ts` (new)** — the pure rules both a SURFACE and a TOOL need:
+  `isUsableDirectory`, `normalizeWorkspacePath`, `directoryFromMessage`. It lives in `utils/` rather than
+  beside either user because it has two; a tool importing the dashboard would invert the dependency
+  (`src/tools` is also driven by the CLI, the SDK and the child agent).
+- **`src/web-dashboard/workspace-resolution.ts` (new)** — `resolveTurnWorkspace` (the priority order and
+  the notice each source carries) and `formatWorkspaceNoticeText` (the caption the surface shows).
+
+**The priority order, and why each step is where it is.**
+
+| Order | Source | Why it wins where it does |
+|---|---|---|
+| 1 | `attached` — the path the request carried | The user picked it THIS turn. No notice: the user's own folder needs no caption. |
+| 2 | `session` — the folder this conversation attached earlier | **G2.** The composer only re-sends from React state, so a reload or a failed re-attach drops it. The server can still read it back, and a folder the chat attached IS the chat's workspace. |
+| 3 | `message` — a directory in the user's own words | **G3.** Only an ABSOLUTE path (or `~/…`) that is an existing DIRECTORY. A relative path is refused because resolving it needs a base, and the only basis for choosing one is `process.cwd()` — the exact guess behind the older "it went to kuttaaddon" report. A path that names a FILE is refused too: a path in a message is usually the file the user is talking about, and adopting its folder would silently relocate the turn. |
+| 4 | `default` — the operator's `dashboard.cwd` | **The user's "proceed with warning" clause.** It is a real workspace, so the turn runs — but it is not the user's project, so the turn is TOLD so and the surface shows a caption. |
+| 5 | `none` | **G4.** No workspace at all: the turn is marked `unscoped` and a write asks where the file goes. |
+
+**The empty folder (G1), which is the measured cause of "keeps refusing".** `formatProjectText` now opens
+with `Workspace: ATTACHED — <path> is this chat's project. Create and edit files INSIDE it.`, and when
+`fileCount === 0` it adds, in words: *this folder is ATTACHED and EMPTY … create the files the user asks
+for HERE … do not tell the user that no project is attached, and do not ask them to attach one — one is
+already attached at the path above.* Reproduced before the fix against the real fixture: the entire
+context for an empty attached folder was three lines ending `0 file(s) · 0 symbol(s)`.
+
+**The write with no workspace (G4) is an ASK, not a refusal.** `ToolContext.workspaceUnscoped` (set by
+`chat-console.ts` → `cli/chat.ts` from the server's resolution) makes `write_file`/`edit_file` return the
+`confirmFirst`-shaped message: nothing was written, here is the `ask_user` to make, here are the three
+answers that are honoured, and *do NOT say the file was created*. It is checked BEFORE the path gate so
+the model gets the actionable message rather than a boundary denial about a directory nobody chose. Then:
+
+- a folder the user names in their REPLY is adopted by `ask_user` itself — `ctx.cwd` moves and the flag
+  clears, exactly as `clone_repo` moves `ctx.cwd` after it clones, and the result says the retry will now
+  work. That is the user's "as user gives folder either path via chat … we can use it".
+- **a deadlock had to be closed for it to work at all.** "Which folder should I create the app in?"
+  reads to the permission-seeking heuristic like a permission question, and G13 suppresses those when the
+  request already authorized the work — so the user would never be shown it, no folder would ever be
+  named, and every retry would fail identically. That is the reported loop, in code. A missing workspace
+  is a required INPUT, not a decision the model may take on the user's behalf, so the suppression now
+  stands down while `workspaceUnscoped` is set.
+
+**Highlight it (the user's clause, and the frontend half).** The response carries `workspaceNotice`,
+`workspacePath` and `workspaceSource`; `ChatPage` shows the notice as a dismissable `📁` banner beside
+the routing notice, and ATTACHES the resolved folder so the composer chip highlights what the turn
+ground in. Without the attach the chip stayed empty and the next turn would ask for the folder again.
+
+**What this bundle does NOT change.** The turn-level ask for a READ-a-project ask ("assess this
+project") stays: with no workspace there is genuinely nothing to read, so asking before the turn is
+cheaper and kinder than asking mid-turn. And the per-turn decision is still deny-first — a write never
+lands outside the resolved workspace.
+
+**Measured / verified.** Full root suite **462 passed | 2 skipped, 8447 passed | 19 skipped, 0 failed**
+(was 460/8419; +2 files, +28 tests); dashboard suite **50 files / 1052 tests**; both `tsc --noEmit`
+clean; `build:cli`, `docs:commands:check`, `docs:wire:check`, `docs:citations:check`, `verify:commands`
+(336/336) and `dashboard:bundle:check` green (the bundle was rebuilt). New/added tests:
+`tests/web-dashboard/workspace-resolution.test.ts` (new, 13), `tests/web-dashboard/project-context.test.ts`
+(+3), `tests/web-dashboard/chat-api.test.ts` (+3), `tests/tools/unscoped-workspace.test.ts` (new, 9).
+
+**Honest residual.** The live re-run — attach an empty folder in the dashboard, ask for a file, and watch
+the turn run rather than ask — is the remaining proof, and needs the rebuilt `dist/`. And the notice
+banner is a frontend addition that the browser smoke walk does not yet assert.
 
 ## Bundle 4b — one probe per fact per run (C3 LANDED)
 
@@ -964,6 +1052,7 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 | **B1 / B3 / B4 (Bundle 3b)** | New `learning/capability-evidence.ts` (five parameters, per-parameter sample counts, prior decay, derived tier, `DEFAULT_PRIORS`, rendering); `ModelRegistryEntry.capability` + `recordCapabilityEvidence`/`getCapability` + folds in `recordCall`; the chat turn feeds the turn's derived verdict in; `getModelCapabilities` reads measurement and the id-substring block is DELETED; `model explain` prints the scorecard. | `tests/learning/capability-evidence.test.ts` (new, 16), `tests/learning/auto-router.test.ts` (4 rewritten/added: B1 equality, B4 cold-vs-measured ×2, planner floor) | **LANDED**, live-verified in `model explain` |
 | **A1 (Bundle 3d)** | New `learning/model-identity.ts`: the hand-declared alias table (`declaredAt` + evidence per entry), `identityKey`/`sameModel` (exact + bare id, widened ONLY by declaration), and `identityProvenance`. Wired into `twinKey`/`areTwins` (funded-twin grouping), `route-resolver.ts` `verifiedEquivalent` (the pin-refusal sentence now names the funded twin for the run-D pair), `model explain` (twin set + provenance) and `model list` ("same model, different verdicts"). Identity groups CAPABILITY/legibility only — never routability. | `tests/learning/model-identity.test.ts` (new, 9), `tests/inference/route-resolver.test.ts` (rewritten pair + a new no-guessing pair) | **LANDED**, live-verified in `model list` |
 | **C4 residual (Bundle 4d)** | `tools/tool-loop.ts`: `planContextBlock` + one bounded `system` block at the top of every turn holding the conversation's existing plan (goal, revision, each step id with status and note, the `update`-not-redeclare instruction). Skipped when every step is done (`PLAN_CONTEXT_MAX_STEPS` = 12). | `tests/tools/c4-plan-continuation.test.ts` (+2: no plan ⇒ no block, completed plan ⇒ no block; the cross-turn case now asserts the plan is visible with `1/3 done`) | **LANDED**, measured (`secondTurnSawThePlan: true`) |
+| **G1–G4 (Bundle 7)** | New `utils/workspace-path.ts` (the shared path rules) and `web-dashboard/workspace-resolution.ts` (`resolveTurnWorkspace`, `formatWorkspaceNoticeText`); `web-dashboard/server.ts` resolves the turn's workspace through it (attached → session → message → default → none) and returns `workspaceNotice`/`workspacePath`/`workspaceSource`; `web-dashboard/project-context.ts` opens the context with `Workspace: ATTACHED …` and states that an EMPTY attached folder is a normal start; `tools/registry.ts` (`ToolContext.workspaceUnscoped`, the `ask_user` folder ADOPTION, and the G13 suppression standing down while unscoped), `tools/coding-tools.ts` (`unscopedWriteRefusal` on `write_file`/`edit_file`), `web-dashboard/chat-console.ts` + `cli/chat.ts` (the flag reaches the tool context), `web-dashboard/src/api.ts` + `components/ChatPage.tsx` (the notice banner and attaching the resolved folder). | `tests/web-dashboard/workspace-resolution.test.ts` (new, 13), `tests/web-dashboard/project-context.test.ts` (+3), `tests/web-dashboard/chat-api.test.ts` (+3), `tests/tools/unscoped-workspace.test.ts` (new, 9) | **LANDED**, unit + API verified; the live re-run against the rebuilt `dist/` is the remaining proof |
 | **F1 (Bundle 6)** | `inference/interface.ts` (`ToolArgumentsError`, `finishReason`), `inference/tools.ts` (`parseToolCallArguments` used by both the streaming and one-shot paths), `inference/native-tools.ts` (Anthropic wire), `tools/tool-loop.ts` (`malformedToolCallRefusal` + `malformedCallNudge` + the planning-phase refusal), `tools/child-agent-runtime.ts` (same refusal in the forked loop), `tools/coding-tools.ts` + `tools/registry.ts` (`write_file` `mode: "append"`), `learning/reasoning-trace.ts` (the `malformed-call` gate name). | `tests/tools/malformed-tool-call.test.ts` (new, 5), `tests/inference/tools-stream.test.ts` (+3: truncated, empty, healthy+finishReason), `tests/tools/coding-tools.test.ts` (+2: append sections, overwrite default) | **LANDED**, unit + loop verified; the live re-run of the failing ask is the remaining proof |
 | **C4 (Bundle 4c)** | `tools/plan-store.ts` `PlanStore.create` carries status + note for a step re-declared under the SAME goal (by id, else by an identical normalized description); a different goal still replaces wholesale. `tools/registry.ts` `plan_todo` create announces what it carried and how to override it. | `tests/tools/plan-store.test.ts` (+6: carry by id, carry by description, exact-match-only, correction still applies, explicit reset, one previous step never carried twice, no carry across a different goal) and `tests/tools/c4-plan-continuation.test.ts` (the cross-turn scenario, now asserting `1/3 done` + the carried note) | **LANDED**, measured before/after; showing the plan to the model is the recorded residual |
 | **C3 (Bundle 4b)** | New `tools/command-memo.ts`: `splitCommandChain` (refuses pipes/redirects/substitutions/globs), `commandMemoKind` (`probe` \| `idempotent` \| `null`), `memoKeyFor`/`lookupMemo`/`storeMemo`/`memoNotice`, and the per-run `RunCommandMemo`; `ToolContext.commandMemo` created once per run by the tool loop; `run_terminal` consults it after the DENY check (returning the earlier output with a `↺ not re-run` header) and stores only SUCCESSFUL results. | `tests/tools/command-memo.test.ts` (new, 24: pure classification, combined→individual coverage, one-by-one never satisfies a combined ask, failure-not-remembered, per-run isolation, directory scoping, the make-a-re-spawn-fail proof, and a real-loop wiring test) | **LANDED**, unit + real-loop verified; the live parity re-run is the remaining proof |
@@ -998,5 +1087,5 @@ the pipeline simply does not populate the step provider. That belongs to A5 and 
 2. **Bundle 1 — identity & routability** (A1–A4): A2/A3/A4 **LANDED** (see their rows). **A1 decided by the user ("go ahead with all 3"): option A, the declared alias table** (seeded from this machine's registry), plus twin grouping in `model list`/`model explain`; identity groups CAPABILITY only and never routability. Next up.
 3. **Bundle 2 — truthful reporting** (**CLOSED: D1/D3/D4/D5/A5 landed in Bundles 2c–2g**): make the system's account of itself true.
 4. **Bundle 3 — capability by measurement** (B1–B5): the root cause. **Design re-written to the parameter-based scorecard you specified** (accuracy / performance / cost / robustness / ecosystem + a derived tier + a rank, each fed from measurement during task execution) — see `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md`. Awaiting sign-off on the three open questions in its §6.
-5. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **C6 LANDED (Bundle 4a)**, **C3 LANDED (Bundle 4b)**, **C4 EXPERIMENT RUN** (its section, above): a continuation does not re-derive the plan — a LATER TURN does, and `create` resets completed steps while the model is never shown the plan. **The fix LANDED (Bundle 4c + 4d)**: the carried progress + disclosure, AND the plan is now shown at turn start (`planContextBlock`, bounded to 12 steps and skipped once every step is done). **F1 LANDED (Bundle 6)** — found live in the dashboard traces, not on the original list: a tool call whose arguments did not arrive was executed as `{}` (134 empty calls across the last two big turns), so it is now refused with the real cause and the sectioned-delivery alternative, and `write_file` can append. Next: the C1/C5 budget policy. **C1 begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
+5. **Bundle 4 — context discipline** (C1, C3–C6): the 2.85× gap. **C6 LANDED (Bundle 4a)**, **C3 LANDED (Bundle 4b)**, **C4 EXPERIMENT RUN** (its section, above): a continuation does not re-derive the plan — a LATER TURN does, and `create` resets completed steps while the model is never shown the plan. **The fix LANDED (Bundle 4c + 4d)**: the carried progress + disclosure, AND the plan is now shown at turn start (`planContextBlock`, bounded to 12 steps and skipped once every step is done). **F1 LANDED (Bundle 6)** — found live in the dashboard traces, not on the original list: a tool call whose arguments did not arrive was executed as `{}` (134 empty calls across the last two big turns), so it is now refused with the real cause and the sectioned-delivery alternative, and `write_file` can append. **Cluster G LANDED (Bundle 7)** — also found live, while the user was blocked on it: an attached-but-empty folder read as "no project", a folder the CHAT had attached was forgotten when the request did not resend it, a folder the user TYPED was discarded, and an unscoped turn could write into the dashboard process's own cwd; the workspace decision now lives in one tested place, the priority is attached → session → message → configured default → none, and a write with no folder ASKS where instead of guessing. Next: the C1/C5 budget policy. **C1 begins with a policy decision, not a patch:** C1's re-measurement (above) shows compaction already exists and never fired, so the question is the budget policy (lower the 200K-char floor / compact proactively / compact against the plan), and C5's fit-to-window conflict with the deliberate `THREAD_BUDGET_FLOOR_CHARS` never-shrink rule must be resolved the same way.
 6. **Bundle 5 — autonomy & inventory** (**PARTIAL: E1/E2 landed in Bundle 5a/5b; E3 + D6 landed in Bundles 2a/2b; B5 is part of Bundle 3**).

@@ -7399,10 +7399,24 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           : undefined;
       /**
        * The workspace for this turn, in priority order: the folder the user
-       * ATTACHED, then the operator-configured `dashboard.cwd`, and otherwise
-       * NOTHING.
+       * ATTACHED, the one this CONVERSATION attached earlier, one the user NAMED
+       * in their own message, then the operator-configured `dashboard.cwd` — and
+       * otherwise NOTHING. See `resolveTurnWorkspace` (Cluster G); the rule lives
+       * in that module so it can be tested without an HTTP server, and this call
+       * site only carries it out.
        *
-       * "Nothing" is the important case. The turn used to fall back to the
+       * The two additions matter because both were reported failures:
+       * - The SESSION's path is read back. The composer re-sends `projectPath`
+       *   from React state only, so a reload mid-conversation (or an attach whose
+       *   response the UI never got) left the server folder-less and answering
+       *   every turn with "I need a project folder" — the user's "agent keep
+       *   refusing even after i attach the folder".
+       * - A folder TYPED IN THE MESSAGE is adopted. The guard already treated a
+       *   typed absolute path as specific enough not to ask about; it then
+       *   discarded it. "as user gives folder either path via chat … we can use
+       *   it" is that second half.
+       *
+       * "Nothing" remains the important case. The turn used to fall back to the
        * dashboard server's own working directory, so a service started from the
        * home folder answered "assess this project" by listing `~` and describing
        * whatever unrelated checkout it found there — a confident answer about a
@@ -7410,16 +7424,35 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
        * guard below turns that into a request for a folder.
        */
       const configuredCwd = resolveDashboardCwd();
-      const effectiveProjectPath = attachedPath ?? configuredCwd;
-      if (effectiveProjectPath) {
-        projectPath = effectiveProjectPath;
-        const bundle = getProjectBundle(effectiveProjectPath);
-        if (bundle) projectContext = formatProjectText(bundle);
+      const { resolveTurnWorkspace, formatWorkspaceNoticeText } = await import('./workspace-resolution.js');
+      const sessionProjectPath = chatConsole.get(sessionId)?.projectPath;
+      const workspace = resolveTurnWorkspace({
+        ...(attachedPath ? { attachedPath } : {}),
+        ...(sessionProjectPath ? { sessionPath: sessionProjectPath } : {}),
+        ...(configuredCwd ? { configuredCwd } : {}),
+        message,
+      });
+      if (workspace.path) {
+        projectPath = workspace.path;
+        const bundle = getProjectBundle(workspace.path);
+        if (bundle) {
+          projectContext = formatProjectText(bundle, {
+            source: workspace.source as 'attached' | 'session' | 'message' | 'default',
+            ...(workspace.notice ? { notice: workspace.notice } : {}),
+          });
+        }
       }
+      /**
+       * The warning the response carries when the turn is NOT in the user's own
+       * folder, so the surface can say where the work went instead of the user
+       * discovering it. Absent for the attached case — the user's own folder
+       * needs no caption.
+       */
+      const workspaceNotice = formatWorkspaceNoticeText(workspace);
       // No workspace and no configured default: an ask that names a project, or
       // that produces/consumes files, gets a folder request instead of an answer
       // about the wrong tree. General chat is unaffected.
-      if (!effectiveProjectPath) {
+      if (!workspace.path) {
         const { needsProjectAttachment, projectAttachmentPrompt, projectAttachmentFollowups } =
           await import('./workspace-guard.js');
         if (needsProjectAttachment(message)) {
@@ -7475,6 +7508,10 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           model,
           projectContext,
           projectPath,
+          // Cluster G — carry the "no folder attached" state into the turn so a
+          // write asks WHERE instead of landing in whatever directory the
+          // dashboard process was started from (see `unscopedWriteRefusal`).
+          ...(workspace.unscoped ? { unscopedWorkspace: true } : {}),
           attachments,
           ...(worktree === undefined ? {} : { worktree }),
           ...(keepWorktree === undefined ? {} : { keepWorktree }),
@@ -7545,6 +7582,18 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         provider: result.provider ?? null,
         model: result.model ?? null,
         ...(routingNotice ? { routingNotice } : {}),
+        // Cluster G — where this turn's workspace came from, when it was not the
+        // folder the user attached: the session's earlier attachment, a folder
+        // they named in the message, or the operator's default. The client shows
+        // it so a file landing somewhere unexpected is explained, not discovered.
+        ...(workspaceNotice ? { workspaceNotice } : {}),
+        // The resolved workspace itself, so the client can ATTACH it to the chat
+        // and highlight it. A folder the user named in a message is a folder they
+        // want to keep working in; leaving the composer's chip empty would ask
+        // them for it again on the next turn.
+        ...(workspace.path && workspace.source !== 'attached'
+          ? { workspacePath: workspace.path, workspaceSource: workspace.source }
+          : {}),
         // WS1 — the findings this turn recorded, with the gate's verdicts, so
         // a dashboard client reads the same wire form the CLI, the gateway and
         // the subagent report (the GUI card is a rendering decision; the FACT
