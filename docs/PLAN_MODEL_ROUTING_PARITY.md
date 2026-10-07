@@ -360,8 +360,16 @@ exists; where it does not, that is stated as the residual rather than implied cl
 6. **F1's live re-run of the oversized-document ask is the remaining proof**, and F1 does not cover the
    **JSON-fallback transport** (a model asked to emit the call as text) or the **Gemini wire** (whose
    calls carry structured `args`, so "empty" is ambiguous).
-7. **C3's live parity re-run** (the probe count dropping) is deferred; a duplicate `write_file` **by
-   content** is a deliberate non-goal, since content can legitimately change between two writes.
+7. ~~**C3's live parity re-run** (the probe count dropping) is deferred.~~ **CLOSED — measured live
+   (2026-10-07)**: a real turn asked to run `python3 --version` twice recorded the repeat, and the model's own
+   report says it worked — *"the harness detected it as a repeat and declined to re-execute it, returning the
+   cached output from the first run instead"*. It also proves the memo is not a false-confidence machine:
+   the model recognised the cached reading is *"not an independent confirmation"* and re-verified inside a
+   single chained command, which the memo correctly does not treat as a probe. A duplicate `write_file`
+   **by content** remains a deliberate non-goal (content can legitimately change between two writes).
+   Verification note: the debug log carries call EVENTS but no tool RESULTS, so `↺ not re-run` cannot be
+   grepped there — my first read of this run was wrong for exactly that reason, and the step checkpoint is
+   the artefact that settles it.
 8. ~~**Cluster G's dashboard live path** — attach an empty folder in the UI and watch the turn run rather
    than ask — is the remaining proof, and the notice banner is not yet asserted by the browser smoke walk.~~
    **CLOSED — Bundle 17**: proven live in a genuinely empty folder (the file was created, with 0 `ask_user`
