@@ -308,6 +308,45 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 36 — a rating you can audit, and a 👎 that reaches the router (36a/36b LANDED 2026-10-08; 36c in progress)
+
+**Why.** Three questions opened this bundle: *"show it on Models"*, *"if the user gives a negative, how
+does that help the agent?"*, and whether a per-project decision log is worth building. The middle one had
+a real gap behind it — see 36b.
+
+### 36a. One rating is auditable, and visible where the models are
+
+`nuvira rate --explain <id>` prints one turn's features, its label (or an honest `unrated`), and the
+fitted `P(accepted | features)` — built from the SAME `featuresFromTrace` the fit uses, so the audit
+cannot disagree with the model (`explainTraceLabel`). The dashboard **Models page** gained a read-only
+acceptance section beside the capability scorecard, rendered from the shared `acceptanceSummary`, so the
+Models page, the Trace tab and the CLI cannot describe the corpus differently. `scripts/seed-acceptance.mjs`
+reports the distance to the fit floor and lists recent UNRATED turns with the exact `nuvira rate … -t <id>`
+command — and rates nothing: the label must be the user's.
+
+### 36b. An EXPLICIT verdict now reaches the router bandit
+
+**The gap.** The DERIVED correction (a regression reported in the next message) already reached the bandit
+via `AutoModelRouter.recordUserRejection`. The EXPLICIT verdict did not — it recorded the label and
+stopped, so `nuvira rate bad` changed what was recorded but not what the agent tried next.
+
+**The fix.** `learning/verdict-routing.ts` bridges the two: it reads the trace the verdict names, recovers
+the arm the turn was learned under (provider / model / complexity, plus the task **intent** — now recorded
+on `TraceRoutingSnapshot.taskIntent`), and applies the SAME deferred `α − 0.1 / β + 0.1` through the new
+`RouterBandit.recordExplicitVerdict`. It is applied **once per trace** — the bandit remembers the ids it
+has corrected, so a re-rate or a verdict that follows a derived rejection of the same turn cannot
+double-count. An ACCEPTANCE moves nothing: the turn was already recorded as its own outcome. `rateTurn`
+calls the bridge for BOTH the CLI and the dashboard verdict route (they share it), and `nuvira rate`
+reports exactly what happened.
+
+**Tests.** `verdict-routing.test.ts` (4: corrects once / acceptance no-op / learning-off / unknown trace);
+`router-bandit.test.ts` (+6 for `recordExplicitVerdict`); `rate-explain.test.ts` (+1: `rate bad` prints the
+correction, re-rating prints `already applied`).
+
+### 36c. Decision artifacts — see the decisions section below
+
+---
+
 ## Bundle 35 — the workflow is documented, checked, and reconciled (LANDED 2026-10-08)
 
 ### 35a. One tutorial — `docs/ACCEPTANCE.md`

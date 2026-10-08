@@ -371,3 +371,35 @@ until the floor is cleared, never a failure), and `nuvira rate --merge [--replac
 reconciles an imported corpus against the local labels explicitly. The whole
 workflow — rate, infer, fit, export, import, offline fit — is one tutorial:
 `docs/ACCEPTANCE.md`.
+
+### 8.7 Closing the gap — an explicit verdict now reaches the ROUTER (Bundle 36)
+
+The ✦ question that opened this bundle was honest: *"if the user gives a negative, how does that help
+the agent?"* The answer was uneven. The **derived** correction (a "still broken" next message) already
+reached the router bandit — `chat.ts` calls `AutoModelRouter.recordUserRejection`, which applies the
+deferred `userAccepted: false` delta to the arm that served the turn. The **explicit** verdict
+(`nuvira rate bad`, the dashboard 👎) did not: it recorded the label and stopped. So the clearest
+statement a user can make reached the dataset but never the router.
+
+`learning/verdict-routing.ts` is the bridge. It reads the trace the verdict names, recovers the arm the
+turn was learned under (provider / model / complexity, plus the task **intent** the router bucketed it
+by — now recorded on `TraceRoutingSnapshot.taskIntent`), and applies the SAME `α − 0.1 / β + 0.1` the
+derived path uses, through `RouterBandit.recordExplicitVerdict`.
+
+- **Counted once, ever.** The bandit remembers the trace ids it has corrected, so re-rating a turn — or a
+  verdict that follows a derived rejection of the same turn — cannot move an arm twice. The marker is
+  written even when no arm existed, because a rejection CORRECTS an existing arm and never creates one.
+- **An acceptance moves nothing.** The turn was already recorded as its own outcome when it ended; a 👍
+  adds no new observation to routing, and inventing one would be the same fabrication the label subsystem
+  refuses. It is still stored as a label.
+- **Honest when it cannot apply.** No trace, no routing evidence, learning switched off
+  (`routing.bandit = false`), a non-success outcome — each prints its own reason rather than a silent
+  no-op. `nuvira rate` reports what actually happened.
+
+**The label is auditable (Bundle 36).** `nuvira rate --explain <id>` prints one turn's features, its
+label (or an honest `unrated`), and the fitted `P(accepted | features)` — built from the SAME
+`featuresFromTrace` the fit uses, so an audit cannot disagree with the model. The dashboard **Models
+page** gained the same read-only acceptance section beside the capability scorecard, rendered from the
+shared `acceptanceSummary`. `scripts/seed-acceptance.mjs` reports the distance to the fit floor and lists
+recent UNRATED turns with the exact `nuvira rate` command — and rates nothing, keeping seeding the
+user's job.

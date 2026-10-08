@@ -54,6 +54,16 @@ export interface TraceRoutingSnapshot {
   gateAction?: string;
   /** C3 — the pair this route failed over FROM (the failover chain's head). */
   fallbackFrom?: string;
+  /**
+   * Bundle 36 — the task INTENT the router bucketed this decision under
+   * (`coding` / `creative` / …), recorded so a LATER explicit verdict
+   * (`nuvira rate bad`) can correct the exact bandit arm the turn was learned
+   * under. The bandit's buckets are `intent:complexity`; without this the
+   * correction only has the complexity and has to fall back to every intent
+   * bucket at that complexity. Optional: entries written before this field parse
+   * unchanged, and `verdict-routing.ts` degrades honestly when it is absent.
+   */
+  taskIntent?: string;
 }
 
 /** One LLM call within a trace. */

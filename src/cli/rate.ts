@@ -12,15 +12,25 @@
  * artifact, labels the matching row in the deliverable corpus. Both are what a
  * measured `P(accepted | features)` would later be fit to.
  *
- * WHAT IT DOES NOT DO. Nothing routes on it, no score is derived from it, and
- * the corpus keeps `verdict: null` for a turn nobody rated — reading silence as
- * acceptance would manufacture the positive class instead of measuring it.
+ * WHAT IT DOES. The verdict is stored on the trace (and the matching corpus row)
+ * as the label a fitted quality model reads, AND — since Bundle 36 — a REJECTION
+ * also corrects the ROUTER: it applies the deferred `userAccepted: false` delta to
+ * the bandit arm that served the turn, exactly as the derived correction does, and
+ * exactly once per trace (see `learning/verdict-routing.ts`). So a 👎 now changes
+ * what the agent tries next, not merely what it records.
+ *
+ * WHAT IT DOES NOT DO. No score is derived from the label, the FITTED quality model
+ * routes nothing, and the corpus keeps `verdict: null` for a turn nobody rated —
+ * reading silence as acceptance would manufacture the positive class instead of
+ * measuring it. An ACCEPTANCE moves no bandit arm: the turn was already recorded as
+ * its own outcome, so a 👍 adds no new observation to routing.
  *
  *   nuvira rate good                 — the most recent turn was what you wanted
- *   nuvira rate bad                  — it was not
+ *   nuvira rate bad                  — it was not (and the router arm is corrected)
  *   nuvira rate bad --trace <id>     — rate a specific turn (see `nuvira trace list`)
  *   nuvira rate --list               — recent verdicts
  *   nuvira rate --stats              — the corpus: labels, class balance, per-pair, fit status
+ *   nuvira rate --explain <id>       — one trace: its features, its label, the fitted P(accepted)
  *   nuvira rate --export corpus.csv  — export the labelled corpus (JSON/CSV) for offline fitting
  *   nuvira rate --import corpus.json — merge an exported corpus back into the local store
  *   nuvira rate --merge corpus.json  — reconcile against local labels (--replace lets the import win)
@@ -150,7 +160,25 @@ export class RateCommand {
         ? '   Labelled the delivered artifact in the quality corpus (one row).'
         : '   No delivered artifact on this turn — the verdict is recorded on the trace.',
     );
-    logger.info('   Recorded as MEASUREMENT only: nothing routes on it and no score is derived from it yet.');
+    // Bundle 36 — the verdict also corrects the ROUTER. A rejection moves the
+    // bandit arm that served the turn (once); print what actually happened rather
+    // than implying a correction that did not land.
+    const router = rated.router;
+    if (router) {
+      const where = router.provider
+        ? ` (${router.provider}${router.model ? `/${router.model}` : ''} @ ${router.complexity})`
+        : '';
+      if (router.alreadyApplied) {
+        logger.info(`   Router: this verdict was already applied${where} — the arm moved once, not twice.`);
+      } else if (router.applied && router.moved > 0) {
+        logger.info(`   Router: corrected ${router.moved} bandit prior(s)${where} — the rejected arm now samples lower.`);
+      } else if (router.applied) {
+        logger.info(`   Router: no recorded arm for this pair yet${where} — nothing to correct (a verdict never invents one).`);
+      } else {
+        logger.info(`   Router: not applied — ${router.reason}`);
+      }
+    }
+    logger.info('   The fitted quality model still reads the label only; it routes nothing yet.');
     console.log('');
   }
 
