@@ -823,6 +823,14 @@ export interface ToolLoopResult {
    */
   artifactShortfall?: { path: string; deliveredWords: number; targetWords: number; source: string };
   /**
+   * Item 13 (round 3) — a SINGLE authored artifact that tripped neither the
+   * omission nor the shortfall check: the "fluent, on-length" delivery that no
+   * deterministic rule can judge. Reported as FACTS only (path, length, a bounded
+   * excerpt) so a caller can COLLECT the case; no verdict is made here, and
+   * nothing routes on it.
+   */
+  authoredDeliverable?: { path: string; deliveredWords: number; targetWords?: number; excerpt: string };
+  /**
    * R2 — which transport carried this turn's tool calls (`native` / `json` /
    * `none`), as reported by the caller's own model-call seam. Absent when the
    * caller reports none (an in-process mock, or a surface that has not been
@@ -1203,7 +1211,7 @@ export interface ToolLoopProgress {
    * the turn can be judged on its own ARTIFACT rather than on its prose. Bounded in
    * both size and count (see `AUTHORED_ARTIFACT_MAX*`).
    */
-  authoredArtifacts: Array<{ tool: string; path: string; content: string }>;
+  authoredArtifacts: Array<{ tool: string; path: string; content: string; words: number }>;
   /** Session 4 — successful verification calls (args + result) to judge relevance. */
   verificationEvidence: ToolCallEvidence[];
   /**
@@ -2749,10 +2757,16 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             // Bundle 19 — keep what was WRITTEN, so the turn can be judged on its
             // artifact. Capped: a turn cannot grow the loop's memory without bound.
             if (progress.authoredArtifacts.length < AUTHORED_ARTIFACT_MAX) {
+              const written = extractWrittenText(call.arguments);
               progress.authoredArtifacts.push({
                 tool: call.name,
                 path: p,
-                content: extractWrittenText(call.arguments),
+                // The TEXT is capped for memory, but the WORD COUNT is taken from the
+                // FULL text: a long document must be measured whole. Measuring the
+                // first 20k characters instead under-counts a long-with-long-words
+                // document and FALSELY flags it as short — see `detectArtifactShortfall`.
+                content: written.slice(0, AUTHORED_ARTIFACT_MAX_CHARS),
+                words: countWords(written),
               });
             }
             // Stage 2 — the run's own record of what it CHANGED, so a self-report
@@ -3369,6 +3383,14 @@ export function detectUnverifiedFileClaim(
 export const ARTIFACT_SHORTFALL_RATIO = 0.5;
 
 /**
+ * How much of a delivered artifact travels to the corpus (item 13). Bounded on
+ * purpose: a candidate row is a SAMPLE to fit a signal to, not a copy of the
+ * user's document, and an unbounded row would turn a collection file into a
+ * second copy of everything the agent ever wrote.
+ */
+export const AUTHORED_DELIVERABLE_EXCERPT_MAX = 2000;
+
+/**
  * Compare a written artifact against an EXPLICIT magnitude the ask named.
  *
  * This is item 13's honest half: the delivered artifact is measured AGAINST THE
@@ -3383,7 +3405,7 @@ export const ARTIFACT_SHORTFALL_RATIO = 0.5;
  */
 export function detectArtifactShortfall(
   ask: string,
-  artifact: { path: string; content: string },
+  artifact: { path: string; content: string; words?: number },
 ): { path: string; deliveredWords: number; targetWords: number; source: string } | null {
   const target = parseLongFormTarget(ask || '');
   // Only an EXPLICIT magnitude counts: `source` is the quoted number the parser
@@ -3391,7 +3413,10 @@ export function detectArtifactShortfall(
   // no quotes — inventing a target there would measure the document against a
   // number the user never said.
   if (!target || !target.source.startsWith('"')) return null;
-  const deliveredWords = countWords(artifact.content);
+  // `words` is the count of the FULL artifact when the caller supplies it; counting
+  // `content` (which may be a capped prefix) instead would measure the storage
+  // limit, not the document, and could flag a long deliverable as short.
+  const deliveredWords = artifact.words ?? countWords(artifact.content);
   if (deliveredWords === 0) return null;
   if (deliveredWords >= target.wordsTarget * ARTIFACT_SHORTFALL_RATIO) return null;
   return {
@@ -3542,12 +3567,17 @@ const AUTHORED_ARTIFACT_MAX = 40;
  * The text a mutation call WROTE, from whichever field carries it. `''` when the call
  * carries no literal body (an append by path, a patch with no text).
  */
+/**
+ * The text a write actually carried — UNCAPPED, so a caller can measure the WHOLE
+ * artifact (word count) and cap only what it stores. Capping here would make the
+ * measurement a property of the storage limit rather than of the file.
+ */
 function extractWrittenText(args: unknown): string {
   if (!args || typeof args !== 'object') return '';
   const a = args as Record<string, unknown>;
   for (const key of ['content', 'new_string', 'newText', 'text', 'body', 'patch']) {
     const v = a[key];
-    if (typeof v === 'string' && v) return v.slice(0, AUTHORED_ARTIFACT_MAX_CHARS);
+    if (typeof v === 'string' && v) return v;
   }
   return '';
 }
@@ -3786,6 +3816,27 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     if (!result.artifactIncomplete && progress.authoredArtifacts.length === 1) {
       const shortfall = detectArtifactShortfall(lastUserText(opts.messages), progress.authoredArtifacts[0]);
       if (shortfall) result.artifactShortfall = shortfall;
+    }
+    // Item 13 (round 3) — COLLECT the case a quality signal would have to be fit
+    // to, instead of inventing a rule for it. A single authored artifact that
+    // tripped NEITHER check above is the "fluent, on-length" shape: the one no
+    // live run has produced as a miss, and the one no deterministic rule can judge
+    // (judging it from vocabulary is the defect this programme exists to remove).
+    // So the FACTS travel — path, length, a bounded excerpt — and a caller records
+    // them with a later user verdict as the label. No judgement is made here.
+    if (!result.artifactIncomplete && !result.artifactShortfall && progress.authoredArtifacts.length === 1) {
+      const artifact = progress.authoredArtifacts[0];
+      const ask = lastUserText(opts.messages) || '';
+      const target = parseLongFormTarget(ask);
+      result.authoredDeliverable = {
+        path: artifact.path,
+        deliveredWords: artifact.words,
+        // Only an EXPLICIT magnitude is carried — `source` is the quoted number the
+        // parser matched, while the default-book branch invents one. A corpus that
+        // recorded an invented target would fit a signal to a number nobody asked for.
+        ...(target && target.source.startsWith('"') ? { targetWords: target.wordsTarget } : {}),
+        excerpt: artifact.content.slice(0, AUTHORED_DELIVERABLE_EXCERPT_MAX),
+      };
     }
     // G13b — DELIVERABLE honesty, the same way and for the same reason: the
     // flag is a function of what the turn DID, never of configuration. A turn

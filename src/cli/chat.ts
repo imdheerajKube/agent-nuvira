@@ -85,6 +85,7 @@ import {
 } from '../inference/tool-call-utils.js';
 import { beginTrace, endTrace, recordStep, recordTraceEvent, recordTraceFindings, recordTurnReport, buildTraceOutcome, traceOutcomeSucceeded } from '../learning/reasoning-trace.js';
 import { recordWorkingState, getWorkingState, formatWorkingState, isProjectLedgerDir, detectRegressionSignal } from '../learning/working-state.js';
+import { recordDeliverableCandidate, markLastDeliverableRejected } from '../learning/deliverable-corpus.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile, shouldSkipNativeTools, isAgenticCapableModel } from '../learning/model-harness.js';
 import { assertAgenticRoute, setWeakModelConsent, resolveWeakModelPolicy, weakRouteNotice } from '../learning/agentic-route-gate.js';
@@ -845,6 +846,14 @@ export class ChatCommand extends BaseCommand {
    * Includes the measurement so the warning can state the numbers.
    */
   artifactShortfall?: { path: string; deliveredWords: number; targetWords: number; source: string };
+  /**
+   * Item 13 (round 3) — a SINGLE authored artifact that met the ask's stated
+   * magnitude and admitted no omission: the "fluent, on-length" delivery no rule
+   * can judge. Carried as FACTS so the caller can COLLECT it (see
+   * `learning/deliverable-corpus.ts`). NOT an honesty flag — it does not make a
+   * turn `unverified`, and nothing routes on it.
+   */
+  authoredDeliverable?: { path: string; deliveredWords: number; targetWords?: number; excerpt: string };
   provider?: string;
   model?: string;
   /**
@@ -1170,6 +1179,41 @@ export class ChatCommand extends BaseCommand {
     // reviewable after the fact (the Trace tab renders it), not only in this
     // turn's return value. Best-effort: a trace write never breaks a turn.
     recordTurnReport(answer.traceId, turnReport);
+    // Item 13 (round 3) — COLLECT, never judge. An authored artifact that met the
+    // ask's stated magnitude and did not admit its own omission is the "fluent,
+    // on-length" delivery no rule can score; the corpus records it so that a
+    // LATER correction can label it. This is a dataset, not a detector: nothing
+    // reads it, and no score is derived from it.
+    if (answer.authoredDeliverable) {
+      try {
+        recordDeliverableCandidate({
+          ask: message,
+          path: answer.authoredDeliverable.path,
+          deliveredWords: answer.authoredDeliverable.deliveredWords,
+          ...(answer.authoredDeliverable.targetWords !== undefined
+            ? { targetWords: answer.authoredDeliverable.targetWords }
+            : {}),
+          ...(turnReport?.verification ? { verification: turnReport.verification } : {}),
+          excerpt: answer.authoredDeliverable.excerpt,
+        });
+      } catch {
+        // Collection is best-effort — never break a turn on a corpus write.
+      }
+    }
+    // The user's message for THIS turn is also a verdict on the PREVIOUS one
+    // ("still broken", "no change"). Derived ONCE here, because two independent
+    // consumers need the same answer: the bandit's `userAccepted` and the deliverable
+    // corpus's label. Neither trusts the model's own account of itself.
+    const userReportsRegression = detectRegressionSignal(message);
+    if (userReportsRegression) {
+      // Label the previous authored delivery as a miss. Independent of routing:
+      // the corpus is collected whether or not the bandit is on.
+      try {
+        markLastDeliverableRejected();
+      } catch {
+        // Collection is best-effort.
+      }
+    }
     // Feed the MEASURED outcome back into the bandit on the CHAT path too. The
     // orchestrator has done this for pipeline tasks all along; the chat turn —
     // the product's most common entry point — never did, so every turn's real
@@ -1181,14 +1225,11 @@ export class ChatCommand extends BaseCommand {
     // (otherwise `getLastProvider` could reward a stale provider noted by an
     // earlier auto run in this process) and only when bandit learning is on.
     if (autoMode && this.configManager.getAll().routing?.bandit !== false) {
-      // The user's message for THIS turn is also a verdict on the PREVIOUS one:
-      // "still broken" / "no change" is `userAccepted: false` for the turn that
-      // just ran. It must be applied BEFORE this turn's own outcome is recorded,
-      // because recording overwrites the attribution the correction refers to.
-      // The signal is the SAME one the working-state ledger keeps (one derivation,
-      // two consumers), and it is walked up to the previous AUTO-routed turn only —
-      // `recordUserRejection` no-ops when nothing is pending.
-      if (detectRegressionSignal(message)) {
+      // `userAccepted: false` for the turn that just ran, applied BEFORE this
+      // turn's own outcome is recorded (recording overwrites the attribution the
+      // correction refers to). It is walked up to the previous AUTO-routed turn
+      // only — `recordUserRejection` no-ops when nothing is pending.
+      if (userReportsRegression) {
         try {
           getAutoRouter().recordUserRejection('chat');
         } catch {
@@ -1251,6 +1292,9 @@ export class ChatCommand extends BaseCommand {
       artifactIncomplete: answer.artifactIncomplete,
       unverifiedFileClaim: answer.unverifiedFileClaim,
       artifactShortfall: answer.artifactShortfall,
+      // Item 13 (round 3) — the collectable "fluent, on-length" delivery travels to
+      // the caller, which records it. Facts only; no verdict is attached here.
+      authoredDeliverable: answer.authoredDeliverable,
       // WS1 — the findings this turn recorded (empty when it recorded none).
       findings: answer.findings ?? [],
       provider: type,
@@ -1956,6 +2000,12 @@ export class ChatCommand extends BaseCommand {
      * it. Carries the measurement so a caller can state the gap.
      */
     artifactShortfall?: { path: string; deliveredWords: number; targetWords: number; source: string };
+    /**
+     * Item 13 (round 3) — a SINGLE authored artifact that met the ask's magnitude
+     * and admitted no omission: the "fluent, on-length" delivery no rule can judge.
+     * Carried as FACTS so `answerOnce` can COLLECT it. Not an honesty flag.
+     */
+    authoredDeliverable?: { path: string; deliveredWords: number; targetWords?: number; excerpt: string };
     /**
      * R2 — the tool transport this turn travelled on (`native` / `json` /
      * `none`), as the loop reported it. Absent only when no loop ran (a cache
@@ -3274,6 +3324,9 @@ export class ChatCommand extends BaseCommand {
       artifactIncomplete: result.artifactIncomplete,
       unverifiedFileClaim: result.unverifiedFileClaim,
       artifactShortfall: result.artifactShortfall,
+      // Item 13 (round 3) — the collectable "fluent, on-length" delivery survives
+      // this boundary too, so `answerOnce` can record it as corpus facts.
+      authoredDeliverable: result.authoredDeliverable,
       // R2 — the transport this turn travelled on (interactive REPL path).
       transport: result.transport,
       // WS1 — the findings this turn recorded, with their verdicts.
