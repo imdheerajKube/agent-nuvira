@@ -1107,9 +1107,14 @@ describe('tool loop — authorized-work nudge', () => {
     expect(deps.callModel).toHaveBeenCalledTimes(2);
     expect(result.content).toContain('Chapter 1 is written');
     expect(result.content).not.toContain('Do you want me to create');
-    // The nudge tells the model the request already authorized the work.
+    // The nudge tells the model the request already authorized the work, and it
+    // is delivered as a MARKED harness directive (system role), not a user turn
+    // the model would answer — see tools/harness-directive.ts.
     const secondCall = deps.callModel.mock.calls[1][0] as Array<{ role: string; content: string }>;
-    expect(secondCall.some((m) => m.role === 'user' && m.content.includes('already asked for this work'))).toBe(true);
+    const nudge = secondCall.find((m) => m.content.includes('already asked for this work'));
+    expect(nudge).toBeDefined();
+    expect(nudge!.role).toBe('system');
+    expect(nudge!.content.startsWith('[harness]')).toBe(true);
   });
 
   it('does NOT nudge when the request never authorized the work', async () => {

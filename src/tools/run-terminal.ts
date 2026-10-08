@@ -44,6 +44,7 @@ import type { ToolContext } from './registry.js';
 import { maskSenderId } from '../utils/mask.js';
 import { decideStateChange } from '../learning/autonomy-policy.js';
 import { envelopeCoversAction } from '../learning/intent-envelope.js';
+import { sessionGrantCovers } from '../learning/session-grant.js';
 import { applyProjectEnvironment, guardCommandEnvironment } from '../utils/project-env.js';
 import { formatEffectVerdict, isBuildCommand, verifyBuildEffect } from '../utils/effect-verification.js';
 import { lookupMemo, memoNotice, storeMemo } from './command-memo.js';
@@ -595,8 +596,19 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
       tool: 'run_terminal',
       changeClass: recoverable ? 'local-state' : 'external',
     });
-    const verdict = envVerdict.covered
-      ? { action: 'proceed' as const, reason: envVerdict.reason }
+    // The SESSION grant — "allow all terminal commands for this session" — is
+    // consulted next. It only ever covers LOCAL-STATE (recoverable) commands:
+    // `external` is refused by the envelope itself and this grant does not
+    // widen it, so a network fetch or a global install still asks. The absolute
+    // DENY patterns ran above and are unaffected by any grant.
+    const grantCovers = recoverable && sessionGrantCovers(ctx.planStore, 'terminal');
+    const verdict = envVerdict.covered || grantCovers
+      ? {
+          action: 'proceed' as const,
+          reason: envVerdict.covered
+            ? envVerdict.reason
+            : 'allowed for this session by the user',
+        }
       : decideStateChange({
           tool: 'run_terminal',
           action: `running "${command}"`,

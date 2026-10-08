@@ -48,6 +48,7 @@ import {
   requestNamesPath,
 } from '../learning/autonomy-policy.js';
 import { envelopeCoversAction, envelopeNamesPath } from '../learning/intent-envelope.js';
+import { sessionGrantCovers } from '../learning/session-grant.js';
 
 /** Max characters returned by read_file (a 40MB file must not flood context). */
 const MAX_READ_CHARS = 60000;
@@ -690,8 +691,16 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
       path: gated.rel,
       changeClass: 'modify',
     });
-    const verdict = envVerdict.covered
-      ? { action: 'proceed' as const, reason: envVerdict.reason }
+    // The explicit SESSION grant — "allow all file writes for this session" — is
+    // consulted next, and covers the modify class it names. It is the user's own
+    // go-ahead, so unlike a request-derived envelope it does not need the file
+    // named; that is the deliberate difference the grant exists for.
+    const grantCovers = sessionGrantCovers(ctx.planStore, 'write');
+    const verdict = envVerdict.covered || grantCovers
+      ? {
+          action: 'proceed' as const,
+          reason: envVerdict.covered ? envVerdict.reason : 'allowed for this session by the user',
+        }
       : decideStateChange({
           tool: 'edit_file',
           action: `rewriting ${share}% of '${gated.rel}'`,
@@ -825,9 +834,13 @@ export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promi
     // clobbering a file the request never mentioned — a re-run cannot recover a
     // wholesale overwrite, so that stays the user’s call. CREATING a file the
     // intent covers is safe either way.
+    const grantCovers = sessionGrantCovers(ctx.planStore, 'write');
     const verdict =
-      envVerdict.covered && (!existed || envelopeNamesPath(ctx.envelope, gated.rel))
-        ? { action: 'proceed' as const, reason: envVerdict.reason }
+      (envVerdict.covered && (!existed || envelopeNamesPath(ctx.envelope, gated.rel))) || grantCovers
+        ? {
+            action: 'proceed' as const,
+            reason: envVerdict.covered ? envVerdict.reason : 'allowed for this session by the user',
+          }
         : decideWriteConfirmation({
             tool: 'write_file',
             path: gated.rel,

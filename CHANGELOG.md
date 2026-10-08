@@ -4,6 +4,26 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Added: an explicit "allow all for this session" grant, and a harness that speaks in one voice
+
+Two harness fixes for the same report — a trace where the model narrated its own
+guard refusals as if it were arguing with the agent. `learning/session-grant.ts`
+adds a per-conversation, EXPLICITLY user-granted permission to run a CATEGORY of
+state-changing action without asking again: `write` (file mutations) and
+`terminal` (recoverable local-state commands). It is offered as ONE extra choice
+at the exact confirmation a tool demanded ("Allow this for the whole session"),
+never inferred from prose, and the answer is recorded as a revisable decision. It
+does not widen what may run: `external` (publishes/spends/off-machine) and
+`destructive` actions stay the user's call, and the absolute DENY patterns run
+first — `sudo`, `git push` and `rm -rf /` still refuse with any grant.
+`tools/harness-directive.ts` delivers every gate nudge as a marked `system`
+directive instead of a `user` message the model answers, deduped by gate per turn,
+so the loop's own voice stops reading as a second agent.
+`scripts/measure-gate-friction.mjs` counts gate/refusal events per reasoning trace
+(and prints a before → after delta) so the reduction is MEASURED, not asserted.
+Pinned by `tests/tools/session-grant.test.ts` (11) and
+`tests/tools/harness-directive.test.ts` (3).
+
 ### Fixed: the Windows CI run (a POSIX-only assertion in the remediation-ladder test)
 
 The v3.3.13 tag published to npm from the local pipeline, but its GitHub Actions

@@ -95,6 +95,7 @@ import {
   deliverableNudge,
   type ToolCallEvidence,
 } from './edit-verification.js';
+import { createHarnessDirectiveSink } from './harness-directive.js';
 import { effectiveToolJsonSchemas, coreToolJsonSchemas, isToolEnabled, toolsetForTool } from './toolsets.js';
 import { deliverablesNamedIn, recordStepHandoff } from '../agents/step-handoff.js';
 import { fenceUntrustedToolOutput } from './untrusted-content.js';
@@ -1504,6 +1505,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   };
 
   const thread: ToolMessage[] = [...messages];
+  // Every harness-authored nudge is delivered through ONE channel: a marked
+  // `system` directive that the model ACTS ON, deduped by gate within the turn,
+  // instead of a `user` message it answers (see tools/harness-directive.ts).
+  const harness = createHarnessDirectiveSink();
   /** Serving pairs the loop has already told the model about, oldest first. */
   const routeFeedState = { pairs: [] as string[] };
   // ── C4 residual: the plan the conversation ALREADY has is shown, not hidden ──
@@ -1997,7 +2002,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
               : `the model produced reasoning-only output ${thinkContinues} times with no tool call and no answer — ` +
                 'one bounded escalation to act or answer',
           });
-          thread.push({ role: 'user', content: THINK_ONLY_ESCALATION });
+          harness.push(thread, 'think-only', THINK_ONLY_ESCALATION);
           continue;
         }
         // Still spinning after the escalation: END the turn rather than burn the
@@ -2055,12 +2060,12 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // would outrank and suppress the nudge entirely.
         lastContent = '';
         thread.push({ role: 'assistant', content: response.content });
-        thread.push({
-          role: 'user',
-          content:
-            'You announced an action you were about to take, but no tool was called and nothing was done. ' +
+        harness.push(
+          thread,
+          'promise',
+          'You announced an action you were about to take, but no tool was called and nothing was done. ' +
             'Either carry it out now with the tools available, or reply with the actual answer — do not end the turn on a promise.',
-        });
+        );
         continue;
       }
       // ── G13 — AUTHORIZED-WORK nudge (bounded, once) ──────────────────────
@@ -2103,7 +2108,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           );
         }
         thread.push({ role: 'assistant', content: response.content });
-        thread.push({ role: 'user', content: AUTHORIZED_WORK_NUDGE });
+        harness.push(thread, 'permission', AUTHORIZED_WORK_NUDGE);
         continue;
       }
       // ── Stage 2 — REPETITION nudge (bounded, once) ───────────────────────
@@ -2141,7 +2146,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           lastContent = stripTrailingPermissionSeek(closing);
         }
         thread.push({ role: 'assistant', content: response.content });
-        thread.push({ role: 'user', content: repeatNudge(closing, runTrace.priorAnswer(closing)) });
+        harness.push(thread, 'repeat', repeatNudge(closing, runTrace.priorAnswer(closing)));
         continue;
       }
       // ── ZERO-ACTION gate (bounded, once) ────────────────────────────────
@@ -2169,7 +2174,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // The non-answer must not become the delivered answer either way.
         lastContent = '';
         thread.push({ role: 'assistant', content: response.content });
-        thread.push({ role: 'user', content: zeroActionNudge(currentAsk(opts)) });
+        harness.push(thread, 'action', zeroActionNudge(currentAsk(opts)));
         continue;
       }
       // S1 (both exits): the MOST SUBSTANTIVE content seen wins here too —
@@ -2194,7 +2199,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             : 'an authored deliverable was requested and no file was written — one bounded nudge to produce it',
         });
         thread.push({ role: 'assistant', content: response.content });
-        thread.push({ role: 'user', content: deliverableNudge(authorization.requestedPath) });
+        harness.push(thread, 'deliverable', deliverableNudge(authorization.requestedPath));
         continue;
       }
       //
@@ -2224,10 +2229,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // preference order. A live turn reached for `node -c` because the nudge
         // left the choice to the model; `verificationNudgeFor` reads the
         // workspace and asks for the real command, so there is nothing to guess.
-        thread.push({
-          role: 'user',
-          content: verificationNudgeFor(ctx.cwd ?? process.cwd(), progress.mutatedPaths),
-        });
+        harness.push(thread, 'verification', verificationNudgeFor(ctx.cwd ?? process.cwd(), progress.mutatedPaths));
         continue;
       }
       // SELF-REVIEW (no-tools exit) — a substantial, already-verified turn is
@@ -2243,7 +2245,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           summary: 'a substantial turn that changed files reached its end — one bounded nudge to check the result against the original ask',
         });
         thread.push({ role: 'assistant', content: response.content });
-        thread.push({ role: 'user', content: review });
+        harness.push(thread, 'self-review', review);
         continue;
       }
       return {
@@ -2290,7 +2292,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // their nudge into this queue and it is flushed after the results, keeping
     // the assistant→tool group intact. (Without this, a pinned/strict run died
     // on the third model call and looked like a provider fault.)
-    const deferredUserNudges: string[] = [];
+    // Planning-time directives, flushed as harness directives once the step's
+    // tool-call group is complete. Kept as {gate, content} so the same channel
+    // (and the same per-turn dedupe) covers them.
+    const deferredUserNudges: Array<{ gate: string; content: string }> = [];
 
     // ── Phase 1 — decide, in order (deterministic) ─────────────────────────
     // Guards count calls that came BEFORE this one. Pushing the name first made
@@ -2590,7 +2595,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             createNodePrereqFs(opts.context?.cwd || process.cwd()),
           );
           if (findings.length > 0) {
-            deferredUserNudges.push(formatPreflightFindings(findings));
+            deferredUserNudges.push({ gate: 'prerequisite', content: formatPreflightFindings(findings) });
             deps.onEvent?.(
               `   🧱 pre-flight: ${findings.length} missing project prerequisite(s) — handed the exact fix before building.`,
             );
@@ -2679,7 +2684,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           ? `a workspace-directing turn was about to mutate without a plan — the first mutation batch (${blocked.join(', ')}) was refused once and the model asked to declare a plan first`
           : 'a workspace-directing turn was about to mutate without a plan — one bounded nudge to declare one first',
       });
-      deferredUserNudges.push(planRequiredNudge(currentAsk(opts)));
+      deferredUserNudges.push({ gate: 'plan', content: planRequiredNudge(currentAsk(opts)) });
     }
 
     const executed: string[] = new Array(plans.length).fill('');
@@ -2921,7 +2926,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // Flush the planning-time nudges now that the assistant's tool_calls group is
     // complete (every call id has a `tool` result). This is the first point a
     // user/system message may safely follow the batch.
-    for (const nudge of deferredUserNudges) thread.push({ role: 'user', content: nudge });
+    for (const nudge of deferredUserNudges) harness.push(thread, nudge.gate, nudge.content);
 
     // Track the generalized stall: a step that RAN tools but succeeded at none
     // of them extends the streak; any success clears it. A text-only step (no
@@ -2955,7 +2960,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         gate: 'malformed-call',
         summary: `${malformedToolCalls} tool calls this turn carried no usable arguments (payload larger than one model output) — one bounded nudge to deliver in sections`,
       });
-      thread.push({ role: 'user', content: malformedCallNudge(malformedToolCalls) });
+      harness.push(thread, 'malformed-call', malformedCallNudge(malformedToolCalls));
     }
 
     if (diagnosisNudges < 1) {
@@ -2973,7 +2978,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             `the same action failed ${repeated.times} times (${repeated.tool}: ${repeated.action.slice(0, 120)}) — ` +
             'one bounded nudge to diagnose the root cause and change the approach',
         });
-        thread.push({ role: 'user', content: repeatedFailureNudge(repeated) });
+        harness.push(thread, 'diagnosis', repeatedFailureNudge(repeated));
       } else if (failedToolSteps >= NO_PROGRESS_STALL_STEPS) {
         // Stage 2 — no SINGLE action repeated, but the last N steps each ran
         // tools and none succeeded. Same diagnosis demanded, different evidence.
@@ -2989,7 +2994,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             `${failedToolSteps} consecutive steps ran tools and none succeeded — ` +
             'one bounded nudge to diagnose the shared cause and change the approach',
         });
-        thread.push({ role: 'user', content: noProgressNudge(runTrace.recentFailures(3), failedToolSteps) });
+        harness.push(thread, 'diagnosis', noProgressNudge(runTrace.recentFailures(3), failedToolSteps));
       }
     }
 
@@ -3107,10 +3112,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // preference order. A live turn reached for `node -c` because the nudge
         // left the choice to the model; `verificationNudgeFor` reads the
         // workspace and asks for the real command, so there is nothing to guess.
-        thread.push({
-          role: 'user',
-          content: verificationNudgeFor(ctx.cwd ?? process.cwd(), progress.mutatedPaths),
-        });
+        harness.push(thread, 'verification', verificationNudgeFor(ctx.cwd ?? process.cwd(), progress.mutatedPaths));
         continue;
       }
       // G13b — DELIVERABLE GATE (concluding path). AFTER the verification gate
@@ -3128,7 +3130,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             : 'an authored deliverable was requested and no file was written — one bounded nudge to produce it',
         });
         thread.push({ role: 'assistant', content: response.content });
-        thread.push({ role: 'user', content: deliverableNudge(authorization.requestedPath) });
+        harness.push(thread, 'deliverable', deliverableNudge(authorization.requestedPath));
         continue;
       }
       // ZERO-ACTION gate (concluding exit) — the same bounded pass as the
@@ -3148,7 +3150,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         });
         lastContent = '';
         thread.push({ role: 'assistant', content: response.content });
-        thread.push({ role: 'user', content: zeroActionNudge(currentAsk(opts)) });
+        harness.push(thread, 'action', zeroActionNudge(currentAsk(opts)));
         continue;
       }
       // SELF-REVIEW (concluding exit) — same bounded pass, placed AFTER the
@@ -3164,7 +3166,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           summary: 'a substantial turn that changed files reached its end — one bounded nudge to check the result against the original ask',
         });
         thread.push({ role: 'assistant', content: response.content });
-        thread.push({ role: 'user', content: review });
+        harness.push(thread, 'self-review', review);
         continue;
       }
       const content = response.content.length >= lastContent.length ? response.content : lastContent;

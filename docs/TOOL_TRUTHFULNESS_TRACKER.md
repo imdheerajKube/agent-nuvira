@@ -599,6 +599,36 @@ carrying a placeholder). The suite, its verification and its scoring are proven 
 that applies the reference fix, one that changes nothing, and one that fixes the
 right file while rewriting an unrelated one.
 
+## Bundle 37 — the harness's own voice, and the explicit session grant (2026-10-08)
+
+A user read one trace (`trace-1791390325578-4968th`) and saw the MODEL narrate the
+HARNESS's interruptions back at them — "the command guard misfired on a read-only
+check" — and read it as an agent arguing with a model. Two harness causes, both
+fixed without touching the model:
+
+1. **The gate voice.** Every loop nudge was pushed as a `user` message. A chat
+   model ANSWERS a user turn, so it replied to the loop. `tools/harness-directive.ts`
+   now delivers every gate nudge (promise / permission / repeat / action /
+   deliverable / verification / self-review / diagnosis / malformed-call / plan /
+   prerequisite / think-only, plus the child loop's verification nudge) as a
+   `system`-role message prefixed with `[harness]`, DEDUPED by gate within the
+   turn. The gate TEXT is unchanged — only who is seen to be speaking.
+2. **The friction could not be reduced.** `learning/session-grant.ts` adds an
+   explicit, per-conversation grant: "Allow this for the whole session", offered
+   as one extra choice at the confirmation a tool demanded. It covers `write`
+   (file mutations) and `terminal` (recoverable local-state commands) and is
+   recorded as a revisable decision. It NEVER covers `external`/`destructive`:
+   `sudo`, `git push`, `rm -rf /` refuse regardless, and the absolute DENY
+   patterns run first.
+
+Measured, not asserted: `scripts/measure-gate-friction.mjs` counts every `gate`
+and `refusal` event per reasoning trace and prints a before → after delta when
+given two files. On the local store (60 traces): 382 events, mean 6.37/turn, p90 19.
+Pinned by `tests/tools/session-grant.test.ts` (11) and
+`tests/tools/harness-directive.test.ts` (3); the two nudge-role assertions in
+`tool-loop.test.ts` / `subagent-end-to-end.test.ts` were updated to the new
+contract (`system` + `[harness]`) rather than loosened.
+
 ## Open
 
 1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost
