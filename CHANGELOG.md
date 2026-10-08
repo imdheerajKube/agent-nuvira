@@ -4,6 +4,32 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Added: parallel read fan-out derived from the registry — 6 tools to 21
+
+Which tools may run concurrently inside one step was a hand-maintained
+SIX-NAME allowlist (`read_file`, `list_dir`, `glob`, `code_search`, `web_search`,
+`read_page`). Every read tool added later — and every read-only MCP tool
+discovered at runtime — silently stayed serial until somebody remembered to
+review it onto the list. `isParallelSafeTool` now asks the capability registry,
+so fan-out extends automatically to the **21** read tools that exist here
+(`read_extract`, `search_memory`, `list_memories`, `memory_stats`, `secret_scan`,
+`fuzzy_match`, `osv_check`, `verify_requirement`, `url_safety`, …).
+
+The safety direction is UNCHANGED, which is the part that matters: a tool the
+registry does not describe maps to `local-state`, so a newly registered tool is
+still serial until someone declares it a read — the same conservative default the
+old allowlist enforced, now enforced by the registry instead of by review.
+
+A finding worth recording, because trusting the effect class alone would have been
+a REGRESSION: `effectClass: 'read'` is NECESSARY but NOT SUFFICIENT. `tool_search`
+genuinely reads and yet mutates the tiering state that decides which tools exist
+in the NEXT step; `ask_user` genuinely reads and yet blocks on the human. Both
+stay serial via one small, explicit `READ_BUT_SERIAL` set — a harness fact, not an
+effect guess. `parallelSafeToolNames()` derives the set by filtering with the same
+predicate, so the set and the predicate cannot disagree. Pinned by
+`tests/tools/parallel-tool-exec.test.ts`, including a case that asserts each
+exception's declared effect IS `read` while it remains serial.
+
 ### Added: a requirement pre-flight, so a run knows what it is missing before it starts
 
 A capability declares what it needs, and nothing checked it. A missing executable

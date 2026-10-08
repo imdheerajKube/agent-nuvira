@@ -16,7 +16,8 @@
  *   blocks after its response text (contract in TOOL_CONTRACT_JSON).
  */
 
-import { getTool, toolJsonSchemas, type ToolContext, type ToolJsonSchema } from './registry.js';
+import { getTool, listTools, toolJsonSchemas, type ToolContext, type ToolJsonSchema } from './registry.js';
+import { effectClassOfTool } from './capability-registry.js';
 import type { ExecutedAction } from '../findings/verdicts.js';
 // A1 — build-command recognition, shared with effect verification so "a build"
 // means the same thing to both the launch check and the honesty guard.
@@ -1022,32 +1023,53 @@ function findMatchingBrace(text: string, start: number): number {
 
 // ─── Parallel read-only execution (W2) ──────────────────────────────────────
 /**
- * Tools that are READ-ONLY and therefore safe to execute concurrently when the
- * model emits several of them in ONE step. Everything else — writes, terminal
- * commands, pipeline dispatch, delegation, `tool_search` (it mutates the
- * tiering state), `plan_todo`, `ask_user` (it blocks on user input) — stays
- * strictly serial and in the model's original order.
+ * Tools that READ the world but must still run SERIALLY, because they change
+ * HARNESS state or block on input rather than changing the world.
  *
- * Why this matters: tool results are fed back one step at a time and the step
- * budget is bounded (16), so N independent reads used to cost N sequential
- * round-trips of wall-clock. Reading several files/searches is the single most
- * common investigation pattern, so it becomes one bounded fan-out.
+ * `effectClass: 'read'` is NECESSARY but NOT SUFFICIENT for safe fan-out — this is
+ * the second half of the fact, and it is a property of the HARNESS, not of the
+ * effect. `tool_search` mutates the tiering state that decides which tools exist
+ * in the NEXT step; `ask_user` blocks on the human. Fanning either out would let
+ * two siblings disagree about the world they are reading.
  *
- * The list is deliberately an ALLOWLIST (never a denylist): a tool added to
- * the registry later is SERIAL by default until it is reviewed as read-only.
+ * Pinned by `parallel-tool-exec.test.ts`, which asserts each of these is serial
+ * WHILE its declared effect is genuinely `read`.
  */
-export const PARALLEL_SAFE_TOOL_NAMES: ReadonlySet<string> = new Set([
-  'read_file',
-  'list_dir',
-  'glob',
-  'code_search',
-  'web_search',
-  'read_page',
+const READ_BUT_SERIAL: ReadonlySet<string> = new Set([
+  'tool_search', // mutates the tiering state
+  'ask_user', // blocks on user input
 ]);
 
-/** Whether a tool may run concurrently with sibling calls in the same step. */
+/**
+ * Whether a tool may run concurrently with sibling calls in the same step.
+ *
+ * DERIVED FROM THE CAPABILITY REGISTRY, not a hand-maintained allowlist. This used
+ * to be a six-name list that had to be reviewed by hand whenever a read tool was
+ * added — so any new read tool, and every read-only MCP tool discovered at
+ * runtime, silently lost the fan-out. The effect class answers it now.
+ *
+ * THE SAFETY DIRECTION IS UNCHANGED, which is the part that matters: a tool the
+ * registry does not describe maps to `local-state`, so a newly registered tool is
+ * still SERIAL until someone declares it a read. `READ_BUT_SERIAL` is the one
+ * hand-written exception, and it is a harness fact rather than an effect guess.
+ */
 export function isParallelSafeTool(name: string): boolean {
-  return PARALLEL_SAFE_TOOL_NAMES.has(name);
+  if (READ_BUT_SERIAL.has(name)) return false;
+  return effectClassOfTool(name) === 'read';
+}
+
+let _parallelSafeNames: ReadonlySet<string> | null = null;
+
+/**
+ * Every REGISTRY tool that currently qualifies, derived by filtering with
+ * `isParallelSafeTool` — so the set and the predicate can never disagree. Built
+ * lazily, because the registry must be fully loaded before it can be enumerated.
+ */
+export function parallelSafeToolNames(): ReadonlySet<string> {
+  if (!_parallelSafeNames) {
+    _parallelSafeNames = new Set(listTools().map((t) => t.name).filter(isParallelSafeTool));
+  }
+  return _parallelSafeNames;
 }
 
 /** Max concurrent read-only calls per step (bounded fan-out) when the model

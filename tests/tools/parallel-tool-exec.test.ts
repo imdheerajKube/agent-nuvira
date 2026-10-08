@@ -16,10 +16,11 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   runToolLoop,
   isParallelSafeTool,
-  PARALLEL_SAFE_TOOL_NAMES,
+  parallelSafeToolNames,
   type ToolLoopDeps,
   type StepResponse,
 } from '../../src/tools/tool-loop.js';
+import { effectClassOfTool } from '../../src/tools/capability-registry.js';
 import type { ToolContext } from '../../src/tools/registry.js';
 
 const ctx: ToolContext = { configManager: {} };
@@ -291,27 +292,64 @@ describe('tool loop — planner + pipeline dispatch guards', () => {
   });
 });
 
-describe('parallel-safe allowlist is conservative', () => {
-  it('contains only read-only tools', () => {
+describe('parallel safety is DERIVED from the capability registry', () => {
+  it('marks plainly read-only tools as safe', () => {
     for (const name of ['read_file', 'list_dir', 'glob', 'code_search', 'web_search', 'read_page']) {
       expect(isParallelSafeTool(name)).toBe(true);
     }
   });
 
-  it('never marks a state-changing, blocking, or tiering tool as parallel-safe', () => {
+  it('never marks a state-changing, blocking, or off-machine tool as parallel-safe', () => {
     for (const name of [
       'write_file',
       'edit_file',
       'run_terminal',
-      'tool_search', // mutates the tiering state
       'plan_todo',
-      'ask_user', // blocks on user input
       'build',
       'delegate',
       'gateway_send',
     ]) {
       expect(isParallelSafeTool(name)).toBe(false);
     }
-    expect(PARALLEL_SAFE_TOOL_NAMES.size).toBe(6);
+  });
+
+  it('keeps a tool SERIAL when it reads the world but changes the harness', () => {
+    // The finding this pins: `effectClass === 'read'` is NECESSARY but NOT
+    // SUFFICIENT. Both of these genuinely READ — and both must still be serial, one
+    // because it mutates the state that decides which tools exist next, the other
+    // because it blocks on the human. A derivation that trusted the effect class
+    // alone would quietly fan these out.
+    for (const name of ['tool_search', 'ask_user']) {
+      expect(effectClassOfTool(name)).toBe('read');
+      expect(isParallelSafeTool(name)).toBe(false);
+    }
+  });
+
+  it('extends fan-out to read tools the old six-name list never covered', () => {
+    // The capability gain: these were read-only all along and stayed serial only
+    // because nobody hand-reviewed them onto the list.
+    for (const name of ['read_extract', 'search_memory', 'list_memories', 'memory_stats', 'secret_scan']) {
+      expect(effectClassOfTool(name)).toBe('read');
+      expect(isParallelSafeTool(name)).toBe(true);
+    }
+  });
+
+  it('defaults an UNDESCRIBED tool to serial — the safety direction is unchanged', () => {
+    // The registry maps an unknown tool to `local-state`, so a newly registered
+    // tool is serial until someone declares it a read. This is what made replacing
+    // an allowlist with a derivation safe rather than a loosening.
+    expect(effectClassOfTool('some_tool_added_next_year')).toBe('local-state');
+    expect(isParallelSafeTool('some_tool_added_next_year')).toBe(false);
+  });
+
+  it('keeps the derived set and the predicate in agreement', () => {
+    const names = parallelSafeToolNames();
+    for (const name of names) expect(isParallelSafeTool(name)).toBe(true);
+    // It grew past the old frozen six…
+    expect(names.size).toBeGreaterThan(6);
+    // …without picking up anything stateful.
+    for (const name of ['write_file', 'edit_file', 'run_terminal', 'tool_search', 'ask_user', 'plan_todo']) {
+      expect(names.has(name)).toBe(false);
+    }
   });
 });
