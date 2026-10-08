@@ -18,11 +18,13 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
-import { writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { MCPClient } from '../../src/mcp/client.js';
 import type { MCPServerConfig } from '../../src/mcp/types.js';
+import { MCPManager } from '../../src/mcp/manager.js';
+import { getMCPSchemaCache, resetMCPSchemaCache } from '../../src/mcp/mcp-schema-cache.js';
 import { capabilityFromMcpTool } from '../../src/tools/capability-registry.js';
 
 // ─── Self-contained mock server script ──────────────────────────────────────
@@ -213,4 +215,40 @@ describe('MCPClient E2E — Real Subprocess', () => {
 
     await expect(client.callTool('greet')).rejects.toThrow(/Not connected/i);
   }, 15_000);
+
+  // ── Bundle 43: the schema cache write path, over a REAL server ──
+  //
+  // Lives in THIS describe on purpose: the mock server script is written in
+  // `beforeAll` and deleted in `afterAll` here, so a sibling describe would run
+  // against a missing script.
+  it('a connect through MCPManager PERSISTS the discovered schemas (Bundle 43)', async () => {
+    const dir = join(tmpdir(), `nuvira-mcp-cache-e2e-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const config: MCPServerConfig = { ...createConfig(), name: 'e2e-cache-server' };
+    writeFileSync(join(dir, 'e2e-cache-server.json'), JSON.stringify(config));
+
+    const previousHome = process.env.NUVIRA_CONFIG_DIR;
+    process.env.NUVIRA_CONFIG_DIR = dir;
+    resetMCPSchemaCache();
+    const manager = new MCPManager(dir);
+    try {
+      await manager.connect('e2e-cache-server');
+
+      // The whole point: a LATER process can now discover these tools without
+      // re-connecting, because the connect persisted them.
+      const cache = getMCPSchemaCache();
+      const entry = cache.getAll().find((e) => e.serverName === 'e2e-cache-server');
+      expect(entry).toBeDefined();
+      expect(entry!.configHash.length).toBeGreaterThan(0);
+      expect(entry!.tools.map((t) => t.name).sort()).toEqual(['echo', 'greet']);
+      // The declaration survives all the way from the server process to disk.
+      expect(entry!.tools.find((t) => t.name === 'greet')!.annotations).toEqual({ readOnlyHint: true });
+    } finally {
+      manager.disconnectAll();
+      resetMCPSchemaCache();
+      if (previousHome === undefined) delete process.env.NUVIRA_CONFIG_DIR;
+      else process.env.NUVIRA_CONFIG_DIR = previousHome;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

@@ -387,18 +387,15 @@ export function actionCapabilities(): Capability[] {
 }
 
 /**
- * The MCP tools reachable RIGHT NOW — read from the live connection singleton,
- * never by connecting. A cold process (or a fresh install) simply has none, and
- * a failure to read them must never break discovery.
- *
- * Only the cache-equivalent in-memory state is consulted: `listTools()` reports
- * servers already connected this process, so a capability search can never spawn
- * a server as a side effect.
+ * The MCP tools the agent can reach — from servers connected this process, plus
+ * cached schemas from previous ones. Never connects, so a capability search
+ * cannot spawn a server as a side effect; a failure to read them never breaks
+ * discovery.
  */
-async function readLiveMcpTools(): Promise<McpToolLike[]> {
+async function readDiscoverableMcpTools(): Promise<McpToolLike[]> {
   try {
-    const { getMCPToolManager } = await import('./mcp-client-tool.js');
-    return getMCPToolManager().listTools() as McpToolLike[];
+    const { readDiscoverableMcpTools: read } = await import('../mcp/mcp-discovery.js');
+    return (await read()) as McpToolLike[];
   } catch {
     return [];
   }
@@ -419,7 +416,7 @@ export async function capabilityIndex(
     ...actionCapabilities(),
   ];
   if (opts.includeMcp !== false) {
-    const mcp = opts.mcpTools ?? (await readLiveMcpTools());
+    const mcp = opts.mcpTools ?? (await readDiscoverableMcpTools());
     for (const t of mcp) {
       if (t && t.server && t.name) index.push(capabilityFromMcpTool(t));
     }

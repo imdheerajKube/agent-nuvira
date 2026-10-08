@@ -713,6 +713,43 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 43 — the MCP schema cache actually caches, so discovery survives a cold start (2026-10-08)
+
+**The finding** (raised as Bundle 42's Open item #3). `mcp-schema-cache.ts` existed
+to persist a server's tool schemas so a later process need not re-connect. Nothing
+in the connection path ever called `set()`; its only readers were the
+`mcp_schema_cache` tool's `get`/`invalidate`/`stats` actions. So the file was
+always empty on a fresh install and the feature was inert — a cache in name only.
+
+**The fix, both halves.**
+
+Writes: `MCPManager.connect` persists the schemas it just discovered, keyed by the
+server name and its config hash, wrapped so a cache failure can never fail a
+connection. `MCPSchemaCache` gained `getAll()` (enumerate) and `prune()`.
+
+Reads: the new `mcp/mcp-discovery.ts` merges the live connection state with the
+cache, live-first. The cache is trusted only while the server is still configured
+AND its config hash is unchanged — so a RECONFIGURED server's stale schemas are
+pruned rather than served, and an UNINSTALLED server's are dropped. This is the
+"never trust a stale copy" rule the whole truthfulness workstream is about,
+applied to a disk cache.
+
+**Why it matters.** Capability discovery can now answer "what can I do?" about an
+MCP server on a COLD START — before anything has connected — which is exactly when
+a user asks. Reading never connects, so a capability search still cannot spawn a
+server as a side effect.
+
+**Two isolation defects fixed in passing.** The cache directory used
+`resolveNuviraHome()`, which ignores `$NUVIRA_CONFIG_DIR` — so a process pointed at
+an isolated profile still read and wrote the REAL `~/.nuvira/mcp/cache`, the exact
+reach the note on `resolveNuviraHome` warns about. And it was a module-level
+constant, so the path was frozen at IMPORT time: anything that set the env
+afterwards still got the developer's real home. It now resolves through
+`resolveMcpConfigDir()` at construction.
+
+Pinned by `tests/mcp/mcp-schema-cache.test.ts` (10), `tests/mcp/mcp-discovery.test.ts`
+(7), and a real-subprocess persistence case in `tests/mcp/mcp-e2e.test.ts`.
+
 ## Bundle 42 — external MCP tools become discoverable capabilities (2026-10-08)
 
 **The finding.** nuvira could reach MCP servers but exposed them as ONE
@@ -771,12 +808,8 @@ declaration is true.
    tools in the prompt and parses the `{"tool":…}` reply, so a local-only setup can
    spawn a subagent *with* tools. The run's `transport` says which path it took, so
    the fallback is visible rather than silent.
-3. **NEW — the MCP schema cache is never written.** `src/mcp/mcp-schema-cache.ts`
-   exists to persist a server's tool schemas so a later process need not
-   re-connect, and its only readers are the `mcp_schema_cache` tool's
-   `get/invalidate/stats` actions. Nothing in the connection path
-   (`client.ts` / `mcp-client-tool.ts` / `manager.ts`) ever calls `set()`, so
-   `~/.nuvira/mcp/cache/schemas.json` is only ever read or invalidated and is
-   always empty on a fresh install. Found while choosing an ingestion source for
-   Bundle 42 — capability discovery reads the LIVE connection instead, so this
-   does not block it. Untested and unverified end to end.
+3. ~~The MCP schema cache is never written.~~ **Closed** — `MCPManager.connect`
+   now persists the schemas it discovered, `MCPSchemaCache` gained `getAll()` and
+   `prune()`, and `mcp/mcp-discovery.ts` reads live-first-then-cache with a config
+   hash check, so MCP discovery survives a cold start. Two isolation defects in
+   the cache directory were fixed at the same time. See Bundle 43.
