@@ -203,6 +203,12 @@ This table highlights core capabilities for quick machine parsing and comparison
   git post-checkout and pre-commit hooks for automated branch workflows; issue-driven branch creation
   (`feat/PROJ-123-description`), PR label-triggered updates, file-watch auto-commit with conventional
   commit messages, and CI failure detection with LLM diagnosis
+- **Declarative lifecycle hooks (no-code guardrails)** — `agent-nuvira hooks` and the dashboard's
+  **Agent Management → Hooks** page bind a JSON *rule* — never a script — to nuvira's four lifecycle seams
+  (`before_tool_call` / `after_tool_call` / `failed_tool_call` / `on_session_end`), with a fixed native
+  action set: `deny`, `notify`, `scan-args`. Block `rm -rf`, refuse a force-push, stop a secret-shaped value
+  from ever reaching disk, or log every failed tool call. No third-party code can run, by construction;
+  see [`docs/HOOKS.md`](docs/HOOKS.md) for the cookbook
 - **Issue Triage Engine (Pillar A3)** — Automated issue classification, prioritization, and labeling
   across GitHub and GitLab via `agent-nuvira execute "triage issues"` with LLM-powered analysis
 - **GitHub PR Review Agent (Pillar A2)** — Automatic inline code review on open PRs; reads diffs,
@@ -1417,6 +1423,59 @@ How it works:
 - `--resume` rehydrates the vault, **skips completed steps and the planner**, and continues from the first pending step — on whatever provider/model is now available.
 - `--checkpoint` alone always starts **fresh** (it never silently resumes a stale checkpoint); only an explicit `--resume` loads.
 - State persists across sessions, so a provider that died mid-pipeline can resume on the next-best provider with zero rework (assessment item #6: continuity across models).
+
+---
+
+### `agent-nuvira hooks` — Declarative Lifecycle Rules (no-code guardrails)
+
+A hook is a **rule, not code**: it binds to one of nuvira's four lifecycle seams and its only possible
+actions are `deny`, `notify` and `scan-args` — a fixed, native allow-list. Installing one can never execute
+third-party code, reach the network, or read a credential, which is what makes it safe to hand to an
+operator. The same `<config-dir>/hooks.json` is edited by the CLI *and* by **Agent Management → Hooks** in
+the dashboard, and the runtime reads it live — a save is in force on the next tool call, no restart.
+
+```bash
+# See everything (built-in starters + your own rules), with state
+agent-nuvira hooks list
+
+# Stop a destructive command before it runs
+agent-nuvira hooks add --id no-force-push --label "No force push" \
+  --event before_tool_call --action deny \
+  --tool run_terminal --arg "command=*git push --force*" \
+  --reason "force-push is destructive"
+
+# Turn on a shipped starter (writes it into hooks.json)
+agent-nuvira hooks enable builtin-block-rm-rf
+
+# Audit every failed tool call to the log
+agent-nuvira hooks add --id audit-failures --label "Audit failures" \
+  --event failed_tool_call --action notify --message "{tool} failed on {surface}"
+
+agent-nuvira hooks disable no-force-push   # switch off
+agent-nuvira hooks remove  no-force-push   # delete (user hooks only)
+```
+
+**What you can achieve with the three actions:**
+
+| Goal | Seam | Action | Example |
+|------|------|--------|---------|
+| Block a destructive command or a dangerous flag | `before_tool_call` | `deny` | `--arg "command=*rm -rf*"`, `--arg "command=*git push --force*"` |
+| Protect specific FILES from being written | `before_tool_call` | `deny` | `--tool write_file --arg "path=*.env"` |
+| Stop a secret from ever reaching disk | `before_tool_call` | `scan-args --deny-on-hit` | `--tool write_file` (starter: `builtin-scan-writes-for-secrets`) |
+| Flag a key pasted into a shell command | `before_tool_call` | `scan-args` | `--tool run_terminal` (starter: `builtin-scan-terminal-args-for-secrets`) |
+| Audit every failed tool call | `failed_tool_call` | `notify` | `--message "{tool} failed on {surface}"` |
+| Watch a specific tool being used | `before_tool_call` | `notify` | `--tool browser --message "browsing on {surface}"` |
+| Log when a pipeline run finishes | `on_session_end` | `notify` | `--message "run finished"` |
+
+**Four built-in starters ship DISABLED** — block `rm -rf`, block writes containing a secret, flag secrets
+in terminal commands, and log every failed tool call. Nothing changes until you enable one
+(`agent-nuvira hooks enable <id>`, or toggle + **Save hooks** on the dashboard page).
+
+**Two rules that are easy to get wrong:** `deny` is only valid on `before_tool_call` (the other seams
+cannot stop a call), and matchers are **globs over top-level tool arguments** — `cwdPrefix` matches the
+*working directory*, not a file path, so gate a specific file with `--arg path=…` instead. A bad
+declaration is **rejected at save time** with a message naming the rule, and the previously-saved set stays
+in force. Full contract, recipes and gotchas: [`docs/HOOKS.md`](docs/HOOKS.md).
 
 ---
 
