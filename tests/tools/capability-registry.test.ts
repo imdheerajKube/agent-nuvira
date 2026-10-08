@@ -303,3 +303,68 @@ describe('tool_search — the readiness action', () => {
     for (const cap of parsed.capabilities) expect(cap.check).toBeDefined();
   });
 });
+
+// ─── Bundle 47: per-platform commands, declared only where the OS decides ─────
+
+describe('platform variants — declared exactly where the OS determines the command', () => {
+  const actions = actionCapabilities();
+  const byRef = (ref: string) => actions.find((a) => a.ref === ref)!;
+  const OSES = ['win32', 'darwin', 'linux'] as const;
+
+  it('an OS-determined verb declares a command for every OS', () => {
+    for (const ref of ['install-system-tool', 'store-credential']) {
+      const platforms = byRef(ref).platforms!;
+      expect(platforms, ref).toBeDefined();
+      for (const os of OSES) {
+        expect(platforms[os], `${ref} on ${os}`).toBeDefined();
+        expect(platforms[os]!.command.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('every platform binary is one the capability ALSO declares it needs', () => {
+    // The guard that stops a platform hint naming a tool the requirement pre-flight
+    // never checked for — the two halves are the same fact and must agree.
+    for (const cap of actions) {
+      if (!cap.platforms) continue;
+      const declared = new Set((cap.requires.binaries ?? []).flatMap((b) => b.anyOf));
+      for (const [os, variant] of Object.entries(cap.platforms)) {
+        if (!variant?.binary) continue;
+        expect(declared.has(variant.binary), `${cap.ref} on ${os} runs '${variant.binary}'`).toBe(true);
+      }
+    }
+  });
+
+  it('a command that runs through nuvira itself claims NO PATH binary', () => {
+    const platforms = byRef('store-credential').platforms!;
+    // The OS decides WHERE the secret lives, not what to run — so naming a PATH
+    // binary would be a false fact, and the type makes it optional for this reason.
+    for (const os of OSES) expect(platforms[os]!.binary).toBeUndefined();
+    // …but the note, which IS the OS-determined part, is present everywhere.
+    for (const os of OSES) expect(platforms[os]!.note).toBeTruthy();
+  });
+
+  it('declares NO platforms where the OS is irrelevant — pinned so it stays that way', () => {
+    // `npm install` is the same command on every OS, and npm-vs-pnpm is a user
+    // preference rather than an OS affordance; deploy targets are a platform
+    // CHOICE, not an OS one. Inventing a per-OS map for these would fabricate a
+    // mapping that does not exist, so absence is the assertion.
+    for (const ref of ['install-package', 'add-dependency', 'deploy-app', 'publish-package', 'push-git']) {
+      expect(byRef(ref).platforms, ref).toBeUndefined();
+    }
+  });
+
+  it('tool_search resolves the hint for THIS machine', async () => {
+    const raw = await getTool('tool_search')!.run(
+      { action: 'search', query: 'install a system tool' },
+      ctx,
+    );
+    const parsed = JSON.parse(String(raw)) as { capabilities: Array<Record<string, any>> };
+    const cap = parsed.capabilities.find((c) => c.id === 'action:install-system-tool')!;
+    expect(cap.onThisMachine).toBeDefined();
+    expect(cap.onThisMachine.command).toContain('install');
+    // …and the map for the other OSes rides along, so the model can see the whole
+    // picture rather than only its own.
+    expect(Object.keys(cap.platforms).sort()).toEqual(['darwin', 'linux', 'win32']);
+  });
+});
