@@ -566,6 +566,35 @@ export class DashboardAPI {
     }
   }
 
+  /**
+   * Record the user's verdict on a turn (`good`/`bad`) — the one label a quality
+   * signal can be fit to, and the only source of the POSITIVE class (the derived
+   * correction signal can only ever produce negatives). Returns the labelled turn,
+   * or null when the server refused (an unknown id, or a bad verdict).
+   */
+  async rateTrace(
+    id: string,
+    verdict: 'accepted' | 'rejected',
+  ): Promise<{ traceId: string; corpusLabeled: boolean } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/traces/${encodeURIComponent(id)}/verdict`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verdict }),
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = (await parseJsonOrNull(res)) as {
+        ok?: boolean;
+        rated?: { traceId: string; corpusLabeled: boolean };
+      } | null;
+      return data?.ok && data.rated
+        ? { traceId: data.rated.traceId, corpusLabeled: Boolean(data.rated.corpusLabeled) }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** P0: fetch a single trace's full detail (steps + previews). */
   async fetchTraceDetail(id: string): Promise<TraceEntry | null> {
     try {

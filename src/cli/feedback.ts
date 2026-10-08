@@ -21,7 +21,14 @@ import { logger } from '../utils/logger.js';
 export class FeedbackCommand extends BaseCommand {
   create(): Command {
     const command = new Command('feedback')
-      .description('Record, view, and manage user feedback on agent outputs');
+      .description('Record, view, and manage user feedback on agent outputs')
+      .addHelpText(
+        'after',
+        `
+Note: this store is keyed by TRAJECTORY id (pipeline runs) and is read for stats.
+To rate a CHAT turn — the label a future quality signal is fit to — use \`nuvira rate <good|bad>\`.
+`,
+      );
 
     // ── record ───────────────────────────────────────────────────────────
     command

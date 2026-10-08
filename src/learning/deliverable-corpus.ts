@@ -54,14 +54,18 @@ export interface DeliverableCandidate {
   verification?: string;
   /** A bounded excerpt of the artifact. */
   excerpt: string;
+  /** The trace this delivery belongs to, so a later verdict can label THIS row. */
+  traceId?: string;
   /**
-   * `null` — the user has not spoken since; `true` — the user reported the turn
-   * as a miss. Never `false`: silence is not acceptance, and a `false` would
-   * fabricate a positive label from nothing (the same rule the bandit follows).
+   * `null` — the user has not judged the turn; `'accepted'` / `'rejected'` — they
+   * did. A boolean `rejected: false` is deliberately NOT used: it cannot tell
+   * "the user accepted it" from "the user never said", and reading silence as
+   * acceptance would fabricate the positive class a fitted signal needs most
+   * (the same rule the bandit follows).
    */
-  rejected: boolean | null;
-  /** Epoch ms the rejection was recorded. */
-  rejectedAt?: number;
+  verdict: 'accepted' | 'rejected' | null;
+  /** Epoch ms the verdict was recorded. */
+  verdictAt?: number;
 }
 
 function memoryDir(): string {
@@ -87,7 +91,16 @@ export function readDeliverableCandidates(): DeliverableCandidate[] {
       if (!trimmed) continue;
       try {
         const row = JSON.parse(trimmed) as DeliverableCandidate;
-        if (row && typeof row.path === 'string' && typeof row.ask === 'string') out.push(row);
+            if (row && typeof row.path === 'string' && typeof row.ask === 'string') {
+          // Tolerate the short-lived shape that predates the tri-state verdict: an
+          // old `rejected: true` row is a rejection, and is MIGRATED on read so the
+          // rest of the module has exactly one shape to reason about.
+          if (row.verdict === undefined && (row as { rejected?: unknown }).rejected === true) {
+            row.verdict = 'rejected';
+          }
+          if (row.verdict === undefined) row.verdict = null;
+          out.push(row);
+        }
       } catch {
         // A corrupt line is skipped — a collection store must not become a landmine.
       }
@@ -120,6 +133,7 @@ export function recordDeliverableCandidate(
     targetWords?: number;
     verification?: string;
     excerpt: string;
+    traceId?: string;
   },
   now: number = Date.now(),
 ): DeliverableCandidate | null {
@@ -131,8 +145,9 @@ export function recordDeliverableCandidate(
     deliveredWords: input.deliveredWords,
     ...(input.targetWords !== undefined ? { targetWords: input.targetWords } : {}),
     ...(input.verification ? { verification: input.verification } : {}),
+    ...(input.traceId ? { traceId: input.traceId } : {}),
     excerpt: input.excerpt.slice(0, DELIVERABLE_EXCERPT_MAX),
-    rejected: null,
+    verdict: null,
   };
   const rows = readDeliverableCandidates();
   rows.push(row);
@@ -151,13 +166,42 @@ export function recordDeliverableCandidate(
 export function markLastDeliverableRejected(now: number = Date.now()): boolean {
   const rows = readDeliverableCandidates();
   for (let i = rows.length - 1; i >= 0; i--) {
-    if (rows[i].rejected === null) {
-      rows[i] = { ...rows[i], rejected: true, rejectedAt: now };
+    if (rows[i].verdict === null) {
+      rows[i] = { ...rows[i], verdict: 'rejected', verdictAt: now };
       writeCandidates(rows);
       return true;
     }
   }
   return false;
+}
+
+/**
+ * Label the delivery that belongs to `traceId` with the user's EXPLICIT verdict.
+ *
+ * Unlike {@link markLastDeliverableRejected} (which the derived correction signal
+ * uses), this is the reliable path: the row knows which trace produced it, so the
+ * label lands on the RIGHT delivery rather than on "the most recent one".
+ *
+ * When no row carries this trace, a REJECTION still falls back to the newest
+ * unlabelled row — the delivery may predate the trace link — but an ACCEPTANCE
+ * does not: inventing a positive label for a delivery we cannot identify is
+ * exactly the fabricated sample this corpus refuses. Returns true when a row was
+ * labelled.
+ */
+export function labelDeliverableByTrace(
+  traceId: string,
+  verdict: 'accepted' | 'rejected',
+  now: number = Date.now(),
+): boolean {
+  const rows = readDeliverableCandidates();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].traceId === traceId) {
+      rows[i] = { ...rows[i], verdict, verdictAt: now };
+      writeCandidates(rows);
+      return true;
+    }
+  }
+  return verdict === 'rejected' ? markLastDeliverableRejected(now) : false;
 }
 
 /** Forget the whole corpus (CLI/test escape hatch). */

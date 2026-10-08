@@ -72,6 +72,7 @@ import { RetrievalCommand } from './retrieval.js';
 import { KnowledgeCommand } from './knowledge.js';
 import { HooksCommand } from './hooks.js';
 import { TraceCommand } from './trace.js';
+import { RateCommand } from './rate.js';
 import { ContinuityCommand } from './continuity.js';
 import { WebsiteCommand } from './website.js';
 import { BedrockCommand } from './bedrock.js';
@@ -300,6 +301,10 @@ export function createCLI(): Command {
   // Register Trace command (P0 reasoning-trace capture + replay)
   const traceCmd = new TraceCommand();
   program.addCommand(traceCmd.create());
+
+  // Register Rate command (the USER's verdict on a turn — the one label a
+  // quality signal can be fit to; recorded on the trace + the quality corpus)
+  program.addCommand(new RateCommand().create());
 
   // Register Continuity command (session snapshots + semantic recall: inspect/forget)
   program.addCommand(new ContinuityCommand().create());

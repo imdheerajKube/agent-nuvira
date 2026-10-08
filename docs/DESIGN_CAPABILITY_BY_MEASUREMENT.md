@@ -232,3 +232,90 @@ With Code, or Graphify — and do not populate any score from data whose names c
 | §4.4 floor on measured accuracy | **LANDED** — the floor reads the scorecard; the id-substring block is deleted. |
 | §4.5 `model explain` | **LANDED** — parameter, value, basis and sample count; `n/a` when there is no prior. |
 | §4.6 B5 (complexity) | **LANDED (Bundle 3e)** — `analyzeComplexity` now takes the higher of the keyword ladder and a measured breadth floor. This row said OPEN for several bundles after it landed; corrected 2026-10-07. |
+| §4.2 `userAccepted` | **CLOSED (Bundle 27)** — `detectRegressionSignal` (the next-turn correction) is wired into the bandit as `recordUserRejection`; it corrects an arm, never creates one. This is the DERIVED negative half only. |
+| §4.2 labelled reference | **COLLECTION LANDED (Bundle 30)** — see §8. The POSITIVE class now has a source (an explicit per-turn verdict), and the corpus that a `P(accepted \| features)` would be fit to records both classes with provenance. Nothing is fit or routed on it yet — that is the remaining work, and it is deliberately gated on enough rows. |
+
+## 8. Labelled reference — the previous approach vs the new one (Bundle 30)
+
+§4.2 kept `qualityScore` OPEN for many bundles with the note *"no measured scale exists"*. The scale
+was never the problem. A quality number fit to signals the harness already derives would just be a
+**second copy of the verification verdict** — it would agree with `accuracy` and add nothing. What was
+missing is a **LABEL**: an observation of whether the delivered work was what the user wanted. This
+section records the previous label-sourcing approach, the new one, and why they differ.
+
+### 8.1 Previous — derived signals only (negatives, and no positive class)
+
+Every honesty signal the harness had was **derived from the run**:
+
+| Signal | Source | Direction |
+|---|---|---|
+| `verificationPassed` | `TurnReport.verification` from recorded tool/plan evidence | both, but it is *"did the work verify"*, not *"was it wanted"* |
+| honesty flags (`undeliveredArtifact`, `unfulfilledPromise`, …) | `tools/tool-loop.ts` | negative |
+| `testPassed` | executed action `ok` | both |
+| **`userAccepted`** | the **next-turn correction signal** — `detectRegressionSignal` (`learning/working-state.ts`) | **negative only** |
+
+Bundle 27 wired the correction signal into the bandit (`recordUserRejection`, α−=0.1/β+=0.1) — a real
+improvement, and it closed `userAccepted`. But the mechanics matter: `detectRegressionSignal` fires on
+a CORRECTION and is **silent otherwise**. Silence is not acceptance — a user who closes the terminal is
+recorded identically to one who is delighted. So the derived path can **only ever produce negatives**,
+and a binary classifier trained on negatives alone would learn "reject everything". The `accuracy` fold
+in the scorecard has the same shape: it measures *verified*, which is orthogonal to *wanted*.
+
+**The consequence stated honestly:** `qualityScore` could not be built from these inputs, and no amount
+of additional wiring would change that. The missing ingredient was a label, and the only source of one
+is the person who asked.
+
+### 8.2 New — an explicit verdict, recorded with provenance (Bundle 30)
+
+The new approach adds the one input the harness cannot compute: the user's own verdict on a turn.
+
+| Layer | Where | What it holds |
+|---|---|---|
+| Per-turn verdict | `ReasoningTrace.userVerdict` (`learning/reasoning-trace.ts`), written by `recordTraceVerdict` | `{ verdict: 'accepted' \| 'rejected', at, source: 'cli' \| 'dashboard' }` — the durable per-turn record |
+| Corpus label | `deliverable-candidates.jsonl` (`learning/deliverable-corpus.ts`) | `verdict: 'accepted' \| 'rejected' \| null` + `verdictAt` + `traceId` — the artifact-specific row a fit would read |
+| Recorder | `learning/turn-feedback.ts` — `rateTurn({verdict, traceId?, source})`, `parseVerdict`, `latestRateableTraceId`, `listTurnVerdicts` | labels the trace AND, when that turn delivered an authored artifact, exactly that corpus row |
+| CLI surface | `nuvira rate <good\|bad>` (`cli/rate.ts`), `-t/--trace <id>`, `-l/--list` | source `'cli'` |
+| Dashboard surface | `POST /api/traces/:id/verdict` + the "Was this what you wanted?" 👍/👎 control in `TracePanel.tsx` | source `'dashboard'` |
+
+**Provenance is part of the label** (`source: 'cli' | 'dashboard'`) so a future fit can weigh a human
+judgement separately from a derived one. **Silence stays `null`.** The corpus never fabricates a
+`false` for an unrated turn, and a REJECTION falls back to the newest unlabelled row while an
+ACCEPTANCE does not (`labelDeliverableByTrace`) — the positive class is never invented, only measured.
+
+### 8.3 The four tiers of label sourcing (only tier 2 supplies the positive class)
+
+| Tier | Source | Class supplied | State |
+|---|---|---|---|
+| 1 — derived | `detectRegressionSignal`, honesty flags | negatives only | wired (Bundle 27) |
+| 2 — **explicit** | `nuvira rate` / dashboard 👍👎 | **both — the only source of `accepted`** | **landed (Bundle 30)** |
+| 3 — behavioural | repeat ask, artifact left untouched, user hand-edits the file | both, weaker | recorded with `source:'derived'` when built — not built |
+| 4 — model-as-judge | an LLM scores the turn | both, but a prior, never a measurement | `source:'model-judge'` when built — not built |
+
+### 8.4 Honest limits
+
+- **Nothing routes on this yet.** `rateTurn` fits nothing and moves no score. Recording the label and
+  using it are separate decisions; using it waits until enough rows exist to mean anything.
+- **A few hundred rows with BOTH classes are needed** before a `P(accepted | features)` is fit-able.
+  Until then `qualityScore` stays genuinely blocked — the collection path is the unblock, not the score.
+- **Coverage gap.** The CLI chat path (`chat.ts` `answerOnce`) records corpus candidates; the dashboard
+  chat console does not, so a dashboard-rated turn labels its trace but has no corpus row to label.
+
+### 8.5 Decision — two feedback concepts, kept distinct (not merged)
+
+There is a **pre-existing** `src/learning/feedback.ts` (`FeedbackStore`, `~/.nuvira/memory/feedback.json`,
+CLI `nuvira feedback record|list|stats|clear`) whose shape is superficially similar. It is **not** the
+same thing, and the decision is to keep both and say so plainly rather than ship two overlapping stores
+silently:
+
+| | `feedback.ts` (old) | `turn-feedback.ts` (new) |
+|---|---|---|
+| Key | `trajectoryId` — pipeline runs | `traceId` — **chat turns** |
+| Verdict | `positive \| negative \| neutral \| skip` | `accepted \| rejected` (binary) |
+| Store | `feedback.json` | the trace itself + the deliverable corpus row |
+| Consumed by | stats display only (`cli/learn.ts`, `cli/memory.ts`, dashboard) | the corpus a future fit reads |
+| `ratingToScoreDelta` (±0.3) | defined but **has no caller today** | — |
+
+The old store never fed the **chat** turn (its `source` is hardcoded `'cli'` and it was only ever written
+by the pipeline), so it could not have produced the chat-turn label this document needs. The new one is
+the **trace-scoped** implementation and the only one that also labels the corpus. `nuvira feedback`
+remains for trajectory ratings; its help now points at `nuvira rate` for turn labels.

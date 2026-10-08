@@ -308,6 +308,67 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 30 — the user's verdict becomes a recorded label (LANDED 2026-10-08)
+
+**Why.** Bundle 29 built the corpus item 13 needed and could label it with the DERIVED correction signal — which
+is **negatives only**, because a user who says nothing is not a user who accepts. Item 13's `qualityScore`
+therefore still had no source of the POSITIVE class. Round 3's followup was to collect the one input the harness
+cannot compute: the person's own verdict on the turn. This bundle records it, and records how it differs from the
+signals the harness already derives.
+
+### 30a. An explicit per-turn verdict, on both surfaces, with provenance
+
+- **On the trace.** `ReasoningTrace.userVerdict?: { verdict: 'accepted' | 'rejected'; at: number; source: 'cli' | 'dashboard' }`
+  (`learning/reasoning-trace.ts`), written by `recordTraceVerdict` (idempotent — re-rating replaces, and the change
+  is appended as a `decision` event so the trace stays a record of what happened).
+- **The recorder.** `learning/turn-feedback.ts` — `rateTurn({ verdict, traceId?, source })` labels the trace AND,
+  when that turn delivered an authored artifact, **exactly that** corpus row (`labelDeliverableByTrace`). `traceId`
+  is optional: omitted means "the turn I just saw". Both writes are best-effort and never throw.
+- **CLI.** `nuvira rate <good|bad>` (`cli/rate.ts`), `-t/--trace <id>`, `-l/--list`. Keyed to the same trace the
+  turn already wrote, via the `traceId` the chat path now threads into `recordDeliverableCandidate`.
+- **Dashboard.** `POST /api/traces/:id/verdict` (`{verdict}` — 400 on a bad verdict, 404 on an unknown trace) plus
+  the **"Was this what you wanted?"** 👍/👎 control in `TracePanel.tsx`. Its `source` is `'dashboard'`, so a future
+  fit can tell the two channels apart.
+- **The corpus is now tri-state.** `deliverable-corpus.ts` moved from `rejected: boolean | null` to
+  `verdict: 'accepted' | 'rejected' | null` + `verdictAt` + `traceId`; a legacy `rejected: true` row is migrated on
+  read. **A rejection falls back to the newest unlabelled row; an acceptance does NOT** — the positive class is
+  never invented, only measured.
+
+### 30b. The pre-existing `feedback` store — reconciled, not silently duplicated
+
+`src/learning/feedback.ts` (with `nuvira feedback record|list|stats|clear`) already existed and looked similar, so
+this bundle states the decision rather than ships two overlapping concepts. They are **kept distinct**: the old
+store is keyed by **trajectory id** (pipeline runs), has four ratings, and is read only for stats — its
+`ratingToScoreDelta` still has no caller — while the new one is keyed by **chat turn** (`traceId`) and is the only
+one that labels the corpus. `nuvira feedback --help` and `docs/COMMANDS.md` §7.3 now point at `nuvira rate`, and
+`docs/COMMANDS.md` §12.15 points back. Full comparison: `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §8.5.
+
+**The design record.** The previous-vs-new label-sourcing approach — derived signals (negatives only) vs the
+four tiers (derived / **explicit** / behavioural / model-judge), and why only the explicit tier supplies the
+positive class — is now written down in `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` **§8**, with the honest limits.
+
+### 30c. Honest limits
+
+- **Nothing routes on it, and no score is derived from it.** `rateTurn` fits nothing. Recording the label and
+  using it are separate decisions, and the fit waits until enough rows exist.
+- **A few hundred rows with BOTH classes are needed** before `P(accepted | features)` is fit-able. `qualityScore`
+  stays genuinely blocked; this bundle is the collection path, not the score.
+- **Coverage gap.** Corpus candidates are recorded on the CLI chat path only; a dashboard-rated turn labels its
+  trace but has no corpus row (the dashboard chat console does not collect yet).
+
+**Tests.** `turn-feedback.test.ts` (new: `parseVerdict` acceptance/refusal, rate-the-latest-turn, corpus labelling,
+refuse when no turn exists, refuse an unknown trace, re-rating replaces, `--list`, and `recordTurnReport` staying
+separate from the verdict); `deliverable-corpus.test.ts` **rewritten** for tri-state (14: exact-trace labelling,
+refusal to invent an acceptance, re-rating, legacy `rejected:true` migration, and the Bundle-29 cases still
+held); `trace-verdict-api.test.ts` (new HTTP: records the verdict, labels the corpus, 400 on a bad verdict, 404 on
+an unknown trace).
+
+**Gates.** root suite **466 files / 8584+ passed / 0 failed**, `verify:commands` **341/341**, dashboard suite
+**50 files / 1053+ passed**, both `tsc --noEmit` clean, all three docs guards, `build:cli`, `build:dashboard`
+(TracePanel changed), `dashboard:bundle:check`, and the real-browser walk over all 27 routes × 4 themes.
+
+---
+
 ## Bundle 29 — collect the case item 13 needs, and the capped measurement that lied (LANDED 2026-10-08)
 
 ### 29a. The collection path (round 3's followup #1)
@@ -324,6 +385,9 @@ implemented as `learning/deliverable-corpus.ts` — and it is deliberately INERT
 **Nothing reads the corpus.** No score is derived from it, nothing routes on it, and `rejected` is never `false`:
 reading the user's silence as acceptance would be a fabricated positive label, the same rule the bandit follows.
 The corpus is a dataset a future quality signal would be fit to, stated as such in the module header.
+*(Note: **Bundle 30** replaced the `rejected: boolean | null` field with the tri-state `verdict` so an explicit
+acceptance can also be recorded — the never-fabricate-a-positive rule is unchanged; the legacy field is migrated
+on read.)*
 
 **Honest limit.** Collection is wired on the CLI chat path. The dashboard chat console does not yet collect — it
 would need the same correction signal plumbed through a session — and that is recorded rather than implied.
@@ -554,6 +618,12 @@ honestly open.
 (`detectRegressionSignal`), and it was only UNWIRED. That half is fixed in **Bundle 27** below; only the
 `qualityScore` half remains behind the missing label. Read the two together — "no labelled corpus" applies to
 the SCALE of quality, not to whether the user accepted the turn.
+
+**UNBLOCKED (2026-10-08) — the missing label now has a source.** Bundles 29 and 30 built the collection path:
+the deliverable corpus (facts only, no verdict) plus an EXPLICIT per-turn verdict (`nuvira rate <good|bad>` and
+the dashboard Trace 👍/👎), which supplies the positive class this probe could not find anywhere on disk. The
+SCALE stays blocked only on ROW COUNT now (a few hundred rows, both classes), not on a missing mechanism — see
+`docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §8.
 
 ---
 
@@ -1055,7 +1125,11 @@ exists; where it does not, that is stated as the residual rather than implied cl
    message (`detectRegressionSignal`) and merely unwired. Bundle 27 applies it as the exact deferred delta the
    success branch would have used. Only `qualityScore` — the 0–1 *scale* — still needs a measured reference that
    does not exist, so the reward is now a veto on verification, an explicit rejection penalty, and a cost
-   adjustment. The remaining gap is the quality SCALE alone.
+   adjustment. The remaining gap is the quality SCALE alone. **NARROWED — Bundle 30**: the missing reference
+   now has a COLLECTION path. `nuvira rate <good|bad>` (and the dashboard Trace 👍/👎) records an explicit
+   per-turn verdict with provenance, and labels the matching corpus row — supplying the POSITIVE class the
+   derived correction signal can never produce. Nothing is fit to it yet and nothing routes on it; the scale
+   stays blocked until a few hundred rows with both classes exist (`docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §8).
 5. ~~**`cost` and `ecosystem` have declared priors but no measured feed.**~~ **CLOSED — Bundle 16**: the
    approved OpenRouter catalogue now supplies both as LABELLED priors (opt-in, default OFF,
    `NUVIRA_CATALOG_FEED` in the CLI and the dashboard's Process Env page). `accuracy`, `performance` and
@@ -1130,7 +1204,11 @@ exists; where it does not, that is stated as the residual rather than implied cl
     excuse the next observable signal. **Bundle 29 implemented the collection itself:** a
     magnitude-satisfied authored delivery is now recorded (facts only, no verdict) and labelled when the user's
     next message reports a miss, so the corpus this item asked for is being built rather than deferred. The
-    detector still waits on labelled rows — that is the one thing that was ever genuinely blocked.
+    detector still waits on labelled rows — that is the one thing that was ever genuinely blocked. **Bundle 30
+    supplied the rows' POSITIVE half:** `nuvira rate <good|bad>` (and the dashboard Trace 👍/👎) now records an
+    explicit acceptance/rejection on the turn and labels the matching corpus row, so the corpus carries both
+    classes rather than negatives only. The detector is still NOT written — it waits on a few hundred labelled
+    rows, and writing it before then would mean hand-writing the vocabulary this programme exists to replace.
 14. ~~**`model explain` answers a hypothetical**: it cannot see a continuation's `routingText`, the
     `contextHintTokens`, or the session's failed-provider set, which exist only at runtime.~~
     **CLOSED — Bundle 21**: `--context-tokens <n>` feeds the context preflight the token count the runtime

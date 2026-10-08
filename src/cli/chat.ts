@@ -1194,6 +1194,9 @@ export class ChatCommand extends BaseCommand {
             ? { targetWords: answer.authoredDeliverable.targetWords }
             : {}),
           ...(turnReport?.verification ? { verification: turnReport.verification } : {}),
+          // The trace link is what lets an EXPLICIT verdict (`nuvira rate`) label
+          // THIS delivery rather than "the most recent one".
+          ...(answer.traceId ? { traceId: answer.traceId } : {}),
           excerpt: answer.authoredDeliverable.excerpt,
         });
       } catch {

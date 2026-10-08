@@ -1511,6 +1511,11 @@ Step-by-step replay of a trace — every LLM call with prompt digest, model, tok
 
 Delete all stored traces
 
+### `nuvira rate`
+
+Rate the last turn (good|bad) — records the one label a quality signal can be fit to (also on the dashboard Trace tab)
+
+   - flags: `--list, --trace <trace>`
 ### `nuvira continuity`
 
 Session continuity — what is stored, and how to forget it
@@ -1531,4 +1536,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*490 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*492 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

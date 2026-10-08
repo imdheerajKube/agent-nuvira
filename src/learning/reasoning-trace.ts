@@ -379,6 +379,22 @@ export interface ReasoningTrace {
    */
   turnReport?: TurnReport;
   /**
+   * The USER's verdict on this turn — the ONE label the harness cannot derive.
+   *
+   * Every other signal on this record is derived from evidence the run produced
+   * (a tool ran, a plan step closed, a flag fired). Acceptance is not: only the
+   * user knows whether the work was what they wanted. So it is recorded
+   * EXPLICITLY, never inferred from silence (silence is not consent — the same
+   * rule the bandit follows), and it carries its SOURCE so a fitted quality
+   * signal can tell a human judgement from a derived one. Written by
+   * `recordTraceVerdict` (CLI `nuvira rate` and the dashboard Trace tab).
+   */
+  userVerdict?: {
+    verdict: 'accepted' | 'rejected';
+    at: number;
+    source: 'cli' | 'dashboard';
+  };
+  /**
    * The FULL stable layer (system prompt), captured ONCE per trace.
    * Previously every trace exposed only the first 80 characters of it, so the
    * persona / tool contract / response rules were unreviewable. Capped to keep
@@ -724,6 +740,50 @@ export function recordTurnReport(
     writeFile(data);
   } catch {
     // Best-effort — an instrument must never break the run it observes.
+  }
+}
+
+/**
+ * Record the USER's verdict on a finished turn — the ground truth a quality
+ * signal is fit to.
+ *
+ * WHY ON THE TRACE. The trace is already the per-turn record: the goal, the
+ * steps, the outcome, the turn report. A verdict that lived anywhere else would
+ * have to be joined back to a turn by heuristic, and a label that cannot be
+ * traced to the run it judges is a number nobody can audit. It also lands as a
+ * `decision` event, so the reviewable timeline reads in order.
+ *
+ * Idempotent in the useful direction: re-rating a turn REPLACES the verdict
+ * (people change their mind, and the newer judgement is the better one) rather
+ * than accumulating contradicting rows.
+ */
+export function recordTraceVerdict(
+  traceId: string,
+  verdict: 'accepted' | 'rejected',
+  source: 'cli' | 'dashboard',
+  now: number = Date.now(),
+): boolean {
+  try {
+    const data = readFile();
+    const trace = data.traces.find((t) => t.id === traceId);
+    if (!trace) return false;
+    trace.userVerdict = { verdict, at: now, source };
+    const events = trace.events ?? (trace.events = []);
+    events.push({
+      seq: events.length + 1,
+      timestamp: now,
+      kind: 'decision',
+      summary: `user verdict — ${verdict} (${source})`,
+    });
+    // Same cap and re-numbering rule as `recordTraceEvent`.
+    if (events.length > MAX_EVENTS_PER_TRACE) {
+      trace.events = events.slice(-MAX_EVENTS_PER_TRACE);
+      trace.events.forEach((e, i) => { e.seq = i + 1; });
+    }
+    writeFile(data);
+    return true;
+  } catch {
+    return false;
   }
 }
 

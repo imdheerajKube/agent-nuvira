@@ -338,6 +338,24 @@ function StepRow({ step }: { step: TraceStep }) {
 function TraceDetail({ trace }: { trace: TraceEntry }) {
   const [steps, setSteps] = useState<TraceStep[] | null>(trace.steps ?? null);
   const [error, setError] = useState(false);
+  /**
+   * The USER's verdict on this turn — the only label the harness cannot derive.
+   * Seeded from the trace so a rated turn still reads as rated after a reload, and
+   * NEVER defaulted: `null` means "not rated", which is not the same as accepted.
+   * Nothing routes on it; it is recorded so a quality signal can later be fit to
+   * labelled turns (the CLI twin is `nuvira rate`).
+   */
+  const [verdict, setVerdict] = useState<'accepted' | 'rejected' | null>(trace.userVerdict?.verdict ?? null);
+  const [savingVerdict, setSavingVerdict] = useState(false);
+  const rate = useCallback(
+    async (v: 'accepted' | 'rejected') => {
+      setSavingVerdict(true);
+      const r = await dashboardAPI.rateTrace(trace.id, v);
+      if (r) setVerdict(v);
+      setSavingVerdict(false);
+    },
+    [trace.id],
+  );
 
   useEffect(() => {
     if (trace.steps) {
@@ -380,6 +398,42 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
         </span>
         <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: 'var(--bg-primary)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
           🔢 {steps?.length ?? '?'} call(s)
+        </span>
+        {/*
+          The user's verdict. Deliberately labelled "was this what you wanted?"
+          rather than "rate quality": a 0–100 judgement is inconsistent between
+          people and turns, while a yes/no is a label a signal can actually be fit
+          to. The positive case is the reason this exists at all — the derived
+          correction signal can only ever produce negatives.
+        */}
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', marginLeft: 4 }}>
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Was this what you wanted?</span>
+          {(['accepted', 'rejected'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              disabled={savingVerdict}
+              aria-pressed={verdict === v}
+              onClick={() => void rate(v)}
+              style={{
+                fontSize: 11,
+                padding: '2px 10px',
+                borderRadius: 12,
+                cursor: savingVerdict ? 'default' : 'pointer',
+                background: verdict === v ? 'var(--accent, var(--bg-hover))' : 'var(--bg-primary)',
+                border: `1px solid ${verdict === v ? 'var(--accent, var(--border))' : 'var(--border)'}`,
+                color: verdict === v ? 'var(--text-inverse, var(--text-primary))' : 'var(--text-secondary)',
+                fontWeight: verdict === v ? 600 : 400,
+              }}
+            >
+              {v === 'accepted' ? '👍 Yes' : '👎 No'}
+            </button>
+          ))}
+          {verdict ? (
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>recorded</span>
+          ) : (
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>not rated</span>
+          )}
         </span>
         {steps && steps.some((s) => s.escalated) && (
           <span style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: 'var(--warn-soft)', border: '1px solid var(--accent-yellow)', color: 'var(--accent-yellow)' }}>
