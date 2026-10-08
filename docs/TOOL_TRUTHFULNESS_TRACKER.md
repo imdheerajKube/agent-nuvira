@@ -1044,6 +1044,49 @@ HONEST LIMIT: `readOnlyHint` is the spec's own description of itself as "a hint,
 not a guarantee". These tests prove we READ the declaration, not that a server's
 declaration is true.
 
+## Audit — hand-maintained tables a descriptor could own (2026-10-08)
+
+A survey of the tables that still restate a fact the capability descriptor
+already carries (Bundle 41's `Capability`) or could carry. Ranked by whether the
+descriptor genuinely knows the fact, not by file size.
+
+**OWNABLE — the descriptor already holds the fact (drift risk is real):**
+
+| Site | Table | Why the descriptor owns it |
+|---|---|---|
+| `tools/capability-registry.ts` | `EFFECT_BY_TOOL` | This IS the descriptor source, and it is still keyed by tool NAME in one hand map. The end state is each tool self-declaring `effectClass`/`grantCategory` at `registerTool`, so a new tool cannot be born unclassified. The DEFAULT is conservative, so nothing is unsafe — but it is the last hand table in the layer. |
+| `tools/run-terminal.ts:604` | `grantCategory = recoverable ? 'terminal' : 'external'` | The category is a capability fact; the gate re-derives it from a `recoverable` boolean instead of reading the descriptor. |
+| `tools/git-tool.ts:236` | `sessionGrantCovers(planStore, 'external')` | The literal `'external'` restates `git`'s `grantCategory`. |
+| `tools/run-cli.ts:191` | `gatedIntent.grantCategory ?? 'terminal'` | The `?? 'terminal'` fallback is a hand default; the intent declaration (`cli-intent-effects.ts`) already carries the category. |
+| `tools/coding-tools.ts:698`, `:840` | `sessionGrantCovers(planStore, 'write')` | `write_file`/`edit_file` declare `grant: 'write'`; the gate hardcodes it. |
+
+**PARTIALLY OWNABLE — derivable from `effectClass`, with one honest caveat each:**
+
+| Site | Table | Fit |
+|---|---|---|
+| `agents/tool-bridge.ts:105` | `SAFETY_GATED_TOOLS` | ≈ `effectClass` ∈ {external, destructive}. Today it is a `console.warn` only, so it is cosmetic — but it is the same fact stated by hand. |
+| `tools/tool-loop.ts:3334` | `FILE_WRITE_CAPABLE_TOOLS` | ≈ `effectClass` ∈ {local-write, local-state}. `run_terminal` is in by hand; the descriptor already says `run_terminal` is `local-state`, so the derivation is exact. |
+| `learning/turn-report.ts:35` | `MUTATION_TOOLS` | ≈ `effectClass` ∈ {local-write} ∪ {local-state that writes}. `run_terminal` is correctly absent (a shell command is not necessarily a mutation), so this is a *semantic* subset, not `effectClass` verbatim. |
+| `learning/turn-report.ts:33` | `VERIFICATION_TOOLS` | A judgment call, not an effect: `run_terminal` both verifies and mutates. The descriptor cannot decide it; it stays. |
+| `tools/tool-loop.ts:288` | `INDEPENDENT_TOOLS` | A SECOND, older fan-out list (6 names) beside Bundle 45's derived `parallelSafeToolNames()` (21). It gates the delegate *suggestion*, not the fan-out, so it never went wrong — but it is a stale duplicate of a derived set. |
+| `agents/tool-bridge.ts:47/94` | `AGENT_PIPELINE_TOOLS` / `CHAT_ONLY_TOOLS` | Tool EXPOSURE, not effect. Its own comment says "ALL 111 registry tools" over a hand list — it has drifted. A descriptor `surface`/`audience` field could own it. |
+| `tools/toolsets.ts:320` | `CORE_TOOL_NAMES` | Grouping/exposure. A `core` flag on the descriptor is a natural fit, but the toolset/enablement gates already own part of this. |
+| `tools/computer-use-tool.ts:46/47` | `SAFE_ACTIONS` / `DESTRUCTIVE_ACTIONS` | Per-ACTION effect for ONE tool. The descriptor is per-tool, so this is sub-tool granularity the current model does not express. |
+| `tools/registry.ts:483` | the `run_terminal` confirm description naming `history.clear, memory.prune, stats.cost.clear, publish` | Prose that restates `cli-intent-effects.ts` (Bundle 46). Bundle 47's `tool_search` description mentions the manifest confirmation still carried by `intent-router.ts:212/220` and read by `run-cli.ts:169`. |
+
+**NOT OWNABLE — correctly domain/lexical, no capability meaning:** tokenizers and
+stopword lists (`learning/lexical-search.ts`, `nlu/learnings.ts`, planner
+`GOAL_STOPWORDS`, `learning/deferred-task.ts` accept/decline phrases); shell
+parsing sets (`run-terminal.ts`); file-scan ignore dirs and source extensions;
+`read-extract` formats; config ON/OFF words; provider/router tables
+(`engine-router.ts`, `quota-ledger.ts`, `inference/*`) — those are MODEL
+capability, a different axis, and `model-capability.ts` is their home.
+
+**The one-line conclusion.** The capability layer centralized the facts but did
+not yet let the TOOL own them, so `EFFECT_BY_TOOL` and the five grant literals are
+the remaining drift surface; everything else is either a semantic subset (keep,
+but derive the easy half) or a different axis (exposure, not effect).
+
 ## Open
 
 1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost
