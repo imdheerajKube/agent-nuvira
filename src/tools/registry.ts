@@ -2614,7 +2614,7 @@ registerTool({
 registerTool({
   name: 'tool_search',
   description:
-    'Discover and load tools. Actions: "search" fuzzy-finds tools by query; ' +
+    'Discover and load capabilities. Actions: "search" finds what the agent can DO by query and returns each hit as a CAPABILITY — its effect (read / local-write / local-state / external / destructive), whether it is reversible and how, any credentials or binaries it needs, and whether a session grant can cover it; ' +
     '"load" activates a whole toolset (media, browser, channels, docker, ' +
     'productivity, publish, core-pipeline, …) for THIS turn — call it before ' +
     'using any tool outside the always-available core set. "load" returns ' +
@@ -2674,13 +2674,35 @@ registerTool({
       });
     }
 
-    // ── search: the pre-existing fuzzy find (unchanged behavior) ──
+    // ── search: fuzzy find, ENRICHED with capability descriptors ──
+    // The tools returned are the same as before; each is also returned as a
+    // CAPABILITY (effect class + reversibility + requirements + grant), and the
+    // curated high-level ACTIONS (install / publish / deploy / push …) ride
+    // alongside, so the model can discover what it can do — not just which tool
+    // names exist. Discovery only: nothing here decides what runs.
     const m = await import('./infra-tools.js');
     const engine = m.getToolSearchEngine();
-    // Index from registry
     const { listTools } = await import('./registry.js');
-    engine.index(listTools().map((t: any) => ({ name: t.name, description: t.description })));
-    return JSON.stringify(engine.search(query || '', limit || 10));
+    const tools = listTools();
+    engine.index(tools.map((t: any) => ({ name: t.name, description: t.description })));
+    const { capabilityIndex, searchCapabilities } = await import('./capability-registry.js');
+    const index = await capabilityIndex(
+      tools.map((t: any) => ({ name: t.name, description: t.description, category: t.category })),
+    );
+    const caps = searchCapabilities(index, query || '', limit || 10).map((h) => ({
+      id: h.capability.id,
+      kind: h.capability.kind,
+      ref: h.capability.ref,
+      name: h.capability.name,
+      does: h.capability.oneLiner,
+      effect: h.capability.effectClass,
+      reversible: h.capability.reversible,
+      ...(h.capability.reversibleHow ? { undo: h.capability.reversibleHow } : {}),
+      ...(h.capability.grantCategory ? { grantable: h.capability.grantCategory } : {}),
+      ...(Object.keys(h.capability.requires).length > 0 ? { requires: h.capability.requires } : {}),
+      matched: h.matched,
+    }));
+    return JSON.stringify({ tools: engine.search(query || '', limit || 10), capabilities: caps });
   },
 });
 
