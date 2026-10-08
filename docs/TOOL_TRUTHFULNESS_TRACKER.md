@@ -713,6 +713,67 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 44 — a requirement pre-flight, so a run knows what it is missing before it starts (2026-10-08)
+
+**The finding.** A capability declared what it needed and NOTHING checked it. A
+missing executable surfaced halfway through a task — after files had been written —
+and the user had to work out what went wrong. Worse, the declaration could not be
+checked at all: `credentials: ['NPM_TOKEN or a GitHub token']` and
+`binaries: ['winget|brew|apt']` were PROSE. A phrase list can be displayed but
+never probed, which is how the same string ended up encoding two different
+things (a note for the reader, an alternation for a parser) with no rule for
+which.
+
+**The fix.** `CapabilityRequires` now holds `CapabilityNeed` — `{ anyOf, note? }`
+— for credentials and binaries. ONE form is both displayed and probed:
+`describeRequires` renders `needs NPM_TOKEN or GITHUB_TOKEN` from the same `anyOf`
+the pre-flight checks, so the two cannot drift apart. `inputs` stays a plain list
+of things only the model can decide, and is deliberately never probed — a bump
+type is a decision, not an environment fact.
+
+**The asymmetry is the honesty.** `learning/requirement-probe.ts` reports two
+gap kinds, worded differently on purpose:
+
+- a missing BINARY is a FACT — `which`/`where` is the same resolver the shell
+  uses — so it makes `ready: false` and BLOCKS;
+- a credential absent from `process.env` is NOT the same as absent. It may live in
+  the credential vault, a `gh auth login` profile, an SSH agent, or an AWS profile
+  file. So it is reported as "credential not visible in the environment" and NEVER
+  blocks on its own.
+
+Reporting the second as definitively missing would be exactly the false claim
+this tracker exists to remove.
+
+**Surfacing.** `tool_search` annotates every hit that declares a need with a
+`check` (`ready` / `gaps` / `ask`), probed at DISCOVERY time — so the answer
+arrives before the work starts, not after. A new `readiness` action is the
+deliberate pre-flight: with a query it pre-flights a described task, with no query
+it reports what the curated install / publish / deploy / push verbs are missing
+here. A capability that declares nothing gets no empty `check` — absence is the
+signal, so the model never has to interpret a meaningless one.
+
+**The probe is injected**, so it is testable without a real PATH or env.
+
+**Measured.** `scripts/measure-requirement-gaps.mjs`:
+
+- readiness here: 8/9 curated verbs ready; `deploy-app` BLOCKED (none of
+  `vercel`/`flyctl`/`gcloud`/`aws`/`az` on PATH), and `publish-package`,
+  `publish-website`, `push-git` carry ADVISORY credential notes only;
+- trace baseline: 0 of 60 turns hit a requirement wall (keyed on
+  `tool-refusal.ts`'s own codes, not user phrasing).
+
+HONEST NOTE: that baseline is zero, so this store contains NO evidence of the
+problem the pre-flight fixes. Its value here is preventive, and it is NOT claimed
+as a measured reduction.
+
+**Consolidation.** Adding this needed a PATH probe, and TWO byte-identical copies
+already existed — `tools/modality/shared.ts` (which documented itself as "mirrors
+vault.ts binaryOnPath") and `enterprise/vault.ts`. Resolved into
+`utils/binary-probe.ts` rather than tripled; both callers now delegate.
+
+Pinned by `tests/learning/requirement-probe.test.ts` (12) and new cases in
+`tests/tools/capability-registry.test.ts`.
+
 ## Bundle 43 — the MCP schema cache actually caches, so discovery survives a cold start (2026-10-08)
 
 **The finding** (raised as Bundle 42's Open item #3). `mcp-schema-cache.ts` existed

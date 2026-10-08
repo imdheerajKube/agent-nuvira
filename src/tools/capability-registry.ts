@@ -127,7 +127,10 @@ const EFFECT_BY_TOOL: Record<string, EffectInfo> = {
   code_execution: T('local-state', true, { grant: 'terminal' }),
   docker: T('local-state', true, { grant: 'terminal' }),
   // ── off-machine / metered (a grant is possible, but NEVER assumed) ──
-  publish: T('external', false, { grant: 'external', requires: { credentials: ['NPM_TOKEN or a GitHub token'] } }),
+  publish: T('external', false, {
+    grant: 'external',
+    requires: { credentials: [{ anyOf: ['NPM_TOKEN', 'GITHUB_TOKEN'], note: 'an npm automation token, or a GitHub token for a GitHub release' }] },
+  }),
   git: T('external', false, { grant: 'external', how: 'a local commit is reversible; a push is only as reversible as the remote' }),
   clone_repo: T('external', true, { how: 'delete the cloned directory', grant: 'external' }),
   gateway_send: T('external', false, { grant: 'external' }),
@@ -159,11 +162,13 @@ const EFFECT_BY_TOOL: Record<string, EffectInfo> = {
 /** Unknown tools: treat as a local-state change that NO grant may cover. */
 const DEFAULT_EFFECT: EffectInfo = T('local-state', true);
 
-/** Short, human summary of a requirement set (for the one-liner / display). */
+/** Short, human summary of a requirement set — rendered FROM the checked form. */
 export function describeRequires(requires: CapabilityRequires): string {
+  const anyOf = (needs: Array<{ anyOf: string[] }>): string =>
+    needs.map((n) => n.anyOf.join(' or ')).join(', ');
   const parts: string[] = [];
-  if (requires.credentials?.length) parts.push(`needs ${requires.credentials.join(', ')}`);
-  if (requires.binaries?.length) parts.push(`runs ${requires.binaries.join('/')}`);
+  if (requires.credentials?.length) parts.push(`needs ${anyOf(requires.credentials)}`);
+  if (requires.binaries?.length) parts.push(`runs ${anyOf(requires.binaries)}`);
   if (requires.inputs?.length) parts.push(`ask for ${requires.inputs.join(', ')}`);
   return parts.join('; ');
 }
@@ -304,7 +309,7 @@ export function actionCapabilities(): Capability[] {
       'Install the packages a project already declares (npm/pnpm/yarn/bun install) into the workspace.',
       'local-state',
       true,
-      { binaries: ['npm|pnpm|yarn|bun'] },
+      { binaries: [{ anyOf: ['npm', 'pnpm', 'yarn', 'bun'] }] },
       ['install', 'dependency', 'package', 'npm', 'node'],
       'removing node_modules or a git checkout',
     ),
@@ -314,7 +319,7 @@ export function actionCapabilities(): Capability[] {
       'Declare and install a package the manifest does not yet list — a new choice, so the user owns it.',
       'external',
       true,
-      { binaries: ['npm|pnpm|yarn|bun'], inputs: ['which package'] },
+      { binaries: [{ anyOf: ['npm', 'pnpm', 'yarn', 'bun'] }], inputs: ['which package'] },
       ['add', 'dependency', 'install', 'package', 'library'],
       'uninstall it and revert the manifest',
     ),
@@ -324,7 +329,7 @@ export function actionCapabilities(): Capability[] {
       'Install a binary or toolchain for the machine (winget/brew/apt/choco/scoop, or npm -g).',
       'external',
       false,
-      { binaries: ['winget|brew|apt|choco|scoop|npm'], inputs: ['which tool'] },
+      { binaries: [{ anyOf: ['winget', 'brew', 'apt', 'choco', 'scoop', 'npm'] }], inputs: ['which tool'] },
       ['install', 'tool', 'toolchain', 'winget', 'brew', 'apt', 'global'],
     ),
     A(
@@ -333,7 +338,7 @@ export function actionCapabilities(): Capability[] {
       'Remove an installed package or tool, locally or from the machine.',
       'external',
       false,
-      { binaries: ['npm|pnpm|yarn', 'winget|brew|apt'], inputs: ['which package'] },
+      { binaries: [{ anyOf: ['npm', 'pnpm', 'yarn'] }, { anyOf: ['winget', 'brew', 'apt'] }], inputs: ['which package'] },
       ['uninstall', 'remove', 'delete', 'package', 'tool'],
     ),
     A(
@@ -342,7 +347,11 @@ export function actionCapabilities(): Capability[] {
       'Publish a release to npm/GitHub — off-machine and irreversible.',
       'external',
       false,
-      { credentials: ['NPM_TOKEN or a GitHub token'], binaries: ['npm|gh'], inputs: ['bump type'] },
+      {
+        credentials: [{ anyOf: ['NPM_TOKEN', 'GITHUB_TOKEN'], note: 'an npm automation token, or a GitHub token for a GitHub release' }],
+        binaries: [{ anyOf: ['npm', 'gh'] }],
+        inputs: ['bump type'],
+      },
       ['publish', 'release', 'npm', 'registry', 'package', 'ship'],
     ),
     A(
@@ -351,7 +360,11 @@ export function actionCapabilities(): Capability[] {
       'Deploy a built site to a host (Cloudflare Pages, Netlify, Vercel, GitHub Pages) — off-machine and public.',
       'external',
       false,
-      { credentials: ['the host token (CLOUDFLARE_API_TOKEN / NETLIFY_AUTH_TOKEN / VERCEL_TOKEN)'], binaries: ['cf|netlify|vercel|gh'], inputs: ['which host', 'the domain or project'] },
+      {
+        credentials: [{ anyOf: ['CLOUDFLARE_API_TOKEN', 'NETLIFY_AUTH_TOKEN', 'VERCEL_TOKEN'], note: 'the token for whichever host you deploy to — may also live in the credential vault' }],
+        binaries: [{ anyOf: ['wrangler', 'netlify', 'vercel', 'gh'] }],
+        inputs: ['which host', 'the domain or project'],
+      },
       ['publish', 'website', 'deploy', 'host', 'cloudflare', 'netlify', 'vercel', 'pages'],
     ),
     A(
@@ -360,7 +373,11 @@ export function actionCapabilities(): Capability[] {
       'Deploy an app/server to a host or platform — off-machine and public.',
       'external',
       false,
-      { credentials: ['the platform token'], binaries: ['vercel|flyctl|gcloud|aws|az'], inputs: ['which platform'] },
+      {
+        credentials: [{ anyOf: ['VERCEL_TOKEN', 'FLY_API_TOKEN', 'GOOGLE_APPLICATION_CREDENTIALS', 'AWS_ACCESS_KEY_ID', 'AZURE_CLIENT_ID'], note: 'the token for whichever platform you deploy to — a logged-in CLI may already hold it' }],
+        binaries: [{ anyOf: ['vercel', 'flyctl', 'gcloud', 'aws', 'az'] }],
+        inputs: ['which platform'],
+      },
       ['deploy', 'app', 'server', 'host', 'platform', 'ship'],
     ),
     A(
@@ -369,7 +386,10 @@ export function actionCapabilities(): Capability[] {
       'Send commits to a remote (GitHub et al.) — off-machine; the request naming it is the authorization.',
       'external',
       true,
-      { credentials: ['git credentials or an SSH key for the remote'], binaries: ['git'] },
+      {
+        credentials: [{ anyOf: ['GITHUB_TOKEN', 'GH_TOKEN'], note: 'or an SSH key / credential helper the remote already accepts' }],
+        binaries: [{ anyOf: ['git'] }],
+      },
       ['push', 'git', 'github', 'remote', 'origin', 'commit'],
       'force-push is denied; otherwise the remote keeps history you can revert',
     ),

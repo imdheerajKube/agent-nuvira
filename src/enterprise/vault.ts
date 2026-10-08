@@ -59,6 +59,7 @@ import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { resolveBuffConfigDir } from '../config/paths.js';
+import { binaryOnPath } from '../utils/binary-probe.js';
 import { recordVaultAccess } from './vault-audit.js';
 
 /** CJS require, available in ESM (the package is CJS). */
@@ -230,25 +231,10 @@ export function probeKeyringReachable(): boolean {
 
 // ─── Tier 1b: OS-native CLI backends ───────────────────────────────────────
 
-/**
- * True when an executable exists on PATH (never throws). MEMOIZED — OS tool
- * presence cannot change mid-process, and this runs on every Vault.open (which
- * every ConfigManager construction triggers), so spawning `which`/`where` once
- * per tool per process is enough.
- */
-const binaryOnPathCache = new Map<string, boolean>();
-function binaryOnPath(name: string): boolean {
-  const cached = binaryOnPathCache.get(name);
-  if (cached !== undefined) return cached;
-  try {
-    execFileSync(process.platform === 'win32' ? 'where' : 'which', [name], { stdio: 'ignore' });
-    binaryOnPathCache.set(name, true);
-    return true;
-  } catch {
-    binaryOnPathCache.set(name, false);
-    return false;
-  }
-}
+// PATH probing now lives in ONE place — `utils/binary-probe.ts` — because this
+// file and `tools/modality/shared.ts` held byte-identical copies of it. The memo
+// travels with the shared implementation, so the "once per tool per process"
+// property this comment used to describe still holds.
 
 /**
  * macOS `security` CLI backend — the same Keychain the keyring binding uses,
