@@ -4,6 +4,36 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Changed: the CLI intent sets become one declaration table
+
+`autonomy-policy.ts` carried three hand-maintained sets —
+`IRREVERSIBLE_CLI_INTENTS`, `RECOVERABLE_CLI_INTENTS`, `EXTERNAL_CLI_INTENTS` —
+where membership was the ONLY fact each one carried. "Is it reversible", "does it
+leave the machine" and "may a grant cover it" had to be re-derived by every reader
+of every call site. All three are RETIRED in favour of
+`learning/cli-intent-effects.ts`, which states those facts once per intent, plus
+`cliIntentGateFacts(intent)` to derive the gate view in one place for `run_cli`,
+the policy and the consent picture.
+
+The publish rule is now GENERALIZED rather than special-cased: it used to read
+`intent === 'publish'`; it now reads the declaration (`grantCategory === 'external'
+&& namedByRequest`), so a second off-machine intent would inherit it without an
+edit. This is a STRUCTURAL move — every declared grant category is what `run_cli`
+already computed — and a test writes the old membership down once so a future edit
+has to change behaviour consciously instead of drifting into it.
+
+The key guard is a manifest parity test: the declared intents and the manifest's
+confirmation-gated intents must be the SAME set, so a newly gated command cannot
+ship without an effect and a removed one cannot leave a ghost.
+
+THAT GUARD EARNED ITS KEEP IMMEDIATELY. `command-manifest.json` expresses gating
+in TWO places — an intent's own `confirmation`, and `resolutions[].confirmation`
+for one resolution of an intent. `contacts.remove` is gated ONLY through the
+second, so reading the top-level flag alone makes it look like a ghost; it was
+nearly deleted as dead membership while building this table. It is declared, and a
+test pins both the resolution-only shape and its declaration. Pinned by
+`tests/learning/autonomy-state-change.test.ts` (31).
+
 ### Added: parallel read fan-out derived from the registry — 6 tools to 21
 
 Which tools may run concurrently inside one step was a hand-maintained

@@ -24,6 +24,11 @@
  * around a model's own "should I ask?" instinct, which skews towards asking.
  */
 
+// NOTE ON IMPORTS: this module was deliberately dependency-free. It now imports
+// the CLI-intent effect declarations, because "may the agent decide this?" depends
+// on what the action DOES — and that answer belongs in exactly one place.
+import { cliIntentEffect } from './cli-intent-effects.js';
+
 /** How much damage a wrong choice does. */
 export type DecisionImpact = 'low' | 'medium' | 'high';
 
@@ -771,47 +776,19 @@ export function decideStateChange(request: StateChangeRequest): WriteConfirmatio
 // ── run_cli: which gated intents may be decided autonomously ───────────────
 
 /**
- * Confirmation-gated CLI intents that cannot be undone by re-running the
- * agent: irreversible data loss, or an effect outside this machine.
+ * The three hand-maintained sets that used to live here
+ * (`IRREVERSIBLE_CLI_INTENTS`, `EXTERNAL_CLI_INTENTS`, `RECOVERABLE_CLI_INTENTS`)
+ * are RETIRED. Each carried only membership, so "is it reversible", "does it
+ * leave the machine" and "may a grant cover it" were re-derived at every call
+ * site — and they drifted: `contacts.remove` sat in the recoverable set while not
+ * existing in `command-manifest.json` at all.
  *
- * These keep their gate even when the request names them. One round trip is a
- * small price for a decision that cannot be taken back.
+ * The declarations live in `learning/cli-intent-effects.ts`, which states all of
+ * those facts once per intent, and `cliIntentGateFacts(intent)` derives the gate
+ * view from them. A test asserts the declared intents and the manifest's
+ * confirmation-gated intents are the SAME set, so the two halves cannot drift
+ * again in either direction.
  */
-export const IRREVERSIBLE_CLI_INTENTS: ReadonlySet<string> = new Set([
-  'history.clear',
-  'memory.prune',
-  'stats.cost.clear',
-  'publish',
-]);
-
-/**
- * CLI intents whose effect LEAVES this machine (publish to a registry). These
- * are the ones an explicit, session-scoped OFF-MACHINE grant may cover — never a
- * blanket request, and never the local, irreversible intents above.
- */
-export const EXTERNAL_CLI_INTENTS: ReadonlySet<string> = new Set(['publish']);
-
-/**
- * Confirmation-gated CLI intents that ARE recoverable: a service that can be
- * started again, config that can be re-added, a cache that rebuilds, a skill
- * that reinstalls.
- *
- * These proceed when the user's own request resolves to the exact command. The
- * manifest flag exists because the ACTION is stateful, not because the user
- * needs to approve what they just asked for.
- */
-export const RECOVERABLE_CLI_INTENTS: ReadonlySet<string> = new Set([
-  'dashboard.stop',
-  'gateway.stop',
-  'health.selfheal',
-  'memory.optimize',
-  'cache.clear',
-  'skills.uninstall',
-  'contacts.remove',
-  'permissions.disallow',
-  'platform.remove',
-  'cron.remove',
-]);
 
 /**
  * Decide a confirmation-gated CLI intent.
@@ -828,39 +805,48 @@ export function decideCliIntentConfirmation(request: {
   /** Does the user's own request resolve to this exact command? */
   namedByRequest: boolean;
 }): WriteConfirmationVerdict {
-  // `publish` is the one off-machine intent the request can authorize directly,
-  // the same way a named `git push` does: "publish v1.2.0 to npm" IS the
-  // decision, and re-asking is a round trip with no new information. It stays in
-  // IRREVERSIBLE_CLI_INTENTS (so an UNNAMED publish — the model's own idea — is
-  // still always gated), but a request that resolves to the exact command
-  // proceeds and is REPORTED. See the README/consent picture for the model.
-  if (request.intent === 'publish' && request.namedByRequest) {
+  const effect = cliIntentEffect(request.intent);
+  if (!effect) {
+    // A gated intent with no declaration. Asking is the only safe reading, and the
+    // manifest parity test exists so this branch cannot be reached in practice.
     return {
-      action: 'proceed',
-      reason: 'the user\u2019s own request resolves to the publish \u2014 asking them to confirm what they just asked for is the manual cadence',
+      action: 'ask',
+      reason: `'${request.intent}' is confirmation-gated and has no declared effect — asking`,
     };
   }
-  if (IRREVERSIBLE_CLI_INTENTS.has(request.intent)) {
+
+  // An OFF-MACHINE intent the user's own request names proceeds directly, the same
+  // way a named `git push` does: "publish v1.2.0 to npm" IS the decision, and
+  // re-asking is a round trip with no new information. It is still irreversible, so
+  // an UNNAMED publish — the model's own idea — stays gated below. This is the rule
+  // GENERALIZED from the old hardcoded `intent === 'publish'`: it now reads the
+  // declaration, so a second off-machine intent would get it without an edit here.
+  if (effect.grantCategory === 'external' && request.namedByRequest) {
+    return {
+      action: 'proceed',
+      reason: `the user\u2019s own request resolves to the ${request.intent} \u2014 asking them to confirm what they just asked for is the manual cadence`,
+    };
+  }
+
+  // Irreversible: gated however the request is phrased.
+  if (!effect.reversible) {
     return {
       action: 'ask',
       reason: `'${request.intent}' cannot be undone by re-running — one round trip is cheap, and being wrong is not`,
     };
   }
-  if (RECOVERABLE_CLI_INTENTS.has(request.intent)) {
-    return request.namedByRequest
-      ? {
-          action: 'proceed',
-          reason: `the user's own request resolves to '${request.intent}' — asking them to confirm what they just asked for is the manual cadence`,
-        }
-      : {
-          action: 'ask',
-          reason: `'${request.intent}' was not what the user asked for — it is the agent's own initiative, so it is their call`,
-        };
-  }
-  return {
-    action: 'ask',
-    reason: `'${request.intent}' is confirmation-gated and not classified as recoverable — asking`,
-  };
+
+  // Recoverable: the user's own words resolving to the exact command is the
+  // authorization; the agent's own initiative is the user's call.
+  return request.namedByRequest
+    ? {
+        action: 'proceed',
+        reason: `the user's own request resolves to '${request.intent}' — asking them to confirm what they just asked for is the manual cadence`,
+      }
+    : {
+        action: 'ask',
+        reason: `'${request.intent}' was not what the user asked for — it is the agent's own initiative, so it is their call`,
+      };
 }
 
 /**

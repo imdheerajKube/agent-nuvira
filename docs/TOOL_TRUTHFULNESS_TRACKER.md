@@ -713,6 +713,51 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 46 — the CLI intent sets become one declaration table (2026-10-08)
+
+**The finding.** `autonomy-policy.ts` carried three hand-maintained sets
+(`IRREVERSIBLE_CLI_INTENTS`, `RECOVERABLE_CLI_INTENTS`, `EXTERNAL_CLI_INTENTS`),
+and membership was the ONLY fact each carried. So "is it reversible", "does its
+effect leave this machine" and "may a grant cover it" were all re-derived by
+whoever read the call site — and `EXTERNAL_CLI_INTENTS` was literally
+`new Set(['publish'])`, a set of one that existed only to answer a question the
+declaration should answer.
+
+**The fix.** `learning/cli-intent-effects.ts` declares all 14 confirmation-gated
+intents with `effectClass` / `reversible` / `grantCategory` / `why`, and
+`cliIntentGateFacts(intent)` derives the gate view in ONE place for `run_cli`, the
+policy and the consent picture. The three sets are retired.
+
+**The publish rule is now general rather than special.** It read
+`intent === 'publish'`; it now reads the declaration
+(`grantCategory === 'external' && namedByRequest`), so a second off-machine intent
+inherits it without an edit here — which is the difference between a rule and a
+coincidence.
+
+**Not a policy change.** Every declared category is what `run_cli` already
+computed (external for publish, terminal otherwise, nothing for the irreversible
+local ones). A test writes the old membership down once, so a future edit has to
+change behaviour CONSCIOUSLY instead of drifting into it.
+
+**The guard, and how it paid for itself immediately.** The declared intents and
+the manifest's gated intents must be the SAME set — a newly gated command cannot
+ship without an effect, and a removed one cannot leave a ghost. While building the
+table I read `command-manifest.json` for intents whose own `confirmation` is true,
+counted 13, and concluded `contacts.remove` was dead membership that had never
+existed as a gate.
+
+**That was wrong, and the guard is what caught it.** The manifest expresses gating
+in TWO places — an intent's own `confirmation`, AND `resolutions[].confirmation`
+for a specific resolution of an intent. `contacts.remove` is gated ONLY through
+the second form, so a check that reads the top-level flag alone calls it a ghost
+and deletes it. There are 14 gated intents, not 13. The declaration is now present,
+and a test pins BOTH the resolution-only shape and its declaration, so the trap is
+recorded rather than re-discovered.
+
+Pinned by `tests/learning/autonomy-state-change.test.ts` (31), including the
+manifest parity guard, the resolution-only case, and the behavior-equivalence
+table against the retired sets.
+
 ## Bundle 45 — parallel read fan-out derived from the registry, 6 tools to 21 (2026-10-08)
 
 **The finding.** Which tools may run concurrently inside one step was a

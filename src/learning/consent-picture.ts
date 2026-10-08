@@ -60,7 +60,7 @@ export function consentPicture(): ConsentPicture {
         { action: 'a command the request itself names', evidence: 'namedByRequest' },
         { action: 'git commit / git push the request names', evidence: 'requestRequestsCommit / requestRequestsPush' },
         { action: 'publish the request resolves to', evidence: 'the request resolves to the publish CLI intent' },
-        { action: 'recoverable CLI intents the user asked for (stop dashboard, clear cache…)', evidence: 'RECOVERABLE_CLI_INTENTS + namedByRequest' },
+        { action: 'recoverable CLI intents the user asked for (stop dashboard, clear cache…)', evidence: 'the intent is declared reversible in cli-intent-effects.ts + namedByRequest' },
         { action: 'a workspace command the request authorized', evidence: 'authorizedByRequest + recoverable' },
       ],
     },

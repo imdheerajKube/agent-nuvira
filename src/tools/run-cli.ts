@@ -35,7 +35,8 @@ import type { ToolContext } from './registry.js';
 import { recordArtifact } from './artifact-append.js';
 import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { resolveAsk } from '../commands/intent-router.js';
-import { decideCliIntentConfirmation, EXTERNAL_CLI_INTENTS, RECOVERABLE_CLI_INTENTS } from '../learning/autonomy-policy.js';
+import { decideCliIntentConfirmation } from '../learning/autonomy-policy.js';
+import { cliIntentGateFacts } from '../learning/cli-intent-effects.js';
 import { envelopeCoversAction } from '../learning/intent-envelope.js';
 import { sessionGrantCovers, type SessionGrantCategory } from '../learning/session-grant.js';
 import { maskSenderId } from '../utils/mask.js';
@@ -173,22 +174,21 @@ export async function runCliTool(args: unknown, ctx: ToolContext): Promise<strin
     // widen what may run: irreversible intents keep the gate they had, and this
     // only lets an approved plan carry out system work without a round trip per
     // command.
+    // ONE declaration answers every question below — what it does to the world,
+    // whether re-running undoes it, and which grant may cover it. See
+    // `learning/cli-intent-effects.ts`; the three hand-maintained sets this used to
+    // consult are retired.
+    const gatedIntent = cliIntentGateFacts(top.intent);
     const envVerdict = envelopeCoversAction(ctx.envelope, {
       tool: 'run_cli',
-      changeClass: RECOVERABLE_CLI_INTENTS.has(top.intent) ? 'local-state' : 'destructive',
+      changeClass: gatedIntent.recoverable ? 'local-state' : 'destructive',
     });
-    // The explicit session grant: an off-machine intent (publish) needs the
-    // `external` category; a recoverable system intent needs `terminal`. A named
-    // publish proceeds through the policy below, the same as a named push.
-    const externIntent = EXTERNAL_CLI_INTENTS.has(top.intent);
-    // A grant may only cover an intent the CLI policy itself classifies as
-    // recoverable or off-machine — NEVER an irreversible local one
-    // (`history.clear`, `memory.prune`), which keeps its gate whatever the user
-    // granted.
-    const recoverableIntent = RECOVERABLE_CLI_INTENTS.has(top.intent);
+    // A grant may only cover an intent the policy itself classifies as recoverable
+    // or off-machine — NEVER an irreversible local one (`history.clear`,
+    // `memory.prune`), which keeps its gate whatever the user granted.
     const grantCovers =
-      (externIntent || recoverableIntent) &&
-      sessionGrantCovers(ctx.planStore, externIntent ? 'external' : 'terminal');
+      (gatedIntent.external || gatedIntent.recoverable) &&
+      sessionGrantCovers(ctx.planStore, gatedIntent.grantCategory ?? 'terminal');
     const verdict = envVerdict.covered || grantCovers
       ? {
           action: 'proceed' as const,
@@ -200,9 +200,9 @@ export async function runCliTool(args: unknown, ctx: ToolContext): Promise<strin
         tool: 'run_cli',
         command,
         // Offer a session grant ONLY where one could actually help; an
-        // irreversible local intent gets no category, so no grant is offered.
-        ...(externIntent || recoverableIntent
-          ? { category: (externIntent ? 'external' : 'terminal') as SessionGrantCategory }
+        // irreversible local intent declares no category, so no grant is offered.
+        ...((gatedIntent.external || gatedIntent.recoverable) && gatedIntent.grantCategory
+          ? { category: gatedIntent.grantCategory as SessionGrantCategory }
           : {}),
       };
       return (
