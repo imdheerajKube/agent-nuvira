@@ -73,6 +73,7 @@ import { KnowledgeCommand } from './knowledge.js';
 import { HooksCommand } from './hooks.js';
 import { TraceCommand } from './trace.js';
 import { RateCommand } from './rate.js';
+import { DecisionsCommand } from './decisions.js';
 import { ContinuityCommand } from './continuity.js';
 import { WebsiteCommand } from './website.js';
 import { BedrockCommand } from './bedrock.js';
@@ -305,6 +306,10 @@ export function createCLI(): Command {
   // Register Rate command (the USER's verdict on a turn — the one label a
   // quality signal can be fit to; recorded on the trace + the quality corpus)
   program.addCommand(new RateCommand().create());
+
+  // Register Decisions command (the project's recorded must-ask decisions —
+  // written by ask_user, revisable, so a choice is never lost with the terminal)
+  program.addCommand(new DecisionsCommand().create());
 
   // Register Continuity command (session snapshots + semantic recall: inspect/forget)
   program.addCommand(new ContinuityCommand().create());

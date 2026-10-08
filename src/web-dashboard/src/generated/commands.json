@@ -2,8 +2,8 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 287,
-  "groupCount": 56,
+  "commandCount": 289,
+  "groupCount": 57,
   "groups": [
     {
       "name": "admin",
@@ -2172,6 +2172,27 @@
       "name": "rate",
       "description": "Rate the last turn (good|bad) — records the one label a quality signal can be fit to (also on the dashboard Trace tab)",
       "commands": []
+    },
+    {
+      "name": "decisions",
+      "description": "The must-ask decisions recorded for this project — list, search, and revise them (written by ask_user)",
+      "commands": [
+        {
+          "name": "decisions show",
+          "description": "",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "decisions revise",
+          "description": "",
+          "flags": [
+            "--answer <answer>",
+            "--note <note>"
+          ]
+        }
+      ]
     },
     {
       "name": "continuity",

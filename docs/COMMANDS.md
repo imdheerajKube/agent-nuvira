@@ -1475,6 +1475,36 @@ nuvira models excluded         # show what routing is skipping, and WHY
 - **Full walkthrough:** `docs/ACCEPTANCE.md` covers the whole workflow — rate, infer, fit,
   export, import/merge, and fit offline — in one place.
 
+### 12.16 Decisions (the must-ask choices, kept as project artifacts)
+
+- **Objective:** When the agent cannot proceed without YOUR decision it calls `ask_user`. That
+  question and your answer used to live only in the turn's transcript — close the terminal and
+  the decision was gone. Now a genuine, shown ask is recorded as a **project artifact** you can
+  go back through and revise.
+- **Command:** `nuvira decisions [--dir <path>] [--for <text>] [--limit <n>] [--json]` ·
+  `nuvira decisions show <id> [--json]` · `nuvira decisions revise <id> --answer <text> [--note <text>]`
+- **Examples:**
+  ```bash
+  nuvira decisions                        # every decision recorded for this project
+  nuvira decisions --for "database migration"   # decisions relevant to a new ask
+  nuvira decisions show dec-123-abc       # the full record, incl. its history
+  nuvira decisions revise dec-123-abc --answer "Postgres" --note "needed JSONB"
+  ```
+- **What it writes:** `<project>/.nuvira/decisions.jsonl` (one JSON record per decision,
+  append-only, the machine-readable source of truth) and a generated
+  `<project>/.nuvira/DECISIONS.md` a person can read — `.nuvira/` is gitignored, so a decision
+  log never dirties a repo. A revised decision keeps its **previous answer in the history**, so
+  a choice that changed is documented rather than overwritten.
+- **What it does NOT do:** it is never a SUBSTITUTE for asking — nothing here suppresses an
+  `ask_user` call or answers one; it records what was asked and answered. An **unattended**
+  default (no human reachable) is an ASSUMPTION and is **not** recorded as a decision. Every
+  write is best-effort and **redacts obvious secrets** (keys, tokens, `password:`/`api_key:`
+  values) before touching disk.
+- **Reading it back:** `--for "<ask>"` ranks recorded decisions by shared significant tokens
+  (no model, no phrase list), so a later, related turn can be shown what was already decided.
+  Automatic re-injection into prompts is deliberately NOT done — a decision is read when YOU
+  ask for it.
+
 ---
 
 ## 13. Cache & sandbox
@@ -1566,6 +1596,8 @@ nuvira continuity    session snapshots + semantic recall (list/clear)
 nuvira bedrock       AWS Bedrock onboarding (setup/status/test)
 nuvira credentials   release tokens (status/set/forget/verify)
 nuvira website       open the project site (capabilities/commands/docs/setup)
+nuvira rate          rate the last turn (the label a quality signal is fit to)
+nuvira decisions     the must-ask decisions recorded for this project (list/search/revise)
 ```
 
 ---
