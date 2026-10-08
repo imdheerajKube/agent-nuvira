@@ -116,6 +116,38 @@ node scripts/fit-acceptance.mjs corpus.csv
 Runs the identical deterministic fit on an exported file — no live store, no
 network, no model.
 
+## 8b. Seeding your first 20 labels (a recipe)
+
+The fit trains at **20 labelled turns with ≥ 5 of each class**. Here is the
+shortest honest path to get there — the labels are still yours; the script only
+shows you what to rate.
+
+```bash
+npm run build:cli                       # once
+node scripts/seed-acceptance.mjs 15     # how far you are, plus recent UNRATED turns
+```
+
+For each turn it lists, open it and rate it:
+
+```bash
+nuvira trace show <id>        # read what the turn actually did
+nuvira rate good -t <id>      # or: nuvira rate bad -t <id>
+nuvira rate --stats           # watch the count climb to 20 (≥5 each class)
+```
+
+Worked pattern that reaches the floor fastest:
+
+1. Run a handful of ordinary chat turns (`nuvira chat "…"`) — a mix of ones that
+   land and ones that do not.
+2. Rate each one honestly. The behavioural tier (re-ask / hand-edit /
+   referenced-untouched) adds derived labels along the way, so you usually need
+   fewer explicit ratings than the floor suggests.
+3. When `rate --stats` says `fit: TRAINED`, `model explain` and the dashboard show
+   the fitted `P(accepted | features)`.
+
+**Do not** make the agent rate its own turns — that would fabricate the exact
+labels this is meant to measure.
+
 ## 9. A worked run (measured)
 
 ```

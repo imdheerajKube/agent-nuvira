@@ -39,6 +39,8 @@ import {
   detectCorpusFormat,
   mergeImportedLabels,
   mergeLabelledCorpus,
+  explainTraceLabel,
+  ACCEPTANCE_FEATURES,
   type CorpusFormat,
 } from '../learning/acceptance-model.js';
 
@@ -56,6 +58,7 @@ export class RateCommand {
       .option('-i, --import <file>', 'merge an exported corpus (JSON or CSV) into the local labelled corpus')
       .option('-m, --merge <file>', 'reconcile an exported corpus against LOCAL labels (default: keep local on a conflict)')
       .option('--replace', 'with --merge: let the incoming label win on a conflict')
+      .option('--explain <id>', 'explain one trace: its features, its label, and the fitted P(accepted)')
       .option('--format <format>', 'export format: json | csv (default: by path extension, else json)')
       .action(
         (
@@ -69,6 +72,7 @@ export class RateCommand {
             merge?: string;
             replace?: boolean;
             format?: string;
+            explain?: string;
           },
         ) => {
           this.run(verdict, opts ?? {});
@@ -87,8 +91,13 @@ export class RateCommand {
       merge?: string;
       replace?: boolean;
       format?: string;
+      explain?: string;
     },
   ): void {
+    if (opts.explain !== undefined) {
+      this.explain(opts.explain);
+      return;
+    }
     if (opts.merge !== undefined) {
       this.mergeCorpus(opts.merge, Boolean(opts.replace));
       return;
@@ -182,6 +191,38 @@ export class RateCommand {
     const { added, updated, total } = mergeImportedLabels(turns);
     logger.success(`Imported ${turns.length} row(s) from ${file}: ${added} new, ${updated} already present.`);
     logger.info(`   Imported store now holds ${total} labelled turn(s); they are read by the fit alongside your own.`);
+    console.log('');
+  }
+
+  /**
+   * Explain ONE trace (Bundle 36): its features, its label and the fitted
+   * `P(accepted | features)` for it — so a single rating can be audited against the
+   * exact evidence the model sees.
+   */
+  private explain(traceId: string): void {
+    const e = explainTraceLabel(traceId);
+    if (!e) {
+      logger.error(`Trace not found: ${traceId}`);
+      process.exitCode = 1;
+      return;
+    }
+    logger.highlight('\n🔎 Acceptance explanation');
+    console.log(`   ${e.traceId}${e.provider ? `  ${e.provider}/${e.model ?? ''}` : ''}`);
+    console.log(`   ${e.goal.slice(0, 100)}`);
+    console.log(`   verification ${e.verification ?? 'not-applicable'} · delivered ${e.delivered ? 'yes' : 'no'}`);
+    console.log(`   flags: ${e.flags.length > 0 ? e.flags.join(', ') : 'none'}`);
+    console.log(`   features: ${ACCEPTANCE_FEATURES.map((f) => `${f}=${e.features[f]}`).join('  ')}`);
+    console.log(
+      `   label: ${
+        e.label === null ? 'unrated (silence is not acceptance)' : e.label ? '👍 accepted' : '👎 rejected'
+      }${e.source ? ` [${e.source}]` : ''}`,
+    );
+    console.log(
+      `   P(accepted | these features): ${
+        e.probability === null ? 'n/a — the fit is not trained yet' : e.probability.toFixed(3)
+      }`,
+    );
+    console.log('   (read-only: the fit routes nothing and derives no score)');
     console.log('');
   }
 

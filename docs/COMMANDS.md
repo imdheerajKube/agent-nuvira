@@ -1416,7 +1416,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
   step closed, an honesty flag fired); only you know whether the work was right. That
   makes your verdict the one input the harness cannot compute — and, because the derived
   correction signal can only ever produce negatives, the only source of a POSITIVE label.
-- **Command:** `nuvira rate <good|bad> [--trace <id>]` · `nuvira rate --list` · `nuvira rate --stats` · `nuvira rate --export [path] [--format json|csv]` · `nuvira rate --import <file>` · `nuvira rate --merge <file> [--replace]`
+- **Command:** `nuvira rate <good|bad> [--trace <id>]` · `nuvira rate --list` · `nuvira rate --stats` · `nuvira rate --explain <id>` · `nuvira rate --export [path] [--format json|csv]` · `nuvira rate --import <file>` · `nuvira rate --merge <file> [--replace]`
 - **Examples:**
   ```bash
   nuvira rate good                 # the last turn was what you wanted
@@ -1424,12 +1424,16 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira rate bad -t t_abc123      # rate a specific turn (`nuvira trace list`)
   nuvira rate --list               # recent verdicts
   nuvira rate --stats              # labels, class balance, per-pair record, fit status
+  nuvira rate --explain t_abc123   # one trace: its features, its label, the fitted P(accepted)
   nuvira rate --export corpus.json # ship the labelled corpus for offline fitting
   nuvira rate --export corpus.csv  # CSV (or --format csv); no path prints to stdout
   nuvira rate --import corpus.json # merge a corpus collected on another machine
   nuvira rate --merge corpus.json  # reconcile against local labels (keeps local on a conflict)
   nuvira rate --merge corpus.json --replace   # let the incoming label win
   ```
+- **Explain:** `--explain <id>` audits ONE turn — the features the fit derives for it, its
+  label (or an honest `unrated`), and the fitted `P(accepted | features)`. It uses the same
+  `featuresFromTrace` the fit uses, so the audit cannot disagree with the model. Read-only.
 - **Export:** `--export` writes the SAME rows a fit here reads (the labelled turns, with
   their features and provenance), so nothing is lost in the hand-off. JSON keeps the full
   structure; CSV is the flat form (`traceId,provider,model,at,accepted,source,` + one column
@@ -1443,6 +1447,9 @@ nuvira models excluded         # show what routing is skipping, and WHY
 - **Fit offline:** `node scripts/fit-acceptance.mjs corpus.csv` runs the SAME deterministic
   fit on an exported file and prints the model — no live store, no network. It produces the
   identical coefficients the live `--stats`/`model explain` show.
+- **Seeding the floor:** `node scripts/seed-acceptance.mjs [count]` reports how far you are
+  from 20 labels (with ≥5 of each class) and lists recent UNRATED turns with the exact
+  `nuvira rate … -t <id>` command for each. It rates nothing — the label must be yours.
 - **What it writes:** the verdict on the turn's reasoning trace (`userVerdict`, with its
   source) and, when that turn delivered an authored file, a label on the matching row of
   the quality corpus. The dashboard's **Trace tab** has the same control (👍/👎).

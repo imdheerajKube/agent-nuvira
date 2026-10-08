@@ -14,6 +14,9 @@ import {
   acceptanceByPair,
   acceptanceSummary,
   collectLabelledTurns,
+  explainTraceLabel,
+  featuresFromTrace,
+  flagNames,
   formatAcceptanceSummary,
   predictAcceptance,
   trainAcceptanceModel,
@@ -192,5 +195,52 @@ describe('acceptance model', () => {
     const providerIdx = cols.indexOf('provider');
     expect(['0', '1']).toContain(lines[1].split(',')[acceptedIdx]);
     expect(lines.map((l) => l.split(',')[providerIdx])).toContain('groq');
+  });
+
+  it('explains an unrated turn honestly — silence is not acceptance', () => {
+    const id = beginTrace({ goal: 'a guided turn', source: 'chat', provider: 'groq', model: 'm1' });
+    recordTurnReport(id, report('unverified', { unverifiedEdit: true }));
+
+    const e = explainTraceLabel(id);
+    expect(e).not.toBeNull();
+    if (!e) throw new Error('unreachable');
+    expect(e.label).toBeNull();
+    expect(e.source).toBeNull();
+    expect(e.probability).toBeNull();
+    expect(e.fitReady).toBe(false);
+    expect(e.verification).toBe('unverified');
+    expect(e.flags).toContain('unverifiedEdit');
+    expect(e.features).toEqual({ verified: 0, unverified: 1, flag: 1, delivered: 0 });
+  });
+
+  it('explains a rated turn with the fitted probability when the model has trained', () => {
+    for (let i = 0; i < 12; i++) addTurn({ accepted: true, verification: 'verified' });
+    for (let i = 0; i < 12; i++) addTurn({ accepted: false, verification: 'unverified' });
+    const id = addTurn({ accepted: true, verification: 'verified', provider: 'groq', model: 'm1' });
+
+    const e = explainTraceLabel(id);
+    expect(e).not.toBeNull();
+    if (!e) throw new Error('unreachable');
+    expect(e.fitReady).toBe(true);
+    expect(e.label).toBe(true);
+    expect(e.source).toBe('cli');
+    const fit = trainAcceptanceModel();
+    if (!fit.ok) throw new Error('unreachable');
+    expect(e.probability).toBeCloseTo(predictAcceptance(fit.model, e.features), 10);
+    expect(e.probability).toBeGreaterThan(0.5);
+  });
+
+  it('returns null for a trace it cannot find, and reports flag names directly', () => {
+    expect(explainTraceLabel('trace-does-not-exist')).toBeNull();
+    expect(flagNames(report('verified', { unverifiedActionClaim: true, noActionTaken: true }))).toEqual([
+      'unverifiedActionClaim',
+      'noActionTaken',
+    ]);
+    expect(featuresFromTrace({ turnReport: report('verified') }, true)).toEqual({
+      verified: 1,
+      unverified: 0,
+      flag: 0,
+      delivered: 1,
+    });
   });
 });

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { parseJsonOrNull } from '../jsonOrNull';
-import type { ModelsHealthData, ProviderHealth, ModelStatus, TestedModel, ModelRegistryInsights, RegistryModelEntry, ActionTelemetryInsights } from '../types';
+import type { AcceptanceData, ModelsHealthData, ProviderHealth, ModelStatus, TestedModel, ModelRegistryInsights, RegistryModelEntry, ActionTelemetryInsights } from '../types';
+import { dashboardAPI } from '../api';
 import { formatCount } from '../format';
 import { useModelCounts } from '../useModelCounts';
 import MetricTiles, { type MetricTile } from './MetricTiles';
@@ -1625,6 +1626,53 @@ function Legend() {
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
+/**
+ * Bundle 36 — the acceptance record and fit, READ-ONLY, on the Models page: the
+ * label sits beside the pair you are already comparing. Same `acceptanceSummary`
+ * the Trace tab and the CLI render, so the three cannot disagree. Hidden when the
+ * server cannot answer.
+ */
+function AcceptanceSection() {
+  const [data, setData] = useState<AcceptanceData | null>(null);
+  useEffect(() => {
+    let alive = true;
+    dashboardAPI.fetchAcceptance().then((d) => { if (alive) setData(d); });
+    return () => { alive = false; };
+  }, []);
+  if (!data) return null;
+  const pairs = Object.entries(data.byPair);
+  return (
+    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 12, padding: '14px 18px', marginBottom: 16 }}>
+      <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 6px 0' }}>
+        ⭐ Acceptance (read-only)
+      </h2>
+      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+        {data.labelled} labelled turn{data.labelled === 1 ? '' : 's'} — 👍 {data.accepted} / 👎 {data.rejected}
+        {Object.keys(data.bySource).length > 0
+          ? ` · by source: ${Object.entries(data.bySource).map(([k, v]) => `${k} ${v}`).join(', ')}`
+          : ''}
+      </div>
+      {pairs.length > 0 && (
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+          {pairs.map(([key, v]) => {
+            const n = v.accepted + v.rejected;
+            return (
+              <div key={key}>
+                {key}: 👍 {v.accepted} / 👎 {v.rejected} ({Math.round((100 * v.accepted) / n)}%, n={n})
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{ fontSize: 12, color: data.fit.ok ? 'var(--accent-green)' : 'var(--text-secondary)' }}>
+        {data.fit.ok
+          ? `fit TRAINED — P(accepted | features) n=${data.fit.n} (${data.fit.positives}👍/${data.fit.negatives}👎)`
+          : `fit NOT trained — ${data.fit.reason ?? 'insufficient labels'} · rate a turn with \`nuvira rate good|bad\``}
+      </div>
+    </div>
+  );
+}
+
 export default function ModelsPanel() {
   const [modelsData, setModelsData] = useState<ModelsHealthData | null>(null);
   const [registryData, setRegistryData] = useState<ModelRegistryInsights | null>(null);
@@ -1728,6 +1776,8 @@ export default function ModelsPanel() {
 
       <ActionBar onRefresh={fetchModels} loading={loading} />
       <Legend />
+
+      <AcceptanceSection />
 
       {loading && !modelsData && (
         <div className="loading-state">
