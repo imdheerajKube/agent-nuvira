@@ -1416,7 +1416,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
   step closed, an honesty flag fired); only you know whether the work was right. That
   makes your verdict the one input the harness cannot compute — and, because the derived
   correction signal can only ever produce negatives, the only source of a POSITIVE label.
-- **Command:** `nuvira rate <good|bad> [--trace <id>]` · `nuvira rate --list` · `nuvira rate --stats` · `nuvira rate --export [path] [--format json|csv]`
+- **Command:** `nuvira rate <good|bad> [--trace <id>]` · `nuvira rate --list` · `nuvira rate --stats` · `nuvira rate --export [path] [--format json|csv]` · `nuvira rate --import <file>`
 - **Examples:**
   ```bash
   nuvira rate good                 # the last turn was what you wanted
@@ -1426,11 +1426,18 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira rate --stats              # labels, class balance, per-pair record, fit status
   nuvira rate --export corpus.json # ship the labelled corpus for offline fitting
   nuvira rate --export corpus.csv  # CSV (or --format csv); no path prints to stdout
+  nuvira rate --import corpus.json # merge a corpus collected on another machine
   ```
 - **Export:** `--export` writes the SAME rows a fit here reads (the labelled turns, with
   their features and provenance), so nothing is lost in the hand-off. JSON keeps the full
   structure; CSV is the flat form (`traceId,provider,model,at,accepted,source,` + one column
   per feature). With no path it prints to stdout to be piped.
+- **Import:** `--import` merges an exported corpus (JSON or CSV, auto-detected) back in,
+  deduped by trace, so re-importing the same file is idempotent. The merged rows are read by
+  the fit alongside your own. The dashboard Trace tab has the same Export/Import controls.
+- **Fit offline:** `node scripts/fit-acceptance.mjs corpus.csv` runs the SAME deterministic
+  fit on an exported file and prints the model — no live store, no network. It produces the
+  identical coefficients the live `--stats`/`model explain` show.
 - **What it writes:** the verdict on the turn's reasoning trace (`userVerdict`, with its
   source) and, when that turn delivered an authored file, a label on the matching row of
   the quality corpus. The dashboard's **Trace tab** has the same control (👍/👎).

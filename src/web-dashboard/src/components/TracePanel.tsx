@@ -214,11 +214,10 @@ function EmptyNote() {
 function AcceptanceCard() {
   const [data, setData] = useState<AcceptanceData | null>(null);
   const [unavailable, setUnavailable] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  useEffect(() => {
-    let alive = true;
+  const load = useCallback(() => {
     dashboardAPI.fetchAcceptance().then((d) => {
-      if (!alive) return;
       if (d) {
         setData(d);
         setUnavailable(false);
@@ -226,8 +225,34 @@ function AcceptanceCard() {
         setUnavailable(true);
       }
     });
-    return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  /** Bundle 34 — read the chosen file's TEXT and merge it (no multipart handling). */
+  const onImportFile = useCallback(
+    async (file: File | undefined) => {
+      if (!file) return;
+      setNotice('Importing…');
+      try {
+        const text = await file.text();
+        const res = await dashboardAPI.importAcceptance(text);
+        if (!res || !res.ok) {
+          setNotice(res?.error ? `Import failed: ${res.error}` : 'Import failed.');
+          return;
+        }
+        setNotice(
+          `Imported ${res.imported ?? 0}: ${res.added ?? 0} new, ${res.updated ?? 0} present (store ${res.total ?? 0}).`,
+        );
+        load();
+      } catch {
+        setNotice('Import failed.');
+      }
+    },
+    [load],
+  );
 
   if (unavailable && !data) return null;
   const pairs = data ? Object.entries(data.byPair) : [];
@@ -266,6 +291,27 @@ function AcceptanceCard() {
             {data.fit.ok
               ? `fit TRAINED — P(accepted | features) n=${data.fit.n} (${data.fit.positives}👍/${data.fit.negatives}👎)`
               : `fit NOT trained — ${data.fit.reason ?? 'insufficient labels'}`}
+          </div>
+          {/* Bundle 34 — ship / join the corpus. Export is a plain download of the
+              SAME rows the CLI exports; import reads a file's text and merges it. */}
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Ship / join:</span>
+            <a href={dashboardAPI.acceptanceExportUrl('json')} download style={{ fontSize: 12, color: 'var(--accent-blue)' }}>
+              Export JSON
+            </a>
+            <a href={dashboardAPI.acceptanceExportUrl('csv')} download style={{ fontSize: 12, color: 'var(--accent-blue)' }}>
+              Export CSV
+            </a>
+            <label style={{ fontSize: 12, color: 'var(--accent-blue)', cursor: 'pointer' }}>
+              Import…
+              <input
+                type="file"
+                accept=".json,.csv,application/json,text/csv"
+                style={{ display: 'none' }}
+                onChange={(e) => { void onImportFile(e.target.files?.[0]); e.currentTarget.value = ''; }}
+              />
+            </label>
+            {notice && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{notice}</span>}
           </div>
         </>
       )}

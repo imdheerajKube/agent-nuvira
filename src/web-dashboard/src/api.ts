@@ -2,6 +2,7 @@ import { parseJsonOrNull } from './jsonOrNull';
 import type { ExecutionEntry } from './components/ExecutionHistory';
 import type {
   AcceptanceData,
+  AcceptanceImportResult,
   AdminAuthStatus,
   AdminCachePayload,
   AdminCatalog,
@@ -549,6 +550,30 @@ export class DashboardAPI {
       const res = await fetch(`${this.baseUrl}/api/acceptance`, { signal: AbortSignal.timeout(8000) });
       const data = (await parseJsonOrNull(res)) as AcceptanceData | null;
       if (!data || typeof data.labelled !== 'number') return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Bundle 34 — the URL that downloads the labelled corpus (JSON/CSV). */
+  acceptanceExportUrl(format: 'json' | 'csv' = 'json'): string {
+    return `${this.baseUrl}/api/acceptance/export?format=${format}`;
+  }
+
+  /**
+   * Bundle 34 — merge a corpus collected elsewhere (its TEXT) into the local store.
+   * Returns the merge counts, or null when the server refused.
+   */
+  async importAcceptance(text: string, format?: 'json' | 'csv'): Promise<AcceptanceImportResult | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/acceptance/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, ...(format ? { format } : {}) }),
+      });
+      const data = (await parseJsonOrNull(res)) as AcceptanceImportResult | null;
+      if (!data || typeof data.ok !== 'boolean') return null;
       return data;
     } catch {
       return null;

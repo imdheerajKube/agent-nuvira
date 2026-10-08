@@ -22,17 +22,21 @@
  *   nuvira rate --list               — recent verdicts
  *   nuvira rate --stats              — the corpus: labels, class balance, per-pair, fit status
  *   nuvira rate --export corpus.csv  — export the labelled corpus (JSON/CSV) for offline fitting
+ *   nuvira rate --import corpus.json — merge an exported corpus back into the local store
  */
 
 import { Command } from 'commander';
 import { logger } from '../utils/logger.js';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { parseVerdict, rateTurn, listTurnVerdicts, latestRateableTraceId } from '../learning/turn-feedback.js';
 import {
   acceptanceSummary,
   formatAcceptanceSummary,
   collectLabelledTurns,
   serializeLabelledTurns,
+  parseCorpusText,
+  detectCorpusFormat,
+  mergeImportedLabels,
   type CorpusFormat,
 } from '../learning/acceptance-model.js';
 
@@ -47,11 +51,19 @@ export class RateCommand {
       .option('-l, --list', 'show recent verdicts instead of recording one')
       .option('-s, --stats', 'show the acceptance corpus: labels, class balance, per-pair record, fit status')
       .option('-e, --export [path]', 'export the labelled corpus (JSON, or CSV with --format csv / a .csv path); no path prints to stdout')
+      .option('-i, --import <file>', 'merge an exported corpus (JSON or CSV) into the local labelled corpus')
       .option('--format <format>', 'export format: json | csv (default: by path extension, else json)')
       .action(
         (
           verdict: string | undefined,
-          opts?: { trace?: string; list?: boolean; stats?: boolean; export?: string | boolean; format?: string },
+          opts?: {
+            trace?: string;
+            list?: boolean;
+            stats?: boolean;
+            export?: string | boolean;
+            import?: string;
+            format?: string;
+          },
         ) => {
           this.run(verdict, opts ?? {});
         },
@@ -60,8 +72,19 @@ export class RateCommand {
 
   private run(
     verdict: string | undefined,
-    opts: { trace?: string; list?: boolean; stats?: boolean; export?: string | boolean; format?: string },
+    opts: {
+      trace?: string;
+      list?: boolean;
+      stats?: boolean;
+      export?: string | boolean;
+      import?: string;
+      format?: string;
+    },
   ): void {
+    if (opts.import !== undefined) {
+      this.importCorpus(opts.import);
+      return;
+    }
     if (opts.export !== undefined) {
       this.export(opts.export, opts.format);
       return;
@@ -120,6 +143,33 @@ export class RateCommand {
     const lines = formatAcceptanceSummary(acceptanceSummary());
     logger.highlight('\n📊 Acceptance corpus');
     for (const line of lines) console.log(`   ${line}`);
+    console.log('');
+  }
+
+  /**
+   * Merge an exported corpus into the local store so labels collected elsewhere can
+   * be joined. Deduped by trace (or identity): re-importing the same file is
+   * idempotent. Imported rows carry their OWN features, so nothing is re-derived from
+   * a local run that may not exist.
+   */
+  private importCorpus(file: string): void {
+    let text: string;
+    try {
+      text = readFileSync(file, 'utf-8');
+    } catch (err) {
+      logger.error(`Could not read ${file}: ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+    const turns = parseCorpusText(text, detectCorpusFormat(file, text));
+    if (turns.length === 0) {
+      logger.error(`No labelled turns found in ${file} — is it an exported corpus (JSON or CSV)?`);
+      process.exitCode = 1;
+      return;
+    }
+    const { added, updated, total } = mergeImportedLabels(turns);
+    logger.success(`Imported ${turns.length} row(s) from ${file}: ${added} new, ${updated} already present.`);
+    logger.info(`   Imported store now holds ${total} labelled turn(s); they are read by the fit alongside your own.`);
     console.log('');
   }
 

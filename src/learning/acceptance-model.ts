@@ -30,8 +30,11 @@
  * corpus always yields the same coefficients and a report cannot drift run to run.
  */
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { listTraces } from './reasoning-trace.js';
 import { readDeliverableCandidates } from './deliverable-corpus.js';
+import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import type { TurnReport } from './turn-report.js';
 
 /** The features a fit sees. Binary by construction — measured flags, not magnitudes. */
@@ -94,10 +97,174 @@ function anyFlag(report: TurnReport | undefined): boolean {
   );
 }
 
+/** Imported labels kept on disk, oldest drop first — a dataset, not an unbounded log. */
+export const MAX_IMPORTED_LABELS = 5000;
+
+function memoryDir(): string {
+  return envBuff('MEMORY_DIR') || join(resolveNuviraHome(), 'memory');
+}
+
+/**
+ * Where an imported corpus's labels live. Kept separate from the traces because an
+ * imported row has no local trace to attach a `userVerdict` to — a fit simply READS
+ * these alongside the local labels, so a corpus collected elsewhere joins without
+ * the harness inventing a trace or rewriting one it does not own.
+ */
+export function importedLabelsPath(): string {
+  return join(memoryDir(), 'acceptance-labels.jsonl');
+}
+
+function isTruthy(v: unknown): boolean {
+  return v === true || v === 1 || v === '1' || v === 'true';
+}
+
+/** One row from a shipped corpus → a `LabelledTurn`, or null when it is malformed. */
+function coerceTurn(raw: unknown): LabelledTurn | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (!('accepted' in r) || !('at' in r)) return null;
+  const at = Number(r.at);
+  if (!Number.isFinite(at)) return null;
+  const features = emptyFeatures();
+  const featSrc =
+    r.features && typeof r.features === 'object'
+      ? (r.features as Record<string, unknown>)
+      : r;
+  for (const f of ACCEPTANCE_FEATURES) features[f] = isTruthy(featSrc[f]) ? 1 : 0;
+  return {
+    ...(typeof r.traceId === 'string' && r.traceId ? { traceId: r.traceId } : {}),
+    ...(typeof r.provider === 'string' && r.provider ? { provider: r.provider } : {}),
+    ...(typeof r.model === 'string' && r.model ? { model: r.model } : {}),
+    at,
+    accepted: isTruthy(r.accepted),
+    source: typeof r.source === 'string' && r.source ? r.source : 'imported',
+    features,
+  };
+}
+
+/** Quote-aware split of one CSV line (RFC-4180: doubled quotes, embedded commas). */
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false;
+      } else cur += ch;
+    } else if (ch === '"') inQuotes = true;
+    else if (ch === ',') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+function parseCorpusCsv(text: string): LabelledTurn[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length < 2) return [];
+  const header = splitCsvLine(lines[0]).map((h) => h.trim());
+  const out: LabelledTurn[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = splitCsvLine(lines[i]);
+    const obj: Record<string, unknown> = {};
+    header.forEach((h, j) => { obj[h] = cells[j]; });
+    const t = coerceTurn(obj);
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+function parseCorpusJson(text: string): LabelledTurn[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const rows = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object' && Array.isArray((parsed as { turns?: unknown }).turns)
+      ? (parsed as { turns: unknown[] }).turns
+      : [];
+  const out: LabelledTurn[] = [];
+  for (const raw of rows) {
+    const t = coerceTurn(raw);
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+/** Best-effort format detection: by extension, else by the first non-space character. */
+export function detectCorpusFormat(path: string | undefined, text: string): CorpusFormat {
+  if (path && path.toLowerCase().endsWith('.csv')) return 'csv';
+  if (path && path.toLowerCase().endsWith('.json')) return 'json';
+  const first = text.trimStart()[0];
+  return first === '{' || first === '[' ? 'json' : 'csv';
+}
+
+/** Parse a shipped corpus in either format into labelled turns (malformed rows dropped). */
+export function parseCorpusText(text: string, format: CorpusFormat): LabelledTurn[] {
+  return format === 'csv' ? parseCorpusCsv(text) : parseCorpusJson(text);
+}
+
+/** Read the imported labels store (best-effort; a corrupt line is skipped). */
+export function readImportedLabels(): LabelledTurn[] {
+  try {
+    if (!existsSync(importedLabelsPath())) return [];
+    const out: LabelledTurn[] = [];
+    for (const line of readFileSync(importedLabelsPath(), 'utf-8').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const row = coerceTurn(JSON.parse(trimmed));
+        if (row) out.push(row);
+      } catch {
+        // A corrupt line is skipped — a dataset store must not be a landmine.
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Dedupe key for an imported row: its trace when it has one, else its identity. */
+function labelKey(t: LabelledTurn): string {
+  return t.traceId ?? `p:${t.provider ?? ''}|m:${t.model ?? ''}|at:${t.at}|a:${t.accepted ? 1 : 0}`;
+}
+
+/**
+ * Merge an imported corpus into the local store, deduped by trace (or identity).
+ * Re-importing the same file is idempotent: rows already present are updated, not
+ * duplicated. Returns the counts a caller reports, and never throws.
+ */
+export function mergeImportedLabels(incoming: LabelledTurn[]): { added: number; updated: number; total: number } {
+  const byKey = new Map<string, LabelledTurn>();
+  for (const t of readImportedLabels()) byKey.set(labelKey(t), t);
+  let added = 0;
+  let updated = 0;
+  for (const t of incoming) {
+    const k = labelKey(t);
+    if (byKey.has(k)) updated++;
+    else added++;
+    byKey.set(k, t);
+  }
+  const merged = [...byKey.values()].sort((a, b) => a.at - b.at).slice(-MAX_IMPORTED_LABELS);
+  try {
+    if (!existsSync(memoryDir())) mkdirSync(memoryDir(), { recursive: true });
+    writeFileSync(importedLabelsPath(), merged.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+  } catch {
+    // Best-effort — an import must never break the caller.
+  }
+  return { added, updated, total: merged.length };
+}
+
 /**
  * Collect every LABELLED turn the harness has: the trace verdicts (the reliable
- * source, carrying the features) plus any corpus rows whose verdict has no trace
- * counterpart (a delivery labelled without a trace to attach it to).
+ * source, carrying the features), any corpus rows whose verdict has no trace
+ * counterpart, and the labels imported from another corpus.
  */
 export function collectLabelledTurns(): LabelledTurn[] {
   const out: LabelledTurn[] = [];
@@ -156,6 +323,14 @@ export function collectLabelledTurns(): LabelledTurn[] {
     });
   }
 
+  // Imported labels from another corpus. A local trace (or corpus row) for the
+  // same trace wins — the local record carries the features we measured ourselves.
+  for (const imp of readImportedLabels()) {
+    if (imp.traceId && seen.has(imp.traceId)) continue;
+    out.push(imp);
+    if (imp.traceId) seen.add(imp.traceId);
+  }
+
   return out.sort((a, b) => a.at - b.at);
 }
 
@@ -163,8 +338,13 @@ export function collectLabelledTurns(): LabelledTurn[] {
  * Fit the logistic model. Deterministic; returns a NAMED reason rather than a
  * model whenever the sample is too thin to mean anything.
  */
-export function trainAcceptanceModel(now: number = Date.now()): AcceptanceFit {
-  const rows = collectLabelledTurns();
+/**
+ * Fit the SAME deterministic logistic model to an arbitrary set of rows. Split
+ * out from {@link trainAcceptanceModel} so the offline fitter script can train on
+ * an EXPORTED corpus without the live trace store — the model is identical by
+ * construction, so a shipped corpus and this machine cannot disagree.
+ */
+export function fitLabelledTurns(rows: LabelledTurn[], now: number = Date.now()): AcceptanceFit {
   const positives = rows.filter((r) => r.accepted).length;
   const negatives = rows.length - positives;
 
@@ -221,6 +401,11 @@ export function trainAcceptanceModel(now: number = Date.now()): AcceptanceFit {
       trainedAt: now,
     },
   };
+}
+
+/** Fit to the LIVE corpus the harness has collected (local traces + imports). */
+export function trainAcceptanceModel(now: number = Date.now()): AcceptanceFit {
+  return fitLabelledTurns(collectLabelledTurns(), now);
 }
 
 /** `P(accepted | features)` under a fitted model. */
