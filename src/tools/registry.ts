@@ -2614,7 +2614,7 @@ registerTool({
 registerTool({
   name: 'tool_search',
   description:
-    'Discover and load capabilities. Actions: "search" finds what the agent can DO by query and returns each hit as a CAPABILITY — its effect (read / local-write / local-state / external / destructive), whether it is reversible and how, any credentials or binaries it needs, and whether a session grant can cover it; ' +
+    'Discover and load capabilities. Actions: "search" finds what the agent can DO by query and returns each hit as a CAPABILITY — its effect (read / local-write / local-state / external / destructive), whether it is reversible and how, any credentials or binaries it needs, and whether a session grant can cover it. Tools on any MCP server connected this session are included as capabilities too (kind "mcp", with an `invoke` saying how to call them); ' +
     '"load" activates a whole toolset (media, browser, channels, docker, ' +
     'productivity, publish, core-pipeline, …) for THIS turn — call it before ' +
     'using any tool outside the always-available core set. "load" returns ' +
@@ -2700,6 +2700,8 @@ registerTool({
       ...(h.capability.reversibleHow ? { undo: h.capability.reversibleHow } : {}),
       ...(h.capability.grantCategory ? { grantable: h.capability.grantCategory } : {}),
       ...(Object.keys(h.capability.requires).length > 0 ? { requires: h.capability.requires } : {}),
+      // A foreign (MCP) hit is not called by its own name — say how to reach it.
+      ...(h.capability.invoke ? { invoke: h.capability.invoke } : {}),
       matched: h.matched,
     }));
     return JSON.stringify({ tools: engine.search(query || '', limit || 10), capabilities: caps });

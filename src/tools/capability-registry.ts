@@ -7,7 +7,11 @@
  *   - the installed SKILL catalog (→ `kind: 'skill'`),
  *   - a small curated set of high-level ACTIONS the user named (install /
  *     uninstall / publish package / publish site / deploy / push / store a
- *     credential) that are expressed TODAY only as scattered prose.
+ *     credential) that are expressed TODAY only as scattered prose,
+ *   - the tools of any MCP server connected THIS process (→ `kind: 'mcp'`).
+ *     Reach borrowed from outside: a foreign server already declares what each
+ *     tool does (MCP `ToolAnnotations`) and what it needs (its JSON Schema), so
+ *     those become discoverable capabilities with nothing hand-written here.
  *
  * It deliberately does NOT import `./registry.js` — callers pass the tool list
  * in, so `tool_search` can use this without an import cycle. And it does NOT
@@ -27,6 +31,33 @@ import type {
 } from '../learning/capability-types.js';
 
 type ToolLike = { name: string; description?: string; category?: string };
+
+/**
+ * A tool discovered on an external MCP server. Deliberately structural, not
+ * imported from `src/mcp/types.ts`: this module must stay importable from the
+ * tool layer without pulling the MCP client in, and an injected list is what
+ * makes the ingestion testable.
+ */
+export interface McpToolLike {
+  server: string;
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+  /** The server's OWN declaration (MCP `ToolAnnotations`). Absent = unknown. */
+  annotations?: {
+    title?: string;
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
+}
+
+/** The required property names an MCP tool's JSON Schema declares. */
+function requiredInputs(inputSchema?: Record<string, unknown>): string[] {
+  const required = inputSchema?.required;
+  return Array.isArray(required) ? required.filter((r): r is string => typeof r === 'string') : [];
+}
 
 /** Per-tool effect metadata. Anything absent falls back to the conservative default. */
 interface EffectInfo {
@@ -177,6 +208,66 @@ export function capabilityFromSkill(skill: { id?: string; name: string; descript
 }
 
 /**
+ * Turn an EXTERNAL MCP tool into a capability.
+ *
+ * This is the "borrow capability from outside" path: the agent's reach grows by
+ * ingesting what a foreign server already declares, with nothing hand-written
+ * here. The effect class comes from the MCP spec's own `ToolAnnotations` —
+ * `readOnlyHint` and `destructiveHint` — NOT from matching words in a
+ * description. The required inputs come from the tool's JSON Schema.
+ *
+ * When a server declares NOTHING, the capability is `external` and not
+ * reversible: a foreign tool is off-machine by construction, so the honest
+ * reading of silence is "off-machine, effect unknown" — it asks, and only an
+ * explicit off-machine session grant can unlock it. Erring the other way would
+ * let an undeclared foreign tool run silently, which is the one outcome the whole
+ * layer exists to prevent.
+ *
+ * HONEST LIMIT: `readOnlyHint` is the spec's description of itself as "a hint,
+ * not a guarantee". These tests prove we READ the declaration, not that the
+ * declaration is true.
+ */
+export function capabilityFromMcpTool(t: McpToolLike): Capability {
+  const ann = t.annotations ?? {};
+  const inputs = requiredInputs(t.inputSchema);
+
+  let effectClass: EffectClass;
+  let reversible: boolean;
+  let grantCategory: GrantCategory | undefined;
+  if (ann.readOnlyHint === true) {
+    // The server declares it changes nothing — nothing to gate.
+    effectClass = 'read';
+    reversible = true;
+  } else if (ann.destructiveHint === true) {
+    // Destructive is never grantable, exactly like the DENY floor.
+    effectClass = 'destructive';
+    reversible = false;
+  } else {
+    effectClass = 'external';
+    reversible = false;
+    grantCategory = 'external';
+  }
+
+  const name = t.annotations?.title || t.name;
+  return {
+    id: `mcp:${t.server}:${t.name}`,
+    kind: 'mcp',
+    ref: `${t.server}/${t.name}`,
+    name,
+    oneLiner: String(t.description ?? '').split(/(?<=\.)\s/)[0]?.trim() || `The ${t.name} tool on the ${t.server} MCP server.`,
+    effectClass,
+    reversible,
+    ...(grantCategory ? { grantCategory } : {}),
+    // Reached through the dispatcher — `ref` is not itself a callable tool name,
+    // so a hit must say how to reach it instead of handing over a name it cannot
+    // call. These arguments mirror `mcp_tool`'s real schema.
+    invoke: { tool: 'mcp_tool', args: { action: 'call', server: t.server, tool: t.name } },
+    requires: inputs.length > 0 ? { inputs } : {},
+    tags: [t.name.replace(/_/g, ' '), t.server, 'mcp'],
+  };
+}
+
+/**
  * The high-level ACTIONS the user named — the verbs that today exist only as
  * scattered prose across tool descriptions and the consent picture. Each declares
  * what it needs and what it touches, so the model can discover it and (Phase 2)
@@ -296,17 +387,43 @@ export function actionCapabilities(): Capability[] {
 }
 
 /**
+ * The MCP tools reachable RIGHT NOW — read from the live connection singleton,
+ * never by connecting. A cold process (or a fresh install) simply has none, and
+ * a failure to read them must never break discovery.
+ *
+ * Only the cache-equivalent in-memory state is consulted: `listTools()` reports
+ * servers already connected this process, so a capability search can never spawn
+ * a server as a side effect.
+ */
+async function readLiveMcpTools(): Promise<McpToolLike[]> {
+  try {
+    const { getMCPToolManager } = await import('./mcp-client-tool.js');
+    return getMCPToolManager().listTools() as McpToolLike[];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * The capability index, best-effort. Skills come from the installed hub catalog;
- * a catalog read failure simply omits them, it never breaks discovery.
+ * a catalog read failure simply omits them, it never breaks discovery. MCP tools
+ * come from servers already connected this process, and may be injected instead
+ * (which is what makes the ingestion testable without a live server).
  */
 export async function capabilityIndex(
   tools: ToolLike[],
-  opts: { includeSkills?: boolean } = {},
+  opts: { includeSkills?: boolean; includeMcp?: boolean; mcpTools?: McpToolLike[] } = {},
 ): Promise<Capability[]> {
   const index: Capability[] = [
     ...tools.map(capabilityFromTool),
     ...actionCapabilities(),
   ];
+  if (opts.includeMcp !== false) {
+    const mcp = opts.mcpTools ?? (await readLiveMcpTools());
+    for (const t of mcp) {
+      if (t && t.server && t.name) index.push(capabilityFromMcpTool(t));
+    }
+  }
   if (opts.includeSkills !== false) {
     try {
       const { readHubCatalog } = await import('../learning/hub-skill-catalog.js');

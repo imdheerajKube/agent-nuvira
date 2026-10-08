@@ -4,6 +4,27 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Added: external MCP tools become discoverable capabilities, described by their own declarations
+
+Reach borrowed from outside, with nothing hand-written. nuvira could already
+connect to MCP servers, but exposed them as ONE `mcp_tool` dispatcher: the model
+had to know a server name and a tool name to use anything, and there was no way
+to discover what a connected server offered. `tools/capability-registry.ts` now
+ingests every tool of every MCP server connected this process as a `kind: 'mcp'`
+capability, so `tool_search` finds them by purpose. The effect class comes from
+the MCP spec's own `ToolAnnotations` — `readOnlyHint` is a read, `destructiveHint`
+is destructive and never grantable — and the required inputs come from the tool's
+JSON Schema; a server that declares nothing is treated as `external`, not
+reversible, and unlockable only by an explicit off-machine session grant. Each hit
+carries an `invoke` naming how to reach it (`mcp_tool` + server + tool), because a
+foreign tool's name is not itself a callable tool. Two boundary defects are fixed
+as part of this: `mcp/client.ts` was DROPPING the SDK's `annotations`, which made a
+read-only MCP tool and a destructive one indistinguishable, and
+`mcp-client-tool.ts` did not pass them on either. Discovery never connects to a
+server — it reads servers already connected, so a capability search can never
+spawn one as a side effect. Pinned by `tests/tools/mcp-capability.test.ts` (11)
+and a new annotation-preservation case in `tests/mcp/sdk-client.test.ts`.
+
 ### Added: one capability descriptor, so "what the agent can do" is a fact and not prose
 
 Phase 1 of the capability layer. "What an action needs, what it costs, and what

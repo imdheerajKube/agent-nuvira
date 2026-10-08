@@ -72,6 +72,29 @@ export interface ServerCapabilities {
 
 // ─── Tools ──────────────────────────────────────────────────────────────────
 
+/**
+ * MCP `ToolAnnotations` — the SPEC's own effect declaration.
+ *
+ * Borrowed verbatim from the Model Context Protocol so the agent never has to
+ * invent or phrase-match an effect class: a server may DECLARE whether its tool
+ * only reads, or is destructive. The capability layer maps these onto its
+ * `effectClass`, and an absent annotation means "unknown" — never "safe".
+ *
+ * Spec: https://modelcontextprotocol.io/specification/ — `ToolAnnotations`.
+ */
+export interface ToolAnnotations {
+  /** A human-readable title for the tool. */
+  title?: string;
+  /** The tool does not modify its environment (a hint, not a guarantee). */
+  readOnlyHint?: boolean;
+  /** The tool may perform destructive updates to its environment. */
+  destructiveHint?: boolean;
+  /** Repeated calls with the same arguments have no additional effect. */
+  idempotentHint?: boolean;
+  /** The tool may interact with an "open world" of external entities. */
+  openWorldHint?: boolean;
+}
+
 export interface Tool {
   /** The name of the tool (unique within the server) */
   name: string;
@@ -79,6 +102,12 @@ export interface Tool {
   description?: string;
   /** JSON Schema defining the expected parameters */
   inputSchema?: Record<string, unknown>;
+  /**
+   * The server's own declaration of what this tool does. CARRIED THROUGH from the
+   * SDK — it was previously dropped at `client.ts`, which silently made every MCP
+   * tool look effect-unknown to the capability layer.
+   */
+  annotations?: ToolAnnotations;
 }
 
 export interface ListToolsResult {
