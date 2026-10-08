@@ -32,7 +32,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { listTraces, recordTraceVerdict } from './reasoning-trace.js';
+import { listTraces, recordTraceVerdict, getTrace } from './reasoning-trace.js';
 import { readDeliverableCandidates, labelDeliverableByTrace } from './deliverable-corpus.js';
 import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import type { TurnReport } from './turn-report.js';
@@ -261,6 +261,32 @@ export function mergeImportedLabels(incoming: LabelledTurn[]): { added: number; 
   return { added, updated, total: merged.length };
 }
 
+/** Names of the honesty flags a report set, for an audit view. */
+export function flagNames(report: TurnReport | undefined): string[] {
+  const f = report?.flags;
+  if (!f) return [];
+  return Object.entries(f)
+    .filter(([, v]) => Boolean(v))
+    .map(([k]) => k);
+}
+
+/**
+ * The features a fit sees for ONE trace — the SAME derivation `collectLocalTurns`
+ * uses, extracted so an audit (`nuvira rate --explain`) cannot disagree with the fit.
+ */
+export function featuresFromTrace(
+  trace: { turnReport?: TurnReport },
+  delivered: boolean,
+): AcceptanceFeatures {
+  const features = emptyFeatures();
+  const verification = trace.turnReport?.verification;
+  if (verification === 'verified' || verification === 'delivered-and-read-back') features.verified = 1;
+  else if (verification === 'unverified') features.unverified = 1;
+  if (anyFlag(trace.turnReport)) features.flag = 1;
+  if (delivered) features.delivered = 1;
+  return features;
+}
+
 /**
  * The LOCAL labels: the trace verdicts (the reliable source, carrying the
  * features) plus any corpus rows whose verdict has no trace counterpart. Excludes
@@ -287,14 +313,9 @@ function collectLocalTurns(): LabelledTurn[] {
   for (const t of traces) {
     const v = t.userVerdict;
     if (!v) continue;
-    const report = t.turnReport;
-    const features = emptyFeatures();
-    const verification = report?.verification;
-    if (verification === 'verified' || verification === 'delivered-and-read-back') features.verified = 1;
-    else if (verification === 'unverified') features.unverified = 1;
-    if (anyFlag(report)) features.flag = 1;
+    const verification = t.turnReport?.verification;
     const row = corpus.find((r) => r.traceId === t.id);
-    if (row || verification === 'delivered-and-read-back') features.delivered = 1;
+    const features = featuresFromTrace(t, Boolean(row) || verification === 'delivered-and-read-back');
     out.push({
       traceId: t.id,
       ...(t.provider ? { provider: t.provider } : {}),
@@ -342,10 +363,64 @@ export function collectLabelledTurns(): LabelledTurn[] {
   return out.sort((a, b) => a.at - b.at);
 }
 
+/** One turn's evidence and label, for auditing a single rating. */
+export interface TraceLabelExplanation {
+  traceId: string;
+  goal: string;
+  provider?: string;
+  model?: string;
+  verification?: string;
+  flags: string[];
+  delivered: boolean;
+  features: AcceptanceFeatures;
+  /** The user's label, or null when the turn is unrated. */
+  label: boolean | null;
+  source: string | null;
+  /** The fitted `P(accepted | features)` for THIS turn, or null when no model exists. */
+  probability: number | null;
+  fitReady: boolean;
+}
+
 /**
- * Fit the logistic model. Deterministic; returns a NAMED reason rather than a
- * model whenever the sample is too thin to mean anything.
+ * Explain ONE trace: its features, its label and — when the fit has trained — the
+ * probability the model assigns to it. The features come from the SAME
+ * `featuresFromTrace` the fit uses, so an audit cannot disagree with the model.
  */
+export function explainTraceLabel(traceId: string, now: number = Date.now()): TraceLabelExplanation | null {
+  let trace;
+  try {
+    trace = getTrace(traceId);
+  } catch {
+    trace = null;
+  }
+  if (!trace) return null;
+  const row = (() => {
+    try {
+      return readDeliverableCandidates().find((r) => r.traceId === traceId);
+    } catch {
+      return undefined;
+    }
+  })();
+  const verification = trace.turnReport?.verification;
+  const delivered = Boolean(row) || verification === 'delivered-and-read-back';
+  const features = featuresFromTrace(trace, delivered);
+  const fit = trainAcceptanceModel(now);
+  return {
+    traceId,
+    goal: trace.goal,
+    ...(trace.provider ? { provider: trace.provider } : {}),
+    ...(trace.model ? { model: trace.model } : {}),
+    ...(verification ? { verification } : {}),
+    flags: flagNames(trace.turnReport),
+    delivered,
+    features,
+    label: trace.userVerdict ? trace.userVerdict.verdict === 'accepted' : null,
+    source: trace.userVerdict?.source ?? null,
+    probability: fit.ok ? predictAcceptance(fit.model, features) : null,
+    fitReady: fit.ok,
+  };
+}
+
 /** The outcome of reconciling an imported corpus against the local labels. */
 export interface MergeResult {
   /** Rows in the incoming file. */
@@ -446,10 +521,10 @@ export function mergeLabelledCorpus(
 }
 
 /**
- * Fit the SAME deterministic logistic model to an arbitrary set of rows. Split
- * out from {@link trainAcceptanceModel} so the offline fitter script can train on
- * an EXPORTED corpus without the live trace store — the model is identical by
- * construction, so a shipped corpus and this machine cannot disagree.
+ * Fit the logistic model. Deterministic; returns a NAMED reason rather than a
+ * model whenever the sample is too thin to mean anything. Trains on an arbitrary
+ * set of rows, so the offline fitter can reuse the identical maths on an EXPORTED
+ * corpus — a shipped corpus and this machine cannot disagree.
  */
 export function fitLabelledTurns(rows: LabelledTurn[], now: number = Date.now()): AcceptanceFit {
   const positives = rows.filter((r) => r.accepted).length;
