@@ -28,6 +28,15 @@ import { envBuff } from '../config/paths';
 import { z, toJSONSchema, type ZodType } from 'zod';
 import { ACTION_BY_INTENT } from '../nlu/actions.js';
 import { detectPermissionSeeking, IRREVERSIBLE_ACTION_RE } from '../learning/autonomy-policy.js';
+// The explicit, session-scoped "allow all <category> for this session" grant —
+// offered at the confirmation a state-changing tool demanded (see the
+// `ask_user` runner) and consulted by the write/terminal gates.
+import {
+  grantSession,
+  sessionGrantLabel,
+  sessionGrantNotice,
+  type SessionGrantCategory,
+} from '../learning/session-grant.js';
 // Cluster G — a folder the user names in an ask_user reply IS the workspace
 // (see the adoption block in the `ask_user` runner). The rule is the same,
 // conservative one the dashboard server applies to a message.
@@ -396,6 +405,21 @@ const askUserSchema = z.object({
     .describe('2–4 answer choices the user can pick from'),
   multi_select: z.boolean().default(false).describe('Allow multiple selections (checkbox)'),
 });
+
+/**
+ * The extra choice a TOOL-DEMANDED confirmation ask offers: allow this whole
+ * category of state-changing action for the rest of the session. Deliberately
+ * one fixed label, so the grant is a choice the user picks — never a phrase
+ * the harness tries to recognise in free text.
+ */
+const SESSION_GRANT_CHOICE_LABEL = 'Allow this for the whole session';
+
+/** Did the user's answer (single-select or multi-select) name the grant choice? */
+function answerIsSessionGrant(answer: string | string[]): boolean {
+  return Array.isArray(answer)
+    ? answer.includes(SESSION_GRANT_CHOICE_LABEL)
+    : answer === SESSION_GRANT_CHOICE_LABEL;
+}
 
 /** E3c — publish tool args: bump type + safety flags (irreversible action). */
 export const publishToolSchema = z.object({
@@ -943,11 +967,32 @@ registerTool({
     }
     // One confirmation refusal buys exactly ONE ask — clear it before rendering.
     if (pending) ctx.pendingConfirmation = undefined;
+    // ── Session-grant offer (Copilot-style "allow all for this session") ─────
+    // Only when the ask is the CONFIRMATION a state-changing tool demanded
+    // (`pending` is set) is there a category to offer. It is ONE extra choice,
+    // so the user's explicit go-ahead is RECEIVED, never inferred — an answer
+    // that does not name it leaves the ask-every-time default untouched, and an
+    // unattended default (returned below) is an assumption, not a grant.
+    const grantCategory: SessionGrantCategory | null = pending
+      ? pending.tool === 'run_terminal'
+        ? 'terminal'
+        : 'write'
+      : null;
+    const offeredChoices =
+      grantCategory && choices.length < 4
+        ? [
+            ...choices,
+            {
+              label: SESSION_GRANT_CHOICE_LABEL,
+              description: `Allow all ${sessionGrantLabel(grantCategory)} for this session — no more asks until the conversation ends.`,
+            },
+          ]
+        : choices;
     // Deferred so the registry stays import-light — the writing half of the
     // decision log is only needed when an ask actually reaches a person.
     const { recordDecision, decisionsRecordingEnabled } = await import('../learning/decision-log.js');
     const render = ctx.askUser || (await import('./ask-user.js')).renderAskUser;
-    const answer = await render(question, choices, multi_select);
+    const answer = await render(question, offeredChoices, multi_select);
     const picked = Array.isArray(answer.answer) ? answer.answer.join(', ') : answer.answer;
     // E1 — an UNATTENDED answer is an ASSUMPTION, not the user's word. Recorded
     // as one (never as a shown ask with an answer, which is what made a silent
@@ -964,6 +1009,20 @@ registerTool({
             `you made (e.g. "I assumed ${picked} — tell me if you would prefer something else"), then continue with it.`) +
         ' Do not record it as a user decision or re-ask the same question.'
       );
+    }
+    // ── Grant it, if the user picked the session choice ──────────────────────
+    // The grant is stored against the session (the same key the intent envelope
+    // uses), so it outlives this turn and dies with the conversation. The write
+    // happens HERE; the RETURN that tells the model to finish the refused call
+    // is issued after the decision is recorded, so the grant itself is a
+    // recorded, revisable decision like any other must-ask.
+    const granted = Boolean(grantCategory) && answerIsSessionGrant(answer.answer);
+    const grant =
+      granted && grantCategory
+        ? grantSession(ctx.planStore, [grantCategory], 'the user allowed it for the session')
+        : null;
+    if (granted && grantCategory) {
+      ctx.emit?.('autonomy:session-grant', { category: grantCategory, question }, 'tool-loop');
     }
     // Recorded SHOWN and with the answer, so the trace can hand both back when
     // the agent tries to ask it a second time (and so a self-report can say what
@@ -985,13 +1044,25 @@ registerTool({
         recordDecision({
           question,
           answer: answerText,
-          choices: choices.map((c) => c.label),
+          choices: offeredChoices.map((c) => c.label),
           source: 'ask_user',
           dir: ctx.cwd,
         });
       } catch {
         // Best-effort — never break a turn on a decision-log write.
       }
+    }
+    // The grant was a real decision — recorded above — so now hand the model the
+    // instruction that turns it into work: finish the ONE refused call, then stop
+    // asking about this category.
+    if (granted && grantCategory) {
+      return (
+        `User allowed all ${sessionGrantLabel(grantCategory)} for this session. ` +
+        `Retry the refused ${grantCategory === 'terminal' ? 'run_terminal command' : 'write'} ONCE with confirm:true to complete it. ` +
+        'Every later action in this category proceeds without asking — do not ask about it again. ' +
+        (grant ? sessionGrantNotice(grant) : '') +
+        'Irreversible and off-machine actions still ask, and the permission ends with the conversation.'
+      );
     }
     // ── Cluster G: the reply may be the FOLDER, and then it is the workspace ──
     // An unscoped turn asks "which folder should I use?". The user answers by

@@ -32,6 +32,7 @@ import { resolveAdapterDefault } from '../learning/model-selection.js';
 import { SubagentRefusalError } from './subagent-refusal.js';
 import { fenceUntrustedToolOutput } from './untrusted-content.js';
 import { getTool, toolJsonSchemas, TOOL_CONTRACT_JSON, type ToolContext } from './registry.js';
+import { harnessDirective } from './harness-directive.js';
 // WS1 — the finding tool's bus event; forwarded to the parent as its own frame.
 import { FINDING_EVENT } from './finding-tool.js';
 import { sessionDebugLog, type SessionDebugLog } from '../observability/debug-log.js';
@@ -787,10 +788,10 @@ async function runToolLoop(
         });
         loop.debug?.event('gate.verification', { mutations });
         messages.push({ role: 'assistant', content: response.content });
-        messages.push({
-          role: 'user',
-          content: verificationNudgeFor(config.cwd ?? process.cwd(), mutatedPaths),
-        });
+        // Delivered through the harness channel (marked `system` directive, not a
+        // user turn) so the subagent acts on it instead of answering it — the same
+        // parity rule the in-process loop uses. See tools/harness-directive.ts.
+        messages.push(harnessDirective(verificationNudgeFor(config.cwd ?? process.cwd(), mutatedPaths)));
         continue;
       }
       return finish(response.content.trim(), false);

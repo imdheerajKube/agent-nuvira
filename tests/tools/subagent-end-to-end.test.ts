@@ -689,8 +689,9 @@ describe('G1 — the child applies the same verification gate as the in-process 
     // The extra call was asked for the check, in the same words the in-process
     // loop uses — the gate is imported, not reimplemented.
     expect(calls[0].some((m) => m.content.includes(NUDGE_MARKER))).toBe(false);
-    expect(calls[2].some((m) => m.role === 'user' && m.content.includes(NUDGE_MARKER))).toBe(true);
-    expect(calls[2].some((m) => m.role === 'user' && m.content.includes('out.txt'))).toBe(true);
+    // Delivered as a marked harness directive (system role), not a user turn.
+    expect(calls[2].some((m) => m.role === 'system' && m.content.startsWith('[harness]') && m.content.includes(NUDGE_MARKER))).toBe(true);
+    expect(calls[2].some((m) => m.role === 'system' && m.content.includes('out.txt'))).toBe(true);
 
     // And the result says so, whether or not a caller acted on the nudge. A run
     // whose write nothing observed may not be read as a checked one.
