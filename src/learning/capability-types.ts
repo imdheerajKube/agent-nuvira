@@ -23,13 +23,33 @@ export type EffectClass = 'read' | 'local-write' | 'local-state' | 'external' | 
 /** Which session grant may cover the action (see `session-grant.ts`). */
 export type GrantCategory = 'write' | 'terminal' | 'external';
 
+/**
+ * ONE requirement, in a shape that can be both SHOWN and CHECKED.
+ *
+ * The alternative — a human phrase like `'NPM_TOKEN or a GitHub token'` — can be
+ * displayed but never probed, so the agent could only discover it was missing by
+ * failing halfway through. `anyOf` is machine-checkable (an env var NAMES list
+ * for a credential, an executable list for a binary) and `join(' or ')` renders
+ * the same sentence a reader used to see. One source, so the displayed and the
+ * checked forms cannot drift.
+ */
+export interface CapabilityNeed {
+  /** Satisfied when ANY of these is present. */
+  anyOf: string[];
+  /** How to satisfy it — shown when it is missing. */
+  note?: string;
+}
+
 /** What has to exist before the capability can run. */
 export interface CapabilityRequires {
-  /** Credential names the action needs (e.g. `NPM_TOKEN`, a GitHub token). */
-  credentials?: string[];
-  /** Executables the action needs on PATH (e.g. `npm`, `winget`, `gh`). */
-  binaries?: string[];
-  /** Free-form required inputs the model must supply (a bump type, a target). */
+  /** Env var names; satisfied when any one is set and non-empty. */
+  credentials?: CapabilityNeed[];
+  /** Executables; satisfied when any one resolves on PATH. */
+  binaries?: CapabilityNeed[];
+  /**
+   * Things only the MODEL can supply (a bump type, a target host) — a decision,
+   * not an environment fact, so never probed.
+   */
   inputs?: string[];
 }
 

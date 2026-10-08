@@ -8,7 +8,6 @@
 
 import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { envBuff } from '../../config/paths';
-import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 
 // ─── Artifact dir ───────────────────────────────────────────────────────────
@@ -45,28 +44,13 @@ export function safeArtifactName(prefix: string, ext: string): string {
   return `${slug}-${Date.now().toString(36)}${ext}`;
 }
 
-// ─── Binary availability probe (mirrors vault.ts binaryOnPath) ─────────────
-
-const probeCache = new Map<string, boolean>();
-
-/** Whether a binary is on PATH (cached). Tests reset via resetProbeCache(). */
-export function binaryOnPath(name: string): boolean {
-  const cached = probeCache.get(name);
-  if (cached !== undefined) return cached;
-  try {
-    execFileSync(process.platform === 'win32' ? 'where' : 'which', [name], { stdio: 'ignore' });
-    probeCache.set(name, true);
-    return true;
-  } catch {
-    probeCache.set(name, false);
-    return false;
-  }
-}
-
-/** Clear the probe cache (test isolation). */
-export function resetProbeCache(): void {
-  probeCache.clear();
-}
+// ─── Binary availability probe ────────────────────────────────────────────
+//
+// Delegates to the ONE shared implementation. This used to be a local copy (the
+// comment even read "mirrors vault.ts binaryOnPath"), so the OS resolver's rules
+// lived in two places and disagreed at their own risk. `resetProbeCache` keeps
+// its name because browser.ts and the modality tests call it.
+export { binaryOnPath, resetBinaryProbeCache as resetProbeCache } from '../../utils/binary-probe.js';
 
 /** Whether a file exists (availability of an audio/image input). */
 export function fileExists(path: string): boolean {

@@ -29,9 +29,14 @@ const ctx = {} as ToolContext;
 describe('describeRequires', () => {
   it('summarizes credentials, binaries and inputs', () => {
     expect(describeRequires({})).toBe('');
-    expect(describeRequires({ credentials: ['NPM_TOKEN'], binaries: ['npm'] })).toBe(
-      'needs NPM_TOKEN; runs npm',
-    );
+    // The display is RENDERED from the checkable form — one source, so they cannot
+    // drift. `anyOf` is what the pre-flight probes; `' or '` is what a reader sees.
+    expect(
+      describeRequires({
+        credentials: [{ anyOf: ['NPM_TOKEN', 'GITHUB_TOKEN'] }],
+        binaries: [{ anyOf: ['npm', 'gh'] }],
+      }),
+    ).toBe('needs NPM_TOKEN or GITHUB_TOKEN; runs npm or gh');
     expect(describeRequires({ inputs: ['bump type'] })).toBe('ask for bump type');
   });
 });
@@ -73,7 +78,7 @@ describe('capabilityFromTool', () => {
     expect(cap.effectClass).toBe('external');
     expect(cap.reversible).toBe(false);
     expect(cap.grantCategory).toBe('external');
-    expect(cap.requires.credentials?.length).toBeGreaterThan(0);
+    expect(cap.requires.credentials?.[0]?.anyOf.length).toBeGreaterThan(0);
   });
 
   it('DEFAULTS an undescribed tool to a local-state change that no grant may cover', () => {
@@ -152,7 +157,7 @@ describe('actionCapabilities — the curated high-level verbs', () => {
     expect(publish.effectClass).toBe('external');
     expect(publish.reversible).toBe(false);
     expect(publish.grantCategory).toBe('external');
-    expect(publish.requires.credentials).toContain('NPM_TOKEN or a GitHub token');
+    expect(publish.requires.credentials?.[0]?.anyOf).toEqual(['NPM_TOKEN', 'GITHUB_TOKEN']);
     expect(publish.requires.inputs).toContain('bump type');
   });
 
@@ -241,7 +246,7 @@ describe('tool_search — the search action surfaces capabilities', () => {
     expect(publish.effect).toBe('external');
     expect(publish.reversible).toBe(false);
     expect(publish.grantable).toBe('external');
-    expect(publish.requires).toMatchObject({ credentials: ['NPM_TOKEN or a GitHub token'] });
+    expect(publish.requires).toMatchObject({ credentials: [{ anyOf: ['NPM_TOKEN', 'GITHUB_TOKEN'] }] });
     expect(publish.undo).toBeUndefined();
   });
 
@@ -251,5 +256,50 @@ describe('tool_search — the search action surfaces capabilities', () => {
     const write = parsed.capabilities.find((c) => c.id === 'tool:write_file')!;
     expect(write.effect).toBe('local-write');
     expect(String(write.undo)).toContain('git revert');
+  });
+
+  it('PRE-FLIGHTS each hit: a capability with requirements carries a check', async () => {
+    const raw = await getTool('tool_search')!.run({ action: 'search', query: 'publish the package to npm' }, ctx);
+    const parsed = JSON.parse(String(raw)) as { capabilities: Array<Record<string, any>> };
+    const publish = parsed.capabilities.find((c) => c.id === 'action:publish-package')!;
+    // Probed at discovery time, so what is missing is known before the work starts.
+    expect(publish.check).toBeDefined();
+    expect(typeof publish.check.ready).toBe('boolean');
+    expect(publish.check.ask).toContain('bump type');
+
+    // A capability that declares nothing gets no empty check — absence is the
+    // signal, so the model never has to interpret a meaningless one.
+    const readRaw = await getTool('tool_search')!.run({ action: 'search', query: 'read file' }, ctx);
+    const read = (JSON.parse(String(readRaw)) as { capabilities: Array<Record<string, any>> }).capabilities.find(
+      (c) => c.id === 'tool:read_file',
+    )!;
+    expect(read.check).toBeUndefined();
+  });
+});
+
+// ─── Bundle 44: readiness, the deliberate pre-flight ─────────────────────────
+
+describe('tool_search — the readiness action', () => {
+  it('reports a pre-flight for a described task', async () => {
+    const raw = await getTool('tool_search')!.run(
+      { action: 'readiness', query: 'publish this package to npm' },
+      ctx,
+    );
+    const parsed = JSON.parse(String(raw)) as {
+      checked: number; blocked: number; summary: string; capabilities: Array<Record<string, any>>;
+    };
+    expect(parsed.checked).toBeGreaterThan(0);
+    expect(typeof parsed.summary).toBe('string');
+    expect(parsed.summary.length).toBeGreaterThan(0);
+    const publish = parsed.capabilities.find((c) => c.id === 'action:publish-package')!;
+    expect(publish.check).toBeDefined();
+  });
+
+  it('with NO query it checks the curated verbs, which are the ones that declare needs', async () => {
+    const raw = await getTool('tool_search')!.run({ action: 'readiness' }, ctx);
+    const parsed = JSON.parse(String(raw)) as { checked: number; capabilities: Array<Record<string, any>> };
+    expect(parsed.checked).toBeGreaterThanOrEqual(9);
+    // Every curated action declares a requirement, so every one is probed.
+    for (const cap of parsed.capabilities) expect(cap.check).toBeDefined();
   });
 });

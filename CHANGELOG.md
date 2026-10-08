@@ -4,6 +4,34 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Added: a requirement pre-flight, so a run knows what it is missing before it starts
+
+A capability declares what it needs, and nothing checked it. A missing executable
+surfaced halfway through a task — after files had already been written — and the
+user had to work out what went wrong. Requirements are now `CapabilityNeed`
+(`anyOf` + an optional remedy) instead of prose, so ONE form is both displayed and
+probed: `describeRequires` renders `needs NPM_TOKEN or GITHUB_TOKEN` from the same
+`anyOf` the pre-flight checks, and the two cannot drift. `tool_search` annotates
+every hit that declares a need with a `check` (ready / gaps / ask), probed at
+discovery time, and a new `readiness` action is the deliberate pre-flight — with no
+query it reports what the curated install / publish / deploy / push verbs are
+missing on this machine. The asymmetry is the honesty of the module: a missing
+BINARY is a fact and blocks (`which`/`where` is the resolver the shell uses), while
+a credential absent from `process.env` is reported as "not visible in the
+environment" and never blocks, because it may live in the vault, a `gh auth login`
+profile or an SSH agent. Reporting the second as definitively missing would be the
+false claim this workstream exists to remove. `requirement-probe` is injected, so
+it is testable without a real PATH. Measuring it also consolidated the two
+byte-identical `binaryOnPath` copies (`tools/modality/shared.ts` had documented
+itself as "mirrors vault.ts") into `utils/binary-probe.ts`. Pinned by
+`tests/learning/requirement-probe.test.ts` (12) and new cases in
+`tests/tools/capability-registry.test.ts`. `scripts/measure-requirement-gaps.mjs`
+reports readiness here (8/9 curated verbs ready, `deploy-app` blocked: no
+`vercel`/`flyctl`/`gcloud`/`aws`/`az`) and the trace baseline. HONEST NOTE: that
+baseline is 0 of 60 turns — this store contains NO turn that hit a requirement
+wall, so the pre-flight's value here is preventive and is not claimed as a
+measured reduction.
+
 ### Fixed: the MCP schema cache actually caches, so MCP discovery survives a cold start
 
 The cache existed to persist a server's tool schemas so a LATER process would not

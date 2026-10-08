@@ -2614,22 +2614,24 @@ registerTool({
 registerTool({
   name: 'tool_search',
   description:
-    'Discover and load capabilities. Actions: "search" finds what the agent can DO by query and returns each hit as a CAPABILITY — its effect (read / local-write / local-state / external / destructive), whether it is reversible and how, any credentials or binaries it needs, and whether a session grant can cover it. Tools on any MCP server connected this session are included as capabilities too (kind "mcp", with an `invoke` saying how to call them); ' +
+    'Discover and load capabilities. Actions: "search" finds what the agent can DO by query and returns each hit as a CAPABILITY — its effect (read / local-write / local-state / external / destructive), whether it is reversible and how, any credentials or binaries it needs, whether a session grant can cover it, and a `check` saying whether those needs are actually MET on this machine (run this FIRST for an install / publish / deploy / push task, so a missing executable is known before the work starts rather than halfway through); ' +
+    '"readiness" is the same probe without a search — call it with a query to pre-flight a described task, or with no query to see what the curated install / publish / deploy / push verbs are missing here; ' +
+    'Tools on any MCP server connected this session are included as capabilities too (kind "mcp", with an `invoke` saying how to call them); ' +
     '"load" activates a whole toolset (media, browser, channels, docker, ' +
     'productivity, publish, core-pipeline, …) for THIS turn — call it before ' +
     'using any tool outside the always-available core set. "load" returns ' +
     'the toolset\'s tool names, which become callable immediately.',
   category: 'workflow',
   inputSchema: z.object({
-    action: z.enum(['search', 'load']).optional().describe('Defaults to "search".'),
-    query: z.string().optional().describe('Search query (action=search)'),
+    action: z.enum(['search', 'load', 'readiness']).optional().describe('Defaults to "search".'),
+    query: z.string().optional().describe('Search query (action=search|readiness; omit for readiness to check the install/publish/deploy/push verbs)'),
     limit: z.number().optional().describe('Max results (action=search)'),
     toolset: z.string().optional().describe('Toolset name to load (action=load) — e.g. "media", "browser", "channels"'),
   }),
   endsAgentStep: false,
   run: async (args, ctx) => {
     const { action = 'search', query, limit, toolset } = args as {
-      action?: 'search' | 'load'; query?: string; limit?: number; toolset?: string;
+      action?: 'search' | 'load' | 'readiness'; query?: string; limit?: number; toolset?: string;
     };
 
     // ── load: activate a toolset for this turn (tiered exposure) ──
@@ -2689,22 +2691,67 @@ registerTool({
     const index = await capabilityIndex(
       tools.map((t: any) => ({ name: t.name, description: t.description, category: t.category })),
     );
-    const caps = searchCapabilities(index, query || '', limit || 10).map((h) => ({
-      id: h.capability.id,
-      kind: h.capability.kind,
-      ref: h.capability.ref,
-      name: h.capability.name,
-      does: h.capability.oneLiner,
-      effect: h.capability.effectClass,
-      reversible: h.capability.reversible,
-      ...(h.capability.reversibleHow ? { undo: h.capability.reversibleHow } : {}),
-      ...(h.capability.grantCategory ? { grantable: h.capability.grantCategory } : {}),
-      ...(Object.keys(h.capability.requires).length > 0 ? { requires: h.capability.requires } : {}),
-      // A foreign (MCP) hit is not called by its own name — say how to reach it.
-      ...(h.capability.invoke ? { invoke: h.capability.invoke } : {}),
-      matched: h.matched,
-    }));
-    return JSON.stringify({ tools: engine.search(query || '', limit || 10), capabilities: caps });
+    const { describeGap, probeRequirements } = await import('../learning/requirement-probe.js');
+    const hits = searchCapabilities(index, query || '', limit || 10);
+
+    // PRE-FLIGHT. Each hit's declared requirements are probed HERE, at discovery
+    // time, so a missing executable is known BEFORE the run starts rather than
+    // after it has written half the work. A binary gap is a hard blocker; a
+    // credential gap is advisory and never blocks — see requirement-probe.ts.
+    const toCapability = (h: { capability: (typeof index)[number]; matched: string[] }) => {
+      const requires = h.capability.requires;
+      const hasRequires = Object.keys(requires).length > 0;
+      const readiness = hasRequires ? probeRequirements(requires) : undefined;
+      return {
+        id: h.capability.id,
+        kind: h.capability.kind,
+        ref: h.capability.ref,
+        name: h.capability.name,
+        does: h.capability.oneLiner,
+        effect: h.capability.effectClass,
+        reversible: h.capability.reversible,
+        ...(h.capability.reversibleHow ? { undo: h.capability.reversibleHow } : {}),
+        ...(h.capability.grantCategory ? { grantable: h.capability.grantCategory } : {}),
+        ...(hasRequires ? { requires } : {}),
+        // A foreign (MCP) hit is not called by its own name — say how to reach it.
+        ...(h.capability.invoke ? { invoke: h.capability.invoke } : {}),
+        ...(readiness
+          ? {
+              check: {
+                ready: readiness.ready,
+                ...(readiness.gaps.length > 0 ? { gaps: readiness.gaps.map(describeGap) } : {}),
+                ...(readiness.ask.length > 0 ? { ask: readiness.ask } : {}),
+              },
+            }
+          : {}),
+        matched: h.matched,
+      };
+    };
+
+    // ── readiness: the same hits, reported as a PRE-FLIGHT rather than a find ──
+    if (action === 'readiness') {
+      // With no query, check the curated ACTION verbs — the capabilities that
+      // declare requirements (install / publish / deploy / push / credentials).
+      const selected = query
+        ? hits
+        : index.filter((c) => c.kind === 'action').map((c) => ({ capability: c, matched: [] as string[] }));
+      const caps = selected.map(toCapability);
+      const blocked = caps.filter((c) => c.check && !c.check.ready);
+      return JSON.stringify({
+        checked: caps.length,
+        blocked: blocked.length,
+        summary:
+          blocked.length === 0
+            ? 'No missing executables among these capabilities. Any credential notes are advisory — a credential may live in the vault rather than the environment.'
+            : `${blocked.length} of ${caps.length} need an executable that is not on PATH; see each check.gaps.`,
+        capabilities: caps,
+      });
+    }
+
+    return JSON.stringify({
+      tools: engine.search(query || '', limit || 10),
+      capabilities: hits.map(toCapability),
+    });
   },
 });
 
