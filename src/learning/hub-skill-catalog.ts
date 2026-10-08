@@ -414,8 +414,7 @@ export function findHubSkillMatch(goal: string, cm?: ConfigManager, projectRoot 
   // "s**kill**", which ranked `feature-flags` top for "no skill covers alpaca
   // husbandry whatsoever". The same class makes `mac` match "machine" and
   // `arch` match "search". Tokenizing once also keeps this ranking consistent
-  // with the caller's evidence gate (`hasRealGoalEvidence`), so the scorer
-  // cannot nominate a skill the gate then rejects.
+  // with whole-word matching elsewhere in the skill layer. NOTE: the auto-
   const tokens = new Set(q.split(/[^a-z0-9]+/).filter((w) => w.length > 0));
 
   const scored = skills.map((skill) => {

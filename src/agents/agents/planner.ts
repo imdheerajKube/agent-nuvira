@@ -158,6 +158,10 @@ export class PlannerAgent extends Agent {
       const skillGuidance = context.metadata.skillGuidance as
         | { name: string; description: string; steps: Array<{ agentType: string; description: string }>; body?: string; fullMethodology?: string }
         | undefined;
+      // Model-driven skill discovery: the orchestrator hands the planner the
+      // skill CATALOG instead of a keyword-matched skill — the planner (a model)
+      // picks the one that fits a step, and the writer loads it via skill_view.
+      const skillCatalog = context.metadata.skillCatalog as string | undefined;
 
       this.report(context, 'analyzing', 'Analyzing goal and current project structure…');
 
@@ -302,6 +306,12 @@ export class PlannerAgent extends Agent {
           'Resolve skill placeholders like {{provider}}, {{projectName}}, and {{outputDir}} to concrete values from the goal and the working directory — NEVER emit literal {{...}} tokens inside a command.',
         );
         promptParts.push(...skillLines);
+      }
+
+      // The model-driven skill catalog (names + one-liners), when the
+      // orchestrator injected one. Named by the planner, loaded by the writer.
+      if (skillCatalog) {
+        promptParts.push('', skillCatalog);
       }
 
       // Append memory/few-shot examples if available

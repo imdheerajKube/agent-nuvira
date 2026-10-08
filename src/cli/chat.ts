@@ -2295,24 +2295,20 @@ export class ChatCommand extends BaseCommand {
     const systemText = buildToolSystemPrompt(parsed);
 
     // Skill hint — MODE-DEPENDENT (see resolveSkillHintMode):
-    //   - `match` (default) — the small keyword-matched hint: ONE skill, and
-    //     only when the goal really matches; otherwise nothing. This is the
-    //     3.3.10 behaviour and keeps the prompt small.
+    //   - `pointer` (default) — a bounded discovery pointer: skills exist, here
+    //     are the two ways to find one (the `skill` tool and the capability
+    //     search). The MODEL picks; the harness no longer keyword-matches. This
+    //     keeps the prompt small and has no false positives to maintain.
     //   - `catalog` (opt-in) — the full name+description catalog, which lets the
-    //     MODEL pick a skill but costs ~24K chars on every turn, so it must be
-    //     chosen (`NUVIRA_SKILL_CATALOG=catalog` or `skills.catalogHint`).
+    //     model read every skill in-context but costs ~24K chars on every turn,
+    //     so it must be chosen (`NUVIRA_SKILL_CATALOG=catalog` or
+    //     `skills.catalogHint`).
     //   - `off` — never inject one.
     // Best-effort: any failure returns '' and the turn proceeds byte-identically.
     let skillHint = '';
     try {
-      const { buildConfiguredSkillHint, markLoopSkillUsed } = await import(
-        '../tools/loop-skill-hint.js'
-      );
-      const injected: { value: import('../tools/loop-skill-hint.js').LoopSkillHintMatch | null } = {
-        value: null,
-      };
-      skillHint = await buildConfiguredSkillHint(message, this.configManager, injected);
-      await markLoopSkillUsed(injected.value);
+      const { buildConfiguredSkillHint } = await import('../tools/loop-skill-hint.js');
+      skillHint = await buildConfiguredSkillHint(this.configManager);
     } catch {
       skillHint = ''; // best-effort — a hint failure never breaks the turn
     }

@@ -55,15 +55,17 @@ describe('RELEASE GATE — system prompt budget', () => {
   });
 
   it('the DEFAULT skill hint for a software ask is small — the catalog is OPT-IN', async () => {
-    expect(DEFAULT_SKILL_HINT_MODE).toBe('match');
-    expect(resolveSkillHintMode()).toBe('match');
-    const hint = await buildConfiguredSkillHint(SAMPLE_GOAL);
+    // Model-driven default: a bounded discovery POINTER (the skill tool + the
+    // capability search), never the ~24K catalog.
+    expect(DEFAULT_SKILL_HINT_MODE).toBe('pointer');
+    expect(resolveSkillHintMode()).toBe('pointer');
+    const hint = await buildConfiguredSkillHint();
     expect(hint.length).toBeLessThan(2_000);
     expect(hint).not.toContain('## Available skills');
   });
 
   it('base prompt + default skill hint stay within the per-turn budget', async () => {
-    const hint = await buildConfiguredSkillHint(SAMPLE_GOAL);
+    const hint = await buildConfiguredSkillHint();
     const total = buildToolSystemPrompt().length + hint.length;
     // The regression was ~32.8K. This is the number that must never regress.
     expect(total).toBeLessThan(20_000);
