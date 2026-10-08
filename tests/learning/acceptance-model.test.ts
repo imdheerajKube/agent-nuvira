@@ -12,7 +12,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   acceptanceByPair,
+  acceptanceSummary,
   collectLabelledTurns,
+  formatAcceptanceSummary,
   predictAcceptance,
   trainAcceptanceModel,
   MIN_LABELS_FOR_FIT,
@@ -137,5 +139,17 @@ describe('acceptance model', () => {
     const pairs = acceptanceByPair();
     expect(pairs['groq/m1']).toEqual({ accepted: 1, rejected: 1 });
     expect(pairs['gemini/m2']).toEqual({ accepted: 1, rejected: 0 });
+  });
+
+  it('summarises with an honest untrained line below the floor', () => {
+    addTurn({ accepted: true, verification: 'verified' });
+    const s = acceptanceSummary();
+    expect(s.labelled).toBe(1);
+    expect(s.accepted).toBe(1);
+    expect(s.fit.ok).toBe(false);
+    const text = formatAcceptanceSummary(s).join('\n');
+    expect(text).toMatch(/labelled turns: 1/);
+    expect(text).toMatch(/NOT trained/);
+    expect(text).toMatch(/read-only: nothing routes on this/);
   });
 });

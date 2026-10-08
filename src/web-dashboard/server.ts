@@ -27,6 +27,7 @@ import { runAllChecks, type CheckResult, type HealthStatus } from '../cli/doctor
 import type { ProviderConfig } from '../config/types.js';
 import type { WireFinding } from '../findings/verdicts.js';
 import { getAutoRouter } from '../learning/auto-router.js';
+import { acceptanceSummary } from '../learning/acceptance-model.js';
 import { withStrictModel } from '../inference/route-resolver.js';
 import { readRecallHits } from '../context/session-recall.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
@@ -5769,6 +5770,51 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   if (pathname === '/api/model-registry') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readModelRegistryData()));
+    return;
+  }
+
+  // GET /api/acceptance (Bundle 32) — the acceptance corpus at a glance: labelled
+  // counts, class balance, the per-pair record, and whether the read-only fit has
+  // enough to train. READ is open like the other model endpoints — it carries only
+  // aggregate counts and a fit that nothing routes on. Always 200; an unavailable
+  // store degrades to an empty summary rather than a spinner the UI never leaves.
+  if (pathname === '/api/acceptance' && req.method === 'GET') {
+    try {
+      const s = acceptanceSummary();
+      writeJson(res, 200, {
+        labelled: s.labelled,
+        accepted: s.accepted,
+        rejected: s.rejected,
+        bySource: s.bySource,
+        byPair: s.byPair,
+        fit: s.fit.ok
+          ? {
+              ok: true,
+              n: s.fit.model.n,
+              positives: s.fit.model.positives,
+              negatives: s.fit.model.negatives,
+              featureNames: s.fit.model.featureNames,
+              weights: s.fit.model.weights,
+              bias: s.fit.model.bias,
+            }
+          : {
+              ok: false,
+              reason: s.fit.reason,
+              n: s.fit.n,
+              positives: s.fit.positives,
+              negatives: s.fit.negatives,
+            },
+      });
+    } catch {
+      writeJson(res, 200, {
+        labelled: 0,
+        accepted: 0,
+        rejected: 0,
+        bySource: {},
+        byPair: {},
+        fit: { ok: false, reason: 'acceptance model unavailable', n: 0, positives: 0, negatives: 0 },
+      });
+    }
     return;
   }
 

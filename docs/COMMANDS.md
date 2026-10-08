@@ -1416,13 +1416,14 @@ nuvira models excluded         # show what routing is skipping, and WHY
   step closed, an honesty flag fired); only you know whether the work was right. That
   makes your verdict the one input the harness cannot compute — and, because the derived
   correction signal can only ever produce negatives, the only source of a POSITIVE label.
-- **Command:** `nuvira rate <good|bad> [--trace <id>]` · `nuvira rate --list`
+- **Command:** `nuvira rate <good|bad> [--trace <id>]` · `nuvira rate --list` · `nuvira rate --stats`
 - **Examples:**
   ```bash
   nuvira rate good                 # the last turn was what you wanted
   nuvira rate bad                  # it was not
   nuvira rate bad -t t_abc123      # rate a specific turn (`nuvira trace list`)
   nuvira rate --list               # recent verdicts
+  nuvira rate --stats              # labels, class balance, per-pair record, fit status
   ```
 - **What it writes:** the verdict on the turn's reasoning trace (`userVerdict`, with its
   source) and, when that turn delivered an authored file, a label on the matching row of

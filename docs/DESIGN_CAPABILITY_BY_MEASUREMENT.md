@@ -348,3 +348,13 @@ features — and reports it READ-ONLY.
 
 As of this bundle the corpus on this machine holds **0 labelled turns** (60 traces, none rated), so the
 section prints the not-trained line — which is the correct, measured output, not a placeholder.
+
+**Two read-only surfaces, one source (Bundle 32).** `acceptanceSummary()` is the single summary both
+surfaces render: CLI `nuvira rate --stats` (labels, class balance, provenance, per-pair, fit status) and the
+dashboard Trace tab's **Acceptance (read-only)** card (`GET /api/acceptance`). Neither can describe the
+corpus differently from the other, and neither routes.
+
+**Seeding stays the user's job.** The corpus is filled by real verdicts — a human rating a turn, or the
+tier-3 behavioural inferences — never by the harness rating turns on the user's behalf. Auto-labelling
+would fabricate the very ground truth the fit is supposed to measure, which is the hand-written-vocabulary
+defect one layer up.

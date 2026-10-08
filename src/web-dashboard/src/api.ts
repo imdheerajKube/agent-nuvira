@@ -1,6 +1,7 @@
 import { parseJsonOrNull } from './jsonOrNull';
 import type { ExecutionEntry } from './components/ExecutionHistory';
 import type {
+  AcceptanceData,
   AdminAuthStatus,
   AdminCachePayload,
   AdminCatalog,
@@ -533,6 +534,22 @@ export class DashboardAPI {
       const data = (await parseJsonOrNull(res)) as { total?: number; traces?: TraceEntry[] } | null;
       if (!data?.traces) return null;
       return data.traces;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Bundle 32 — the acceptance corpus at a glance (labels, class balance, per-pair
+   * record, read-only fit status). Returns null when the server cannot answer, so
+   * the panel degrades instead of inventing a zero.
+   */
+  async fetchAcceptance(): Promise<AcceptanceData | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/acceptance`, { signal: AbortSignal.timeout(8000) });
+      const data = (await parseJsonOrNull(res)) as AcceptanceData | null;
+      if (!data || typeof data.labelled !== 'number') return null;
+      return data;
     } catch {
       return null;
     }
