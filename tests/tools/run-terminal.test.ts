@@ -139,6 +139,38 @@ describe('classifyCommand — deny-first three-class model', () => {
       expect(classifyCommand(cmd), cmd).toBe('confirm');
     }
   });
+
+  it('classifies a READ-ONLY chain through a shell loop as verify (never gate a check)', () => {
+    // Live, 2026-10-08 (`trace-1791390325578-4968th`): the model inspected its own
+    // output with a chain that only ever READ a file, but the `for`/`do`/`done`
+    // segments were off the allowlist, so the whole chain scored confirm and the
+    // gate refused it as "state-changing". The model then burned a step on it
+    // ("the command guard misfired on a read-only check"). A check that cannot
+    // mutate state must never generate a prompt.
+    const live =
+      'grep -n \'^#\' NOTES.md && echo "---" && wc -w NOTES.md && echo "--- sections ---" && ' +
+      'for i in Introduction Design Operations; do printf "%s: " "$i"; done; echo; awk \'/^# Introduction/{print}\' NOTES.md';
+    expect(classifyCommand(live)).toBe('verify');
+
+    // The same rule, exercised on its own.
+    expect(classifyCommand('for f in a b c; do echo "$f"; done')).toBe('verify');
+    expect(classifyCommand('if test -f x; then echo yes; else echo no; fi')).toBe('verify');
+  });
+
+  it('a loop BODY is judged by what it RUNS — grammar never launders a state change', () => {
+    expect(classifyCommand('for f in a b; do touch $f; done')).toBe('confirm');
+    expect(classifyCommand('for f in *; do rm -rf $f; done')).toBe('confirm');
+    expect(classifyCommand('if true; then npm install lodash; fi')).toBe('confirm');
+    // Deny still wins on the WHOLE string, whatever the grammar around it.
+    expect(classifyCommand('for x in 1; do sudo rm -rf /; done')).toBe('deny');
+  });
+
+  it('a text processor is read-only only in its READ form', () => {
+    expect(classifyCommand("awk '/^#/{print}' NOTES.md")).toBe('verify');
+    // The write forms keep the confirm gate (safe direction).
+    expect(classifyCommand("awk '{print > \"out.txt\"}' NOTES.md")).toBe('confirm');
+    expect(classifyCommand("awk 'BEGIN{system(\"rm x\")}'")).toBe('confirm');
+  });
 });
 
 describe('runTerminalTool — the verify loop', () => {
