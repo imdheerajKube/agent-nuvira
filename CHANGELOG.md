@@ -4,6 +4,26 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Added: this machine's facts, detected once and handed to the model
+
+Choosing the right command means knowing the host: the OS and release, the
+architecture, the shell, and — the fact that actually decides the command — which
+package managers are installed. Assuming `apt` on a machine that only has `dnf`,
+or `brew` on Windows, is a command that cannot run. `src/learning/machine-facts.ts`
+detects those facts ONCE per process (using the same `which`/`where` resolver the
+shell uses, memoized) and the chat/execute loop injects a bounded `## This machine`
+block into the system prompt.
+
+The block is the counterpart to the per-OS command map (Bundle 47): the map
+declares the command for the two verbs where the OS determines it and a wrong
+guess is expensive; this detects what is PRESENT, so the model can derive a
+command for anything the map does not cover instead of the map having to
+enumerate the world. The facts are also a discoverable capability
+(`action:machine-facts`), so a capability search returns them.
+
+Measured in the prompt budget as an optional block (drops after the skill hint).
+Pinned by `tests/learning/machine-facts.test.ts` (10).
+
 ### Added: a Capabilities page — what the agent can do on this machine
 
 The capability layer (effect / reversibility / requirements / per-OS commands)

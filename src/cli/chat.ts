@@ -2313,6 +2313,18 @@ export class ChatCommand extends BaseCommand {
       skillHint = ''; // best-effort — a hint failure never breaks the turn
     }
 
+    // Machine facts — the host stated ONCE (OS / arch / shell / installed package
+    // managers), so the model chooses a command for THIS machine instead of
+    // assuming one. Detected once per process; best-effort (a detection failure
+    // injects nothing and the turn proceeds byte-identically).
+    let machineBlock = '';
+    try {
+      const { buildMachineFactsBlock } = await import('../learning/machine-facts.js');
+      machineBlock = buildMachineFactsBlock();
+    } catch {
+      machineBlock = '';
+    }
+
     // `-f/--file` file-context parity: the legacy generateWithContext loaded
     // + retrieval-reduced file context. Inject it as a context message before
     // the user's message so the tool-loop path keeps the flag working.
@@ -2393,7 +2405,7 @@ export class ChatCommand extends BaseCommand {
     // turn, where it used to occupy ~80% of the ask on WhatsApp turns.
     const systemPolicyBlock = ctxOverrides?.systemPolicy ? `\n\n${ctxOverrides.systemPolicy}` : '';
     const thread: ToolMessage[] = [
-      { role: 'system', content: systemText + systemPolicyBlock + skillHint },
+      { role: 'system', content: systemText + systemPolicyBlock + machineBlock + skillHint },
       // P3 — the attached project's bounded snapshot (path + file tree +
       // symbol map) rides in before the conversation, exactly like --file
       // context: the model knows what it is looking at without being told.
@@ -2660,6 +2672,9 @@ export class ChatCommand extends BaseCommand {
           { name: 'system:identity+tool-contract', chars: systemText.length },
           { name: 'system:channel-policy', chars: systemPolicyBlock.length },
           { name: 'skill-hint', chars: skillHint.length, dropPriority: 10 },
+          // Machine facts are FACTS about the host, not a recommendation, so they
+          // drop LAST among the optional blocks (higher priority = kept longer).
+          { name: 'machine-facts', chars: machineBlock.length, dropPriority: 15 },
           { name: 'working-state', chars: workingStateBlock.length, dropPriority: 25 },
           { name: 'decisions', chars: ctxOverrides?.decisionContext?.length ?? 0, dropPriority: 28 },
           { name: 'recall', chars: ctxOverrides?.recallContext?.length ?? 0, dropPriority: 30 },
@@ -2673,10 +2688,18 @@ export class ChatCommand extends BaseCommand {
         ],
         { budget: contextBudget },
       );
-      // Apply the FIRST ladder step (the documented, safe one): drop the skill
-      // hint from the assembled system message.
-      if (report.trims.includes('skill-hint') && skillHint) {
-        thread[0] = { role: 'system', content: systemText + systemPolicyBlock };
+      // Apply the ladder steps: drop the optional system blocks the budget names,
+      // rebuilding the system message from the survivors.
+      const trimmed = new Set(report.trims);
+      if ((trimmed.has('skill-hint') || trimmed.has('machine-facts')) && (skillHint || machineBlock)) {
+        thread[0] = {
+          role: 'system',
+          content:
+            systemText +
+            systemPolicyBlock +
+            (trimmed.has('machine-facts') ? '' : machineBlock) +
+            (trimmed.has('skill-hint') ? '' : skillHint),
+        };
       }
       if (report.level !== 'ok') {
         recordTraceEvent(chatTraceId, {

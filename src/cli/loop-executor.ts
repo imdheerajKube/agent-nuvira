@@ -776,11 +776,21 @@ export async function runLoopExecutor(
     }
   }
 
+  // Machine facts — the host stated once (OS / arch / shell / installed package
+  // managers). One detection per process; best-effort (a failure injects nothing).
+  let machineBlock = '';
+  try {
+    const { buildMachineFactsBlock } = await import('../learning/machine-facts.js');
+    machineBlock = buildMachineFactsBlock();
+  } catch {
+    machineBlock = '';
+  }
+
   const { runToolLoop } = await import('../tools/tool-loop.js');
   const { getTool, TOOL_CONTRACT_JSON } = await import('../tools/registry.js');
 
   const head: ToolMessage[] = [
-    { role: 'system', content: buildExecuteLoopSystemPrompt(TOOL_CONTRACT_JSON) + skillHint },
+    { role: 'system', content: buildExecuteLoopSystemPrompt(TOOL_CONTRACT_JSON) + machineBlock + skillHint },
     ...(projectContext ? [{ role: 'user' as const, content: `[Project context]\n${projectContext}` }] : []),
   ];
   let thread: ToolMessage[] = [...head, { role: 'user', content: goal }];

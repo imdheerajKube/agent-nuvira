@@ -223,7 +223,10 @@ describe('capabilityIndex', () => {
     expect(withActions.map((c) => c.kind)).toContain('tool');
     expect(withActions.map((c) => c.kind)).toContain('action');
     expect(withActions.some((c) => c.kind === 'skill')).toBe(false);
-    expect(withActions.length).toBe(tools.length + actionCapabilities().length);
+    // The index also carries ONE always-on "this machine" capability (OS /
+    // arch / shell / installed package managers), detected from the host.
+    expect(withActions.some((c) => c.id === 'action:machine-facts')).toBe(true);
+    expect(withActions.length).toBe(tools.length + actionCapabilities().length + 1);
   });
 });
 
