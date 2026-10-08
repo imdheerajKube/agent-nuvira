@@ -586,3 +586,134 @@ describe('RouterBandit.penalizeModel — empties are evidence, not silence', () 
     expect(bandit.getModelPrior('default', 'moderate' as never)).toEqual({ alpha: 1, beta: 1 });
   });
 });
+
+// ─── recordExplicitVerdict (Bundle 36 — an EXPLICIT rate reaches the router) ──
+
+/**
+ * The derived rejection already reached the bandit through `pendingOutcome`; an
+ * explicit `nuvira rate bad` runs in its OWN process, so it corrects the arm from
+ * the trace instead — once per trace, whatever the outcome branch allows.
+ */
+describe('recordExplicitVerdict', () => {
+  it('moves the provider arm by the same delta the derived path would', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0, undefined, 'coding');
+    const before = { ...bandit.getPrior('groq', 'moderate' as never, 'coding') };
+    const res = bandit.recordExplicitVerdict({
+      traceId: 'trace-1',
+      provider: 'groq',
+      complexity: 'moderate' as never,
+      taskIntent: 'coding',
+      outcome: 'success',
+    });
+    expect(res.applied).toBe(true);
+    expect(res.moved).toBe(1);
+    const after = bandit.getPrior('groq', 'moderate' as never, 'coding');
+    expect(after.alpha).toBeCloseTo(before.alpha - USER_REJECTION_DELTA, 10);
+    expect(after.beta).toBeCloseTo(before.beta + USER_REJECTION_DELTA, 10);
+  });
+
+  it('is applied ONCE per trace — re-rating cannot move the arm twice', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0, undefined, 'coding');
+    const input = {
+      traceId: 'trace-once',
+      provider: 'groq',
+      complexity: 'moderate' as never,
+      taskIntent: 'coding',
+      outcome: 'success' as const,
+    };
+    bandit.recordExplicitVerdict(input);
+    const afterFirst = { ...bandit.getPrior('groq', 'moderate' as never, 'coding') };
+    const second = bandit.recordExplicitVerdict(input);
+    expect(second.applied).toBe(false);
+    expect(second.alreadyApplied).toBe(true);
+    expect(bandit.getPrior('groq', 'moderate' as never, 'coding')).toEqual(afterFirst);
+  });
+
+  it('corrects an arm but never CREATES one, and remembers so it is not retried', () => {
+    const bandit = new RouterBandit();
+    const res = bandit.recordExplicitVerdict({
+      traceId: 'trace-no-arm',
+      provider: 'groq',
+      complexity: 'moderate' as never,
+      taskIntent: 'coding',
+      outcome: 'success',
+    });
+    expect(res.applied).toBe(true);
+    expect(res.moved).toBe(0);
+    expect(bandit.getPrior('groq', 'moderate' as never, 'coding')).toEqual({ alpha: 1, beta: 1 });
+    // Even after an arm later appears, this verdict must not be applied on a re-rate.
+    bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0, undefined, 'coding');
+    const before = { ...bandit.getPrior('groq', 'moderate' as never, 'coding') };
+    const second = bandit.recordExplicitVerdict({
+      traceId: 'trace-no-arm',
+      provider: 'groq',
+      complexity: 'moderate' as never,
+      taskIntent: 'coding',
+      outcome: 'success',
+    });
+    expect(second.alreadyApplied).toBe(true);
+    expect(bandit.getPrior('groq', 'moderate' as never, 'coding')).toEqual(before);
+  });
+
+  it('does NOTHING for a non-success outcome (those branches never read the verdict)', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('gemini', 'implement a login form', 'failure', 0.5, undefined, 'coding');
+    const before = { ...bandit.getPrior('gemini', 'moderate' as never, 'coding') };
+    const res = bandit.recordExplicitVerdict({
+      traceId: 'trace-fail',
+      provider: 'gemini',
+      complexity: 'moderate' as never,
+      taskIntent: 'coding',
+      outcome: 'failure',
+    });
+    expect(res.applied).toBe(false);
+    expect(bandit.getPrior('gemini', 'moderate' as never, 'coding')).toEqual(before);
+    expect(bandit.getState().correctedVerdicts ?? []).not.toContain('trace-fail');
+  });
+
+  it('without the intent, corrects every bucket at that complexity that knows the provider', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0, undefined, 'coding');
+    bandit.recordOutcome('groq', 'write an essay', 'success', 1.0, undefined, 'creative');
+    const codingBefore = { ...bandit.getPrior('groq', 'moderate' as never, 'coding') };
+    const creativeBefore = { ...bandit.getPrior('groq', 'moderate' as never, 'creative') };
+    const res = bandit.recordExplicitVerdict({
+      traceId: 'trace-no-intent',
+      provider: 'groq',
+      complexity: 'moderate' as never,
+      outcome: 'success',
+    });
+    expect(res.moved).toBe(2);
+    expect(bandit.getPrior('groq', 'moderate' as never, 'coding').alpha).toBeCloseTo(
+      codingBefore.alpha - USER_REJECTION_DELTA,
+      10,
+    );
+    expect(bandit.getPrior('groq', 'moderate' as never, 'creative').alpha).toBeCloseTo(
+      creativeBefore.alpha - USER_REJECTION_DELTA,
+      10,
+    );
+    // A DIFFERENT complexity is untouched.
+    expect(bandit.getPrior('groq', 'simple' as never, 'coding')).toEqual({ alpha: 1, beta: 1 });
+  });
+
+  it('moves the per-model arm too when the trace named the model', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0, undefined, 'coding');
+    bandit.recordModelOutcome('llama-3.3-70b-versatile', 'implement a login form', 'success', 1.0, undefined, 'coding');
+    const before = { ...bandit.getModelPrior('llama-3.3-70b-versatile', 'moderate' as never, 'coding') };
+    const res = bandit.recordExplicitVerdict({
+      traceId: 'trace-model',
+      provider: 'groq',
+      complexity: 'moderate' as never,
+      taskIntent: 'coding',
+      model: 'llama-3.3-70b-versatile',
+      outcome: 'success',
+    });
+    expect(res.moved).toBe(2);
+    const after = bandit.getModelPrior('llama-3.3-70b-versatile', 'moderate' as never, 'coding');
+    expect(after.alpha).toBeCloseTo(before.alpha - USER_REJECTION_DELTA, 10);
+    expect(after.beta).toBeCloseTo(before.beta + USER_REJECTION_DELTA, 10);
+  });
+});

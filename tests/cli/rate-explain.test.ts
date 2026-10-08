@@ -13,8 +13,9 @@ import { join } from 'node:path';
 import { Command } from 'commander';
 
 import { RateCommand } from '../../src/cli/rate.js';
-import { beginTrace, clearTraces, recordTurnReport } from '../../src/learning/reasoning-trace.js';
+import { beginTrace, clearTraces, recordTraceEvent, recordTurnReport } from '../../src/learning/reasoning-trace.js';
 import { collectLabelledTurns } from '../../src/learning/acceptance-model.js';
+import { getRouterBandit, resetRouterBandit } from '../../src/learning/router-bandit.js';
 import type { TurnReport } from '../../src/learning/turn-report.js';
 
 function report(verification: string, flags: Record<string, boolean> = {}): TurnReport {
@@ -73,6 +74,7 @@ describe('rate --explain', () => {
     origConfig = process.env.NUVIRA_CONFIG_DIR;
     process.env.NUVIRA_MEMORY_DIR = tempDir;
     process.env.NUVIRA_CONFIG_DIR = join(tempDir, 'config');
+    resetRouterBandit();
     clearTraces();
   });
 
@@ -106,5 +108,31 @@ describe('rate --explain', () => {
     const { stdout, code } = runCli(makeCli(), ['rate', '--explain', 'trace-nope']);
     expect(code).toBe(1);
     expect(stdout).toMatch(/Trace not found: trace-nope/);
+  });
+
+  it('`rate bad` also corrects the router, and re-rating does not correct it twice', () => {
+    const id = beginTrace({ goal: 'implement a login form', source: 'chat', provider: 'auto', model: 'auto' });
+    recordTurnReport(id, report('verified'));
+    recordTraceEvent(id, {
+      kind: 'decision',
+      gate: 'routing',
+      summary: 'routed to groq/llama (complexity moderate)',
+      routing: {
+        provider: 'groq',
+        model: 'llama-3.3-70b-versatile',
+        score: 0.9,
+        complexity: 'moderate',
+        explanation: 'test',
+        taskIntent: 'coding',
+      },
+    });
+    getRouterBandit().recordOutcome('groq', 'implement a login form', 'success', 1.0, undefined, 'coding');
+
+    const first = runCli(makeCli(), ['rate', 'bad', '-t', id]);
+    expect(first.code).toBe(0);
+    expect(first.stdout).toMatch(/Router: corrected 1 bandit prior\(s\)/);
+
+    const second = runCli(makeCli(), ['rate', 'bad', '-t', id]);
+    expect(second.stdout).toMatch(/already applied/);
   });
 });

@@ -26,6 +26,7 @@
 
 import { getTrace, listTraces, recordTraceVerdict } from './reasoning-trace.js';
 import { labelDeliverableByTrace } from './deliverable-corpus.js';
+import { applyVerdictToRouter, type VerdictRoutingOutcome } from './verdict-routing.js';
 
 /** The two things a user can say about a turn. */
 export type TurnVerdict = 'accepted' | 'rejected';
@@ -51,6 +52,13 @@ export interface RatedTurn {
   at: number;
   /** True when a deliverable-corpus row was labelled by this verdict. */
   corpusLabeled: boolean;
+  /**
+   * Bundle 36 — what the verdict did to the ROUTER, when it reached it. A
+   * rejection corrects the bandit arm that served the turn (the deferred
+   * `userAccepted: false` delta, applied once); an acceptance adds nothing to
+   * routing. Present only when a correction was attempted.
+   */
+  router?: VerdictRoutingOutcome;
 }
 
 /**
@@ -115,9 +123,27 @@ export function rateTurn(input: {
     // A corpus write is best-effort — the verdict on the trace is the durable half.
     corpusLabeled = false;
   }
+  // Bundle 36 — the same verdict also corrects the ROUTER, so an explicit
+  // rejection reaches the bandit the way the derived one already did. Keyed on
+  // the trace, so it is applied once however many times the turn is rated.
+  // Best-effort: the label is recorded whether or not routing could be corrected.
+  let router: VerdictRoutingOutcome | undefined;
+  try {
+    router = applyVerdictToRouter(traceId, input.verdict);
+  } catch {
+    router = undefined;
+  }
   return {
     ok: true,
-    rated: { traceId, goal: trace.goal, verdict: input.verdict, source: input.source, at: now, corpusLabeled },
+    rated: {
+      traceId,
+      goal: trace.goal,
+      verdict: input.verdict,
+      source: input.source,
+      at: now,
+      corpusLabeled,
+      ...(router ? { router } : {}),
+    },
   };
 }
 

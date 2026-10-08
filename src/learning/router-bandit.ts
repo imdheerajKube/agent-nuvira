@@ -113,6 +113,14 @@ export interface RouterBanditState {
     verificationPassed?: boolean;
     timestamp: string;
   }>;
+  /**
+   * Bundle 36 — trace ids whose EXPLICIT user verdict has already been applied to
+   * the arms that served them. An explicit `nuvira rate bad` arrives in its OWN
+   * process, so it cannot rely on `pendingOutcome`; keying the correction on the
+   * trace is what lets a re-run (or a verdict that follows a DERIVED rejection of
+   * the same turn) move an arm exactly once. Bounded like the history.
+   */
+  correctedVerdicts?: string[];
 }
 
 // ─── Storage ────────────────────────────────────────────────────────────────
@@ -120,6 +128,8 @@ export interface RouterBanditState {
 const DEFAULT_MEMORY_DIR = join(resolveNuviraHome(), 'memory');
 const CURRENT_VERSION = 3; // v2 = per-modelId modelPriors; v3 = task-INTENT-aware buckets
 const MAX_HISTORY = 200;
+/** Cap the applied-verdict dedupe set (oldest drop first — a trace, once old, is never re-rated). */
+const MAX_CORRECTED_VERDICTS = 2000;
 
 function memoryDir(): string {
   return envBuff('MEMORY_DIR') || DEFAULT_MEMORY_DIR;
@@ -607,6 +617,109 @@ export class RouterBandit {
     }
     if (moved) this.save();
     return moved;
+  }
+
+  /**
+   * Apply an EXPLICIT user verdict (`nuvira rate bad`, or the dashboard's 👎) to the
+   * arms that served the trace it is about.
+   *
+   * WHY A SEPARATE ENTRY POINT. `recordUserRejection` applies the same deferred
+   * delta for the DERIVED signal, but its attribution lives in the in-process
+   * `pendingOutcome` slot: it is gone by the time the user rates a turn from the
+   * CLI (or from the dashboard after the process ended). An explicit verdict names
+   * a TRACE, so this reads the pair and complexity the trace recorded and corrects
+   * the arm there — the same `α−δ / β+δ` a known verdict would have applied at
+   * record time.
+   *
+   * COUNTED ONCE, EVER. The trace id is remembered, so a re-run — or a verdict
+   * that follows a DERIVED rejection of the same turn — cannot move the arm twice.
+   * The marker is written even when no arm existed, because a rejection CORRECTS an
+   * existing arm and never creates one, and a second attempt must not suddenly
+   * apply a delta the first deliberately did not.
+   *
+   * Only a SUCCESS carries an un-applied penalty: the escalated and failure
+   * branches of `applyReward` never read `userAccepted`, so a rejection of one of
+   * those is already fully reflected.
+   */
+  recordExplicitVerdict(input: {
+    traceId: string;
+    provider: string;
+    complexity: ComplexityLevel;
+    taskIntent?: string;
+    model?: string;
+    /** The outcome the turn's own evidence was recorded under (see `turnOutcomeObservation`). */
+    outcome: BanditOutcome;
+  }): { applied: boolean; alreadyApplied: boolean; moved: number; reason: string } {
+    const noop = (reason: string, alreadyApplied = false) => ({
+      applied: false,
+      alreadyApplied,
+      moved: 0,
+      reason,
+    });
+    if (!input.traceId) return noop('no trace id to key the correction on');
+    const done = this.state.correctedVerdicts ?? [];
+    if (done.includes(input.traceId)) return noop('this verdict was already applied', true);
+    if (input.outcome !== 'success') {
+      return noop('the turn was not recorded as a success — its arm never read the verdict');
+    }
+
+    const keys = this.correctionKeys(input.provider, input.complexity, input.taskIntent);
+    const applyDelta = (prior: BetaPrior): void => {
+      // Clamp α above zero: a Beta prior needs positive shape parameters.
+      prior.alpha = Math.max(0.1, prior.alpha - USER_REJECTION_DELTA);
+      prior.beta += USER_REJECTION_DELTA;
+    };
+    let moved = 0;
+    for (const key of keys) {
+      const providerPrior = this.state.priors[key]?.[input.provider];
+      if (providerPrior) {
+        applyDelta(providerPrior);
+        moved++;
+      }
+      if (input.model) {
+        const modelPrior = this.state.modelPriors[key]?.[input.model];
+        if (modelPrior) {
+          applyDelta(modelPrior);
+          moved++;
+        }
+      }
+    }
+
+    this.state.correctedVerdicts = [...done, input.traceId].slice(-MAX_CORRECTED_VERDICTS);
+    this.save();
+    return {
+      applied: true,
+      alreadyApplied: false,
+      moved,
+      reason: moved > 0 ? `moved ${moved} prior(s)` : 'no recorded arm for this pair yet',
+    };
+  }
+
+  /**
+   * The bucket keys whose arms could have served this turn, most precise first.
+   *
+   * The exact `intent:complexity` bucket is used when the trace carried the intent
+   * (new traces do; see `TraceRoutingSnapshot.taskIntent`). When it did not — an
+   * older trace — every bucket at the SAME complexity that already holds an entry
+   * for the provider is corrected instead, because a correction that silently
+   * no-ops is worse than one that lands on the buckets this pair could have served.
+   */
+  private correctionKeys(provider: string, complexity: ComplexityLevel, taskIntent?: string): string[] {
+    const keys: string[] = [];
+    if (taskIntent) {
+      const exact = this.bucketKey(complexity, taskIntent);
+      if (this.state.priors[exact]?.[provider]) keys.push(exact);
+    } else if (this.state.priors[complexity]?.[provider]) {
+      keys.push(complexity);
+    }
+    if (keys.length === 0) {
+      for (const key of Object.keys(this.state.priors)) {
+        if ((key === complexity || key.endsWith(`:${complexity}`)) && this.state.priors[key]?.[provider]) {
+          keys.push(key);
+        }
+      }
+    }
+    return keys;
   }
 
   /**

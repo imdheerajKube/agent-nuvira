@@ -38,6 +38,29 @@ The verdict lands on the turn's reasoning trace (`userVerdict`) and, when the tu
 delivered an authored file, on that exact row of the quality corpus. In the
 dashboard, the **Trace tab** shows the same control — a 👍/👎 under each trace.
 
+### What a 👎 does to routing (and a 👍 does not)
+
+A **rejection** also corrects the ROUTER: it applies the deferred
+`userAccepted: false` delta to the model arm that served the turn — the same
+`α − 0.1 / β + 0.1` the derived correction (tier 1) already applies — so the model
+that produced work you rejected samples lower for that task type next time. It is
+applied **once per trace**: re-rating the same turn cannot double-count it.
+
+An **acceptance** moves no bandit arm. The turn was already recorded as its own
+outcome when it ended; a 👍 adds no new observation, and inventing one would be
+the same fabrication this workflow avoids. The 👍 still becomes a label the fit
+reads — it just does not manufacture a second positive routing sample.
+
+```
+$ nuvira rate bad -t trace-123
+👎 rejected — trace-123
+   Labelled the delivered artifact in the quality corpus (one row).
+   Router: corrected 1 bandit prior(s) (groq/llama-3.3-70b-versatile @ moderate) — the rejected arm now samples lower.
+```
+
+When no arm exists for the pair (the turn was not auto-routed, or learning is
+switched off), the command says so — a verdict never invents an arm.
+
 ## 3. Or don't — the behavioural tier (tier 3, inferred)
 
 When you do not rate, three behaviours are read (`learning/behavioural-labels.ts`):
@@ -78,8 +101,10 @@ decision pair's own rated record and the harness-level fit.
   it prints the reason instead of a number — an underfit probability shown as
   evidence is worse than showing nothing.
 - **Deterministic:** the same corpus always yields the same coefficients.
-- **Read-only:** nothing in the router imports it. A fitted number that moved a
-  routing decision would be the exact defect this programme removes.
+- **Read-only:** nothing in the router imports THIS fit. A fitted number that moved
+  a routing decision would be the exact defect this programme removes. (A 👎 still
+  corrects the bandit separately — that is the trace's verdict, not the fit's
+  output; see §2.)
 
 ## 6. Export — ship the corpus
 
@@ -185,16 +210,18 @@ The live fit and the offline fit are byte-identical by construction.
 
 | Action | Writes to |
 |---|---|
-| `nuvira rate <good\|bad>` | the turn's trace (`userVerdict`) + the matching corpus row |
-| behavioural tiers | the same two places, `source: 'derived'` |
+| `nuvira rate bad` | the turn's trace (`userVerdict`) + the matching corpus row + the router bandit arm that served the turn (once) |
+| `nuvira rate good` | the turn's trace + the matching corpus row (no routing change) |
+| behavioural tiers | the same trace/corpus places, `source: 'derived'` |
 | `--export` | nothing — reads `collectLabelledTurns()` to a file/stdout |
 | `--import` / `--merge` | `<memory>/acceptance-labels.jsonl` (`--replace` also rewrites local traces/corpus rows) |
 | fit (`model explain`, `--stats`, doctor) | nothing — pure read |
 
 ## 11. Honest limits
 
-- **Nothing routes on this.** It is a dataset and a read-only fit; no score moves
-  a decision.
+- **The FIT routes nothing.** It is a dataset and a read-only probability; no score
+  it produces moves a decision. A **rejection** does move the router, but through
+  the bandit's own `userAccepted` reward — the trace's verdict, never the fit.
 - **A few hundred rows with both classes** are what make the fit meaningful; the
   20/5 floor is only where it becomes *trainable*.
 - **Labels are yours.** The harness never rates a turn on your behalf — the

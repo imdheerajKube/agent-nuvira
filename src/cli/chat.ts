@@ -4138,6 +4138,9 @@ export class ChatCommand extends BaseCommand {
       // and console can show WHY the pair was chosen, not just which pair.
       agenticCapable: decision.agenticCapable,
       overrideReason: decision.overrideReason,
+      // Bundle 36 — the intent the bandit will bucket this outcome under, so a
+      // later `nuvira rate bad` can correct the EXACT arm (see `verdict-routing.ts`).
+      ...(decision.taskProfile?.intent ? { taskIntent: decision.taskProfile.intent } : {}),
     };
 
     // Walk the ranked candidates (winner first) and return the first available

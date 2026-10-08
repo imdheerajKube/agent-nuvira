@@ -1453,10 +1453,17 @@ nuvira models excluded         # show what routing is skipping, and WHY
 - **What it writes:** the verdict on the turn's reasoning trace (`userVerdict`, with its
   source) and, when that turn delivered an authored file, a label on the matching row of
   the quality corpus. The dashboard's **Trace tab** has the same control (👍/👎).
-- **What it does NOT do:** nothing routes on it and no score is derived from it. It
-  records a dataset so a measured quality signal can be fit to labelled turns; a turn
-  nobody rated stays unlabelled, because reading silence as acceptance would fabricate
-  the positive class instead of measuring it. See `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §8.
+- **What it does to routing (Bundle 36):** a **rejection** also corrects the ROUTER — it
+  applies the deferred `userAccepted: false` delta to the bandit arm that served the turn
+  (`provider`/`model` at that complexity), exactly as the derived correction already did,
+  and exactly once per trace (re-rating cannot double-count). An **acceptance** moves no
+  bandit arm: the turn was already recorded as its own outcome, so a 👍 adds no new
+  observation. So a 👎 changes what the agent tries next, not only what it records.
+- **What it does NOT do:** the FITTED quality model routes nothing, and no score is
+  derived from the label. `--stats`/`--export` collect a dataset so a measured quality
+  signal can be fit to labelled turns; a turn nobody rated stays unlabelled, because
+  reading silence as acceptance would fabricate the positive class instead of measuring
+  it. See `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §8.
   (For trajectory ratings in the older store, use `nuvira feedback` — §7.3.)
 - **Other label sources:** behaviour is also inferred when you do not rate — a near-verbatim
   **re-ask** or a **hand-edit** of the delivered file is a derived rejection, and an untouched
