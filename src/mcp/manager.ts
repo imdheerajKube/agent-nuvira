@@ -11,6 +11,7 @@ import { join } from 'node:path';
 
 import { resolveMcpConfigDir } from '../config/paths.js';
 import { logger } from '../utils/logger.js';
+import { getMCPSchemaCache, MCPSchemaCache } from './mcp-schema-cache.js';
 import { MCPClient } from './client.js';
 import {
   type MCPServerConfig,
@@ -125,7 +126,32 @@ export class MCPManager {
       throw err;
     }
     this.clients.set(name, client);
+    this.cacheDiscoveredSchemas(config, client);
     return client;
+  }
+
+  /**
+   * Persist a server's discovered schemas so a LATER process can discover its
+   * tools without re-connecting — the reason the cache exists.
+   *
+   * Best-effort by contract: connecting is the valuable thing, and a cache write
+   * must never be able to fail it. The config hash is stored alongside so a
+   * RECONFIGURED server's stale schemas are recognisable and ignored rather than
+   * silently trusted.
+   */
+  private cacheDiscoveredSchemas(config: MCPServerConfig, client: MCPClient): void {
+    try {
+      const cache = getMCPSchemaCache();
+      cache.set(
+        config.name,
+        MCPSchemaCache.computeConfigHash(config as unknown as Record<string, unknown>),
+        client.tools,
+        client.resources,
+        client.prompts,
+      );
+    } catch (err) {
+      logger.debug(`MCP: could not cache schemas for '${config.name}': ${err}`);
+    }
   }
 
   /**

@@ -9,9 +9,8 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths';
+import { resolveMcpConfigDir } from '../config/paths.js';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { logger } from '../utils/logger.js';
 import type { Tool, Resource, Prompt } from './types.js';
@@ -46,10 +45,23 @@ export interface SchemaCacheConfig {
 
 // ─── Schema Cache ─────────────────────────────────────────────────────────
 
-const DEFAULT_CACHE_DIR = join(resolveNuviraHome(), 'mcp', 'cache');
 const DEFAULT_TTL_MS = 3600_000; // 1 hour
 const DEFAULT_MAX_SIZE = 10 * 1024 * 1024; // 10MB
 const CACHE_FILE = 'schemas.json';
+
+/**
+ * Resolve the cache directory LAZILY, through `resolveMcpConfigDir` like every
+ * other MCP path. Two isolation defects are fixed here.
+ *
+ * It used `resolveNuviraHome()`, which ignores `$NUVIRA_CONFIG_DIR` — so a
+ * process pointed at an isolated profile still read and wrote the REAL
+ * `~/.nuvira/mcp/cache`, the exact reach the note on `resolveNuviraHome` warns
+ * about. And it was a module-level constant, so the path was frozen at IMPORT
+ * time: anything that set the env afterwards still got the developer's home.
+ */
+function defaultCacheDir(): string {
+  return join(resolveMcpConfigDir(), 'cache');
+}
 
 export class MCPSchemaCache {
   private cacheDir: string;
@@ -58,7 +70,7 @@ export class MCPSchemaCache {
   private cache: Map<string, CachedServerSchema> = new Map();
 
   constructor(config?: SchemaCacheConfig) {
-    this.cacheDir = config?.cacheDir || DEFAULT_CACHE_DIR;
+    this.cacheDir = config?.cacheDir || defaultCacheDir();
     this.ttlMs = config?.ttlMs || DEFAULT_TTL_MS;
     this.maxSizeBytes = config?.maxSizeBytes || DEFAULT_MAX_SIZE;
     this.loadCache();
@@ -113,6 +125,39 @@ export class MCPSchemaCache {
 
     this.cache.set(serverName, entry);
     this.saveCache();
+  }
+
+  /**
+   * EVERY cached server schema, live ones included.
+   *
+   * WHY THIS EXISTS. This cache was write-only-in-name: nothing in the
+   * connection path ever called `set()`, so `schemas.json` only ever held what a
+   * caller put there by hand. The capability layer needs to enumerate it to
+   * discover a server's tools WITHOUT re-connecting, which is the entire point
+   * of caching schemas at all. Returns a copy so a caller cannot mutate the
+   * cache map.
+   */
+  getAll(): CachedServerSchema[] {
+    return [...this.cache.values()];
+  }
+
+  /**
+   * Drop entries whose config no longer matches (the server was reconfigured) or
+   * whose TTL has passed. Returns the number of entries dropped, so a caller can
+   * report rather than silently trust stale data.
+   */
+  prune(configHashFor: (serverName: string) => string | undefined): number {
+    const now = Date.now();
+    let dropped = 0;
+    for (const [name, entry] of this.cache) {
+      const hash = configHashFor(name);
+      if (hash === undefined || hash !== entry.configHash || entry.expiresAt <= now) {
+        this.cache.delete(name);
+        dropped += 1;
+      }
+    }
+    if (dropped > 0) this.saveCache();
+    return dropped;
   }
 
   /**

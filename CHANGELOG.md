@@ -4,6 +4,29 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Fixed: the MCP schema cache actually caches, so MCP discovery survives a cold start
+
+The cache existed to persist a server's tool schemas so a LATER process would not
+have to re-connect — and nothing ever called `set()`. Its only readers were the
+`mcp_schema_cache` tool's `get`/`invalidate`/`stats` actions, so
+`schemas.json` was always empty on a fresh install and the feature was inert.
+`MCPManager.connect` now persists the schemas it just discovered, with the
+server's config hash, best-effort so a cache write can never fail a connection.
+`MCPSchemaCache` gained `getAll()` (enumerate) and `prune()`, and the new
+`mcp/mcp-discovery.ts` merges the live connection state with the cache
+live-first. The cache is trusted only while the server is still configured AND
+its config hash is unchanged, so a RECONFIGURED server's stale schemas are pruned
+and an UNINSTALLED server's are dropped — never silently served. Capability
+discovery therefore answers "what can I do?" on a cold start, without connecting
+and without being able to spawn a server as a side effect. Two isolation defects
+are fixed at the same time: the cache directory used `resolveNuviraHome()`, which
+ignores `$NUVIRA_CONFIG_DIR`, so an isolated process still read and wrote the real
+`~/.nuvira/mcp/cache`; and it was a module-level constant, so the path was frozen
+at IMPORT time and anything that set the env afterwards got the developer's real
+home anyway. Pinned by `tests/mcp/mcp-schema-cache.test.ts` (10),
+`tests/mcp/mcp-discovery.test.ts` (7), and a real-subprocess persistence case in
+`tests/mcp/mcp-e2e.test.ts`.
+
 ### Added: external MCP tools become discoverable capabilities, described by their own declarations
 
 Reach borrowed from outside, with nothing hand-written. nuvira could already
