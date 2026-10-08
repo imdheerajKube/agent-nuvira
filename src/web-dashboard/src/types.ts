@@ -2035,3 +2035,50 @@ export interface SessionGrantInfo {
   grantedAt: number;
   expiresAt: number;
 }
+
+/** One declared need: satisfied when ANY of `anyOf` is present. */
+export interface CapabilityNeed {
+  anyOf: string[];
+  note?: string;
+}
+
+/** The per-OS command, present only where the OS genuinely decides it. */
+export interface CapabilityPlatformCommand {
+  command: string;
+  binary?: string;
+  note?: string;
+}
+
+/** One curated verb's readiness (`GET /api/capabilities`). */
+export interface CapabilityReadinessVerb {
+  id: string;
+  ref: string;
+  name: string;
+  does: string;
+  effect: string;
+  reversible: boolean;
+  undo?: string;
+  grantable?: string;
+  requires?: { credentials?: CapabilityNeed[]; binaries?: CapabilityNeed[]; inputs?: string[] };
+  ready: boolean;
+  gaps: string[];
+  ask: string[];
+  onThisMachine?: CapabilityPlatformCommand;
+  platforms?: Record<string, CapabilityPlatformCommand>;
+}
+
+/** An executable the curated verbs need that is not on PATH. */
+export interface MissingExecutable {
+  forRefs: string[];
+  anyOf: string[];
+  remedy: string;
+}
+
+/** Bundle 48 — `GET /api/capabilities`: verbs, readiness, missing executables. */
+export interface CapabilitiesData {
+  ok?: boolean;
+  verbs: CapabilityReadinessVerb[];
+  missingExecutables: MissingExecutable[];
+  readyCount: number;
+  blockedCount: number;
+}

@@ -53,6 +53,11 @@ import ProcessEnvPage from './components/ProcessEnvPage';
 // and a runtime but no surface: an operator could not see what would fire or
 // what it could do. This page is that surface.
 import HooksPage from './components/HooksPage';
+// The capability layer (effect / reversibility / requirements / per-OS commands)
+// was discoverable by the MODEL (tool_search) but invisible to the human. This
+// page is the human view: per-verb readiness, the executables that are missing,
+// and the live session grants.
+import CapabilitiesPage from './components/CapabilitiesPage';
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -160,6 +165,7 @@ export default function App() {
           <Route path="/requests" element={<RequestsPanel data={data} />} />
           <Route path="/traces" element={<TracePanel />} />
           <Route path="/hub" element={<AgentHub />} />
+          <Route path="/capabilities" element={<CapabilitiesPage />} />
           <Route path="/tasks" element={<TasksPage />} />
           <Route path="/evals" element={<EvalsPage data={data} />} />
           <Route path="/platforms" element={<PlatformsPage />} />
