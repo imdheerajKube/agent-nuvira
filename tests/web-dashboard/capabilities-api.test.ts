@@ -58,5 +58,25 @@ describe('GET /api/capabilities', () => {
     expect(body.readyCount).toBe(expected.readyCount);
     expect(body.blockedCount).toBe(expected.blockedCount);
     expect(Array.isArray(body.missingExecutables)).toBe(true);
+    // The learned (grown) table rides along, so the page can show it.
+    expect(Array.isArray((body as { learnedCommands?: unknown }).learnedCommands)).toBe(true);
+  });
+
+  it('refuses a learned-command write without authentication', async () => {
+    const res = await fetch(`${baseUrl}/api/capabilities/commands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verb: 'install java', command: 'brew install openjdk' }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('refuses a learned-command forget without authentication', async () => {
+    const res = await fetch(`${baseUrl}/api/capabilities/commands/forget`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verb: 'install java' }),
+    });
+    expect(res.status).toBe(401);
   });
 });

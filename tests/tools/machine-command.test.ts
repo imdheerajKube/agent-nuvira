@@ -50,6 +50,17 @@ describe('tool_search — action "resolve"', () => {
     expect(String(res.advice)).toContain('can run');
   });
 
+  it('suggests an install command from a manager that is present here', async () => {
+    const facts = detectMachineFacts();
+    const res = await run({ action: 'resolve', command: 'definitely-not-a-real-binary-xyz --go' });
+    // Only meaningful when this machine has a manager to suggest with.
+    if (facts.packageManagers.length > 0) {
+      expect(res.suggestedInstall).toBeDefined();
+      expect(facts.packageManagers).toContain(res.suggestedInstall.manager);
+      expect(String(res.suggestedInstall.command)).toContain('definitely-not-a-real-binary-xyz');
+    }
+  });
+
   it('reports when no command is known for a verb yet', async () => {
     const res = await run({ action: 'resolve', verb: 'frobnicate the widget' });
     expect(res.learned).toBeUndefined();

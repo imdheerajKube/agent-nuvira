@@ -109,6 +109,10 @@
                   "maximum": 300000,
                   "minimum": 1000,
                   "type": "integer"
+                },
+                "verb": {
+                  "description": "What this command is FOR (e.g. \"install java\"). When it SUCCEEDS, it is remembered for this verb on this machine, so the next tool_search resolve can offer it instead of re-deriving it. Optional.",
+                  "type": "string"
                 }
               },
               "required": [

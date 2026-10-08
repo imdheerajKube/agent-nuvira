@@ -680,6 +680,7 @@ const runTerminalSchema = z.object({
   command: z.string().min(1).describe('The shell command to run in the workspace — e.g. "npx vitest run tests/foo.test.ts", "npx tsc --noEmit", "npm run build", "git diff --stat". Read-only verify commands run directly. Recoverable workspace commands (dependency installs, mkdir/touch/cp/mv, git add, npm init) also run directly when the request authorized the work; every other state-changing command needs confirm:true after the user approves via ask_user. Destructive/system commands are denied outright.'),
   confirm: z.boolean().default(false).describe('Set true ONLY after the user explicitly confirmed a command you initiated. Required for state-changing commands outside the recoverable workspace set (network fetches, arbitrary code, global installs, anything that leaves the machine).'),
   timeout_ms: z.number().int().min(1000).max(300000).optional().describe('Timeout in ms (default 120000).'),
+  verb: z.string().optional().describe('What this command is FOR (e.g. "install java"). When it SUCCEEDS, it is remembered for this verb on this machine, so the next tool_search resolve can offer it instead of re-deriving it. Optional.'),
 });
 
 /** The C2 requirementState check as a reusable tool. */
@@ -2689,7 +2690,7 @@ registerTool({
       const { detectMachineFacts } = await import('../learning/machine-facts.js');
       const facts = detectMachineFacts();
       const learnedMod = await import('../learning/learned-commands.js');
-      const { leadingBinary } = await import('../learning/command-adaptation.js');
+      const { leadingBinary, suggestInstallCommand } = await import('../learning/command-adaptation.js');
       const { binaryOnPath } = await import('../utils/binary-probe.js');
 
       if (action === 'list-commands') {
@@ -2717,22 +2718,38 @@ registerTool({
 
       // resolve
       const bin = command ? leadingBinary(command) : null;
+      const binPresent = bin ? binaryOnPath(bin) : null;
       const learned = verb ? learnedMod.learnedCommandFor(verb) : null;
+      // When the executable is missing, prefer a manager that is ACTUALLY PRESENT
+      // here — the suggestion is buildable, not a manager the machine lacks.
+      const suggestedInstall = bin && binPresent === false ? suggestInstallCommand(facts, bin) : null;
       return JSON.stringify({
         os: facts.os,
         osName: facts.osName,
         arch: facts.arch,
         shell: facts.shellName,
         packageManagers: facts.packageManagers,
-        ...(command ? { proposed: { command, binary: bin, present: bin ? binaryOnPath(bin) : null } } : {}),
+        ...(command ? { proposed: { command, binary: bin, present: binPresent } } : {}),
+        ...(suggestedInstall
+          ? {
+              suggestedInstall: {
+                manager: suggestedInstall.manager,
+                command: suggestedInstall.command,
+                note: 'The package name can differ from the executable name — adjust if the install fails.',
+              },
+            }
+          : {}),
         ...(learned
           ? { learned: { command: learned.command, binary: learned.binary, source: learned.source, learnedAt: learned.learnedAt } }
           : {}),
         advice: command
-          ? bin && binaryOnPath(bin)
+          ? binPresent
             ? `\`${bin}\` is on this machine — the command can run.`
             : bin
-              ? `\`${bin}\` is NOT on this machine. Choose from what is present, or install it with one of: ${facts.packageManagers.join(', ') || '(no package manager detected)'}.`
+              ? `\`${bin}\` is NOT on this machine.` +
+                (suggestedInstall
+                  ? ` Install it with \`${suggestedInstall.command}\` (${suggestedInstall.manager} is present here), or choose another present manager: ${facts.packageManagers.join(', ')}.`
+                  : ` No package manager that can install it is present; use what is on the machine.`)
               : 'Could not identify an executable in this command; check it with a small probe run.'
           : learned
             ? `A command for "${verb}" on this OS was already derived — use it, or record a better one.`

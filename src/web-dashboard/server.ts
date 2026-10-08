@@ -6198,10 +6198,76 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   // Open like the other read paths: it exposes capability declarations and PATH
   // facts, never user data. The page pairs it with `/api/session-grants`, so the
   // grants shown and the grants ended are read and written through one source.
-  if (pathname === '/api/capabilities') {
+  if (pathname === '/api/capabilities' && req.method === 'GET') {
     void (async () => {
       const { capabilityReadiness } = await import('../learning/capability-readiness.js');
-      writeJson(res, 200, { ok: true, ...capabilityReadiness() });
+      const { listLearnedCommands } = await import('../learning/learned-commands.js');
+      writeJson(res, 200, { ok: true, ...capabilityReadiness(), learnedCommands: listLearnedCommands() });
+    })();
+    return;
+  }
+
+  // Record (or replace) a per-OS command. A WRITE, so gated like the other
+  // capability-changing surfaces. The store is keyed by (verb, os) and isolated
+  // by $NUVIRA_CONFIG_DIR — the same store `tool_search record` writes.
+  if (pathname === '/api/capabilities/commands' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot change capability commands (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const verb = typeof body?.verb === 'string' ? body.verb.trim() : '';
+      const commandText = typeof body?.command === 'string' ? body.command.trim() : '';
+      const note = typeof body?.note === 'string' ? body.note.trim() : '';
+      if (!verb || !commandText) {
+        writeJson(res, 400, { ok: false, error: 'A verb and a command are required.' });
+        return;
+      }
+      const { recordLearnedCommand, listLearnedCommands } = await import('../learning/learned-commands.js');
+      const { leadingBinary } = await import('../learning/command-adaptation.js');
+      const bin = leadingBinary(commandText);
+      const entry = recordLearnedCommand({
+        verb,
+        command: commandText,
+        ...(bin ? { binary: bin } : {}),
+        ...(note ? { note } : {}),
+      });
+      writeJson(res, 200, { ok: true, recorded: entry, commands: listLearnedCommands() });
+    })();
+    return;
+  }
+
+  if (pathname === '/api/capabilities/commands/forget' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot change capability commands (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const verb = typeof body?.verb === 'string' ? body.verb.trim() : '';
+      if (!verb) {
+        writeJson(res, 400, { ok: false, error: 'A verb is required.' });
+        return;
+      }
+      const { forgetLearnedCommand, listLearnedCommands } = await import('../learning/learned-commands.js');
+      writeJson(res, 200, { ok: true, forgotten: forgetLearnedCommand(verb), commands: listLearnedCommands() });
     })();
     return;
   }

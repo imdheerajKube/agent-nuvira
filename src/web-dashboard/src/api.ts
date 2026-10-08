@@ -9,6 +9,7 @@ import type {
   ConsentPictureData,
   SessionGrantInfo,
   CapabilitiesData,
+  LearnedCommandInfo,
   AdminAuthStatus,
   AdminCachePayload,
   AdminCatalog,
@@ -659,6 +660,40 @@ export class DashboardAPI {
       return data;
     } catch {
       return null;
+    }
+  }
+
+  /** Bundle 52 — record (or replace) a learned per-OS command. */
+  async saveLearnedCommand(
+    verb: string,
+    command: string,
+    note?: string,
+  ): Promise<{ ok: boolean; commands?: LearnedCommandInfo[]; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/capabilities/commands`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verb, command, ...(note ? { note } : {}) }),
+      });
+      const data = (await parseJsonOrNull(res)) as { ok?: boolean; commands?: LearnedCommandInfo[]; error?: string } | null;
+      return { ok: data?.ok === true, commands: data?.commands, error: data?.error };
+    } catch {
+      return { ok: false, error: 'Could not reach the server.' };
+    }
+  }
+
+  /** Bundle 52 — forget a learned command for a verb on this OS. */
+  async forgetLearnedCommand(verb: string): Promise<{ ok: boolean; commands?: LearnedCommandInfo[]; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/capabilities/commands/forget`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verb }),
+      });
+      const data = (await parseJsonOrNull(res)) as { ok?: boolean; commands?: LearnedCommandInfo[]; error?: string } | null;
+      return { ok: data?.ok === true, commands: data?.commands, error: data?.error };
+    } catch {
+      return { ok: false, error: 'Could not reach the server.' };
     }
   }
 

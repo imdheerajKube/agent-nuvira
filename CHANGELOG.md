@@ -4,6 +4,28 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Changed: the learned table becomes visible, editable, and self-growing
+
+The per-OS commands the model derives were written to a file the user could not
+see. Now:
+
+- `GET /api/capabilities` carries `learnedCommands`, and the Capabilities page
+  renders them — verb, OS, the command, its source, and a **Forget** button —
+  with an add/replace form. Writes are gated by the same `admin`/`operator` role
+  the endpoint enforces (`POST /api/capabilities/commands`,
+  `/api/capabilities/commands/forget`).
+- A successful `run_terminal` that was LABELLED with a `verb` is recorded as an
+  **observed** learned command, so the table grows from real runs without an
+  explicit record call. A failure is never learned, and a verbless command cannot
+  be keyed — the harness only records what it can name honestly.
+- `tool_search resolve` now SUGGESTS an install command built from a package
+  manager that is **actually present** here (`brew install gh` when brew is
+  installed), instead of naming every manager or one the machine lacks, and says
+  the package name may differ from the executable name.
+
+Pinned by `CapabilitiesPage.test.tsx` (8), `tests/web-dashboard/capabilities-api.test.ts` (3),
+`tests/learning/command-adaptation.test.ts`, and `tests/tools/machine-command.test.ts`.
+
 ### Added: the long-tail OS command loop — resolve, verify, adapt, record
 
 The per-OS command map covers two verbs and a table cannot enumerate the world,
