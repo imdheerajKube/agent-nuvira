@@ -308,6 +308,70 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 31 — the label gets its first consumer, and two more sources (LANDED 2026-10-08)
+
+**Why.** Bundle 30 made it possible to record a per-turn verdict, but nothing read it. This bundle adds the
+first reader (the fitted acceptance model), a third tier of label sources (behaviour), and closes a FALSE
+limit Bundle 30 recorded about the dashboard.
+
+### 31a. The acceptance model — `P(accepted | features)`, read-only
+
+`learning/acceptance-model.ts` fits a logistic model over the harness's OWN per-turn features — `verified`,
+`unverified`, `flag` (an honesty flag fired), `delivered` — to the labels the verdicts provide. It is the
+thing a "quality score" was always supposed to be, and it could never be built from derived signals alone.
+
+- **Deterministic**: zero initial weights, fixed iterations, L2 — the same corpus always yields the same
+  coefficients.
+- **Refuses to fit below the floor** (`MIN_LABELS_FOR_FIT = 20`, `MIN_PER_CLASS = 5`): too few rows, or one
+  class, returns a NAMED reason and no model.
+- **Read-only, by construction**: `model explain` is the only caller; nothing in the router imports it.
+- **Surfaced** as a new `model explain` section — the pair's rated record (`👍 9 / 👎 3 (n=12, 75%)`) and the
+  harness-level fit, or the honest *"NOT trained — only N labelled turn(s)"*.
+
+**Measured on this machine: 60 traces, 0 rated** — so the section correctly prints the not-trained line.
+
+### 31b. Tier-3 behavioural labels — `learning/behavioural-labels.ts`
+
+Three inferences, `source: 'derived'`, in priority order:
+
+1. **repeat-ask** — the new ask is a near-verbatim repeat of the delivered ask (token-set Jaccard ≥ 0.9) →
+   `rejected`.
+2. **hand-edit** — the delivered file's mtime is AFTER delivery → `rejected`.
+3. **unchanged-referenced** — the file is untouched AND the new message NAMES it AND no regression was
+   reported → `accepted`.
+
+**The rule that keeps it honest:** an untouched artifact ALONE is still not a label. Raw silence — an
+untouched file nobody mentioned — stays `verdict: null`, exactly like an unrated turn. This is the user's
+explicit choice ("accept only with a positive cue"), and it is what lets the tier exist without bending the
+"silence is not acceptance" doctrine. A reported regression is left to the existing correction path, so one
+event is never labelled twice.
+
+### 31c. A real ordering bug the console test found
+
+Writing `tests/web-dashboard/chat-console-corpus.test.ts` exposed a defect in the Bundle 29/30 chat wiring:
+the verdict-on-PREVIOUS-turn block ran AFTER this turn's own delivery was recorded, so it judged the row the
+turn had just created. For the behavioural tier this was systematic — the current ask compared against its own
+row is a similarity of 1.0, i.e. a false `repeat-ask` rejection on every turn that authored a deliverable.
+The block now runs BEFORE `recordDeliverableCandidate`, so the signals see the PREVIOUS turn's delivery (the
+`markLastDeliverableRejected` correction path had the same latent flaw and is fixed by the same move).
+
+### 31d. The dashboard-collects claim, corrected
+
+Bundle 30 recorded *"the dashboard chat console does not collect corpus candidates"* as an honest limit. That
+was wrong: `ChatConsole.answer` drives the same `ChatCommand.answerOnce` the CLI does, and the collection is a
+straight-line statement inside it. `tests/web-dashboard/chat-console-corpus.test.ts` now pins it both ways (a
+delivery records a row; a plain answer records nothing), so the corrected claim cannot silently regress.
+
+**Tests.** `acceptance-model.test.ts` (new, 5: refuse-until-floor, refuse-one-class, fit-and-rank-verified-
+higher + determinism, exclude-unrated, per-pair grouping); `behavioural-labels.test.ts` (new, 13: pure
+inference for all four outcomes + all three signals, and the corpus-store path incl. the trace write);
+`chat-console-corpus.test.ts` (new, 2).
+
+**Gates.** root suite, dashboard suite, both `tsc --noEmit`, all three docs guards, `verify:commands`,
+`build:cli`, `build:dashboard`, `dashboard:bundle:check`, and the real-browser walk.
+
+---
+
 ## Bundle 30 — the user's verdict becomes a recorded label (LANDED 2026-10-08)
 
 **Why.** Bundle 29 built the corpus item 13 needed and could label it with the DERIVED correction signal — which
@@ -353,8 +417,9 @@ positive class — is now written down in `docs/DESIGN_CAPABILITY_BY_MEASUREMENT
   using it are separate decisions, and the fit waits until enough rows exist.
 - **A few hundred rows with BOTH classes are needed** before `P(accepted | features)` is fit-able. `qualityScore`
   stays genuinely blocked; this bundle is the collection path, not the score.
-- **Coverage gap.** Corpus candidates are recorded on the CLI chat path only; a dashboard-rated turn labels its
-  trace but has no corpus row (the dashboard chat console does not collect yet).
+- ~~**Coverage gap** — the dashboard chat console does not collect corpus candidates.~~ **CORRECTED (Bundle
+  31).** This was wrong: the console drives the same `ChatCommand.answerOnce`, so a dashboard turn records a
+  corpus row too. Pinned by `tests/web-dashboard/chat-console-corpus.test.ts`.
 
 **Tests.** `turn-feedback.test.ts` (new: `parseVerdict` acceptance/refusal, rate-the-latest-turn, corpus labelling,
 refuse when no turn exists, refuse an unknown trace, re-rating replaces, `--list`, and `recordTurnReport` staying
@@ -1130,6 +1195,9 @@ exists; where it does not, that is stated as the residual rather than implied cl
    per-turn verdict with provenance, and labels the matching corpus row — supplying the POSITIVE class the
    derived correction signal can never produce. Nothing is fit to it yet and nothing routes on it; the scale
    stays blocked until a few hundred rows with both classes exist (`docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §8).
+   **Bundle 31 built the fit itself**: `learning/acceptance-model.ts` fits `P(accepted | features)` and prints it
+   read-only in `model explain`, refusing below 20 labels / 5 per class — so the only thing still missing is the
+   ROWS, not the mechanism (measured 2026-10-08: 60 traces, 0 rated).
 5. ~~**`cost` and `ecosystem` have declared priors but no measured feed.**~~ **CLOSED — Bundle 16**: the
    approved OpenRouter catalogue now supplies both as LABELLED priors (opt-in, default OFF,
    `NUVIRA_CATALOG_FEED` in the CLI and the dashboard's Process Env page). `accuracy`, `performance` and

@@ -20,7 +20,7 @@
  * ground truth a measured quality signal must be fit to. Until rows carry the
  * label the corpus is deliberately INERT: nothing reads it, nothing routes on it,
  * and no score is derived from it. It is a dataset, not a detector. Deriving a
- * signal from `rejected: null` rows, or from the excerpt's wording, would be the
+ * signal from `verdict: null` rows, or from the excerpt's wording, would be the
  * phrase-list defect one layer down.
  *
  * Storage: `<memory>/deliverable-candidates.jsonl` (honours `NUVIRA_MEMORY_DIR`).
@@ -164,10 +164,27 @@ export function recordDeliverableCandidate(
  * later, unrelated complaint. Returns true when a row was labelled.
  */
 export function markLastDeliverableRejected(now: number = Date.now()): boolean {
+  return labelNewestUnlabelled('rejected', now);
+}
+
+/**
+ * Label the most recent UNLABELLED row with `verdict`.
+ *
+ * The general form of {@link markLastDeliverableRejected}, for callers that carry
+ * a verdict but not a trace id (the tier-3 behavioural path can infer a label from
+ * what the user did without a trace to attach it to). Only the newest unlabelled
+ * row is touched — a verdict speaks about the most recent delivery, and a row that
+ * already carries one must not be relabelled by a later, unrelated signal. Returns
+ * true when a row was labelled.
+ */
+export function labelNewestUnlabelled(
+  verdict: 'accepted' | 'rejected',
+  now: number = Date.now(),
+): boolean {
   const rows = readDeliverableCandidates();
   for (let i = rows.length - 1; i >= 0; i--) {
     if (rows[i].verdict === null) {
-      rows[i] = { ...rows[i], verdict: 'rejected', verdictAt: now };
+      rows[i] = { ...rows[i], verdict, verdictAt: now };
       writeCandidates(rows);
       return true;
     }

@@ -86,6 +86,7 @@ import {
 import { beginTrace, endTrace, recordStep, recordTraceEvent, recordTraceFindings, recordTurnReport, buildTraceOutcome, traceOutcomeSucceeded } from '../learning/reasoning-trace.js';
 import { recordWorkingState, getWorkingState, formatWorkingState, isProjectLedgerDir, detectRegressionSignal } from '../learning/working-state.js';
 import { recordDeliverableCandidate, markLastDeliverableRejected } from '../learning/deliverable-corpus.js';
+import { deriveAndApplyBehaviouralLabel } from '../learning/behavioural-labels.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile, shouldSkipNativeTools, isAgenticCapableModel } from '../learning/model-harness.js';
 import { assertAgenticRoute, setWeakModelConsent, resolveWeakModelPolicy, weakRouteNotice } from '../learning/agentic-route-gate.js';
@@ -1179,11 +1180,41 @@ export class ChatCommand extends BaseCommand {
     // reviewable after the fact (the Trace tab renders it), not only in this
     // turn's return value. Best-effort: a trace write never breaks a turn.
     recordTurnReport(answer.traceId, turnReport);
+    // The user's message for THIS turn is also a verdict on the PREVIOUS one
+    // ("still broken", "no change", or a near-identical re-ask). It is resolved
+    // BEFORE this turn's own delivery is recorded, because these signals judge the
+    // PREVIOUS turn — run after the record below, they would label the row this very
+    // turn just created. Derived ONCE here, because two independent consumers need
+    // the same answer: the bandit's `userAccepted` and the deliverable corpus's
+    // label. Neither trusts the model's own account of itself.
+    const userReportsRegression = detectRegressionSignal(message);
+    if (userReportsRegression) {
+      // Label the previous authored delivery as a miss. Independent of routing:
+      // the corpus is collected whether or not the bandit is on.
+      try {
+        markLastDeliverableRejected();
+      } catch {
+        // Collection is best-effort.
+      }
+    }
+    // Tier 3 — the verdict the harness can infer from BEHAVIOUR, when the user did
+    // not report a regression: a re-ask or a hand-edited artifact is a rejection, an
+    // untouched artifact the user then REFERENCES is a (weak) acceptance. Recorded
+    // `source: 'derived'` so a fit can weigh it below an explicit verdict. Stands
+    // aside when a regression was reported — that path already owns the label.
+    if (!userReportsRegression) {
+      try {
+        deriveAndApplyBehaviouralLabel({ newAsk: message, reportsRegression: false });
+      } catch {
+        // Collection is best-effort.
+      }
+    }
     // Item 13 (round 3) — COLLECT, never judge. An authored artifact that met the
     // ask's stated magnitude and did not admit its own omission is the "fluent,
     // on-length" delivery no rule can score; the corpus records it so that a
     // LATER correction can label it. This is a dataset, not a detector: nothing
-    // reads it, and no score is derived from it.
+    // reads it, and no score is derived from it. Recorded LAST so the verdict-on-
+    // previous above never sees this turn's own row.
     if (answer.authoredDeliverable) {
       try {
         recordDeliverableCandidate({
@@ -1201,20 +1232,6 @@ export class ChatCommand extends BaseCommand {
         });
       } catch {
         // Collection is best-effort — never break a turn on a corpus write.
-      }
-    }
-    // The user's message for THIS turn is also a verdict on the PREVIOUS one
-    // ("still broken", "no change"). Derived ONCE here, because two independent
-    // consumers need the same answer: the bandit's `userAccepted` and the deliverable
-    // corpus's label. Neither trusts the model's own account of itself.
-    const userReportsRegression = detectRegressionSignal(message);
-    if (userReportsRegression) {
-      // Label the previous authored delivery as a miss. Independent of routing:
-      // the corpus is collected whether or not the bandit is on.
-      try {
-        markLastDeliverableRejected();
-      } catch {
-        // Collection is best-effort.
       }
     }
     // Feed the MEASURED outcome back into the bandit on the CHAT path too. The

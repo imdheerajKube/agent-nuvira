@@ -392,7 +392,8 @@ export interface ReasoningTrace {
   userVerdict?: {
     verdict: 'accepted' | 'rejected';
     at: number;
-    source: 'cli' | 'dashboard';
+    /** `cli`/`dashboard` = the user said so; `derived` = the harness inferred it. */
+    source: 'cli' | 'dashboard' | 'derived';
   };
   /**
    * The FULL stable layer (system prompt), captured ONCE per trace.
@@ -760,7 +761,7 @@ export function recordTurnReport(
 export function recordTraceVerdict(
   traceId: string,
   verdict: 'accepted' | 'rejected',
-  source: 'cli' | 'dashboard',
+  source: 'cli' | 'dashboard' | 'derived',
   now: number = Date.now(),
 ): boolean {
   try {
