@@ -663,6 +663,56 @@ gate/refusal/narration counts from the traces. The dashboard serves all three �
 and the Models panel renders them: the friction number, the live session grants
 with an **End** button, and the consent table.
 
+## Bundle 41 Phase 1 — one capability descriptor (2026-10-08)
+
+**The finding.** Four registries overlapped and none of them knew what an action
+DID. `src/tools/registry.ts` (tools + zod schemas) hardcoded a gate per tool;
+`src/tools/toolsets.ts` tiered them; the skills carried only methodology; the CLI
+manifest carried one `confirmation` boolean. So "what does this need, and what
+does it touch" was re-stated in prose at every site — tool descriptions, the
+consent picture, refusal strings, the CLI intent tables — and any new verb meant
+editing all of them. That duplication is the disease; the drift between the
+copies is what the user sees as the agent fighting itself.
+
+**The fix.** `src/learning/capability-types.ts` defines the ONE descriptor:
+`{ id, kind: 'tool'|'skill'|'action', ref, name, oneLiner, effectClass,
+reversible, reversibleHow?, grantCategory?, requires: {credentials,binaries,
+inputs}, tags }`. `src/tools/capability-registry.ts` ADAPTS the existing sources
+into it — every registered tool, the hub skill catalog, and nine curated
+high-level actions that only existed as prose. It does NOT import the tool
+registry (callers pass the tools in), so `tool_search` uses it without a cycle.
+
+**The conservative default.** An unlisted tool becomes `local-state` + reversible
++ NO grant category. Both choices are deliberate: `read` would hide a mutation as
+inspection, and a grant category would let a user's grant silently unlock an
+undeclared action. A network READ (`web_search`, `read_page`, `osv_check`) is still `read` —
+the class describes what the action DOES, not where it runs.
+
+**Discovery.** `tool_search`'s `search` action returns the same tool hits as
+before PLUS a `capabilities` array carrying effect / reversibility / undo /
+requirements / grant. The model can now ask "how do I publish a package" and get
+the effect class and the token it needs, not just a tool name. Phase 1 changes no
+behaviour: nothing routes on a descriptor yet.
+
+**Measured, not asserted.** `scripts/measure-capability-search.mjs`, two probes,
+no phrase list:
+
+- self-retrieval (query each capability with its own words at top-K=10): tool
+  87% rank-1 / 100% top-5 · action 100% / 100% · skill 99% / 99%;
+- consequential recall over 60 live traces (38 tool-using turns). Ground truth is
+  what the model ACTUALLY did, and the query is the model's OWN pre-call prose
+  (`steps[].responsePreview`), which is the query it would really issue: 12/22
+  consequential pairs surfaced (55%), 10/17 turns fully covered (59%).
+  Precision proxy: turns that touched nothing yet still rank an off-machine action
+  — 5/21 (24%). Plumbing (`suggest_followups`, `read_file`, `plan_todo`) is NOT
+  graded on purpose: a user's goal should not name it, so counting it would
+  fabricate a miss.
+
+HONEST LIMIT: 55% is a lexical baseline. A goal names an outcome ("build a
+knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
+never be the discovery path — which is the argument for Phase 2, where the MODEL
+selects by descriptor and the gate reads `effectClass` instead of parsing prose.
+
 ## Open
 
 1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost

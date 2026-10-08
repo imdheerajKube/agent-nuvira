@@ -4,6 +4,31 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Added: one capability descriptor, so "what the agent can do" is a fact and not prose
+
+Phase 1 of the capability layer. "What an action needs, what it costs, and what
+it touches" was scattered across four registries — tools carried it in prose
+descriptions, each gate hardcoded its own effect class, skills carried only
+methodology, and the CLI manifest carried a single boolean. `learning/capability-types.ts`
+defines ONE descriptor (`kind` / `ref` / `effectClass` / `reversible` / `requires`
+/ `grantCategory`), and `tools/capability-registry.ts` normalizes the existing
+sources into it: every registered tool, the installed skill catalog, and nine
+curated high-level ACTIONS the user named (`install-package`, `add-dependency`,
+`install-system-tool`, `uninstall-package`, `publish-package`, `publish-website`,
+`deploy-app`, `push-git`, `store-credential`) that previously existed only as
+scattered prose. The default is conservative in BOTH directions: a tool nobody
+described is a `local-state` change (an ask, never a silent `read`) that no grant
+may cover. `tool_search`'s `search` action now returns each hit as a capability —
+its effect, whether it is reversible and how, the credentials or binaries it
+needs, and whether a session grant can cover it — so the model can discover what
+it can DO, not just which tool names exist. Discovery only: nothing here decides
+what runs. Measured by `scripts/measure-capability-search.mjs`, which grades the
+index two ways without a hand-written phrase list — self-retrieval (tool 87%
+rank-1 / 100% top-5; action 100%; skill 99%) and CONSEQUENTIAL recall over live
+traces, where the query is the model's own pre-call narration (55% pair recall,
+59% turn coverage; plumbing is deliberately not graded). Pinned by
+`tests/tools/capability-registry.test.ts` (23).
+
 ### Added: an explicit "allow all for this session" grant, and a harness that speaks in one voice
 
 Two harness fixes for the same report — a trace where the model narrated its own
