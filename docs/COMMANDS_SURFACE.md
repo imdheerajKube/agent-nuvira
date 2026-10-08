@@ -1516,6 +1516,17 @@ Delete all stored traces
 Rate the last turn (good|bad) — records the one label a quality signal can be fit to (also on the dashboard Trace tab)
 
    - flags: `--explain <explain>, --export [export], --format <format>, --import <import>, --list, --merge <merge>, --replace, --stats, --trace <trace>`
+### `nuvira decisions`
+
+The must-ask decisions recorded for this project — list, search, and revise them (written by ask_user)
+
+   - flags: `--dir <dir>, --for <for>, --json, --limit <limit>`
+### `nuvira decisions show`
+
+   - flags: `--json`
+### `nuvira decisions revise`
+
+   - flags: `--answer <answer>, --note <note>`
 ### `nuvira continuity`
 
 Session continuity — what is stored, and how to forget it
@@ -1536,4 +1547,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*492 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*498 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

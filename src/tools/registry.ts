@@ -943,6 +943,9 @@ registerTool({
     }
     // One confirmation refusal buys exactly ONE ask — clear it before rendering.
     if (pending) ctx.pendingConfirmation = undefined;
+    // Deferred so the registry stays import-light — the writing half of the
+    // decision log is only needed when an ask actually reaches a person.
+    const { recordDecision, decisionsRecordingEnabled } = await import('../learning/decision-log.js');
     const render = ctx.askUser || (await import('./ask-user.js')).renderAskUser;
     const answer = await render(question, choices, multi_select);
     const picked = Array.isArray(answer.answer) ? answer.answer.join(', ') : answer.answer;
@@ -966,6 +969,30 @@ registerTool({
     // the agent tries to ask it a second time (and so a self-report can say what
     // the user actually replied, instead of "asked 4×, no answer recorded").
     ctx.runTrace?.recordAsk(question, true, picked);
+    // Bundle 36 — a MUST-ASK decision is also a PROJECT artifact: recorded so the
+    // user can go back through it later and revise it (see
+    // `learning/decision-log.ts`). Only a genuine, SHOWN ask reaches here (an
+    // unattended default is an assumption and returned above), and the write is
+    // best-effort — recording a decision must never break the turn. Deferred
+    // import to keep the registry import-light.
+    if (decisionsRecordingEnabled() && ctx.cwd) {
+      try {
+        const answerText = answer.custom
+          ? picked
+            ? `${picked} (${answer.custom})`
+            : answer.custom
+          : picked;
+        recordDecision({
+          question,
+          answer: answerText,
+          choices: choices.map((c) => c.label),
+          source: 'ask_user',
+          dir: ctx.cwd,
+        });
+      } catch {
+        // Best-effort — never break a turn on a decision-log write.
+      }
+    }
     // ── Cluster G: the reply may be the FOLDER, and then it is the workspace ──
     // An unscoped turn asks "which folder should I use?". The user answers by
     // typing one (the free-text "Other" field, or a label they edited) — and

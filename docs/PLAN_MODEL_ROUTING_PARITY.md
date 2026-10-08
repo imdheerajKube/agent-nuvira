@@ -308,7 +308,7 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
-## Bundle 36 — a rating you can audit, and a 👎 that reaches the router (36a/36b LANDED 2026-10-08; 36c in progress)
+## Bundle 36 — a rating you can audit, a 👎 that reaches the router, and decisions you can revise (LANDED 2026-10-08)
 
 **Why.** Three questions opened this bundle: *"show it on Models"*, *"if the user gives a negative, how
 does that help the agent?"*, and whether a per-project decision log is worth building. The middle one had
@@ -343,7 +343,29 @@ reports exactly what happened.
 `router-bandit.test.ts` (+6 for `recordExplicitVerdict`); `rate-explain.test.ts` (+1: `rate bad` prints the
 correction, re-rating prints `already applied`).
 
-### 36c. Decision artifacts — see the decisions section below
+### 36c. Decision artifacts — a must-ask choice is a project artifact
+
+**Why.** A `ask_user` round-trip is the one place the user's intent is explicit — and it lived
+only in the turn's transcript and the in-memory run trace. Close the terminal and the decision
+was gone: nobody could see WHAT was decided or WHY, and there was no way to change it.
+
+**The fix.** `learning/decision-log.ts` writes `<project>/.nuvira/decisions.jsonl` (the
+machine-readable source of truth) plus a generated `<project>/.nuvira/DECISIONS.md`, on every
+**genuine, shown** ask — the `ask_user` runner records it. `nuvira decisions` lists the log,
+`--for "<ask>"` ranks decisions relevant to a later ask by shared significant tokens, `show`
+prints one with its history, and `revise <id> --answer "…" [--note "…"]` changes one while
+keeping the previous answer in the history.
+
+**The cautions the user raised, honoured.** It is never a SUBSTITUTE for asking (nothing
+suppresses or auto-answers an ask); an unattended default is an ASSUMPTION and is NOT recorded
+as a decision; writes are best-effort and redact obvious secrets; recording is disabled under a
+test runner (an injected renderer is not a person deciding). `.nuvira/` is gitignored, so the
+log never dirties a repo. Automatic prompt re-injection was deliberately NOT built — a decision
+is read back when the user asks for it.
+
+**Tests.** `decision-log.test.ts` (7: record+doc / redaction / revise keeps history / unknown
+id / relevant-ask recall / corrupt line skipped / off under a test runner);
+`decisions.test.ts` (4 CLI: empty / list+show+revise / `--for` / unknown id exit 1).
 
 ---
 
