@@ -8,6 +8,7 @@ import type {
   GateFrictionData,
   ConsentPictureData,
   SessionGrantInfo,
+  CapabilitiesData,
   AdminAuthStatus,
   AdminCachePayload,
   AdminCatalog,
@@ -644,6 +645,18 @@ export class DashboardAPI {
       const data = (await parseJsonOrNull(res)) as { ok?: boolean; picture?: ConsentPictureData } | null;
       if (!data || data.ok !== true || !data.picture || !data.picture.denied) return null;
       return data.picture;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Bundle 48 — the capability readiness view: curated verbs + missing executables. */
+  async fetchCapabilities(): Promise<CapabilitiesData | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/capabilities`, { signal: AbortSignal.timeout(8000) });
+      const data = (await parseJsonOrNull(res)) as CapabilitiesData | null;
+      if (!data || data.ok !== true || !Array.isArray(data.verbs)) return null;
+      return data;
     } catch {
       return null;
     }

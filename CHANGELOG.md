@@ -4,6 +4,25 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Added: a Capabilities page — what the agent can do on this machine
+
+The capability layer (effect / reversibility / requirements / per-OS commands)
+was discoverable by the MODEL through `tool_search` but invisible to the human.
+`GET /api/capabilities` and a new dashboard page (Agent Management → Capabilities)
+give the user the same view, derived from the SAME declarations:
+
+- **readiness per curated verb** — ready, or the exact gap. A missing executable
+  BLOCKS; a credential that is not an environment variable does not, because it
+  may live in the vault (`requirement-probe.ts`);
+- **missing executables, aggregated** — the same `gh` is one row naming every verb
+  that needs it, not one row per verb;
+- **live session grants** — read and ended through the existing
+  `/api/session-grants`, so "trusted for this session" is visible and revocable.
+
+Where the OS genuinely decides the command, the verb shows its `onThisMachine`
+command (and the whole map beside it). Pinned by `tests/learning/capability-readiness.test.ts`,
+`tests/web-dashboard/capabilities-api.test.ts`, and `CapabilitiesPage.test.tsx`.
+
 ### Changed: skill selection is the model's job — the keyword scorer is gone
 
 The chat/execute loop and the pipeline both used to decide, **in code**, which

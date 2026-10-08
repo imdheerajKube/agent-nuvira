@@ -6194,6 +6194,18 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // ── Capability readiness — what the agent can do on THIS machine ────────
+  // Open like the other read paths: it exposes capability declarations and PATH
+  // facts, never user data. The page pairs it with `/api/session-grants`, so the
+  // grants shown and the grants ended are read and written through one source.
+  if (pathname === '/api/capabilities') {
+    void (async () => {
+      const { capabilityReadiness } = await import('../learning/capability-readiness.js');
+      writeJson(res, 200, { ok: true, ...capabilityReadiness() });
+    })();
+    return;
+  }
+
   if (pathname === '/api/routing') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readRoutingInsights()));

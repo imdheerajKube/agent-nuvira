@@ -57,6 +57,10 @@ export const NAV_GROUPS: NavGroup[] = [
       // destination in this group (enable/disable the agents a chat turn will
       // actually use), so it is one step from the front door rather than last.
       { path: '/hub', label: 'Agent Hub', icon: '🧰' },
+      // Bundle 48 — what the agent can DO on this machine (readiness per verb,
+      // missing executables, live session grants). It sits with the capabilities
+      // a turn uses, next to the hub that enables them.
+      { path: '/capabilities', label: 'Capabilities', icon: '📋' },
       { path: '/dag', label: 'Execution', icon: '🔀' },
       { path: '/routing', label: 'Routing', icon: '🤖' },
       { path: '/requests', label: 'Requests', icon: '📨' },

@@ -713,6 +713,28 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 49 — the Capabilities page, or what the agent can do here (2026-10-08)
+
+**The gap.** Bundles 41–47 built the capability layer — effect, reversibility,
+requirements, per-OS commands — and exposed it to the MODEL through `tool_search`.
+The human saw none of it. A user could not answer "will `deploy` work on my
+machine?" before asking for it, nor see that a verb was waiting on an executable
+that is not installed; the answer only surfaced as a run that abandoned halfway.
+
+**The fix.** `src/learning/capability-readiness.ts` is a read-model over the SAME
+`actionCapabilities()` the search serves and the SAME `probeRequirements` the
+pre-flight runs, so the page cannot disagree with what a run sees. It reports each
+curated verb's readiness, aggregates the missing executables (the same `gh` is one
+row, not nine), and resolves the per-OS `onThisMachine` command. `GET /api/capabilities`
+serves it (open, like the other read paths — declarations and PATH facts, no user
+data), and the new `/capabilities` page renders it beside the live session grants,
+which it reads and ends through the existing `/api/session-grants` (one source).
+
+**The honesty carried through.** A binary gap marks a verb blocked; a credential
+that is merely absent from the environment does not — it may live in the vault, so
+it is reported and never blocks. The page states the asymmetry rather than
+flattening it to a red/green.
+
 ## Bundle 48 — skill selection is the model's job, the keyword scorer is gone (2026-10-08)
 
 **The finding.** `src/tools/loop-skill-hint.ts` decided WHICH skill a goal wanted
