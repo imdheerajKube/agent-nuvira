@@ -19,6 +19,9 @@ const DATA: CapabilitiesData = {
   missingExecutables: [
     { forRefs: ['publish-package', 'publish-website'], anyOf: ['gh'], remedy: 'install one of: gh' },
   ],
+  learnedCommands: [
+    { verb: 'install java', os: 'macos', command: 'brew install openjdk', source: 'observed', learnedAt: 1 },
+  ],
   verbs: [
     {
       id: 'action:install-package',
@@ -64,10 +67,22 @@ const GRANTS: SessionGrantInfo[] = [
   { sessionId: 'sess-1', categories: ['external'], grantedAt: 1, expiresAt: Date.now() + 60_000 },
 ];
 
-function mockApi() {
+function mockApi(role = 'admin') {
+  vi.spyOn(dashboardAPI, 'fetchAdminAuthStatus').mockResolvedValue({
+    configured: true,
+    authenticated: true,
+    role,
+    user: role,
+    mustChangePassword: false,
+  });
   vi.spyOn(dashboardAPI, 'fetchCapabilities').mockResolvedValue(structuredClone(DATA));
   vi.spyOn(dashboardAPI, 'fetchSessionGrants').mockResolvedValue(structuredClone(GRANTS));
   vi.spyOn(dashboardAPI, 'revokeSessionGrant').mockResolvedValue(true);
+  vi.spyOn(dashboardAPI, 'saveLearnedCommand').mockResolvedValue({
+    ok: true,
+    commands: [{ verb: 'install java', os: 'macos', command: 'brew install openjdk', source: 'model', learnedAt: 2 }],
+  });
+  vi.spyOn(dashboardAPI, 'forgetLearnedCommand').mockResolvedValue({ ok: true, commands: [] });
 }
 
 afterEach(() => {
@@ -127,5 +142,40 @@ describe('CapabilitiesPage', () => {
 
     await waitFor(() => expect(dashboardAPI.revokeSessionGrant).toHaveBeenCalledWith('sess-1'));
     await waitFor(() => expect(screen.queryByTestId('cap-grant-sess-1')).toBeNull());
+  });
+
+  it('shows the learned commands and forgets one through the endpoint', async () => {
+    mockApi();
+    render(<CapabilitiesPage />);
+
+    const row = await screen.findByTestId('cap-learned-install java');
+    expect(within(row).getByText('brew install openjdk')).toBeDefined();
+
+    fireEvent.click(within(row).getByRole('button', { name: /forget/i }));
+    await waitFor(() => expect(dashboardAPI.forgetLearnedCommand).toHaveBeenCalledWith('install java'));
+    await waitFor(() => expect(screen.queryByTestId('cap-learned-install java')).toBeNull());
+  });
+
+  it('learns a command from the form (admin only)', async () => {
+    mockApi();
+    render(<CapabilitiesPage />);
+
+    await screen.findByTestId('cap-learned');
+    fireEvent.change(screen.getByLabelText('learned verb'), { target: { value: 'install java' } });
+    fireEvent.change(screen.getByLabelText('learned command'), { target: { value: 'brew install openjdk' } });
+    fireEvent.click(screen.getByRole('button', { name: /learn/i }));
+
+    await waitFor(() =>
+      expect(dashboardAPI.saveLearnedCommand).toHaveBeenCalledWith('install java', 'brew install openjdk', undefined),
+    );
+  });
+
+  it('hides the learned-command form for a read-only role', async () => {
+    mockApi('viewer');
+    render(<CapabilitiesPage />);
+
+    await screen.findByTestId('cap-learned');
+    expect(screen.queryByLabelText('learned verb')).toBeNull();
+    expect(screen.getByText(/Read-only/)).toBeDefined();
   });
 });

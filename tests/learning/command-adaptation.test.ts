@@ -10,7 +10,9 @@ import {
   leadingBinary,
   isMissingBinaryFailure,
   buildMissingBinaryNote,
+  suggestInstallCommand,
 } from '../../src/learning/command-adaptation.js';
+import { detectMachineFacts } from '../../src/learning/machine-facts.js';
 
 describe('leadingBinary', () => {
   it('finds the executable, skipping flags and env assignments', () => {
@@ -59,5 +61,22 @@ describe('buildMissingBinaryNote', () => {
     const note = buildMissingBinaryNote('');
     expect(note).toContain('Package managers present:');
     expect(note).not.toContain('is not on PATH');
+  });
+});
+
+describe('suggestInstallCommand — prefer a manager that is actually present', () => {
+  it('uses the OS-native manager when it is installed', () => {
+    const facts = detectMachineFacts({ platform: 'darwin', binary: (n) => n === 'brew' || n === 'npm', env: {} });
+    expect(suggestInstallCommand(facts, 'gh')).toEqual({ manager: 'brew', command: 'brew install gh' });
+  });
+
+  it('falls through to another present manager when the native one is absent', () => {
+    const facts = detectMachineFacts({ platform: 'darwin', binary: (n) => n === 'npm', env: {} });
+    expect(suggestInstallCommand(facts, 'tsx')).toEqual({ manager: 'npm', command: 'npm install -g tsx' });
+  });
+
+  it('returns null when nothing present can install it', () => {
+    const facts = detectMachineFacts({ platform: 'linux', binary: () => false, env: {} });
+    expect(suggestInstallCommand(facts, 'gh')).toBeNull();
   });
 });

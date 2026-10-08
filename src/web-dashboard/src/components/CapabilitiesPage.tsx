@@ -14,17 +14,26 @@
  *      does not, because it may live in the vault — see requirement-probe.ts);
  *   2. the missing executables, aggregated, so the same `gh` names every verb
  *      that needs it instead of appearing nine times;
- *   3. the live session grants, read and ended through the same endpoints the
- *      Models panel uses (one source), so "trusted for this session" is a thing
- *      the user can SEE and revoke.
+ *   3. the LEARNED commands — the per-OS commands the model derived (or a
+ *      labelled run observed) and the harness kept, so the table that grows by
+ *      use is VISIBLE and EDITABLE rather than hidden in a file;
+ *   4. the live session grants, read and ended through the same endpoints the
+ *      Models panel uses (one source).
  *
- * Nothing here changes a declaration: the page is a read-model plus the existing
- * grant-revocation action (which can only make the agent more conservative).
+ * Writes (adding/removing a learned command) go through the server's role gate,
+ * the same `admin`/`operator` rule the endpoint enforces; the page only hides the
+ * controls it cannot use.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { dashboardAPI } from '../api';
-import type { CapabilitiesData, CapabilityReadinessVerb, SessionGrantInfo } from '../types';
+import { useAuthVersion } from '../useAuthVersion';
+import type {
+  CapabilitiesData,
+  CapabilityReadinessVerb,
+  LearnedCommandInfo,
+  SessionGrantInfo,
+} from '../types';
 import PageHeader from './PageHeader';
 
 /** Human label + tone per effect class. */
@@ -40,12 +49,26 @@ function effectMeta(effect: string): { label: string; className: string } {
   return EFFECT_META[effect] ?? { label: effect, className: 'cap-effect-local' };
 }
 
+interface AuthState {
+  authenticated: boolean;
+  role: string | null;
+}
+
 export default function CapabilitiesPage() {
   const [data, setData] = useState<CapabilitiesData | null>(null);
   const [grants, setGrants] = useState<SessionGrantInfo[]>([]);
+  const [auth, setAuth] = useState<AuthState>({ authenticated: false, role: null });
+  const authVersion = useAuthVersion();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // The add/edit form.
+  const [draftVerb, setDraftVerb] = useState('');
+  const [draftCommand, setDraftCommand] = useState('');
+  const [draftNote, setDraftNote] = useState('');
+
+  const canWrite = auth.authenticated && (auth.role === 'admin' || auth.role === 'operator');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -61,21 +84,68 @@ export default function CapabilitiesPage() {
   }, []);
 
   useEffect(() => {
+    void dashboardAPI.fetchAdminAuthStatus().then((s) => {
+      setAuth(s ? { authenticated: s.authenticated, role: s.role ?? null } : { authenticated: false, role: null });
+    });
     void refresh();
-  }, [refresh]);
+  }, [refresh, authVersion]);
 
   /** End a session grant — the user asking to be asked again. */
   const endGrant = useCallback(async (sessionId: string) => {
     setBusy(sessionId);
+    setError(null);
     const ok = await dashboardAPI.revokeSessionGrant(sessionId);
     if (!ok) setError(`Could not end the grant for ${sessionId}.`);
     else setGrants((prev) => prev.filter((g) => g.sessionId !== sessionId));
     setBusy(null);
   }, []);
 
+  /** Adopt the server's list after a write, so the page never shows a stale one. */
+  const adoptCommands = useCallback((commands: LearnedCommandInfo[] | undefined) => {
+    if (!commands) return;
+    setData((prev) => (prev ? { ...prev, learnedCommands: commands } : prev));
+  }, []);
+
+  const saveCommand = useCallback(async () => {
+    const verb = draftVerb.trim();
+    const commandText = draftCommand.trim();
+    if (!verb || !commandText) return;
+    setBusy('__save__');
+    setError(null);
+    setNotice(null);
+    const r = await dashboardAPI.saveLearnedCommand(verb, commandText, draftNote.trim() || undefined);
+    if (!r.ok) {
+      setError(r.error || 'Could not save the command.');
+    } else {
+      adoptCommands(r.commands);
+      setDraftVerb('');
+      setDraftCommand('');
+      setDraftNote('');
+      setNotice(`Learned "${verb}" for this machine.`);
+    }
+    setBusy(null);
+  }, [draftVerb, draftCommand, draftNote, adoptCommands]);
+
+  const forgetCommand = useCallback(
+    async (verb: string) => {
+      setBusy(verb);
+      setError(null);
+      setNotice(null);
+      const r = await dashboardAPI.forgetLearnedCommand(verb);
+      if (!r.ok) setError(r.error || `Could not forget "${verb}".`);
+      else {
+        adoptCommands(r.commands);
+        setNotice(`Forgot "${verb}" on this machine.`);
+      }
+      setBusy(null);
+    },
+    [adoptCommands],
+  );
+
   const ready = data?.readyCount ?? 0;
   const blocked = data?.blockedCount ?? 0;
   const missing = data?.missingExecutables ?? [];
+  const learned = data?.learnedCommands ?? [];
 
   return (
     <div>
@@ -91,6 +161,7 @@ export default function CapabilitiesPage() {
       </div>
 
       {error ? <div className="env-var-notice env-var-notice-error">{error}</div> : null}
+      {notice ? <div className="env-var-notice">{notice}</div> : null}
 
       {loading ? (
         <div className="loading-state">Loading…</div>
@@ -140,6 +211,83 @@ export default function CapabilitiesPage() {
                 <VerbRow key={verb.id} verb={verb} />
               ))}
             </div>
+          </section>
+
+          <section className="cap-section" data-testid="cap-learned">
+            <h3 className="cap-section-title">Learned commands ({learned.length})</h3>
+            <p className="cap-section-blurb">
+              Commands derived for this machine, keyed by what they do — recorded by the model or observed from a
+              labelled run. They are HINTS: the agent still checks presence before running one. Add or replace one with
+              the same verb below.
+            </p>
+            {learned.length === 0 ? (
+              <p className="cap-empty">
+                Nothing learned yet — the agent records a command when it derives one, or when a labelled run succeeds.
+              </p>
+            ) : (
+              <ul className="cap-learned-list">
+                {learned.map((c) => (
+                  <li key={`${c.verb}|${c.os}`} className="cap-learned-row" data-testid={`cap-learned-${c.verb}`}>
+                    <span className="cap-learned-verb">{c.verb}</span>
+                    <span className="cap-badge cap-effect-local">{c.os}</span>
+                    <span className="cap-badge cap-effect-read">{c.source}</span>
+                    <code className="cap-learned-cmd">{c.command}</code>
+                    {c.note ? <span className="cap-learned-note">{c.note}</span> : null}
+                    {canWrite ? (
+                      <button
+                        className="admin-mini-btn admin-mini-btn-danger"
+                        type="button"
+                        disabled={busy === c.verb}
+                        onClick={() => void forgetCommand(c.verb)}
+                      >
+                        Forget
+                      </button>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {canWrite ? (
+              <div className="cap-learned-form">
+                <input
+                  className="env-var-input"
+                  type="text"
+                  aria-label="learned verb"
+                  placeholder="verb (e.g. install java)"
+                  value={draftVerb}
+                  disabled={busy === '__save__'}
+                  onChange={(e) => setDraftVerb(e.target.value)}
+                />
+                <input
+                  className="env-var-input"
+                  type="text"
+                  aria-label="learned command"
+                  placeholder="command (e.g. brew install openjdk)"
+                  value={draftCommand}
+                  disabled={busy === '__save__'}
+                  onChange={(e) => setDraftCommand(e.target.value)}
+                />
+                <input
+                  className="env-var-input"
+                  type="text"
+                  aria-label="learned note"
+                  placeholder="note (optional)"
+                  value={draftNote}
+                  disabled={busy === '__save__'}
+                  onChange={(e) => setDraftNote(e.target.value)}
+                />
+                <button
+                  className="admin-mini-btn"
+                  type="button"
+                  disabled={!draftVerb.trim() || !draftCommand.trim() || busy === '__save__'}
+                  onClick={() => void saveCommand()}
+                >
+                  💾 Learn
+                </button>
+              </div>
+            ) : (
+              <div className="admin-hint">Read-only — admins and operators can add or remove learned commands.</div>
+            )}
           </section>
 
           <section className="cap-section" data-testid="cap-grants">

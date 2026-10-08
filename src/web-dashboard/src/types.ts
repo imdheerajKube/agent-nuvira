@@ -2074,6 +2074,17 @@ export interface MissingExecutable {
   remedy: string;
 }
 
+/** A per-OS command the model (or a successful run) derived and the harness kept. */
+export interface LearnedCommandInfo {
+  verb: string;
+  os: string;
+  command: string;
+  binary?: string;
+  note?: string;
+  source: 'model' | 'observed';
+  learnedAt: number;
+}
+
 /** Bundle 48 — `GET /api/capabilities`: verbs, readiness, missing executables. */
 export interface CapabilitiesData {
   ok?: boolean;
@@ -2081,4 +2092,6 @@ export interface CapabilitiesData {
   missingExecutables: MissingExecutable[];
   readyCount: number;
   blockedCount: number;
+  /** Bundle 52 — commands learned on this machine, keyed by (verb, os). */
+  learnedCommands?: LearnedCommandInfo[];
 }

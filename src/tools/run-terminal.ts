@@ -497,6 +497,13 @@ export interface RunTerminalArgs {
   command: string;
   confirm?: boolean;
   timeout_ms?: number;
+  /**
+   * What this command is FOR (e.g. "install java"). When the command SUCCEEDS,
+   * it is remembered for this verb on this OS (a learned command, source
+   * 'observed'), so a later `tool_search resolve` offers it. Optional: absent
+   * means nothing is learned — the harness cannot name a verb the model did not.
+   */
+  verb?: string;
 }
 
 export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): Promise<string> {
@@ -733,6 +740,26 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
   if (output.startsWith('Error:')) {
     const { isMissingBinaryFailure, buildMissingBinaryNote } = await import('../learning/command-adaptation.js');
     if (isMissingBinaryFailure(output)) missingNote = buildMissingBinaryNote(command);
+  }
+
+  // The grown table: a SUCCESSFUL command the model LABELLED with a verb is
+  // remembered for this machine (observed), so the same OS-specific command is
+  // not re-derived. Only with a verb and only on success — a failure is not a
+  // fact worth remembering, and a verbless command cannot be keyed. Best-effort.
+  if (args.verb && !timedOut && !output.startsWith('Error:')) {
+    try {
+      const { recordLearnedCommand } = await import('../learning/learned-commands.js');
+      const { leadingBinary } = await import('../learning/command-adaptation.js');
+      const bin = leadingBinary(command);
+      recordLearnedCommand({
+        verb: args.verb,
+        command,
+        ...(bin ? { binary: bin } : {}),
+        source: 'observed',
+      });
+    } catch {
+      // Best-effort — learning must never break the run it learned from.
+    }
   }
 
   // C3 — remember what a SUCCESSFUL run answered (whole command + every fact it

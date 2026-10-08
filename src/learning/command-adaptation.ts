@@ -13,7 +13,7 @@
  * reporting the one thing it already knows.
  */
 
-import { detectMachineFacts } from './machine-facts.js';
+import { detectMachineFacts, type MachineFacts } from './machine-facts.js';
 
 /**
  * The first executable-looking token of a command line, skipping env assignments
@@ -51,6 +51,62 @@ export function isMissingBinaryFailure(output: string): boolean {
  * makes it obvious; otherwise stays general, because guessing the wrong token
  * would be its own false claim.
  */
+/**
+ * How each package manager INSTALLS a tool. This is a fact about the manager
+ * (like `npm install` being the same everywhere), not an OS mapping — which is
+ * why it lives here and not in the per-OS table.
+ */
+const INSTALL_TEMPLATE: Record<string, string> = {
+  winget: 'winget install <tool>',
+  choco: 'choco install <tool>',
+  scoop: 'scoop install <tool>',
+  brew: 'brew install <tool>',
+  port: 'port install <tool>',
+  apt: 'apt-get install -y <tool>',
+  'apt-get': 'apt-get install -y <tool>',
+  dnf: 'dnf install -y <tool>',
+  yum: 'yum install -y <tool>',
+  pacman: 'pacman -S <tool>',
+  zypper: 'zypper install -y <tool>',
+  apk: 'apk add <tool>',
+  snap: 'snap install <tool>',
+  flatpak: 'flatpak install <tool>',
+  uv: 'uv tool install <tool>',
+  poetry: 'poetry add <tool>',
+  pip: 'pip install <tool>',
+  pip3: 'pip3 install <tool>',
+  npm: 'npm install -g <tool>',
+  pnpm: 'pnpm add -g <tool>',
+  yarn: 'yarn global add <tool>',
+  bun: 'bun add -g <tool>',
+  cargo: 'cargo install <tool>',
+  go: 'go install <tool>@latest',
+  gem: 'gem install <tool>',
+  composer: 'composer require <tool>',
+  dotnet: 'dotnet tool install -g <tool>',
+};
+
+/**
+ * The install command to suggest for `tool`, using the FIRST package manager
+ * that is ACTUALLY PRESENT here (machine facts lists only present managers, in
+ * OS-native-first order). Returns null when nothing present can install it.
+ *
+ * This is why `resolve` prefers a present manager rather than naming a manager
+ * the machine does not have: the suggestion is buildable from what exists.
+ */
+export function suggestInstallCommand(
+  facts: MachineFacts,
+  tool: string,
+): { manager: string; command: string } | null {
+  const name = String(tool ?? '').trim();
+  if (!name) return null;
+  for (const manager of facts.packageManagers) {
+    const template = INSTALL_TEMPLATE[manager];
+    if (template) return { manager, command: template.replace('<tool>', name) };
+  }
+  return null;
+}
+
 export function buildMissingBinaryNote(command?: string): string {
   const facts = detectMachineFacts();
   const bin = command ? leadingBinary(command) : null;

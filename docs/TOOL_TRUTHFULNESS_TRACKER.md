@@ -713,6 +713,39 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 52 — the grown table, made visible, editable and self-growing (2026-10-08)
+
+**The gap.** Bundle 51 made the model able to record a derived per-OS command, but
+the store was a file the user could not see, and nothing grew it unless the model
+called `record` explicitly — so "grows by use" was true in principle and invisible
+in practice.
+
+**The fix, three parts.**
+
+1. **Visible and editable.** `GET /api/capabilities` carries `learnedCommands`, and
+the Capabilities page renders them (verb, OS, command, source, Forget) with an
+add/replace form. Writes go through `POST /api/capabilities/commands` and
+`/commands/forget`, role-gated by the SAME `admin`/`operator` rule the endpoint
+enforces (`roleCan(session.role, 'routing.operate')`) — the page only hides what
+it cannot use.
+2. **Self-growing.** A `run_terminal` call that SUCCEEDS and was LABELLED with a
+`verb` is recorded as an `observed` learned command. Only on success (a failure is
+not a fact worth remembering) and only with a verb (the harness cannot key a
+command it cannot name) — the same honesty rule as everywhere else.
+3. **Prefer a present manager.** `resolve` now builds an install suggestion from
+the first package manager that is ACTUALLY PRESENT (machine facts are
+present-only, OS-native-first), so the suggestion is runnable rather than a
+manager the machine lacks, and states the package name may differ from the
+executable name.
+
+**Why the manager→command templates are not "another fixed table".** The template
+is a fact about the MANAGER (`brew install` is `brew install` everywhere), not an
+OS mapping — the OS half is already detected, not declared. A new manager is one
+entry; the surrounding mechanism is unchanged.
+
+Pinned by `CapabilitiesPage.test.tsx` (8), `capabilities-api.test.ts` (3),
+`command-adaptation.test.ts`, and `machine-command.test.ts`.
+
 ## Bundle 51 — the long tail: derive, verify, adapt, remember (2026-10-08)
 
 **The question.** "There could be other commands than the ones we identified —
