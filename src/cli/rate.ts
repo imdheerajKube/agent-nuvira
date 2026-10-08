@@ -23,6 +23,7 @@
  *   nuvira rate --stats              — the corpus: labels, class balance, per-pair, fit status
  *   nuvira rate --export corpus.csv  — export the labelled corpus (JSON/CSV) for offline fitting
  *   nuvira rate --import corpus.json — merge an exported corpus back into the local store
+ *   nuvira rate --merge corpus.json  — reconcile against local labels (--replace lets the import win)
  */
 
 import { Command } from 'commander';
@@ -37,6 +38,7 @@ import {
   parseCorpusText,
   detectCorpusFormat,
   mergeImportedLabels,
+  mergeLabelledCorpus,
   type CorpusFormat,
 } from '../learning/acceptance-model.js';
 
@@ -52,6 +54,8 @@ export class RateCommand {
       .option('-s, --stats', 'show the acceptance corpus: labels, class balance, per-pair record, fit status')
       .option('-e, --export [path]', 'export the labelled corpus (JSON, or CSV with --format csv / a .csv path); no path prints to stdout')
       .option('-i, --import <file>', 'merge an exported corpus (JSON or CSV) into the local labelled corpus')
+      .option('-m, --merge <file>', 'reconcile an exported corpus against LOCAL labels (default: keep local on a conflict)')
+      .option('--replace', 'with --merge: let the incoming label win on a conflict')
       .option('--format <format>', 'export format: json | csv (default: by path extension, else json)')
       .action(
         (
@@ -62,6 +66,8 @@ export class RateCommand {
             stats?: boolean;
             export?: string | boolean;
             import?: string;
+            merge?: string;
+            replace?: boolean;
             format?: string;
           },
         ) => {
@@ -78,9 +84,15 @@ export class RateCommand {
       stats?: boolean;
       export?: string | boolean;
       import?: string;
+      merge?: string;
+      replace?: boolean;
       format?: string;
     },
   ): void {
+    if (opts.merge !== undefined) {
+      this.mergeCorpus(opts.merge, Boolean(opts.replace));
+      return;
+    }
     if (opts.import !== undefined) {
       this.importCorpus(opts.import);
       return;
@@ -170,6 +182,41 @@ export class RateCommand {
     const { added, updated, total } = mergeImportedLabels(turns);
     logger.success(`Imported ${turns.length} row(s) from ${file}: ${added} new, ${updated} already present.`);
     logger.info(`   Imported store now holds ${total} labelled turn(s); they are read by the fit alongside your own.`);
+    console.log('');
+  }
+
+  /**
+   * Reconcile an exported corpus against the LOCAL labels, explicitly (Bundle 35).
+   * Unlike `--import` (a plain union), this REPORTS conflicts — a trace the local
+   * record already labels differently — and by default keeps the local label, the
+   * one this machine measured. `--replace` lets the incoming label win.
+   */
+  private mergeCorpus(file: string, replace: boolean): void {
+    let text: string;
+    try {
+      text = readFileSync(file, 'utf-8');
+    } catch (err) {
+      logger.error(`Could not read ${file}: ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+    const rows = parseCorpusText(text, detectCorpusFormat(file, text));
+    if (rows.length === 0) {
+      logger.error(`No labelled turns found in ${file} — is it an exported corpus (JSON or CSV)?`);
+      process.exitCode = 1;
+      return;
+    }
+    const res = mergeLabelledCorpus(rows, { replace });
+    logger.success(`Merged ${res.incoming} row(s) from ${file}.`);
+    logger.info(`   ${res.stored} stored · ${res.conflicts} conflict(s) · ${res.matching} matching`);
+    if (res.conflicts > 0) {
+      logger.info(
+        replace
+          ? `   ${res.replaced} conflict(s) replaced with the incoming label.`
+          : `   ${res.keptLocal} conflict(s) kept the LOCAL label — re-run with --replace to let the import win.`,
+      );
+    }
+    logger.info(`   Imported store now holds ${res.total} labelled turn(s).`);
     console.log('');
   }
 

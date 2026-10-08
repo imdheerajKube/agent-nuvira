@@ -15,6 +15,7 @@ import {
   collectLabelledTurns,
   detectCorpusFormat,
   mergeImportedLabels,
+  mergeLabelledCorpus,
   parseCorpusText,
   serializeLabelledTurns,
   type LabelledTurn,
@@ -112,6 +113,38 @@ describe('acceptance corpus export → import round trip', () => {
     useDir(dirC);
     mergeImportedLabels(parseCorpusText(csv, 'csv'));
     expect(shape(collectLabelledTurns())).toEqual(shape(original));
+  });
+
+  it('reconciles conflicts explicitly: keeps local by default, replaces on request', () => {
+    useDir(dirA);
+    clearTraces();
+    const t1 = seed(true, 'verified', 'groq', 'm1'); // accepted
+    const t2 = seed(false, 'unverified', 'groq', 'm1'); // rejected
+
+    const feat = (verified: number) => ({ verified, unverified: verified ? 0 : 1, flag: 0, delivered: 0 });
+    const incoming: LabelledTurn[] = [
+      { traceId: t1, at: 1, accepted: false, source: 'cli', features: feat(0) }, // CONFLICT
+      { traceId: t2, at: 2, accepted: false, source: 'cli', features: feat(0) }, // matching
+      { traceId: 'imported-t3', at: 3, accepted: true, source: 'cli', features: feat(1) }, // new
+    ];
+
+    // Default: the local label wins on the conflict.
+    const kept = mergeLabelledCorpus(incoming);
+    expect(kept.conflicts).toBe(1);
+    expect(kept.keptLocal).toBe(1);
+    expect(kept.replaced).toBe(0);
+    expect(kept.matching).toBe(1);
+    expect(kept.stored).toBe(1); // only t3
+    const afterKeep = collectLabelledTurns().find((t) => t.traceId === t1);
+    expect(afterKeep?.accepted).toBe(true);
+
+    // --replace: the incoming label wins.
+    const replaced = mergeLabelledCorpus(incoming, { replace: true });
+    expect(replaced.conflicts).toBe(1);
+    expect(replaced.replaced).toBe(1);
+    expect(replaced.keptLocal).toBe(0);
+    const afterReplace = collectLabelledTurns().find((t) => t.traceId === t1);
+    expect(afterReplace?.accepted).toBe(false);
   });
 
   it('a LOCAL trace wins over an imported row for the same trace id', () => {

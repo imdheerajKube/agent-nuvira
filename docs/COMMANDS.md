@@ -1416,7 +1416,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
   step closed, an honesty flag fired); only you know whether the work was right. That
   makes your verdict the one input the harness cannot compute — and, because the derived
   correction signal can only ever produce negatives, the only source of a POSITIVE label.
-- **Command:** `nuvira rate <good|bad> [--trace <id>]` · `nuvira rate --list` · `nuvira rate --stats` · `nuvira rate --export [path] [--format json|csv]` · `nuvira rate --import <file>`
+- **Command:** `nuvira rate <good|bad> [--trace <id>]` · `nuvira rate --list` · `nuvira rate --stats` · `nuvira rate --export [path] [--format json|csv]` · `nuvira rate --import <file>` · `nuvira rate --merge <file> [--replace]`
 - **Examples:**
   ```bash
   nuvira rate good                 # the last turn was what you wanted
@@ -1427,6 +1427,8 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira rate --export corpus.json # ship the labelled corpus for offline fitting
   nuvira rate --export corpus.csv  # CSV (or --format csv); no path prints to stdout
   nuvira rate --import corpus.json # merge a corpus collected on another machine
+  nuvira rate --merge corpus.json  # reconcile against local labels (keeps local on a conflict)
+  nuvira rate --merge corpus.json --replace   # let the incoming label win
   ```
 - **Export:** `--export` writes the SAME rows a fit here reads (the labelled turns, with
   their features and provenance), so nothing is lost in the hand-off. JSON keeps the full
@@ -1435,6 +1437,9 @@ nuvira models excluded         # show what routing is skipping, and WHY
 - **Import:** `--import` merges an exported corpus (JSON or CSV, auto-detected) back in,
   deduped by trace, so re-importing the same file is idempotent. The merged rows are read by
   the fit alongside your own. The dashboard Trace tab has the same Export/Import controls.
+- **Merge:** `--merge` reconciles against your LOCAL labels and reports conflicts (a trace you
+  label differently). By default the LOCAL label is kept; `--replace` lets the incoming label
+  win (it rewrites the local trace/corpus row, so it must be asked for).
 - **Fit offline:** `node scripts/fit-acceptance.mjs corpus.csv` runs the SAME deterministic
   fit on an exported file and prints the model — no live store, no network. It produces the
   identical coefficients the live `--stats`/`model explain` show.
@@ -1451,8 +1456,10 @@ nuvira models excluded         # show what routing is skipping, and WHY
   file you then **reference** (without reporting a regression) is a derived acceptance. These
   carry `source: 'derived'` and are recorded on the same trace/corpus rows.
 - **Where it is read:** `nuvira model explain` prints the pair's rated record and the fitted
-  `P(accepted | features)` read-only (§5.4). The fit is not used for routing and refuses
-  below 20 labelled turns.
+  `P(accepted | features)` read-only (§5.4). `nuvira doctor` reports fit readiness as an
+  advisory check. The fit is not used for routing and refuses below 20 labelled turns.
+- **Full walkthrough:** `docs/ACCEPTANCE.md` covers the whole workflow — rate, infer, fit,
+  export, import/merge, and fit offline — in one place.
 
 ---
 

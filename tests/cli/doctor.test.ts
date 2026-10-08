@@ -24,7 +24,9 @@ import {
   checkSbomSupplyChain,
   buildEnterpriseChecks,
   runAllChecks,
+  checkAcceptanceReadiness,
 } from '../../src/cli/doctor.js';
+import { beginTrace, clearTraces, recordTraceVerdict, recordTurnReport } from '../../src/learning/reasoning-trace.js';
 import type { BuffConfig } from '../../src/config/types.js';
 import { getMetrics, resetMetrics } from '../../src/enterprise/metrics.js';
 
@@ -572,6 +574,49 @@ describe('doctor --enterprise supply chain (P6 M6.6 SBOM)', () => {
     const check = checkSbomSupplyChain(null, true);
     expect(check.status).toBe('warn');
     expect(check.message).toContain('No stored SBOM');
+  });
+});
+
+describe('doctor — acceptance / quality-fit readiness (Bundle 35)', () => {
+  it('is a WARN with no labels, and PASS once the fit clears its floor', () => {
+    clearTraces();
+    const empty = checkAcceptanceReadiness();
+    expect(empty.name).toBe('Acceptance / quality fit');
+    expect(empty.status).toBe('warn');
+    expect(empty.message).toMatch(/not ready/);
+    // It is advisory — the fix points at the way to add labels.
+    expect(empty.fix).toMatch(/rate good\|bad/);
+
+    for (let i = 0; i < 12; i++) {
+      const id = beginTrace({ goal: 'g', source: 'chat', provider: 'groq', model: 'm1' });
+      recordTurnReport(id, { verification: 'verified', flags: {} } as never);
+      recordTraceVerdict(id, 'accepted', 'cli');
+    }
+    for (let i = 0; i < 12; i++) {
+      const id = beginTrace({ goal: 'g', source: 'chat', provider: 'groq', model: 'm1' });
+      recordTurnReport(id, { verification: 'unverified', flags: {} } as never);
+      recordTraceVerdict(id, 'rejected', 'dashboard');
+    }
+    const ready = checkAcceptanceReadiness();
+    expect(ready.status).toBe('pass');
+    expect(ready.message).toMatch(/fit ready/);
+    expect(ready.detail).toMatch(/cli 12/);
+    expect(ready.detail).toMatch(/dashboard 12/);
+    expect(ready.detail).toMatch(/Read-only/);
+    clearTraces();
+  });
+
+  it('is still a WARN with only one class present', () => {
+    clearTraces();
+    for (let i = 0; i < 24; i++) {
+      const id = beginTrace({ goal: 'g', source: 'chat', provider: 'groq', model: 'm1' });
+      recordTurnReport(id, { verification: 'verified', flags: {} } as never);
+      recordTraceVerdict(id, 'accepted', 'cli');
+    }
+    const oneClass = checkAcceptanceReadiness();
+    expect(oneClass.status).toBe('warn');
+    expect(oneClass.message).toMatch(/not ready/);
+    clearTraces();
   });
 });
 
