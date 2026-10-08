@@ -32,6 +32,7 @@ import MemoryPanel from './components/MemoryPanel';
 // visible nowhere. This page lists, ingests and queries them.
 import KnowledgePage from './components/KnowledgePage';
 import HistoryBrowser from './components/HistoryBrowser';
+import DecisionsPanel from './components/DecisionsPanel';
 // Skill executions were invisible end to end: this panel and the audit backend
 // behind `/api/executions` were both complete and both unreferenced, so a skill
 // run left no trace a user could inspect. `onClear`/`onExport` are intentionally
@@ -171,6 +172,7 @@ export default function App() {
           <Route path="/memory" element={<MemoryPanel data={data} />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/history" element={<HistoryBrowser data={data} />} />
+          <Route path="/decisions" element={<DecisionsPanel />} />
           <Route
             path="/executions"
             element={<ExecutionHistory onFetch={(f) => dashboardAPI.fetchExecutionAudit(f)} />}

@@ -35,6 +35,7 @@ import {
   detectCorpusFormat,
   mergeImportedLabels,
 } from '../learning/acceptance-model.js';
+import { readDecisions, recallDecisions, reviseDecision } from '../learning/decision-log.js';
 import { withStrictModel } from '../inference/route-resolver.js';
 import { readRecallHits } from '../context/session-recall.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
@@ -3174,6 +3175,24 @@ function resolveDashboardCwd(configManager?: ConfigManager): string | undefined 
   }
 }
 
+/**
+ * The directory a decisions request targets: a directory the client named that
+ * actually exists, else the configured workspace (`dashboard.cwd`), else the
+ * process cwd. Never returns a path that is not a directory, so a read or a
+ * revise can only ever touch a real project's own `.nuvira/` store.
+ */
+function resolveDecisionDir(requested: string | null | undefined): string {
+  const named = typeof requested === 'string' ? requested.trim() : '';
+  if (named) {
+    try {
+      if (existsSync(named) && statSync(named).isDirectory()) return resolve(named);
+    } catch {
+      // Unusable path — fall through to the configured default.
+    }
+  }
+  return resolveDashboardCwd() ?? process.cwd();
+}
+
 function summarizeProvider(type: string, configManager: ConfigManager): AdminProviderSummary {
   const c = (configManager.getAll().providers || {})[type] as ProviderConfig & { apiKeys?: string[] } | undefined;
   const envVar = PROVIDER_ENV_VARS[type];
@@ -5867,6 +5886,60 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       }
       const counts = mergeImportedLabels(rows);
       writeJson(res, 200, { ok: true, imported: rows.length, ...counts });
+    })();
+    return;
+  }
+
+  // ── The project's decision log (Bundle 36) ──────────────────────────────
+  //
+  // The decisions a project's turns asked the user to make (written by
+  // `ask_user`). READ-ONLY apart from `revise`, which rewrites ONE record in the
+  // project's own `.nuvira/` store. The dashboard is the same surface the CLI is
+  // (`nuvira decisions`), reading the same files, so the two cannot disagree.
+  //
+  // GET /api/decisions?dir=<path>&for=<text>&limit=<n>
+  //   dir defaults to the configured workspace (`dashboard.cwd`), then the
+  //   process cwd — the SAME fallback the project picker uses.
+  if (pathname === '/api/decisions' && req.method === 'GET') {
+    const dir = resolveDecisionDir(url.searchParams.get('dir'));
+    const forText = (url.searchParams.get('for') ?? '').trim();
+    try {
+      if (forText) {
+        const limit = Math.max(1, Math.min(50, Number(url.searchParams.get('limit')) || 5));
+        writeJson(res, 200, { ok: true, dir, relevant: true, decisions: recallDecisions(dir, forText, limit) });
+      } else {
+        writeJson(res, 200, { ok: true, dir, relevant: false, decisions: readDecisions(dir) });
+      }
+    } catch {
+      // Best-effort: an unreadable store is an empty log, never a 500.
+      writeJson(res, 200, { ok: true, dir, relevant: Boolean(forText), decisions: [] });
+    }
+    return;
+  }
+
+  // POST /api/decisions/revise { id, answer, note?, dir? } — change ONE decision,
+  // keeping the previous answer in its history. Open, like the other turn/feedback
+  // surfaces: it records a choice ABOUT this project rather than changing config.
+  if (pathname === '/api/decisions/revise' && req.method === 'POST') {
+    void (async () => {
+      const body = await readJsonBody(req);
+      const id = typeof body?.id === 'string' ? body.id.trim() : '';
+      const answer = typeof body?.answer === 'string' ? body.answer.trim() : '';
+      const note = typeof body?.note === 'string' && body.note.trim() ? body.note.trim() : undefined;
+      if (!id || !answer) {
+        writeJson(res, 400, { ok: false, error: 'Expected { id, answer }.' });
+        return;
+      }
+      // The workspace the page is showing — a directory that EXISTS, else the
+      // configured default. A revise only ever writes inside that directory's own
+      // `.nuvira/` store.
+      const dir = resolveDecisionDir(typeof body?.dir === 'string' ? body.dir : undefined);
+      const revised = reviseDecision(dir, id, answer, note);
+      if (!revised) {
+        writeJson(res, 404, { ok: false, error: `No decision with id ${id} for this workspace.` });
+        return;
+      }
+      writeJson(res, 200, { ok: true, decision: revised });
     })();
     return;
   }

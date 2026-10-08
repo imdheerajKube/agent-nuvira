@@ -1459,6 +1459,9 @@ nuvira models excluded         # show what routing is skipping, and WHY
   and exactly once per trace (re-rating cannot double-count). An **acceptance** moves no
   bandit arm: the turn was already recorded as its own outcome, so a 👍 adds no new
   observation. So a 👎 changes what the agent tries next, not only what it records.
+  **Measure it:** `node scripts/measure-bandit-correction.mjs [n]` runs the real bandit
+  maths on a controlled sequence and shows a rejected arm's θ dropping turn by turn
+  (and the brake it applies to an arm that keeps being credited).
 - **What it does NOT do:** the FITTED quality model routes nothing, and no score is
   derived from the label. `--stats`/`--export` collect a dataset so a measured quality
   signal can be fit to labelled turns; a turn nobody rated stays unlabelled, because
@@ -1504,6 +1507,9 @@ nuvira models excluded         # show what routing is skipping, and WHY
   (no model, no phrase list), so a later, related turn can be shown what was already decided.
   Automatic re-injection into prompts is deliberately NOT done — a decision is read when YOU
   ask for it.
+- **Dashboard:** the **Decisions** page (`/decisions`) shows the same store for the selected
+  workspace — list, search with `--for`, and revise inline — reading the same
+  `.nuvira/decisions.jsonl` via `GET /api/decisions` and `POST /api/decisions/revise`.
 
 ---
 
