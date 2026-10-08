@@ -55,6 +55,18 @@ export interface BetaPrior {
  * unlearned and (when enabled) escalates to a provider/model that has data.
  */
 export const DEFAULT_MIN_SAMPLES = 8;
+
+/**
+ * How much one deferred `userAccepted: false` moves an arm.
+ *
+ * NOT a new reward rule: the success branch of {@link RouterBandit.applyReward}
+ * already treats `userAccepted: false` as `reward -= 0.1`, and `reward` moves α by
+ * exactly that amount (β by `1 - reward`). Applying the verdict a turn late is
+ * therefore `α -= 0.1, β += 0.1` — byte-for-byte the same arm the run would have
+ * had if the verdict had been known at record time. Stated as a constant so the
+ * two halves cannot drift apart.
+ */
+export const USER_REJECTION_DELTA = 0.1;
 /**
  * How old the newest recorded outcome may be before the bandit's data stops
  * being described as "learned" for a decision made today. See `isStale`.
@@ -543,6 +555,58 @@ export class RouterBandit {
       this.state.learningHistory = this.state.learningHistory.slice(-MAX_HISTORY);
     }
     this.save();
+  }
+
+  /**
+   * Apply the DEFERRED half of `userAccepted: false` to the arms that served the
+   * turn the user has just corrected.
+   *
+   * WHY DEFERRED. The user's verdict on a turn arrives with their NEXT message
+   * ("still broken", "no change"), but bandit learning happens at the END of the
+   * turn it describes — so the signal can never be part of that turn's own
+   * observation. Reading the user's SILENCE as acceptance would be a fabricated
+   * sample (exactly what this reward model refuses to do), so the turn is recorded
+   * as it was and the rejection is applied when it actually arrives.
+   *
+   * Only a SUCCESS carries an un-applied penalty: the escalated and failure
+   * branches of `applyReward` never read `userAccepted`, so a rejection of one of
+   * those is already fully reflected and adds nothing.
+   *
+   * A rejection CORRECTS an existing arm and never creates one — a turn we never
+   * recorded has nothing to correct.
+   *
+   * @returns True when a prior was actually moved.
+   */
+  recordUserRejection(
+    provider: string,
+    complexity: ComplexityLevel,
+    outcome: BanditOutcome,
+    taskIntent?: string,
+    model?: string,
+  ): boolean {
+    if (outcome !== 'success') return false;
+    const key = this.bucketKey(complexity, taskIntent);
+    // Clamp α above zero: a Beta prior needs positive shape parameters, so a run of
+    // rejections must never make an arm numerically invalid.
+    const applyDelta = (prior: BetaPrior): void => {
+      prior.alpha = Math.max(0.1, prior.alpha - USER_REJECTION_DELTA);
+      prior.beta += USER_REJECTION_DELTA;
+    };
+    let moved = false;
+    const providerPrior = this.state.priors[key]?.[provider];
+    if (providerPrior) {
+      applyDelta(providerPrior);
+      moved = true;
+    }
+    if (model) {
+      const modelPrior = this.state.modelPriors[key]?.[model];
+      if (modelPrior) {
+        applyDelta(modelPrior);
+        moved = true;
+      }
+    }
+    if (moved) this.save();
+    return moved;
   }
 
   /**

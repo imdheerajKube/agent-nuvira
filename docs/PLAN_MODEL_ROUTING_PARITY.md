@@ -308,6 +308,65 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 27 — the user's verdict reaches the bandit, and `/hooks` stops skipping a heading (LANDED 2026-10-08)
+
+### 27a. Correcting round 3's "blocked" — only HALF of it was blocked
+
+The round-3 note above said items 9 and 13 were blocked on a missing labelled corpus. Re-reading the reward
+model against the code, that is true of ONE thing and false of the other, and the difference matters:
+
+- **Genuinely blocked — `qualityScore`.** A 0–1 "how good was it" number needs a measured scale, and no
+  reference for one exists (the corpus probe above). Unchanged.
+- **NOT blocked — `userAccepted`.** The harness already derives the label from the user's own next message:
+  `detectRegressionSignal` (`learning/working-state.ts`) has classified "still broken"/"no change" for the
+  working-state ledger since G3. §2.3 of the capability design lists that signal as `userAccepted`'s source.
+  Nothing wired it to the bandit, so the field the reward model reads (`applyReward`'s `userAccepted === false
+  → reward -= 0.1`) was dead on the real path. That is a wiring gap, not missing ground truth.
+
+### 27b. The wiring (deferred by construction)
+
+**The hard part is attribution, not detection.** The bandit learns at the END of the turn it describes, but
+its `getLastProvider`/`getLastModel` are overwritten by the NEXT resolve() — so applying the correction when
+it arrives would penalise whoever served the FOLLOWING turn. That is the same mis-attribution class the
+programme exists to remove, one layer down.
+
+- `RouterBandit.recordUserRejection(provider, complexity, outcome, intent?, model?)` applies the delta as
+  `α -= USER_REJECTION_DELTA, β += USER_REJECTION_DELTA` — which is **not a new reward rule**: it is exactly
+  what `applyReward`'s success branch would have done with `userAccepted: false` had the verdict been known
+  (`reward` moves α by its own amount, β by `1 - reward`). Only a SUCCESS is affected (the escalated/failure
+  branches never read the field), it CORRECTS an arm but never creates one, and α is clamped above zero.
+- `AutoModelRouter` buffers the attribution at record time (`pendingOutcome`) and `recordUserRejection(agentType)`
+  consumes it — clearing FIRST so one correction can never be applied twice, and no-oping when the agent type
+  differs. A turn we recorded nothing about leaves the previous attribution in place, which is correct: the
+  most recent JUDGED turn is what a correction is about.
+- `cli/chat.ts` applies it inside the existing auto-mode/bandit guard, **before** this turn's outcome is
+  recorded (recording is what overwrites the attribution). Same detection the ledger uses — one derivation,
+  two consumers.
+
+**Tests.** `router-bandit.test.ts` (+5: exact delta, per-model arm, no-op on non-success, corrects-not-creates,
+α clamp); `auto-router.test.ts` (+2: a later correction moves the arm it is about and clears, and no-ops for
+no-pending / different agent type). Writing them caught a real aliasing trap — `getPrior` returns the LIVE
+prior, so an unsnapshotted "before" reads its own mutation.
+
+### 27c. A heading defect the real-browser walk found (`/hooks`)
+
+The `Cluster G` browser click-through was finally run (`node scripts/smoke-dashboard-walk.mjs`) and found a
+real accessibility defect: **`/hooks` skipped h1 → h3.** `HooksPage` rendered its three panels as
+`<h3 className="section-title">` while every other page uses `<h2 className="section-title">`, so a
+screen-reader user navigating by heading lost the page's first cue. Fixed to h2.
+
+**The guard had a gap, and that is the more interesting half.** `dashboard-consistency.test.ts` enforces the
+rule — but only for `<h3 className="section-subtitle"`, the ONE class a previous bundle migrated. A section
+heading wearing the OTHER section class was invisible to it, which is why the defect shipped green. The guard
+now checks BOTH section classes, so the next `section-title`-as-h3 cannot pass. Verified in both directions:
+`/hooks` is clean on the real 27-route walk, and the new regex matches the old markup.
+
+**Gates.** root suite **465 files / 8570 passed / 0 failed**, dashboard suite **50 files / 1053 passed**, both
+`tsc --noEmit` clean, `verify:commands` **341/341**, all three docs guards, `build:cli`, `build:dashboard`,
+`dashboard:bundle:check`, and the real-browser walk **27 routes clean** (enterprise/dark).
+
+---
+
 ## Bundle 26 — one verdict for the authored read-back, on every surface (LANDED 2026-10-07)
 
 **The defect, found by reading a live trace.** Bundle 21 decided that an authored document written and then
@@ -361,11 +420,18 @@ than by writing a detector, because both need a LABEL to fit to and the doctrine
   binary outcome but **no quality or magnitude label** and no task text to recover one from.
 
 **Conclusion.** No labelled complexity/quality ground truth exists on this machine. The only label-like
-field is the router's own `complexity`. A B3 quality signal and a learned B5 area set therefore stay
+field is the router's own `complexity`. So a measured `qualityScore` and a learned B5 area set stay
 **blocked**, deliberately: implementing them now would mean hand-writing the very vocabulary the programme
 exists to replace. **The concrete unblock** is to start COLLECTING the missing label — record, per authored
 deliverable, whether it met the ask's stated magnitude yet still read as a miss — as the ground truth a
-quality signal must be fit to. Until such rows exist, items 9 and 13's residuals are honestly open.
+quality signal must be fit to. Until such rows exist, item 9's learned set and item 13's `qualityScore` are
+honestly open.
+
+**CORRECTED (2026-10-08) — this probe does NOT block all of item 13.** The other measured-quality input,
+`userAccepted`, was never blocked at all: the harness already derives it from the user's next message
+(`detectRegressionSignal`), and it was only UNWIRED. That half is fixed in **Bundle 27** below; only the
+`qualityScore` half remains behind the missing label. Read the two together — "no labelled corpus" applies to
+the SCALE of quality, not to whether the user accepted the turn.
 
 ---
 

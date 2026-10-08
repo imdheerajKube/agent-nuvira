@@ -21,6 +21,7 @@ import {
   sampleBeta,
   sampleGamma,
   costAdjustedSuccessReward,
+  USER_REJECTION_DELTA,
   COMPLEXITY_BUCKETS,
   type RouterBanditState,
 } from '../../src/learning/router-bandit.js';
@@ -181,6 +182,63 @@ describe('recordOutcome', () => {
     });
     const prior = bandit.getPrior('openrouter', 'critical');
     expect(prior.beta).toBeGreaterThan(2);
+  });
+});
+
+// ─── recordUserRejection (deferred userAccepted: false) ─────────────────────
+
+describe('recordUserRejection', () => {
+  it('applies the EXACT delta the success branch would have applied had it known', () => {
+    const bandit = new RouterBandit();
+    // Record a success WITHOUT the user verdict (how the real turn ends).
+    bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0);
+    // Snapshot — `getPrior` returns the LIVE prior object, which the rejection mutates.
+    const before = { ...bandit.getPrior('groq', 'moderate') };
+    // The user's next message reports the turn still fails.
+    const moved = bandit.recordUserRejection('groq', 'moderate', 'success');
+    const after = bandit.getPrior('groq', 'moderate');
+    expect(moved).toBe(true);
+    expect(after.alpha).toBeCloseTo(before.alpha - USER_REJECTION_DELTA, 10);
+    expect(after.beta).toBeCloseTo(before.beta + USER_REJECTION_DELTA, 10);
+  });
+
+  it('moves the per-model arm too when one served the turn', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0);
+    bandit.recordModelOutcome('llama-3.3-70b-versatile', 'implement a login form', 'success', 1.0);
+    const before = { ...bandit.getModelPrior('llama-3.3-70b-versatile', 'moderate') };
+    bandit.recordUserRejection('groq', 'moderate', 'success', undefined, 'llama-3.3-70b-versatile');
+    const after = bandit.getModelPrior('llama-3.3-70b-versatile', 'moderate');
+    expect(after.alpha).toBeCloseTo(before.alpha - USER_REJECTION_DELTA, 10);
+    expect(after.beta).toBeCloseTo(before.beta + USER_REJECTION_DELTA, 10);
+  });
+
+  it('does NOTHING for a non-success outcome — those branches never read userAccepted', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('gemini', 'implement a login form', 'failure', 0.5);
+    const before = { ...bandit.getPrior('gemini', 'moderate') };
+    const moved = bandit.recordUserRejection('gemini', 'moderate', 'failure');
+    const after = bandit.getPrior('gemini', 'moderate');
+    expect(moved).toBe(false);
+    expect(after.alpha).toBe(before.alpha);
+    expect(after.beta).toBe(before.beta);
+  });
+
+  it('corrects an arm but never CREATES one', () => {
+    const bandit = new RouterBandit();
+    const moved = bandit.recordUserRejection('groq', 'moderate', 'success');
+    expect(moved).toBe(false);
+    // Nothing recorded → the prior must still be the untouched cold start.
+    expect(bandit.getPrior('groq', 'moderate')).toEqual({ alpha: 1, beta: 1 });
+  });
+
+  it('clamps alpha above zero so a run of rejections cannot invalidate the Beta arm', () => {
+    const bandit = new RouterBandit();
+    bandit.recordOutcome('groq', 'implement a login form', 'success', 1.0);
+    for (let i = 0; i < 50; i++) bandit.recordUserRejection('groq', 'moderate', 'success');
+    const prior = bandit.getPrior('groq', 'moderate');
+    expect(prior.alpha).toBeGreaterThan(0);
+    expect(prior.beta).toBeGreaterThan(1);
   });
 });
 

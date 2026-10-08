@@ -1266,6 +1266,33 @@ describe('AutoModelRouter.resolve with bandit learning', () => {
     expect(modelPrior.beta).toBeGreaterThan(1);
   });
 
+  it('applies a LATER user correction to the turn it is about (deferred userAccepted)', () => {
+    const router = new AutoModelRouter();
+    router.resolve('writer', 'implement a login form', { allowedProviders: ['groq'], useBandit: true });
+    router.recordOutcome('writer', 'implement a login form', 'success');
+    const bandit = getRouterBandit();
+    // Same intent-aware bucket recordOutcome used ('implement a login form' → coding).
+    // Snapshot — `getPrior` returns the LIVE prior the rejection mutates in place.
+    const before = { ...bandit.getPrior('groq', 'coding:moderate') };
+    // The NEXT turn's message reports the previous one still fails.
+    expect(router.recordUserRejection('writer')).toBe(true);
+    const after = bandit.getPrior('groq', 'coding:moderate');
+    expect(after.alpha).toBeLessThan(before.alpha);
+    expect(after.beta).toBeGreaterThan(before.beta);
+    // One correction, applied once — a second call finds nothing pending.
+    expect(router.recordUserRejection('writer')).toBe(false);
+  });
+
+  it('no-ops a correction with no pending outcome, or for a different agent type', () => {
+    const router = new AutoModelRouter();
+    expect(router.recordUserRejection('writer')).toBe(false);
+    router.resolve('writer', 'implement a login form', { allowedProviders: ['groq'], useBandit: true });
+    router.recordOutcome('writer', 'implement a login form', 'success');
+    // A correction about a DIFFERENT agent type must not touch writer's outcome.
+    expect(router.recordUserRejection('planner')).toBe(false);
+    expect(router.recordUserRejection('writer')).toBe(true);
+  });
+
   it('writes the promotion A/B trajectory on resolve + recordOutcome', () => {
     const router = new AutoModelRouter();
     router.resolve('writer', 'implement a login form', {

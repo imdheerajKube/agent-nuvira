@@ -1347,6 +1347,22 @@ export function scoreProvider(
 export class AutoModelRouter {
   private profiles: Record<string, ProviderCapabilities>;
 
+  /**
+   * The attribution of the LAST recorded outcome, kept so a user correction that
+   * arrives with the next message ("still broken") can be applied to the turn it
+   * is actually about. The bandit's own `getLastProvider`/`getLastModel` are
+   * overwritten by the next resolve(), so the pair must be captured HERE, at
+   * record time — see `recordUserRejection`.
+   */
+  private pendingOutcome: {
+    agentType: string;
+    provider: string;
+    model?: string;
+    complexity: ComplexityLevel;
+    intent?: string;
+    outcome: BanditOutcome;
+  } | null = null;
+
   constructor(profiles?: Record<string, ProviderCapabilities>) {
     this.profiles = profiles ? { ...DEFAULT_PROFILES, ...profiles } : { ...DEFAULT_PROFILES };
   }
@@ -2899,6 +2915,52 @@ export class AutoModelRouter {
     } catch {
       // Best-effort — ML recording must never break outcome handling.
     }
+
+    // Remember WHAT this outcome was attributed to, so a correction arriving with
+    // the NEXT user message lands on the turn it is about rather than on whoever
+    // serves the next turn. Overwritten by the next recordOutcome, which is exactly
+    // right: a correction speaks about the most recent judged turn.
+    this.pendingOutcome = {
+      agentType,
+      provider,
+      model: bandit.getLastModel(agentType),
+      complexity: complexityHint ?? analyzeComplexity(taskDescription),
+      intent: analyzeTaskProfile(taskDescription).intent,
+      outcome,
+    };
+  }
+
+  /**
+   * Apply the user's verdict on the PREVIOUS turn.
+   *
+   * A regression report in the user's next message ("still broken", "no change",
+   * "doesn't work") IS `userAccepted: false` for the turn that just ran — the one
+   * measured-quality input the reward model has that nothing on the real path ever
+   * filled in. It cannot be part of that turn's own observation (it does not exist
+   * until the user speaks again), so it is applied here, to the pair captured at
+   * record time, as the exact deferred delta (see `RouterBandit.recordUserRejection`).
+   *
+   * @returns True when a correction was applied to a still-pending outcome.
+   */
+  recordUserRejection(agentType: string): boolean {
+    const pending = this.pendingOutcome;
+    if (!pending || pending.agentType !== agentType) return false;
+    // Clear FIRST: one correction must never be applied twice, even if the bandit
+    // write throws.
+    this.pendingOutcome = null;
+    try {
+      getRouterBandit().recordUserRejection(
+        pending.provider,
+        pending.complexity,
+        pending.outcome,
+        pending.intent,
+        pending.model,
+      );
+    } catch {
+      // Learning is best-effort — never break a turn on a bandit error.
+      return false;
+    }
+    return true;
   }
 
   /**

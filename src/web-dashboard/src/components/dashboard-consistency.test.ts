@@ -97,8 +97,19 @@ describe('every routed page uses the shared page header', () => {
     // the moment the title became an h1: h1 → h3 is a skipped level, which is
     // exactly the navigation cue a screen-reader user relies on. So sections are
     // h2, always, and this is what keeps them there.
+    //
+    // BOTH section classes, not just `section-subtitle`: `HooksPage` shipped its
+    // panels as `<h3 className="section-title">`, so the browser walk found a
+    // real h1 → h3 skip on `/hooks` while this test stayed green. A guard that
+    // watches ONE of the two section classes is how that passed — a section
+    // heading is h2 whichever of the two class names it wears.
+    //
+    // Nested h3s (a panel's own group titles, a markdown h3) are legitimate: they
+    // sit UNDER an h2, so they are not a skip. Only the section-level classes are
+    // checked here, because only those sit directly under the page h1.
+    const SECTION_CLASSES = 'section-subtitle|section-title';
     const skipped = PAGES.filter((name) =>
-      /<h3 className="section-subtitle"/.test(readFileSync(pagePath(name), 'utf8')),
+      new RegExp(`<h3 className="(?:${SECTION_CLASSES})"`).test(readFileSync(pagePath(name), 'utf8')),
     );
     expect(skipped, `pages skipping h1 -> h3: ${skipped.join(', ')}`).toEqual([]);
   });

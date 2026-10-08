@@ -217,7 +217,7 @@ export default function HooksPage() {
       {notice ? <div className="env-var-notice">{notice}</div> : null}
 
       <section className="panel">
-        <h3 className="section-title">How it works</h3>
+        <h2 className="section-title">How it works</h2>
         <p className="admin-hint">
           When a seam fires, nuvira tests each enabled hook whose event matches, in order, and the FIRST <code>deny</code>{' '}
           wins. Every action is implemented natively, so a bad hook can at worst block a call or print a line — it can
@@ -262,7 +262,7 @@ export default function HooksPage() {
       </section>
 
       <section className="panel">
-        <h3 className="section-title">Declared hooks</h3>
+        <h2 className="section-title">Declared hooks</h2>
         {loading ? (
           <div className="loading-state">Loading…</div>
         ) : hooks.length === 0 ? (
@@ -313,7 +313,7 @@ export default function HooksPage() {
 
       {canWrite ? (
         <section className="panel">
-          <h3 className="section-title">Add a hook</h3>
+          <h2 className="section-title">Add a hook</h2>
           <div className="env-var-row">
             <div className="env-var-row-header">
               <span className="env-var-name">

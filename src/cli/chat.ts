@@ -84,7 +84,7 @@ import {
   stripToolCallArtifacts,
 } from '../inference/tool-call-utils.js';
 import { beginTrace, endTrace, recordStep, recordTraceEvent, recordTraceFindings, recordTurnReport, buildTraceOutcome, traceOutcomeSucceeded } from '../learning/reasoning-trace.js';
-import { recordWorkingState, getWorkingState, formatWorkingState, isProjectLedgerDir } from '../learning/working-state.js';
+import { recordWorkingState, getWorkingState, formatWorkingState, isProjectLedgerDir, detectRegressionSignal } from '../learning/working-state.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
 import { resolveModelHarnessProfile, shouldSkipNativeTools, isAgenticCapableModel } from '../learning/model-harness.js';
 import { assertAgenticRoute, setWeakModelConsent, resolveWeakModelPolicy, weakRouteNotice } from '../learning/agentic-route-gate.js';
@@ -1181,6 +1181,20 @@ export class ChatCommand extends BaseCommand {
     // (otherwise `getLastProvider` could reward a stale provider noted by an
     // earlier auto run in this process) and only when bandit learning is on.
     if (autoMode && this.configManager.getAll().routing?.bandit !== false) {
+      // The user's message for THIS turn is also a verdict on the PREVIOUS one:
+      // "still broken" / "no change" is `userAccepted: false` for the turn that
+      // just ran. It must be applied BEFORE this turn's own outcome is recorded,
+      // because recording overwrites the attribution the correction refers to.
+      // The signal is the SAME one the working-state ledger keeps (one derivation,
+      // two consumers), and it is walked up to the previous AUTO-routed turn only —
+      // `recordUserRejection` no-ops when nothing is pending.
+      if (detectRegressionSignal(message)) {
+        try {
+          getAutoRouter().recordUserRejection('chat');
+        } catch {
+          // Learning is best-effort — never break a turn on a bandit error.
+        }
+      }
       const observation = turnOutcomeObservation(turnReport);
       if (observation) {
         try {
