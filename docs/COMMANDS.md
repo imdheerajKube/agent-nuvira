@@ -1505,11 +1505,20 @@ nuvira models excluded         # show what routing is skipping, and WHY
   values) before touching disk.
 - **Reading it back:** `--for "<ask>"` ranks recorded decisions by shared significant tokens
   (no model, no phrase list), so a later, related turn can be shown what was already decided.
-  Automatic re-injection into prompts is deliberately NOT done — a decision is read when YOU
-  ask for it.
+  A turn with an attached project ALSO reads this back automatically: when the ask shares a
+  significant token with a recorded decision, up to 3 are injected as an explicitly-labelled
+  **`[Previously decided …]`** context block. This is **advisory only** — the block says a
+  changed situation may still ask, and nothing suppresses an `ask_user`; it exists so a settled
+  question is not re-asked, not to make the agent silent. It is inert when nothing matches (a
+  turn with no related decision is byte-identical to one from a build without this), and it is
+  **off under a test runner** unless `NUVIRA_DECISION_LOG=on`.
 - **Dashboard:** the **Decisions** page (`/decisions`) shows the same store for the selected
   workspace — list, search with `--for`, and revise inline — reading the same
   `.nuvira/decisions.jsonl` via `GET /api/decisions` and `POST /api/decisions/revise`.
+- **Measure the read-back:** `node scripts/measure-decision-recall.mjs` runs the real built
+  `recallDecisionBlock` over a throwaway project and reports which related asks get a block and
+  which unrelated asks stay inert (measured 4/4 and 3/3). It does NOT measure the real-world
+  re-ask rate — that needs labelled sessions.
 
 ---
 
