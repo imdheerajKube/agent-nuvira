@@ -27,7 +27,14 @@ import { runAllChecks, type CheckResult, type HealthStatus } from '../cli/doctor
 import type { ProviderConfig } from '../config/types.js';
 import type { WireFinding } from '../findings/verdicts.js';
 import { getAutoRouter } from '../learning/auto-router.js';
-import { acceptanceSummary } from '../learning/acceptance-model.js';
+import {
+  acceptanceSummary,
+  collectLabelledTurns,
+  serializeLabelledTurns,
+  parseCorpusText,
+  detectCorpusFormat,
+  mergeImportedLabels,
+} from '../learning/acceptance-model.js';
 import { withStrictModel } from '../inference/route-resolver.js';
 import { readRecallHits } from '../context/session-recall.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
@@ -5815,6 +5822,52 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         fit: { ok: false, reason: 'acceptance model unavailable', n: 0, positives: 0, negatives: 0 },
       });
     }
+    return;
+  }
+
+  // GET /api/acceptance/export (Bundle 34) — the labelled corpus as a download, the
+  // SAME rows `nuvira rate --export` writes, so the CLI and the dashboard ship an
+  // identical file. `?format=csv` selects CSV; JSON is the default.
+  if (pathname === '/api/acceptance/export' && req.method === 'GET') {
+    try {
+      const fmtParam = (new URL(req.url ?? '', 'http://localhost').searchParams.get('format') || '').toLowerCase();
+      const fmt = fmtParam === 'csv' ? 'csv' : 'json';
+      const text = serializeLabelledTurns(collectLabelledTurns(), fmt);
+      res.writeHead(200, {
+        'Content-Type': fmt === 'csv' ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8',
+        'Content-Disposition': `attachment; filename="acceptance-corpus.${fmt}"`,
+      });
+      res.end(text);
+    } catch {
+      writeJson(res, 500, { error: 'Could not export the acceptance corpus' });
+    }
+    return;
+  }
+
+  // POST /api/acceptance/import { text, format? } (Bundle 34) — merge a corpus
+  // collected elsewhere into the local store. The browser reads the file and posts
+  // its TEXT, so the endpoint needs no multipart handling. Deduped by trace, so
+  // re-importing is idempotent. Nothing routes on these labels.
+  if (pathname === '/api/acceptance/import' && req.method === 'POST') {
+    void (async () => {
+      const body = await readJsonBody(req);
+      const text = body && typeof body.text === 'string' ? body.text : '';
+      if (!text.trim()) {
+        writeJson(res, 400, { error: 'No corpus text supplied — POST { text, format? }' });
+        return;
+      }
+      const fmt =
+        body && (body.format === 'csv' || body.format === 'json')
+          ? body.format
+          : detectCorpusFormat(undefined, text);
+      const rows = parseCorpusText(text, fmt);
+      if (rows.length === 0) {
+        writeJson(res, 400, { error: 'No labelled turns found in the supplied corpus' });
+        return;
+      }
+      const counts = mergeImportedLabels(rows);
+      writeJson(res, 200, { ok: true, imported: rows.length, ...counts });
+    })();
     return;
   }
 

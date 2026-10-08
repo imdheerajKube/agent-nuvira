@@ -1967,3 +1967,13 @@ export interface AcceptanceData {
   byPair: Record<string, AcceptancePairRecord>;
   fit: AcceptanceFitView;
 }
+
+/** Bundle 34 — `POST /api/acceptance/import`: the merge counts. */
+export interface AcceptanceImportResult {
+  ok: boolean;
+  imported?: number;
+  added?: number;
+  updated?: number;
+  total?: number;
+  error?: string;
+}

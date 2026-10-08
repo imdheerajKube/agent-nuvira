@@ -308,6 +308,45 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 34 — the corpus moves both ways, and fits offline (LANDED 2026-10-08)
+
+**Why.** Bundle 33 could only EXPORT, from the CLI only, and a fit needed the live store. A corpus that
+cannot come back and cannot be fit where it lands is a dead end.
+
+### 34a. `nuvira rate --import <file>`
+
+Merges an exported corpus (JSON or CSV, auto-detected by extension then content) back in. Imported rows
+are kept in their OWN store (`acceptance-labels.jsonl`) because an imported row has no local trace to
+attach a verdict to; `collectLabelledTurns()` reads them alongside the local labels, and a LOCAL trace for
+the same id WINS (it carries the features we measured ourselves). Deduped by trace (or identity), so
+re-importing is idempotent. Verified live: 24 exported → 24 new on import → re-import 0 new / 24 present.
+
+### 34b. The dashboard ships and joins it too
+
+`GET /api/acceptance/export?format=json|csv` is a download (attachment) of the SAME rows the CLI exports;
+`POST /api/acceptance/import { text, format? }` merges a posted file's TEXT (no multipart) and refuses an
+empty or unparseable body with 400. The Trace tab's Acceptance card gains **Export JSON / Export CSV /
+Import…** controls. Open like the other acceptance routes — these labels are measurement-only and nothing
+routes on them.
+
+### 34c. Offline fitter — `scripts/fit-acceptance.mjs`
+
+Reads an exported corpus and runs the SAME deterministic `fitLabelledTurns` (imported from the built
+`dist/`) and prints the model — no live store, no network, no model. Because the fit is deterministic by
+construction, the offline script produced the **identical coefficients** to the live `rate --stats` on the
+same seeded corpus (verified: `verified +2.27 / unverified −1.99 / flag −1.99 / delivered +0.00 / bias
++0.82`).
+
+**Tests.** `acceptance-import.test.ts` (new, 2: JSON+CSV round-trip preserves labels/features/provenance,
+idempotent re-import, local-wins); `acceptance-transfer-api.test.ts` (new, 3 HTTP: export JSON + CSV,
+idempotent import, 400 on empty/junk).
+
+**Gates.** root suite, dashboard suite, both `tsc --noEmit`, all three docs guards, `verify:commands`,
+`build:cli`, `build:dashboard`, `dashboard:bundle:check`, the real-browser walk, and the live CLI round-trip
++ offline fit above.
+
+---
+
 ## Bundle 33 — the corpus ships, and all three surfaces share one renderer (LANDED 2026-10-08)
 
 ### 33a. `nuvira rate --export [path] [--format json|csv]`

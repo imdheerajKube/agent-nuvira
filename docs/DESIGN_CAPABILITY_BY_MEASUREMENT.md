@@ -359,9 +359,11 @@ tier-3 behavioural inferences — never by the harness rating turns on the user'
 would fabricate the very ground truth the fit is supposed to measure, which is the hand-written-vocabulary
 defect one layer up.
 
-**The corpus is portable (Bundle 33).** `nuvira rate --export [path] [--format json|csv]` writes the SAME
-labelled turns a fit here reads, so the corpus can be shipped and fit offline (or joined with rows from
-other machines) without the harness ever generating a label. `formatAcceptanceSummary` is now the SINGLE
-renderer for all three surfaces — `nuvira rate --stats`, `model explain` (which focuses the decision's own
-pair via its `focusPair` argument), and the dashboard card — so they cannot describe the corpus
-inconsistently.
+**The corpus is portable, both ways (Bundles 33–34).** `nuvira rate --export [path] [--format json|csv]`
+writes the SAME labelled turns a fit here reads; `nuvira rate --import <file>` merges one back (deduped by
+trace, idempotent), and the dashboard Trace card offers the same Export/Import. Imported rows live in their
+own store so a fit reads them without the harness inventing a local trace, and a local trace for the same
+id wins. `scripts/fit-acceptance.mjs` fits an exported file OFFLINE with the identical deterministic model
+— no live store, no network, no model. `formatAcceptanceSummary` is the SINGLE renderer for all three
+surfaces — `nuvira rate --stats`, `model explain` (focusing the decision's own pair via its `focusPair`
+argument), and the dashboard card — so they cannot describe the corpus inconsistently.
