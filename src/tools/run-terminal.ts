@@ -189,11 +189,58 @@ const VERIFY_PREFIXES: string[] = [
   'git status', 'git diff', 'git log', 'git show', 'git branch', 'git rev-parse',
   // Basic read-only shell.
   'ls', 'cat', 'head', 'tail', 'grep', 'rg', 'find', 'pwd', 'echo', 'wc', 'printf', 'which',
+  'test', '[',
   // Read-only path helpers. Listed because a verify command routinely embeds
   // them in a substitution (`npx vitest run tests/$(basename x).test.ts`) and the
   // segment splitter cannot tell a helper from a real command.
   'basename', 'dirname', 'realpath',
+  // Text processors. `awk` READS by default — inspecting a file's headers is a
+  // read-only check the loop reaches for constantly. Its WRITE form is rejected
+  // separately (`isTextProcessorWrite`), so `awk '{print}'` verifies while
+  // `awk '{print > "f"}'` keeps the confirm gate. A command that cannot mutate
+  // state must never generate a prompt (see the misfire below).
+  'awk',
 ];
+
+/** Text processors that READ by default but can WRITE when told to. */
+const TEXT_PROCESSOR_PREFIXES = new Set(['awk']);
+
+/**
+ * Shell GRAMMAR keywords — the structure of a compound command, not a command.
+ *
+ * WHY THIS EXISTS (2026-10-08). A live chat turn
+ * (`trace-1791390325578-4968th`) inspected its own output with a pure read-only
+ * chain:
+ *   grep -n '^#' NOTES.md && echo --- && wc -w NOTES.md &&
+ *     for i in Introduction Design Operations; do printf "%s: " "$i"; done; echo
+ * Every command in it reads a file, but the `for`/`do`/`done` segments were not
+ * on the verify allowlist, so the WHOLE chain scored `confirm`, the gate refused
+ * it as "state-changing", and the model burned a step declaring "the command
+ * guard misfired on a read-only check" and reading the file a second way.
+ *
+ * A loop is judged by its BODY: the structural segments contribute nothing, and
+ * a body-prefixing keyword (`do printf …`) is stripped so the real command is
+ * classified. `for f in *; do rm -rf $f; done` still scores confirm (`rm`), so
+ * the autonomy is bounded by what the body actually runs.
+ */
+const SHELL_STRUCTURAL_KEYWORDS = new Set(['for', 'done', 'fi', 'esac', 'case', '{', '}', '!', 'time', 'function']);
+/** Keywords that PREFIX the real command within their own segment. */
+const SHELL_BODY_KEYWORDS = new Set(['do', 'then', 'else', 'elif', 'while', 'until', 'if']);
+
+/**
+ * Does a text processor's segment WRITE? Over-rejects on purpose: a `>` in an
+ * `awk` program may be a comparison inside quotes, but reading it as a write
+ * only costs a confirmation, while missing a real `print > "file"` would let a
+ * state change run unprompted (the safe direction is confirm).
+ */
+function isTextProcessorWrite(segment: string): boolean {
+  return (
+    /(?:^|\s)(?:-i\S*|--in-place)\b/.test(segment) ||
+    />>?/.test(segment) ||
+    /\b(?:system|close)\s*\(/.test(segment) ||
+    /\bprintf?\s+>/.test(segment)
+  );
+}
 
 /**
  * Read-only PROBES — `<cmd> --version` / `--help`, and package-metadata reads.
@@ -395,16 +442,27 @@ function splitSegments(lower: string): string[] {
 
 /** Classify ONE segment by its leading tokens. */
 function classifySegment(segment: string): CommandClass {
-  const toks = leadingTokens(segment, 3);
+  // `verify` is the LOWEST severity, so returning it is how a segment stays
+  // NEUTRAL: it cannot raise the chain's worst class.
+  const head = leadingTokens(segment, 1)[0] ?? '';
+  if (SHELL_STRUCTURAL_KEYWORDS.has(head)) return 'verify';
+  let body = segment;
+  if (SHELL_BODY_KEYWORDS.has(head)) {
+    body = segment.slice(head.length).trim();
+    if (!body) return 'verify';
+  }
+  const toks = leadingTokens(body, 3);
   for (const prefix of VERIFY_PREFIXES) {
     const pt = prefix.split(' ');
     if (pt.length <= toks.length && toks.slice(0, pt.length).join(' ') === prefix) {
+      // A text processor may WRITE; only its read form is verify.
+      if (TEXT_PROCESSOR_PREFIXES.has(prefix) && isTextProcessorWrite(body)) return 'confirm';
       return 'verify';
     }
   }
   // Read-only probes (`<cmd> --version` / `--help`) and metadata reads — they
   // cannot change state, so they never need confirmation (see the constants).
-  if (READ_ONLY_PROBE_RE.test(segment)) return 'verify';
+  if (READ_ONLY_PROBE_RE.test(body)) return 'verify';
   for (const prefix of READ_ONLY_INFO_PREFIXES) {
     const pt = prefix.split(' ');
     if (pt.length <= toks.length && toks.slice(0, pt.length).join(' ') === prefix) {
