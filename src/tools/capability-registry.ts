@@ -29,6 +29,7 @@ import type {
   EffectClass,
   GrantCategory,
 } from '../learning/capability-types.js';
+import { machineFactsCapability } from '../learning/machine-facts.js';
 
 type ToolLike = { name: string; description?: string; category?: string };
 
@@ -465,6 +466,11 @@ export async function capabilityIndex(
   const index: Capability[] = [
     ...tools.map(capabilityFromTool),
     ...actionCapabilities(),
+    // The host itself is a discoverable capability: OS / arch / shell / which
+    // package managers are installed. Detected once per run (memoized), so this
+    // costs nothing after the first index build and cannot disagree with the
+    // facts the system prompt carries.
+    machineFactsCapability(),
   ];
   if (opts.includeMcp !== false) {
     const mcp = opts.mcpTools ?? (await readDiscoverableMcpTools());

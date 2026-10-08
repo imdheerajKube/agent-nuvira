@@ -713,6 +713,35 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 50 — this machine, stated not assumed (2026-10-08)
+
+**The finding.** The per-OS command map (Bundle 47) covered two verbs and said
+nothing about the host. A model reasoning about "how do I do X here" had to
+assume the OS family and guess which package manager existed — and a wrong guess
+(`apt` on a `dnf` machine, `brew` on Windows) is a command that cannot run. The
+facts it needed were cheap to detect and were being re-derived, badly, every
+turn.
+
+**The fix.** `src/learning/machine-facts.ts` detects OS / release / distro /
+arch / shell / installed package managers ONCE per process. Detection uses
+`binaryOnPath` — the SAME `which`/`where` resolver the shell uses — so "present"
+is a fact, not a declaration, and cannot drift. The loop injects a bounded
+`## This machine` block into the system prompt (chat and execute), measured in
+the budget ladder as an optional block that drops after the skill hint. The facts
+are also a capability (`action:machine-facts`), so `tool_search` returns them.
+
+**Where this differs from a per-OS table.** Bundle 47 declares the command for
+the verbs where the OS DETERMINES it and a wrong guess is destructive. This is
+the other half: it detects what is PRESENT, which is the input that lets the model
+DERIVE a command for the long tail instead of the harness enumerating it. The
+model is the general intelligence; the harness supplies facts.
+
+**The honest limit.** Facts say a binary is present; they do not say the flags
+are right (`apt` vs `apt-get`, `-y` vs `--yes`). Presence is the fact the harness
+can establish; choosing and adapting the command stays the model's.
+
+Pinned by `tests/learning/machine-facts.test.ts` (10).
+
 ## Bundle 49 — the Capabilities page, or what the agent can do here (2026-10-08)
 
 **The gap.** Bundles 41–47 built the capability layer — effect, reversibility,

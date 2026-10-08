@@ -2743,9 +2743,14 @@ registerTool({
     if (action === 'readiness') {
       // With no query, check the curated ACTION verbs — the capabilities that
       // declare requirements (install / publish / deploy / push / credentials).
+      // With no query, check the curated verbs that declare needs. A read-only
+      // action with no requirements (this-machine facts) is not a pre-flight
+      // subject, so it is excluded rather than reported with an empty check.
       const selected = query
         ? hits
-        : index.filter((c) => c.kind === 'action').map((c) => ({ capability: c, matched: [] as string[] }));
+        : index
+            .filter((c) => c.kind === 'action' && Object.keys(c.requires).length > 0)
+            .map((c) => ({ capability: c, matched: [] as string[] }));
       const caps = selected.map(toCapability);
       const blocked = caps.filter((c) => c.check && !c.check.ready);
       return JSON.stringify({
