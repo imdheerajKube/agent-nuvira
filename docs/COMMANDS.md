@@ -1416,7 +1416,7 @@ nuvira models excluded         # show what routing is skipping, and WHY
   step closed, an honesty flag fired); only you know whether the work was right. That
   makes your verdict the one input the harness cannot compute — and, because the derived
   correction signal can only ever produce negatives, the only source of a POSITIVE label.
-- **Command:** `nuvira rate <good|bad> [--trace <id>]` · `nuvira rate --list` · `nuvira rate --stats`
+- **Command:** `nuvira rate <good|bad> [--trace <id>]` · `nuvira rate --list` · `nuvira rate --stats` · `nuvira rate --export [path] [--format json|csv]`
 - **Examples:**
   ```bash
   nuvira rate good                 # the last turn was what you wanted
@@ -1424,7 +1424,13 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira rate bad -t t_abc123      # rate a specific turn (`nuvira trace list`)
   nuvira rate --list               # recent verdicts
   nuvira rate --stats              # labels, class balance, per-pair record, fit status
+  nuvira rate --export corpus.json # ship the labelled corpus for offline fitting
+  nuvira rate --export corpus.csv  # CSV (or --format csv); no path prints to stdout
   ```
+- **Export:** `--export` writes the SAME rows a fit here reads (the labelled turns, with
+  their features and provenance), so nothing is lost in the hand-off. JSON keeps the full
+  structure; CSV is the flat form (`traceId,provider,model,at,accepted,source,` + one column
+  per feature). With no path it prints to stdout to be piped.
 - **What it writes:** the verdict on the turn's reasoning trace (`userVerdict`, with its
   source) and, when that turn delivered an authored file, a label on the matching row of
   the quality corpus. The dashboard's **Trace tab** has the same control (👍/👎).

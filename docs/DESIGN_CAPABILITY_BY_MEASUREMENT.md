@@ -358,3 +358,10 @@ corpus differently from the other, and neither routes.
 tier-3 behavioural inferences — never by the harness rating turns on the user's behalf. Auto-labelling
 would fabricate the very ground truth the fit is supposed to measure, which is the hand-written-vocabulary
 defect one layer up.
+
+**The corpus is portable (Bundle 33).** `nuvira rate --export [path] [--format json|csv]` writes the SAME
+labelled turns a fit here reads, so the corpus can be shipped and fit offline (or joined with rows from
+other machines) without the harness ever generating a label. `formatAcceptanceSummary` is now the SINGLE
+renderer for all three surfaces — `nuvira rate --stats`, `model explain` (which focuses the decision's own
+pair via its `focusPair` argument), and the dashboard card — so they cannot describe the corpus
+inconsistently.
