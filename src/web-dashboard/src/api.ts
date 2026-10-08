@@ -5,6 +5,9 @@ import type {
   AcceptanceImportResult,
   DecisionsData,
   DecisionRecord,
+  GateFrictionData,
+  ConsentPictureData,
+  SessionGrantInfo,
   AdminAuthStatus,
   AdminCachePayload,
   AdminCatalog,
@@ -619,6 +622,57 @@ export class DashboardAPI {
       return data.decision;
     } catch {
       return null;
+    }
+  }
+
+  /** Bundle 37/39 — how much the harness spoke, summarized over the traces. */
+  async fetchGates(): Promise<GateFrictionData | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/gates`, { signal: AbortSignal.timeout(8000) });
+      const data = (await parseJsonOrNull(res)) as GateFrictionData | null;
+      if (!data || typeof data.events !== 'number') return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Bundle 40 — the one picture: denied / grantable / decided. */
+  async fetchConsent(): Promise<ConsentPictureData | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/consent`, { signal: AbortSignal.timeout(8000) });
+      const data = (await parseJsonOrNull(res)) as { ok?: boolean; picture?: ConsentPictureData } | null;
+      if (!data || data.ok !== true || !data.picture || !data.picture.denied) return null;
+      return data.picture;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Bundle 37a — the live session grants across the server's sessions. */
+  async fetchSessionGrants(): Promise<SessionGrantInfo[] | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/session-grants`, { signal: AbortSignal.timeout(8000) });
+      const data = (await parseJsonOrNull(res)) as { ok?: boolean; grants?: SessionGrantInfo[] } | null;
+      if (!data || !Array.isArray(data.grants)) return null;
+      return data.grants;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Bundle 37a — end a session grant (the user asked to be asked again). */
+  async revokeSessionGrant(sessionId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/session-grants/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      });
+      const data = (await parseJsonOrNull(res)) as { ok?: boolean } | null;
+      return data?.ok === true;
+    } catch {
+      return false;
     }
   }
 

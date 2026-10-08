@@ -44,7 +44,7 @@ import type { ToolContext } from './registry.js';
 import { maskSenderId } from '../utils/mask.js';
 import { decideStateChange } from '../learning/autonomy-policy.js';
 import { envelopeCoversAction } from '../learning/intent-envelope.js';
-import { sessionGrantCovers } from '../learning/session-grant.js';
+import { sessionGrantCovers, type SessionGrantCategory } from '../learning/session-grant.js';
 import { applyProjectEnvironment, guardCommandEnvironment } from '../utils/project-env.js';
 import { formatEffectVerdict, isBuildCommand, verifyBuildEffect } from '../utils/effect-verification.js';
 import { lookupMemo, memoNotice, storeMemo } from './command-memo.js';
@@ -596,12 +596,13 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
       tool: 'run_terminal',
       changeClass: recoverable ? 'local-state' : 'external',
     });
-    // The SESSION grant — "allow all terminal commands for this session" — is
-    // consulted next. It only ever covers LOCAL-STATE (recoverable) commands:
-    // `external` is refused by the envelope itself and this grant does not
-    // widen it, so a network fetch or a global install still asks. The absolute
-    // DENY patterns ran above and are unaffected by any grant.
-    const grantCovers = recoverable && sessionGrantCovers(ctx.planStore, 'terminal');
+    // The SESSION grant is consulted next, and WHICH category it is depends on
+    // the command: a recoverable workspace command needs `terminal`, while an
+    // off-machine one (network fetch, global/system install like winget) needs
+    // the user to have explicitly granted `external`. The absolute DENY patterns
+    // ran ABOVE, so nothing here can unlock sudo / rm -rf / / git push.
+    const grantCategory: SessionGrantCategory = recoverable ? 'terminal' : 'external';
+    const grantCovers = sessionGrantCovers(ctx.planStore, grantCategory);
     const verdict = envVerdict.covered || grantCovers
       ? {
           action: 'proceed' as const,
@@ -618,8 +619,9 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
         });
     if (verdict.action !== 'proceed') {
       // Mark the pending confirmation so ask_user does NOT suppress the very
-      // question this refusal asks for (see ToolContext.pendingConfirmation).
-      ctx.pendingConfirmation = { tool: 'run_terminal', command };
+      // question this refusal asks for (see ToolContext.pendingConfirmation),
+      // and so the ask can offer the matching session grant.
+      ctx.pendingConfirmation = { tool: 'run_terminal', command, category: grantCategory };
       return (
         `Error: run_terminal: "${command}" changes state and needs explicit confirmation ` +
         `(${verdict.reason}). Call ask_user (yes/no, one-line reason), then re-call run_terminal ` +

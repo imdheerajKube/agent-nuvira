@@ -254,7 +254,7 @@ export interface ToolContext {
    * when a confirmation refusal is issued lets that ONE ask reach the user
    * instead of being swallowed. Cleared once it is consumed.
    */
-  pendingConfirmation?: { tool: string; command: string };
+  pendingConfirmation?: { tool: string; command: string; category?: SessionGrantCategory };
   /**
    * Tiered tool exposure (AGENTIC_CAPABILITY_ASSESSMENT Addendum v3/v4):
    * when the loop runs in 'tiered' mode, tools outside the CORE set are
@@ -974,9 +974,12 @@ registerTool({
     // that does not name it leaves the ask-every-time default untouched, and an
     // unattended default (returned below) is an assumption, not a grant.
     const grantCategory: SessionGrantCategory | null = pending
-      ? pending.tool === 'run_terminal'
-        ? 'terminal'
-        : 'write'
+      ? (pending.category ??
+          (pending.tool === 'run_terminal'
+            ? 'terminal'
+            : pending.tool === 'run_cli'
+              ? null // run_cli states its own category; absent = a grant cannot help
+              : 'write'))
       : null;
     const offeredChoices =
       grantCategory && choices.length < 4

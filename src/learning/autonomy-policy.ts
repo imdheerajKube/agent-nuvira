@@ -785,6 +785,13 @@ export const IRREVERSIBLE_CLI_INTENTS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * CLI intents whose effect LEAVES this machine (publish to a registry). These
+ * are the ones an explicit, session-scoped OFF-MACHINE grant may cover — never a
+ * blanket request, and never the local, irreversible intents above.
+ */
+export const EXTERNAL_CLI_INTENTS: ReadonlySet<string> = new Set(['publish']);
+
+/**
  * Confirmation-gated CLI intents that ARE recoverable: a service that can be
  * started again, config that can be re-added, a cache that rebuilds, a skill
  * that reinstalls.
@@ -821,6 +828,18 @@ export function decideCliIntentConfirmation(request: {
   /** Does the user's own request resolve to this exact command? */
   namedByRequest: boolean;
 }): WriteConfirmationVerdict {
+  // `publish` is the one off-machine intent the request can authorize directly,
+  // the same way a named `git push` does: "publish v1.2.0 to npm" IS the
+  // decision, and re-asking is a round trip with no new information. It stays in
+  // IRREVERSIBLE_CLI_INTENTS (so an UNNAMED publish — the model's own idea — is
+  // still always gated), but a request that resolves to the exact command
+  // proceeds and is REPORTED. See the README/consent picture for the model.
+  if (request.intent === 'publish' && request.namedByRequest) {
+    return {
+      action: 'proceed',
+      reason: 'the user\u2019s own request resolves to the publish \u2014 asking them to confirm what they just asked for is the manual cadence',
+    };
+  }
   if (IRREVERSIBLE_CLI_INTENTS.has(request.intent)) {
     return {
       action: 'ask',

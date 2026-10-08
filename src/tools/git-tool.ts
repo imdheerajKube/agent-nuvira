@@ -52,6 +52,7 @@ import {
   requestRequestsCommit,
   requestRequestsPush,
 } from '../learning/autonomy-policy.js';
+import { sessionGrantCovers } from '../learning/session-grant.js';
 
 /** The tool's args (zod-validated in the registry). */
 export interface GitToolArgs {
@@ -230,10 +231,14 @@ async function pushAction(args: GitToolArgs, ctx: ToolContext): Promise<string> 
 
   // ── The gate ────────────────────────────────────────────────────────────
   const namedByRequest = requestRequestsPush(ctx.authorizationRequest ?? '');
-  if (!args.confirm && !namedByRequest) {
+  // The user may also have granted off-machine actions for this session — an
+  // explicit go-ahead that covers a push the request did not name.
+  const grantCovers = !namedByRequest && sessionGrantCovers(ctx.planStore, 'external');
+  if (!args.confirm && !namedByRequest && !grantCovers) {
     // `external` is what makes the ask unconditional here — even a request that
     // authorized writes cannot authorize this, because it was not the user who
     // decided the work should leave this machine.
+    ctx.pendingConfirmation = { tool: 'git', command: `git push ${remote} ${branch}`, category: 'external' };
     const verdict = decideStateChange({
       tool: 'git push',
       action: `pushing ${branch} to '${remote}'`,
@@ -261,6 +266,9 @@ async function pushAction(args: GitToolArgs, ctx: ToolContext): Promise<string> 
   }
 
   const reported = !args.confirm;
+  const reason = namedByRequest
+    ? 'the request itself names the push'
+    : 'allowed for this session by the user';
   if (reported) {
     // Reported, never silent — same contract as the commit path's autonomous
     // write: the user must be able to see where their work just went.
@@ -268,14 +276,14 @@ async function pushAction(args: GitToolArgs, ctx: ToolContext): Promise<string> 
       tool: 'git push',
       remote,
       branch,
-      reason: 'the request itself names the push',
+      reason,
     }, 'tool-loop');
   }
 
   const result = `✅ Pushed ${branch} → ${remote}${tagsNote}:\n${pushed.out.slice(0, 800)}`;
   if (!reported) return result;
   return (
-    `${result}\n💡 Pushed without asking: the request itself named the push. ` +
+    `${result}\n💡 Pushed without asking: ${reason}. ` +
     'State the push in your answer so the user can see where the work went.'
   );
 }

@@ -31,6 +31,7 @@ import {
   type PlanSnapshot,
   type PlanStoreLike,
 } from '../tools/plan-store.js';
+import { getSessionGrant, clearSessionGrant } from '../learning/session-grant.js';
 
 /** One stored turn in a chat session. */
 export interface ChatTurn {
@@ -1134,6 +1135,43 @@ export class ChatConsole {
   private clearPlan(sessionId: string): void {
     this.planStores.delete(sessionId);
     writePlanFile(planFilePath(sessionId), null);
+  }
+
+  /**
+   * The live session grants across this process's sessions (Bundle 37a).
+   *
+   * The grant is keyed to the session's plan store, so the console — which owns
+   * every session's store — is the one place that can see them all. A session
+   * with no grant, or an expired one, simply does not appear (an expired grant
+   * must never be shown as live).
+   */
+  listSessionGrants(): Array<{
+    sessionId: string;
+    categories: string[];
+    grantedAt: number;
+    expiresAt: number;
+  }> {
+    const out: Array<{ sessionId: string; categories: string[]; grantedAt: number; expiresAt: number }> = [];
+    for (const [sessionId, store] of this.planStores) {
+      const grant = getSessionGrant(store);
+      if (grant) {
+        out.push({
+          sessionId,
+          categories: [...grant.categories],
+          grantedAt: grant.grantedAt,
+          expiresAt: grant.expiresAt,
+        });
+      }
+    }
+    return out.sort((a, b) => b.grantedAt - a.grantedAt);
+  }
+
+  /** End a session's grant — the user asked to be asked again (Bundle 37a). */
+  revokeSessionGrant(sessionId: string): boolean {
+    const store = this.planStores.get(sessionId);
+    if (!store) return false;
+    clearSessionGrant(store);
+    return true;
   }
 
   /** Forget a session's history (new conversation) + drop its pending questions. */

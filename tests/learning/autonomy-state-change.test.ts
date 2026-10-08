@@ -27,6 +27,7 @@ import {
   requestRequestsPush,
   IRREVERSIBLE_CLI_INTENTS,
   RECOVERABLE_CLI_INTENTS,
+  EXTERNAL_CLI_INTENTS,
   EDIT_SURGICAL_MAX_FRACTION,
 } from '../../src/learning/autonomy-policy.js';
 
@@ -207,11 +208,30 @@ describe('requestNamesPath — the evidence an edit gate measures', () => {
 });
 
 describe('decideCliIntentConfirmation — which gated intents may be decided', () => {
-  it('an irreversible intent stays gated however the request is phrased', () => {
+  it('an irreversible LOCAL intent stays gated however the request is phrased', () => {
     for (const intent of IRREVERSIBLE_CLI_INTENTS) {
+      // `publish` is the one documented exception: a request that RESOLVES to
+      // the publish is the user's own decision (like a named git push), so it
+      // proceeds. The local, irreversible intents stay gated.
+      if (intent === 'publish') continue;
       const verdict = decideCliIntentConfirmation({ intent, namedByRequest: true });
       expect(verdict.action, intent).toBe('ask');
     }
+  });
+
+  it('a NAMED publish proceeds (the request is the decision), reported not silent', () => {
+    const verdict = decideCliIntentConfirmation({ intent: 'publish', namedByRequest: true });
+    expect(verdict.action).toBe('proceed');
+    expect(verdict.reason).toMatch(/manual cadence/);
+  });
+
+  it('a publish the MODEL chose still asks', () => {
+    const verdict = decideCliIntentConfirmation({ intent: 'publish', namedByRequest: false });
+    expect(verdict.action).toBe('ask');
+  });
+
+  it('the off-machine intents are exactly the publish-class ones', () => {
+    expect([...EXTERNAL_CLI_INTENTS]).toEqual(['publish']);
   });
 
   it('a recoverable intent the user asked for is decided', () => {

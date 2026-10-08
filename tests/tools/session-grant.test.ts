@@ -79,11 +79,12 @@ describe('session-grant — the primitive', () => {
     expect(grantSession(undefined, ['write'])).toBeNull();
   });
 
-  it('discloses what was granted', () => {
-    const grant = grantSession(session, ['terminal', 'write'])!;
+  it('discloses what was granted, including the off-machine category', () => {
+    const grant = grantSession(session, ['terminal', 'write', 'external'])!;
     const notice = sessionGrantNotice(grant);
     expect(notice).toContain('terminal commands');
     expect(notice).toContain('file writes');
+    expect(notice).toContain('off-machine actions');
     expect(notice).toContain('still ask');
   });
 });
@@ -112,6 +113,25 @@ describe('run_terminal — a terminal grant covers recoverable commands only', (
     grantSession(session, ['terminal']);
     const out = await runTerminalTool({ command: 'git push origin main' }, ctxWith());
     expect(out).toContain('DENIED');
+  });
+
+  it('an OFF-MACHINE command needs the external grant — a terminal grant does not cover it', async () => {
+    const ctx = ctxWith();
+    grantSession(session, ['terminal']);
+    const refused = await runTerminalTool({ command: 'node -e "process.exit(0)"' }, ctx);
+    expect(refused).toContain('needs explicit confirmation');
+    // …and the pending confirmation names the category the user must grant.
+    expect(ctx.pendingConfirmation).toMatchObject({ category: 'external' });
+
+    grantSession(session, ['external']);
+    const out = await runTerminalTool({ command: 'node -e "process.exit(0)"' }, ctx);
+    expect(out).toContain('✅ succeeded');
+  });
+
+  it('an external grant still cannot unlock the DENY floor', async () => {
+    grantSession(session, ['external']);
+    expect(await runTerminalTool({ command: 'sudo rm -rf /' }, ctxWith())).toContain('DENIED');
+    expect(await runTerminalTool({ command: 'git push origin main' }, ctxWith())).toContain('DENIED');
   });
 });
 
@@ -156,6 +176,26 @@ describe('ask_user — the grant is OFFERED at a tool-demanded confirmation', ()
     // … and the model is told to finish the refused call once, then stop asking.
     expect(out).toContain('allowed all terminal commands for this session');
     expect(out).toContain('Retry the refused run_terminal command ONCE with confirm:true');
+  });
+
+  it('offers the OFF-MACHINE grant when the pending confirmation says so', async () => {
+    const askUser = vi.fn(async (_q: string, choices: Array<{ label: string; description?: string }>) => ({
+      answer: choices[2]!.label,
+      index: 2,
+    }));
+    const ctx = ctxWith({
+      askUser,
+      pendingConfirmation: { tool: 'run_terminal', command: 'winget install ripgrep', category: 'external' },
+    });
+    const out = await getTool('ask_user')!.run(
+      { question: 'Install ripgrep system-wide?', choices: [{ label: 'Yes' }, { label: 'No' }] },
+      ctx,
+    );
+    const offered = (askUser.mock.calls[0] as unknown as [string, Array<{ label: string; description?: string }>])[1];
+    expect(offered[2]!.description).toContain('off-machine actions');
+    expect(sessionGrantCovers(session, 'external')).toBe(true);
+    expect(sessionGrantCovers(session, 'terminal')).toBe(false);
+    expect(out).toContain('allowed all off-machine actions for this session');
   });
 
   it('does NOT offer the grant on an ordinary clarifying question', async () => {
