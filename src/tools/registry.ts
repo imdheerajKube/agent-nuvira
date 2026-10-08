@@ -2620,18 +2620,23 @@ registerTool({
     '"load" activates a whole toolset (media, browser, channels, docker, ' +
     'productivity, publish, core-pipeline, …) for THIS turn — call it before ' +
     'using any tool outside the always-available core set. "load" returns ' +
-    'the toolset\'s tool names, which become callable immediately.',
+    'the toolset\'s tool names, which become callable immediately; ' +
+    '"resolve" checks a command or a verb against THIS machine (is the executable present, which package managers exist here, and any command already learned for it) — run it BEFORE an OS-specific command instead of guessing the platform; "record" stores a command you derived so it is known next time (the table grows by use); "list-commands" and "forget" manage that store.',
   category: 'workflow',
   inputSchema: z.object({
-    action: z.enum(['search', 'load', 'readiness']).optional().describe('Defaults to "search".'),
+    action: z.enum(['search', 'load', 'readiness', 'resolve', 'record', 'forget', 'list-commands']).optional().describe('Defaults to "search".'),
     query: z.string().optional().describe('Search query (action=search|readiness; omit for readiness to check the install/publish/deploy/push verbs)'),
     limit: z.number().optional().describe('Max results (action=search)'),
     toolset: z.string().optional().describe('Toolset name to load (action=load) — e.g. "media", "browser", "channels"'),
+    command: z.string().optional().describe('A command to check against this machine (action=resolve) or to store (action=record)'),
+    verb: z.string().optional().describe('What the command is FOR (action=resolve|record|forget) — e.g. "install java", or a capability ref'),
+    note: z.string().optional().describe('Optional caveat to store beside a learned command (action=record)'),
   }),
   endsAgentStep: false,
   run: async (args, ctx) => {
-    const { action = 'search', query, limit, toolset } = args as {
-      action?: 'search' | 'load' | 'readiness'; query?: string; limit?: number; toolset?: string;
+    const { action = 'search', query, limit, toolset, command, verb, note } = args as {
+      action?: 'search' | 'load' | 'readiness' | 'resolve' | 'record' | 'forget' | 'list-commands';
+      query?: string; limit?: number; toolset?: string; command?: string; verb?: string; note?: string;
     };
 
     // ── load: activate a toolset for this turn (tiered exposure) ──
@@ -2676,6 +2681,65 @@ registerTool({
       });
     }
 
+    // ── resolve / record / forget / list-commands: the long-tail OS command
+    //    loop. The MODEL derives a command; the harness checks it against the
+    //    machine and remembers it. No enumeration, no phrase list — presence is
+    //    probed (binaryOnPath) and the learned store is keyed by (verb, os).
+    if (action === 'resolve' || action === 'record' || action === 'forget' || action === 'list-commands') {
+      const { detectMachineFacts } = await import('../learning/machine-facts.js');
+      const facts = detectMachineFacts();
+      const learnedMod = await import('../learning/learned-commands.js');
+      const { leadingBinary } = await import('../learning/command-adaptation.js');
+      const { binaryOnPath } = await import('../utils/binary-probe.js');
+
+      if (action === 'list-commands') {
+        return JSON.stringify({ os: facts.os, commands: learnedMod.listLearnedCommands() });
+      }
+      if (action === 'forget') {
+        return JSON.stringify({ os: facts.os, verb: verb ?? '', forgotten: learnedMod.forgetLearnedCommand(verb ?? '') });
+      }
+      if (action === 'record') {
+        const bin = command ? leadingBinary(command) : null;
+        const entry = learnedMod.recordLearnedCommand({
+          verb: verb ?? '',
+          command: command ?? '',
+          ...(bin ? { binary: bin } : {}),
+          ...(note ? { note } : {}),
+        });
+        return JSON.stringify({
+          os: facts.os,
+          recorded: entry,
+          ...(entry
+            ? { note: 'Recorded. It will be offered the next time this verb is resolved on this OS.' }
+            : { error: 'record needs a verb and a command.' }),
+        });
+      }
+
+      // resolve
+      const bin = command ? leadingBinary(command) : null;
+      const learned = verb ? learnedMod.learnedCommandFor(verb) : null;
+      return JSON.stringify({
+        os: facts.os,
+        osName: facts.osName,
+        arch: facts.arch,
+        shell: facts.shellName,
+        packageManagers: facts.packageManagers,
+        ...(command ? { proposed: { command, binary: bin, present: bin ? binaryOnPath(bin) : null } } : {}),
+        ...(learned
+          ? { learned: { command: learned.command, binary: learned.binary, source: learned.source, learnedAt: learned.learnedAt } }
+          : {}),
+        advice: command
+          ? bin && binaryOnPath(bin)
+            ? `\`${bin}\` is on this machine — the command can run.`
+            : bin
+              ? `\`${bin}\` is NOT on this machine. Choose from what is present, or install it with one of: ${facts.packageManagers.join(', ') || '(no package manager detected)'}.`
+              : 'Could not identify an executable in this command; check it with a small probe run.'
+          : learned
+            ? `A command for "${verb}" on this OS was already derived — use it, or record a better one.`
+            : `No command is known for "${verb}" on this OS yet. Derive one from the machine facts, run it, then record it.`,
+      });
+    }
+
     // ── search: fuzzy find, ENRICHED with capability descriptors ──
     // The tools returned are the same as before; each is also returned as a
     // CAPABILITY (effect class + reversibility + requirements + grant), and the
@@ -2692,6 +2756,11 @@ registerTool({
       tools.map((t: any) => ({ name: t.name, description: t.description, category: t.category })),
     );
     const { describeGap, probeRequirements } = await import('../learning/requirement-probe.js');
+    // A command the MODEL derived for THIS OS (learned) rides on the hit, so the
+    // per-OS table grows by use rather than by hand.
+    const { detectMachineFacts: detectFacts } = await import('../learning/machine-facts.js');
+    const { learnedCommandFor } = await import('../learning/learned-commands.js');
+    const currentOs = detectFacts().os;
     const hits = searchCapabilities(index, query || '', limit || 10);
 
     // PRE-FLIGHT. Each hit's declared requirements are probed HERE, at discovery
@@ -2702,6 +2771,7 @@ registerTool({
       const requires = h.capability.requires;
       const hasRequires = Object.keys(requires).length > 0;
       const readiness = hasRequires ? probeRequirements(requires) : undefined;
+      const learnedOnThisOs = learnedCommandFor(h.capability.ref, currentOs);
       return {
         id: h.capability.id,
         kind: h.capability.kind,
@@ -2724,6 +2794,17 @@ registerTool({
           ? {
               onThisMachine: h.capability.platforms[process.platform as 'win32' | 'darwin' | 'linux'],
               platforms: h.capability.platforms,
+            }
+          : {}),
+        // A command the MODEL derived for this OS rides ALONGSIDE the declared
+        // one: the table grows by use, and the model can see both and choose.
+        ...(learnedOnThisOs
+          ? {
+              learnedOnThisMachine: {
+                command: learnedOnThisOs.command,
+                ...(learnedOnThisOs.binary ? { binary: learnedOnThisOs.binary } : {}),
+                source: learnedOnThisOs.source,
+              },
             }
           : {}),
         ...(readiness

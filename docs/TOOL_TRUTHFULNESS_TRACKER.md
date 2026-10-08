@@ -713,6 +713,41 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 51 — the long tail: derive, verify, adapt, remember (2026-10-08)
+
+**The question.** "There could be other commands than the ones we identified —
+NPM, and others. If the model wants to run a command we have not described, how
+is it assessed, how does it get the Windows-vs-Linux equivalent, and does the
+agent become a dumb assistant telling it to go search every turn? Anything fixed
+seems a limitation that lacks future extensibility."
+
+**The reframing.** That is correct, and it is why the fix is a LOOP, not a bigger
+table. A table of OS-to-command mappings is incomplete the day it ships — the
+command space (npm/pnpm/yarn/bun, brew/choco/scoop/winget/apt/dnf/pacman…) cannot
+be enumerated. The four pieces the loop needs mostly already existed; this bundle
+wires them and adds the two that were missing:
+
+1. **Facts** (Bundle 50) — OS / arch / shell / installed package managers, once.
+2. **Resolve** — `tool_search` action `resolve` checks a command or verb against
+   the machine: the executable and whether `which`/`where` finds it, the present
+   package managers, and any command already learned for the verb.
+3. **Run → adapt** — `run_terminal` keys on the shell's OWN signal (exit 127 /
+   9009) and, on a missing command, appends the machine facts and the
+   resolve/record pointer. Not a phrase list: the shell reporting what it knows.
+4. **Remember** — `tool_search` action `record` stores a model-derived command
+   keyed by `(verb, os)` in `~/.nuvira/learned-commands.json`, so the table grows
+   by USE. A learned command rides on every search as `learnedOnThisMachine`.
+
+**Why not intercept and gate arbitrary commands.** That would be overreach — and
+unmeasurable. The model derives (it is the general intelligence); the harness
+supplies facts, checks presence, and remembers. The honest limit is stated: the
+harness can establish that a binary is present, not that its flags are right.
+
+**Extensibility, stated plainly.** A new tool or a new OS needs NO harness change:
+the model derives, the probe verifies, the store remembers. The seatbelt tables
+(Bundle 47) stay where a wrong guess is destructive, but they are the exception,
+not the mechanism.
+
 ## Bundle 50 — this machine, stated not assumed (2026-10-08)
 
 **The finding.** The per-OS command map (Bundle 47) covered two verbs and said
