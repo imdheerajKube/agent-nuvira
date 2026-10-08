@@ -1248,6 +1248,13 @@ interface DashboardTrace {
    * audited after the run. Absent on traces written before this existed.
    */
   findings?: WireFinding[];
+  /**
+   * The USER's verdict on this turn, when they gave one — recorded by `nuvira rate`
+   * or the Trace tab, and the ONE label a quality signal can be fit to. Absent on
+   * a turn nobody rated, which is NOT the same as "accepted": silence is not
+   * consent, so it is never defaulted.
+   */
+  userVerdict?: { verdict: 'accepted' | 'rejected'; at: number; source: 'cli' | 'dashboard' };
   steps: DashboardTraceStep[];
 }
 
@@ -5932,6 +5939,33 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   if (pathname === '/api/traces') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readTracesData()));
+    return;
+  }
+
+  // The USER's verdict on a turn — the one label a quality signal can be fit to.
+  // POST /api/traces/:id/verdict { verdict: 'accepted' | 'rejected' }.
+  //
+  // Open, like the other turn surfaces: it records feedback ABOUT a turn rather
+  // than changing configuration. It writes through the SAME module the CLI uses
+  // (`learning/turn-feedback.ts`), so the two surfaces cannot drift into two
+  // different notions of what a verdict means.
+  if (pathname.startsWith('/api/traces/') && pathname.endsWith('/verdict') && req.method === 'POST') {
+    void (async () => {
+      const traceId = decodeURIComponent(pathname.slice('/api/traces/'.length, -'/verdict'.length));
+      const body = await readJsonBody(req);
+      const verdict = body?.verdict;
+      if (verdict !== 'accepted' && verdict !== 'rejected') {
+        writeJson(res, 400, { ok: false, error: "Expected { verdict: 'accepted' | 'rejected' }." });
+        return;
+      }
+      const { rateTurn } = await import('../learning/turn-feedback.js');
+      const result = rateTurn({ verdict, traceId, source: 'dashboard' });
+      if (!result.ok) {
+        writeJson(res, 404, { ok: false, error: result.error });
+        return;
+      }
+      writeJson(res, 200, { ok: true, rated: result.rated });
+    })();
     return;
   }
 

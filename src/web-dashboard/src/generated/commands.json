@@ -3,7 +3,7 @@
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
   "commandCount": 287,
-  "groupCount": 55,
+  "groupCount": 56,
   "groups": [
     {
       "name": "admin",
@@ -2167,6 +2167,11 @@
           "flags": []
         }
       ]
+    },
+    {
+      "name": "rate",
+      "description": "Rate the last turn (good|bad) — records the one label a quality signal can be fit to (also on the dashboard Trace tab)",
+      "commands": []
     },
     {
       "name": "continuity",

@@ -867,6 +867,10 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira feedback record --positive -c "great fix"
   nuvira feedback stats
   ```
+- **Not the same as `nuvira rate` (§12.15):** this store is keyed by **trajectory id** (pipeline runs) and
+  is read for stats; `nuvira rate` is keyed by **chat turn** (`traceId`) and is the label a future
+  quality signal is fit to. They are deliberately separate — see
+  `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §8.5.
 
 ---
 
@@ -1398,6 +1402,30 @@ nuvira models excluded         # show what routing is skipping, and WHY
 - **Starter set:** four built-in hooks ship **DISABLED** (block `rm -rf`, block writes
   that contain a secret, flag secrets in terminal commands, log failed tool calls).
   `enable` writes one into `hooks.json` so the runtime enforces it. See `docs/HOOKS.md`.
+
+### 12.15 Rate a turn (the label the harness cannot derive)
+
+- **Objective:** Tell the harness whether the last turn was actually what you wanted.
+  Every other signal nuvira has is *derived* from what the run did (a tool ran, a plan
+  step closed, an honesty flag fired); only you know whether the work was right. That
+  makes your verdict the one input the harness cannot compute — and, because the derived
+  correction signal can only ever produce negatives, the only source of a POSITIVE label.
+- **Command:** `nuvira rate <good|bad> [--trace <id>]` · `nuvira rate --list`
+- **Examples:**
+  ```bash
+  nuvira rate good                 # the last turn was what you wanted
+  nuvira rate bad                  # it was not
+  nuvira rate bad -t t_abc123      # rate a specific turn (`nuvira trace list`)
+  nuvira rate --list               # recent verdicts
+  ```
+- **What it writes:** the verdict on the turn's reasoning trace (`userVerdict`, with its
+  source) and, when that turn delivered an authored file, a label on the matching row of
+  the quality corpus. The dashboard's **Trace tab** has the same control (👍/👎).
+- **What it does NOT do:** nothing routes on it and no score is derived from it *yet*.
+  It records a dataset so a measured quality signal can be fit to labelled turns; a turn
+  nobody rated stays unlabelled, because reading silence as acceptance would fabricate
+  the positive class instead of measuring it. See `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §8.
+  (For trajectory ratings in the older store, use `nuvira feedback` — §7.3.)
 
 ---
 

@@ -1040,6 +1040,12 @@ export interface TraceEntry {
   endedAt?: number;
   durationMs?: number;
   /**
+   * The USER's verdict on this turn, when they gave one — recorded by the Trace
+   * tab's buttons or `nuvira rate`. Absent means "not rated", which is NOT
+   * "accepted": silence is not consent, so it is never defaulted.
+   */
+  userVerdict?: { verdict: 'accepted' | 'rejected'; at: number; source: 'cli' | 'dashboard' };
+  /**
    * The FULL stable layer (system prompt), captured once per trace
    * (session 3). Present in the detail view only — the list endpoint strips it.
    */
