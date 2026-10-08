@@ -4,6 +4,34 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Added: the long-tail OS command loop — resolve, verify, adapt, record
+
+The per-OS command map covers two verbs and a table cannot enumerate the world,
+so the long tail is handled by a loop instead of a list. `tool_search` gains four
+actions:
+
+- **`resolve`** — check a command (or a verb) against THIS machine: identify the
+executable, probe whether it is present (`which`/`where`), report the package
+managers that exist here, and surface any command already learned for the verb.
+Run it BEFORE an OS-specific command instead of guessing the platform;
+- **`record`** — store a command the model derived, keyed by `(verb, os)` in
+`~/.nuvira/learned-commands.json` (isolated by `$NUVIRA_CONFIG_DIR`), so the table
+**grows by use**;
+- **`list-commands` / `forget`** — manage that store.
+
+A learned command rides on every capability search as `learnedOnThisMachine`,
+alongside the declared one, so the model can see both and choose. And the run
+side adapts: when `run_terminal` fails because an executable is missing — keyed on
+the shell's own signal (exit 127 POSIX / 9009 cmd.exe), never on prose — the result
+carries the machine facts and the `resolve`/`record` pointer, so the failure is a
+step, not a dead end.
+
+The honest limit is stated, not hidden: presence is a fact the harness can
+establish; choosing the command and its flags stays the model's.
+Pinned by `tests/learning/learned-commands.test.ts`, `command-adaptation.test.ts`,
+`tests/tools/machine-command.test.ts`, and a missing-binary case in
+`tests/tools/run-terminal.test.ts`.
+
 ### Added: this machine's facts, detected once and handed to the model
 
 Choosing the right command means knowing the host: the OS and release, the

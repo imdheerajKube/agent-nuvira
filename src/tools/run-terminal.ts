@@ -725,6 +725,16 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
     if (verdict.status === 'verified') effectNote = `\n${formatEffectVerdict(verdict)}`;
   }
 
+  // Long-tail OS adaptation: a command that failed because an executable is not
+  // on THIS machine is not a dead end — the model should choose a command for the
+  // machine it is on. Keyed on the shell's OWN signal (exit 127 / 9009), so this
+  // is a fact the shell reports, not a phrase match. Advisory only.
+  let missingNote = '';
+  if (output.startsWith('Error:')) {
+    const { isMissingBinaryFailure, buildMissingBinaryNote } = await import('../learning/command-adaptation.js');
+    if (isMissingBinaryFailure(output)) missingNote = buildMissingBinaryNote(command);
+  }
+
   // C3 — remember what a SUCCESSFUL run answered (whole command + every fact it
   // established), so the same question in the same run is answered from the
   // output above instead of a second spawn. A timeout is a failure like any
@@ -732,7 +742,7 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
   // fact worth remembering.
   if (!timedOut && !output.startsWith('Error:')) storeMemo(ctx.commandMemo, command, output, memoWhere);
 
-  if (!decidedAutonomously) return outputWithNotes + effectNote + envNote + remediationNote + autoApplyNote;
+  if (!decidedAutonomously) return outputWithNotes + effectNote + envNote + remediationNote + autoApplyNote + missingNote;
   // Reported, never silent — a judgment call the user cannot see is
   // indistinguishable from a bug.
   return (
@@ -740,7 +750,8 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
     'do not ask for permission to do work the user already asked for.' +
     envNote +
     remediationNote +
-    autoApplyNote
+    autoApplyNote +
+    missingNote
   );
 }
 

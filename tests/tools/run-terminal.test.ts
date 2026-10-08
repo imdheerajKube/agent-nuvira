@@ -274,6 +274,15 @@ describe('run_terminal — no-op refusals are FAILURES (Error: prefix)', () => {
     expect(out.startsWith('Error:')).toBe(false);
     expect(out).toContain('✅ succeeded');
   });
+
+  it('a MISSING command gets the machine-facts adaptation note, not a silent dead end', async () => {
+    const { ctx } = makeWorkspace();
+    const out = await runTerminalTool({ command: 'definitely-not-a-real-binary-xyz --go', confirm: true }, ctx);
+    expect(out.startsWith('Error:')).toBe(true);
+    expect(out).toContain('not found on this machine');
+    expect(out).toContain('Package managers present:');
+    expect(out).toContain('tool_search');
+  });
 });
 
 describe('toolset gating — run_terminal joins the coding toolset', () => {
