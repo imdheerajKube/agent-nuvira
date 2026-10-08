@@ -2715,6 +2715,17 @@ registerTool({
         ...(hasRequires ? { requires } : {}),
         // A foreign (MCP) hit is not called by its own name — say how to reach it.
         ...(h.capability.invoke ? { invoke: h.capability.invoke } : {}),
+        // HOW TO DO IT HERE vs. EVERYWHERE. `onThisMachine` is the entry for the
+        // OS the agent is actually running on, resolved from the same per-OS map the
+        // rest is declared in, so the model never has to infer which package manager
+        // exists from the platform name. `platforms` carries the others, present only
+        // where the OS genuinely determines the command.
+        ...(h.capability.platforms
+          ? {
+              onThisMachine: h.capability.platforms[process.platform as 'win32' | 'darwin' | 'linux'],
+              platforms: h.capability.platforms,
+            }
+          : {}),
         ...(readiness
           ? {
               check: {

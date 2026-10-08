@@ -713,6 +713,43 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 47 — per-platform commands, declared only where the OS decides (2026-10-08)
+
+**The ask.** "Will this cover all commands on Windows, Unix and macOS? The agent
+will run on all, and the model will need to execute capabilities on all three."
+
+**The finding, which reframed the work.** The question assumes the OS determines
+the command for every verb. It does not, and blanket-adding a per-OS map would have
+fabricated mappings that do not exist:
+
+| Verb | OS-determined? | Why |
+|---|---|---|
+| `install-system-tool` | YES | winget / brew / apt-get — no portable form |
+| `store-credential` | YES | the OS decides WHERE a secret can live |
+| `install-package`, `add-dependency` | NO | `npm install` is identical everywhere; npm-vs-pnpm is a preference |
+| `deploy-app` | NO | vercel-vs-flyctl is a platform choice, not an OS one |
+| `publish-package`, `push-git` | NO | the toolchain is the same on all three |
+
+**The fix.** `PlatformCommand` declares a command per OS, present EXACTLY where the
+OS decides. `tool_search` resolves the current machine's entry into
+`onThisMachine` and ships the full map beside it, so the model reads the right
+command rather than inferring the package manager from a platform name.
+
+**Two honesty details.** The Linux install hint states its root requirement rather
+than hiding it, and it deliberately does NOT ship a `sudo` command — `sudo` is on
+the unconditional DENY floor, so declaring it would hand the model a command it can
+never run. And `PlatformCommand.binary` is OPTIONAL: `store-credential` runs
+through nuvira itself, so naming a PATH binary for it would be a false fact.
+The type carries the distinction instead of the data lying about it.
+
+**The guard.** A test asserts every declared platform binary appears in the
+capability's own `binaries` requirement — so a platform hint can never name a tool
+the requirement pre-flight did not check for. The two halves are the same fact and
+must agree. A second test pins the ABSENCE for the OS-neutral verbs, so nobody
+"helpfully" adds a fabricated map later.
+
+Pinned by `tests/tools/capability-registry.test.ts` (31).
+
 ## Bundle 46 — the CLI intent sets become one declaration table (2026-10-08)
 
 **The finding.** `autonomy-policy.ts` carried three hand-maintained sets

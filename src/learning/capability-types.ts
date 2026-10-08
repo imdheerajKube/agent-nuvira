@@ -54,6 +54,47 @@ export interface CapabilityRequires {
 }
 
 /**
+ * How to satisfy a capability on ONE operating system.
+ *
+ * WHY THIS IS NOT ON EVERY CAPABILITY. The OS determines the command for some
+ * verbs and not others, and saying otherwise would be inventing a mapping that
+ * does not exist:
+ *
+ *   - `install-system-tool` IS OS-determined — winget on Windows, brew on macOS,
+ *     apt-get on Linux. There is no portable form.
+ *   - `store-credential` IS OS-determined — the OS keychain on macOS/Linux versus
+ *     a credentials file on Windows.
+ *   - `add-dependency` is NOT — `npm install` is the same command everywhere, and
+ *     npm-vs-pnpm is a USER PREFERENCE, not an OS affordance.
+ *   - `deploy-app` is NOT — the choice between vercel and flyctl is a platform
+ *     choice, not an OS one. (Windows and macOS both deploy to Vercel.)
+ *
+ * So `platforms` is present exactly where the OS genuinely decides, and ABSENT
+ * means "there is one command, or the model/user picks" — which is a different and
+ * equally truthful statement.
+ */
+export interface PlatformCommand {
+  /** The command to run on this OS, with the variable part in angle brackets. */
+  command: string;
+  /**
+   * The binary it runs, WHEN an external one does. MUST be a binary this
+   * capability also declares it needs — a test asserts it, so a platform hint can
+   * never name a tool the requirement pre-flight did not check for.
+   *
+   * ABSENT means the command runs through nuvira itself, not through a binary on
+   * PATH. `store-credential` is the case that forced this: the OS decides WHERE a
+   * secret can safely live (Keychain / secret-tool / a vault file), but the command
+   * is identical on all three, so claiming a PATH binary would be a false fact.
+   */
+  binary?: string;
+  /** A caveat worth showing (a privilege requirement, or a fallback). */
+  note?: string;
+}
+
+/** The OSes a `platforms` map may key on. */
+export type PlatformKey = 'win32' | 'darwin' | 'linux';
+
+/**
  * How to actually invoke a capability whose `ref` is NOT a callable tool name.
  * An ingested MCP tool, for instance, is invoked through the `mcp_tool`
  * dispatcher with the server and tool it names, so a discovery hit must say so
@@ -93,6 +134,11 @@ export interface Capability {
   requires: CapabilityRequires;
   /** Discovery keywords — a hint for search, NEVER a decision rule. */
   tags: string[];
+  /**
+   * How to do it on each OS — present ONLY where the OS genuinely determines the
+   * command (see {@link PlatformCommand}). Absent everywhere else, deliberately.
+   */
+  platforms?: Partial<Record<PlatformKey, PlatformCommand>>;
 }
 
 /** A ranked discovery result. */

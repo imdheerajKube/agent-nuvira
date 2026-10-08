@@ -4,6 +4,35 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Added: per-platform commands, declared only where the OS actually decides
+
+A capability can now declare how to do it on each OS, so the model no longer has
+to infer which package manager exists from the platform name. `tool_search`
+resolves the entry for the machine it is running on into `onThisMachine` and
+carries the full `platforms` map alongside, so the whole picture is visible rather
+than only the local slice.
+
+THE INTERESTING PART IS WHERE IT IS *ABSENT*. The OS determines the command for
+some verbs and not others, and declaring a map for the rest would fabricate a
+mapping that does not exist:
+
+- `install-system-tool` IS OS-determined — winget on Windows (with choco/scoop
+  noted as alternatives), brew on macOS, apt-get on Linux, with the root
+  requirement stated rather than hidden.
+- `store-credential` IS OS-determined, for a different reason: the OS decides
+  WHERE a secret can safely live (Keychain / secret-tool / a vault file) while the
+  command is identical. `PlatformCommand.binary` is therefore optional, and the
+  store-credential entry claims none — naming a PATH binary for a command that runs
+  through nuvira itself would be a false fact.
+- `install-package` / `add-dependency` are NOT — `npm install` is the same command
+  everywhere and npm-vs-pnpm is a USER PREFERENCE. `deploy-app` is NOT — vercel
+  vs flyctl is a platform choice, not an OS one.
+
+A test pins both directions: every declared platform binary must appear in the
+capability's own `binaries` requirement (so the hint and the pre-flight are the
+same fact), and the OS-neutral verbs must declare NO platforms at all. Pinned by
+`tests/tools/capability-registry.test.ts` (31).
+
 ### Changed: the CLI intent sets become one declaration table
 
 `autonomy-policy.ts` carried three hand-maintained sets —

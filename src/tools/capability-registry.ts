@@ -301,6 +301,7 @@ export function actionCapabilities(): Capability[] {
     requires: CapabilityRequires,
     tags: string[],
     how?: string,
+    platforms?: Capability['platforms'],
   ): Capability => ({
     id: `action:${key}`,
     kind: 'action',
@@ -313,6 +314,7 @@ export function actionCapabilities(): Capability[] {
     ...(effectClass === 'external' ? { grantCategory: 'external' as GrantCategory } : effectClass === 'read' ? {} : { grantCategory: 'terminal' as GrantCategory }),
     requires,
     tags,
+    ...(platforms ? { platforms } : {}),
   });
 
   return [
@@ -344,6 +346,15 @@ export function actionCapabilities(): Capability[] {
       false,
       { binaries: [{ anyOf: ['winget', 'brew', 'apt', 'choco', 'scoop', 'npm'] }], inputs: ['which tool'] },
       ['install', 'tool', 'toolchain', 'winget', 'brew', 'apt', 'global'],
+      undefined,
+      // GENUINELY OS-determined: there is no portable install command. Every
+      // `binary` here is one the requirement list above also declares, so the
+      // pre-flight that says "winget is present" is the same fact this hint uses.
+      {
+        win32: { command: 'winget install <tool>', binary: 'winget', note: 'or `choco install <tool>` / `scoop install <tool>` if those are installed instead' },
+        darwin: { command: 'brew install <tool>', binary: 'brew' },
+        linux: { command: 'apt-get install -y <tool>', binary: 'apt', note: 'needs root — run it through sudo yourself, or the agent will report the privilege failure' },
+      },
     ),
     A(
       'uninstall-package',
@@ -415,6 +426,13 @@ export function actionCapabilities(): Capability[] {
       { inputs: ['the token'] },
       ['credential', 'token', 'secret', 'store', 'login', 'auth'],
       'forget it with the credentials tool',
+      // Also genuinely OS-determined, and for a different reason: the OS decides
+      // WHERE a secret can safely live, not which package manager exists.
+      {
+        win32: { command: 'nuvira credentials set <name> --value <token>', note: 'Windows has no OS keychain the CLI can reach, so this lands in the vault file' },
+        darwin: { command: 'nuvira credentials set <name> --value <token>', note: 'stored in the macOS Keychain when one is available' },
+        linux: { command: 'nuvira credentials set <name> --value <token>', note: 'stored via secret-tool when available, otherwise the vault file' },
+      },
     ),
   ];
 }
