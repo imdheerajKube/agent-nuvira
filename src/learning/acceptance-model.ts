@@ -257,10 +257,14 @@ export function acceptanceSummary(now: number = Date.now()): AcceptanceSummary {
 }
 
 /**
- * Render a summary as human lines. Shared so `nuvira rate --stats` and any other
- * surface cannot describe the same corpus two different ways.
+ * Render a summary as human lines — the SINGLE renderer every surface uses.
+ *
+ * `nuvira rate --stats`, `model explain` and any future surface call THIS, so they
+ * cannot describe the same corpus two different ways. `focusPair` (optional) lists
+ * that `provider/model` first, which is how `model explain` keeps the decision's own
+ * pair at the top without a second formatter.
  */
-export function formatAcceptanceSummary(s: AcceptanceSummary): string[] {
+export function formatAcceptanceSummary(s: AcceptanceSummary, focusPair?: string): string[] {
   const lines: string[] = [];
   lines.push(`labelled turns: ${s.labelled} (👍 ${s.accepted} / 👎 ${s.rejected})`);
   const sources = Object.entries(s.bySource);
@@ -269,24 +273,91 @@ export function formatAcceptanceSummary(s: AcceptanceSummary): string[] {
       ? `by source: ${sources.map(([k, v]) => `${k} ${v}`).join(', ')}`
       : 'by source: (none yet)',
   );
+
+  const pairLine = (key: string, v: { accepted: number; rejected: number }): string => {
+    const n = v.accepted + v.rejected;
+    return `${key}: 👍 ${v.accepted} / 👎 ${v.rejected} (${Math.round((100 * v.accepted) / n)}%, n=${n})`;
+  };
   const pairs = Object.entries(s.byPair);
-  if (pairs.length > 0) {
-    lines.push('by pair:');
-    for (const [key, v] of pairs) {
-      const n = v.accepted + v.rejected;
-      lines.push(`   ${key}: 👍 ${v.accepted} / 👎 ${v.rejected} (${Math.round((100 * v.accepted) / n)}%, n=${n})`);
-    }
-  } else {
+  if (pairs.length === 0 && !focusPair) {
     lines.push('by pair: (no rated turns yet)');
+  } else {
+    lines.push('by pair:');
+    if (focusPair) {
+      const v = s.byPair[focusPair];
+      lines.push(v ? `   ${pairLine(focusPair, v)}  ←` : `   ${focusPair}: n/a (no rated turns yet)  ←`);
+    }
+    for (const [key, v] of pairs) {
+      if (key === focusPair) continue;
+      lines.push(`   ${pairLine(key, v)}`);
+    }
   }
+
   if (s.fit.ok) {
-    lines.push(`fit: TRAINED — P(accepted | features) n=${s.fit.model.n} (${s.fit.model.positives}👍/${s.fit.model.negatives}👎)`);
+    lines.push(
+      `fit: TRAINED — P(accepted | features) n=${s.fit.model.n} (${s.fit.model.positives}👍/${s.fit.model.negatives}👎)`,
+    );
+    for (let j = 0; j < s.fit.model.featureNames.length; j++) {
+      const w = s.fit.model.weights[j];
+      lines.push(`     ${s.fit.model.featureNames[j].padEnd(10)} ${w >= 0 ? '+' : ''}${w.toFixed(2)}`);
+    }
+    lines.push(`     ${'bias'.padEnd(10)} ${s.fit.model.bias >= 0 ? '+' : ''}${s.fit.model.bias.toFixed(2)}`);
   } else {
     lines.push(`fit: NOT trained — ${s.fit.reason}`);
     lines.push(`     (needs ${MIN_LABELS_FOR_FIT} labelled turns with ≥${MIN_PER_CLASS} of each class)`);
   }
   lines.push('read-only: nothing routes on this and no score is derived from it');
   return lines;
+}
+
+/** Export formats for the labelled corpus. */
+export type CorpusFormat = 'json' | 'csv';
+
+/** CSV column order (stable, so an offline reader can rely on it). */
+export const CORPUS_CSV_COLUMNS = [
+  'traceId',
+  'provider',
+  'model',
+  'at',
+  'accepted',
+  'source',
+  ...ACCEPTANCE_FEATURES,
+] as const;
+
+function csvCell(v: unknown): string {
+  const s = v === undefined || v === null ? '' : String(v);
+  // Quote only when needed, so a plain id stays readable and RFC-4180 holds.
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * Serialize the labelled corpus for shipping and offline fitting — the SAME rows
+ * a fit here would read, so nothing is lost in the hand-off.
+ *
+ * JSON carries the full structure (features nested, plus provenance); CSV is the
+ * flat form for a spreadsheet, with one column per feature and `accepted` as 0/1.
+ */
+export function serializeLabelledTurns(
+  rows: LabelledTurn[],
+  format: CorpusFormat,
+  now: number = Date.now(),
+): string {
+  if (format === 'csv') {
+    const header = CORPUS_CSV_COLUMNS.join(',');
+    const lines = rows.map((r) =>
+      CORPUS_CSV_COLUMNS.map((c) => {
+        if (c === 'accepted') return r.accepted ? '1' : '0';
+        if (c === 'traceId') return csvCell(r.traceId);
+        if (c === 'provider') return csvCell(r.provider);
+        if (c === 'model') return csvCell(r.model);
+        if (c === 'at') return csvCell(r.at);
+        if (c === 'source') return csvCell(r.source);
+        return csvCell(r.features[c]);
+      }).join(','),
+    );
+    return `${header}\n${lines.join('\n')}${lines.length > 0 ? '\n' : ''}`;
+  }
+  return `${JSON.stringify({ version: 1, exportedAt: now, count: rows.length, turns: rows }, null, 2)}\n`;
 }
 
 /** Rated turns per `provider/model`, for the per-pair acceptance line. */

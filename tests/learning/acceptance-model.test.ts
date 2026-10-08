@@ -17,6 +17,8 @@ import {
   formatAcceptanceSummary,
   predictAcceptance,
   trainAcceptanceModel,
+  serializeLabelledTurns,
+  CORPUS_CSV_COLUMNS,
   MIN_LABELS_FOR_FIT,
 } from '../../src/learning/acceptance-model.js';
 import { beginTrace, clearTraces, recordTraceVerdict, recordTurnReport } from '../../src/learning/reasoning-trace.js';
@@ -151,5 +153,44 @@ describe('acceptance model', () => {
     expect(text).toMatch(/labelled turns: 1/);
     expect(text).toMatch(/NOT trained/);
     expect(text).toMatch(/read-only: nothing routes on this/);
+  });
+
+  it('focuses a pair in the shared summary without a second formatter', () => {
+    addTurn({ accepted: true, verification: 'verified', provider: 'groq', model: 'm1' });
+    addTurn({ accepted: false, verification: 'unverified', provider: 'gemini', model: 'm2' });
+    const lines = formatAcceptanceSummary(acceptanceSummary(), 'groq/m1').join('\n');
+    expect(lines).toMatch(/groq\/m1: 👍 1 \/ 👎 0.*←/);
+    // A pair with no labels is shown as n/a rather than hidden.
+    const missing = formatAcceptanceSummary(acceptanceSummary(), 'nope/none').join('\n');
+    expect(missing).toMatch(/nope\/none: n\/a/);
+  });
+
+  it('serializes the labelled corpus to JSON and CSV for offline fitting', () => {
+    addTurn({ accepted: true, verification: 'verified', provider: 'groq', model: 'm1' });
+    addTurn({ accepted: false, verification: 'unverified', provider: 'gemini', model: 'm2' });
+    const rows = collectLabelledTurns();
+
+    const json = JSON.parse(serializeLabelledTurns(rows, 'json', 123)) as {
+      version: number;
+      exportedAt: number;
+      count: number;
+      turns: Array<{ accepted: boolean; features: Record<string, number> }>;
+    };
+    expect(json.version).toBe(1);
+    expect(json.exportedAt).toBe(123);
+    expect(json.count).toBe(2);
+    expect(json.turns).toHaveLength(2);
+    expect(typeof json.turns[0].features.verified).toBe('number');
+
+    const csv = serializeLabelledTurns(rows, 'csv');
+    const lines = csv.trim().split('\n');
+    expect(lines[0]).toBe(CORPUS_CSV_COLUMNS.join(','));
+    expect(lines).toHaveLength(3);
+    // accepted is 0/1 in the flat form; provider/model survive.
+    const cols = lines[0].split(',');
+    const acceptedIdx = cols.indexOf('accepted');
+    const providerIdx = cols.indexOf('provider');
+    expect(['0', '1']).toContain(lines[1].split(',')[acceptedIdx]);
+    expect(lines.map((l) => l.split(',')[providerIdx])).toContain('groq');
   });
 });

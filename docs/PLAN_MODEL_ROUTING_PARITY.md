@@ -308,6 +308,47 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 33 — the corpus ships, and all three surfaces share one renderer (LANDED 2026-10-08)
+
+### 33a. `nuvira rate --export [path] [--format json|csv]`
+
+Writes the SAME rows a fit reads (`collectLabelledTurns`) so the corpus can be shipped and fit offline.
+JSON keeps the full structure (features nested, provenance); CSV is the flat form
+(`traceId,provider,model,at,accepted,source,` + one column per feature). No path → stdout. Format is
+inferred from a `.csv` extension unless `--format` says otherwise. Verified live: the CSV header and the
+JSON envelope both wrote correctly.
+
+### 33b. One renderer for the three surfaces
+
+`model explain` no longer formatted the acceptance block itself — it now calls the SAME
+`formatAcceptanceSummary(acceptanceSummary(), focusPair)` that `nuvira rate --stats` uses, with the
+decision's own `provider/model` passed as the focus (shown first, marked `←`, `n/a` when unrated). The
+CLI and the dashboard therefore cannot describe the corpus two different ways, and the coefficient lines
+live in the one formatter.
+
+### 33c. Live dashboard verification
+
+The dashboard was run against an isolated store, seeded with 5 labelled turns, and the card's endpoint
+answered live:
+
+```
+GET /api/acceptance → {"labelled":5,"accepted":3,"rejected":2,
+  "bySource":{"cli":3,"dashboard":2},
+  "byPair":{"deepseek/deepseek-flash":{"accepted":3,"rejected":2}},
+  "fit":{"ok":false,"reason":"only 5 labelled turn(s) — need 20",…}}
+```
+
+A headless-Chrome DOM dump of `/traces` contained the card (`Acceptance (read-only)`); the dump fires at
+page load, before the card's async fetch resolves, so the snapshot shows its loading state — the live
+data itself is the endpoint response above. The real-browser walk still renders all 27 routes × 4 themes.
+
+**Tests.** `acceptance-model.test.ts` (+2: the export serializer in both formats; the focused summary).
+
+**Gates.** root suite, dashboard suite, both `tsc --noEmit`, all three docs guards, `verify:commands`,
+`build:cli`, `dashboard:bundle:check`, the real-browser walk, and the live seeded run above.
+
+---
+
 ## Bundle 32 — the acceptance corpus becomes inspectable (LANDED 2026-10-08)
 
 **Why.** Bundle 31 fitted the acceptance model but its only surface was `model explain`, and the corpus

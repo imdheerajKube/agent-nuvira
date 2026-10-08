@@ -73,12 +73,7 @@ import {
   type CapabilityParameter,
 } from '../learning/capability-evidence.js';
 import { externalPriorsFor } from '../learning/catalog-feed.js';
-import {
-  acceptanceByPair,
-  trainAcceptanceModel,
-  MIN_LABELS_FOR_FIT,
-  MIN_PER_CLASS,
-} from '../learning/acceptance-model.js';
+import { acceptanceSummary, formatAcceptanceSummary } from '../learning/acceptance-model.js';
 import { getProviderFallback } from '../learning/provider-fallback.js';
 import {
   getRouterPromotion,
@@ -1321,42 +1316,19 @@ export class ModelCommand extends BaseCommand {
       // Best-effort — an audit section must never break `model explain`.
     }
 
-    // Bundle 31 — ACCEPTANCE BY MEASUREMENT, read-only. This is the first consumer
-    // of the per-turn verdict (`nuvira rate`, the dashboard Trace tab, and the
-    // tier-3 behavioural labels). It prints the pair's own rated record and the
-    // harness-level fit `P(accepted | features)`, so a reader can see whether the
-    // quality signal is even fit-able yet. NOTHING routes on it, and when the sample
-    // is too thin it says WHY instead of printing a number that would read as one.
+    // Bundle 31/33 — ACCEPTANCE BY MEASUREMENT, read-only. Rendered through the
+    // SAME `formatAcceptanceSummary` that `nuvira rate --stats` and the dashboard
+    // Trace card use, so all three surfaces describe the one corpus identically. The
+    // decision's own pair is focused first; the harness-level fit
+    // `P(accepted | features)` follows. NOTHING routes on it, and when the sample is
+    // too thin it says WHY instead of printing a number that would read as one.
     try {
       const pairKey = `${decision.provider}/${decision.model}`;
-      const pair = acceptanceByPair()[pairKey];
       console.log('');
       logger.highlight('  ── Acceptance (labelled turns, read-only) ──');
-      if (pair && pair.accepted + pair.rejected > 0) {
-        const n = pair.accepted + pair.rejected;
-        console.log(
-          `   ${pairKey}: 👍 ${pair.accepted} / 👎 ${pair.rejected} (n=${n}, ${Math.round((100 * pair.accepted) / n)}%) — from \`nuvira rate\` and the dashboard Trace tab`,
-        );
-      } else {
-        console.log(`   ${pairKey}: n/a (no rated turns attributed to this pair yet)`);
+      for (const line of formatAcceptanceSummary(acceptanceSummary(), pairKey)) {
+        console.log(`   ${line}`);
       }
-      const fit = trainAcceptanceModel();
-      if (fit.ok) {
-        console.log(
-          `   global fit P(accepted | features): n=${fit.model.n} (${fit.model.positives}👍/${fit.model.negatives}👎)`,
-        );
-        for (let j = 0; j < fit.model.featureNames.length; j++) {
-          const w = fit.model.weights[j];
-          console.log(`     ${fit.model.featureNames[j].padEnd(10)} ${w >= 0 ? '+' : ''}${w.toFixed(2)}`);
-        }
-        console.log(`     bias       ${fit.model.bias >= 0 ? '+' : ''}${fit.model.bias.toFixed(2)}`);
-      } else {
-        console.log(`   global fit: NOT trained — ${fit.reason}`);
-        console.log(
-          `     (needs ${MIN_LABELS_FOR_FIT} labelled turns with ≥${MIN_PER_CLASS} of each class; run \`nuvira rate good|bad\` after a turn)`,
-        );
-      }
-      console.log('   (measured labels only — an unrated turn stays null; nothing routes on this and no score is derived from it)');
     } catch {
       // Best-effort — an audit section must never break `model explain`.
     }
