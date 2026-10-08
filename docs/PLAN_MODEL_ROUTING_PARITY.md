@@ -341,6 +341,34 @@ import (`turn-report` → `plan-store` is a TYPE-only import, erased at compile)
 
 ---
 
+## Round-3 probe — the corpus items 9 and 13 would have to be fit to (2026-10-07)
+
+**Why this section exists.** Round 3 asked for three followups: a B3 measured-quality signal, agreement
+between the trace outcome and the turn-report verdict for `delivered-and-read-back`, and a learned B5 area
+set. The middle one is done (Bundle 26). The other two were assessed by probing the on-disk corpus rather
+than by writing a detector, because both need a LABEL to fit to and the doctrine forbids inventing one.
+
+**What the corpus actually contains** (`~/.nuvira/memory/`):
+
+- `benchmarks.json` (32 B), `evals.json` (273 kB) and `metrics.json` (352 B) each expose **zero fields** — no
+  labelled rows at all.
+- `pipeline-runs.json` (91 kB) exposes a single field, `complexity`.
+- `routing-history.json` — 500 rows. `complexity` is present on every row but is the **router's own output**
+  (`'unknown'` on the bare paired rows, `'moderate'` on resolved rows), so using it as ground truth is
+  circular.
+- `ml-router.jsonl` — 143 records with `features` (hash-bucket index vectors, no text), `provider`, `model`,
+  `outcome` (success 79 / failure 64), `costScore`, `agentType`, `complexity`, `intent`, `ts`. There is a
+  binary outcome but **no quality or magnitude label** and no task text to recover one from.
+
+**Conclusion.** No labelled complexity/quality ground truth exists on this machine. The only label-like
+field is the router's own `complexity`. A B3 quality signal and a learned B5 area set therefore stay
+**blocked**, deliberately: implementing them now would mean hand-writing the very vocabulary the programme
+exists to replace. **The concrete unblock** is to start COLLECTING the missing label — record, per authored
+deliverable, whether it met the ask's stated magnitude yet still read as a miss — as the ground truth a
+quality signal must be fit to. Until such rows exist, items 9 and 13's residuals are honestly open.
+
+---
+
 ## Bundle 25 — F1's sectioned-delivery path, PROVEN LIVE (2026-10-07)
 
 **Why this section exists.** Since Bundle 6 this file has carried one line: *"the live re-run of the failing
