@@ -16,7 +16,7 @@
  */
 
 import { MCPClient } from '../mcp/client.js';
-import type { MCPServerConfig } from '../mcp/types.js';
+import type { MCPServerConfig, ToolAnnotations } from '../mcp/types.js';
 import { MCPManager } from '../mcp/manager.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -118,8 +118,8 @@ class MCPToolManager {
   /**
    * List all available tools across all connected servers.
    */
-  listTools(): { server: string; name: string; description: string; inputSchema: any }[] {
-    const tools: { server: string; name: string; description: string; inputSchema: any }[] = [];
+  listTools(): { server: string; name: string; description: string; inputSchema: any; annotations?: ToolAnnotations }[] {
+    const tools: { server: string; name: string; description: string; inputSchema: any; annotations?: ToolAnnotations }[] = [];
 
     for (const [serverName, state] of this.serverStates) {
       if (state.status === 'connected') {
@@ -131,6 +131,9 @@ class MCPToolManager {
               name: tool.name,
               description: tool.description || '',
               inputSchema: tool.inputSchema,
+              // The server's own effect declaration, passed to the capability
+              // layer so a foreign tool is described by what it SAYS it does.
+              ...(tool.annotations ? { annotations: tool.annotations } : {}),
             });
           }
         }

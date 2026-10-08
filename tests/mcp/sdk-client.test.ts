@@ -259,6 +259,33 @@ describe('MCPClient — tool & resource discovery / invocation', () => {
     expect(client.tools[0].name).toBe('write');
   });
 
+  it('CARRIES the server\'s own ToolAnnotations through tools/list', async () => {
+    // The SDK returns `annotations`; the wrapper used to drop it, which made a
+    // read-only MCP tool and a destructive one indistinguishable to the
+    // capability layer. Both directions are asserted: declared survives, absent
+    // stays absent (never defaulted here).
+    transport.respond = (msg: any, t: FakeTransport) => {
+      if (msg.id === undefined || msg.method === undefined) return;
+      if (msg.method === 'initialize') return t.reply(msg.id, DEFAULT_SERVER_INFO);
+      if (msg.method === 'tools/list') {
+        return t.reply(msg.id, {
+          tools: [
+            { name: 'search', description: 'Search', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+            { name: 'purge', description: 'Purge', inputSchema: { type: 'object' }, annotations: { destructiveHint: true } },
+            { name: 'plain', description: 'Plain', inputSchema: { type: 'object' } },
+          ],
+        });
+      }
+      if (msg.method === 'resources/list') return t.reply(msg.id, { resources: [] });
+      if (msg.method === 'prompts/list') return t.reply(msg.id, { prompts: [] });
+      t.reply(msg.id, {});
+    };
+    const tools = await client.listTools();
+    expect(tools.find((t) => t.name === 'search')!.annotations).toEqual({ readOnlyHint: true });
+    expect(tools.find((t) => t.name === 'purge')!.annotations).toEqual({ destructiveHint: true });
+    expect(tools.find((t) => t.name === 'plain')!.annotations).toBeUndefined();
+  });
+
   it('lists resources', async () => {
     const resources = await client.listResources();
     expect(resources).toHaveLength(1);

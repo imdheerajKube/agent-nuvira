@@ -29,6 +29,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { logger } from '../utils/logger.js';
 import {
   type Tool,
+  type ToolAnnotations,
   type Resource,
   type Prompt,
   type CallToolResult,
@@ -191,6 +192,11 @@ export class MCPClient extends EventEmitter {
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema as Record<string, unknown> | undefined,
+      // The server's OWN effect declaration (MCP `ToolAnnotations`). Carried
+      // through on purpose: dropping it made every MCP tool look effect-unknown
+      // to the capability layer, so a read-only tool and a destructive one were
+      // indistinguishable. Absent annotations stay absent — never defaulted here.
+      annotations: (t as { annotations?: ToolAnnotations }).annotations,
     }));
     const changed = tools.length !== this._tools.length
       || tools.some((t, i) => t.name !== this._tools[i]?.name);

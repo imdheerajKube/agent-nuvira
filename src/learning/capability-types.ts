@@ -33,14 +33,33 @@ export interface CapabilityRequires {
   inputs?: string[];
 }
 
-/** One thing the agent can do, normalized from a tool, a skill, or the catalog. */
+/**
+ * How to actually invoke a capability whose `ref` is NOT a callable tool name.
+ * An ingested MCP tool, for instance, is invoked through the `mcp_tool`
+ * dispatcher with the server and tool it names, so a discovery hit must say so
+ * rather than hand the model a name it cannot call.
+ */
+export interface CapabilityInvoke {
+  /** The real tool to call. */
+  tool: string;
+  /** Fixed arguments that identify the capability (e.g. server + tool). */
+  args: Record<string, string>;
+}
+
+/** One thing the agent can do, normalized from a tool, a skill, an MCP server, or the catalog. */
 export interface Capability {
   /** Stable id (`tool:write_file`, `action:publish-site`, `skill:deploy-vercel`). */
   id: string;
-  /** Which registry this came from. */
-  kind: 'tool' | 'skill' | 'action';
-  /** The thing to invoke: a tool name, a skill id, or a curated action key. */
+  /**
+   * Which registry this came from. `mcp` is a FOREIGN tool, discovered from an
+   * external MCP server at runtime — it has no place in this repo's registry, so
+   * it carries `invoke` to say how it is reached.
+   */
+  kind: 'tool' | 'skill' | 'action' | 'mcp';
+  /** The thing to invoke: a tool name, a skill id, a curated action key, or `<server>/<tool>`. */
   ref: string;
+  /** How to reach it, when `ref` is not itself a callable tool name. */
+  invoke?: CapabilityInvoke;
   /** Short human name. */
   name: string;
   /** ONE sentence: what it does. Used for display and refusal wording. */

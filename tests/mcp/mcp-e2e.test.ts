@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { MCPClient } from '../../src/mcp/client.js';
 import type { MCPServerConfig } from '../../src/mcp/types.js';
+import { capabilityFromMcpTool } from '../../src/tools/capability-registry.js';
 
 // ─── Self-contained mock server script ──────────────────────────────────────
 
@@ -48,7 +49,7 @@ rl.on('line', (line) => {
         case 'tools/list':
           response.result = {
             tools: [
-              { name: 'greet', description: 'Greet a user by name', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+              { name: 'greet', description: 'Greet a user by name', inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }, annotations: { readOnlyHint: true } },
               { name: 'echo', description: 'Echo back input text', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
             ],
           };
@@ -128,6 +129,29 @@ describe('MCPClient E2E — Real Subprocess', () => {
     const echo = tools.find((t) => t.name === 'echo');
     expect(echo).toBeDefined();
     expect(echo!.description).toContain('Echo');
+  }, 15_000);
+
+  it('a REAL discovered tool becomes a capability, declaration intact (Bundle 42)', async () => {
+    // End-to-end over a real subprocess: server declaration → SDK → the client's
+    // tools map → the capability adapter. `greet` declares readOnlyHint; `echo`
+    // declares nothing, so it must read as off-machine and unknown, not safe.
+    client = new MCPClient(createConfig(), 10_000);
+    await client.connect();
+
+    const caps = client.tools.map((t) =>
+      capabilityFromMcpTool({ server: client.name, name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: t.annotations }),
+    );
+
+    const greet = caps.find((c) => c.ref.endsWith('/greet'))!;
+    expect(greet.effectClass).toBe('read');
+    expect(greet.reversible).toBe(true);
+    expect(greet.requires.inputs).toEqual(['name']);
+    expect(greet.invoke).toMatchObject({ tool: 'mcp_tool', args: { server: client.name, tool: 'greet' } });
+
+    const echo = caps.find((c) => c.ref.endsWith('/echo'))!;
+    expect(echo.effectClass).toBe('external');
+    expect(echo.reversible).toBe(false);
+    expect(echo.grantCategory).toBe('external');
   }, 15_000);
 
   it('calls the greet tool and returns a response', async () => {

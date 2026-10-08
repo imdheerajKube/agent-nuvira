@@ -713,6 +713,49 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 42 — external MCP tools become discoverable capabilities (2026-10-08)
+
+**The finding.** nuvira could reach MCP servers but exposed them as ONE
+dispatcher: `toolsets.ts` lists a `mcp` toolset whose only member is `mcp_tool`,
+so using anything on a connected server required already knowing a server name
+AND a tool name. `MCPManager.getAllTools()` existed and nothing surfaced it. So
+nuvira had reach it could not see — the exact opposite of a capability layer.
+
+**The fix.** `capabilityFromMcpTool` normalizes each connected server's tool into
+a `kind: 'mcp'` capability, and `capabilityIndex` ingests them, so `tool_search`
+finds them by purpose. Nothing is hand-written here: the effect class is read from
+the MCP spec's own `ToolAnnotations` (`readOnlyHint` → read + reversible;
+`destructiveHint` → destructive + not reversible + never grantable), and the
+required inputs are read from the tool's JSON Schema `required`. Reflection rather
+than a phrase list, and a standard we borrowed instead of inventing.
+
+**Silence is not safety.** A server that declares nothing becomes `external`, not
+reversible, grantable only via the explicit off-machine session grant. A foreign
+tool is off-machine by construction, so the honest reading of an absent annotation
+is "off-machine, effect unknown". Erring the other way would let an undeclared
+foreign tool run silently.
+
+**How to reach it.** `ref` is `<server>/<tool>`, which is NOT a callable tool name,
+so every hit carries `invoke: { tool: 'mcp_tool', args: { action: 'call', server, tool } }` — mirroring `mcp_tool`'s real schema. A hit never hands over a name the
+model cannot call.
+
+**Discovery never connects.** The index reads `getMCPToolManager().listTools()` —
+servers ALREADY connected this process — so a capability search cannot spawn a
+server as a side effect. Hermetic: a cold process simply has no MCP capabilities.
+
+**Two boundary defects fixed.** `mcp/client.ts` mapped tools to
+`{name, description, inputSchema}` and DROPPED `annotations` the SDK had returned,
+so a read-only MCP tool and a destructive one were indistinguishable to every
+consumer; `mcp-client-tool.ts` did not pass them on either. Both now carry them,
+and absent stays absent (never defaulted at the boundary).
+
+Pinned by `tests/tools/mcp-capability.test.ts` (11) and an annotation-preservation
+case in `tests/mcp/sdk-client.test.ts`.
+
+HONEST LIMIT: `readOnlyHint` is the spec's own description of itself as "a hint,
+not a guarantee". These tests prove we READ the declaration, not that a server's
+declaration is true.
+
 ## Open
 
 1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost
@@ -728,3 +771,12 @@ selects by descriptor and the gate reads `effectClass` instead of parsing prose.
    tools in the prompt and parses the `{"tool":…}` reply, so a local-only setup can
    spawn a subagent *with* tools. The run's `transport` says which path it took, so
    the fallback is visible rather than silent.
+3. **NEW — the MCP schema cache is never written.** `src/mcp/mcp-schema-cache.ts`
+   exists to persist a server's tool schemas so a later process need not
+   re-connect, and its only readers are the `mcp_schema_cache` tool's
+   `get/invalidate/stats` actions. Nothing in the connection path
+   (`client.ts` / `mcp-client-tool.ts` / `manager.ts`) ever calls `set()`, so
+   `~/.nuvira/mcp/cache/schemas.json` is only ever read or invalidated and is
+   always empty on a fresh install. Found while choosing an ingestion source for
+   Bundle 42 — capability discovery reads the LIVE connection instead, so this
+   does not block it. Untested and unverified end to end.
