@@ -21,6 +21,9 @@ import {
   capabilityIndex,
   searchCapabilities,
   describeRequires,
+  effectClassOfTool,
+  grantCategoryOfTool,
+  grantCategoryForEffect,
 } from '../../src/tools/capability-registry.js';
 import { getTool, type ToolContext } from '../../src/tools/registry.js';
 
@@ -355,6 +358,92 @@ describe('platform variants — declared exactly where the OS determines the com
     for (const ref of ['install-package', 'add-dependency', 'deploy-app', 'publish-package', 'push-git']) {
       expect(byRef(ref).platforms, ref).toBeUndefined();
     }
+  });
+
+  it('the gate answers a tool question from the descriptor (Phase 2)', async () => {
+    // Cluster — the gates used to hardcode the category at each call site
+    // (`sessionGrantCovers(planStore, 'write')` for write_file/edit_file,
+    // `'external'` for git). These pin the values the descriptor now supplies, so
+    // the gate and the declaration cannot disagree.
+    expect(grantCategoryOfTool('write_file')).toBe('write');
+    expect(grantCategoryOfTool('edit_file')).toBe('write');
+    expect(grantCategoryOfTool('git')).toBe('external');
+    expect(grantCategoryOfTool('run_terminal')).toBe('terminal');
+    expect(grantCategoryOfTool('publish')).toBe('external');
+  });
+
+  it('a read tool and an undescribed tool declare NO grant (the conservative default)', async () => {
+    // A read never needs a grant, and an undeclared action must never be
+    // unlocked by a user's blanket grant. `null` is that answer, not `'write'`.
+    expect(grantCategoryOfTool('read_file')).toBeNull();
+    expect(grantCategoryOfTool('list_dir')).toBeNull();
+    // An off-machine tool DOES declare a grant — the point of the default is that
+    // an UNDECLARED one declares none.
+    expect(grantCategoryOfTool('describe_image')).toBe('external');
+    expect(grantCategoryOfTool('a_tool_nobody_declared')).toBeNull();
+  });
+
+  it('grantCategoryForEffect maps the effect to its grant, and refuses the irreversible', async () => {
+    expect(grantCategoryForEffect('local-write')).toBe('write');
+    expect(grantCategoryForEffect('local-state')).toBe('terminal');
+    expect(grantCategoryForEffect('external')).toBe('external');
+    // A read needs no grant, and NO grant may ever cover a destructive action.
+    expect(grantCategoryForEffect('read')).toBeNull();
+    expect(grantCategoryForEffect('destructive')).toBeNull();
+  });
+
+  it('the descriptor gate agrees with the capability the tool advertises', async () => {
+    // The cheap name-only lookup and the full descriptor must not diverge — they
+    // are the same declaration. This is the anti-drift guard for the whole layer.
+    for (const name of ['write_file', 'edit_file', 'git', 'run_terminal', 'publish']) {
+      const capability = capabilityFromTool({ name, description: '' });
+      expect(grantCategoryOfTool(name), name).toBe(capability.grantCategory ?? null);
+    }
+  });
+
+  it('every migrated tool declares what the retired EFFECT_BY_TOOL map said (behaviour equivalence)', async () => {
+    // The migration moved each entry of the old hand map onto its own tool at
+    // `registerTool`. This table is the OLD map written down once, so a future
+    // edit has to change behaviour CONSCIOUSLY instead of drifting into it.
+    const effect = (name: string) => effectClassOfTool(name);
+    const reversible = (name: string) => capabilityFromTool({ name, description: '' }).reversible;
+    const grant = (name: string) => grantCategoryOfTool(name);
+
+    const READS = ['read_file', 'list_dir', 'glob', 'code_search', 'web_search', 'read_page', 'read_extract', 'verify_requirement', 'ask_user', 'suggest_followups', 'tool_search', 'fuzzy_match', 'analyze', 'osv_check', 'path_security', 'threat_patterns', 'url_safety', 'secret_scan', 'security_score', 'list_memories', 'search_memory', 'memory_stats', 'process_registry'];
+    const WRITES = ['write_file', 'edit_file', 'file_ops', 'blueprint', 'kanban', 'document', 'website'];
+    const STATES = ['run_terminal', 'terminal', 'run_cli', 'code_execution', 'docker'];
+    const EXTERNAL_IRREVERSIBLE = ['publish', 'git', 'gateway_send', 'send_message', 'messaging', 'discord', 'feishu_doc', 'feishu_drive', 'microsoft_graph', 'homeassistant', 'generate_image', 'describe_image', 'video_generate', 'vision', 'image_source', 'speak', 'transcribe', 'tts_streaming', 'neutts_synth', 'browser', 'camofox', 'browser_dialog', 'browser_supervisor', 'computer_use', 'mcp_tool'];
+    const EXTERNAL_REVERSIBLE = ['clone_repo', 'openrouter_client'];
+
+    for (const n of READS) {
+      expect(effect(n), n).toBe('read');
+      expect(grant(n), n).toBeNull();
+      expect(reversible(n), n).toBe(true);
+    }
+    for (const n of WRITES) {
+      expect(effect(n), n).toBe('local-write');
+      expect(grant(n), n).toBe('write');
+      expect(reversible(n), n).toBe(true);
+    }
+    for (const n of STATES) {
+      expect(effect(n), n).toBe('local-state');
+      expect(grant(n), n).toBe('terminal');
+      expect(reversible(n), n).toBe(true);
+    }
+    for (const n of EXTERNAL_IRREVERSIBLE) {
+      expect(effect(n), n).toBe('external');
+      expect(grant(n), n).toBe('external');
+      expect(reversible(n), n).toBe(false);
+    }
+    for (const n of EXTERNAL_REVERSIBLE) {
+      expect(effect(n), n).toBe('external');
+      expect(grant(n), n).toBe('external');
+      expect(reversible(n), n).toBe(true);
+    }
+
+    // And an UNDECLARED tool keeps the conservative default the old map's absence gave.
+    expect(effect('a_tool_nobody_declared')).toBe('local-state');
+    expect(grant('a_tool_nobody_declared')).toBeNull();
   });
 
   it('tool_search resolves the hint for THIS machine', async () => {

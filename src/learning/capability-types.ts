@@ -141,6 +141,34 @@ export interface Capability {
   platforms?: Partial<Record<PlatformKey, PlatformCommand>>;
 }
 
+/**
+ * A TOOL's own capability declaration — the fact the descriptor used to hold in
+ * one hand-maintained name-keyed map (`EFFECT_BY_TOOL`).
+ *
+ * WHY IT LIVES ON THE TOOL. The map meant a tool could be born unclassified and
+ * its gate could hardcode a different answer than its descriptor; the map was the
+ * last place the layer did not let the TOOL own its own facts. The tool declares
+ * these at `registerTool`, `registry.ts` records them, and every consumer
+ * (fan-out, the write/terminal/external grants, the capability descriptor) reads
+ * the same declaration.
+ *
+ * `reversible` defaults to `true` (matching the old map's every read/write
+ * entry), and every field except `effectClass` is optional so a silent tool still
+ * declares the one fact that matters.
+ */
+export interface ToolCapabilityDeclaration {
+  /** What the action does to the world — the one REQUIRED fact. */
+  effectClass: EffectClass;
+  /** Can re-running undo it? Defaults to true; set false for off-machine effects. */
+  reversible?: boolean;
+  /** How to undo it, when it is reversible. */
+  reversibleHow?: string;
+  /** The session grant that may cover it (absent = no grant covers it). */
+  grantCategory?: GrantCategory;
+  /** What has to exist before it can run. */
+  requires?: CapabilityRequires;
+}
+
 /** A ranked discovery result. */
 export interface CapabilityHit {
   capability: Capability;

@@ -2,7 +2,54 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
+## v3.3.14 — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
+
+### Changed: the router learns MEASURED quality — the bandit's `qualityScore` is now populated
+
+The router bandit carried `testPassed` / `userAccepted` / `verificationPassed` / `qualityScore`,
+but only the first three were wired. `qualityScore` was deliberately blocked because no measured
+scale existed — a fabricated number in a learning record is worse than a missing one. The scale
+exists now: the fitted acceptance model's `P(accepted | features)`, built from the user's own 👍/👎.
+
+- `outcome-observation.ts` attaches `qualityScore = predictAcceptance(fit, features)` **only when the
+  fit is trained** (`MIN_LABELS_FOR_FIT`/`MIN_PER_CLASS`); below the floor the field is omitted and
+  routing is byte-for-byte what it was. A turn's live features come from `featuresFromReport`, the same
+  rules a stored trace uses, so a live score cannot disagree with the training rows.
+- The fit is **memoized** (`cachedAcceptanceFit`, 60s TTL, `invalidateAcceptanceFit`) so the live path
+  does not re-read the corpus and refit on every turn.
+- **Off-switch:** `NUVIRA_BANDIT_QUALITY=off` (unset/tru-ish = ON) restores the previous behaviour.
+- This is a **conscious override** of `DESIGN_CAPABILITY_BY_MEASUREMENT.md` §8's "nothing routes on
+  this" (the sign-off §7 asked for); the doc and the acceptance model's own header now say so.
+
+Pinned by `tests/learning/outcome-observation.test.ts` (measured-present, untrained-absent, off-switch)
+and `tests/learning/acceptance-model.test.ts` (live-turn features, fit memoization/invalidation).
+
+### Changed: the gates answer from the capability descriptor, not hardcoded literals (Bundle 41 Phase 2)
+
+Phase 1 gave "what the agent can do" ONE descriptor but let nothing route on it:
+each gate restated the fact by hand. Now `capability-registry.ts` exposes
+`grantCategoryOfTool(name)` (the category a tool declares, or `null`) and
+`grantCategoryForEffect(effect)`, both reading the same map the full descriptor is
+built from — so the cheap gate path and the descriptor cannot drift.
+
+The five hardcoded grant literals are gone: `write_file`/`edit_file`
+(`coding-tools.ts`), `git` push (`git-tool.ts`), `run_terminal`
+(`grantCategoryForEffect(recoverable ? 'local-state' : 'external')`), and
+`run_cli`'s `?? 'terminal'` hand default — the intent declaration already carried
+the category. Behaviour is unchanged (each declared category is what the site
+already computed); the SOURCE changed, so a new tool cannot be gated with a
+category that disagrees with its declaration, and an undeclared tool can no longer
+be unlocked by a user's blanket grant. Pinned by
+`tests/tools/capability-registry.test.ts`.
+
+**And each tool now owns its own facts.** `Tool` gained
+`capability?: ToolCapabilityDeclaration`, and `registerTool` records it
+(`declareToolCapability`). The hand-maintained `EFFECT_BY_TOOL` map is retired —
+`capability-registry.ts` holds no name→effect table any more. All 62 tools declare
+their effect class, reversibility, grant category and requirements at their own
+`registerTool` call; a tool that declares nothing keeps the conservative default
+(local-state, no grant). A behaviour-equivalence test writes the retired map down
+once, so the migration cannot silently drift.
 
 ### Changed: the learned table becomes visible, editable, and self-growing
 

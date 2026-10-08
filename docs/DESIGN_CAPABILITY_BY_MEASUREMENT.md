@@ -2,7 +2,8 @@
 
 **Status: §1–§5 LANDED (Bundle 3b, 2026-10-07) — the scorecard exists, the id-substring block is gone,
 and the reasoning floor acts on measurement. §6 remains a recommendation (no external feed integrated).
-§7 records the decisions taken. Implementation: `src/learning/capability-evidence.ts` +
+§7 records the decisions taken. **§8's "nothing routes on `qualityScore`" was revised 2026-10-08 (user
+decision): the fitted acceptance probability now feeds the bandit's `qualityScore` above the sample floor.** Implementation: `src/learning/capability-evidence.ts` +
 `ModelRegistryEntry.capability` + `AutoModelRouter.getModelCapabilities()` + `model explain`.**
 
 Bundle 3 of `PLAN_MODEL_ROUTING_PARITY.md` is the programme's root cause: *the router judges a
@@ -293,10 +294,15 @@ ACCEPTANCE does not (`labelDeliverableByTrace`) — the positive class is never 
 
 ### 8.4 Honest limits
 
-- **Nothing routes on this yet.** `rateTurn` fits nothing and moves no score. Recording the label and
-  using it are separate decisions; using it waits until enough rows exist to mean anything.
-- **A few hundred rows with BOTH classes are needed** before a `P(accepted | features)` is fit-able.
-  Until then `qualityScore` stays genuinely blocked — the collection path is the unblock, not the score.
+- ~~**Nothing routes on this yet.**~~ **REVISED 2026-10-08 (user decision).** The fitted
+  `P(accepted | features)` is now wired into the router bandit's `qualityScore`
+  (`outcome-observation.ts` reads `cachedAcceptanceFit` / `predictAcceptance`). It is recorded ONLY when
+  the fit is `ok` — below the sample floor the field is omitted and routing is unchanged — and it can still
+  be switched off with `NUVIRA_BANDIT_QUALITY=off`. This is the conscious override §7 asked sign-off for;
+  the "nothing routes" stance is retired, not forgotten.
+- **The floor still governs.** A few hundred rows with BOTH classes are ideal before a
+  `P(accepted | features)` is trustworthy; the fit's own `MIN_LABELS_FOR_FIT` / `MIN_PER_CLASS` refuse
+  below that, so `qualityScore` is absent rather than guessed until enough labels exist.
 - ~~**Coverage gap** — the dashboard chat console does not collect corpus candidates.~~ **CORRECTED
   (Bundle 31).** That claim was wrong: the dashboard console drives the *same* `ChatCommand.answerOnce`
   the CLI does, and the collection is a straight-line statement inside it, so a dashboard turn that

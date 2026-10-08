@@ -483,10 +483,15 @@ own wrapped calls) — auditability gap, same family as G5; (3) a title given in
 (4) the full 39-unit live run has not been executed end-to-end.
 
 ### New follow-ups recorded
-- `[ ]` Resumable long-form job runner: continue batches unattended until the target is met.
-- `[ ]` Trace fidelity for long-form steps: record the real provider/model (flagged above).
-- `[ ]` Extract a quoted/prose title ("called Mahagatha") for the document name.
-- `[ ]` Full 39-unit live run + a 100-page timing/cost report.
+- `[x]` Resumable long-form job runner: continue batches unattended until the target is met. — **DONE** (`src/learning/unattended-job.ts` + `unattended-progress.ts`, G11 below).
+- `[x]` Trace fidelity for long-form steps: record the real provider/model (flagged above). — **DONE** (`orchestrator.resolveAuditRoute` + `housekeepingTraceContext`; the trace now names the routed pair instead of `unknown`).
+- `[x]` Extract a quoted/prose title ("called Mahagatha") for the document name. — **DONE** (`src/agents/long-form-plan.ts:117`, the `called|titled|named` extractor).
+- `[ ]` Full 39-unit live run + a 100-page timing/cost report. — **still open** (validation only; no code gap).
+
+> **Reconciled 2026-10-08.** Three of these four boxes were stale — the fixes had
+> shipped in later sessions and the `[ ]` was never flipped. Verified in code, not
+> inferred, before closing. The fourth is a live validation run, not a defect, and
+> stays open honestly.
 
 ---
 
@@ -1201,7 +1206,7 @@ for both the event kind and the success verdict**, so the two can never disagree
 the boundary phrasings rather than the bare word "denied", because a `run_terminal` that reads a log
 containing "Permission denied" is a successful call.
 
-### G28 — an `ask_user` TOOL call for authorized work is still a round trip `[ ]` (new, open)
+### G28 — an `ask_user` TOOL call for authorized work is still a round trip `[x]` (closed 2026-10-08)
 
 Recorded because the G18 trace made it VISIBLE on the first loop verification run, and it is the
 permission-seeking failure one layer down. The request named its destination and authorized the
@@ -1212,8 +1217,15 @@ still right — the autonomy gate proceeded on `write_file` and the artifact lan
 one empty step were spent asking a question the request had already answered. The text-level
 `detectPermissionSeeking` nudge does not see a TOOL call, and `ask_user` is deliberately NOT gated
 (an irreversible action must be able to reach the user). The fix is not "gate ask_user": it is to
-answer the question from the request's own authorization when the request already settled it, the
-same way the write gate does. Not a regression, not attempted here, and now measurable in the trace.
+answer the question from the request's own authorization when the request already settled it,the same way the write gate does. Not a regression, not attempted here, and now measurable in the trace.
+
+**CLOSED (2026-10-08).** `registry.ts` now settles a permission-seeking `ask_user`
+call at the gate when the request or an approved envelope already authorized the
+work (and the question names nothing irreversible): it emits
+`autonomy:consult-suppressed` and returns "decide it yourself and continue" instead
+of a round trip. `ask_user` itself is still ungated, as required — an irreversible
+action must always be able to reach the user. Pinned by
+`tests/tools/write-autonomy.test.ts`.
 
 ### G29 — the followups contract leaked as raw JSON into the answer `[x]`
 

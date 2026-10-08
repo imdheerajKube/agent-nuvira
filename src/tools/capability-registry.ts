@@ -28,10 +28,17 @@ import type {
   CapabilityRequires,
   EffectClass,
   GrantCategory,
+  ToolCapabilityDeclaration,
 } from '../learning/capability-types.js';
 import { machineFactsCapability } from '../learning/machine-facts.js';
 
-type ToolLike = { name: string; description?: string; category?: string };
+type ToolLike = {
+  name: string;
+  description?: string;
+  category?: string;
+  /** The tool's OWN declaration (see `Tool.capability` in registry.ts). */
+  capability?: ToolCapabilityDeclaration;
+};
 
 /**
  * A tool discovered on an external MCP server. Deliberately structural, not
@@ -60,7 +67,7 @@ function requiredInputs(inputSchema?: Record<string, unknown>): string[] {
   return Array.isArray(required) ? required.filter((r): r is string => typeof r === 'string') : [];
 }
 
-/** Per-tool effect metadata. Anything absent falls back to the conservative default. */
+/** Per-tool effect metadata, normalized from a tool's own declaration. */
 interface EffectInfo {
   effect: EffectClass;
   reversible: boolean;
@@ -69,99 +76,51 @@ interface EffectInfo {
   requires?: CapabilityRequires;
 }
 
-const T = (effect: EffectClass, reversible: boolean, extra: Partial<EffectInfo> = {}): EffectInfo => ({
-  effect,
-  reversible,
-  ...extra,
-});
+/** Unknown tools: treat as a local-state change that NO grant may cover. */
+const DEFAULT_EFFECT: EffectInfo = { effect: 'local-state', reversible: true };
 
 /**
- * Curated effect map for the tools whose effect is specific. Reads are marked
- * read; workspace mutations and machine changes carry their grant category;
- * off-machine actions carry their credential needs.
+ * The declarations tools made at `registerTool`.
  *
- * Anything NOT listed here falls to `DEFAULT_EFFECT`, which is deliberately
- * cautious in BOTH directions: an unlisted tool is treated as a local-state
- * change (an ask, never a silent read) and NO grant is assumed to cover it (the
- * agent has not declared a category, so a user's grant cannot unlock it).
+ * WHY A MAP POPULATED AT REGISTRATION, not a field read off the tool: the
+ * hot-path lookups below (`effectClassOfTool` on every fan-out decision,
+ * `grantCategoryOfTool` at each gate) take only a NAME, and `capabilityFromTool`
+ * must also answer for a tool not passed in. So `registry.ts` — which imports
+ * this module, never the reverse, since the other direction would cycle through
+ * `tool_search` — records each tool's OWN declaration here.
  *
- * A network READ (`web_search`, `read_page`, `osv_check`) is still `read`: the
- * class describes what the action DOES to the world, not where it runs.
+ * There is no hand-maintained name→effect table any more. A tool that declares
+ * nothing falls to `DEFAULT_EFFECT`: a local-state change an ask covers and NO
+ * grant may unlock.
  */
-const EFFECT_BY_TOOL: Record<string, EffectInfo> = {
-  // ── read-only: inspects, changes nothing ──
-  read_file: T('read', true),
-  list_dir: T('read', true),
-  glob: T('read', true),
-  code_search: T('read', true),
-  web_search: T('read', true),
-  read_page: T('read', true),
-  read_extract: T('read', true),
-  verify_requirement: T('read', true),
-  ask_user: T('read', true),
-  suggest_followups: T('read', true),
-  tool_search: T('read', true),
-  fuzzy_match: T('read', true),
-  analyze: T('read', true),
-  osv_check: T('read', true),
-  path_security: T('read', true),
-  threat_patterns: T('read', true),
-  url_safety: T('read', true),
-  secret_scan: T('read', true),
-  security_score: T('read', true),
-  list_memories: T('read', true),
-  search_memory: T('read', true),
-  memory_stats: T('read', true),
-  process_registry: T('read', true),
-  // ── file writes (grant: 'write') ──
-  write_file: T('local-write', true, { how: 'a create is undone by deleting the file; an overwrite is a git revert', grant: 'write' }),
-  edit_file: T('local-write', true, { how: 'a git revert', grant: 'write' }),
-  file_ops: T('local-write', true, { how: 'a git revert', grant: 'write' }),
-  blueprint: T('local-write', true, { how: 'a git revert', grant: 'write' }),
-  kanban: T('local-write', true, { how: 'a git revert', grant: 'write' }),
-  document: T('local-write', true, { how: 'a git revert', grant: 'write' }),
-  website: T('local-write', true, { how: 'a git revert', grant: 'write' }),
-  // ── local state / machine changes ──
-  run_terminal: T('local-state', true, { grant: 'terminal' }),
-  terminal: T('local-state', true, { grant: 'terminal' }),
-  run_cli: T('local-state', true, { grant: 'terminal' }),
-  code_execution: T('local-state', true, { grant: 'terminal' }),
-  docker: T('local-state', true, { grant: 'terminal' }),
-  // ── off-machine / metered (a grant is possible, but NEVER assumed) ──
-  publish: T('external', false, {
-    grant: 'external',
-    requires: { credentials: [{ anyOf: ['NPM_TOKEN', 'GITHUB_TOKEN'], note: 'an npm automation token, or a GitHub token for a GitHub release' }] },
-  }),
-  git: T('external', false, { grant: 'external', how: 'a local commit is reversible; a push is only as reversible as the remote' }),
-  clone_repo: T('external', true, { how: 'delete the cloned directory', grant: 'external' }),
-  gateway_send: T('external', false, { grant: 'external' }),
-  send_message: T('external', false, { grant: 'external' }),
-  messaging: T('external', false, { grant: 'external' }),
-  discord: T('external', false, { grant: 'external' }),
-  feishu_doc: T('external', false, { grant: 'external' }),
-  feishu_drive: T('external', false, { grant: 'external' }),
-  microsoft_graph: T('external', false, { grant: 'external' }),
-  homeassistant: T('external', false, { grant: 'external' }),
-  generate_image: T('external', false, { grant: 'external' }),
-  describe_image: T('external', false, { grant: 'external' }),
-  video_generate: T('external', false, { grant: 'external' }),
-  vision: T('external', false, { grant: 'external' }),
-  image_source: T('external', false, { grant: 'external' }),
-  speak: T('external', false, { grant: 'external' }),
-  transcribe: T('external', false, { grant: 'external' }),
-  tts_streaming: T('external', false, { grant: 'external' }),
-  neutts_synth: T('external', false, { grant: 'external' }),
-  browser: T('external', false, { grant: 'external' }),
-  camofox: T('external', false, { grant: 'external' }),
-  browser_dialog: T('external', false, { grant: 'external' }),
-  browser_supervisor: T('external', false, { grant: 'external' }),
-  computer_use: T('external', false, { grant: 'external' }),
-  mcp_tool: T('external', false, { grant: 'external' }),
-  openrouter_client: T('external', true, { grant: 'external' }),
-};
+const DECLARED_BY_TOOL = new Map<string, ToolCapabilityDeclaration>();
 
-/** Unknown tools: treat as a local-state change that NO grant may cover. */
-const DEFAULT_EFFECT: EffectInfo = T('local-state', true);
+/**
+ * Record a tool's own capability declaration (called once per `registerTool`).
+ * A tool that declares nothing is left out on purpose — absence IS the
+ * conservative default, not an error.
+ */
+export function declareToolCapability(name: string, decl?: ToolCapabilityDeclaration): void {
+  if (!decl) return;
+  DECLARED_BY_TOOL.set(name, decl);
+}
+
+/** Normalize a tool's declaration into the internal effect record. */
+function normalizeDeclaration(decl: ToolCapabilityDeclaration): EffectInfo {
+  return {
+    effect: decl.effectClass,
+    reversible: decl.reversible ?? true,
+    ...(decl.reversibleHow ? { how: decl.reversibleHow } : {}),
+    ...(decl.grantCategory ? { grant: decl.grantCategory } : {}),
+    ...(decl.requires ? { requires: decl.requires } : {}),
+  };
+}
+
+/** The normalized declaration for a name, or the conservative default. */
+function declaredEffect(name: string): EffectInfo {
+  const decl = DECLARED_BY_TOOL.get(name);
+  return decl ? normalizeDeclaration(decl) : DEFAULT_EFFECT;
+}
 
 /**
  * The effect class of a registry tool by NAME only — the cheap path.
@@ -173,7 +132,46 @@ const DEFAULT_EFFECT: EffectInfo = T('local-state', true);
  * need — one map, one conservative default, no second opinion.
  */
 export function effectClassOfTool(name: string): EffectClass {
-  return (EFFECT_BY_TOOL[name] ?? DEFAULT_EFFECT).effect;
+  return declaredEffect(name).effect;
+}
+
+/**
+ * The session-grant category a tool DECLARES — Phase 2 of the capability layer.
+ *
+ * WHY THIS EXISTS. The gates used to hardcode the literal at each call site
+ * (`sessionGrantCovers(planStore, 'write')` for `write_file`/`edit_file`,
+ * `'external'` for `git`), restating a fact the descriptor already held. That is
+ * the same drift surface the whole capability layer exists to remove: a tool's
+ * declared `grantCategory` and the string its gate consults could disagree, and
+ * a new tool could be gated with no declaration at all. One lookup, one default.
+ *
+ * `null` means the tool declares NO grant (an unlisted tool, or one whose effect
+ * is destructive/read). That is the conservative answer: an undeclared action
+ * cannot be unlocked by a user's blanket grant.
+ */
+export function grantCategoryOfTool(name: string): GrantCategory | null {
+  return declaredEffect(name).grant ?? null;
+}
+
+/**
+ * The grant category an EFFECT implies, for a call site whose category is a
+ * property of the effect rather than of a tool name — a shell command whose reach
+ * depends on the command, or a CLI intent resolved from the manifest.
+ *
+ * `read` and `destructive` return `null` on purpose: a read never needs a grant,
+ * and NO grant may ever cover a destructive action.
+ */
+export function grantCategoryForEffect(effect: EffectClass): GrantCategory | null {
+  switch (effect) {
+    case 'local-write':
+      return 'write';
+    case 'local-state':
+      return 'terminal';
+    case 'external':
+      return 'external';
+    default:
+      return null;
+  }
 }
 
 /** Short, human summary of a requirement set — rendered FROM the checked form. */
@@ -189,7 +187,7 @@ export function describeRequires(requires: CapabilityRequires): string {
 
 /** Turn one registry tool into a capability. */
 export function capabilityFromTool(tool: ToolLike): Capability {
-  const info = EFFECT_BY_TOOL[tool.name] ?? DEFAULT_EFFECT;
+  const info = tool.capability ? normalizeDeclaration(tool.capability) : declaredEffect(tool.name);
   const firstSentence = String(tool.description ?? '').split(/(?<=\.)\s/)[0]?.trim() ?? '';
   return {
     id: `tool:${tool.name}`,
