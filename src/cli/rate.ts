@@ -20,11 +20,13 @@
  *   nuvira rate bad                  — it was not
  *   nuvira rate bad --trace <id>     — rate a specific turn (see `nuvira trace list`)
  *   nuvira rate --list               — recent verdicts
+ *   nuvira rate --stats              — the corpus: labels, class balance, per-pair, fit status
  */
 
 import { Command } from 'commander';
 import { logger } from '../utils/logger.js';
 import { parseVerdict, rateTurn, listTurnVerdicts, latestRateableTraceId } from '../learning/turn-feedback.js';
+import { acceptanceSummary, formatAcceptanceSummary } from '../learning/acceptance-model.js';
 
 export class RateCommand {
   create(): Command {
@@ -35,12 +37,17 @@ export class RateCommand {
       .argument('[verdict]', 'good | bad (aliases: accepted | rejected)')
       .option('-t, --trace <id>', 'rate a specific trace instead of the most recent turn')
       .option('-l, --list', 'show recent verdicts instead of recording one')
-      .action((verdict: string | undefined, opts?: { trace?: string; list?: boolean }) => {
+      .option('-s, --stats', 'show the acceptance corpus: labels, class balance, per-pair record, fit status')
+      .action((verdict: string | undefined, opts?: { trace?: string; list?: boolean; stats?: boolean }) => {
         this.run(verdict, opts ?? {});
       });
   }
 
-  private run(verdict: string | undefined, opts: { trace?: string; list?: boolean }): void {
+  private run(verdict: string | undefined, opts: { trace?: string; list?: boolean; stats?: boolean }): void {
+    if (opts.stats) {
+      this.stats();
+      return;
+    }
     if (opts.list) {
       this.list();
       return;
@@ -78,6 +85,19 @@ export class RateCommand {
         : '   No delivered artifact on this turn — the verdict is recorded on the trace.',
     );
     logger.info('   Recorded as MEASUREMENT only: nothing routes on it and no score is derived from it yet.');
+    console.log('');
+  }
+
+  /**
+   * The corpus at a glance: how many turns are labelled, the class balance, the
+   * per-pair record, and whether the fit has enough to train. READ-ONLY — this is
+   * the same data `model explain` prints, from the same `acceptanceSummary`, so the
+   * two surfaces cannot describe the corpus differently.
+   */
+  private stats(): void {
+    const lines = formatAcceptanceSummary(acceptanceSummary());
+    logger.highlight('\n📊 Acceptance corpus');
+    for (const line of lines) console.log(`   ${line}`);
     console.log('');
   }
 

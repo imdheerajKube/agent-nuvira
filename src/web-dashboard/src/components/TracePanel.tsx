@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { dashboardAPI } from '../api';
-import type { TraceEntry, TraceFinding, TraceStep } from '../types';
+import type { AcceptanceData, TraceEntry, TraceFinding, TraceStep } from '../types';
 import PageHeader from './PageHeader';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -201,6 +201,75 @@ function EmptyNote() {
       is recorded to <code style={{ color: 'var(--accent-blue)' }}>reasoning-traces.json</code>. Run a pipeline, then replay
       it here or with <code style={{ color: 'var(--accent-blue)' }}>buff trace replay &lt;id&gt;</code>.
     </div>
+  );
+}
+
+/**
+ * Bundle 32 — the acceptance corpus, READ-ONLY: how many turns are labelled, the
+ * class balance, the per-pair record, and whether the fit can train yet. It renders
+ * the same `acceptanceSummary` the CLI prints, so the two surfaces cannot disagree.
+ * A missing server hides the card (the traces below still work) rather than showing
+ * a fabricated zero.
+ */
+function AcceptanceCard() {
+  const [data, setData] = useState<AcceptanceData | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    dashboardAPI.fetchAcceptance().then((d) => {
+      if (!alive) return;
+      if (d) {
+        setData(d);
+        setUnavailable(false);
+      } else {
+        setUnavailable(true);
+      }
+    });
+    return () => { alive = false; };
+  }, []);
+
+  if (unavailable && !data) return null;
+  const pairs = data ? Object.entries(data.byPair) : [];
+
+  return (
+    <SectionCard
+      icon="⭐"
+      title="Acceptance (read-only)"
+      subtitle="The one label the harness cannot derive: whether YOU wanted the turn. Rate it with the 👍/👎 control on a trace below, run `nuvira rate good|bad`, or let the behavioural tier infer it. Nothing routes on this."
+    >
+      {data === null ? (
+        <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Loading…</div>
+      ) : (
+        <>
+          <div style={{ fontSize: 13, color: 'var(--text-primary)', marginBottom: 6 }}>
+            {data.labelled} labelled turn{data.labelled === 1 ? '' : 's'} — 👍 {data.accepted} / 👎 {data.rejected}
+          </div>
+          {Object.keys(data.bySource).length > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+              by source: {Object.entries(data.bySource).map(([k, v]) => `${k} ${v}`).join(', ')}
+            </div>
+          )}
+          {pairs.length > 0 && (
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+              {pairs.map(([key, v]) => {
+                const n = v.accepted + v.rejected;
+                return (
+                  <div key={key}>
+                    {key}: 👍 {v.accepted} / 👎 {v.rejected} ({Math.round((100 * v.accepted) / n)}%, n={n})
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: data.fit.ok ? 'var(--accent-green)' : 'var(--text-secondary)' }}>
+            {data.fit.ok
+              ? `fit TRAINED — P(accepted | features) n=${data.fit.n} (${data.fit.positives}👍/${data.fit.negatives}👎)`
+              : `fit NOT trained — ${data.fit.reason ?? 'insufficient labels'}`}
+          </div>
+        </>
+      )}
+    </SectionCard>
   );
 }
 
@@ -658,6 +727,8 @@ export default function TracePanel() {
         title="Reasoning Traces"
         description="Every LLM call in each pipeline — agent × model × prompt digest × response × tokens × latency × routing snapshot (assessment P0)."
       />
+
+      <AcceptanceCard />
 
       {traces === null && !loadError && (
         <SectionCard icon="⏳" title="Loading…">

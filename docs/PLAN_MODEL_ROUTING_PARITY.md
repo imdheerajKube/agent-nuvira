@@ -308,6 +308,44 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 32 — the acceptance corpus becomes inspectable (LANDED 2026-10-08)
+
+**Why.** Bundle 31 fitted the acceptance model but its only surface was `model explain`, and the corpus
+itself was invisible without reading JSONL by hand. A label nobody can review is a label nobody trusts.
+This bundle adds two read-only views built on the SAME `acceptanceSummary`, so the CLI and the dashboard
+cannot describe the corpus differently.
+
+### 32a. `nuvira rate --stats`
+
+`formatAcceptanceSummary(acceptanceSummary())` prints: labelled turns with class balance, the
+provenance breakdown (`cli` / `dashboard` / `derived`), the per-pair record, and the fit status
+(TRAINED, or NOT trained with the reason). Verified live: *"labelled turns: 0 … fit: NOT trained — only
+0 labelled turn(s) — need 20"*.
+
+### 32b. The dashboard Trace tab shows it
+
+New open `GET /api/acceptance` returns the summary (aggregate counts + a read-only fit; never 500 — an
+unavailable store degrades to an empty summary). The Trace tab gains an **Acceptance (read-only)** card at
+the top, above the traces whose 👍/👎 controls feed it. The card hides itself if the server cannot answer,
+rather than showing a fabricated zero.
+
+### 32c. Corpus seeding — NOT auto-labelled, on purpose
+
+The suggested followup *"replay real turns and rate them"* is deliberately NOT implemented as stated.
+Rating turns on the user's behalf would FABRICATE the exact labels this programme exists to measure — the
+same defect as a hand-written phrase list, one layer up. The corpus is seeded by real verdicts: a human
+rating a turn, or the tier-3 inferences. The tooling to make that easy is what 32a/32b add; the labels
+stay the user's. (On this machine the model backends are also unavailable — gemini times out, OpenRouter is
+credit-exhausted — so live seeding is not something the harness could do reliably even if it were honest.)
+
+**Tests.** `acceptance-api.test.ts` (new, 2 HTTP: untrained-below-floor with a named reason; trained once
+both classes clear); `acceptance-model.test.ts` (+1: the summary/formatter honest line).
+
+**Gates.** root suite, dashboard suite, both `tsc --noEmit`, all three docs guards, `verify:commands`,
+`build:cli`, `build:dashboard`, `dashboard:bundle:check`, and the real-browser walk (4×27).
+
+---
+
 ## Bundle 31 — the label gets its first consumer, and two more sources (LANDED 2026-10-08)
 
 **Why.** Bundle 30 made it possible to record a per-turn verdict, but nothing read it. This bundle adds the

@@ -1515,7 +1515,7 @@ Delete all stored traces
 
 Rate the last turn (good|bad) — records the one label a quality signal can be fit to (also on the dashboard Trace tab)
 
-   - flags: `--list, --trace <trace>`
+   - flags: `--list, --stats, --trace <trace>`
 ### `nuvira continuity`
 
 Session continuity — what is stored, and how to forget it

@@ -1939,3 +1939,31 @@ export interface HooksData {
   actionKinds: string[];
   actionDescriptions: Record<string, string>;
 }
+
+/** Bundle 32 — rated turns for one `provider/model`. */
+export interface AcceptancePairRecord {
+  accepted: number;
+  rejected: number;
+}
+
+/** Bundle 32 — the read-only fit status (trained, or a named reason it is not). */
+export interface AcceptanceFitView {
+  ok: boolean;
+  n: number;
+  positives: number;
+  negatives: number;
+  reason?: string;
+  featureNames?: string[];
+  weights?: number[];
+  bias?: number;
+}
+
+/** Bundle 32 — `GET /api/acceptance`: the acceptance corpus at a glance. */
+export interface AcceptanceData {
+  labelled: number;
+  accepted: number;
+  rejected: number;
+  bySource: Record<string, number>;
+  byPair: Record<string, AcceptancePairRecord>;
+  fit: AcceptanceFitView;
+}

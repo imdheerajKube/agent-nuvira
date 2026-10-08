@@ -229,6 +229,66 @@ export function predictAcceptance(model: AcceptanceModel, features: AcceptanceFe
   return 1 / (1 + Math.exp(-z));
 }
 
+/** One review surface's worth of acceptance state, so CLI and dashboard agree. */
+export interface AcceptanceSummary {
+  labelled: number;
+  accepted: number;
+  rejected: number;
+  /** Labels by provenance: `cli` / `dashboard` / `derived`. */
+  bySource: Record<string, number>;
+  byPair: Record<string, { accepted: number; rejected: number }>;
+  fit: AcceptanceFit;
+}
+
+/** The whole acceptance picture in one call — the ONE source the surfaces render. */
+export function acceptanceSummary(now: number = Date.now()): AcceptanceSummary {
+  const turns = collectLabelledTurns();
+  const bySource: Record<string, number> = {};
+  for (const t of turns) bySource[t.source] = (bySource[t.source] ?? 0) + 1;
+  const accepted = turns.filter((t) => t.accepted).length;
+  return {
+    labelled: turns.length,
+    accepted,
+    rejected: turns.length - accepted,
+    bySource,
+    byPair: acceptanceByPair(),
+    fit: trainAcceptanceModel(now),
+  };
+}
+
+/**
+ * Render a summary as human lines. Shared so `nuvira rate --stats` and any other
+ * surface cannot describe the same corpus two different ways.
+ */
+export function formatAcceptanceSummary(s: AcceptanceSummary): string[] {
+  const lines: string[] = [];
+  lines.push(`labelled turns: ${s.labelled} (👍 ${s.accepted} / 👎 ${s.rejected})`);
+  const sources = Object.entries(s.bySource);
+  lines.push(
+    sources.length > 0
+      ? `by source: ${sources.map(([k, v]) => `${k} ${v}`).join(', ')}`
+      : 'by source: (none yet)',
+  );
+  const pairs = Object.entries(s.byPair);
+  if (pairs.length > 0) {
+    lines.push('by pair:');
+    for (const [key, v] of pairs) {
+      const n = v.accepted + v.rejected;
+      lines.push(`   ${key}: 👍 ${v.accepted} / 👎 ${v.rejected} (${Math.round((100 * v.accepted) / n)}%, n=${n})`);
+    }
+  } else {
+    lines.push('by pair: (no rated turns yet)');
+  }
+  if (s.fit.ok) {
+    lines.push(`fit: TRAINED — P(accepted | features) n=${s.fit.model.n} (${s.fit.model.positives}👍/${s.fit.model.negatives}👎)`);
+  } else {
+    lines.push(`fit: NOT trained — ${s.fit.reason}`);
+    lines.push(`     (needs ${MIN_LABELS_FOR_FIT} labelled turns with ≥${MIN_PER_CLASS} of each class)`);
+  }
+  lines.push('read-only: nothing routes on this and no score is derived from it');
+  return lines;
+}
+
 /** Rated turns per `provider/model`, for the per-pair acceptance line. */
 export function acceptanceByPair(): Record<string, { accepted: number; rejected: number }> {
   const out: Record<string, { accepted: number; rejected: number }> = {};
