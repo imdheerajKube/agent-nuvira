@@ -16,6 +16,10 @@ import {
   collectLabelledTurns,
   explainTraceLabel,
   featuresFromTrace,
+  featuresFromReport,
+  cachedAcceptanceFit,
+  invalidateAcceptanceFit,
+  FIT_CACHE_TTL_MS,
   flagNames,
   formatAcceptanceSummary,
   predictAcceptance,
@@ -155,7 +159,10 @@ describe('acceptance model', () => {
     const text = formatAcceptanceSummary(s).join('\n');
     expect(text).toMatch(/labelled turns: 1/);
     expect(text).toMatch(/NOT trained/);
-    expect(text).toMatch(/read-only: nothing routes on this/);
+    // The fit now feeds the bandit's qualityScore ABOVE the floor; below it, the
+    // summary states the honest opposite rather than claiming a read-only stance
+    // the router no longer has.
+    expect(text).toMatch(/nothing routes on this until the fit clears the sample floor/);
   });
 
   it('focuses a pair in the shared summary without a second formatter', () => {
@@ -242,5 +249,39 @@ describe('acceptance model', () => {
       flag: 0,
       delivered: 1,
     });
+  });
+});
+
+describe('the LIVE-turn read path (qualityScore for the router bandit)', () => {
+  it('derives a live turn’s features the SAME way a stored trace’s are derived', () => {
+    // The score a turn gets while it runs must not disagree with the rows the fit
+    // trained on, so both go through the same rules.
+    expect(featuresFromReport(report('verified'))).toEqual({ verified: 1, unverified: 0, flag: 0, delivered: 0 });
+    expect(featuresFromReport(report('unverified', { unverifiedEdit: true }))).toEqual({
+      verified: 0,
+      unverified: 1,
+      flag: 1,
+      delivered: 0,
+    });
+    // A delivered-and-read-back authored turn counts as both verified and delivered.
+    expect(featuresFromReport(report('delivered-and-read-back'))).toEqual({
+      verified: 1,
+      unverified: 0,
+      flag: 0,
+      delivered: 1,
+    });
+  });
+
+  it('memoizes the fit and refits after the TTL or an explicit invalidation', () => {
+    // Fitting re-reads the corpus and runs 500 iterations; the live path must not
+    // pay that on every turn.
+    invalidateAcceptanceFit();
+    const a = cachedAcceptanceFit(1_000);
+    const b = cachedAcceptanceFit(2_000);
+    expect(b).toBe(a);
+    const afterTtl = cachedAcceptanceFit(1_000 + FIT_CACHE_TTL_MS + 1);
+    expect(afterTtl).not.toBe(a);
+    invalidateAcceptanceFit();
+    expect(cachedAcceptanceFit(5_000)).not.toBe(afterTtl);
   });
 });

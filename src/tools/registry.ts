@@ -42,6 +42,8 @@ import {
 // conservative one the dashboard server applies to a message.
 import { directoryFromMessage } from '../utils/workspace-path.js';
 import { createFindingTool } from './finding-tool.js';
+import { declareToolCapability } from './capability-registry.js';
+import type { ToolCapabilityDeclaration } from '../learning/capability-types.js';
 import { recordArtifact } from './artifact-append.js';
 import { checkStepArtifacts } from './step-artifact.js';
 
@@ -68,6 +70,14 @@ export interface Tool {
   /** Human description (the tool schema description field). */
   description: string;
   category: ToolCategory;
+  /**
+   * The tool's OWN capability declaration — its effect class, reversibility,
+   * grant category and requirements. `registerTool` records it so the capability
+   * descriptor, the fan-out decision and the write/terminal/external gates all
+   * read ONE source. Absent = the conservative default (a local-state change no
+   * grant may cover). See `learning/capability-types.ts`.
+   */
+  capability?: ToolCapabilityDeclaration;
   /** zod input schema — the same schema handed to tool-calling providers. */
   inputSchema: ZodType;
   /**
@@ -720,6 +730,11 @@ const registry = new Map<string, Tool>();
  */
 export function registerTool(tool: Tool): void {
   registry.set(tool.name, tool);
+  // Record the tool's OWN capability declaration so the name-only lookups
+  // (`effectClassOfTool`, `grantCategoryOfTool`) and the descriptor answer from
+  // it instead of a hand-maintained map. A tool that declares nothing is left
+  // out — absence IS the conservative default.
+  declareToolCapability(tool.name, tool.capability);
 }
 
 /** Look up a tool by name. */
@@ -819,6 +834,7 @@ registerTool({
 
 registerTool({
   name: 'document',
+  capability: { effectClass: 'local-write', grantCategory: 'write', reversibleHow: "a git revert" },
   description: 'Write documentation for the project (README, API docs, guides) through the agent pipeline',
   category: 'pipeline',
   inputSchema: taskGoalArgs,
@@ -828,6 +844,7 @@ registerTool({
 
 registerTool({
   name: 'website',
+  capability: { effectClass: 'local-write', grantCategory: 'write', reversibleHow: "a git revert" },
   description: 'Create or build a website / web app end-to-end through the agent pipeline',
   category: 'pipeline',
   inputSchema: taskGoalArgs,
@@ -837,6 +854,7 @@ registerTool({
 
 registerTool({
   name: 'analyze',
+  capability: { effectClass: 'read' },
   description: 'Analyze the project (state, architecture, comparison against another project) and produce findings',
   category: 'pipeline',
   inputSchema: taskGoalArgs,
@@ -855,6 +873,7 @@ registerTool({
 
 registerTool({
   name: 'publish',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external', requires: { credentials: [{ anyOf: ['NPM_TOKEN', 'GITHUB_TOKEN'], note: 'an npm automation token, or a GitHub token for a GitHub release' }] } },
   description: 'Publish a release to npm/GitHub (version bump, changelog, build, publish). IRREVERSIBLE — confirm bump type and target with ask_user first.',
   category: 'workflow',
   inputSchema: publishToolSchema,
@@ -875,6 +894,7 @@ registerTool({
 
 registerTool({
   name: 'ask_user',
+  capability: { effectClass: 'read' },
   description: 'Ask the user a clarifying question with 2–4 choices (multi-select optional). Every surface also offers the user a free-text "Other" answer, so a reply may be their own words instead of one of your choices. Use when a request is ambiguous or missing information.',
   category: 'experience',
   inputSchema: askUserSchema,
@@ -1100,6 +1120,7 @@ registerTool({
 
 registerTool({
   name: 'suggest_followups',
+  capability: { effectClass: 'read' },
   description: 'Suggest clickable followup prompts the user can click to send. Use this tool AFTER completing the task — call it last, after your written answer (never before or instead of it). Aim for ~3 suggestions; skip only when there is no sensible next step (e.g. the user said goodbye).',
   category: 'experience',
   inputSchema: suggestFollowupsSchema,
@@ -1120,6 +1141,7 @@ registerTool({
 
 registerTool({
   name: 'code_search',
+  capability: { effectClass: 'read' },
   description: 'Search the project for a regex/literal pattern (ripgrep-fast), returning matching file:line:column entries. Use for context gathering: finding definitions, usages, and where things live.',
   category: 'workflow',
   inputSchema: codeSearchSchema,
@@ -1154,6 +1176,7 @@ registerTool({
 
 registerTool({
   name: 'read_file',
+  capability: { effectClass: 'read' },
   description: 'Read files with line numbers. Pass `path` for one file (offset/limit for large files) OR `paths` to read several in one call — batching is one step instead of many. Each file gets its own line count and a continuation offset when truncated. Use to open the actual contents of files code_search or glob located — never guess what a file contains.',
   category: 'workflow',
   inputSchema: readFileSchema,
@@ -1163,6 +1186,7 @@ registerTool({
 
 registerTool({
   name: 'list_dir',
+  capability: { effectClass: 'read' },
   description: 'List a directory in the workspace (subdirectories first, sorted). Use to explore project structure — what is in this folder, where does this component live.',
   category: 'workflow',
   inputSchema: listDirSchema,
@@ -1172,6 +1196,7 @@ registerTool({
 
 registerTool({
   name: 'glob',
+  capability: { effectClass: 'read' },
   description: 'Find files by glob pattern relative to the workspace (e.g. "src/**\/*.ts", "tests/*.test.ts"). Use to locate files by shape when code_search content search does not fit.',
   category: 'workflow',
   inputSchema: globSchema,
@@ -1181,6 +1206,7 @@ registerTool({
 
 registerTool({
   name: 'edit_file',
+  capability: { effectClass: 'local-write', grantCategory: 'write', reversibleHow: "a git revert" },
   description: 'Surgical exact-text edit to a file (find old_string, replace with new_string — like str_replace). Make ONE call for ALL edits to a file via `replacements[]` (they apply atomically — all-or-nothing, never a partial edit). Optionally `dry_run` to preview a unified diff without writing. State-changing: confirm with the user via ask_user first, then retry with confirm:true. Use after read_file so the match is exact.',
   category: 'workflow',
   inputSchema: editFileSchema,
@@ -1190,6 +1216,7 @@ registerTool({
 
 registerTool({
   name: 'write_file',
+  capability: { effectClass: 'local-write', grantCategory: 'write', reversibleHow: "a create is undone by deleting the file; an overwrite is a git revert" },
   description: 'Create a new file, overwrite one, or APPEND a section to one (parent directories are created). Use mode "append" to deliver a large document or file in sections across several calls — a payload too large for one model output cannot be sent at all, so split it. State-changing: confirm with the user via ask_user first, then retry with confirm:true.',
   category: 'workflow',
   inputSchema: writeFileSchema,
@@ -1199,6 +1226,7 @@ registerTool({
 
 registerTool({
   name: 'run_terminal',
+  capability: { effectClass: 'local-state', grantCategory: 'terminal' },
   description: 'Run a shell command in the workspace and see its REAL output — typecheck, a single test file, a build, git diff/status. Use to verify code by actual invocation: run, read the failure, edit, re-run. Verify-class commands (tests/typecheck/build/git-readonly) run directly; state-changing commands need confirm:true after the user approves via ask_user. Destructive/system commands (sudo, git push, rm -rf at dangerous targets, ...) are denied outright.',
   category: 'workflow',
   inputSchema: runTerminalSchema,
@@ -1307,6 +1335,7 @@ registerTool(createFindingTool());
 
 registerTool({
   name: 'web_search',
+  capability: { effectClass: 'read' },
   description: 'Search the web for a query, returning title/url/snippet hits. Uses the first available backend: a configured Brave/Serper/Tavily/Google-CSE key, a self-hosted SearXNG, or the keyless DuckDuckGo fallback. Set the backend with `tools.toolsets.web.provider` or an API-key env var. Use to ground answers in current information.',
   category: 'workflow',
   inputSchema: webSearchSchema,
@@ -1330,6 +1359,7 @@ registerTool({
 
 registerTool({
   name: 'read_page',
+  capability: { effectClass: 'read' },
   description: 'Fetch a URL and return its readable text (Jina Reader free tier when JINA_API_KEY is set, else a plain fetch). Use to read a full page found by web_search.',
   category: 'workflow',
   inputSchema: readPageSchema,
@@ -1349,6 +1379,7 @@ registerTool({
 
 registerTool({
   name: 'browser',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Automate a real browser (open/click/type/extract/screenshot). Requires the optional playwright package (npm i playwright && npx playwright install chromium). Use for tasks that need a live page (login flows, scraping dynamic sites).',
   category: 'workflow',
   inputSchema: browserSchema,
@@ -1367,6 +1398,7 @@ registerTool({
 
 registerTool({
   name: 'generate_image',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Generate an image from a text prompt using a bring-your-own-key backend: Google Gemini/Imagen (GEMINI_API_KEY), OpenAI DALL-E/gpt-image (OPENAI_API_KEY), Stability AI (STABILITY_API_KEY), a local ComfyUI/Stable Diffusion (BUFF_IMAGE_API_URL), or the free keyless Pollinations.ai fallback. The first backend whose key is configured wins (override with `modality.image.provider`), and a failing backend falls back to Pollinations. The image is saved to the sandbox images/ dir and the path is returned. When running in a gateway context (WhatsApp/Telegram/etc.), the image is automatically sent back to the originating channel.',
   category: 'workflow',
   inputSchema: imageGenSchema,
@@ -1402,6 +1434,7 @@ registerTool({
 
 registerTool({
   name: 'speak',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Synthesize speech for text to an audio file (edge-tts or Piper, both free and local). Requires edge-tts or piper on PATH. Returns the audio file path. When running in a gateway context, the audio is automatically sent back to the originating channel.',
   category: 'workflow',
   inputSchema: speakSchema,
@@ -1425,6 +1458,7 @@ registerTool({
 
 registerTool({
   name: 'transcribe',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Transcribe an audio file to text (whisper.cpp or faster-whisper, local and free). Requires whisper on PATH. Returns the transcript.',
   category: 'workflow',
   inputSchema: transcribeSchema,
@@ -1439,6 +1473,7 @@ registerTool({
 
 registerTool({
   name: 'describe_image',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Describe an image (local Ollama llava/llama3.2-vision, or free Gemini vision when BUFF_GEMINI_API_KEY is set). Use for screenshots, diagrams, or any image the user references.',
   category: 'workflow',
   inputSchema: describeImageSchema,
@@ -1456,6 +1491,7 @@ registerTool({
 
 registerTool({
   name: 'gateway_send',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Send a message (text or image) to a DIFFERENT channel or contact through the gateway (WhatsApp by contact name or number, Telegram, Slack, Discord, email, or any registered alias). Do NOT use this tool to reply to the CURRENT conversation — your text response is automatically sent back to the originating channel. Only call this when the user asks you to deliver a result to SOMEONE ELSE — e.g. "send the poem to Alex on whatsapp" (while you are chatting with Divya). For images, set image_path to the file path (e.g. from generate_image output) — the image is sent with text as caption. AUTHORIZATION: on a gateway turn the sender must hold outbound send authority for that platform (dashboard → Agent Hub → Permissions → Send authority); the result string tells you plainly when a send was refused and why — report that to the user honestly and NEVER claim a message was delivered unless this tool returned its \'✅ sent\' result.',
   category: 'workflow',
   inputSchema: gatewaySendSchema,
@@ -1465,6 +1501,7 @@ registerTool({
 
 registerTool({
   name: 'run_cli',
+  capability: { effectClass: 'local-state', grantCategory: 'terminal' },
   description: 'Resolve a plain-English request into the exact nuvira CLI command and execute it (start/stop the dashboard or gateway, check status, add a verified sender or send-by-name contact, configure a platform like telegram/whatsapp, run evals, show stats, manage memory/cache, etc.). Use when the user describes a system/tooling task in plain English instead of typing the command — e.g. "stop the dashboard", "add Rahul to whatsapp", "enable telegram support", "run the eval suite". Ambiguous asks and destructive actions are gated: the tool returns what to confirm, then call ask_user and retry with confirm:true when the user agreed.',
   category: 'workflow',
   inputSchema: runCliSchema,
@@ -1474,6 +1511,7 @@ registerTool({
 
 registerTool({
   name: 'verify_requirement',
+  capability: { effectClass: 'read' },
   description: 'Verify whether a user request is complete enough to act on (requirementState: complete vs needs-clarification), returning the missing information.',
   category: 'experience',
   inputSchema: verifyRequirementSchema,
@@ -1510,6 +1548,7 @@ registerTool({
 
 registerTool({
   name: 'clone_repo',
+  capability: { effectClass: 'external', grantCategory: 'external', reversibleHow: 'delete the cloned directory' },
   description: 'Clone a git repository (depth-1 shallow) into an ephemeral cache and scope the conversation to it — read_file / list_dir / glob / code_search / run_terminal then operate on the CLONE, so you can assess another project without touching the user\'s workspace. Use when the ask is about a repo that is not the attached project.',
   category: 'workflow',
   inputSchema: cloneRepoSchema,
@@ -1527,6 +1566,7 @@ registerTool({
 
 registerTool({
   name: 'git',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external', reversibleHow: 'a local commit is reversible; a push is only as reversible as the remote' },
   description: 'Structured git operations: status/log (read-only), diff (unified output + a diff card in the GUI), commit (GATED — confirm:true only after the user approved via ask_user; optional files = the accepted subset to stage+commit), and push (GATED — sends a branch to a remote; runs when the user’s own request named the push, otherwise ask via ask_user first). Use for the whole flow: diff → ask_user (accept/reject files) → commit → push.',
   category: 'workflow',
   inputSchema: gitToolSchema,
@@ -1725,6 +1765,7 @@ registerTool({
 // Browser Supervisor tool
 registerTool({
   name: 'browser_supervisor',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Browser CDP supervisor: monitor health, detect dialogs, track frames.',
   category: 'workflow',
   inputSchema: z.object({
@@ -1747,6 +1788,7 @@ registerTool({
 // Browser Dialog tool
 registerTool({
   name: 'browser_dialog',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Handle native browser dialogs: accept, dismiss, or enter values.',
   category: 'workflow',
   inputSchema: z.object({
@@ -1774,6 +1816,7 @@ registerTool({
 // Camofox tool
 registerTool({
   name: 'camofox',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Camofox anti-detection browser: open pages, screenshots, interact via a11y refs.',
   category: 'workflow',
   inputSchema: z.object({
@@ -1802,6 +1845,7 @@ registerTool({
 // Docker tool
 registerTool({
   name: 'docker',
+  capability: { effectClass: 'local-state', grantCategory: 'terminal' },
   description: 'Docker management: containers, images, compose, volumes, networks.',
   category: 'workflow',
   inputSchema: z.object({
@@ -1919,6 +1963,7 @@ registerTool({
 // Kanban tool
 registerTool({
   name: 'kanban',
+  capability: { effectClass: 'local-write', grantCategory: 'write', reversibleHow: "a git revert" },
   description: 'Kanban board: create boards, manage cards, track priorities.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2042,6 +2087,7 @@ registerTool({
 // Blueprint tool
 registerTool({
   name: 'blueprint',
+  capability: { effectClass: 'local-write', grantCategory: 'write', reversibleHow: "a git revert" },
   description: 'Project blueprints: create project templates with file structure.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2064,6 +2110,7 @@ registerTool({
 // File ops tool
 registerTool({
   name: 'file_ops',
+  capability: { effectClass: 'local-write', grantCategory: 'write', reversibleHow: "a git revert" },
   description: 'Advanced file operations: state tracking, safe writes, extraction, preview.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2287,6 +2334,7 @@ registerTool({
 // tool-loop.ts trusts). See TOOL_TRUTHFULNESS_TRACKER.md findings #3 and #9.
 registerTool({
   name: 'messaging',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description:
     'NOT CONNECTED — this tool has no delivery adapter and every send/react refuses with code "not_configured". '
     + 'Do NOT use it to deliver anything and never report a delivery from it. Use gateway_send instead: it sends '
@@ -2320,6 +2368,7 @@ registerTool({
 // Vision tool — comprehensive image analysis, OCR, UI element detection
 registerTool({
   name: 'vision',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description:
     'Analyze an image and transcribe its text (OCR) through the configured vision backend (a local Ollama '
     + 'vision model or a Gemini key); `analyze` also reports real pixel dimensions. detect-elements, '
@@ -2406,6 +2455,7 @@ registerTool({
 // Process registry tool
 registerTool({
   name: 'process_registry',
+  capability: { effectClass: 'read' },
   description: 'Track all running processes with metadata and cleanup.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2432,6 +2482,7 @@ registerTool({
 // Code execution tool
 registerTool({
   name: 'code_execution',
+  capability: { effectClass: 'local-state', grantCategory: 'terminal' },
   description: 'Execute code in sandboxed environment with timeout and resource limits.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2493,6 +2544,7 @@ registerTool({
 // Threat patterns tool
 registerTool({
   name: 'threat_patterns',
+  capability: { effectClass: 'read' },
   description: 'Detect threat patterns: shell execution, external HTTP, obfuscation.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2508,6 +2560,7 @@ registerTool({
 // URL safety tool
 registerTool({
   name: 'url_safety',
+  capability: { effectClass: 'read' },
   description: 'Check URL safety: suspicious TLDs, patterns, length.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2523,6 +2576,7 @@ registerTool({
 // Path security tool
 registerTool({
   name: 'path_security',
+  capability: { effectClass: 'read' },
   description: 'Check path security: traversal, null bytes, directory escape.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2539,6 +2593,7 @@ registerTool({
 // Security score tool
 registerTool({
   name: 'security_score',
+  capability: { effectClass: 'read' },
   description: 'Calculate security score for a file: code injection, secrets, threats.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2560,6 +2615,7 @@ registerTool({
 // and no network, and reports masked values only — see src/security/secret-scan.ts.
 registerTool({
   name: 'secret_scan',
+  capability: { effectClass: 'read' },
   description:
     'Scan the workspace for secret-shaped strings (API keys, tokens, private keys, credentials in URLs) before committing or publishing. Fully local — no network and no external scanner binary — and every reported value is masked. Returns findings with path:line and severity, plus a summary. Set history:true to scan git HISTORY as well (every committed version of every file) — a key deleted in a later commit is STILL committed and must be rotated. A clean result means "nothing matched a known shape", NOT "no secrets": report it as a lint, never as a guarantee.',
   category: 'workflow',
@@ -2614,6 +2670,7 @@ registerTool({
 //   ~85% of per-turn schema tokens saved, zero capability lost.
 registerTool({
   name: 'tool_search',
+  capability: { effectClass: 'read' },
   description:
     'Discover and load capabilities. Actions: "search" finds what the agent can DO by query and returns each hit as a CAPABILITY — its effect (read / local-write / local-state / external / destructive), whether it is reversible and how, any credentials or binaries it needs, whether a session grant can cover it, and a `check` saying whether those needs are actually MET on this machine (run this FIRST for an install / publish / deploy / push task, so a missing executable is known before the work starts rather than halfway through); ' +
     '"readiness" is the same probe without a search — call it with a query to pre-flight a described task, or with no query to see what the curated install / publish / deploy / push verbs are missing here; ' +
@@ -2896,6 +2953,7 @@ registerTool({
 // Fuzzy match tool
 registerTool({
   name: 'fuzzy_match',
+  capability: { effectClass: 'read' },
   description: 'Fuzzy string matching with Levenshtein distance.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2932,6 +2990,7 @@ registerTool({
 // OSV check tool
 registerTool({
   name: 'osv_check',
+  capability: { effectClass: 'read' },
   description: 'Check for known vulnerabilities in npm packages via OSV API.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2963,6 +3022,7 @@ registerTool({
 // Image source tool
 registerTool({
   name: 'image_source',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Detect image source: format, size, is screenshot.',
   category: 'workflow',
   inputSchema: z.object({
@@ -2980,6 +3040,7 @@ registerTool({
 // Discord tool
 registerTool({
   name: 'discord',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Discord server management: list servers, channels, members, messages, roles. Send messages.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3008,6 +3069,7 @@ registerTool({
 // Home Assistant tool
 registerTool({
   name: 'homeassistant',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Home Assistant smart home: list entities, get state, call services (turn_on/off, set_temperature).',
   category: 'workflow',
   inputSchema: z.object({
@@ -3037,6 +3099,7 @@ registerTool({
 // Microsoft Graph tool
 registerTool({
   name: 'microsoft_graph',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Microsoft Graph API: email, calendar, OneDrive, contacts.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3088,6 +3151,7 @@ registerTool({
 // Feishu document tool
 registerTool({
   name: 'feishu_doc',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Feishu document management: create, read, update, delete documents.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3113,6 +3177,7 @@ registerTool({
 // Feishu drive tool
 registerTool({
   name: 'feishu_drive',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Feishu drive management: list files, create folders, move, copy, search.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3144,6 +3209,7 @@ registerTool({
 // Video generation tool
 registerTool({
   name: 'video_generate',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Generate videos from text prompts or images. Supports FAL/BFL providers. When running in a gateway context and a video URL is returned, the video is automatically downloaded and sent back to the originating channel.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3252,6 +3318,7 @@ registerTool({
 // NeuTTS synthesis tool
 registerTool({
   name: 'neutts_synth',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'High-quality text-to-speech synthesis via NeuTTS.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3277,6 +3344,7 @@ registerTool({
 // Terminal tool — multi-environment execution
 registerTool({
   name: 'terminal',
+  capability: { effectClass: 'local-state', grantCategory: 'terminal' },
   description: 'Execute commands in local, Docker, Modal, SSH environments with background support.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3333,6 +3401,7 @@ registerTool({
 // Send message tool — cross-channel messaging
 registerTool({
   name: 'send_message',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Send messages to Telegram, Discord, Slack, WhatsApp, Email. Supports media attachments (images, videos, audio, documents) on WhatsApp.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3604,6 +3673,7 @@ registerTool({
 // MCP Tool — Dynamic MCP server connection and tool invocation
 registerTool({
   name: 'mcp_tool',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Connect to external MCP servers and invoke their tools — stdio, HTTP, or SSE transport.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3632,6 +3702,7 @@ registerTool({
 // Computer Use — Desktop automation via cua-driver
 registerTool({
   name: 'computer_use',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Desktop control via cua-driver — screenshots, mouse, keyboard, scroll without stealing focus.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3720,6 +3791,7 @@ registerTool({
 // OpenRouter Client — Multi-LLM routing
 registerTool({
   name: 'openrouter_client',
+  capability: { effectClass: 'external', grantCategory: 'external' },
   description: 'Route LLM calls to multiple providers via OpenRouter — cost optimization and fallback.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3745,6 +3817,7 @@ registerTool({
 // TTS Streaming — Provider-agnostic streaming TTS
 registerTool({
   name: 'tts_streaming',
+  capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
   description: 'Convert text to speech using various providers — streaming and batch modes.',
   category: 'workflow',
   inputSchema: z.object({
@@ -3826,6 +3899,7 @@ registerTool({
 // that cannot, so the model can distinguish "read it" from "could not read it".
 registerTool({
   name: 'read_extract',
+  capability: { effectClass: 'read' },
   description:
     'Extract text from a document. WORKS for PDF, DOCX, XLSX, PPTX, HTML, CSV/TSV, JSON, XML, YAML and '
     + 'plain text/Markdown; PDF and spreadsheet table rows are preserved so values stay paired with their '
@@ -4028,6 +4102,7 @@ registerTool({
 
 registerTool({
   name: 'search_memory',
+  capability: { effectClass: 'read' },
   description: 'Search memories by content, type, or tags. Searches BOTH memory stores: entries added with add_memory (keyword/tag) and facts learned from earlier sessions (semantic), so a memory recorded by another path is still found.',
   category: 'workflow',
   inputSchema: z.object({
@@ -4091,6 +4166,7 @@ registerTool({
 
 registerTool({
   name: 'list_memories',
+  capability: { effectClass: 'read' },
   description: 'List all memory entries with optional filters.',
   category: 'workflow',
   inputSchema: z.object({
@@ -4108,6 +4184,7 @@ registerTool({
 
 registerTool({
   name: 'memory_stats',
+  capability: { effectClass: 'read' },
   description: 'Get memory statistics.',
   category: 'workflow',
   inputSchema: z.object({}),

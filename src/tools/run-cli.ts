@@ -188,7 +188,8 @@ export async function runCliTool(args: unknown, ctx: ToolContext): Promise<strin
     // `memory.prune`), which keeps its gate whatever the user granted.
     const grantCovers =
       (gatedIntent.external || gatedIntent.recoverable) &&
-      sessionGrantCovers(ctx.planStore, gatedIntent.grantCategory ?? 'terminal');
+      gatedIntent.grantCategory !== undefined &&
+      sessionGrantCovers(ctx.planStore, gatedIntent.grantCategory);
     const verdict = envVerdict.covered || grantCovers
       ? {
           action: 'proceed' as const,

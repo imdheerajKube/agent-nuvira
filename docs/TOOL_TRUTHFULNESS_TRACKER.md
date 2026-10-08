@@ -713,6 +713,56 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 41 Phase 2 — the gates answer from the descriptor (2026-10-08)
+
+**The gap Phase 1 left.** Phase 1 made "what the agent can do" one descriptor, but
+**nothing routed on it** — the gates still restated the fact by hand at each call
+site. The audit below named the drift surface; this closes the tool-scoped half of
+it.
+
+**Two lookups, one map.** `capability-registry.ts` gains
+`grantCategoryOfTool(name)` (the category a tool DECLARES, or `null` when it
+declares none) and `grantCategoryForEffect(effect)` (for a call site whose category
+is a property of the effect — a shell command whose reach depends on the command, a
+CLI intent resolved from the manifest). Both read the SAME `EFFECT_BY_TOOL` map
+`capabilityFromTool` builds, so the cheap gate path and the full descriptor cannot
+diverge — and a test pins that.
+
+**The five hardcoded grant literals are gone.**
+
+| Site | Was | Now |
+|---|---|---|
+| `tools/coding-tools.ts` (`edit_file`, `write_file`) | `sessionGrantCovers(planStore, 'write')` | `grantCategoryOfTool('edit_file' \| 'write_file')` |
+| `tools/git-tool.ts` (push) | `sessionGrantCovers(planStore, 'external')` | `grantCategoryOfTool('git')` |
+| `tools/run-terminal.ts` | `recoverable ? 'terminal' : 'external'` | `grantCategoryForEffect(recoverable ? 'local-state' : 'external')` |
+| `tools/run-cli.ts` | `gatedIntent.grantCategory ?? 'terminal'` | the declaration's own `grantCategory`, no hand fallback |
+
+All four are **behaviour-equivalent** to what the sites computed (the declared
+category of each tool is exactly the literal it used), which is why the existing
+gate suites pass unchanged. The difference is the SOURCE: a new tool cannot be gated
+with a category that disagrees with its declaration, and a tool that declares none
+can no longer be unlocked by a user's blanket grant (the `run-cli` hand default
+`?? 'terminal'` was the one place that could).
+
+**And the end state landed: each tool owns its facts.** `Tool` gained an optional
+`capability?: ToolCapabilityDeclaration`, and `registerTool` records it
+(`declareToolCapability`). The hand map is **retired** — `capability-registry.ts`
+holds no name→effect table any more; its lookups read the registration, and a tool
+that declares nothing keeps the conservative default (local-state, no grant). All
+62 tools that the old map described now declare their own effect class,
+reversibility, grant category and requirements at `registerTool`.
+
+**Still open in this layer (recorded, not claimed):** `INDEPENDENT_TOOLS`
+(`tool-loop.ts:288`) is still a hand list beside the derived `parallelSafeToolNames()`
+— deliberately left, because it gates the delegate SUGGESTION (a semantic "gather"
+question), not the fan-out, and the derived read set would pull in `suggest_followups`
+(plumbing, never a gather step).
+
+Pinned by `tests/tools/capability-registry.test.ts` (5 new: the declared categories,
+the conservative `null`, the effect mapping, the map/descriptor agreement, and a
+**behaviour-equivalence table** that writes the retired `EFFECT_BY_TOOL` down once
+so the migration cannot silently drift).
+
 ## Bundle 52 — the grown table, made visible, editable and self-growing (2026-10-08)
 
 **The gap.** Bundle 51 made the model able to record a derived per-OS command, but
@@ -1151,7 +1201,7 @@ descriptor genuinely knows the fact, not by file size.
 
 | Site | Table | Why the descriptor owns it |
 |---|---|---|
-| `tools/capability-registry.ts` | `EFFECT_BY_TOOL` | This IS the descriptor source, and it is still keyed by tool NAME in one hand map. The end state is each tool self-declaring `effectClass`/`grantCategory` at `registerTool`, so a new tool cannot be born unclassified. The DEFAULT is conservative, so nothing is unsafe — but it is the last hand table in the layer. |
+| `tools/capability-registry.ts` | ~~`EFFECT_BY_TOOL`~~ ✅ **CLOSED** | **Done (2026-10-08).** Each tool self-declares `capability` at `registerTool`; `registerTool` records it and every lookup reads the declaration. The hand map is retired. A tool that declares nothing keeps the conservative default. See Bundle 41 Phase 2 above. |
 | `tools/run-terminal.ts:604` | `grantCategory = recoverable ? 'terminal' : 'external'` | The category is a capability fact; the gate re-derives it from a `recoverable` boolean instead of reading the descriptor. |
 | `tools/git-tool.ts:236` | `sessionGrantCovers(planStore, 'external')` | The literal `'external'` restates `git`'s `grantCategory`. |
 | `tools/run-cli.ts:191` | `gatedIntent.grantCategory ?? 'terminal'` | The `?? 'terminal'` fallback is a hand default; the intent declaration (`cli-intent-effects.ts`) already carries the category. |
@@ -1179,10 +1229,13 @@ parsing sets (`run-terminal.ts`); file-scan ignore dirs and source extensions;
 (`engine-router.ts`, `quota-ledger.ts`, `inference/*`) — those are MODEL
 capability, a different axis, and `model-capability.ts` is their home.
 
-**The one-line conclusion.** The capability layer centralized the facts but did
-not yet let the TOOL own them, so `EFFECT_BY_TOOL` and the five grant literals are
-the remaining drift surface; everything else is either a semantic subset (keep,
-but derive the easy half) or a different axis (exposure, not effect).
+**The one-line conclusion (updated 2026-10-08).** The capability layer centralized
+the facts and now lets the TOOL own them. **The five grant literals are closed**
+(the gates read `grantCategoryOfTool` / `grantCategoryForEffect`) **and
+`EFFECT_BY_TOOL` is retired** — each tool self-declares its `capability` at
+`registerTool`. What remains is the partial/exposure tables
+(`INDEPENDENT_TOOLS`, `AGENT_PIPELINE_TOOLS`, `CORE_TOOL_NAMES`), which are a
+different axis or a deliberate semantic subset.
 
 ## Open
 

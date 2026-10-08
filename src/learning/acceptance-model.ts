@@ -10,9 +10,15 @@
  * be built from derived signals alone.
  *
  * WHAT IT REFUSES TO DO.
- *  - It never routes. Nothing in the router reads this file; `model explain`
- *    prints it and that is the only caller. A fitted number that moved a routing
- *    decision would be the exact defect the programme removes, one layer up.
+ *  - It never routes on an UNMEASURED or too-thin sample. `cachedAcceptanceFit`
+ *    returns the same named refusal below the floor as `trainAcceptanceModel`, and
+ *    the one routing consumer (`outcome-observation.ts` → the bandit's
+ *    `qualityScore`) omits the field entirely unless the fit is `ok`. So a router
+ *    cannot be moved by a probability fitted to three rows — the exact defect the
+ *    programme removes. (NOTE: this file previously READ-ONLY; the user's decision
+ *    of 2026-10-08 wired the fitted probability into the bandit's measured
+ *    `qualityScore`, which is why the router now reads it. Below the floor, nothing
+ *    changes.)
  *  - It never fits below the sample floor. With too few labelled turns, or with
  *    only one class, it returns a NAMED reason and no model — an underfit
  *    probability printed as if it were evidence is worse than printing nothing.
@@ -285,6 +291,46 @@ export function featuresFromTrace(
   if (anyFlag(trace.turnReport)) features.flag = 1;
   if (delivered) features.delivered = 1;
   return features;
+}
+
+/**
+ * Features for a LIVE turn, derived from its `TurnReport` the SAME way
+ * {@link featuresFromTrace} derives them for a stored one — so the score a turn
+ * gets while it runs cannot disagree with the rows the fit trained on.
+ */
+export function featuresFromReport(report: TurnReport | undefined): AcceptanceFeatures {
+  const features = emptyFeatures();
+  const verification = report?.verification;
+  if (verification === 'verified' || verification === 'delivered-and-read-back') features.verified = 1;
+  else if (verification === 'unverified') features.unverified = 1;
+  if (anyFlag(report)) features.flag = 1;
+  if (verification === 'delivered-and-read-back' || (report?.changedPaths?.length ?? 0) > 0) features.delivered = 1;
+  return features;
+}
+
+/** How long a fitted model is reused before the corpus is re-read. */
+export const FIT_CACHE_TTL_MS = 60_000;
+let _fitCache: { at: number; fit: AcceptanceFit } | null = null;
+
+/**
+ * A MEMOIZED {@link trainAcceptanceModel}.
+ *
+ * WHY IT MUST BE CACHED: this is read on the live turn-outcome path, and fitting
+ * re-reads up to 1000 traces plus the corpus and runs 500 iterations. Doing that
+ * once per turn would put a synchronous fs read on every answer. The corpus only
+ * grows when a turn is rated, so a short TTL costs at most one refit per minute and
+ * cannot hide a label for longer than that.
+ */
+export function cachedAcceptanceFit(now: number = Date.now()): AcceptanceFit {
+  if (_fitCache && now - _fitCache.at < FIT_CACHE_TTL_MS) return _fitCache.fit;
+  const fit = trainAcceptanceModel(now);
+  _fitCache = { at: now, fit };
+  return fit;
+}
+
+/** Drop the memoized fit, so the next read refits (a CLI refresh, and tests). */
+export function invalidateAcceptanceFit(): void {
+  _fitCache = null;
 }
 
 /**
@@ -673,7 +719,11 @@ export function formatAcceptanceSummary(s: AcceptanceSummary, focusPair?: string
     lines.push(`fit: NOT trained — ${s.fit.reason}`);
     lines.push(`     (needs ${MIN_LABELS_FOR_FIT} labelled turns with ≥${MIN_PER_CLASS} of each class)`);
   }
-  lines.push('read-only: nothing routes on this and no score is derived from it');
+  lines.push(
+    s.fit.ok
+      ? 'this fit feeds the router bandit\'s qualityScore on live turns (never below the sample floor)'
+      : 'nothing routes on this until the fit clears the sample floor above',
+  );
   return lines;
 }
 

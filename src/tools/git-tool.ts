@@ -53,6 +53,7 @@ import {
   requestRequestsPush,
 } from '../learning/autonomy-policy.js';
 import { sessionGrantCovers } from '../learning/session-grant.js';
+import { grantCategoryOfTool } from './capability-registry.js';
 
 /** The tool's args (zod-validated in the registry). */
 export interface GitToolArgs {
@@ -233,7 +234,8 @@ async function pushAction(args: GitToolArgs, ctx: ToolContext): Promise<string> 
   const namedByRequest = requestRequestsPush(ctx.authorizationRequest ?? '');
   // The user may also have granted off-machine actions for this session — an
   // explicit go-ahead that covers a push the request did not name.
-  const grantCovers = !namedByRequest && sessionGrantCovers(ctx.planStore, 'external');
+  const gitGrant = grantCategoryOfTool('git');
+  const grantCovers = !namedByRequest && gitGrant !== null && sessionGrantCovers(ctx.planStore, gitGrant);
   if (!args.confirm && !namedByRequest && !grantCovers) {
     // `external` is what makes the ask unconditional here — even a request that
     // authorized writes cannot authorize this, because it was not the user who
