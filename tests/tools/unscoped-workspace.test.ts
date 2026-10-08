@@ -138,7 +138,8 @@ describe('ask_user adopts a folder the user names in their reply', () => {
       { path: 'app/index.html', content: '<html></html>', confirm: true },
       ctx,
     );
-    expect(out).toContain("created 'app/index.html'");
+    // The reported path carries the platform separator (Windows: `app\index.html`).
+    expect(out).toContain(`created '${join('app', 'index.html')}'`);
     expect(existsSync(join(chosen, 'app', 'index.html'))).toBe(true);
     // Still nothing in the server's own directory.
     expect(existsSync(join(serverCwd, 'app', 'index.html'))).toBe(false);

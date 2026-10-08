@@ -240,7 +240,10 @@ describe('ensureProjectVenv — C3 install sandbox', () => {
     expect(existsSync(venv!.python)).toBe(true);
     // Pinned for the rest of the run — a follow-up lookup is the same object.
     expect(getPinnedProjectVenv(root)?.dir).toBe(venv?.dir);
-  });
+    // `python -m venv` shells out to the real interpreter and is genuinely slower
+    // on Windows CI than the 15s default (observed timing out there); the work is
+    // real, so give it room rather than weakening what is asserted.
+  }, 60_000);
 });
 
 describe('command classification', () => {

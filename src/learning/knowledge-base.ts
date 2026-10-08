@@ -44,7 +44,7 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { join, extname, basename } from 'node:path';
+import { join, extname, basename, relative, isAbsolute } from 'node:path';
 
 import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import { embed, RETRIEVAL_MODEL } from '../memory/embedder.js';
@@ -1014,6 +1014,16 @@ export interface SyncResult {
   skipped: Array<{ path: string; reason: string }>;
 }
 
+// True when `child` is `root` itself or lives beneath it, on ANY platform.
+// Deliberately NOT a `startsWith(root + '/')` test: manifest paths carry the
+// native separator, so on Windows a hardcoded `/` prefix never matches — the
+// document looks like it belongs to no synced root and a deleted file is
+// silently never pruned, so it keeps being served. `path.relative` is native.
+function isUnderRoot(root: string, child: string): boolean {
+  const rel = relative(root, child);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
 /**
  * Bring a tag up to date with the folders it is kept in step with.
  *
@@ -1087,9 +1097,7 @@ export async function syncKnowledgeTag(
 
   for (const path of before.keys()) {
     if (enumerated.has(path)) continue;
-    const underSyncedRoot = directoryRoots.some((root) =>
-      path === root || path.startsWith(root.endsWith('/') ? root : `${root}/`),
-    );
+    const underSyncedRoot = directoryRoots.some((root) => isUnderRoot(root, path));
     if (underSyncedRoot && (await removeKnowledgeDocument(normalized, path))) {
       result.removed.push(path);
     }
