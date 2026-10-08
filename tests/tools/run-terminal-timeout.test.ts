@@ -110,7 +110,9 @@ describe('P7 — the identical-command retry storm is capped', () => {
 
   it('a SUCCESS on the SAME command clears the streak, so a repaired command is not held against it', async () => {
     const script = join(root, 'check.js');
-    const args = { command: `node ${script}`, confirm: true };
+    // Quote the path: an UNQUOTED Windows path (`node C:\Users\...\check.js`) has its
+    // backslashes eaten as shell escapes, so the command fails for the wrong reason.
+    const args = { command: `node "${script}"`, confirm: true };
     const fail = async () => {
       writeFileSync(script, 'process.exit(3)');
       return runTerminal.run(args, ctx());
@@ -161,7 +163,7 @@ describe('P7 — a WRITE invalidates the guard, so a repaired project can re-run
     // one the autonomy gate lets the agent apply without a round trip.
     const padding = '// padding line so the fix stays a surgical edit\n'.repeat(12);
     writeFileSync(script, `${padding}process.exit(3)\n`);
-    const command = `node ${script}`;
+    const command = `node "${script}"`;
     const args = { command, timeout_ms: 5_000, confirm: true };
     const call = (): StepResponse => ({
       content: '',
@@ -222,7 +224,7 @@ describe('P7 — a WRITE invalidates the guard, so a repaired project can re-run
     // branch that announces `autonomy:write-applied` for run_terminal itself.
     // It fails fast and deterministically (the source does not exist).
     const absent = join(root, 'does-not-exist.txt');
-    const args = { command: `cp ${absent} ${join(root, 'out.txt')}`, timeout_ms: 5_000 };
+    const args = { command: `cp "${absent}" "${join(root, 'out.txt')}"`, timeout_ms: 5_000 };
     const step = (): StepResponse => ({
       content: '',
       toolCalls: [{ id: `c${Math.random()}`, name: 'run_terminal', arguments: args }],

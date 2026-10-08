@@ -193,11 +193,11 @@ describe('content hashing and sync', () => {
     expect(second.changed).toBe(1);
     expect(second.added).toBe(1);
     expect(second.unchanged).toBe(0);
-    expect(second.removed.map((p) => p.split('/').pop())).toEqual(['other.md']);
+    expect(second.removed.map((p) => p.split(/[\\/]/).pop())).toEqual(['other.md']);
 
     // The deleted document stops being served AND stops being retrievable.
     expect(readKnowledgeDocument('spec', 'other.md').ok).toBe(false);
-    expect(getKnowledgeTag('spec')?.documents.map((d) => d.path.split('/').pop())).toEqual([
+    expect(getKnowledgeTag('spec')?.documents.map((d) => d.path.split(/[\\/]/).pop())).toEqual([
       'payments.md',
       'third.md',
     ]);
