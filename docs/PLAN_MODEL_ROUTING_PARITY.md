@@ -360,8 +360,9 @@ keeping the previous answer in the history.
 suppresses or auto-answers an ask); an unattended default is an ASSUMPTION and is NOT recorded
 as a decision; writes are best-effort and redact obvious secrets; recording is disabled under a
 test runner (an injected renderer is not a person deciding). `.nuvira/` is gitignored, so the
-log never dirties a repo. Automatic prompt re-injection was deliberately NOT built — a decision
-is read back when the user asks for it.
+log never dirties a repo. Automatic prompt re-injection was deliberately NOT built in 36c — a
+decision was read back only when the user asked for it. 36e adds the automatic, ADVISORY
+read-back, on the user's instruction.
 
 **Tests.** `decision-log.test.ts` (7: record+doc / redaction / revise keeps history / unknown
 id / relevant-ask recall / corrupt line skipped / off under a test runner);
@@ -378,6 +379,32 @@ crossing below a coin flip after 12. **PART 2 — the BRAKE:** an arm that is cr
 rejected still rises (the model did answer) but stays below an identical un-rejected control
 (θ 0.76 vs 0.85 after 13 turns). It reports the Beta MEAN, so the effect is deterministic and
 not a lucky Thompson draw.
+
+### 36e. In-turn decision recall — ADVISORY, bounded, never a suppression
+
+**Why.** 36c made a decision durable; the user asked why it did not also HEAL the turn. When a
+later ask re-opens something the project already settled, the agent re-derives the answer from
+scratch (or, worse, re-asks) — the same drift the working-state ledger was built to stop, one
+layer up.
+
+**The fix.** `recallDecisionBlock(dir, ask, limit=3)` reuses the 36c read side
+(`recallDecisions`, shared significant tokens of length ≥4, no model, no phrase list) and
+renders an explicitly-labelled `[Previously decided — …]` block. `answerOnce` computes it for an
+attached project and injects it with the other context blocks, right after the recalled project
+context, before history. The block's own text says what it is AND that a changed situation may
+still ask.
+
+**The line it does not cross.** It is ADVISORY. It never suppresses an `ask_user` — the tool
+stays on the wire (a test asserts the schema is still exposed on the same turn) — so a situation
+that has changed can still ask. It is inert when no significant token matches (empty string; a
+turn with no related decision is byte-identical to one from a build without this), it drops
+EARLY under the context budget (dropPriority 28, before `recall` at 30), and it is gated by
+`decisionsRecordingEnabled()` so a test-run turn is inert unless it opts in with
+`NUVIRA_DECISION_LOG=on` (also added so a record → recall round trip can be tested).
+
+**Tests.** `decision-log.test.ts` (+3: labelled block / revised marker / inert when nothing
+matches / force-enable); `chat-tool-loop.test.ts` (+1: a related ask gets the block before the
+ask, `ask_user` stays exposed, an unrelated ask gets NONE).
 
 ---
 

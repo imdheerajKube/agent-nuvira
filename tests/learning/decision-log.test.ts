@@ -15,6 +15,7 @@ import {
   readDecisions,
   reviseDecision,
   recallDecisions,
+  recallDecisionBlock,
   redactDecisionText,
   decisionsRecordingEnabled,
   decisionLogPath,
@@ -104,6 +105,28 @@ describe('decision log', () => {
     expect(recallDecisions(dir, '')).toHaveLength(0);
   });
 
+  it('renders a labelled advisory block for a related later ask, and nothing otherwise', () => {
+    recordDecision({ question: 'Which database should the service use?', answer: 'Postgres', dir });
+
+    const block = recallDecisionBlock(dir, 'add an index to the service database');
+    expect(block.startsWith('[Previously decided')).toBe(true);
+    expect(block).toContain('Which database should the service use?');
+    expect(block).toContain('Postgres');
+    // The block says what it is AND that a changed situation may still ask:
+    // nothing here suppresses a must-ask.
+    expect(block).toContain('skip a must-ask');
+    // No shared significant token → no block at all (inert, not noisy).
+    expect(recallDecisionBlock(dir, 'write a haiku about the sea')).toBe('');
+  });
+
+  it('marks a revised decision in the recall block', () => {
+    const rec = recordDecision({ question: 'Which port should the API use?', answer: '3000', dir })!;
+    reviseDecision(dir, rec.id, '8080');
+    const block = recallDecisionBlock(dir, 'the API port is wrong');
+    expect(block).toContain('8080');
+    expect(block).toContain('(revised)');
+  });
+
   it('skips a corrupt line rather than throwing', () => {
     recordDecision({ question: 'Keep it simple?', answer: 'yes', dir });
     writeFileSync(decisionLogPath(dir), '{not json}\n' + readFileSync(decisionLogPath(dir), 'utf-8'), 'utf-8');
@@ -112,5 +135,18 @@ describe('decision log', () => {
 
   it('is OFF under a test runner — an injected renderer is not a person deciding', () => {
     expect(decisionsRecordingEnabled()).toBe(false);
+  });
+
+  it('can be force-enabled for a round-trip test (NUVIRA_DECISION_LOG=on)', () => {
+    const orig = process.env.NUVIRA_DECISION_LOG;
+    try {
+      process.env.NUVIRA_DECISION_LOG = 'on';
+      expect(decisionsRecordingEnabled()).toBe(true);
+      process.env.NUVIRA_DECISION_LOG = 'off';
+      expect(decisionsRecordingEnabled()).toBe(false);
+    } finally {
+      if (orig === undefined) delete process.env.NUVIRA_DECISION_LOG;
+      else process.env.NUVIRA_DECISION_LOG = orig;
+    }
   });
 });

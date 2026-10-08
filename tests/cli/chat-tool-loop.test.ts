@@ -18,6 +18,7 @@ import { ChatCommand } from '../../src/cli/chat.js';
 import { ConfigManager } from '../../src/config/manager.js';
 import { deriveProjectId, resetWorkspaceStore } from '../../src/config/workspace.js';
 import { resetModelRegistry } from '../../src/learning/model-registry.js';
+import { recordDecision } from '../../src/learning/decision-log.js';
 import type { InferenceProvider } from '../../src/inference/interface.js';
 
 describe('ChatCommand — E3b tool-call turn', () => {
@@ -260,6 +261,7 @@ describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
   let projDir: string;
   let origMemory: string | undefined;
   let origConfig: string | undefined;
+  let origDecisionLog: string | undefined;
 
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -267,6 +269,8 @@ describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'buff-chat-recall-'));
     origMemory = process.env.NUVIRA_MEMORY_DIR;
     origConfig = process.env.NUVIRA_CONFIG_DIR;
+    origDecisionLog = process.env.NUVIRA_DECISION_LOG;
+    delete process.env.NUVIRA_DECISION_LOG;
     process.env.NUVIRA_MEMORY_DIR = join(tempDir, 'memory');
     process.env.NUVIRA_CONFIG_DIR = join(tempDir, 'config');
     resetModelRegistry();
@@ -281,6 +285,8 @@ describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
     else process.env.NUVIRA_MEMORY_DIR = origMemory;
     if (origConfig === undefined) delete process.env.NUVIRA_CONFIG_DIR;
     else process.env.NUVIRA_CONFIG_DIR = origConfig;
+    if (origDecisionLog === undefined) delete process.env.NUVIRA_DECISION_LOG;
+    else process.env.NUVIRA_DECISION_LOG = origDecisionLog;
     try {
       rmSync(tempDir, { recursive: true, force: true });
     } catch { /* noop */ }
@@ -357,6 +363,58 @@ describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
     const askIdx = thread.findIndex((m) => m.role === 'user' && m.content.includes('continue the checkout work'));
     expect(recallIdx).toBeGreaterThan(sysIdx);
     expect(recallIdx).toBeLessThan(askIdx);
+  });
+
+  it('injects this project’s related recorded decisions as an advisory block', async () => {
+    // A later ask that mentions the same subject must be shown what was already
+    // decided, so the same question is not re-asked. The block is ADVISORY: it is
+    // ordinary context, and it never suppresses an `ask_user` (the tool stays on
+    // the wire below).
+    const projectPath = projDir;
+    recordDecision({
+      question: 'Which database should the service use?',
+      answer: 'Postgres',
+      source: 'ask_user',
+      dir: projectPath,
+    });
+    process.env.NUVIRA_DECISION_LOG = 'on'; // a test runner is otherwise inert
+
+    const { provider, calls } = makeCapturingProvider();
+    stubGetProvider(provider);
+
+    const cmd = new ChatCommand() as unknown as { answerOnce: Function };
+    await cmd.answerOnce('add an index to the service database', {
+      provider: 'groq',
+      model: 'mock-model',
+      projectPath,
+    });
+
+    const thread = calls[0].messages;
+    const block = thread.find((m) => m.content.startsWith('[Previously decided'));
+    expect(block).toBeDefined();
+    expect(block!.content).toContain('Which database should the service use?');
+    expect(block!.content).toContain('Postgres');
+    // It rides in BEFORE the user's ask, with the other context blocks.
+    const blockIdx = thread.indexOf(block!);
+    const askIdx = thread.findIndex(
+      (m) => m.role === 'user' && m.content.includes('add an index to the service database'),
+    );
+    expect(blockIdx).toBeGreaterThan(-1);
+    expect(blockIdx).toBeLessThan(askIdx);
+    // Advisory, not a suppression: `ask_user` remains exposed on the wire.
+    const schemas = (provider.generateTools as ReturnType<typeof vi.fn>).mock.calls[0][1] as Array<{
+      name: string;
+    }>;
+    expect(schemas.some((s) => s.name === 'ask_user')).toBe(true);
+
+    // A later ask with NO shared significant token gets no block at all.
+    await cmd.answerOnce('write a haiku about the sea', {
+      provider: 'groq',
+      model: 'mock-model',
+      projectPath,
+    });
+    const secondThread = calls[calls.length - 1].messages;
+    expect(secondThread.some((m) => m.content.startsWith('[Previously decided'))).toBe(false);
   });
 
   it('the system prompt tells a weak model that general writing needs no folder', async () => {

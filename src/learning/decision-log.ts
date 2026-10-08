@@ -15,7 +15,10 @@
  *
  * WHAT IT DELIBERATELY DOES NOT DO.
  *  - It is never a SUBSTITUTE for asking. Nothing here suppresses an `ask_user`
- *    call or auto-answers one; it records what was asked and answered.
+ *    call or auto-answers one; it records what was asked and answered. The
+ *    read-back block (`recallDecisionBlock`) is ADVISORY context for a later
+ *    turn — it says what is settled, and explicitly that a changed situation
+ *    may still ask again. It never gates whether the agent may ask.
  *  - It never fabricates an answer. The `unattended` default an unreachable user
  *    gets is an ASSUMPTION, and is not recorded here as a decision — only a
  *    genuine, shown question with a real reply is.
@@ -68,6 +71,9 @@ export function decisionsDocPath(dir: string): string {
  */
 export function decisionsRecordingEnabled(): boolean {
   if (process.env.NUVIRA_DECISION_LOG === 'off') return false;
+  // Explicit opt-IN wins over the test-runner default below, so a test can
+  // exercise the record → recall round trip without a real terminal.
+  if (process.env.NUVIRA_DECISION_LOG === 'on') return true;
   if (process.env.VITEST === 'true' || process.env.NODE_ENV === 'test') return false;
   return true;
 }
@@ -304,4 +310,34 @@ export function recallDecisions(dir: string, text: string, limit = 5): DecisionR
     .filter((s) => s.shared > 0)
     .sort((a, b) => b.shared - a.shared || b.r.at - a.r.at);
   return scored.slice(0, Math.max(1, limit)).map((s) => s.r);
+}
+
+/**
+ * The READ-BACK block injected into a later turn's context: the related
+ * decisions this project already made, so the model is not asked to re-decide
+ * what is settled. ADVISORY ONLY.
+ *
+ * The header says what the block IS and marks it revisable on purpose: the whole
+ * point of a standing answer is that a CHANGED situation must still be able to
+ * ask again. Nothing here suppresses an `ask_user` — the block only tells the
+ * model what was already decided; the decision to ask belongs to the situation.
+ *
+ * Empty string when nothing matches a significant token, so a turn with no
+ * related decision is byte-identical to one from a build without this feature.
+ */
+export function recallDecisionBlock(dir: string, text: string, limit = 3): string {
+  const hits = recallDecisions(dir, text, limit);
+  if (hits.length === 0) return '';
+  const lines = hits.map((r) => {
+    const revised = r.status === 'revised' ? ' (revised)' : '';
+    return `- ${r.question} → ${r.answer || '(no answer)'}${revised}`;
+  });
+  return [
+    '[Previously decided — this project already answered these related questions]',
+    'Standing answers, so the same question is not asked twice. They are NOT a',
+    'reason to skip a must-ask: if the situation has genuinely changed (new scope, a',
+    'different target, a constraint that no longer holds), ask again and record the',
+    'new answer.',
+    ...lines,
+  ].join('\n');
 }

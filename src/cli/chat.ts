@@ -13,6 +13,7 @@ import { getCache } from '../context/cache.js';
 import { assembleContext, retrievalOptionsFromConfig, recordRetrievalStats } from '../learning/retrieval.js';
 import { getChatHistory } from '../context/history.js';
 import { maybeAutoRecall, recallContextBlock } from '../context/session-recall.js';
+import { decisionsRecordingEnabled, recallDecisionBlock } from '../learning/decision-log.js';
 import { getMemoryManager } from '../memory/manager.js';
 import { logger } from '../utils/logger.js';
 import { printOrchestrationResult } from './execute.js';
@@ -734,6 +735,13 @@ export class ChatCommand extends BaseCommand {
      */
     projectPath?: string;
     /**
+     * Decision recall — the related decisions this project already recorded
+     * (`ask_user` → `.nuvira/decisions.jsonl`), injected as a labelled advisory
+     * block so a settled question is not re-asked. Computed internally from
+     * `projectPath` (no caller supplies it); declared here so a test can pin it.
+     */
+    decisionContext?: string;
+    /**
      * P4 — stream content tokens of the answer as the model generates them
      * (the dashboard's typewriter). Forwarded verbatim from the tool loop;
      * providers that stream deliver tokens live, others deliver the whole
@@ -1064,6 +1072,23 @@ export class ChatCommand extends BaseCommand {
       }
     }
 
+    // Decision recall — the SAME attached project's recorded decisions
+    // (`.nuvira/decisions.jsonl`), when this ask actually mentions one. It is
+    // ADVISORY: it is injected as context and NEVER suppresses an `ask_user`, so
+    // a situation that has changed can still ask. Best-effort: an empty log (or
+    // no matching token) injects nothing, and a read failure never breaks the
+    // turn. Gated by `decisionsRecordingEnabled()` so a test-run turn is inert
+    // unless it explicitly opts in (NUVIRA_DECISION_LOG=on).
+    let decisionBlock: string | undefined;
+    if (opts.projectPath && decisionsRecordingEnabled()) {
+      try {
+        const block = recallDecisionBlock(opts.projectPath, message, 3);
+        if (block) decisionBlock = block;
+      } catch {
+        decisionBlock = undefined;
+      }
+    }
+
     const parsed = parseRequestSync(message);
     const dispatchDecision = resolvePipelineDispatch(parsed, { dev: opts.dev, text: message });
     const answer = await this.runChatAnswer(
@@ -1074,7 +1099,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat', debugSession: opts.debugSession, worktree: opts.worktree, keepWorktree: opts.keepWorktree, resume: opts.resume },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, decisionContext: decisionBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat', debugSession: opts.debugSession, worktree: opts.worktree, keepWorktree: opts.keepWorktree, resume: opts.resume },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -1930,6 +1955,12 @@ export class ChatCommand extends BaseCommand {
        */
       recallContext?: string;
       /**
+       * Decision recall — the labelled advisory block of related recorded
+       * decisions (see `answerOnce`). Injected after the recalled project
+       * context; empty/absent injects nothing.
+       */
+      decisionContext?: string;
+      /**
        * P4 — the attached project's directory path. When set, the tool
        * context's cwd is scoped to this directory so file tools (read_files,
        * write_file, str_replace, etc.) and terminal commands resolve
@@ -2387,6 +2418,12 @@ export class ChatCommand extends BaseCommand {
       ...(ctxOverrides?.recallContext
         ? [{ role: 'user' as const, content: ctxOverrides.recallContext }]
         : []),
+      // Decision recall — the ADVISORY standing answers this project recorded
+      // for related asks. Sits with the other context blocks, and is deliberately
+      // never used to suppress an `ask_user`.
+      ...(ctxOverrides?.decisionContext
+        ? [{ role: 'user' as const, content: ctxOverrides.decisionContext }]
+        : []),
       // G4 — the deterministic working-state ledger (never a summary).
       ...(workingStateBlock ? [{ role: 'user' as const, content: workingStateBlock }] : []),
       ...(fileContext
@@ -2628,6 +2665,7 @@ export class ChatCommand extends BaseCommand {
           { name: 'system:channel-policy', chars: systemPolicyBlock.length },
           { name: 'skill-hint', chars: skillHint.length, dropPriority: 10 },
           { name: 'working-state', chars: workingStateBlock.length, dropPriority: 25 },
+          { name: 'decisions', chars: ctxOverrides?.decisionContext?.length ?? 0, dropPriority: 28 },
           { name: 'recall', chars: ctxOverrides?.recallContext?.length ?? 0, dropPriority: 30 },
           {
             name: 'project-context',
