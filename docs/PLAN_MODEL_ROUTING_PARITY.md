@@ -308,6 +308,60 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 29 — collect the case item 13 needs, and the capped measurement that lied (LANDED 2026-10-08)
+
+### 29a. The collection path (round 3's followup #1)
+
+Item 13's text already named the honest next step: not another detector, but **COLLECT the case**. That is now
+implemented as `learning/deliverable-corpus.ts` — and it is deliberately INERT.
+
+- `tool-loop.ts` reports `authoredDeliverable` (path, word count, an explicit target when the ask stated one, a
+  **capped** excerpt) for a SINGLE authored artifact that tripped neither the omission nor the shortfall check.
+  That is the "fluent, on-length" shape no deterministic rule can judge.
+- `cli/chat.ts` records it, and — on the SAME `detectRegressionSignal` derivation the ledger and the bandit
+  already use — labels the most recent unlabelled row `rejected` when the user's next message reports a miss.
+
+**Nothing reads the corpus.** No score is derived from it, nothing routes on it, and `rejected` is never `false`:
+reading the user's silence as acceptance would be a fabricated positive label, the same rule the bandit follows.
+The corpus is a dataset a future quality signal would be fit to, stated as such in the module header.
+
+**Honest limit.** Collection is wired on the CLI chat path. The dashboard chat console does not yet collect — it
+would need the same correction signal plumbed through a session — and that is recorded rather than implied.
+
+### 29b. A measured bug the new test found: the shortfall check measured a CAPPED prefix
+
+Writing the corpus test exposed a real defect in **Bundle 23's** shortfall check, and the first failing assertion
+is the evidence:
+
+```
+expected { path: 'GUIDE.md', deliveredWords: 2414, targetWords: 5000, source: "\"5000 words\"" } to be undefined
+```
+
+The turn had written a **3 500-word** document against a stated 5 000-word target — comfortably over the 2 500
+threshold — and the harness reported it as **short**. The cause: `authoredArtifacts` stores `content` capped at
+`AUTHORED_ARTIFACT_MAX_CHARS = 20_000` for memory, and the shortfall check counted words in THAT. A long document
+written in long words therefore had only its first 20 000 characters measured (2 414 words), fell under half the
+target, and was flagged. **A false accusation against honest work — worse than a miss, and exactly the
+harness-misreports-itself class this programme exists to remove.**
+
+**Fix.** The word count is now taken from the FULL written text at capture time (`words` on the artifact entry)
+and `detectArtifactShortfall` prefers it over counting the stored (possibly capped) `content` — the optional
+`words` field keeps the exported signature backward compatible. `extractWrittenText` no longer caps; the cap
+moves to the storage site, where it belongs. The upper bound for a false positive before this: a stated target
+above ~`40000 / averageWordLength` words — for ordinary prose, roughly **6 700 words**, i.e. a plain
+"write me a 10 000-word guide" was enough.
+
+**Tests.** `deliverable-corpus.test.ts` (new, 12: null label on record, newest-first single labelling, target
+omitted when the ask stated none, excerpt/ask bounds, refuse path-less rows, store cap, corrupt-line tolerance,
+clear); `tool-loop.test.ts` (+3): the on-length delivery is collected and carries `deliveredWords >= 2500` with a
+bounded excerpt; a delivery that already tripped the shortfall is NOT collected; and the regression test that
+pins the cap bug in both directions (`countWords(capped) < 2500` yet the real 3 000 is not short).
+
+**Gates.** root suite **466 files / 8584 passed / 0 failed** (+1 file, +14 tests), `verify:commands` **341/341**,
+all three docs guards, `dashboard:bundle:check`, `build:cli`.
+
+---
+
 ## Bundle 28 — the admin flow verified end-to-end, and the hooks cookbook (LANDED 2026-10-08)
 
 **Why.** Round 3's last open proof was "the literal browser dashboard flow" — and the admin credential was
@@ -1073,7 +1127,10 @@ exists; where it does not, that is stated as the residual rather than implied cl
     is the same missing ground truth the learned area set (item 9) needs. **Bundle 27 (2026-10-08) closed the
     adjacent signal that was NOT blocked:** `userAccepted` is now fed from the same correction the ledger keeps,
     so the generic-on-length case is the ONLY residual here — do not let "no labelled corpus" be reused to
-    excuse the next observable signal.
+    excuse the next observable signal. **Bundle 29 implemented the collection itself:** a
+    magnitude-satisfied authored delivery is now recorded (facts only, no verdict) and labelled when the user's
+    next message reports a miss, so the corpus this item asked for is being built rather than deferred. The
+    detector still waits on labelled rows — that is the one thing that was ever genuinely blocked.
 14. ~~**`model explain` answers a hypothetical**: it cannot see a continuation's `routingText`, the
     `contextHintTokens`, or the session's failed-provider set, which exist only at runtime.~~
     **CLOSED — Bundle 21**: `--context-tokens <n>` feeds the context preflight the token count the runtime

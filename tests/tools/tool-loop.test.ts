@@ -32,6 +32,7 @@ import {
   type StepResponse,
 } from '../../src/tools/tool-loop.js';
 import { getTool, type ToolContext, type FollowupSuggestion } from '../../src/tools/registry.js';
+import { countWords } from '../../src/learning/long-form.js';
 import { requestAuthorizesWrites } from '../../src/learning/autonomy-policy.js';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -3167,6 +3168,23 @@ describe('Bundle 23 (item 13) — the artifact measured against the ask', () => 
     expect(detectArtifactShortfall('write about 5000 words to A.md', { path: 'A.md', content: '' })).toBeNull();
   });
 
+  it('measures the WHOLE artifact when given its word count, never a capped prefix', () => {
+    // MEASURED BUG this pins: the captured content is capped at 20 000 characters
+    // for memory, and the shortfall check used to count THAT — so a long document
+    // written in long words was measured as its first 20k characters, under-counted,
+    // and FALSELY flagged as short. The live symptom was a turn that wrote 3 500
+    // words and was told it had delivered 2 414.
+    const ask = 'Write a guide. Aim for about 5000 words. Save it to GUIDE.md';
+    const doc = 'supercalifragilistic '.repeat(3000); // 3 000 words, ~63k characters
+    const capped = doc.slice(0, 20_000);
+    expect(countWords(doc)).toBe(3000);
+    expect(countWords(capped)).toBeLessThan(2500);
+    // Counting the capped prefix alone would flag an honest document as short.
+    expect(detectArtifactShortfall(ask, { path: 'GUIDE.md', content: capped })).not.toBeNull();
+    // Given the real count, it is correctly NOT short.
+    expect(detectArtifactShortfall(ask, { path: 'GUIDE.md', content: capped, words: 3000 })).toBeNull();
+  });
+
   it('flags a real turn that wrote a far-too-short deliverable', async () => {
     const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-shortfall-'));
     try {
@@ -3191,6 +3209,75 @@ describe('Bundle 23 (item 13) — the artifact measured against the ask', () => 
       });
       expect(result.artifactShortfall?.path).toBe('GUIDE.md');
       expect(result.artifactShortfall?.targetWords).toBe(5000);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('records an on-length authored delivery as a COLLECTABLE candidate, not a verdict', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-authored-'));
+    // ~3500 words (7 words × 500) — comfortably over half of the 5000 the ask
+    // names, so the shortfall check stays silent. THIS is the "fluent, on-length"
+    // shape the corpus exists to collect: no deterministic rule can judge it.
+    const LONG = 'Distributed key-value stores replicate data across nodes. '.repeat(500);
+    try {
+      const ask =
+        'Write a comprehensive technical guide to building a distributed key-value store. Aim for about 5000 words. Save it to GUIDE.md in this folder.';
+      const deps = mockDeps(
+        [
+          {
+            content: '',
+            toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: 'GUIDE.md', content: LONG } }],
+          },
+          { content: 'The guide has been written and saved as GUIDE.md.', toolCalls: [] },
+        ],
+        realExecute,
+      );
+      const result = await runToolLoop({
+        messages: [{ role: 'user', content: ask }],
+        context: { ...ctx, cwd: workdir, writesAuthorized: true },
+        deps,
+        requireVerification: false,
+        requirePlan: false,
+      });
+      // No defect — the shortfall check is silent by construction.
+      expect(result.artifactShortfall).toBeUndefined();
+      // And the FACTS travel so a caller can collect them.
+      expect(result.authoredDeliverable?.path).toBe('GUIDE.md');
+      expect(result.authoredDeliverable?.targetWords).toBe(5000);
+      expect(result.authoredDeliverable?.deliveredWords).toBeGreaterThanOrEqual(2500);
+      // The excerpt is BOUNDED — a candidate row is a sample, not a document copy.
+      expect(result.authoredDeliverable!.excerpt.length).toBeLessThanOrEqual(2000);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it('does NOT collect a delivery that already tripped the shortfall check', async () => {
+    const workdir = mkdtempSync(join(tmpdir(), 'nuvira-loop-authored-short-'));
+    try {
+      const ask =
+        'Write a comprehensive technical guide to building a distributed key-value store. Aim for about 5000 words. Save it to GUIDE.md in this folder.';
+      const deps = mockDeps(
+        [
+          {
+            content: '',
+            toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: 'GUIDE.md', content: SHORT } }],
+          },
+          { content: 'The guide has been written and saved as GUIDE.md.', toolCalls: [] },
+        ],
+        realExecute,
+      );
+      const result = await runToolLoop({
+        messages: [{ role: 'user', content: ask }],
+        context: { ...ctx, cwd: workdir, writesAuthorized: true },
+        deps,
+        requireVerification: false,
+        requirePlan: false,
+      });
+      // A shortfall is a DECIDED defect; there is nothing to collect about it.
+      expect(result.artifactShortfall?.path).toBe('GUIDE.md');
+      expect(result.authoredDeliverable).toBeUndefined();
     } finally {
       rmSync(workdir, { recursive: true, force: true });
     }
