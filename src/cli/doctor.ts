@@ -36,6 +36,7 @@ import { countKeyStates, ConfigManager } from '../config/manager.js';
 import { recordRegistryFailure } from '../learning/provider-fallback.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
+import { acceptanceSummary, MIN_LABELS_FOR_FIT, MIN_PER_CLASS } from '../learning/acceptance-model.js';
 import { verifyAuditFile } from '../enterprise/audit-chain.js';
 import { resolve } from 'node:path';
 import { readLockfile, buildSbom, verifySbom, parseSbom } from '../enterprise/sbom.js';
@@ -967,7 +968,53 @@ export async function runSystemChecks(configManager: ConfigManager): Promise<Che
     });
   }
 
+  // 7. Acceptance / quality-fit readiness (Bundle 35). Informational: the product
+  // works with no labels, so this is a WARN until enough turns are RATED — it says
+  // whether the read-only acceptance fit has a corpus to train on, and nothing more.
+  checks.push(checkAcceptanceReadiness());
+
   return checks;
+}
+
+/**
+ * Acceptance / quality-fit readiness. Reports how many turns are LABELLED and
+ * whether the read-only fit has cleared its floor. Never a failure: a product with
+ * no labels is working correctly, it simply has no measured quality signal yet.
+ */
+export function checkAcceptanceReadiness(): CheckResult {
+  try {
+    const s = acceptanceSummary();
+    const smaller = Math.min(s.accepted, s.rejected);
+    const sources = Object.entries(s.bySource)
+      .map(([k, v]) => `${k} ${v}`)
+      .join(', ');
+    const detail = [
+      `${s.labelled} labelled turn(s) — 👍 ${s.accepted} / 👎 ${s.rejected}`,
+      sources ? `by source: ${sources}` : 'by source: (none yet)',
+      s.fit.ok
+        ? `fit trained on ${s.fit.model.n} turn(s)`
+        : `${s.fit.reason} (smaller class has ${smaller})`,
+      'Read-only: nothing routes on this and no score is derived from it.',
+    ].join('\n');
+    return {
+      name: 'Acceptance / quality fit',
+      status: s.fit.ok ? 'pass' : 'warn',
+      message: s.fit.ok
+        ? `fit ready — ${s.labelled} labelled turn(s) (👍 ${s.accepted} / 👎 ${s.rejected})`
+        : `not ready — ${s.labelled} labelled turn(s); needs ${MIN_LABELS_FOR_FIT} with ≥${MIN_PER_CLASS} of each class`,
+      detail,
+      fix: s.fit.ok
+        ? undefined
+        : `Rate turns with \`${getCliName()} rate good|bad\` (or the dashboard Trace tab); see docs/ACCEPTANCE.md`,
+    };
+  } catch {
+    return {
+      name: 'Acceptance / quality fit',
+      status: 'warn',
+      message: 'Acceptance store unavailable',
+      detail: 'The labelled corpus could not be read — the fit stays untrained.',
+    };
+  }
 }
 
 /**

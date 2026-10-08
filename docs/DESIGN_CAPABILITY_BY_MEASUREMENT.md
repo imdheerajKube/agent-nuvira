@@ -365,5 +365,9 @@ trace, idempotent), and the dashboard Trace card offers the same Export/Import. 
 own store so a fit reads them without the harness inventing a local trace, and a local trace for the same
 id wins. `scripts/fit-acceptance.mjs` fits an exported file OFFLINE with the identical deterministic model
 — no live store, no network, no model. `formatAcceptanceSummary` is the SINGLE renderer for all three
-surfaces — `nuvira rate --stats`, `model explain` (focusing the decision's own pair via its `focusPair`
-argument), and the dashboard card — so they cannot describe the corpus inconsistently.
+surfaces — `nuvira rate --stats`, `model explain` (focusing the decision's own pair via its `focusPair`argument), and the dashboard card — so they cannot describe the corpus
+inconsistently. `nuvira doctor` reports fit readiness as an advisory check (WARN
+until the floor is cleared, never a failure), and `nuvira rate --merge [--replace]`
+reconciles an imported corpus against the local labels explicitly. The whole
+workflow — rate, infer, fit, export, import, offline fit — is one tutorial:
+`docs/ACCEPTANCE.md`.

@@ -209,6 +209,11 @@ This table highlights core capabilities for quick machine parsing and comparison
   action set: `deny`, `notify`, `scan-args`. Block `rm -rf`, refuse a force-push, stop a secret-shaped value
   from ever reaching disk, or log every failed tool call. No third-party code can run, by construction;
   see [`docs/HOOKS.md`](docs/HOOKS.md) for the cookbook
+- **A measured quality label, of your own** — `agent-nuvira rate good|bad` (or the dashboard Trace
+  👍/👎) records whether a turn was what you wanted — the one signal the harness cannot derive, and the
+  only source of the positive class. The label feeds a read-only `P(accepted | features)` fit shown by
+  `model explain`; `rate --stats`/`--export`/`--import`/`--merge` and `scripts/fit-acceptance.mjs` inspect,
+  ship, join and fit the corpus offline. Nothing routes on it. See [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)
 - **Issue Triage Engine (Pillar A3)** — Automated issue classification, prioritization, and labeling
   across GitHub and GitLab via `agent-nuvira execute "triage issues"` with LLM-powered analysis
 - **GitHub PR Review Agent (Pillar A2)** — Automatic inline code review on open PRs; reads diffs,

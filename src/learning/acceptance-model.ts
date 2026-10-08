@@ -32,8 +32,8 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { listTraces } from './reasoning-trace.js';
-import { readDeliverableCandidates } from './deliverable-corpus.js';
+import { listTraces, recordTraceVerdict } from './reasoning-trace.js';
+import { readDeliverableCandidates, labelDeliverableByTrace } from './deliverable-corpus.js';
 import { envBuff, resolveNuviraHome } from '../config/paths.js';
 import type { TurnReport } from './turn-report.js';
 
@@ -262,11 +262,11 @@ export function mergeImportedLabels(incoming: LabelledTurn[]): { added: number; 
 }
 
 /**
- * Collect every LABELLED turn the harness has: the trace verdicts (the reliable
- * source, carrying the features), any corpus rows whose verdict has no trace
- * counterpart, and the labels imported from another corpus.
+ * The LOCAL labels: the trace verdicts (the reliable source, carrying the
+ * features) plus any corpus rows whose verdict has no trace counterpart. Excludes
+ * imported rows — a conflict merge must compare against what THIS machine recorded.
  */
-export function collectLabelledTurns(): LabelledTurn[] {
+function collectLocalTurns(): LabelledTurn[] {
   const out: LabelledTurn[] = [];
   const seen = new Set<string>();
 
@@ -323,14 +323,22 @@ export function collectLabelledTurns(): LabelledTurn[] {
     });
   }
 
-  // Imported labels from another corpus. A local trace (or corpus row) for the
-  // same trace wins — the local record carries the features we measured ourselves.
+  return out.sort((a, b) => a.at - b.at);
+}
+
+/**
+ * Collect every LABELLED turn the harness has: the local labels plus the rows
+ * imported from another corpus. A LOCAL label for the same trace wins — the local
+ * record carries the features we measured ourselves.
+ */
+export function collectLabelledTurns(): LabelledTurn[] {
+  const out = collectLocalTurns();
+  const seen = new Set(out.map((t) => t.traceId).filter((id): id is string => Boolean(id)));
   for (const imp of readImportedLabels()) {
     if (imp.traceId && seen.has(imp.traceId)) continue;
     out.push(imp);
     if (imp.traceId) seen.add(imp.traceId);
   }
-
   return out.sort((a, b) => a.at - b.at);
 }
 
@@ -338,6 +346,105 @@ export function collectLabelledTurns(): LabelledTurn[] {
  * Fit the logistic model. Deterministic; returns a NAMED reason rather than a
  * model whenever the sample is too thin to mean anything.
  */
+/** The outcome of reconciling an imported corpus against the local labels. */
+export interface MergeResult {
+  /** Rows in the incoming file. */
+  incoming: number;
+  /** Rows written to the imported store (no local label for their trace). */
+  stored: number;
+  /** Rows whose trace already carries a DIFFERENT local label. */
+  conflicts: number;
+  /** Conflicts the incoming label won (`--replace`). */
+  replaced: number;
+  /** Conflicts the local label won (the default). */
+  keptLocal: number;
+  /** Rows whose trace already carries the SAME label — nothing to reconcile. */
+  matching: number;
+  /** The imported store size after the merge. */
+  total: number;
+}
+
+/**
+ * Overwrite one LOCAL label with an imported verdict (corpus row and trace). Used
+ * only by an EXPLICIT `--replace` — the default keeps the local label, because a
+ * label this machine recorded is one a person or the behaviour here produced.
+ */
+export function replaceLocalLabel(
+  traceId: string,
+  accepted: boolean,
+  source: string,
+  now: number = Date.now(),
+): boolean {
+  const verdict: 'accepted' | 'rejected' = accepted ? 'accepted' : 'rejected';
+  const src = source === 'cli' || source === 'dashboard' || source === 'derived' ? source : 'derived';
+  let did = false;
+  try {
+    did = recordTraceVerdict(traceId, verdict, src, now) || did;
+  } catch {
+    // best-effort
+  }
+  try {
+    did = labelDeliverableByTrace(traceId, verdict, now) || did;
+  } catch {
+    // best-effort
+  }
+  return did;
+}
+
+/**
+ * Reconcile an incoming corpus against the LOCAL labels, explicitly.
+ *
+ * A conflict is a trace the local record already labels differently. The default
+ * KEEPS the local label (it is this machine's own measurement) and reports the
+ * count; `replace: true` lets the incoming label win. Rows with no local label are
+ * simply stored. Deduped and idempotent like {@link mergeImportedLabels}.
+ */
+export function mergeLabelledCorpus(
+  incoming: LabelledTurn[],
+  opts: { replace?: boolean; now?: number } = {},
+): MergeResult {
+  const now = opts.now ?? Date.now();
+  const localByTrace = new Map<string, boolean>();
+  for (const t of collectLocalTurns()) {
+    if (t.traceId) localByTrace.set(t.traceId, t.accepted);
+  }
+
+  const toStore: LabelledTurn[] = [];
+  let conflicts = 0;
+  let replaced = 0;
+  let keptLocal = 0;
+  let matching = 0;
+
+  for (const t of incoming) {
+    if (!t.traceId || !localByTrace.has(t.traceId)) {
+      toStore.push(t);
+      continue;
+    }
+    if (localByTrace.get(t.traceId) === t.accepted) {
+      matching++;
+      continue;
+    }
+    conflicts++;
+    if (opts.replace) {
+      replaceLocalLabel(t.traceId, t.accepted, t.source, now);
+      replaced++;
+    } else {
+      keptLocal++;
+    }
+  }
+
+  const merged = mergeImportedLabels(toStore);
+  return {
+    incoming: incoming.length,
+    stored: toStore.length,
+    conflicts,
+    replaced,
+    keptLocal,
+    matching,
+    total: merged.total,
+  };
+}
+
 /**
  * Fit the SAME deterministic logistic model to an arbitrary set of rows. Split
  * out from {@link trainAcceptanceModel} so the offline fitter script can train on

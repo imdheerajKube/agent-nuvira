@@ -308,6 +308,36 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 35 — the workflow is documented, checked, and reconciled (LANDED 2026-10-08)
+
+### 35a. One tutorial — `docs/ACCEPTANCE.md`
+
+The label story was spread across `COMMANDS.md` §12.15, `DESIGN …` §8 and the tracker. It is now ONE
+tutorial: the four label sources, rate → infer → fit → export → import/merge → offline fit, a worked
+transcript with the MEASURED 24-turn run, and a table of exactly what each command writes. Referenced
+from the README, `COMMANDS.md` §12.15 and `DESIGN …` §8.6.
+
+### 35b. `nuvira doctor` reports fit readiness
+
+`checkAcceptanceReadiness()` is an advisory check: **WARN** until the floor is cleared (a product with no
+labels is working correctly, it just has no measured quality signal yet), **PASS** once it trains. It
+prints the labelled/class balance, the provenance breakdown and the fit reason. Never a failure.
+
+### 35c. `nuvira rate --merge <file> [--replace]`
+
+`--import` is a plain union; `--merge` reconciles against the LOCAL labels explicitly: a trace the local
+record labels differently is a CONFLICT, reported, and by default the local label is KEPT (it is this
+machine's own measurement). `--replace` lets the incoming label win — it rewrites the local trace/corpus
+row, which is why it must be asked for. Split `collectLocalTurns()` out of `collectLabelledTurns()` so a
+merge compares against genuine local labels, not the imports it already has.
+
+**Tests.** `acceptance-import.test.ts` (+1: conflicts kept local by default, replaced with the flag);
+`doctor.test.ts` (+2: WARN with no labels / PASS once ready, and still WARN with one class).
+**Gates.** full root suite, dashboard suite, both `tsc --noEmit`, all three docs guards,
+`verify:commands`, `build:cli`, `dashboard:bundle:check`.
+
+---
+
 ## Bundle 34 — the corpus moves both ways, and fits offline (LANDED 2026-10-08)
 
 **Why.** Bundle 33 could only EXPORT, from the CLI only, and a fit needed the live store. A corpus that
