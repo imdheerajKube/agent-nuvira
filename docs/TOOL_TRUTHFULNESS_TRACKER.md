@@ -713,6 +713,54 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 45 — parallel read fan-out derived from the registry, 6 tools to 21 (2026-10-08)
+
+**The finding.** Which tools may run concurrently inside one step was a
+hand-maintained SIX-NAME allowlist in `tool-loop.ts`. The header even argued for
+the design ("an ALLOWLIST … a tool added to the registry later is SERIAL by
+default until it is reviewed as read-only") — and that reasoning was sound, but the
+COST was invisible: every read tool added since, and every read-only MCP tool
+discovered at runtime, silently stayed serial because nobody remembered the list.
+That is the same hand-maintained-table disease as the gate sets, in the hot path.
+
+**The fix.** `isParallelSafeTool` asks the capability registry's `effectClass`.
+Fan-out went from 6 to **21** tools, verified against the build:
+
+```
+read_extract read_file read_page search_memory secret_scan security_score
+suggest_followups threat_patterns url_safety verify_requirement web_search
+fuzzy_match glob list_dir list_memories memory_stats osv_check path_security
+process_registry analyze code_search
+```
+
+**The safety direction is UNCHANGED.** A tool the registry does not describe maps
+to `local-state`, so a newly registered tool is STILL serial until someone
+declares it a read. That conservative default — built in Bundle 41 — is exactly
+what makes replacing an allowlist with a derivation a widening rather than a
+loosening.
+
+**A finding that would have been a REGRESSION if I had trusted the effect class.**
+`effectClass: 'read'` is NECESSARY but NOT SUFFICIENT for safe fan-out:
+
+- `tool_search` genuinely reads the world and MUTATES the tiering state that
+decides which tools exist in the NEXT step;
+- `ask_user` genuinely reads and BLOCKS on the human.
+
+Two siblings fanned out around either one would disagree about the world they are
+reading. Both stay serial through one small explicit `READ_BUT_SERIAL` set — a
+HARNESS fact, not an effect guess. The old test had already recorded both (its
+comments read `// mutates the tiering state` and `// blocks on user input`), which
+is how the exception was found rather than shipped.
+
+`parallelSafeToolNames()` derives the set by filtering with the same predicate, so
+the published set and the hot-path decision cannot disagree.
+
+Pinned by `tests/tools/parallel-tool-exec.test.ts`, which now asserts: the plainly
+read-only tools are safe; the stateful/blocking/off-machine ones are not; each
+`READ_BUT_SERIAL` exception has a declared effect of `read` AND remains serial; an
+undescribed tool is serial; and the derived set agrees with the predicate and
+excludes every stateful name.
+
 ## Bundle 44 — a requirement pre-flight, so a run knows what it is missing before it starts (2026-10-08)
 
 **The finding.** A capability declared what it needed and NOTHING checked it. A

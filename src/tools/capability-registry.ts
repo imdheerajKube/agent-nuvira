@@ -162,6 +162,19 @@ const EFFECT_BY_TOOL: Record<string, EffectInfo> = {
 /** Unknown tools: treat as a local-state change that NO grant may cover. */
 const DEFAULT_EFFECT: EffectInfo = T('local-state', true);
 
+/**
+ * The effect class of a registry tool by NAME only — the cheap path.
+ *
+ * WHY THIS EXISTS SEPARATELY. The tool loop asks this on every call in a step to
+ * decide whether siblings may run concurrently, so it must not build a full
+ * descriptor (description parsing, tags, requirement objects) per call. It is the
+ * same lookup `capabilityFromTool` performs, minus the parts the caller does not
+ * need — one map, one conservative default, no second opinion.
+ */
+export function effectClassOfTool(name: string): EffectClass {
+  return (EFFECT_BY_TOOL[name] ?? DEFAULT_EFFECT).effect;
+}
+
 /** Short, human summary of a requirement set — rendered FROM the checked form. */
 export function describeRequires(requires: CapabilityRequires): string {
   const anyOf = (needs: Array<{ anyOf: string[] }>): string =>
