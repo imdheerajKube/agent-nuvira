@@ -233,7 +233,7 @@ With Code, or Graphify — and do not populate any score from data whose names c
 | §4.5 `model explain` | **LANDED** — parameter, value, basis and sample count; `n/a` when there is no prior. |
 | §4.6 B5 (complexity) | **LANDED (Bundle 3e)** — `analyzeComplexity` now takes the higher of the keyword ladder and a measured breadth floor. This row said OPEN for several bundles after it landed; corrected 2026-10-07. |
 | §4.2 `userAccepted` | **CLOSED (Bundle 27)** — `detectRegressionSignal` (the next-turn correction) is wired into the bandit as `recordUserRejection`; it corrects an arm, never creates one. This is the DERIVED negative half only. |
-| §4.2 labelled reference | **COLLECTION LANDED (Bundle 30)** — see §8. The POSITIVE class now has a source (an explicit per-turn verdict), and the corpus that a `P(accepted \| features)` would be fit to records both classes with provenance. Nothing is fit or routed on it yet — that is the remaining work, and it is deliberately gated on enough rows. |
+| §4.2 labelled reference | **LANDED (Bundles 30–31)** — see §8. The POSITIVE class has a source (an explicit per-turn verdict + the tier-3 behavioural labels), and `learning/acceptance-model.ts` now FITS `P(accepted \| features)` to it and prints it read-only in `model explain`. Nothing routes on it, and the fit refuses below 20 labelled turns — so on today's machine (0 rated) it correctly prints the not-trained line. |
 
 ## 8. Labelled reference — the previous approach vs the new one (Bundle 30)
 
@@ -288,7 +288,7 @@ ACCEPTANCE does not (`labelDeliverableByTrace`) — the positive class is never 
 |---|---|---|---|
 | 1 — derived | `detectRegressionSignal`, honesty flags | negatives only | wired (Bundle 27) |
 | 2 — **explicit** | `nuvira rate` / dashboard 👍👎 | **both — the only source of `accepted`** | **landed (Bundle 30)** |
-| 3 — behavioural | repeat ask, artifact left untouched, user hand-edits the file | both, weaker | recorded with `source:'derived'` when built — not built |
+| 3 — behavioural | repeat ask (token similarity), user hand-edits the file (mtime after delivery), untouched artifact the user then **references** | both, weaker | **LANDED (Bundle 31)** — `learning/behavioural-labels.ts`, `source:'derived'`. An untouched artifact alone is NOT a label (silence is not acceptance); only an untouched artifact the user's next message names, with no regression, is a weak accept. |
 | 4 — model-as-judge | an LLM scores the turn | both, but a prior, never a measurement | `source:'model-judge'` when built — not built |
 
 ### 8.4 Honest limits
@@ -297,8 +297,11 @@ ACCEPTANCE does not (`labelDeliverableByTrace`) — the positive class is never 
   using it are separate decisions; using it waits until enough rows exist to mean anything.
 - **A few hundred rows with BOTH classes are needed** before a `P(accepted | features)` is fit-able.
   Until then `qualityScore` stays genuinely blocked — the collection path is the unblock, not the score.
-- **Coverage gap.** The CLI chat path (`chat.ts` `answerOnce`) records corpus candidates; the dashboard
-  chat console does not, so a dashboard-rated turn labels its trace but has no corpus row to label.
+- ~~**Coverage gap** — the dashboard chat console does not collect corpus candidates.~~ **CORRECTED
+  (Bundle 31).** That claim was wrong: the dashboard console drives the *same* `ChatCommand.answerOnce`
+  the CLI does, and the collection is a straight-line statement inside it, so a dashboard turn that
+  authors a single on-length artifact DOES record a corpus row (pinned by
+  `tests/web-dashboard/chat-console-corpus.test.ts`). A dashboard 👍/👎 can therefore label its row.
 
 ### 8.5 Decision — two feedback concepts, kept distinct (not merged)
 
@@ -319,3 +322,29 @@ The old store never fed the **chat** turn (its `source` is hardcoded `'cli'` and
 by the pipeline), so it could not have produced the chat-turn label this document needs. The new one is
 the **trace-scoped** implementation and the only one that also labels the corpus. `nuvira feedback`
 remains for trajectory ratings; its help now points at `nuvira rate` for turn labels.
+
+### 8.6 The first consumer — the acceptance model (Bundle 31)
+
+The label is only worth collecting if something reads it. `learning/acceptance-model.ts` is that first
+consumer: it fits **`P(accepted | features)`** — a logistic model over the harness's own per-turn
+features — and reports it READ-ONLY.
+
+| Feature | Read from | Meaning |
+|---|---|---|
+| `verified` | `TurnReport.verification` ∈ {`verified`, `delivered-and-read-back`} | the turn's own check passed |
+| `unverified` | `verification === 'unverified'` | it ran but nothing verified it |
+| `flag` | any honesty flag fired | the turn disclosed a defect about itself |
+| `delivered` | an authored artifact exists (corpus row / read-back) | the turn produced a deliverable |
+
+- **Deterministic.** Zero initial weights, fixed iterations, L2 — the same corpus always yields the same
+  coefficients, so a report cannot drift run to run.
+- **It refuses to fit below the floor** (`MIN_LABELS_FOR_FIT = 20`, `MIN_PER_CLASS = 5`). With too few
+  rows, or only one class, it returns a **named reason** and no model. A probability printed from three
+  rows is exactly the plausible-looking number this programme exists to remove.
+- **Read-only, by construction.** `model explain` is the only caller. Nothing in the router imports it; a
+  fitted number that moved a routing decision would be the original defect one layer up.
+- **Surfaced** as a new `model explain` section: the pair's own rated record (`👍 9 / 👎 3 (n=12, 75%)`)
+  and the harness-level fit (or the honest "NOT trained — only N labelled turn(s)").
+
+As of this bundle the corpus on this machine holds **0 labelled turns** (60 traces, none rated), so the
+section prints the not-trained line — which is the correct, measured output, not a placeholder.

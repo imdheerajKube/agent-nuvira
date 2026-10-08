@@ -30,8 +30,17 @@ import { labelDeliverableByTrace } from './deliverable-corpus.js';
 /** The two things a user can say about a turn. */
 export type TurnVerdict = 'accepted' | 'rejected';
 
-/** Where a verdict came from — kept so a fit can separate the two. */
-export type VerdictSource = 'cli' | 'dashboard';
+/**
+ * Where a verdict came from — kept so a fit can separate them.
+ *
+ * `'cli'` / `'dashboard'` are a PERSON's explicit verdict. `'derived'` is a
+ * BEHAVIOURAL one (tier 3): the harness observed the user re-ask, hand-edit the
+ * artifact, or leave it untouched and reference it — an inference, not a
+ * statement. Keeping them apart is the whole reason the source is stored: a fit
+ * can weigh a human judgement above an inference from what the run happened to
+ * see.
+ */
+export type VerdictSource = 'cli' | 'dashboard' | 'derived';
 
 /** One recorded verdict, as reported back to the caller. */
 export interface RatedTurn {

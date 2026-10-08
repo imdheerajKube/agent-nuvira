@@ -629,6 +629,12 @@ nuvira models excluded         # show what routing is skipping, and WHY
   (`--exclude-provider`, repeatable — it sinks by scoring exactly as a live failure does).
   The header always states which inputs were in force, so an offline answer is never read
   as the live one.
+- **Acceptance (read-only):** `explain` also prints the pair's own rated record
+  (`👍 9 / 👎 3 (n=12, 75%)`, from `nuvira rate` and the dashboard Trace tab) and a
+  harness-level fit `P(accepted | features)`. The fit is **NOT used for routing** and it
+  refuses to train below 20 labelled turns (≥5 of each class), printing the honest reason
+  instead of a number that would read as evidence. See
+  `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §8.
 
 ### 5.5 Provider health
 
@@ -1421,11 +1427,18 @@ nuvira models excluded         # show what routing is skipping, and WHY
 - **What it writes:** the verdict on the turn's reasoning trace (`userVerdict`, with its
   source) and, when that turn delivered an authored file, a label on the matching row of
   the quality corpus. The dashboard's **Trace tab** has the same control (👍/👎).
-- **What it does NOT do:** nothing routes on it and no score is derived from it *yet*.
-  It records a dataset so a measured quality signal can be fit to labelled turns; a turn
+- **What it does NOT do:** nothing routes on it and no score is derived from it. It
+  records a dataset so a measured quality signal can be fit to labelled turns; a turn
   nobody rated stays unlabelled, because reading silence as acceptance would fabricate
   the positive class instead of measuring it. See `docs/DESIGN_CAPABILITY_BY_MEASUREMENT.md` §8.
   (For trajectory ratings in the older store, use `nuvira feedback` — §7.3.)
+- **Other label sources:** behaviour is also inferred when you do not rate — a near-verbatim
+  **re-ask** or a **hand-edit** of the delivered file is a derived rejection, and an untouched
+  file you then **reference** (without reporting a regression) is a derived acceptance. These
+  carry `source: 'derived'` and are recorded on the same trace/corpus rows.
+- **Where it is read:** `nuvira model explain` prints the pair's rated record and the fitted
+  `P(accepted | features)` read-only (§5.4). The fit is not used for routing and refuses
+  below 20 labelled turns.
 
 ---
 
