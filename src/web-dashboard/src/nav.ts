@@ -80,6 +80,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { path: '/memory', label: 'Memory', icon: '💾' },
       { path: '/knowledge', label: 'Knowledge', icon: '📚' },
       { path: '/history', label: 'History', icon: '📝' },
+      // Bundle 36 — decisions the agent asked the user to make, kept as project
+      // artifacts (readable + revisable long after the turn that asked them).
+      { path: '/decisions', label: 'Decisions', icon: '🧭' },
       { path: '/env', label: 'Env Config', icon: '🔐' },
       { path: '/process-env', label: 'Process Env', icon: '🌱' },
     ],

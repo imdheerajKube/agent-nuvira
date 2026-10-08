@@ -3,6 +3,8 @@ import type { ExecutionEntry } from './components/ExecutionHistory';
 import type {
   AcceptanceData,
   AcceptanceImportResult,
+  DecisionsData,
+  DecisionRecord,
   AdminAuthStatus,
   AdminCachePayload,
   AdminCatalog,
@@ -575,6 +577,46 @@ export class DashboardAPI {
       const data = (await parseJsonOrNull(res)) as AcceptanceImportResult | null;
       if (!data || typeof data.ok !== 'boolean') return null;
       return data;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Bundle 36 — the project's decision log (`ask_user` choices kept as project
+   * artifacts). `forText` turns it into the read-back search (`--for`). Returns
+   * null when the server cannot answer, so the panel degrades rather than lying.
+   */
+  async fetchDecisions(dir: string, forText?: string): Promise<DecisionsData | null> {
+    try {
+      const qs = new URLSearchParams();
+      if (dir) qs.set('dir', dir);
+      if (forText && forText.trim()) qs.set('for', forText.trim());
+      const res = await fetch(`${this.baseUrl}/api/decisions?${qs.toString()}`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = (await parseJsonOrNull(res)) as DecisionsData | null;
+      if (!data || !Array.isArray(data.decisions)) return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Bundle 36 — revise ONE recorded decision. The previous answer is kept in the
+   * record's history by the server; this returns the updated record, or null.
+   */
+  async reviseDecision(dir: string, id: string, answer: string, note?: string): Promise<DecisionRecord | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/decisions/revise`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir, id, answer, ...(note ? { note } : {}) }),
+      });
+      const data = (await parseJsonOrNull(res)) as { ok?: boolean; decision?: DecisionRecord } | null;
+      if (!data || data.ok !== true || !data.decision) return null;
+      return data.decision;
     } catch {
       return null;
     }

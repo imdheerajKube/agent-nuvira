@@ -365,7 +365,19 @@ is read back when the user asks for it.
 
 **Tests.** `decision-log.test.ts` (7: record+doc / redaction / revise keeps history / unknown
 id / relevant-ask recall / corrupt line skipped / off under a test runner);
-`decisions.test.ts` (4 CLI: empty / list+show+revise / `--for` / unknown id exit 1).
+`decisions.test.ts` (4 CLI: empty / list+show+revise / `--for` / unknown id exit 1);
+`decisions-api.test.ts` (5 HTTP) and `DecisionsPanel.test.tsx` (4). The dashboard **Decisions**
+page (`/decisions`) reads the same store — list, `--for` search, revise inline.
+
+### 36d. The correction is MEASURED, not asserted
+
+`scripts/measure-bandit-correction.mjs` runs the REAL `RouterBandit` maths on a controlled
+sequence (a temp state dir, never the user's store) and prints two measurements:
+**PART 1 — the DROP:** a warm arm with no new credit falls θ 0.74 → 0.48 over 13 rejections,
+crossing below a coin flip after 12. **PART 2 — the BRAKE:** an arm that is credited then
+rejected still rises (the model did answer) but stays below an identical un-rejected control
+(θ 0.76 vs 0.85 after 13 turns). It reports the Beta MEAN, so the effect is deterministic and
+not a lucky Thompson draw.
 
 ---
 

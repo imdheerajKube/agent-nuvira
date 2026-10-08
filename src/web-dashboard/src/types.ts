@@ -1977,3 +1977,23 @@ export interface AcceptanceImportResult {
   total?: number;
   error?: string;
 }
+
+/** Bundle 36 — one must-ask decision recorded for a project (`.nuvira/decisions.jsonl`). */
+export interface DecisionRecord {
+  id: string;
+  at: number;
+  question: string;
+  answer: string;
+  choices?: string[];
+  source: string;
+  status: 'decided' | 'revised';
+  revisions?: Array<{ at: number; answer: string; note?: string }>;
+}
+
+/** Bundle 36 — `GET /api/decisions`: the project's decision log. */
+export interface DecisionsData {
+  ok: boolean;
+  dir: string;
+  relevant: boolean;
+  decisions: DecisionRecord[];
+}
