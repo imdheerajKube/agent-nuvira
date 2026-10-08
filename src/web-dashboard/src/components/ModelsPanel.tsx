@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, type CSSProperties } from 'react';
 import { parseJsonOrNull } from '../jsonOrNull';
-import type { AcceptanceData, ModelsHealthData, ProviderHealth, ModelStatus, TestedModel, ModelRegistryInsights, RegistryModelEntry, ActionTelemetryInsights } from '../types';
+import type { AcceptanceData, ModelsHealthData, ProviderHealth, ModelStatus, TestedModel, ModelRegistryInsights, RegistryModelEntry, ActionTelemetryInsights, GateFrictionData, ConsentPictureData, SessionGrantInfo } from '../types';
 import { dashboardAPI } from '../api';
 import { formatCount } from '../format';
 import { useModelCounts } from '../useModelCounts';
@@ -1673,6 +1673,89 @@ function AcceptanceSection() {
   );
 }
 
+function GatesConsentSection() {
+  const [gates, setGates] = useState<GateFrictionData | null>(null);
+  const [consent, setConsent] = useState<ConsentPictureData | null>(null);
+  const [grants, setGrants] = useState<SessionGrantInfo[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      dashboardAPI.fetchGates(),
+      dashboardAPI.fetchConsent(),
+      dashboardAPI.fetchSessionGrants(),
+    ]).then(([g, c, s]) => {
+      if (!alive) return;
+      setGates(g);
+      setConsent(c);
+      setGrants(s);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  async function endGrant(sessionId: string) {
+    const ok = await dashboardAPI.revokeSessionGrant(sessionId);
+    if (ok) setGrants((prev) => (prev ?? []).filter((x) => x.sessionId !== sessionId));
+  }
+  if (!gates && !consent && !grants) return null;
+  const h2: CSSProperties = { fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 6px 0' };
+  const sub: CSSProperties = { fontSize: 12, color: 'var(--text-secondary)' };
+  return (
+    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 12, padding: '14px 18px', marginBottom: 16 }}>
+      <h2 style={h2}>🛡️ Gates &amp; Consent</h2>
+      {gates && (
+        <div style={{ ...sub, marginBottom: 8 }}>
+          harness friction — {gates.traces} trace{gates.traces === 1 ? '' : 's'} · {gates.events} gate/refusal events · per
+          turn mean {gates.perTurn.mean} (median {gates.perTurn.median}, p90 {gates.perTurn.p90}, max {gates.perTurn.max}) ·
+          narration {gates.narration.turns}
+          {gates.byGate.length > 0 ? (
+            <div style={{ marginTop: 4 }}>
+              top gates: {gates.byGate.slice(0, 5).map((g) => `${g.key} ${g.count}`).join(' · ')}
+            </div>
+          ) : null}
+        </div>
+      )}
+      {grants && (
+        <div style={{ ...sub, marginBottom: 8 }}>
+          {grants.length === 0 ? (
+            <span>No session grants are live — every state change still asks.</span>
+          ) : (
+            grants.map((g) => (
+              <div key={g.sessionId} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
+                <span>
+                  <strong>{g.sessionId}</strong> — allowed {g.categories.join(', ')}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => endGrant(g.sessionId)}
+                  style={{ fontSize: 11, padding: '1px 8px', borderRadius: 6, border: '1px solid var(--border-light)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                >
+                  End
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+      {consent && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+          {[consent.denied, consent.grantable, consent.decided].map((group) => (
+            <div key={group.title}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{group.title}</div>
+              <div style={{ ...sub, marginBottom: 4 }}>{group.note}</div>
+              {group.examples.map((ex) => (
+                <div key={ex.action} style={sub}>
+                  • {ex.action} <span style={{ opacity: 0.7 }}>({ex.evidence})</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ModelsPanel() {
   const [modelsData, setModelsData] = useState<ModelsHealthData | null>(null);
   const [registryData, setRegistryData] = useState<ModelRegistryInsights | null>(null);
@@ -1778,6 +1861,7 @@ export default function ModelsPanel() {
       <Legend />
 
       <AcceptanceSection />
+      <GatesConsentSection />
 
       {loading && !modelsData && (
         <div className="loading-state">

@@ -24,6 +24,29 @@ so the loop's own voice stops reading as a second agent.
 Pinned by `tests/tools/session-grant.test.ts` (11) and
 `tests/tools/harness-directive.test.ts` (3).
 
+### Added: an explicit off-machine grant, a named publish that proceeds, and one consent picture
+
+Continuing the harness-voice work with the operational half of the same report —
+"why is this asking, and why won't this run?". The session grant gained an
+`external` category — network fetches, global/system installs (`winget`,
+`npm i -g`), publish, push — offered at the friction point exactly like `write`
+and `terminal`, so a user who WANTS the agent to install a toolchain can say so
+once. The hard DENY floor is untouched: the patterns run BEFORE the grant is
+consulted, so `sudo`, `rm -rf /`, and `git push` as a raw shell string stay
+denied with any grant. A `publish` the user's own request resolves to now
+proceeds and reports like a named `git push` (an UNNAMED publish still asks).
+`learning/harness-narration.ts` detects an answer that quotes the harness — no
+phrase list; the vocabulary is derived from the harness's own text — and
+`scripts/detect-harness-narration.mjs` reports it over live traces.
+`learning/consent-picture.ts` states in ONE place what is denied, grantable, or
+decided by evidence; `learning/gate-friction.ts` summarizes the counts. The
+dashboard serves `GET /api/gates`, `/api/consent`, and `/api/session-grants`
+(plus a POST to end a grant), and the Models panel renders the friction number,
+the live session grants with an **End** button, and the consent table. Pinned by
+`tests/tools/session-grant.test.ts`, `tests/learning/harness-narration.test.ts`,
+`tests/learning/autonomy-state-change.test.ts`, and
+`tests/web-dashboard/gates-api.test.ts`.
+
 ### Fixed: the Windows CI run (a POSIX-only assertion in the remediation-ladder test)
 
 The v3.3.13 tag published to npm from the local pipeline, but its GitHub Actions

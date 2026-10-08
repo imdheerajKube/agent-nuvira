@@ -710,6 +710,9 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
           authorizedByRequest: ctx.writesAuthorized?.authorized === true,
         });
     if (verdict.action !== 'proceed') {
+      // Mark the confirmation so the ask reaches the user (not suppressed) and
+      // can offer the session write grant.
+      ctx.pendingConfirmation = { tool: 'edit_file', command: gated.rel, category: 'write' };
       const question = multi
         ? `Apply ${pairs.length} replacements to ${gated.rel}?`
         : `Apply this edit to ${gated.rel}? — replace "${abbrev(pairs[0].old_string)}" with "${abbrev(pairs[0].new_string)}"`;
@@ -848,6 +851,7 @@ export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promi
             authorizedByRequest: ctx.writesAuthorized?.authorized === true,
           });
     if (verdict.action !== 'proceed') {
+      ctx.pendingConfirmation = { tool: 'write_file', command: gated.rel, category: 'write' };
       return confirmFirst('write_file', args.path, `writing ${args.content.length} chars${abbrev(args.content) ? ` ("${abbrev(args.content)}")` : ''}`);
     }
     decidedAutonomously = true;

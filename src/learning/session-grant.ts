@@ -16,6 +16,9 @@
  *   - `write`    — file mutations (`edit_file`, `write_file`, …).
  *   - `terminal` — recoverable *local-state* shell commands (installs, mkdir,
  *                  cp/mv, git add — the workspace set).
+ *   - `external` — OFF-MACHINE actions: network fetches, global/system installs,
+ *                  publish, push. The user may grant it EXPLICITLY, once, at the
+ *                  friction point; it is never the default.
  *
  * It is offered at the exact moment the guard would ask (the `ask_user` a
  * confirmation refusal asks for) as one extra choice — "Allow all <category>
@@ -23,13 +26,13 @@
  * inferred. A user who does not pick it keeps the ask-every-time default; there
  * is no silent widening.
  *
- * THE LINE IT DOES NOT CROSS. Exactly like the envelope, a session grant NEVER
- * covers the two classes that must stay the user's call: `external` (publishes,
- * spends, anything that leaves this machine) and `destructive` (irreversible
- * removal). "Allow all terminal commands" is therefore "allow all recoverable
- * workspace commands", not "run anything". The absolute DENY patterns in
- * `run-terminal.ts` still run BEFORE this grant is ever consulted, so a
- * `sudo`/`git push`/`rm -rf /` is refused regardless of what was granted.
+ * THE LINE IT DOES NOT CROSS. The HARD DENY floor is not a category and can
+ * never be granted: the absolute DENY patterns in `run-terminal.ts` (sudo, rm
+ * -rf at dangerous targets, force-push, history destruction) run BEFORE any
+ * grant is consulted, so no grant unlocks them. And a grant is never inferred
+ * from prose — `external` in particular is only ever granted when the user
+ * picks it explicitly, so a blanket "go ahead and build" cannot silently
+ * authorize changing the whole machine or publishing to the world.
  *
  * WHERE IT LIVES. Per CONVERSATION, keyed to the session's plan store — the
  * same key the intent envelope uses — so it survives the turn that granted it
@@ -40,7 +43,7 @@
  */
 
 /** The categories a session grant can cover. */
-export type SessionGrantCategory = 'write' | 'terminal';
+export type SessionGrantCategory = 'write' | 'terminal' | 'external';
 
 /**
  * How long a session grant stays live. Eight hours is a working session; the
@@ -67,7 +70,9 @@ function isKey(key: unknown): key is object {
 
 /** The human label for a category, used in the offered choice and messages. */
 export function sessionGrantLabel(category: SessionGrantCategory): string {
-  return category === 'terminal' ? 'terminal commands' : 'file writes';
+  if (category === 'terminal') return 'terminal commands';
+  if (category === 'external') return 'off-machine actions';
+  return 'file writes';
 }
 
 /**

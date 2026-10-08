@@ -6154,6 +6154,46 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // ── Bundle 37/39/40 — one picture of consent, and how much the harness spoke ──
+  // Open like the other read paths: these expose policy and counts, never data.
+  if (pathname === '/api/gates') {
+    void (async () => {
+      const { summarizeGateFriction } = await import('../learning/gate-friction.js');
+      writeJson(res, 200, { ok: true, ...summarizeGateFriction(readTracesFile()) });
+    })();
+    return;
+  }
+
+  if (pathname === '/api/consent') {
+    void (async () => {
+      const { consentPicture } = await import('../learning/consent-picture.js');
+      writeJson(res, 200, { ok: true, picture: consentPicture() });
+    })();
+    return;
+  }
+
+  // The live session grants (Bundle 37a). The console owns every session's plan
+  // store, so it is the one place that can see them all.
+  if (pathname === '/api/session-grants') {
+    writeJson(res, 200, { ok: true, grants: chatConsole.listSessionGrants() });
+    return;
+  }
+
+  // Ending a grant is the user asking to be asked again — it can only make the
+  // agent MORE conservative, so it needs no further confirmation.
+  if (pathname === '/api/session-grants/clear' && req.method === 'POST') {
+    void (async () => {
+      const body = await readJsonBody(req);
+      const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
+      if (!sessionId) {
+        writeJson(res, 400, { ok: false, error: 'sessionId is required.' });
+        return;
+      }
+      writeJson(res, 200, { ok: true, cleared: chatConsole.revokeSessionGrant(sessionId) });
+    })();
+    return;
+  }
+
   if (pathname === '/api/routing') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(readRoutingInsights()));

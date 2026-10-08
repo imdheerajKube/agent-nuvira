@@ -629,6 +629,40 @@ Pinned by `tests/tools/session-grant.test.ts` (11) and
 `tool-loop.test.ts` / `subagent-end-to-end.test.ts` were updated to the new
 contract (`system` + `[harness]`) rather than loosened.
 
+## Bundle 38–40 — off-machine consent, named publish, and one picture (2026-10-08)
+
+Continued the harness-voice work with the operational half of the same report —
+"why is this asking, and why won't this run?":
+
+**38a. The off-machine grant.** The session grant gained an `external` category:
+network fetches, global/system installs (`winget`, `npm i -g`), publish, push. It
+is offered at the friction point exactly like `write`/`terminal`, and is the ONLY
+category a blanket request can never reach — it exists so a user who WANTS the
+agent to install a toolchain can say so once. The hard DENY floor is untouched:
+the patterns run before the grant is consulted, so `sudo`, `rm -rf /`, `git push`
+as a raw shell string stay denied with any grant. Wired in `run_terminal.ts`
+(category = recoverable ? terminal : external), `git-tool.ts` (push), and
+`run-cli.ts` (external intents only — never an irreversible local one).
+
+**38b. A named publish proceeds.** `decideCliIntentConfirmation` now treats a
+`publish` the user's OWN request resolves to like a named `git push`: it
+proceeds and reports. An UNNAMED publish (the model's idea) still always asks.
+
+**39. Narration is detected.** `learning/harness-narration.ts` flags an answer
+that reuses a DISTINCTIVE token (a hyphenated compound or a ≥10-char word) from
+the harness's own text — no phrase list; the vocabulary is derived at runtime
+from what the harness actually said. `scripts/detect-harness-narration.mjs`
+reports it over live traces. HONEST LIMIT: it catches the model QUOTING the
+harness, not a paraphrase in the model's own words.
+
+**40. One picture.** `learning/consent-picture.ts` states, in one place, what is
+DENIED (never runs), GRANTABLE (one explicit session grant), or DECIDED by
+evidence (the request names it). `learning/gate-friction.ts` summarizes the
+gate/refusal/narration counts from the traces. The dashboard serves all three —
+`GET /api/gates`, `/api/consent`, `/api/session-grants` (+ a POST to end one) —
+and the Models panel renders them: the friction number, the live session grants
+with an **End** button, and the consent table.
+
 ## Open
 
 1. Findings **#2** and **#8** — no surviving witness; recoverable only from the lost

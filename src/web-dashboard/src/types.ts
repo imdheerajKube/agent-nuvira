@@ -1997,3 +1997,41 @@ export interface DecisionsData {
   relevant: boolean;
   decisions: DecisionRecord[];
 }
+
+/** Bundle 37/39 — `GET /api/gates`: how much the harness spoke in a turn. */
+export interface GateFrictionData {
+  ok: boolean;
+  traces: number;
+  events: number;
+  perTurn: { mean: number; median: number; p90: number; max: number; turnsWithAny: number };
+  byGate: Array<{ key: string; count: number }>;
+  narration: { turns: number; echoedMarker: number };
+}
+
+/** One row of the consent picture. */
+export interface ConsentExample {
+  action: string;
+  evidence: string;
+}
+
+/** One group of the consent picture (denied / grantable / decided). */
+export interface ConsentGroup {
+  title: string;
+  note: string;
+  examples: ConsentExample[];
+}
+
+/** Bundle 40 — `GET /api/consent`: the one page that says what runs and what asks. */
+export interface ConsentPictureData {
+  denied: ConsentGroup;
+  grantable: ConsentGroup;
+  decided: ConsentGroup;
+}
+
+/** Bundle 37a — a live session grant (`GET /api/session-grants`). */
+export interface SessionGrantInfo {
+  sessionId: string;
+  categories: string[];
+  grantedAt: number;
+  expiresAt: number;
+}
