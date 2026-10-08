@@ -308,6 +308,74 @@ isolation (26/26) and passed on the next full run — recorded as containment co
 
 ---
 
+## Bundle 28 — the admin flow verified end-to-end, and the hooks cookbook (LANDED 2026-10-08)
+
+**Why.** Round 3's last open proof was "the literal browser dashboard flow" — and the admin credential was
+missing. The user supplied it (`admin`); this section records what was actually verified and what the docs now
+say, so the surface is not left "assumed working".
+
+### The admin flow, driven over HTTP against an ISOLATED dashboard
+
+The server was started with `NUVIRA_CONFIG_DIR` and `NUVIRA_MEMORY_DIR` pointed at temp dirs and
+`BUFF_DASHBOARD_ADMIN_PASSWORD=admin`, so the entire flow — including the write — was exercised without
+touching the real `~/.nuvira`. Every step behaved correctly:
+
+| Step | Result |
+|---|---|
+| `GET /api/admin/auth-status` (anonymous) | `{configured:true, authenticated:false}` |
+| `POST /api/admin/login` admin/admin | 200, token + `role:admin` |
+| `GET /api/admin/auth-status` (token) | `authenticated:true, user:"admin", role:"admin"` |
+| `POST /api/admin/login` wrong password | **401** |
+| `PUT /api/hooks` with no token | **401** "Not authenticated" |
+| `PUT /api/hooks` invalid (`deny` on `after_tool_call`) | **400**, naming the rule: *"deny is only available on before_tool_call (after_tool_call cannot stop a call)"* |
+| `PUT /api/hooks` valid | 200; persisted to `<config-dir>/hooks.json` |
+| `GET /api/hooks` (read is open) | built-ins merged for display (all OFF) + the user hook ON |
+| `nuvira hooks list` on the SAME config dir | the CLI prints the identical set — the shared `hooks.json` claim, demonstrated not asserted |
+| `POST /api/admin/logout` then re-use the token | 200, then **401** — the session is genuinely revoked |
+
+**The real credential.** `admin`/`admin` did NOT verify against the on-disk store (the account existed with
+`role:admin` and `mustChangePassword:false`, so a previous password had been set). Rather than guess, the auth
+path was proven correct with a hermetic round-trip (`writeAdminUser`→`verifyAdmin` = true, wrong password =
+false), which isolates a credential mismatch from a code defect. On the user's instruction the password was then
+reset to `admin` (`writeAdminUser`, which preserves the other user and clears `mustChangePassword`), and
+verified. **Reset by explicit request only — never guessed.**
+
+### The browser walk, finally run
+
+`node scripts/smoke-dashboard-walk.mjs` walks every routed page in a real Chrome across four themes. It found
+the `/hooks` h1→h3 defect (fixed in Bundle 27 — the guard missing it is fixed there too) and, after the fix,
+**all four themes walk clean (27 routes each)**. That closes the last face of the Cluster G followup: the
+dashboard is browser-verified, not merely unit-tested.
+
+### The hooks cookbook (documentation)
+
+`docs/HOOKS.md` was a fine *reference* and a poor *manual*: it explained the contract and why it is safe, but
+never answered "what can I actually do with this?". It gains **§8 — Recipes**, built from the contract's real
+semantics (read out of `hook-contract.ts`, not recalled):
+
+- **§8.1 the matcher, precisely** — the five misreadings that make a hook look inert: `*` is the only wildcard
+  (no `?`, no regex), `argsMatch` is SHALLOW over top-level args, a missing arg matches only a bare `*`,
+  **`cwdPrefix` is the working directory and NOT a file path**, and all `when` fields are AND-ed. Plus the two
+  save-time rules and "first denial wins, built-ins before user".
+- **§8.2 recipes by goal** — deny (block `rm -rf`, force-push, `DROP TABLE`; protect `*.env` writes), scan-args
+  (secret hygiene at the moment of writing), notify (audit failures, watch a tool, scope to a checkout, mark a
+  run complete) — each given for the CLI, the dashboard form AND the raw `hooks.json`.
+- **§8.3/§8.4** — an action-by-seam capability matrix and an explicit "what a hook deliberately CANNOT do".
+
+`README.md` gains a feature bullet and an `agent-nuvira hooks` section (goal→seam→action table, the four
+disabled starters, and the two easy-to-get-wrong rules), pointing at §8 for depth.
+
+**Every documented claim was checked against the code, not the prose:** the arg names were read from the live
+schemas (`write_file`→`path`, `run_terminal`→`command`), the glob/matcher rules from `globToRegExp`/
+`matchesHookDeclaration`, and the hook context's `args` from `tool-hooks.ts` (`args: call.arguments` — shallow,
+as documented). A doc example using a plausible-but-wrong arg name is the same class of defect as a fabricated
+number.
+
+**Gates.** All four themes walk clean (27 routes each); `docs:citations:check`, `docs:commands:check`,
+`docs:wire:check` and `verify:commands` **341/341** all pass; no code changed in this bundle beyond Bundle 27.
+
+---
+
 ## Bundle 27 — the user's verdict reaches the bandit, and `/hooks` stops skipping a heading (LANDED 2026-10-08)
 
 ### 27a. Correcting round 3's "blocked" — only HALF of it was blocked
@@ -927,9 +995,13 @@ exists; where it does not, that is stated as the residual rather than implied cl
    record of those decisions), and the two-writer pattern itself is **A6's intended behaviour** (its
    acceptance counts 2–3 rows per headless turn), so redundant rows will re-accumulate — the pass is
    re-runnable, not a one-time cure.
-4. **`testPassed` — CLOSED (Bundle 18). `userAccepted` and a real `qualityScore` remain absent** from the
-   bandit payload, so the reward is still a veto on verification plus a cost adjustment — better, not
-   complete. Bundle 18 states what each of the two would need.
+4. **`testPassed` — CLOSED (Bundle 18). `userAccepted` — CLOSED (Bundle 27). A real `qualityScore` remains
+   absent** from the bandit payload. The round-3 note below called BOTH of the last two blocked on a missing
+   labelled corpus; that was wrong for `userAccepted`, which was derivable all along from the user's own next
+   message (`detectRegressionSignal`) and merely unwired. Bundle 27 applies it as the exact deferred delta the
+   success branch would have used. Only `qualityScore` — the 0–1 *scale* — still needs a measured reference that
+   does not exist, so the reward is now a veto on verification, an explicit rejection penalty, and a cost
+   adjustment. The remaining gap is the quality SCALE alone.
 5. ~~**`cost` and `ecosystem` have declared priors but no measured feed.**~~ **CLOSED — Bundle 16**: the
    approved OpenRouter catalogue now supplies both as LABELLED priors (opt-in, default OFF,
    `NUVIRA_CATALOG_FEED` in the CLI and the dashboard's Process Env page). `accuracy`, `performance` and
@@ -997,8 +1069,11 @@ exists; where it does not, that is stated as the residual rather than implied cl
     generic document. Shipping a detector for a failure that has not been observed, using a rule the
     doctrine forbids, would add noise rather than a signal. The honest next step is to COLLECT the case:
     when an authored artifact is delivered at ≥ the stated magnitude (so the shortfall check is silent) and
-    the turn still reads as a miss, record it — that corpus is what a quality signal must be fit to, and it
-    is the same missing ground truth the learned area set (item 9) needs.
+    the turn still reads as a miss, record   it — that corpus is what a quality signal must be fit to, and it
+    is the same missing ground truth the learned area set (item 9) needs. **Bundle 27 (2026-10-08) closed the
+    adjacent signal that was NOT blocked:** `userAccepted` is now fed from the same correction the ledger keeps,
+    so the generic-on-length case is the ONLY residual here — do not let "no labelled corpus" be reused to
+    excuse the next observable signal.
 14. ~~**`model explain` answers a hypothetical**: it cannot see a continuation's `routingText`, the
     `contextHintTokens`, or the session's failed-provider set, which exist only at runtime.~~
     **CLOSED — Bundle 21**: `--context-tokens <n>` feeds the context preflight the token count the runtime
