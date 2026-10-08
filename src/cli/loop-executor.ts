@@ -761,22 +761,16 @@ export async function runLoopExecutor(
   }
 
   // ── Skill hint (chat/execute parity) ────────────────────────────────────
-  // MODE-DEPENDENT (see resolveSkillHintMode): `match` (default) injects ONE
-  // keyword-matched skill only when the goal really matches; `catalog`
-  // (opt-in — ~24K chars) hands the model the full list to choose from; `off`
-  // injects nothing. Best-effort: a failure returns '' and the prompt is
-  // unchanged.
+  // MODE-DEPENDENT (see resolveSkillHintMode): `pointer` (default) injects a
+  // bounded discovery pointer (the MODEL picks a skill via the skill tool /
+  // capability search — the harness no longer keyword-matches); `catalog`
+  // (opt-in — ~24K chars) hands the model the full list; `off` injects nothing.
+  // Best-effort: a failure returns '' and the prompt is unchanged.
   let skillHint = '';
   if (!opts.skipSkillHint) {
     try {
-      const { buildConfiguredSkillHint, markLoopSkillUsed } = await import(
-        '../tools/loop-skill-hint.js'
-      );
-      const injected: { value: import('../tools/loop-skill-hint.js').LoopSkillHintMatch | null } = {
-        value: null,
-      };
-      skillHint = await buildConfiguredSkillHint(goal, configManager, injected);
-      await markLoopSkillUsed(injected.value);
+      const { buildConfiguredSkillHint } = await import('../tools/loop-skill-hint.js');
+      skillHint = await buildConfiguredSkillHint(configManager);
     } catch {
       skillHint = ''; // best-effort — never breaks the turn
     }

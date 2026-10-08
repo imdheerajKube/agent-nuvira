@@ -4,6 +4,35 @@ All notable changes to **Agent-Nuvira** are documented in this file.
 
 ## Unreleased — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
+### Changed: skill selection is the model's job — the keyword scorer is gone
+
+The chat/execute loop and the pipeline both used to decide, **in code**, which
+skill a goal wanted: `loop-skill-hint.ts` scored the compiled store and the hub
+catalog, then an evidence filter pulled the false positives back with stopword
+lists, generic-word lists and platform-host lists. Every list was a bug report —
+"blood test report" matched the software `test-strategy` skill, "Windows and
+Linux" matched `wsl-setup`, "packaging" matched `electron-app`. A word list
+cannot decide what a goal MEANS, and each word added to force one case right made
+some real match wrong.
+
+Selection is the MODEL's job now, on every surface:
+
+- the loop default (`pointer`) is a bounded **discovery pointer** — skills exist,
+  and here are the two ways to find one: the `skill` tool (list / load) and the
+  capability search (`tool_search`, whose hits include `kind:"skill"`
+  capabilities). Near-zero prompt cost, no false positives, no maintenance;
+- the full name+description `catalog` and the `names` list stay available
+  **opt-in** (`NUVIRA_SKILL_CATALOG` / `skills.catalogHint`); the retired
+  `match`/`keyword` values still parse, and now mean the pointer;
+- the pipeline hands the planner the **catalog** and lets it name the skill a step
+  needs, which the writer loads with `skill_view(name)` — the same model-driven
+  contract, same catalog builder, so the two surfaces cannot drift.
+
+`tool_search`'s description now says it discovers skills too, so the pointer's
+instruction is actionable. Pinned by `tests/tools/loop-skill-hint.test.ts`,
+the planner's `skillCatalog` case, and the release-gate budget contract
+(`DEFAULT_SKILL_HINT_MODE === 'pointer'`, hint < 2000 chars).
+
 ### Added: per-platform commands, declared only where the OS actually decides
 
 A capability can now declare how to do it on each OS, so the model no longer has

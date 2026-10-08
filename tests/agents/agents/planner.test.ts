@@ -478,6 +478,37 @@ describe('PlannerAgent', () => {
       expect(capturedPrompt).toContain('NEVER emit literal');
     });
 
+    it('should inject the model-driven skill catalog when skillCatalog is present in metadata', async () => {
+      // The harness no longer keyword-matches a skill; the orchestrator hands the
+      // planner the catalog and the model picks.
+      const context = {
+        goal: 'deploy this website',
+        workingDirectory: '/test',
+        taskPlan: [],
+        artifacts: [],
+        conversations: [],
+        fileChanges: [],
+        metadata: {
+          skillCatalog:
+            '## Available skills\n  - website-deploy: Deploy a static site to a hosting provider.\n\nName the skill in the step that needs it; the writer agent can call skill_view(name) to load its full methodology.',
+        },
+      } as any;
+
+      let capturedPrompt = '';
+      const mockLLM = async (prompt: string) => {
+        capturedPrompt = prompt;
+        return JSON.stringify([
+          { id: 's1', description: 'Deploy the website', agentType: 'runner', dependsOn: [] },
+        ]);
+      };
+
+      const result = await planner.execute(context, mockLLM as any);
+      expect(result.success).toBe(true);
+      expect(capturedPrompt).toContain('## Available skills');
+      expect(capturedPrompt).toContain('website-deploy');
+      expect(capturedPrompt).toContain('skill_view');
+    });
+
     it('should not inject skill guidance when metadata is absent', async () => {
       const context = {
         goal: 'test',

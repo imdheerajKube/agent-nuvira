@@ -713,6 +713,44 @@ knowledge base app"), not a tool ("write_file"), so goal-text matching alone can
 never be the discovery path — which is the argument for Phase 2, where the MODEL
 selects by descriptor and the gate reads `effectClass` instead of parsing prose.
 
+## Bundle 48 — skill selection is the model's job, the keyword scorer is gone (2026-10-08)
+
+**The finding.** `src/tools/loop-skill-hint.ts` decided WHICH skill a goal wanted
+in code: `findLoopSkillMatch` scored the compiled store and the hub catalog, then
+`hasRealGoalEvidence` pulled the false positives back with a stopword list, a
+generic-name-word list (`test`), a generic-tag list (`packaging`), and a
+platform-host list (`windows`, `linux`). The same `isSkillActivated` gate was
+imported by `src/agents/orchestrator.ts`, so the keyword decision served the
+chat/execute loop AND the pipeline. Every list was a live bug report: "blood test
+report" matched the software `test-strategy` skill, "Windows and Linux" matched
+`wsl-setup`, "packaging" matched `electron-app`. The user called it "the least
+intelligent piece" — a word list cannot decide what a goal MEANS, and each word
+added to force one case right made some real match wrong.
+
+**The fix.** Delete the scorer, on every surface. Selection is the model's:
+
+- the loop default (`pointer`) injects a bounded **discovery pointer** naming the
+  two model-driven paths — the `skill` tool and the capability search
+  (`tool_search`, hits of `kind:"skill"`);
+- `buildSkillCatalogHint` (full `catalog` / `names`) stays OPT-IN via
+  `NUVIRA_SKILL_CATALOG` / `skills.catalogHint`; the retired `match`/`keyword`
+  values still parse and now alias the pointer;
+- the orchestrator no longer keyword-matches: it hands the planner the **catalog**
+  (`vault.setMeta('skillCatalog', …)`, `loadHint: 'skill-view'`), and the planner
+  names the skill a step needs — the writer loads it with `skill_view(name)`.
+
+Removed: `findLoopSkillMatch`, `hasRealGoalEvidence`, `isSkillActivated`,
+`isPlatformName`, `buildLoopSkillHint`, `markLoopSkillUsed`, `LoopSkillHintMatch`
+and the five word/host sets. Kept and shared: the catalog builder, so loop and
+pipeline cannot disagree about what a skill IS. `skillStore.findMatch` and
+`findHubSkillMatch` stay for MANUAL discovery (the CLI, and the learning dedup
+check) — the retired thing is auto-injection, not lookup.
+
+**The guard.** `DEFAULT_SKILL_HINT_MODE === 'pointer'` and the default hint stays
+< 2000 chars (`tests/release/agent-contracts.test.ts`), so the 3.3.11 catalog
+blow-up cannot return. The pointer names BOTH discovery paths; the catalog honors
+`skills.disabled[]`; the planner renders `skillCatalog`.
+
 ## Bundle 47 — per-platform commands, declared only where the OS decides (2026-10-08)
 
 **The ask.** "Will this cover all commands on Windows, Unix and macOS? The agent

@@ -2616,7 +2616,7 @@ registerTool({
   description:
     'Discover and load capabilities. Actions: "search" finds what the agent can DO by query and returns each hit as a CAPABILITY — its effect (read / local-write / local-state / external / destructive), whether it is reversible and how, any credentials or binaries it needs, whether a session grant can cover it, and a `check` saying whether those needs are actually MET on this machine (run this FIRST for an install / publish / deploy / push task, so a missing executable is known before the work starts rather than halfway through); ' +
     '"readiness" is the same probe without a search — call it with a query to pre-flight a described task, or with no query to see what the curated install / publish / deploy / push verbs are missing here; ' +
-    'Tools on any MCP server connected this session are included as capabilities too (kind "mcp", with an `invoke` saying how to call them); ' +
+    'Tools on any MCP server connected this session are included as capabilities too (kind "mcp", with an `invoke` saying how to call them). Installed SKILLS are capabilities too (kind "skill") — call this to find the skill that fits a task, then load it with the skill tool; ' +
     '"load" activates a whole toolset (media, browser, channels, docker, ' +
     'productivity, publish, core-pipeline, …) for THIS turn — call it before ' +
     'using any tool outside the always-available core set. "load" returns ' +

@@ -1165,104 +1165,32 @@ export class Orchestrator {
     // `--auto-route` / autoRouteModels enables per-task AutoModelRouter
     // routing in executeSingleTask (no static map needed).
 
-    // ── 3c. Skill guidance (progressive disclosure, industry pattern) ──────
-    // Level 1 metadata lives in the skill store; when the goal matches a
-    // skill (findMatch), Level 2 (the methodology) is injected into the
-    // planner's context so deploy-style goals produce the correct steps
-    // automatically. Model-selected activation: the skill is a recommendation,
-    // the planner still owns the final plan. Best-effort — a skill-store
-    // failure must never break planning.
+    // ── 3c. Skill discovery (MODEL-DRIVEN) ──────────────────────────────────
+    // This step used to KEYWORD-MATCH one skill to the goal (findMatch +
+    // findHubSkillMatch, then the isSkillActivated evidence filter) and inject
+    // its methodology. That shipped a hand-written stopword/generic-word/host
+    // list that kept getting a case wrong ("blood test report" → the software
+    // test-strategy skill; "Windows and Linux" → wsl-setup). Word matching
+    // cannot decide what a goal MEANS, so it is gone from the pipeline too:
+    // the planner is a MODEL, so it is handed the CATALOG and picks the skill
+    // (by name) that fits, and the writer can load one in full with
+    // skill_view(name). The disabled gate still applies at catalog build time.
+    // Best-effort — a skill-store failure must never break planning.
     try {
-      const { getSkillStore } = await import('../learning/skill-store.js');
-      let matchedSkill = getSkillStore().findMatch(goal);
-      // P3 — skills.disabled[] gate: a dashboard/CLI-disabled skill is never
-      // injected, for COMPILED skills too. (The hub path already filters via
-      // listMatchableHubSkills; this closes the compiled gap so the Agent Hub
-      // toggle is never cosmetic.)
-      const { readDisabledSkills } = await import('../learning/hub-skill-catalog.js');
-      if (matchedSkill && new Set(readDisabledSkills()).has(matchedSkill.id)) matchedSkill = null;
-      // Activation gate (industry practice: model-selected activation).
-      // findMatch's threshold is intentionally low (score >= 1) for manual
-      // discovery; auto-injection must be tighter so a generic "deploy the
-      // API" goal does NOT get website-deployment methodology. For a
-      // website-deployment skill (bundled OR hub-installed), require
-      // hosting-specific intent words.
-      //
-      // This pipeline path used to apply ONLY the website-deploy rule and NO
-      // evidence filter at all — so it was the most exposed injection surface
-      // (live 2026-09-21: `wsl-setup` methodology injected into a cross-platform
-      // GUI app plan because the goal named "Windows and Linux"). It now uses
-      // the SAME `isSkillActivated` predicate as the chat/execute loop, so the
-      // three surfaces cannot disagree about what a goal is evidence FOR.
-      const { isSkillActivated } = await import('../tools/loop-skill-hint.js');
-      if (matchedSkill && !isSkillActivated(goal, matchedSkill)) matchedSkill = null;
-      if (matchedSkill) {
-        // Load full methodology from skill_view() (Hermes progressive disclosure)
-        let fullMethodology = '';
-        try {
-          const { getSkillStore } = await import('../learning/skill-store.js');
-          const store = getSkillStore();
-          fullMethodology = store.skillView(matchedSkill.name);
-        } catch {
-          // Best-effort — skill_view failure must never break the pipeline
-        }
-
-        vault.setMeta('skillGuidance', {
-          name: matchedSkill.name,
-          description: matchedSkill.description,
-          steps: matchedSkill.steps.map((s) => ({ agentType: s.agentType, description: s.description })),
-          fullMethodology,
-        });
+      const { buildConfiguredSkillHint } = await import('../tools/loop-skill-hint.js');
+      // `skill-view` tail: the pipeline's load path is the writer's skill_view,
+      // not the loop's skill tool.
+      const skillCatalog = await buildConfiguredSkillHint(this.configManager, { loadHint: 'skill-view' });
+      if (skillCatalog) {
+        vault.setMeta('skillCatalog', skillCatalog);
         this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
           agentType: 'orchestrator',
           stage: 'skill',
-          message: `🧠 Matched skill '${matchedSkill.name}' — injecting its methodology into the planner`, 
+          message: '🧠 Handing the planner the skill catalog — the model picks which skill (if any) a step needs',
         }, 'orchestrator');
-        if (options.verbose) {
-          logger.info(`   🧠 Matched skill '${matchedSkill.name}' — injecting its methodology into the planner`);
-        }
-      } else {
-        // I7 P0: no compiled skill matched — consult the HUB catalog (installed
-        // SKILL.md skills). These are first-class runtime capabilities too: a
-        // fresh `nuvira skills install` is matchable with zero recompilation.
-        // Same model-selected activation contract: the skill is a
-        // recommendation, the planner still owns the final plan.
-        const { findHubSkillMatch } = await import('../learning/hub-skill-catalog.js');
-        let hubMatch = findHubSkillMatch(goal);
-        // SAME activation gate as the compiled skill (website-deploy needs
-        // hosting intent) AND the evidence filter the hub scorer has never had:
-        // its name/description keyword score is a candidate RANKING, not proof
-        // the goal asked for the methodology.
-        if (hubMatch && !isSkillActivated(goal, hubMatch)) hubMatch = null;
-        if (hubMatch) {
-          // Load full methodology from skill_view() (Hermes progressive disclosure)
-          let fullMethodology = '';
-          try {
-            const { getSkillStore } = await import('../learning/skill-store.js');
-            const store = getSkillStore();
-            fullMethodology = store.skillView(hubMatch.name);
-          } catch {
-            // Best-effort — skill_view failure must never break the pipeline
-          }
-
-          vault.setMeta('skillGuidance', {
-            name: hubMatch.name,
-            description: hubMatch.description,
-            body: hubMatch.body,
-            fullMethodology,
-          });
-          this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
-            agentType: 'orchestrator',
-            stage: 'skill',
-            message: `🧠 Matched hub skill '${hubMatch.name}' — injecting its SKILL.md methodology into the planner`,
-          }, 'orchestrator');
-          if (options.verbose) {
-            logger.info(`   🧠 Matched hub skill '${hubMatch.name}' — injecting its SKILL.md methodology into the planner`);
-          }
-        }
       }
     } catch {
-      // Best-effort — skill guidance must never break the pipeline.
+      // Best-effort — skill discovery must never break the pipeline.
     }
 
     // ── 4. Planner (or pre-built plan from workflow template) ────────────
