@@ -25,11 +25,13 @@ import {
   requestNamesPath,
   requestRequestsCommit,
   requestRequestsPush,
-  IRREVERSIBLE_CLI_INTENTS,
-  RECOVERABLE_CLI_INTENTS,
-  EXTERNAL_CLI_INTENTS,
   EDIT_SURGICAL_MAX_FRACTION,
 } from '../../src/learning/autonomy-policy.js';
+import {
+  CLI_INTENT_EFFECTS,
+  declaredCliIntents,
+  cliIntentGateFacts,
+} from '../../src/learning/cli-intent-effects.js';
 
 describe('decideStateChange — the shared rule table', () => {
   const base = { tool: 't', action: 'doing the thing' };
@@ -209,11 +211,14 @@ describe('requestNamesPath — the evidence an edit gate measures', () => {
 
 describe('decideCliIntentConfirmation — which gated intents may be decided', () => {
   it('an irreversible LOCAL intent stays gated however the request is phrased', () => {
-    for (const intent of IRREVERSIBLE_CLI_INTENTS) {
-      // `publish` is the one documented exception: a request that RESOLVES to
-      // the publish is the user's own decision (like a named git push), so it
-      // proceeds. The local, irreversible intents stay gated.
-      if (intent === 'publish') continue;
+    // Read from the DECLARATIONS, not a list this test keeps in step by hand — the
+    // property under test is "every intent declared irreversible is gated", which
+    // must hold for intents added later without editing this test.
+    const localIrreversible = CLI_INTENT_EFFECTS.filter(
+      (e) => !e.reversible && e.grantCategory !== 'external',
+    );
+    expect(localIrreversible.length).toBeGreaterThan(0);
+    for (const { intent } of localIrreversible) {
       const verdict = decideCliIntentConfirmation({ intent, namedByRequest: true });
       expect(verdict.action, intent).toBe('ask');
     }
@@ -230,8 +235,9 @@ describe('decideCliIntentConfirmation — which gated intents may be decided', (
     expect(verdict.action).toBe('ask');
   });
 
-  it('the off-machine intents are exactly the publish-class ones', () => {
-    expect([...EXTERNAL_CLI_INTENTS]).toEqual(['publish']);
+  it('the off-machine intents are exactly the ones declaring the external grant', () => {
+    const external = CLI_INTENT_EFFECTS.filter((e) => e.grantCategory === 'external').map((e) => e.intent);
+    expect(external).toEqual(['publish']);
   });
 
   it('a recoverable intent the user asked for is decided', () => {
@@ -246,10 +252,18 @@ describe('decideCliIntentConfirmation — which gated intents may be decided', (
     expect(verdict.reason).toMatch(/agent's own initiative/);
   });
 
-  it('an unclassified gated intent falls back to asking (the safe default)', () => {
+  it('an UNCLASSIFIED gated intent falls back to asking (the safe default)', () => {
     const verdict = decideCliIntentConfirmation({ intent: 'something.new', namedByRequest: true });
     expect(verdict.action).toBe('ask');
-    expect(verdict.reason).toMatch(/not classified/);
+    expect(verdict.reason).toMatch(/no declared effect/);
+  });
+
+  it('REPORTS the decision text plainly — no raw unicode escapes leak into the reason', () => {
+    // The reason is user-facing prose; an escape that survives into the string
+    // would be visible garbage in the transcript.
+    const verdict = decideCliIntentConfirmation({ intent: 'publish', namedByRequest: true });
+    expect(verdict.reason).not.toMatch(/\\u[0-9a-f]{4}/i);
+    expect(verdict.reason).toContain('\u2019');
   });
 });
 
@@ -272,16 +286,83 @@ describe('manifest coverage — no gated intent inherits a behaviour by accident
     // something — otherwise this test would pass vacuously.
     expect(gated.length).toBeGreaterThan(0);
 
-    const irreversible = [...IRREVERSIBLE_CLI_INTENTS];
-    const recoverable = [...RECOVERABLE_CLI_INTENTS];
+    const declared = declaredCliIntents();
 
-    // No intent may appear in both tables, and none may be in neither.
-    const both = irreversible.filter((i) => recoverable.includes(i));
-    expect(both).toEqual([]);
-    expect(gated.filter((i) => !irreversible.includes(i) && !recoverable.includes(i))).toEqual([]);
+    // EVERY gated intent has a declaration — a newly gated command cannot ship
+    // without an effect, so it can never quietly inherit an unclassified default.
+    expect(gated.filter((i) => !declared.includes(i))).toEqual([]);
 
-    // …and no table may claim an intent the manifest does not actually gate.
-    expect(irreversible.filter((i) => !gated.includes(i))).toEqual([]);
-    expect(recoverable.filter((i) => !gated.includes(i))).toEqual([]);
+    // …and every declaration corresponds to a real gate — a removed command
+    // cannot leave a ghost behind.
+    expect(declared.filter((i) => !gated.includes(i))).toEqual([]);
+
+    // No duplicates, and no intent claiming two effects at once.
+    expect(new Set(declared).size).toBe(declared.length);
+    expect(CLI_INTENT_EFFECTS.filter((e) => !e.why.trim()).map((e) => e.intent)).toEqual([]);
+  });
+
+  it('a resolution-only gate is covered — the trap this guard exists for', () => {
+    // `contacts.remove` is gated ONLY through `resolutions[].confirmation`, so a
+    // check that reads the intent's own flag alone calls it a ghost. Pin that the
+    // guard sees both forms AND that the declaration exists.
+    const manifest = JSON.parse(
+      readFileSync(new URL('../../src/resources/command-manifest.json', import.meta.url), 'utf-8'),
+    ) as {
+      intents: Array<{
+        intent: string;
+        confirmation?: boolean;
+        resolutions?: Array<{ confirmation?: boolean }>;
+      }>;
+    };
+    const entry = manifest.intents.find((i) => i.intent === 'contacts.remove')!;
+    expect(entry).toBeDefined();
+    expect(entry.confirmation).not.toBe(true);
+    expect((entry.resolutions ?? []).some((r) => r.confirmation === true)).toBe(true);
+    expect(declaredCliIntents()).toContain('contacts.remove');
+  });
+});
+
+describe('cliIntentGateFacts — the derived view run_cli reads', () => {
+  it('matches what the three retired sets used to say, intent for intent', () => {
+    // The refactor's contract: a structural move, not a policy change. The OLD
+    // membership is written down here once, so a future edit to the declarations
+    // has to change behaviour CONSCIOUSLY rather than drift into it.
+    const wasRecoverable = [
+      'dashboard.stop',
+      'gateway.stop',
+      'health.selfheal',
+      'memory.optimize',
+      'cache.clear',
+      'skills.uninstall',
+      'contacts.remove',
+      'permissions.disallow',
+      'platform.remove',
+      'cron.remove',
+    ];
+    for (const intent of wasRecoverable) {
+      const facts = cliIntentGateFacts(intent);
+      expect(facts.recoverable, intent).toBe(true);
+      expect(facts.external, intent).toBe(false);
+      expect(facts.grantCategory, intent).toBe('terminal');
+    }
+
+    for (const intent of ['history.clear', 'memory.prune', 'stats.cost.clear']) {
+      const facts = cliIntentGateFacts(intent);
+      expect(facts.recoverable, intent).toBe(false);
+      // An irreversible local intent offers NO grant category, so no grant can be
+      // offered for it at the friction point.
+      expect(facts.grantCategory, intent).toBeUndefined();
+    }
+
+    const publish = cliIntentGateFacts('publish');
+    expect(publish.external).toBe(true);
+    expect(publish.grantCategory).toBe('external');
+    // Off-machine is NEVER "recoverable" — that is what keeps a blanket request
+    // from ever reaching it.
+    expect(publish.recoverable).toBe(false);
+  });
+
+  it('treats an undeclared intent as ungrantable and unrecoverable', () => {
+    expect(cliIntentGateFacts('something.new')).toEqual({ recoverable: false, external: false });
   });
 });
