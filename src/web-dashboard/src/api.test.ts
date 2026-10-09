@@ -215,3 +215,50 @@ describe('DashboardAPI.fetchAll', () => {
     expect(await api.fetchAll()).toBeNull();
   });
 });
+
+/**
+ * The 5-minute POST ceiling is a CLIENT-side limit, and reporting it as
+ * "Could not reach the dashboard server" is a lie that sends the investigation to
+ * a dashboard that never went down.
+ *
+ * Measured: trace-1791551810613-mnn84h ran 300.9s over 34 model calls. The
+ * browser aborted the POST at exactly 5:00, the user saw "the dashboard server is
+ * not reachable", and the server finished the turn normally
+ * (`generationFailed:false`, 43 tool calls, 6 findings) — visible in Traces.
+ */
+describe('DashboardAPI.chatSend — a client ceiling is not an unreachable server', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const named = (name: string): Error => {
+    const err = new Error(name);
+    err.name = name;
+    return err;
+  };
+
+  it('says the turn is STILL RUNNING when the 5-minute ceiling aborts it', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(named('TimeoutError'));
+    const r = await new DashboardAPI('http://test').chatSend('s1', 'a long job');
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected failure');
+    expect(r.error).toContain('STILL RUNNING');
+    expect(r.error).not.toContain('Could not reach the dashboard server');
+  });
+
+  it('reads the user’s own Cancel as a cancellation, not a failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(named('AbortError'));
+    const r = await new DashboardAPI('http://test').chatSend('s1', 'stop this');
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected failure');
+    expect(r.error).toBe('Cancelled.');
+  });
+
+  it('still says the server is unreachable for a real transport failure', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+    const r = await new DashboardAPI('http://test').chatSend('s1', 'hi');
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected failure');
+    expect(r.error).toBe('Could not reach the dashboard server.');
+  });
+});

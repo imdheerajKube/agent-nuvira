@@ -2,6 +2,56 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.3.19 — a reachability probe can no longer spend the model you pinned, and a client-side wait ceiling stops reporting itself as an unreachable dashboard
+
+> Two lies, both measured on the same turn. **First**: `trace-1791551810613-mnn84h`
+> ran **27 clean steps** on the pinned `deepseek/deepseek-flash` — then one
+> **reachability probe** miss moved the last **6 steps** to
+> `openrouter/apodex/apodex-1.1-mini:free`, with no failure booked anywhere: the
+> registry kept `deepseek|deepseek-flash` at `verified` / errorRate `0` / no park,
+> the turn's step-handoffs contained zero model failures, and the trace only
+> mentioned it at the very end (`model detour — 6 of 34 step(s) ran on a pair
+> other than the run's own`). The probe is a single `GET /models` with a
+> **3-second** timeout (`openai-compat-adapter.ts`), so a hiccup on one HTTP read
+> — not one of the model's own calls — silently spent the user's own choice for
+> the rest of the turn, and the winner of that walk became the loop's primary
+> pair, so there was no way back. **Second**: that same turn ran 300.9s, the
+> dashboard caps the chat POST at **5 minutes**
+> (`AbortSignal.timeout(300_000)`), and the client reported the ceiling as
+> *"Could not reach the dashboard server"* — about a dashboard that was up, and a
+> turn the server **finished normally** (`generationFailed:false`, 43 tool calls,
+> 6 findings, plan `10/11 achieved · 1 blocked`).
+
+### Changed: a pinned model is ATTEMPTED, never probed away
+
+For the pair the user pinned, the walk no longer consults `isAvailable()` at all.
+A model the user asked for is called; only a **real** failure — a thrown call, an
+empty response, a quality rejection — may walk the turn away from it, and that
+failure is still booked (registry, session, hand-off) exactly as before, so the
+router is never blinded. A probe can delay a step; it can never spend the user's
+choice for them. `pinnedPair` is captured once the pin is validated, so the walk
+can tell "the model you asked for" from "whatever the walk is currently on" —
+they diverge the moment it moves, which is what let the pin be treated like any
+other candidate.
+
+### Changed: a fallback candidate is re-probed before it is skipped, and a skip says it was a probe
+
+For non-pinned candidates the probe still saves a doomed call, but one miss is no
+longer evidence: the candidate is re-probed once (500ms) before it is stood down,
+and when it is, the event is recorded as what it is — *"failed its reachability
+probe twice (a /models read, not a call)"* — never as a model failure, because the
+empty-response/quality wording would teach the router something untrue about a
+model that may be perfectly healthy. Console-visible either way, and pinned-run
+behaviour is unchanged (a strict pin still refuses to walk at all).
+
+### Fixed: the 5-minute client ceiling no longer reports itself as an unreachable dashboard
+
+The dashboard's chat POST fails three different ways and they were all reported
+as one sentence. Now: a `TimeoutError` says the turn is **STILL RUNNING on the
+server** and where to watch it, an `AbortError` (the Cancel button aborts this
+same POST) reads as `Cancelled.`, and only a real transport failure says the
+server could not be reached.
+
 ## v3.3.18 — the verification debt is named file by file, a plan this turn never touched stops reading as this turn's progress, and the heavy chat sections collapse to a gist
 
 > Four honest records already existed for a project — the plan, the resumable

@@ -84,6 +84,15 @@ import { resolveThreadBudgetChars } from '../learning/context-budget.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
 import { deliverablesNamedIn, formatHandoffs, recordStepHandoff } from '../agents/step-handoff.js';
 import { recordSessionTurn } from '../learning/session-digest.js';
+
+/**
+ * How long to wait before RE-probing a candidate the reachability probe called
+ * unavailable. `isAvailable()` is a single `GET /models` with a 3s timeout, so a
+ * 3s network hiccup reads as "provider down"; a second read half a second later
+ * is the difference between standing by the user's pinned model and silently
+ * running their turn somewhere else (trace-1791551810613-mnn84h).
+ */
+const PROBE_RE_RETRY_MS = 500;
 // Phase 4 follow-on — semantic recall index (default ON; resolvable off).
 import { indexSessionTurn, resolveSessionRecall } from '../learning/session-recall.js';
 import { isVerificationTool } from '../tools/edit-verification.js';
@@ -738,6 +747,17 @@ export async function runLoopExecutor(
     );
   }
 
+  /**
+   * The pair the user PINNED, captured once the pin has been validated.
+   *
+   * The walk must be able to tell "the model you asked for" from "whatever the
+   * walk is currently on" — they diverge the moment the walk moves, and treating
+   * the pin like any other candidate is what let a REACHABILITY PROBE eject it
+   * (trace-1791551810613-mnn84h). `null` for an auto run: nothing was pinned, so
+   * every candidate is a normal candidate.
+   */
+  const pinnedPair = pinnedRun ? { provider: providerType, model } : null;
+
   // ── Engine decision (Phase 2): audit-trail echo for the caller/telemetry ──
   // The CALLER decides loop-vs-pipeline with the same function; this echo
   // keeps the executor's telemetry self-describing (dashboard badge parity).
@@ -934,15 +954,61 @@ export async function runLoopExecutor(
       const key = pairKey(cand.provider, cand.model);
       try {
         const prov = await resolveAdapter(cand.provider);
-        if (typeof prov.isAvailable === 'function' && !(await prov.isAvailable())) {
-          failedPairs.add(key);
-          // A2 — under a strict pin, an unreachable pinned provider is the
-          // user's answer, not a reason to run somewhere else.
-          if (strictPin) throw strictPinError(`provider '${cand.provider}' is not available`);
-          // A pinned provider that cannot be constructed/reached is not a
-          // verdict on it — walk its configured fallbacks.
-          extendWithPinnedFallbacks();
-          continue;
+        // ── A REACHABILITY PROBE IS NOT A FAILED CALL (measured, 2026-10-09) ──
+        // `isAvailable()` on the OpenAI-compatible adapter is one `GET /models`
+        // with a THREE-SECOND timeout (`openai-compat-adapter.ts`), and any
+        // non-OK answer or timeout reads as false. Skipping a candidate on that
+        // silently walked a turn off the model the user had PINNED while not one
+        // of its calls had failed: trace-1791551810613-mnn84h ran 27 clean steps
+        // on `deepseek/deepseek-flash`, then one probe miss at +253s moved the
+        // last 6 steps of the turn to the fallback chain
+        // (`openrouter/apodex/apodex-1.1-mini:free`) with NO failure booked, so
+        // nothing on any surface explained the switch — not the trace, not the
+        // registry, not the dashboard.
+        //
+        // For the PIN, the probe is not even consulted: a model the user
+        // explicitly asked for is ATTEMPTED, and only a real failure (a thrown
+        // call, an empty response, a quality rejection) may walk the turn away
+        // from it. A probe can still delay a step; it can never spend the user's
+        // choice for them. A fallback candidate that probes unreachable is still
+        // skipped — cheaply, and now visibly — with one re-probe so a hiccup does
+        // not skip a healthy provider either.
+        const isPinnedCandidate =
+          !!pinnedPair &&
+          cand.provider === pinnedPair.provider &&
+          cand.model === pinnedPair.model;
+        if (!isPinnedCandidate && typeof prov.isAvailable === 'function' && !(await prov.isAvailable())) {
+          await new Promise((r) => setTimeout(r, PROBE_RE_RETRY_MS));
+          if (typeof prov.isAvailable === 'function' && !(await prov.isAvailable())) {
+            failedPairs.add(key);
+            // A2 — under a strict pin, an unreachable FALLBACK provider is not
+            // the pinned provider, so it is still just a candidate miss.
+            if (strictPin) throw strictPinError(`provider '${cand.provider}' is not available`);
+            // Recorded as what it IS: a reachability probe, not a model failure.
+            // Borrowing the empty-response/quality wording here would teach the
+            // router something untrue about the model.
+            onTraceEvent({
+              kind: 'decision',
+              summary:
+                `${cand.provider}/${cand.model} failed its reachability probe twice ` +
+                `(a /models read, not a call) — standing by the configured fallbacks for this turn`,
+              ok: false,
+            });
+            if (!opts.quiet) {
+              logger.warn(
+                `   ⚠️  ${cand.provider}/${cand.model} unreachable on a reachability probe (not a failed call) — trying the fallback chain`,
+              );
+            }
+            // A pinned provider that cannot be constructed/reached is not a
+            // verdict on it — walk its configured fallbacks.
+            extendWithPinnedFallbacks();
+            continue;
+          }
+          if (!opts.quiet) {
+            logger.warn(
+              `   ⚠️  fallback candidate ${cand.provider} looked unreachable on the first probe — it answered on the second, so it stays in the walk`,
+            );
+          }
         }
         const desired = cand.model !== 'default'
           ? cand.model
