@@ -159,6 +159,33 @@ describe('WS5 resume — the ledger', () => {
     expect(closeResume(run, ask).notice).toContain('why not: not in the record (1)');
   });
 
+  it('names the reason and the STEP when only some steps replay', () => {
+    // THE CASE THAT HID THE REASON. A partial resume — one step reused, one not —
+    // used to report only "replayed 1, made 1 model call(s)": the counts of a
+    // working resume, with no hint that a step had been lost or which one. That is
+    // exactly how the parity probe's intermittent partial replay stayed
+    // undiagnosed (see the resume probe in `tests/parity/scenario-parity.test.ts`).
+    const unchanged = stepDigest([{ role: 'user', content: 'hi' }], []);
+    const changed = stepDigest([{ role: 'user', content: 'hi, and also this' }], []);
+    const first = openResume({ ...ask, resume: { id: 'partial' } });
+    first.ledger.record('model:0', unchanged, answer('ANSWER-0'));
+    first.ledger.record('model:1', stepDigest([{ role: 'user', content: 'then' }], []), answer('ANSWER-1'));
+    closeResume(first, ask);
+
+    const second = openResume({ ...ask, resume: { id: 'partial' } });
+    expect(second.ledger.replay('model:0', unchanged)).toEqual(answer('ANSWER-0'));
+    // The second step's input moved, so it is paid for again — correctly.
+    expect(second.ledger.replay('model:1', changed)).toBeNull();
+    const outcome = closeResume(second, ask);
+
+    expect(outcome.replayed).toBe(1);
+    expect(outcome.modelCalls).toBe(0);
+    expect(outcome.notice).toContain('replayed 1, made 0 model call(s)');
+    // The reason AND the step, so a partial replay is actionable.
+    expect(outcome.notice).toContain('why not: its input changed (1)');
+    expect(outcome.notice).toContain('missed: model:1 (its input changed)');
+  });
+
   it('NEVER replays a recorded provider failure', () => {
     // A response with no text and no tool call is a failure, not an answer:
     // inheriting it would reproduce the failure and hide that the provider was

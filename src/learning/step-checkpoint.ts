@@ -249,6 +249,16 @@ interface LedgerState {
   /** Why a step missed, counted by reason, in the order they were first seen. */
   misses: Map<string, number>;
   /**
+   * WHICH step missed, and why — key to reason, in the order they were seen.
+   *
+   * Separate from `misses` because the two answer different questions: the counts
+   * say how many steps were lost and why, and this says WHICH ones. A partial
+   * resume (some steps replayed, some not) is invisible in the counts alone — it
+   * reads as a successful replay — and the step that missed is the only thing that
+   * identifies what changed. Reported by `closeResume`.
+   */
+  missed: Map<string, string>;
+  /**
    * B4 — whether recorded steps may be REUSED this run.
    *
    * `false` is the checkpoint-only mode: the run WRITES a resume point but
@@ -310,6 +320,7 @@ export function openResume(input: {
     replayed: 0,
     modelCalls: 0,
     misses: new Map(),
+    missed: new Map(),
     replayEnabled,
     // Checkpoint-only: seed the staged map with what the record already holds so
     // `closeResume` MERGES this run's steps into it instead of replacing a
@@ -322,20 +333,20 @@ export function openResume(input: {
     replay(key, digest) {
       if (!state.replayEnabled) {
         // Checkpoint-only: nothing is reused this run (see `replayEnabled`).
-        countMiss(state, NOT_REQUESTED_REASON);
+        countMiss(state, NOT_REQUESTED_REASON, key);
         return null;
       }
       const entry = byKey.get(key);
       if (!entry) {
-        countMiss(state, MISSING_REASON);
+        countMiss(state, MISSING_REASON, key);
         return null;
       }
       if (entry.digest !== digest) {
-        countMiss(state, CHANGED_REASON);
+        countMiss(state, CHANGED_REASON, key);
         return null;
       }
       if (isEmptyResponse(entry.response)) {
-        countMiss(state, EMPTY_REASON);
+        countMiss(state, EMPTY_REASON, key);
         return null;
       }
       state.replayed += 1;
@@ -363,8 +374,9 @@ export function openResume(input: {
   return { id, goal: input.goal, cwd: input.cwd, ledger };
 }
 
-function countMiss(state: LedgerState, reason: string): void {
+function countMiss(state: LedgerState, reason: string, key: string): void {
   state.misses.set(reason, (state.misses.get(reason) ?? 0) + 1);
+  if (!state.missed.has(key)) state.missed.set(key, reason);
 }
 
 /** What a resumed run replayed, what it paid for, and whether the record survived. */
@@ -424,9 +436,20 @@ export function closeResume(resume: OpenResume, input: { goal: string; cwd: stri
   const lines = [
     `↩️  resume probe: replayed ${state.replayed}, made ${state.modelCalls} model call(s)${avoided}`,
   ];
-  if (state.replayed === 0 && state.misses.size > 0) {
+  // WHY EVERY MISS IS REPORTED, not only a total miss. This used to print the
+  // reasons only when NOTHING replayed, which hid the one case that needs them
+  // most: a PARTIAL resume (some steps replayed, some did not) reported a clean
+  // "replayed 1, made 1 model call(s)" with no explanation, so the reader could
+  // not tell which step changed or why. The reasons are the whole value of the
+  // number — a count alone cannot be acted on.
+  if (state.misses.size > 0) {
     const reasons = [...state.misses.entries()].map(([reason, count]) => `${reason} (${count})`);
     lines.push(`     why not: ${reasons.join(', ')}`);
+    // And WHICH step, because "1 step missed" does not say which, and the step is
+    // what points at the change (a step whose thread carried a tool result is a
+    // different investigation from one that never existed).
+    const steps = [...state.missed.entries()].map(([key, reason]) => `${key} (${reason})`);
+    lines.push(`     missed: ${steps.join(', ')}`);
   }
   if (!saved) {
     lines.push('     the record could not be written — the next resume will not see this run');
