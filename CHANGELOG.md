@@ -2,6 +2,41 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.3.17 — `nuvira trace degraded -l <n>` reported an empty census, because the option default was being passed in as `parseInt`'s radix
+
+> Shipped in v3.3.16 and caught within the hour, by running the released artifact
+> against the live store instead of trusting the test suite. `nuvira trace
+> degraded -l 60` printed **"derived read-only from 0 trace(s) … No
+> non-agentic-capable pair served a traced step"** while the same derivation over
+> the same file found `local/qwen2.5:0.5b — 10 steps across 6 traces`. The
+> derivation was never wrong: commander calls a custom option parser as
+> `(value, previous)`, so the bare `parseInt` idiom handed the option's DEFAULT
+> (60) in as the **radix**, `parseInt('60', 60)` is `NaN`, and `listTraces` slices
+> a `NaN` limit down to nothing. Without `-l` the default path skipped the
+> coercion, which is why the flag could empty a report that was correct without
+> it — and why five passing tests missed it: every case exercised the derivation
+> through the commander tree without ever passing the flag.
+
+### Fixed: the census option parses a base-10 count, and a bad count cannot select nothing
+
+`parseCount` (explicit base 10, with the measured trap recorded above it) is used
+for both `trace degraded -l` and `trace list -l`, and both handlers normalise a
+limit that is not a positive finite number back to their own default, so
+`-l abc` cannot print an empty census either. Three cases now go through the real
+commander tree WITH the flag: the census survives `-l 60`, `-l 1` scans only the
+most recent trace, and a non-numeric `-l` still reports the pair.
+
+*Left alone, deliberately:* the same `parseInt` idiom appears on option defaults
+that happen to be valid radixes (`10`), so those options are correct today and
+were not touched. The two sibling instances where the default is **not** a valid
+radix are `--port` on the federation commands and `history --limit`. In the
+federation commands the default (`8374` / `8375`) exceeds 36, so a given
+`-p 9000` parses to `NaN` and the handler's `options.port || config.port`
+silently substitutes the configured port instead — the port you asked for is
+ignored. `history --limit` has a default of `20`, which mis-parses a given count
+as base 20 (`--limit 50` becomes `100`). Both are pre-existing and unrelated to
+this release; they are measured here rather than quietly changed.
+
 ## v3.3.16 — a change request answered with a plan is no longer a success, a weak model that served a step downgrades the turn, and the Requests panel's `0.0%` stops vouching for the model that produced the poor answer
 
 > Two live turns exposed one doctrine and five ways to violate it. A three-bug

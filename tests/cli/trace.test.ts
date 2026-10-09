@@ -90,4 +90,52 @@ describe('nuvira trace degraded', () => {
     await runTrace(['degraded']);
     expect(out.join('\n')).toContain('No non-agentic-capable pair served a traced step');
   });
+
+  /**
+   * MEASURED 2026-10-09, on the live store: `nuvira trace degraded -l 60` printed
+   * "0 trace(s) … No non-agentic-capable pair served a traced step" while the same
+   * derivation over the same file found `local/qwen2.5:0.5b — 10 steps across 6
+   * traces`. Commander hands a custom option parser `(value, previous)`, so the
+   * bare `parseInt` idiom passed the option's DEFAULT (60) as the RADIX:
+   * `parseInt('60', 60)` is NaN, and `listTraces` slices a NaN limit away to
+   * nothing. The derivation was right; the option surface was lying. This case
+   * goes through the real commander tree WITH `-l` — the hole the other cases left.
+   */
+  it('honours -l without emptying the census', async () => {
+    const c = beginTrace({ goal: 'answer the three bugs', source: 'chat', provider: 'gemini' });
+    recordStep(c, step('gemini', 'gemma-4-31b-it'));
+    recordStep(c, step('local', 'qwen2.5:0.5b'));
+    endTrace(c, true);
+
+    await runTrace(['degraded', '-l', '60']);
+    const printed = out.join('\n');
+    expect(printed).toContain('from 1 trace(s)');
+    expect(printed).toContain('local/qwen2.5:0.5b');
+    expect(printed).not.toContain('No non-agentic-capable pair served a traced step');
+  });
+
+  it('scans only the -l most recent traces', async () => {
+    const older = beginTrace({ goal: 'older turn', source: 'chat', provider: 'gemini' });
+    recordStep(older, step('local', 'qwen2.5:0.5b'));
+    endTrace(older, true);
+    const recent = beginTrace({ goal: 'recent turn', source: 'chat', provider: 'groq' });
+    recordStep(recent, step('groq', 'openai/gpt-oss-120b'));
+    endTrace(recent, true);
+
+    await runTrace(['degraded', '-l', '1']);
+    const printed = out.join('\n');
+    expect(printed).toContain('from 1 trace(s)');
+    expect(printed).toContain('No non-agentic-capable pair served a traced step');
+  });
+
+  it('does not let a non-numeric -l report an empty census', async () => {
+    const d = beginTrace({ goal: 'a turn', source: 'chat', provider: 'gemini' });
+    recordStep(d, step('local', 'qwen2.5:0.5b'));
+    endTrace(d, true);
+
+    await runTrace(['degraded', '-l', 'abc']);
+    const printed = out.join('\n');
+    expect(printed).toContain('from 1 trace(s)');
+    expect(printed).toContain('local/qwen2.5:0.5b');
+  });
 });

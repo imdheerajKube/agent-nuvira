@@ -30,6 +30,25 @@ import {
   type TraceEvent,
 } from '../learning/reasoning-trace.js';
 
+/**
+ * Commander calls a custom option parser as `(value, previous)`, so the bare
+ * `parseInt` idiom hands the option's DEFAULT in as the RADIX: with a default of
+ * 60, `parseInt('60', 60)` is `NaN` (a radix above 36 is invalid), and a `NaN`
+ * limit makes `listTraces` slice every trace away. MEASURED 2026-10-09 against
+ * the live store: `nuvira trace degraded -l 60` printed "0 trace(s) … No
+ * non-agentic-capable pair served a traced step" while `degradedCallsFromTraces`
+ * derived `local/qwen2.5:0.5b — 10 steps across 6 traces` from the very same
+ * file — a silent empty census, which is the failure class this command exists
+ * to expose. `trace list` only escaped it because its default (10) happens to be
+ * a valid radix. Parse with an explicit base, and never let the count be NaN.
+ */
+const parseCount = (value: string): number => parseInt(value, 10);
+
+/** A limit that is not a positive count must not silently select nothing. */
+function usableLimit(limit: number, fallback: number): number {
+  return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : fallback;
+}
+
 export class TraceCommand {
   create(): Command {
     const command = new Command('trace')
@@ -38,8 +57,8 @@ export class TraceCommand {
     command
       .command('list')
       .description('Show recent traces')
-      .option('-l, --limit <number>', 'Maximum traces to show', parseInt, 10)
-      .action((opts?: { limit?: number }) => this.listTraces(opts?.limit ?? 10));
+      .option('-l, --limit <number>', 'Maximum traces to show', parseCount, 10)
+      .action((opts?: { limit?: number }) => this.listTraces(usableLimit(opts?.limit ?? 10, 10)));
 
     command
       .command('show')
@@ -57,8 +76,10 @@ export class TraceCommand {
     command
       .command('degraded')
       .description('List provider × model pairs that served steps without agentic capability (derived, read-only, from the traces)')
-      .option('-l, --limit <number>', 'Maximum traces to scan', parseInt, MAX_TRACES)
-      .action((opts?: { limit?: number }) => this.degraded(opts?.limit ?? MAX_TRACES));
+      .option('-l, --limit <number>', 'Maximum traces to scan', parseCount, MAX_TRACES)
+      .action((opts?: { limit?: number }) =>
+        this.degraded(usableLimit(opts?.limit ?? MAX_TRACES, MAX_TRACES)),
+      );
 
     command
       .command('clear')
