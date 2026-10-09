@@ -2057,8 +2057,30 @@ export class DashboardAPI {
         unauthorized: res.status === 401,
         forbidden: res.status === 403,
       };
-    } catch {
-      return { ok: false, error: 'Could not reach the dashboard server, or the turn timed out.' };
+    } catch (err) {
+      // ── A CLIENT-SIDE CEILING IS NOT AN UNREACHABLE SERVER ─────────────────
+      // The POST above is capped at 5 minutes (`AbortSignal.timeout(300_000)`),
+      // and a long turn simply outlives it. Measured: trace-1791551810613-mnn84h
+      // ran 300.9s over 34 model calls, so the browser gave up at exactly 5:00
+      // and this message reported "Could not reach the dashboard server" — for a
+      // turn the SERVER finished normally (generationFailed:false, 43 tool calls,
+      // 6 findings) and that the user could watch in Traces. Naming the wrong
+      // cause sent the investigation to a dashboard that was never down.
+      const name = (err as { name?: string } | null)?.name;
+      if (name === 'TimeoutError') {
+        return {
+          ok: false,
+          error:
+            'The dashboard stopped waiting after 5 minutes — the turn is STILL RUNNING on the server. ' +
+            'Reopen this conversation (or watch Traces) to see the result when it lands.',
+        };
+      }
+      if (name === 'AbortError') {
+        // The Cancel button aborts this same POST (see the `signal` argument),
+        // so an abort the user asked for is a cancellation, not a failure.
+        return { ok: false, error: 'Cancelled.' };
+      }
+      return { ok: false, error: 'Could not reach the dashboard server.' };
     }
   }
 

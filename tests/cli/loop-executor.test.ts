@@ -393,13 +393,29 @@ describe('loop executor — pinned-provider failover (config fallback chain)', (
     vi.resetModules();
   });
 
-  /** A pinned provider that fails with `failure` + a healthy fallback sibling. */
-  function mockPinnedPair(failure: Error): { recordFailure: ReturnType<typeof vi.fn>; fallbackCalls: { n: number } } {
+  /**
+   * A pinned provider that fails with `failure` + a healthy fallback sibling.
+   *
+   * `pinnedAvailable` is the reachability-probe sequence: one entry per
+   * `isAvailable()` call, the last entry repeating once the sequence runs out.
+   */
+  function mockPinnedPair(
+    failure: Error,
+    opts?: { pinnedAvailable?: boolean[]; fallbackAvailable?: boolean[] },
+  ): {
+    recordFailure: ReturnType<typeof vi.fn>;
+    fallbackCalls: { n: number };
+    isAvailable: ReturnType<typeof vi.fn>;
+    fallbackIsAvailable: ReturnType<typeof vi.fn>;
+  } {
     const recordFailure = vi.fn();
     const fallbackCalls = { n: 0 };
+    const availability = opts?.pinnedAvailable ?? [true];
+    let probe = 0;
+    const isAvailable = vi.fn(async () => availability[Math.min(probe++, availability.length - 1)]);
     const pinned: InferenceProvider = {
       name: 'Pinned',
-      isAvailable: async () => true,
+      isAvailable,
       async generate(): Promise<string> {
         throw new Error('should not be reached');
       },
@@ -407,9 +423,14 @@ describe('loop executor — pinned-provider failover (config fallback chain)', (
         throw failure;
       },
     } as unknown as InferenceProvider;
+    const fallbackAvailability = opts?.fallbackAvailable ?? [true];
+    let fallbackProbe = 0;
+    const fallbackIsAvailable = vi.fn(async () =>
+      fallbackAvailability[Math.min(fallbackProbe++, fallbackAvailability.length - 1)],
+    );
     const fallback: InferenceProvider = {
       name: 'Fallback',
-      isAvailable: async () => true,
+      isAvailable: fallbackIsAvailable,
       async generate(): Promise<string> {
         return 'fallback answer';
       },
@@ -450,7 +471,7 @@ describe('loop executor — pinned-provider failover (config fallback chain)', (
         provider: type === 'pinned' ? pinned : fallback,
       }),
     }));
-    return { recordFailure, fallbackCalls };
+    return { recordFailure, fallbackCalls, isAvailable, fallbackIsAvailable };
   }
 
   it('walks the config fallback chain when a pinned provider hits a 429', async () => {
@@ -515,6 +536,73 @@ describe('loop executor — pinned-provider failover (config fallback chain)', (
       if (prev === undefined) delete process.env.NUVIRA_STRICT_MODEL;
       else process.env.NUVIRA_STRICT_MODEL = prev;
     }
+  });
+
+  // ─── The reachability probe is not a failed call (measured 2026-10-09) ────
+  // Live (trace-1791551810613-mnn84h): 27 clean steps on the user's PINNED
+  // `deepseek/deepseek-flash`, then ONE probe miss moved the last 6 steps of the
+  // turn to `openrouter/apodex/apodex-1.1-mini:free` with no failure booked. The
+  // probe is a single `GET /models` with a 3s timeout, so a hiccup spent the
+  // user's own choice for them, silently.
+  it('ATTEMPTS the pinned model even when a reachability probe would say it is down', async () => {
+    // The pin's probe answers `false` — and is never consulted, because a probe
+    // is not a call. The 429 below (a REAL failure) is what walks the turn on.
+    const { isAvailable, recordFailure, fallbackCalls } = mockPinnedPair(
+      new Error('429 rate limit exceeded'),
+      { pinnedAvailable: [false] },
+    );
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const result = await runLoopExecutor('never probe the pinned model', new ConfigManager(), {
+      provider: 'pinned',
+      skipProjectContext: true,
+      skipSkillHint: true,
+      quiet: true,
+    });
+
+    expect(isAvailable).not.toHaveBeenCalled();
+    // It left the pin for a real reason, and that reason was recorded.
+    expect(recordFailure).toHaveBeenCalled();
+    expect(fallbackCalls.n).toBe(1);
+    expect(result.provider).toBe('fallback');
+  });
+
+  it('re-probes a FALLBACK candidate, so one hiccup does not skip a healthy provider', async () => {
+    // First probe says down, the re-probe says up → the fallback serves the step.
+    const { fallbackIsAvailable, fallbackCalls } = mockPinnedPair(
+      new Error('429 rate limit exceeded'),
+      { fallbackAvailable: [false, true] },
+    );
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const result = await runLoopExecutor('re-probe the fallback before skipping it', new ConfigManager(), {
+      provider: 'pinned',
+      skipProjectContext: true,
+      skipSkillHint: true,
+      quiet: true,
+    });
+
+    expect(fallbackIsAvailable.mock.calls.length).toBe(2);
+    expect(fallbackCalls.n).toBe(1);
+    expect(result.provider).toBe('fallback');
+  });
+
+  it('stands a fallback down after TWO probe misses, and says it was a probe', async () => {
+    const { fallbackIsAvailable, fallbackCalls } = mockPinnedPair(
+      new Error('429 rate limit exceeded'),
+      { fallbackAvailable: [false] },
+    );
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const result = await runLoopExecutor('stand down a fallback that will not answer a probe', new ConfigManager(), {
+      provider: 'pinned',
+      skipProjectContext: true,
+      skipSkillHint: true,
+      quiet: true,
+    });
+
+    // Probed twice, never called: nothing left to serve the step, and the turn
+    // reports a failure rather than inventing one.
+    expect(fallbackIsAvailable.mock.calls.length).toBe(2);
+    expect(fallbackCalls.n).toBe(0);
+    expect(result.generationFailed).toBe(true);
   });
 });
 
