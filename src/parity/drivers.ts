@@ -831,8 +831,15 @@ interface SurfaceAnswer {
   otel?: OtelExportObs;
   /** WS5 — the isolation this turn had (the surface's own report). */
   worktree?: { dir: string; base: string; diff: { files: readonly string[] }; removed: boolean };
-  /** WS5 — what this turn's resume replayed (the surface's own report). */
-  resume?: { id: string; replayed: number; modelCalls: number; saved: boolean };
+  /**
+   * WS5 — what this turn's resume replayed (the surface's own report).
+   *
+   * `notice` is the surface's OWN explanation, including each miss reason when
+   * nothing replayed. It is carried for diagnosis only and never compared —
+   * `resumeObsOf` copies it onto the observation, and `compare` quotes it on a
+   * divergent resume row rather than comparing it.
+   */
+  resume?: { id: string; replayed: number; modelCalls: number; saved: boolean; notice?: string };
 }
 
 /**
@@ -870,7 +877,10 @@ function isolationObsOf(
  */
 function resumeObsOf(
   asked: boolean,
-  report: { replayed: number; modelCalls: number; saved: boolean } | undefined | null,
+  report:
+    | { replayed: number; modelCalls: number; saved: boolean; notice?: string }
+    | undefined
+    | null,
 ): ResumeObs {
   if (!report) return { ...noResume(), asked };
   return {
@@ -879,6 +889,9 @@ function resumeObsOf(
     replayed: report.replayed,
     modelCalls: report.modelCalls,
     saved: report.saved,
+    // Diagnostic only (never compared) — see `ResumeObs.notice`. Carried so a
+    // divergent row can name the miss reason instead of only the count.
+    ...(report.notice ? { notice: report.notice } : {}),
   };
 }
 

@@ -160,12 +160,17 @@ Observed live behaviour after the gate:
   so mechanical compaction never triggered — the growth is real but the budget far too loose.
 - ⚠️ No cross-turn state in any observed prompt (the G4 gap — now fixed on both paths).
 
-**Recommended (tracked, not yet done):**
-- [ ] Store a **layered** prompt record per step: separate digests + previews for the
+**Recommended:**
+- [x] Store a **layered** prompt record per step: separate digests + previews for the
       system / context / volatile layers, plus the FULL system prompt once per trace.
       Without it, prompt engineering cannot be reviewed at all.
-- [ ] Move channel/format policy out of the user turn into the stable system layer.
-- [ ] Tie the compaction budget to the model's real window instead of a flat 200K chars.
+      — **DONE** (`src/learning/prompt-layers.ts`; see "Session 4/5 — layered tracing" below).
+- [x] Move channel/format policy out of the user turn into the stable system layer.
+      — **DONE** (`answerOnce`'s `systemPolicy`, `src/cli/chat.ts:727`; the gateway passes
+      `CHANNEL_POLICY` through it, `src/gateway/registry.ts`).
+- [x] Tie the compaction budget to the model's real window instead of a flat 200K chars.
+      — **DONE** (`resolveThreadBudgetChars`, `src/learning/context-budget.ts:242`, wired in
+      `src/cli/chat.ts:2936` and `src/cli/loop-executor.ts`).
 
 ---
 
@@ -232,8 +237,10 @@ verification tool (baseline: zero across the whole session) and the ledger recor
 
 ## Follow-ups (not blocking, worth a later pass)
 - [ ] Config flag to make the verification nudge **strict** (block the turn) for CI/enterprise profiles.
-- [ ] Accept a verification run only when it actually EXERCISED the changed artifact
+- [x] Accept a verification run only when it actually EXERCISED the changed artifact
       (today any successful `run_terminal` counts — e.g. `echo hi` would pass).
+      — **DONE** (`verificationExercisedArtifact`, `src/tools/edit-verification.ts:170`, gated
+      at `:216`).
 - [ ] Retire a working-state project entry after N verified turns with no reports (age-out).
 - [ ] Per-turn watchdog + `--no-cache` for a clean full-session replay.
 - [ ] Make a cache-served turn leave a trace (source `cache`), so the Trace tab is complete.
@@ -366,7 +373,7 @@ hours**. The retry is conditional on *model availability*, but the failure was a
 *task-shape* failure. All 40 attempts would fail identically. The offer is not a
 recovery path; it is a 6-hour re-run of the same mistake.
 
-### G7 — Deliverable-class awareness `[ ]`
+### G7 — Deliverable-class awareness `[x]`
 Classify the ask before planning: `code | document | creative | data | research`. A
 `document`/`creative` deliverable must plan **sections**, not a program that emits
 sections, and must route to a prose capable path rather than the code writer.

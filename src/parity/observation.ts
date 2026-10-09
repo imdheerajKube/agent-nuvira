@@ -279,6 +279,18 @@ export interface ResumeObs {
   modelCalls: number;
   /** True when the resumed turn could write the record back for the next run. */
   saved: boolean;
+  /**
+   * WHY the surface reported what it did — its own resume notice, including each
+   * miss reason when nothing replayed (`src/learning/step-checkpoint.ts`).
+   *
+   * DIAGNOSTIC ONLY, and deliberately NOT compared: it quotes paths and counts
+   * that legitimately differ per surface, so comparing it would turn normal rows
+   * red. It exists because the counts alone cannot tell a MISSING RECORD from a
+   * CHANGED INPUT — the two failures have the same shape (`replayed: 0`,
+   * `modelCalls: 2`) and completely different causes, and without the reason a
+   * divergent row is unactionable. Surfaced on the failure message by `compare`.
+   */
+  notice?: string;
 }
 
 /** The honest "this turn was not resumed" value. Fresh each call. */
@@ -669,14 +681,28 @@ export function compare(a: TurnObservation, b: TurnObservation): string[] {
     'modelCalls',
     'saved',
   ];
+  let resumeDiffered = false;
   for (const field of resumeFields) {
     const l = left.resume[field];
     const r = right.resume[field];
     if (l !== r) {
+      resumeDiffered = true;
       differences.push(
         `${who}: resume.${field} differs — ${show(String(l))} vs ${show(String(r))}`,
       );
     }
+  }
+  // A different COUNT with no reason attached is not actionable: `replayed: 0`
+  // with `modelCalls: 2` is the shape of BOTH "the surface never found a record"
+  // and "the record was there but the step's input had changed", and only the
+  // surface's own notice separates them. So when the counts disagree, the row
+  // quotes what each side said about itself.
+  if (resumeDiffered) {
+    const side = (o: ComparableObservation, name: string): string => {
+      const notice = o.resume.notice?.replace(/\s+/g, ' ').trim();
+      return notice ? `${name} (${notice})` : `${name} (no reason reported)`;
+    };
+    differences.push(`${who}: resume why — ${side(left, a.surface)} | ${side(right, b.surface)}`);
   }
 
   // WS6 (#28) — the declared fault. `asked`/`site`/`kind` are the declaration
