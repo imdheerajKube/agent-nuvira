@@ -8,6 +8,7 @@
  *   nuvira trace list               — Show recent traces
  *   nuvira trace show <id>          — Show one trace (steps summary)
  *   nuvira trace replay <id>        — Step-by-step replay of a trace
+ *   nuvira trace degraded           — Pair(s) that served steps without agentic capability
  *   nuvira trace clear              — Delete all traces
  *
  * The `replay` command is the debugging centerpiece: it walks every LLM call
@@ -24,6 +25,8 @@ import {
   listTraces,
   clearTraces,
   getTraceStats,
+  degradedCallsFromTraces,
+  MAX_TRACES,
   type TraceEvent,
 } from '../learning/reasoning-trace.js';
 
@@ -50,6 +53,12 @@ export class TraceCommand {
       .argument('<id>', 'Trace id (e.g. trace-1712345678-abc123)')
       .option('-f, --full', 'Show full prompt/response previews (default: truncated)', false)
       .action((id: string, opts?: { full?: boolean }) => this.replayTrace(id, !!opts?.full));
+
+    command
+      .command('degraded')
+      .description('List provider × model pairs that served steps without agentic capability (derived, read-only, from the traces)')
+      .option('-l, --limit <number>', 'Maximum traces to scan', parseInt, MAX_TRACES)
+      .action((opts?: { limit?: number }) => this.degraded(opts?.limit ?? MAX_TRACES));
 
     command
       .command('clear')
@@ -264,6 +273,36 @@ export class TraceCommand {
     }
     console.log('═'.repeat(72));
     console.log('  End of replay.');
+  }
+
+  /**
+   * The read-only correction for the Requests panel vouching for a weak model.
+   * The action log records that a provider ANSWERED, so an unusable reply from a
+   * pair that cannot hold an agentic task books as `verified` and its 0.0% error
+   * rate is not a quality measurement. The log is hash-chained (a correction
+   * cannot be appended without inventing an event), so the truth is DERIVED from
+   * the traces, which record the served pair per step — nothing is written back.
+   */
+  private degraded(limit: number): void {
+    const traces = listTraces(limit);
+    const degraded = degradedCallsFromTraces(traces);
+
+    console.log(`⚠️  Degraded calls — derived read-only from ${traces.length} trace(s)\n`);
+
+    if (degraded.length === 0) {
+      console.log('   No non-agentic-capable pair served a traced step.');
+      console.log('');
+      return;
+    }
+
+    for (const d of degraded) {
+      console.log(`   ⚠️ ${d.provider}/${d.model} — ${d.steps} step(s) across ${d.traces.length} trace(s)`);
+      if (d.traces.length > 0) console.log(`      traces: ${d.traces.join(', ')}`);
+    }
+    console.log('');
+    console.log('   These pairs answered, so the action log (and the dashboard Requests panel)');
+    console.log('   reads them as healthy — but the served pair cannot hold an agentic task.');
+    console.log('   This census is DERIVED from the traces; the hash-chained log is untouched.');
   }
 
   private clear(): void {

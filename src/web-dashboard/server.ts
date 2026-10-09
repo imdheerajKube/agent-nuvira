@@ -36,6 +36,7 @@ import {
   mergeImportedLabels,
 } from '../learning/acceptance-model.js';
 import { readDecisions, recallDecisions, reviseDecision } from '../learning/decision-log.js';
+import { degradedCallsFromTraces } from '../learning/reasoning-trace.js';
 import { withStrictModel } from '../inference/route-resolver.js';
 import { readRecallHits } from '../context/session-recall.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
@@ -2502,10 +2503,19 @@ function readRequestsData(): Record<string, unknown> {
     })
     .sort((a, b) => b.lastAt - a.lastAt);
 
+  // A pair that served steps while NOT agentic-capable is a capability failure
+  // the action log cannot express: it records that the provider ANSWERED, so a
+  // weak model's unusable reply books as `verified` and this panel's 0.0% error
+  // rate vouches for it. The log is hash-chained, so a correction cannot be
+  // appended without inventing an event; the truth is DERIVED read-only from the
+  // traces, which record the served pair per step (see degradedCallsFromTraces).
+  const degraded = degradedCallsFromTraces(readTracesFile().traces);
+
   return {
     enabled: entries.length > 0,
     total: entries.length,
     rows: rows.slice(0, 300),
+    degraded,
     updatedAt: Date.now(),
   };
 }

@@ -844,6 +844,15 @@ export interface RequestsInsights {
     /** Epoch ms of the most recent event in this group. */
     lastAt: number;
   }>;
+  /**
+   * Pairs that served steps while NOT agentic-capable, DERIVED from the
+   * reasoning traces (read-only) because the action log only records that a
+   * provider *answered* — a weak model's unusable reply books as `verified`, so
+   * its error rate is not a quality measurement. A row whose provider × model
+   * appears here must not be read as healthy. Optional: an older server won't
+   * send it. See `degradedCallsFromTraces`.
+   */
+  degraded?: Array<{ provider: string; model: string; steps: number; traces: string[] }>;
   updatedAt: number;
 }
 
@@ -973,6 +982,10 @@ export interface TurnReport {
     undeliveredArtifact?: boolean;
     unfulfilledPromise?: boolean;
     noActionTaken?: boolean;
+    /** A CHANGE was asked for, nothing was mutated, and a plan was delivered. */
+    undeliveredChange?: boolean;
+    /** The reply vouched for the product while nothing exercised it. */
+    unbackedHealthClaim?: boolean;
   };
   /** One deterministic sentence for the console/trace, or null when trivial. */
   summary: string | null;
@@ -1077,6 +1090,16 @@ export interface TraceEntry {
     unverifiedBuildClaim?: boolean;
     /** The request asked for an authored deliverable and no file was written. */
     undeliveredArtifact?: boolean;
+    /** A change was asked for and a plan delivered instead (measured 2026-10-09). */
+    undeliveredChange?: boolean;
+    /** The reply vouched for the product while nothing exercised it (2026-10-09). */
+    unbackedHealthClaim?: boolean;
+    /**
+     * Pairs that served a step and cannot hold an agentic task — the turn was
+     * partly answered by a model like `local/qwen2.5:0.5b`. A degraded turn is
+     * never a success.
+     */
+    degradedBy?: Array<{ provider: string; model: string }>;
   };
   /**
    * E-trace — the derived TurnReport the run ended with (the plan → track →

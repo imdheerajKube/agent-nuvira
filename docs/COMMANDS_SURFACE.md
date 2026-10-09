@@ -1507,6 +1507,11 @@ Show a single trace (goal, timing, step summary)
 Step-by-step replay of a trace — every LLM call with prompt digest, model, tokens, latency, and routing
 
    - flags: `--full`
+### `nuvira trace degraded`
+
+List provider × model pairs that served steps without agentic capability (derived, read-only, from the traces)
+
+   - flags: `--limit <limit>`
 ### `nuvira trace clear`
 
 Delete all stored traces
@@ -1547,4 +1552,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*498 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*500 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

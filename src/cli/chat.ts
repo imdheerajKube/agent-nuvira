@@ -40,7 +40,7 @@ import { ConfigManager } from '../config/manager.js';
 import { capabilityReasoningEffort, isMaxCapability } from '../config/capability-mode.js';
 import { InferenceProvider } from '../inference/interface.js';
 import type { ProviderType } from '../config/types.js';
-import { getProviderFallback, classifyFallbackError, isRetryableError, isTransientForRetry, recordRegistrySuccess } from '../learning/provider-fallback.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError, isTransientForRetry, recordRegistrySuccess, recordRegistryFailure } from '../learning/provider-fallback.js';
 import {
   recordActionFailure,
   RATE_LIMIT_EXCLUSION_MS,
@@ -516,6 +516,10 @@ export function turnCarriesHonestyFlag(result: {
   unverifiedFileClaim?: boolean;
   /** Bundle 23 — the ask named a magnitude and the written artifact is far short. */
   artifactShortfall?: { path: string; deliveredWords: number; targetWords: number; source: string };
+  /** A change was asked for and a plan delivered instead (see `ToolLoopResult`). */
+  undeliveredChange?: boolean;
+  /** A health verdict nothing this turn observed the product to support. */
+  unbackedHealthClaim?: boolean;
 }): boolean {
   return Boolean(
     result.unverifiedActionClaim ||
@@ -527,7 +531,12 @@ export function turnCarriesHonestyFlag(result: {
       result.noActionTaken ||
       result.artifactIncomplete ||
       result.unverifiedFileClaim ||
-      result.artifactShortfall,
+      result.artifactShortfall ||
+      // Measured 2026-10-09: a plan delivered in place of a requested change, and
+      // a health verdict nothing observed. Both are answers that must not be
+      // replayed from the cache as settled work.
+      result.undeliveredChange ||
+      result.unbackedHealthClaim,
   );
 }
 
@@ -855,6 +864,18 @@ export class ChatCommand extends BaseCommand {
    * Includes the measurement so the warning can state the numbers.
    */
   artifactShortfall?: { path: string; deliveredWords: number; targetWords: number; source: string };
+  /**
+   * Measured 2026-10-09 — a CHANGE was asked for, nothing was mutated, and the
+   * answer was the model's plan or promise. The edit-shaped sibling of
+   * `undeliveredArtifact`; surfaces must not read it as finished work.
+   */
+  undeliveredChange?: boolean;
+  /**
+   * Measured 2026-10-09 — the answer vouched for the product's health while
+   * nothing this turn observed the product running, so the verdict rests on
+   * evidence about something else (usually a unit suite for one module).
+   */
+  unbackedHealthClaim?: boolean;
   /**
    * Item 13 (round 3) — a SINGLE authored artifact that met the ask's stated
    * magnitude and admitted no omission: the "fluent, on-length" delivery no rule
@@ -1196,6 +1217,11 @@ export class ChatCommand extends BaseCommand {
           // Bundle 23 — a file far short of the stated magnitude is the same:
           // the delivered artifact is not what was asked for.
           artifactShortfall: Boolean(answer.artifactShortfall),
+          // Measured 2026-10-09 — a change asked for and a plan delivered, and a
+          // health verdict nothing observed the product to back, both reach the
+          // report so neither can read as finished work on any surface.
+          undeliveredChange: answer.undeliveredChange,
+          unbackedHealthClaim: answer.unbackedHealthClaim,
         },
       });
     } catch {
@@ -2018,6 +2044,10 @@ export class ChatCommand extends BaseCommand {
      * never interchangeable with it (see the fallback guard in `answerOnce`).
      */
     refused?: boolean;
+    /** Measured 2026-10-09 — a change asked for, a plan delivered instead. */
+    undeliveredChange?: boolean;
+    /** Measured 2026-10-09 — a health verdict nothing observed the product to back. */
+    unbackedHealthClaim?: boolean;
     /** P4 — true when the turn was cancelled via the signal (discarded). */
     cancelled?: boolean;
     /** Phase 4 — true when the loop hit its step bound before an end turn. */
@@ -2642,6 +2672,13 @@ export class ChatCommand extends BaseCommand {
     });
     // G18 — the tool-context emit (declared above) now has somewhere to write.
     traceIdForEvents = chatTraceId;
+    /**
+     * Requests-panel latency: the turn's MODEL time, summed from the per-call
+     * durations `recordChatStep` already measures. The action log recorded no
+     * `latencyMs` at all from this surface, so every chat row rendered `—` in
+     * the dashboard even though the number existed one line away in the trace.
+     */
+    let turnModelMs = 0;
     // A2 — record the routing DECISION as a first-class event, so a turn that
     // ran on a weak/incapable model is self-evident in the Trace tab. The
     // failed Tauri turn had no such record; this is the instrument that would
@@ -2767,10 +2804,14 @@ export class ChatCommand extends BaseCommand {
       const prompt = threadMsgs.map((m) => (m.role === 'system' ? `[System]\n${m.content}` : m.role === 'user' ? `[User]\n${m.content}` : m.role === 'assistant' ? `[Assistant]\n${m.content}` : `[Tool result]\n${m.content}`)).join('\n\n');
       try {
         const resp = await callModel(threadMsgs, schemas2, tok, sig);
-        recordChatStep(prompt, resp.content ?? '', Date.now() - start, true);
+        const ms = Date.now() - start;
+        turnModelMs += ms;
+        recordChatStep(prompt, resp.content ?? '', ms, true);
         return resp;
       } catch (err) {
-        recordChatStep(prompt, '', Date.now() - start, false, err instanceof Error ? err.message : String(err));
+        const ms = Date.now() - start;
+        turnModelMs += ms;
+        recordChatStep(prompt, '', ms, false, err instanceof Error ? err.message : String(err));
         throw err;
       }
     };
@@ -3140,6 +3181,10 @@ export class ChatCommand extends BaseCommand {
       // backs, both make the turn `incomplete` on the trace (not `answered`).      incompleteArtifactClaim: Boolean(result.artifactIncomplete),
       unverifiedFileClaim: result.unverifiedFileClaim,
       artifactShortfall: Boolean(result.artifactShortfall),
+      // Measured 2026-10-09 — an unchanged workspace answering a change request,
+      // and a health verdict nothing observed, are both UNFINISHED work.
+      undeliveredChange: result.undeliveredChange,
+      unbackedHealthClaim: result.unbackedHealthClaim,
     });
 
     // A cancelled / failed / incomplete turn is NOT a success. `!generationFailed`
@@ -3153,6 +3198,17 @@ export class ChatCommand extends BaseCommand {
     // Best-effort by construction; `endTrace` above cleared the in-progress id,
     // so the trace id is passed explicitly.
     recordTraceFindings(chatTraceId, findings);
+
+    // ── §6.5 — WAS THE TURN'S ANSWER SERVED BY A PAIR THAT COULD HOLD IT? ──
+    // Computed ONCE, before the console warnings and the registry write, so the
+    // warning the user reads and the outcome the panel records cannot disagree.
+    // Gated on the turn having actually needed agentic work (it called tools): a
+    // tiny local model answering a plain conversational turn is not a quality
+    // failure, and claiming one would invent a false signal in the other
+    // direction — the same defect this programme exists to remove.
+    const neededAgenticWork = (result.toolCalls?.length ?? 0) > 0;
+    const degradedPair =
+      neededAgenticWork && Boolean(session.model) && !isAgenticCapableModel(session.model, session.type);
 
     // G3 — record what this turn actually did so the NEXT turn starts from it
     // (files changed, whether anything verified the work, and whether the user
@@ -3244,6 +3300,25 @@ export class ChatCommand extends BaseCommand {
           `   ⚠️  ${s.path} has ~${s.deliveredWords} words, but the request asked for ~${s.targetWords} (${s.source}) — the deliverable is materially SHORT of what was asked.`,
         );
       }
+      // Measured 2026-10-09 — the two verdicts that used to be invisible on every
+      // surface but the trace. Both are the failure that LOOKS most like success,
+      // so the reader is told plainly. Printed, never appended to `content`, so
+      // the delivered answer, the gateway bubble and the answer cache stay clean.
+      if (result.undeliveredChange) {
+        logger.warn(
+          '   ⚠️  This request asked for a CHANGE, but nothing was changed this turn — the text above is a PLAN, not the work.',
+        );
+      }
+      if (result.unbackedHealthClaim) {
+        logger.warn(
+          '   ⚠️  This reply vouches for the project working, but NOTHING this turn exercised the product (no server started, no route called) — treat the verdict as UNBACKED.',
+        );
+      }
+      if (degradedPair) {
+        logger.warn(
+          `   ⚠️  No agentic-capable model was reachable — this turn was served by ${session.type}/${session.model}, which cannot hold a task like this. Treat the result as DEGRADED.`,
+        );
+      }
     } catch {
       // Best-effort.
     }
@@ -3293,8 +3368,42 @@ export class ChatCommand extends BaseCommand {
       }
       history.push({ role: 'assistant', content: result.content });
       this.memoryNoteTurn(message, result.content);
+      // ── WHICH PAIR ANSWERED, AND WAS IT ABLE TO? ────────────────────────
+      // This used to record `verified` UNCONDITIONALLY for `session.type` /
+      // `session.model`. Two consequences, both measured on 2026-10-09:
+      //
+      //   1. THE REQUESTS PANEL VOUCHED FOR A MODEL WHOSE ANSWERS ARE UNUSABLE.
+      //      `local/qwen2.5:0.5b` served step 2 of a two-step turn after the cloud
+      //      model was rate-limited and replied with filler — and the dashboard
+      //      showed **4 requests, 0.0% error rate** for it, because `verified`
+      //      means "the provider answered", not "the answer was usable".
+      //   2. ROUTING WAS REWARDED FOR IT. `verified` is what marks a pair good for
+      //      real usage, so the weak model was promoted by the same turn that
+      //      exposed it.
+      //
+      // A pair that cannot hold an agentic task is a QUALITY-REJECTED call: it is
+      // booked as a failure with its own class (so the panel's error rate reflects
+      // it and the walk stops re-picking it) instead of as health.
+      //
+      // `degradedPair` is computed once above the console warnings, so the
+      // verdict the user reads and the outcome recorded here cannot drift.
       try {
-        recordRegistrySuccess(session.type, session.model, 'chat');
+        if (degradedPair) {
+          recordRegistryFailure(
+            session.type,
+            session.model,
+            new Error(
+              `model answered with a reply it could not carry the task with ` +
+                'instead of the task (not agentic-capable)',
+            ),
+            'quality-rejected',
+            'chat',
+            turnModelMs,
+          );
+        } else {
+          // The turn's MODEL time, so the Requests panel stops rendering `—`.
+          recordRegistrySuccess(session.type, session.model, 'chat', turnModelMs);
+        }
       } catch {
         // Best-effort.
       }
@@ -3379,6 +3488,8 @@ export class ChatCommand extends BaseCommand {
       incompleteArtifactClaim: Boolean(result.artifactIncomplete),
       unverifiedFileClaim: result.unverifiedFileClaim,
       artifactShortfall: Boolean(result.artifactShortfall),
+      undeliveredChange: result.undeliveredChange,
+      unbackedHealthClaim: result.unbackedHealthClaim,
     });
     const chatFollowups = withContinuationFollowups(result.followups, {
       unfinished: !traceOutcomeSucceeded(chatOutcomeForFollowups),

@@ -171,6 +171,34 @@ describe('classifyFallbackError — an unfunded account (A4)', () => {
   });
 });
 
+describe('classifyFallbackError — a rejected ANSWER is its own class (measured 2026-10-09)', () => {
+  // The Requests panel counts a failure as `outcome !== 'verified' && !== 'partial'`.
+  // A reply the answer-quality gate REJECTED used to book as `unknown` — which is
+  // still a failure — but a turn served by a pair that cannot hold the task booked
+  // as `verified`, so `local/qwen2.5:0.5b` showed **4 requests / 0.0% error rate**
+  // on the dashboard while producing filler. These pins the class that fixes it.
+  it('classifies the answer-quality gate\u2019s own error wording as quality-rejected', () => {
+    // The EXACT message `answerQualityError` builds, for both kinds.
+    expect(
+      classifyFallbackError(
+        new Error('model answered with its own reasoning instead of the task (reply: The user is reporting\u2026)'),
+      ),
+    ).toBe('quality-rejected');
+    expect(
+      classifyFallbackError(
+        new Error('model answered with tool-contract confusion instead of the task (reply: Sure, I can help\u2026)'),
+      ),
+    ).toBe('quality-rejected');
+  });
+
+  it('is NOT retried in place, but IS retryable on another provider', () => {
+    // Re-asking the same pair reproduces the same reply, so the walk is the
+    // remedy — the same contract `empty-response` and `credit-exhausted` hold.
+    expect(isTransientForRetry('quality-rejected')).toBe(false);
+    expect(isRetryableError('quality-rejected')).toBe(true);
+  });
+});
+
 describe('classifyFallbackError', () => {
   it.each([
     [new Error('401 Unauthorized'), 'auth'],

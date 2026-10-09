@@ -174,7 +174,18 @@ const HIGH_PRECISION_OPENERS: RegExp[] = [
   // `user` table/record/route ("The user table now has an index"), which is
   // ordinary prose in a codebase. "The user can log in" is likewise a
   // deliverable, so modals are excluded on purpose.
-  /^(?:the|this)\s+user\s+(?:is\s+(?:asking|planning|requesting|wondering|looking|trying|attempting|providing|saying|referring|describing)|(?:just\s+)?(?:said|says|asked|asks|wants|wanted|requested|requests|needs|needed|wrote|mentioned|sent|gave|seems|appears))\b/i,
+  //
+  // The REPORTING family is here because of a live miss (trace-1791521608671):
+  // a bug report was answered with the model's own working notes, whose FIRST
+  // LINE was `The user is reporting three main bugs/issues with the project:`.
+  // Every other verb in the alternation was covered — `reporting` was the one
+  // word standing between a leaked trace and the failover walk that should have
+  // rejected it, and the reply was delivered to the user as the answer. This
+  // branch is checked BEFORE `highPrecisionOnly` short-circuits, so it holds for
+  // a tool-carrying step too (the step that leaked here carried `read_file`).
+  // Only verbs describing what the user COMMUNICATED belong here; a bare `The
+  // user` plus any verb would reject ordinary prose about a user model.
+  /^(?:the|this)\s+user\s+(?:is\s+(?:asking|planning|requesting|wondering|looking|trying|attempting|providing|saying|referring|describing|reporting|explaining|complaining|flagging|noting|outlining|inquiring|mentioning)|(?:just\s+)?(?:said|says|asked|asks|wants|wanted|requested|requests|needs|needed|wrote|mentioned|sent|gave|seems|appears|reported|reports|described|explained|complained|flagged|noted|outlined|inquired))\b/i,
   /^according\s+to\s+(?:the\s+)?(?:instructions?|system\s+prompt|prompt|rules?|guidelines?)\b/i,
   /^(?:the|my)\s+(?:system\s+)?(?:prompt|instructions?)\s+(?:says|states|asks|tells|requires)\b/i,
   // Reasoning labels / draft markers.
@@ -254,12 +265,24 @@ const COMPLETION_CLAIM_RE = /\b(?:i(?:'ve| have)\s+(?:updated|created|added|writ
  */
 function looksLikePlanningNarration(text: string): boolean {
   const t = text.trim();
-  if (t.length > 240) return false;
   if (DELIVERABLE_EVIDENCE_RE.test(t)) return false;
   if (COMPLETION_CLAIM_RE.test(t)) return false;
   if (/\?\s*$/.test(t)) return false;
   if (!statesToolIntent(t)) return false;
-  return PLANNING_NARRATION_OPENER_RE.test(t.split(/\r?\n/, 1)[0] ?? '');
+  // ── THE OPENING LINE MUST BE THE NARRATION, NOT THE TAIL OF ONE ────────
+  // A LENGTH cap used to stand here (`t.length > 240 → not narration`). It was
+  // removed because it is not a signal at all: it treated "long" as "an answer",
+  // so a 986-character reply that opened `Let's start by reading public/app.js.`
+  // and delivered nothing sailed through (measured 2026-10-09,
+  // trace-1791521601671-1bjnfa). The four guards above already prove CONTENT —
+  // a fenced block, a completion claim, a structure, or a question back to the
+  // reader — and they are what the cap was standing in for. What replaces it is
+  // PRECISE: the reply must OPEN with the plan-to-act (the first line) and that
+  // line must not already look like a deliverable, so an answer that merely
+  // MENTIONS a search does not qualify, however long it is.
+  const firstLine = t.split(/\r?\n/, 1)[0] ?? '';
+  if (!PLANNING_NARRATION_OPENER_RE.test(firstLine)) return false;
+  return !DELIVERABLE_EVIDENCE_RE.test(firstLine);
 }
 
 /**

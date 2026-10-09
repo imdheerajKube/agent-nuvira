@@ -108,4 +108,30 @@ describe('RequestsPanel', () => {
     fireEvent.change(screen.getByPlaceholderText('Search provider, model or action...'), { target: { value: 'nim' } });
     expect(screen.getByText(/No request groups match your filter/i)).toBeTruthy();
   });
+
+  it('flags a pair the traces derive as degraded — the counter-signal to a clean 0.0%', () => {
+    // The pair ANSWERED (the action log says `verified`, error rate 0.0%), so
+    // nothing in the log can flag it. The derived census rides beside the rows
+    // and marks every action row of the pair.
+    const requests = makeRequests({
+      rows: [{
+        provider: 'local', model: 'qwen2.5:0.5b', action: 'chat',
+        requests: 4, errorRate: 0, partials: 0, costCalls: 0, callIds: [], lastAt: 1750000000000,
+      }],
+      degraded: [{ provider: 'local', model: 'qwen2.5:0.5b', steps: 4, traces: ['trace-a', 'trace-b'] }],
+    });
+    render(<RequestsPanel data={makeData(requests)} />);
+
+    expect(screen.getByText(/pair\(s\) below cannot hold an agentic task/i)).toBeTruthy();
+    expect(screen.getByText('⚠️ degraded')).toBeTruthy();
+    expect(screen.getByTitle(/this row's error rate is not a quality measurement/)).toBeTruthy();
+    // The row is still present and still 0.0% — the measurement is qualified, not rewritten.
+    expect(screen.getAllByText('0.0%').length).toBeGreaterThan(0);
+  });
+
+  it('shows no degraded signal when the traces report none', () => {
+    render(<RequestsPanel data={makeData(makeRequests())} />);
+    expect(screen.queryByText(/degraded/i)).toBeNull();
+    expect(screen.queryByText(/cannot hold an agentic task/i)).toBeNull();
+  });
 });

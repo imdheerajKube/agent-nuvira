@@ -1286,6 +1286,10 @@ export async function runLoopExecutor(
       unverifiedEditClaim: result.unverifiedEditClaim,
       unverifiedBuildClaim: result.unverifiedBuildClaim,
       undeliveredArtifact: result.undeliveredArtifact,
+      // Measured 2026-10-09 — an unchanged workspace answering a change request,
+      // and a health verdict nothing observed, are both UNFINISHED work.
+      undeliveredChange: result.undeliveredChange,
+      unbackedHealthClaim: result.unbackedHealthClaim,
     });
     // A cancelled / failed / incomplete run is NOT a success (A3).
     endTrace(traceId, traceOutcomeSucceeded(loopOutcome), loopOutcome);

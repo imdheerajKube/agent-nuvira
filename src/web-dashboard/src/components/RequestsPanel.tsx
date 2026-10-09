@@ -48,6 +48,28 @@ function errorTone(rate: number): MetricTile['tone'] {
   return 'danger';
 }
 
+/**
+ * The per-row counter-signal for a pair the action log cannot flag: it answered,
+ * so its error rate reads clean, but it served steps without the capability to
+ * hold an agentic task (derived from the traces — see `degradedCallsFromTraces`).
+ */
+function DegradedChip({ pair }: { pair: { provider: string; model: string; steps: number; traces: string[] } }) {
+  const traces = pair.traces.length <= 3
+    ? pair.traces.join(', ')
+    : `${pair.traces.slice(0, 3).join(', ')} +${pair.traces.length - 3} more`;
+  return (
+    <span
+      title={`⚠️ ${pair.steps} step(s) across ${pair.traces.length} trace(s) served by a pair that cannot hold an agentic task — this row's error rate is not a quality measurement (traces: ${traces})`}
+      style={{
+        marginLeft: 6, fontSize: 10, padding: '1px 6px', borderRadius: 8, whiteSpace: 'nowrap',
+        background: 'var(--purple-soft)', border: '1px solid var(--accent-red)', color: 'var(--accent-red)',
+      }}
+    >
+      ⚠️ degraded
+    </span>
+  );
+}
+
 function RequestsStats({ data }: { data: RequestsInsights }) {
   const rows = data.rows;
   const totalRequests = rows.reduce((a, r) => a + r.requests, 0);
@@ -86,6 +108,20 @@ function RequestsStats({ data }: { data: RequestsInsights }) {
       tone: 'warn',
     },
   ];
+
+  // The counter-signal to the error-rate tile above: these pairs ANSWERED, so
+  // their 0.0% reads clean — but they cannot hold an agentic task. Shown only
+  // when there are any, so a healthy log renders exactly as it did before.
+  const degraded = data.degraded ?? [];
+  if (degraded.length > 0) {
+    tiles.push({
+      key: 'degraded',
+      icon: '⚠️',
+      value: String(degraded.length),
+      label: 'Degraded pair(s) — served steps without agentic capability (derived from traces)',
+      tone: 'danger',
+    });
+  }
 
   return <MetricTiles tiles={tiles} />;
 }
@@ -144,11 +180,38 @@ export default function RequestsPanel({ data }: RequestsPanelProps) {
 
   const actions = [...new Set(requests.rows.map((r) => r.action))].sort();
 
+  // The derived counter-signal, keyed by provider × model (independent of
+  // action): a pair that served steps while not agentic-capable marks EVERY
+  // action row it appears on, because the pair — not the action — is what
+  // cannot hold the task.
+  const degradedByPair = new Map(
+    (requests.degraded ?? []).map((d) => [`${d.provider}|${d.model}`, d] as const),
+  );
+
   return (
     <>
       {header}
 
       <RequestsStats data={requests} />
+
+      {degradedByPair.size > 0 && (
+        <div style={{
+          margin: '0 0 14px', padding: '10px 14px', borderRadius: 10,
+          background: 'var(--purple-soft)', border: '1px solid var(--accent-red)',
+          color: 'var(--text-secondary)', fontSize: 12, lineHeight: 1.5,
+        }}>
+          <strong style={{ color: 'var(--accent-red)' }}>
+            ⚠️ {degradedByPair.size} pair(s) below cannot hold an agentic task.
+          </strong>{' '}
+          Their error rates come from the action log, which records that a provider{' '}
+          <em>answered</em> — not that the answer was usable — and cannot be rewritten
+          (it is hash-chained). The truth is derived read-only from the reasoning traces:{' '}
+          {[...degradedByPair.values()]
+            .map((d) => `${d.provider}/${d.model} (${d.steps} step(s))`)
+            .join(', ')}
+          .
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
         <select
@@ -230,6 +293,9 @@ export default function RequestsPanel({ data }: RequestsPanelProps) {
                     {r.model.length > 42 ? r.model.slice(0, 39) + '…' : r.model}
                     {r.callIds.length > 0 && (
                       <span style={{ color: 'var(--text-muted)', marginLeft: 6 }} title={r.callIds.join(', ')}>🔗{r.callIds.length}</span>
+                    )}
+                    {degradedByPair.has(`${r.provider}|${r.model}`) && (
+                      <DegradedChip pair={degradedByPair.get(`${r.provider}|${r.model}`)!} />
                     )}
                   </td>
                   <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12 }}>{r.requests}</td>

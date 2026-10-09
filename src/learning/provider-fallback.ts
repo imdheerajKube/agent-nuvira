@@ -97,6 +97,21 @@ export type FallbackErrorType =
    *     failover walk is where the remedy lives.
    */
   | 'credit-exhausted'
+  /**
+   * The provider RESOLVED (HTTP 200) and returned a reply that the answer-quality
+   * gate REJECTED — the model's own reasoning, or its narration of the tool
+   * contract — or the pair that served cannot hold the task at all (a ≤4B tag on
+   * an agentic ask). Its own class for the same reason `empty-response` has one:
+   * booked as `unknown` it taught the router nothing AND left the Requests panel
+   * reading `0.0% error rate` for a model whose answers are unusable.
+   *
+   * Measured 2026-10-09: `local/qwen2.5:0.5b` served step 2 of a two-step turn,
+   * replied with filler, and the dashboard showed **4 requests / 0.0% errors** for
+   * it — a counter-signal that actively vouched for the model that produced the
+   * poor result. Deliberately ABSENT from `TRANSIENT_RETRY_TYPES`: re-asking the
+   * same pair reproduces the same reply, so the walk is what remedies it.
+   */
+  | 'quality-rejected'
   | 'unknown';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -131,6 +146,13 @@ export function classifyFallbackError(err: unknown): FallbackErrorType {
   // deterministic, and it must never fall through to `unknown` — the ledger, the
   // exhaustion report and the bandit's reward all key off this class.
   if (/unusable model response/i.test(message)) return 'empty-response';
+
+  // The marker is OUR wording (`answerQualityError` in `inference/tool-call-utils`),
+  // so it is deterministic. Checked with `empty-response` rather than among the
+  // transport patterns: a reply HTTP 200 produced and the gate rejected is not a
+  // network or server fault, and booking it as `unknown` is what made a weak
+  // model's unusable answers read as clean on the dashboard.
+  if (/instead of the task\b/i.test(message)) return 'quality-rejected';
 
   // Credit/payment exhaustion — checked BEFORE `auth` and before the
   // rate-limit patterns. Measured live: `402 Insufficient credits. This account
@@ -240,7 +262,8 @@ const TRANSIENT_RETRY_TYPES: ReadonlySet<FallbackErrorType> = new Set<FallbackEr
   'network',
   'timeout',
 ]);
-// DELIBERATELY ABSENT: `empty-response` and `credit-exhausted`. Retrying the
+// DELIBERATELY ABSENT: `empty-response`, `credit-exhausted` and
+// `quality-rejected`. Retrying the
 // SAME provider after it returned nothing re-hits the same model — which is
 // exactly the loop that killed a real turn (5 empty responses on one model, no
 // failover). Retrying an UNFUNDED account is waste on top of waste: waiting

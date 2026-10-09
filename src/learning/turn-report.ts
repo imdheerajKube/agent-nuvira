@@ -60,6 +60,11 @@ const UNFINISHED_FLAGS: ReadonlyArray<keyof TurnReportFlags> = [
   'incompleteArtifactClaim',
   'unverifiedFileClaim',
   'artifactShortfall',
+  // Measured 2026-10-09: a three-bug report answered with a plan and no change,
+  // and a health verdict issued with nothing observing the product. Neither was
+  // an action claim `unverified*` could see, so both read as finished work.
+  'undeliveredChange',
+  'unbackedHealthClaim',
 ];
 
 /** The run's honesty flags, carried so the report can never hide one. */
@@ -88,6 +93,16 @@ export interface TurnReportFlags {
    * makes the turn `unverified` rather than reading as finished work.
    */
   artifactShortfall?: boolean;
+  /**
+   * A CHANGE was asked for, nothing was mutated, and the answer was the model's
+   * plan or promise. The edit-shaped sibling of `undeliveredArtifact`.
+   */
+  undeliveredChange?: boolean;
+  /**
+   * The answer vouched for the product's health while nothing this turn observed
+   * the product running, so the verdict rests on evidence about something else.
+   */
+  unbackedHealthClaim?: boolean;
 }
 
 /** One step, with the evidence that its status is honest. */
@@ -190,7 +205,9 @@ function hasAnyFlag(flags: TurnReportFlags): boolean {
       flags.noActionTaken ||
       flags.incompleteArtifactClaim ||
       flags.unverifiedFileClaim ||
-      flags.artifactShortfall,
+      flags.artifactShortfall ||
+      flags.undeliveredChange ||
+      flags.unbackedHealthClaim,
   );
 }
 

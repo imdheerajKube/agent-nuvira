@@ -781,6 +781,40 @@ export interface ToolLoopResult {
    */
   noActionTaken?: boolean;
   /**
+   * UNCHANGED-WORKSPACE HONESTY FLAG — the request asked for a CHANGE to the
+   * workspace, the turn mutated NOTHING, and the answer is a PLAN or a PROMISE
+   * rather than the work.
+   *
+   * WHY IT EXISTS (measured 2026-10-09, `trace-1791521608671-1bjnfa`). A user
+   * reported three concrete bugs in their own project. The turn read one file
+   * and replied with its own working notes — "I need to investigate… Plan: 1…
+   * Let's start by reading `public/app.js`." — and was recorded `success: true`.
+   * `noActionTaken` could not see it (a read had succeeded), and
+   * `unfulfilledPromise` could not either (its list exemption — correct in
+   * general — exempts exactly the plan-and-stop shape). This flag is the
+   * edit-shaped sibling of `undeliveredArtifact`: that one covers an authored
+   * DOCUMENT that was never written, this one a workspace CHANGE that was never
+   * made. Deliberately narrow — it requires all three of "a change was asked
+   * for", "nothing was mutated", and "the answer is a plan/promise" — so a
+   * legitimate explanatory answer that merely enumerates steps is untouched.
+   */
+  undeliveredChange?: boolean;
+  /**
+   * UNBACKED-HEALTH-CLAIM HONESTY FLAG — the answer vouches for the project
+   * ("stable, working state", "fully implemented", "ready for use") while the
+   * turn mutated nothing and ran NOTHING that exercised the product.
+   *
+   * WHY IT EXISTS (measured 2026-10-09, `trace-1791521454725-e7s5ew`). Asked
+   * "what's the state of this project?", the turn ran `npm test`, read 20 lines
+   * of README, and answered *"the project is in a stable, working state… All 18
+   * automated tests passed… ready for use"*. The app was a dead demo — its
+   * `server.js` served no static route, so `GET /app.js` 404'd and EVERY button
+   * on the page was inert. A unit suite for one module is not evidence about the
+   * product, and nothing in the honesty family covered a claim about a SYSTEM'S
+   * health (every other flag is action-shaped). Set by the loop, never guessed.
+   */
+  unbackedHealthClaim?: boolean;
+  /**
    * G2 — HONESTY FLAG — the answer ASSERTS a completed code change ("I have
    * successfully fixed…", "now fully operational") while the turn mutated the
    * workspace and verified nothing. The delivery-claim guard deliberately
@@ -2059,13 +2093,22 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // this turn (a turn that already did work and narrates a next step is
       // not silently dropped), on tools being available, and on the bounded
       // counter. Any residual promise is reported via `unfulfilledPromise`.
+      // The zero-success requirement is the original contract (a turn that did
+      // NOTHING and announced an action). The second arm covers the measured
+      // 2026-10-09 case this gate could not see: a CHANGE was asked for, only some
+      // READS succeeded, and the answer is a plan/promise — so the nudge is spent
+      // asking for the work instead of the plan being delivered as the answer.
+      // Bounded identically (`intentNudges < 1`) and gated on the ask requiring a
+      // change, so a legitimate plan answer is never nudged.
+      const promiseCandidate =
+        response.content.length >= lastContent.length ? response.content : lastContent;
       if (
         intentNudges < 1 &&
-        progress.successfulToolCalls.length === 0 &&
         schemas.length > 0 &&
-        detectUnfulfilledIntentPromise(
-          response.content.length >= lastContent.length ? response.content : lastContent,
-        )
+        (progress.successfulToolCalls.length === 0
+          ? detectUnfulfilledIntentPromise(promiseCandidate)
+          : requestRequiresWorkspaceChange(lastUserText(opts.messages)) &&
+            answeredWithAPlanInsteadOfWork(promiseCandidate))
       ) {
         intentNudges += 1;
         stepLimit += 1;
@@ -3904,6 +3947,34 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     ) {
       result.noActionTaken = true;
     }
+    // UNCHANGED-WORKSPACE honesty (measured 2026-10-09). A CHANGE was asked for,
+    // nothing was mutated, and the answer is the model's plan or promise rather
+    // than the work. Left to `undeliveredArtifact` when that already fired, so one
+    // turn is never reported under two names.
+    if (
+      !result.cancelled &&
+      !result.undeliveredArtifact &&
+      progress.mutatedPaths.length === 0 &&
+      requestRequiresWorkspaceChange(askText) &&
+      answeredWithAPlanInsteadOfWork(result.content)
+    ) {
+      result.undeliveredChange = true;
+    }
+    // UNBACKED-HEALTH-CLAIM honesty (measured 2026-10-09). The answer vouches for
+    // the product and nothing this turn observed the product running, so the
+    // verdict rests on something else — usually a unit suite for one module.
+    if (
+      !result.cancelled &&
+      !result.generationFailed &&
+      detectUnbackedHealthClaim(
+        result.content,
+        result.successfulToolCalls,
+        progress.executedActions,
+        progress.mutatedPaths,
+      )
+    ) {
+      result.unbackedHealthClaim = true;
+    }
   }
   return result;
 }
@@ -3968,7 +4039,7 @@ const WORK_EDIT_VERB_RE =
   /\b(?:fix|repair|refactor|edit|modify|updat|chang|add|implement|creat|writ|delet|remov|renam|rewrit|migrat|correct|debug|patch|tweak|scaffold)\w*/i;
 /** A code/workspace noun that pairs with the verb above. */
 const CODE_NOUN_RE =
-  /\b(?:file|files|function|functions|method|methods|class|classes|module|modules|script|scripts|component|components|test|tests|suite|api|endpoint|endpoints|route|routes|schema|schemas|migration|migrations|package|dependency|dependencies|import|imports|config|configuration|type|types|interface|interfaces|bug|bugs|repo|repository|codebase|project|source)\b/i;
+  /\b(?:file|files|function|functions|method|methods|class|classes|module|modules|script|scripts|component|components|test|tests|suite|api|endpoint|endpoints|route|routes|schema|schemas|migration|migrations|package|dependency|dependencies|import|imports|config|configuration|type|types|interface|interfaces|bug|bugs|repo|repository|codebase|project|source|button|buttons|ui|ux|page|pages|screen|screens|form|forms|dialog|dialogs|menu|menus|widget|widgets|handler|handlers|frontend|backend|client|server|webpage|website|view|views|layout|styling|style|styles|css|html|markup|input|field|fields|dropdown|dropdowns|checkbox|toggle|modal|modals|label|labels)\b/i;
 
 /**
  * Does this request DIRECT work on the workspace — the precondition for the
@@ -3990,6 +4061,129 @@ function requestRequiresWorkspaceAction(requestText: string, authorized: boolean
   if (wantsAuthoredArtifact(text)) return false;
   if (REQUEST_FILE_TOKEN_RE.test(text)) return true;
   return WORK_EDIT_VERB_RE.test(text) && CODE_NOUN_RE.test(text);
+}
+
+/**
+ * Does this request ask for a CHANGE to work that already exists?
+ *
+ * Deliberately NOT `requestRequiresWorkspaceAction`, which answers a different
+ * question ("does this ask need the tools at all?") and deliberately returns
+ * false for an authored-deliverable ask. This one is the precondition for
+ * `undeliveredChange`: an EDIT verb applied to a code/UI noun — the shape of
+ * "fix the settings button", "add drag-and-drop to the page", "why doesn't the
+ * Add Document button work".
+ *
+ * The two optional guards are the same ones every other gate uses: a request
+ * that forbade writes cannot have failed to change anything, and `authorized`
+ * keeps `requestAuthorizesWrites`'s verdict authoritative where it is available.
+ */
+function requestRequiresWorkspaceChange(requestText: string, authorized?: boolean): boolean {
+  const text = (requestText || '').trim();
+  if (!text) return false;
+  if (authorized === false) return false;
+  if (requestForbidsWrites(text)) return false;
+  return WORK_EDIT_VERB_RE.test(text) && CODE_NOUN_RE.test(text);
+}
+
+/**
+ * A plan header the model writes for ITSELF: `Plan:`, `My plan:`, `Next steps—`.
+ * Requires the label, so an ordinary numbered answer is not a plan.
+ */
+const PLAN_HEADER_RE =
+  /^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*[ \t]*)?(?:my|the|our|final|next)?[ \t]*(?:plan|steps|next\s+steps|approach)\s*(?:\*\*)?[ \t]*[:\u2014-]/im;
+
+/**
+ * A CLOSING first-person intent to act — the promise that ends a turn.
+ *
+ * Deliberately broader than `INTENT_PROMISE_RES` (which this file already uses
+ * for the dangling-promise nudge): the live answer ended *"Let's start by
+ * reading `public/app.js`."*, and the `let me` family that regex covers does not
+ * match `let's`. Only an imminent, tool-shaped intent belongs here.
+ */
+const CLOSING_PROMISE_RES: readonly RegExp[] = [
+  /\blet'?s\s+(?:now\s+|then\s+|first\s+|just\s+)*(?:start|begin)\s+by\s+\w+/i,
+  /\blet'?s\s+(?:now\s+|then\s+|first\s+|just\s+)*(?:go\s+ahead\s+and\s+)?(?:start|begin|read|open|inspect|examine|check|look|search|grep|find|run|build|implement|create|write|fix|update|add)\b/i,
+  /\bi(?:'ll| will| am going to| am about to|'m going to)\s+(?:now\s+|next\s+|first\s+|immediately\s+)*(?:start|begin|read|open|inspect|examine|check|look|search|grep|find|run|build|implement|create|write|fix|update|add)\b/i,
+];
+
+/** A completion claim the model would only make having actually done the work. */
+const COMPLETION_CLAIM_RE =
+  /\b(?:i(?:'ve| have)\s+(?:updated|created|added|written|fixed|changed|run|checked|found|built|removed|refactored|implemented)|here(?:'s| is| are)\s+(?:the|what|how)|the answer is|below is|as requested|i found|all set|that(?:'s| is)\s+(?:it|done))\b/i;
+
+/** A fenced block is shipped code or content — a deliverable, not narration. */
+const FENCED_BLOCK_RE = /```/;
+
+/**
+ * Did the turn answer a WORK request with a PLAN instead of the work?
+ *
+ * The four guards are what keep this off a real answer, and each was chosen
+ * from a shape that would otherwise be a false positive:
+ *   - a fenced block IS the deliverable (code, a diff, a command the user asked for);
+ *   - a completion claim proves work was done, not described;
+ *   - a plan header (`Plan:`, `Next steps:`) is the model writing itself a TODO —
+ *     an explanation that answers the user says "the fix is", never "Plan:";
+ *   - a closing imminent promise ("Let's start by reading X.") is the dropped intent.
+ *
+ * A bare numbered list is NOT enough on its own: "1. Install the CLI\n2. Run
+ * `nuvira gateway start`" is a correct answer to a how-to ask. Only the plan
+ * HEADER or the closing promise marks the turn as having stopped short.
+ */
+function answeredWithAPlanInsteadOfWork(content: string): boolean {
+  const text = (content || '').trim();
+  if (!text) return false;
+  if (FENCED_BLOCK_RE.test(text)) return false;
+  if (COMPLETION_CLAIM_RE.test(text)) return false;
+  const closing = text
+    .split(/(?<=[.!?。！？])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(-3);
+  if (closing.some((s) => CLOSING_PROMISE_RES.some((re) => re.test(s)))) return true;
+  return LIST_STRUCTURE_RE.test(text) && PLAN_HEADER_RE.test(text);
+}
+
+/**
+ * A command that EXERCISES the product the way its user would — the only kind of
+ * evidence that can back a claim that the product WORKS.
+ *
+ * Deliberately excludes a test suite: `npm test` observes a module, not the
+ * running app, which is the exact confusion this flag exists to remove (the live
+ * app answered "ready for use" off `npm test` while `GET /app.js` returned 404).
+ */
+const EXERCISES_PRODUCT_RE =
+  /\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0)\b|\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:start|dev|serve|preview)\b|\bnode\s+\S*(?:server|app|index|main)\b|\b(?:curl|wget|http(?:ie)?)\s|\bhttps?:\/\/|\bplaywright|\bpuppeteer|\bchrome\b/i;
+
+/**
+ * A claim about the PRODUCT's health/readiness — strong, project-level phrasing.
+ * Kept to readiness/working/completeness assertions so that reporting a test
+ * result ("18 tests passed") is not, by itself, treated as one.
+ */
+const PRODUCT_HEALTH_CLAIM_RE =
+  /\b(?:ready\s+for\s+use|ready\s+for\s+further\s+development|fully\s+implemented|fully\s+functional|stable,?\s+working|working\s+state|in\s+good\s+shape|production[-\s]ready|everything\s+works|(?:the\s+)?(?:project|app|application|codebase|repo|repository|service|system|website|web\s?app)\b[^.!?\n]{0,40}\b(?:works|is\s+stable|is\s+complete|is\s+functional|has\s+no\s+(?:issues|bugs|problems)))/i;
+
+/**
+ * Is this a health verdict the turn's own evidence cannot support?
+ *
+ * Requires the CONJUNCTION, because each term is what makes the claim unbacked:
+ * the answer vouches for the product, the turn changed nothing (so this is an
+ * ASSESSMENT, not a change the user can go and look at), and nothing ran that
+ * exercised the product. A turn that started the server and hit a route is
+ * untouched.
+ */
+function detectUnbackedHealthClaim(
+  content: string,
+  successfulToolCalls: readonly string[],
+  executedActions: readonly ExecutedAction[],
+  mutatedPaths: readonly string[],
+): boolean {
+  const text = content || '';
+  if (!text.trim()) return false;
+  if (!PRODUCT_HEALTH_CLAIM_RE.test(text)) return false;
+  if (mutatedPaths.length > 0) return false;
+  if (successfulToolCalls.includes('browser')) return false;
+  return !executedActions.some(
+    (a) => a.ok && typeof a.command === 'string' && EXERCISES_PRODUCT_RE.test(a.command),
+  );
 }
 
 const NON_PRODUCTIVE_TOOLS: ReadonlySet<string> = new Set(['suggest_followups']);

@@ -38,6 +38,16 @@ describe('buildTraceOutcome — kinds', () => {
 
   it('records incomplete when a promised deliverable was not produced', () => {
     expect(buildTraceOutcome({ tools: [], unfulfilledPromise: true }).kind).toBe('incomplete');
+    // §6.5 — a DEGRADED turn is never a success, and the flag must survive the
+    // builder: `traceOutcomeSucceeded` reads the outcome the CALLER built, so an
+    // input this function dropped would be invisible to the very check that
+    // honours it (found by re-running the builder against the live trace data).
+    const degraded = buildTraceOutcome({
+      tools: ['read_file', 'suggest_followups'],
+      degradedBy: [{ provider: 'local', model: 'qwen2.5:0.5b' }],
+    });
+    expect(degraded.degradedBy).toEqual([{ provider: 'local', model: 'qwen2.5:0.5b' }]);
+    expect(traceOutcomeSucceeded(degraded)).toBe(false);
     expect(buildTraceOutcome({ tools: [], undeliveredArtifact: true }).kind).toBe('incomplete');
   });
 

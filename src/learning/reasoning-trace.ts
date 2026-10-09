@@ -29,6 +29,7 @@ import type { LLMCallFn } from '../agents/agent.js';
 import type { InferenceOptions } from '../config/types.js';
 import { estimateTokens } from './cost-tracker.js';
 import { splitPromptLayers, digestPromptLayers, type PromptLayerDigests } from './prompt-layers.js';
+import { isAgenticCapableModel } from './model-harness.js';
 import { describeFinding, toWire, type WireFinding, type Finding } from '../findings/verdicts.js';
 import type { TurnReport } from './turn-report.js';
 
@@ -137,6 +138,28 @@ export interface TraceOutcome {
   kind: 'answered' | 'acted' | 'failed' | 'cancelled' | 'incomplete';
   /** Names of the tools that actually executed this turn (in order). */
   tools?: string[];
+  /**
+   * A CHANGE was asked for, nothing was mutated, and the answer was the model's
+   * plan or promise instead of the work — measured on `trace-1791521608671-1bjnfa`,
+   * which answered three reported bugs with its own working notes and was recorded
+   * `success: true`. `incomplete`, never `acted`.
+   */
+  undeliveredChange?: boolean;
+  /**
+   * The answer vouched for the product ("stable, working state… ready for use")
+   * while nothing this turn observed the product running — measured on
+   * `trace-1791521454725-e7s5ew`, which called a dead app healthy off a unit suite
+   * for one of its modules.
+   */
+  unbackedHealthClaim?: boolean;
+  /**
+   * A pair that is NOT agentic-capable served at least one step of this turn —
+   * measured on `trace-1791521608671-1bjnfa`, where `local/qwen2.5:0.5b` answered
+   * step 2 after the cloud model was rate-limited. A DEGRADED turn is never a
+   * success: the notice used to reach the console log only, so the user saw a
+   * clean answer and an enabled chat box.
+   */
+  degradedBy?: Array<{ provider: string; model: string }>;
   /** True when a delivery tool (`gateway_send`) ran and reported success. */
   delivered?: boolean;
   /**
@@ -887,6 +910,38 @@ export function endTrace(traceId: string, success?: boolean, outcome?: TraceOutc
             trace.events = events.slice(-MAX_EVENTS_PER_TRACE);
             trace.events.forEach((e, i) => { e.seq = i + 1; });
           }
+          // ── A DEGRADED TURN IS NOT A SUCCESS (§6.5) ──────────────────────
+          // The detour above made the substitution AUDITABLE, and that is all it
+          // did. Measured 2026-10-09 (`trace-1791521608671-1bjnfa`): step 2 of a
+          // two-step turn was answered by `local/qwen2.5:0.5b` after the cloud
+          // model was rate-limited; the notice reached the console log ONLY, the
+          // answer was delivered, `success` stayed true and the chat box
+          // re-enabled — so a degraded turn presented exactly like a full one.
+          //
+          // A pair that cannot hold an agentic task is a capability failure, not a
+          // routing preference, so it downgrades the turn: the outcome records the
+          // pairs, an extra decision event names them, and `success` is reset.
+          // A caller that computed `success` BEFORE this point does not get the
+          // last word.
+          const weak = detours.filter((p) => !isAgenticCapableModel(p.model, p.provider));
+          if (weak.length > 0) {
+            const degradedBy = weak.map((p) => ({ provider: p.provider, model: p.model }));
+            if (trace.outcome) trace.outcome = { ...trace.outcome, degradedBy };
+            else trace.outcome = { kind: 'incomplete', tools: [], degradedBy };
+            trace.success = false;
+            events.push({
+              kind: 'decision',
+              summary:
+                `degraded — ${degradedBy.map((d) => `${d.provider}/${d.model || 'unknown'}`).join(', ')} ` +
+                'is not agentic-capable, so this turn is not a success (part of its answer is a weak model\u2019s)',
+              seq: events.length + 1,
+              timestamp: Date.now(),
+            });
+            if (events.length > MAX_EVENTS_PER_TRACE) {
+              trace.events = events.slice(-MAX_EVENTS_PER_TRACE);
+              trace.events.forEach((e, i) => { e.seq = i + 1; });
+            }
+          }
         }
       }
     } catch {
@@ -918,6 +973,22 @@ export function buildTraceOutcome(input: {
   incompleteArtifactClaim?: boolean;
   unverifiedFileClaim?: boolean;
   artifactShortfall?: boolean;
+  /**
+   * A CHANGE was asked for, nothing was mutated, and the answer was a plan or a
+   * promise. See `ToolLoopResult.undeliveredChange`. */
+  undeliveredChange?: boolean;
+  /**
+   * The answer vouched for the product's health while nothing observed it
+   * running. See `ToolLoopResult.unbackedHealthClaim`. */
+  unbackedHealthClaim?: boolean;
+  /**
+   * Pairs that served a step and cannot hold an agentic task (see
+   * `TraceOutcome.degradedBy`). Accepted HERE as well as attached by `endTrace`:
+   * the caller that builds the outcome is the one that decides success from it
+   * (`traceOutcomeSucceeded`), so a `degradedBy` this function dropped made the
+   * degradation invisible to exactly the check meant to honour it.
+   */
+  degradedBy?: Array<{ provider: string; model: string }>;
 }): TraceOutcome {
   const tools = [...(input.tools ?? [])];
   if (input.cancelled) return { kind: 'cancelled', tools };
@@ -934,7 +1005,14 @@ export function buildTraceOutcome(input: {
       input.unverifiedBuildClaim ||
       input.incompleteArtifactClaim ||
       input.unverifiedFileClaim ||
-      input.artifactShortfall,
+      input.artifactShortfall ||
+      // A change was asked for and a plan was delivered instead (measured
+      // 2026-10-09): there IS work to continue from, so this is `incomplete`
+      // and never a success — the same contract `undeliveredArtifact` has.
+      input.undeliveredChange ||
+      // An unbacked health verdict is not a finished turn either: the claim is
+      // about the product and nothing observed the product (measured 2026-10-09).
+      input.unbackedHealthClaim,
   );
   return {
     kind: incomplete ? 'incomplete' : tools.length > 0 ? 'acted' : 'answered',
@@ -949,6 +1027,9 @@ export function buildTraceOutcome(input: {
     ...(input.incompleteArtifactClaim ? { incompleteArtifactClaim: true } : {}),
     ...(input.unverifiedFileClaim ? { unverifiedFileClaim: true } : {}),
     ...(input.artifactShortfall ? { artifactShortfall: true } : {}),
+    ...(input.undeliveredChange ? { undeliveredChange: true } : {}),
+    ...(input.unbackedHealthClaim ? { unbackedHealthClaim: true } : {}),
+    ...(input.degradedBy && input.degradedBy.length > 0 ? { degradedBy: input.degradedBy } : {}),
   };
 }
 
@@ -958,8 +1039,74 @@ export function buildTraceOutcome(input: {
  * record `success: true` while its outcome read `cancelled`; every surface then
  * treated an unfinished run as finished.
  */
+/**
+ * DERIVE the degraded calls from recorded traces — the read-only correction for
+ * telemetry logged BEFORE the classification existed.
+ *
+ * WHY THIS IS A DERIVATION AND NOT A BACKFILL (measured 2026-10-09). The Requests
+ * panel showed `local/qwen2.5:0.5b — 4 requests, 0.0% error rate` for calls that
+ * produced unusable answers, because the action log is written with the meaning
+ * "the provider answered" and the log is **hash-chained and tamper-evident** to
+ * `appendChainedRecordFast` / `rechainRecords`. Its `origin` field is only
+ * `'live' | 'test'`, so an appended "correction" would be indistinguishable from
+ * a real provider call — inventing an event to fix a display, which is the defect
+ * class this programme exists to remove. So history is left intact and the truth
+ * is DERIVED from the traces, which record the served pair per step.
+ *
+ * Pure and read-only: callers print or display it, never write it back.
+ */
+
+/**
+ * The minimal shape the census needs — an id and the pair each step was served
+ * by. Deliberately structural rather than `ReasoningTrace` so a reader that
+ * parses a SUBSET of the trace file (the dashboard server) consumes this same
+ * census logic instead of reimplementing it and drifting.
+ */
+export interface DegradedCallsInput {
+  id: string;
+  steps: ReadonlyArray<{ provider?: string; model?: string }>;
+}
+
+/** One provider × model pair that served steps while not agentic-capable. */
+export interface DegradedCall {
+  provider: string;
+  model: string;
+  /** Steps served by this pair across the scanned traces. */
+  steps: number;
+  /** Ids of the traces that contain at least one such step. */
+  traces: string[];
+}
+
+export function degradedCallsFromTraces(
+  traces: readonly DegradedCallsInput[],
+): DegradedCall[] {
+  const byPair = new Map<string, DegradedCall>();
+  for (const t of traces) {
+    for (const step of t.steps ?? []) {
+      if (!step?.provider || !step?.model) continue;
+      if (isAgenticCapableModel(step.model, step.provider)) continue;
+      const key = `${step.provider}|${step.model}`;
+      const entry = byPair.get(key) ?? {
+        provider: step.provider,
+        model: step.model,
+        steps: 0,
+        traces: [],
+      };
+      entry.steps += 1;
+      if (!entry.traces.includes(t.id)) entry.traces.push(t.id);
+      byPair.set(key, entry);
+    }
+  }
+  return [...byPair.values()].sort((a, b) => b.steps - a.steps);
+}
+
 export function traceOutcomeSucceeded(outcome: TraceOutcome | undefined): boolean {
   if (!outcome) return true;
+  // A DEGRADED turn is not a success either (§6.5): part of its answer came from
+  // a pair that cannot hold an agentic task, so the work cannot be trusted as
+  // finished whatever its `kind` says. Checked separately from `kind` because the
+  // degradation is a fact about WHICH MODELS SERVED, not about how the turn ended.
+  if (outcome.degradedBy && outcome.degradedBy.length > 0) return false;
   return outcome.kind !== 'failed' && outcome.kind !== 'cancelled' && outcome.kind !== 'incomplete';
 }
 
