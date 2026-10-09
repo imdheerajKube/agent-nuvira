@@ -57,8 +57,9 @@ model "fail" while a toy generated the output. The health ranking is why the toy
 won: it is error rate, then latency, and a 124ms 0%-error model sorts first. A
 repair now refuses that downgrade when the requested id **names** a large size
 (a `120b`/`70b`/`27b` tag) and the provider has nothing that can hold the task:
-the dead pin is handed back, the pair is registry-blocked so no doomed call is
-even made, and the walk advances to a provider that can serve it — the run's own
+the dead pin is handed back, the pair is registry-blocked so the failover walk
+skips it rather than calling it, and the walk advances to a provider that can
+serve it — the run's own
 verification had `groq/openai/gpt-oss-120b` usable throughout. When the provider
 DOES have an agentic-capable candidate, that one is returned, so the floor only
 ever narrows a downgrade; and a pin that names no size (`gpt-4-gone`,
