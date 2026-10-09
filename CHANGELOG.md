@@ -2,6 +2,55 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.3.15 — a divergent parity row names the reason it missed, two modules nothing imported stop shipping, and the changelog's stale `Unreleased` block is given the release it actually shipped in
+
+> A housekeeping release with one behavioural change: the parity harness. When a
+> resume row diverges, the failure now quotes each surface's OWN reason instead of
+> only the counts — because `replayed: 0` with `modelCalls: 2` is the shape of two
+> completely different faults (a record that was never written, and an input that
+> genuinely changed), and a divergence nobody can act on is not evidence. Two
+> dead modules that were compiled into the published package are gone, and the
+> changelog block that still said `Unreleased` for work that shipped in v3.3.13 is
+> filed under that release.
+
+### Changed: a divergent resume row now names WHY, not just the count
+
+The parity runner reports a resume row field by field, which was enough to see
+THAT a surface re-paid for its steps and not enough to know WHY. The two faults
+behind `resume.replayed: 0` are a record the surface never found ("not in the
+record") and a step whose whole input had changed ("its input changed") — opposite
+conclusions, identical numbers. `ResumeObs` now carries the surface's own resume
+notice (the miss reasons `src/learning/step-checkpoint.ts` already computes), and
+`compare` quotes both sides on the row when the resume facts disagree. The notice
+is DIAGNOSTIC and deliberately never compared: it quotes paths and counts that
+legitimately differ per surface, so comparing it would turn a normal row red
+(there is a case pinning that: two surfaces agreeing on every resume fact stay
+at-par while reporting different notices).
+
+### Fixed: the changelog's `## Unreleased` block is filed under v3.3.13
+
+`CHANGELOG.md` carried a `## Unreleased — a model id is checked before it is saved…`
+section between v3.3.13 and v3.3.12 describing ten shipped features. Every commit it
+describes (`6c8f4f3b` onward: model-id validation, the toolchain-remediation fix,
+plan-step artifact checks, `-p <provider> -m auto`, the per-provider switch, the
+replayed `reasoning_content`, the keyless provider, and OmniRoute in the catalog)
+is an ancestor of the v3.3.13 release commit, so the heading was the only thing
+wrong: the work shipped, and the section now reads as part of v3.3.13 instead of
+claiming to be unreleased. Five stale `[ ]` boxes in `ENTERPRISE_GRADE_TRACKER.md`
+were flipped with the code that makes each true (`prompt-layers.ts`, `systemPolicy`,
+`resolveThreadBudgetChars`, `verificationExercisedArtifact`, `deliverable-class.ts`).
+
+### Fixed: two modules nothing imported are no longer compiled into the package
+
+A scan of every `src` module's importers found two that nothing reached, both of
+which `tsc` compiled into the published tarball: `src/agents/nvda-addon.ts`
+(`NVDAAddonAgent`, referenced by nothing — the `nvda` elsewhere in the tree is eval
+task ids and archive extensions) and a stray `src/forwarded.ts` (`export const ok =
+true;`) that was gitignored rather than deleted, so it kept being built. Both are
+removed, along with the `dist` artifacts they had left behind. The remaining unused
+exports a scan turns up are mostly deliberate surface (this package's public API and
+its reset/test hooks) and were left alone.
+
 ## v3.3.14 — the hook contract gets a starter set and a CLI, the chat composer's controls share one row, every stat band moves to the Overview tile style, knowledge retrieval gains a calibrated relevance floor, a `#tag` turn marker, structure-aware chunking, verbatim reads, a `sync` command and hybrid (vector + BM25) search, and the Windows CI failure is fixed
 
 ### Changed: the router learns MEASURED quality — the bandit's `qualityScore` is now populated
@@ -840,8 +889,6 @@ repeated at **100%** (found 7/7, fixed 7/7, time-to-green 49.6s) and
 arms miss the same single localisation task, and the fix rate stayed 7/7 on every
 arm and repeat — so the 100% is not a one-off and the 94% is a stable localisation
 figure. See `docs/benchmarks/INDEX.md`.
-
-## Unreleased — a model id is checked before it is saved, a known build failure names (and can take) its fix, a step is not done while its artifact is missing, and OmniRoute joins the provider catalog
 
 > Four follow-ups from the `cal` Android assessment, each closing a place where
 the agent could not see the truth for itself: a dead model id that only failed

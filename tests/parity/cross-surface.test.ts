@@ -354,14 +354,67 @@ describe('WS0 parity projection', () => {
     // The other half of the resume claim: the surface opened the record and
     // replayed nothing, which is a surface whose steps are not actually being
     // reused. Named field by field, because `resuming` alone would hide it.
-    const resumed = observation();
+    const resumed = observation({
+      resume: {
+        asked: true,
+        resuming: true,
+        replayed: 2,
+        modelCalls: 0,
+        saved: true,
+        notice: 'resume probe: replayed 2, made 0 model call(s)',
+      },
+    });
     const repaid = observation({
       surface: 'cli-execute',
-      resume: { asked: true, resuming: true, replayed: 0, modelCalls: 2, saved: true },
+      resume: {
+        asked: true,
+        resuming: true,
+        replayed: 0,
+        modelCalls: 2,
+        saved: true,
+        // THE reason a divergent row is actionable: `replayed: 0` is the shape of
+        // both a MISSING record and a CHANGED input, and only the surface's own
+        // notice separates them.
+        notice: 'resume probe: replayed 0, made 2 model call(s)\n     why not: not in the record (2)',
+      },
     });
     const differences = compare(resumed, repaid);
-    expect(differences.join('\n')).toContain('resume.replayed');
-    expect(differences.join('\n')).toContain('resume.modelCalls');
+    const joined = differences.join('\n');
+    expect(joined).toContain('resume.replayed');
+    expect(joined).toContain('resume.modelCalls');
+    // The counts alone do not say WHY, so the row quotes each surface's own reason.
+    expect(joined).toContain('resume why');
+    expect(joined).toContain('why not: not in the record (2)');
+    expect(joined).toContain('replayed 2, made 0 model call(s)');
+  });
+
+  it('does not compare a resume notice between surfaces', () => {
+    // The notice is DIAGNOSTIC, never a compared field: it quotes paths and miss
+    // counts that legitimately differ per surface. Two surfaces that agree on
+    // every resume fact must still be at-par when their notices differ, otherwise
+    // every cross-surface run would go red for a reason that is not a divergence.
+    const a = observation({
+      resume: {
+        asked: true,
+        resuming: true,
+        replayed: 2,
+        modelCalls: 0,
+        saved: true,
+        notice: 'cli-chat: replayed 2 from /tmp/a/checkpoints/steps/x.json',
+      },
+    });
+    const b = observation({
+      surface: 'gateway-chat',
+      resume: {
+        asked: true,
+        resuming: true,
+        replayed: 2,
+        modelCalls: 0,
+        saved: true,
+        notice: 'gateway-chat: replayed 2 from /tmp/b/checkpoints/steps/y.json',
+      },
+    });
+    expect(compare(a, b)).toEqual([]);
   });
 
   it('does not compare the surface label a hook was told, only that it was told one', () => {
