@@ -2,6 +2,157 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.3.18 — the verification debt is named file by file, a plan this turn never touched stops reading as this turn's progress, and the heavy chat sections collapse to a gist
+
+> Four honest records already existed for a project — the plan, the resumable
+> sessions, the per-file verification debt, the repository's own drift — and they
+> lived in four places, so "where does this project stand?" took four commands and
+> a mental join. The cost of that showed up as measured failures: a plan frozen at
+> **1/7 steps for two days** was presented, on the turn report and the dashboard
+> card, as the progress of the turn that never touched it; the ledger recorded
+> verification debt as a bare **count** ("2 unverified edits"), which cannot be
+> acted on and which any root-level `npm test` could settle wholesale, including
+> for a change inside a nested package whose own suite never ran; and a debt that
+> only lived in the ledger never reached the trace, so a partially-verified turn
+> could not be audited by path from the artifact a reviewer actually reads. This
+> release makes the debt a named set, makes the plan say whether *this* turn
+> advanced it, reconciles the ledger against the working tree instead of trusting
+> its own report, and puts all four records behind one read-only command. The chat
+> keeps the verdict and the gist on screen and puts the evidence one click away.
+
+### Fixed: a reached plan/usage cap is an exhausted ACCOUNT, not a 429 that clears in ten seconds
+
+Live (trace-1791547245754-dmqwmu, 2026-10-09): the run's pair was
+`local/gpt-oss:120b-cloud`, and the account had hit Ollama's monthly usage limit.
+The provider's answer named a 429, so `classifyFallbackError` bucketed it as
+`rate-limit` — and because the body carries no reset hint and no `routing.quota`
+window was configured, the park was `MIN_RATE_LIMIT_PARK_MS`, **ten seconds**. The
+pair was re-admitted, re-picked and re-failed on the very next step, and again on
+the next turn, while verified agentic-capable pairs on other providers sat
+configured and unused — the user's report ("despite having genuine working models
+it just keeps failing") is exactly that shape. Wording that states a **billing
+remedy** ("reached your monthly usage limit", "upgrade for higher limits", "add
+usage credits", a daily/weekly/monthly cap) is now classified `credit-exhausted`
+BEFORE the 429 patterns: it is not retried in place, it is still retryable on a
+different provider, the session excludes the pair for the whole session (like an
+unfunded account, there is no window to wait out), and the registry demotes it so
+the router skips it predictively. Measured through the real modules: the pair goes
+`isUsable: true → false`, `local` leaves the routing pool, and
+`groq/openai/gpt-oss-120b` — verified and agentic-capable — stays usable, which is
+the pair the walk then lands on. A plain 429 keeps its short cooldown; the
+narrowness is the point.
+
+### Fixed: a repair may not hand an agentic task to a ≤4B toy
+
+Same trace, second defect, and the more damaging one. Once the pinned
+`local/gpt-oss:120b-cloud` was excluded, the repair path replaced it with
+`local/qwen2.5:0.5b` — a ≤4B model that the shared capability predicate
+(`isAgenticCapableModel`) rejects. Its answers were confident nonsense: the
+"plan" for a local document-repository RAG app described `generate_song` /
+`send_kashvi_song.py`, and a later retry proposed an MCP `tool_search` for AI
+startups in San Francisco. But they were ANSWERS, so the call **succeeded**, the
+failover walk never left the provider, and the trace attributed every step to the
+120B model that had been asked for — the dashboard and the user saw the strong
+model "fail" while a toy generated the output. The health ranking is why the toy
+won: it is error rate, then latency, and a 124ms 0%-error model sorts first. A
+repair now refuses that downgrade when the requested id **names** a large size
+(a `120b`/`70b`/`27b` tag) and the provider has nothing that can hold the task:
+the dead pin is handed back, the pair is registry-blocked so no doomed call is
+even made, and the walk advances to a provider that can serve it — the run's own
+verification had `groq/openai/gpt-oss-120b` usable throughout. When the provider
+DOES have an agentic-capable candidate, that one is returned, so the floor only
+ever narrows a downgrade; and a pin that names no size (`gpt-4-gone`,
+`some-gone-model`) keeps the provider's own repair, so an unrecognised name can
+never become a refusal. Applied on both repair paths — the registry fast path and
+the live-list path (`listModels` does not enumerate a local cloud model id, which
+is the path this run took).
+
+### Changed: verification debt is per FILE, and a nested package's own suite is the only proof for it
+
+`ProjectWorkingState.unverifiedEdits` was a counter, and a counter cannot be
+reconciled: the next turn could not tell *which* file was owed a check, so a
+verification of anything settled the whole backlog. The authoritative record is now
+`unverifiedPaths: [{ path, at }]` (capped at 40, oldest dropped first), and a path
+leaves that set only when a check actually covered **it**. `assessEditActivity` now
+takes the working directory and splits the changed paths into `covered` and `owed`,
+because the generic-checks regex treated `npm test` as proof for any file in the
+tree — while a change under a nested package with its own `package.json`/runner
+config is only proven by the command that runs *that* package. The gate now stays
+OPEN when the only change is inside a sub-package, accepts the command that really
+runs it (including `npm --prefix <dir>`), names the covering command in the
+remediation nudge, and stays permissive for a nested manifest with no suite of its
+own (a deps-only stub). The orchestrator's pipeline records the same per-path
+shape, so the debt is a list of files on both entry points rather than a count
+here and a list there. An entry written before per-path debt existed is normalised
+on read.
+
+### Changed: the ledger is reconciled against the working tree, not just its own report
+
+The ledger records what the loop *said* it changed — a report, not a fact. A
+read-only `reconcileWithWorkspace` now re-reads the world beside it (bounded git
+read, 2.5s timeout, inert outside a repository, never throws) and reports the dirty
+paths the ledger never recorded (an edit made outside the agent, or a turn killed
+mid-work) and the paths changed on disk **after** the last verification — none of
+which a passing check can speak for. `workingStateBlock` is the one call every
+surface uses (the loop, `prompt-assembly`, `loop-project-context`), so no reader can
+take the ledger without the reconciliation. A pristine workspace still contributes
+nothing to the prompt — no block, no weight.
+
+### Changed: a plan this turn never touched cannot read as this turn's progress
+
+The measured case: `trace-1791542886258-pg42ox` ("review the project") created a
+7-step plan two days earlier, marked `1 done / 1 running / 5 pending`, and no turn
+ever advanced it. The turn report and the dashboard card showed those counts as the
+current turn's progress. `TurnReport` now carries `planTouched` / `planCarried`, and
+a carried plan renders as *plan carried from an earlier turn — 1/7 done, not
+advanced this turn* — on the report, the trace and the dashboard card, so a frozen
+checklist can never be mistaken for work done.
+
+### Added: the plan close-out gate — a plan engaged this turn must not end stale
+
+A turn that declares or advances a plan and then tries to end with steps still open
+gets ONE bounded nudge (`plan-closeout`) to set their real status — `done`, or
+`blocked` with a note. It fires only when the turn actually engaged the plan, so an
+unrelated turn is never told to advance someone else's checklist, and it does not
+force updates on a carried plan (that would risk inventing progress).
+
+### Changed: the per-file verification split reaches the trace, not just the ledger
+
+`verifiedPaths` / `unverifiedPaths` are now on the `TurnReport` **and** the
+`TraceOutcome`, and render as a `⚠️ N path(s) unverified` chip in the dashboard's
+Trace panel and in the CLI report block — so a partially-verified turn is auditable
+by path from the trace alone.
+
+### Added: `nuvira state` — the four records behind one project, in one read
+
+`nuvira state [--dir <path>] [--json]` prints, from those same modules and with no
+second implementation and no model call: the tracked **plan** (the same store chat
+advances), the **open sessions** for the directory, the **per-file verification
+debt**, and the **git drift** (branch, uncommitted work, recent commits) with the
+ledger-vs-disk disagreements called out. It is read-only — it writes no plan,
+session, ledger or git ref.
+
+### Changed: the chat's heavy sections collapse to a one-line gist
+
+Four sections that used to occupy the transcript are now `<details>` closed by
+default, with the verdict readable while closed: the **recorded (resume) card**
+(one header line: `↩️ Resumed a recorded run · 0 steps replayed · 2 model calls
+made · RECORDED`), the **turn report** (verdict badge, step count — `1/7 steps ·
+carried` when the plan was not advanced — and the deterministic summary sentence),
+**tool calls** (previously expanded, the "34 calls" case), and **findings**
+(`🔎 N findings: X confirmed, Y plausible`). Steps were already collapsed. The
+evidence is one click away rather than gone.
+
+### Fixed: a directory that is GONE no longer reports as a permissions problem
+
+The attach and workspace routes answered every failure with *"Not a readable
+directory: <path>"*. Reported live: a user typed a folder under `/tmp` that had
+worked earlier and went hunting for a permissions issue, when the folder had simply
+been cleared by a macOS restart. The three causes that produce a null bundle —
+missing path, a file, an unreadable directory — now each state which one it is
+(and only a real `EACCES`/`EPERM` says "check its permissions"), and a readable
+directory whose bundle build fails no longer claims to be unreadable.
+
 ## v3.3.17 — `nuvira trace degraded -l <n>` reported an empty census, because the option default was being passed in as `parseInt`'s radix
 
 > Shipped in v3.3.16 and caught within the hour, by running the released artifact

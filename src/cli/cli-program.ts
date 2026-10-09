@@ -41,6 +41,7 @@ import { InitCommand } from './init.js';
 import { StatsCommand } from './stats.js';
 import { HistoryCommand } from './history.js';
 import { SessionCommand } from './session.js';
+import { StateCommand } from './state.js';
 import { SkillCommand } from './skill.js';
 import { SkillsCommand } from './skills.js';
 import { GatewayCommand } from './gateway.js';
@@ -259,6 +260,11 @@ export function createCLI(): Command {
 
   // Register G1 session command (D1 debug surface)
   program.addCommand(new SessionCommand().create());
+
+  // Register the ONE-READ project state surface (plan + open sessions + per-file
+  // verification debt + git drift), so answering "where does this project stand?"
+  // is a single command instead of four.
+  program.addCommand(new StateCommand().create());
 
   // Register Marketplace command (from nextlevel roadmap §5.3)
   const marketplaceCmd = new MarketplaceCommand();

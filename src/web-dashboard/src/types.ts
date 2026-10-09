@@ -957,8 +957,16 @@ export type TurnVerification = 'verified' | 'unverified' | 'blocked' | 'not-appl
  */
 export interface TurnReport {
   goal: string;
-  /** Did the turn declare a plan at all? */
+  /** Did a plan exist for this turn (declared now, or carried from earlier)? */
   planned: boolean;
+  /** Did THIS turn declare or advance the plan (`plan_todo` ran)? */
+  planTouched?: boolean;
+  /**
+   * TRUE when a plan exists but this turn did not advance it, so the step
+   * statuses are CARRIED context, not this turn's progress. The card must say
+   * so — a stale plan must not read as the work of the turn on screen.
+   */
+  planCarried?: boolean;
   steps: Array<{
     id: string;
     description: string;
@@ -972,6 +980,10 @@ export interface TurnReport {
   successfulToolCalls: string[];
   mutations: number;
   changedPaths: string[];
+  /** Changed paths a check actually exercised this turn (the per-file split). */
+  verifiedPaths?: string[];
+  /** Changed paths NO check exercised this turn — the outstanding debt by path. */
+  unverifiedPaths?: string[];
   verification: TurnVerification;
   /** The run's honesty flags, carried so the report can never hide one. */
   flags: {
@@ -1100,6 +1112,14 @@ export interface TraceEntry {
      * never a success.
      */
     degradedBy?: Array<{ provider: string; model: string }>;
+    /**
+     * PER-FILE verification truth: changed paths a check exercised, and the ones
+     * still owed one. `unverifiedEdit` is one bit for the whole turn; a partially
+     * verified turn (some paths checked, some not) is only visible here.
+     */
+    verifiedPaths?: string[];
+    /** @see outcome.verifiedPaths */
+    unverifiedPaths?: string[];
   };
   /**
    * E-trace — the derived TurnReport the run ended with (the plan → track →

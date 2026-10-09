@@ -701,7 +701,12 @@ async function runToolLoop(
    * flag. Nothing here depends on whether the nudge fired.
    */
   const finish = (result: string, truncated: boolean): SubagentRuntimeResult => {
-    const activity = assessEditActivity(successfulToolCalls, verificationEvidence, mutatedPaths);
+    const activity = assessEditActivity(
+      successfulToolCalls,
+      verificationEvidence,
+      mutatedPaths,
+      config.cwd ?? process.cwd(),
+    );
     const out: SubagentRuntimeResult = { result, llmCalls, toolCalls, ...base, truncated };
     if (activity.needsVerification) out.unverifiedEdit = true;
     if (detectUnverifiedEditClaim(result, activity.mutations, activity.verifications)) {
@@ -767,7 +772,8 @@ async function runToolLoop(
       // carries the honesty for that case.
       if (
         verificationNudges < 1 &&
-        assessEditActivity(successfulToolCalls, verificationEvidence, mutatedPaths).needsVerification
+        assessEditActivity(successfulToolCalls, verificationEvidence, mutatedPaths, config.cwd ?? process.cwd())
+          .needsVerification
       ) {
         verificationNudges += 1;
         iterationLimit += 1;

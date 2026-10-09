@@ -5544,6 +5544,63 @@ body {
   border-left-color: var(--border);
 }
 
+/* A card HEADER that is also a <summary>: no native disclosure triangle, a
+   pointer cursor, and a caret that rotates when the body opens. The header stays
+   ONE line; the body (steps, files, flags) collapses behind it, so a verbose
+   turn report can never push the answer and the followup chips off screen. */
+.chat-turn-card > summary.chat-turn-head,
+.chat-resume-card > summary.chat-resume-head {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.chat-turn-head::-webkit-details-marker,
+.chat-resume-head::-webkit-details-marker {
+  display: none;
+}
+
+/* The deterministic one-line gist of the turn ("2/2 steps done · 1 file(s)
+   changed · verification: verified"), truncated so the header stays one line. */
+.chat-turn-headline {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.chat-turn-body {
+  margin-top: 7px;
+}
+
+/* The resume counts, on the summary line: the one thing a reader compares
+   (replayed vs paid for). */
+.chat-resume-count {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chat-card-caret {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+details[open] > summary .chat-card-caret {
+  transform: rotate(90deg);
+}
+
 .chat-turn-head {
   display: flex;
   align-items: center;
@@ -5654,6 +5711,24 @@ body {
 }
 
 .chat-turn-files code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.chat-turn-carried {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chat-turn-owed {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--accent-yellow);
+}
+
+.chat-turn-owed code {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-size: 11px;
   color: var(--text-primary);

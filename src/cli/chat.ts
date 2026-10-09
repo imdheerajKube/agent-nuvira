@@ -85,7 +85,7 @@ import {
   stripToolCallArtifacts,
 } from '../inference/tool-call-utils.js';
 import { beginTrace, endTrace, recordStep, recordTraceEvent, recordTraceFindings, recordTurnReport, buildTraceOutcome, traceOutcomeSucceeded } from '../learning/reasoning-trace.js';
-import { recordWorkingState, getWorkingState, formatWorkingState, isProjectLedgerDir, detectRegressionSignal } from '../learning/working-state.js';
+import { recordWorkingState, isProjectLedgerDir, detectRegressionSignal, workingStateBlock as readWorkingStateBlock } from '../learning/working-state.js';
 import { recordDeliverableCandidate, markLastDeliverableRejected } from '../learning/deliverable-corpus.js';
 import { deriveAndApplyBehaviouralLabel } from '../learning/behavioural-labels.js';
 import { getLoopExposureMode } from '../tools/toolsets.js';
@@ -1190,6 +1190,12 @@ export class ChatCommand extends BaseCommand {
         successfulToolCalls: answer.successfulToolCalls,
         mutations: answer.runTrace?.mutations,
         changedPaths: answer.runTrace?.paths,
+        // PER-FILE verification truth: which changed paths a check exercised and
+        // which are still owed one. This is the split the ledger records; the
+        // report (and the trace it rides on) must carry it too, so a partially
+        // verified turn is auditable by path after the fact.
+        ...(answer.verifiedPaths ? { verifiedPaths: answer.verifiedPaths } : {}),
+        ...(answer.unverifiedPaths ? { unverifiedPaths: answer.unverifiedPaths } : {}),
         // E1 — decisions the harness took on the user's behalf (an unattended
         // ask_user default), so the report discloses them instead of letting the
         // answer read as a choice the user made.
@@ -2104,6 +2110,16 @@ export class ChatCommand extends BaseCommand {
      * not from the answer text.
      */
     successfulToolCalls?: string[];
+    /**
+     * PER-FILE verification truth from the loop (see `ToolLoopResult`): the
+     * changed paths a check actually exercised this turn, and the ones still
+     * owed one. Carried to the caller so the TurnReport (and therefore the trace
+     * it is persisted on) can report a PARTIALLY verified turn by path instead of
+     * collapsing it to one aggregate verdict. Absent when no loop ran.
+     */
+    verifiedPaths?: string[];
+    /** @see ChatAnswer.verifiedPaths */
+    unverifiedPaths?: string[];
     runTrace?: import('../learning/run-trace.js').RunTraceSnapshot;
     /**
      * E-trace — the reasoning trace this turn was recorded under, so a caller
@@ -2425,8 +2441,10 @@ export class ChatCommand extends BaseCommand {
     // came back describing an NVDA add-on nobody had mentioned. See
     // isProjectLedgerDir.
     const workingStatePath = turnCwd;
+    // Reads the ledger AND re-reads the world beside it (git status), so the
+    // block cannot claim a workspace state the filesystem contradicts.
     const workingStateBlock = isProjectLedgerDir(workingStatePath)
-      ? formatWorkingState(getWorkingState(workingStatePath))
+      ? readWorkingStateBlock(workingStatePath)
       : '';
 
     // Session 3 — channel/format policy lives in the STABLE layer. It is
@@ -3185,6 +3203,11 @@ export class ChatCommand extends BaseCommand {
       // and a health verdict nothing observed, are both UNFINISHED work.
       undeliveredChange: result.undeliveredChange,
       unbackedHealthClaim: result.unbackedHealthClaim,
+      // PER-FILE truth on the OUTCOME too, not only in the report the trace also
+      // carries: a partially verified turn must name the paths still owed a check
+      // from the trace alone.
+      verifiedPaths: result.verifiedPaths,
+      unverifiedPaths: result.unverifiedPaths,
     });
 
     // A cancelled / failed / incomplete turn is NOT a success. `!generationFailed`
@@ -3227,6 +3250,12 @@ export class ChatCommand extends BaseCommand {
           filesTouched: [...touchedFiles],
           toolsUsed: activity,
           verified,
+          // PER-FILE debt: the loop reports which changed paths a check actually
+          // exercised, so the ledger owes a check on the REST rather than on the
+          // turn. Absent (an older result shape) → the whole-turn flag above.
+          ...(result.unverifiedPaths
+            ? { verifiedPaths: result.verifiedPaths ?? [], unverifiedPaths: result.unverifiedPaths }
+            : {}),
           unverifiedEdit: result.unverifiedEdit === true,
           userMessage: message,
         });
@@ -3521,6 +3550,10 @@ export class ChatCommand extends BaseCommand {
       findings,
       // E — the honest "what happened" facts the TurnReport is derived from.
       successfulToolCalls: result.successfulToolCalls,
+      // PER-FILE truth, carried so a partially verified turn reports its
+      // unverified PATHS on the report (and the trace) — not only in the ledger.
+      ...(result.verifiedPaths ? { verifiedPaths: result.verifiedPaths } : {}),
+      ...(result.unverifiedPaths ? { unverifiedPaths: result.unverifiedPaths } : {}),
       runTrace: result.runTrace,
       unverifiedEdit: result.unverifiedEdit,
       unverifiedEditClaim: result.unverifiedEditClaim,

@@ -8,8 +8,9 @@
  *
  * What it composes (order preserved from the chat path):
  *   1. classify the failure (auth / rate-limit / server / network / timeout / unknown)
- *   2. session-level exclusion (auth = rest of session; rate-limit = short
- *      cooldown; transient = short cooldown + "needs re-verification" marker)
+ *   2. session-level exclusion (auth and an unfunded/plan-capped account = rest
+ *      of session; rate-limit = short cooldown; transient = short cooldown +
+ *      "needs re-verification" marker)
  *   3. rate-limit → park the provider in the central quota ledger
  *   4. registry write-through (per-action telemetry; model-not-found → unavailable)
  *   5. quota-timeline failover event
@@ -60,6 +61,8 @@ export interface FailureSessionState {
   /**
    * Provider → expiry (ms epoch) of its session-level exclusion.
    * - auth        → Number.MAX_SAFE_INTEGER (rest of the session)
+   * - credit-exhausted → Number.MAX_SAFE_INTEGER (rest of the session: an
+   *   unfunded account or a reached plan cap has no window to wait out)
    * - rate-limit  → now + RATE_LIMIT_EXCLUSION_MS (short cooldown, then re-admit)
    * - transient   → now + TRANSIENT_FAILURE_EXCLUSION_MS (short cooldown)
    */
@@ -358,6 +361,34 @@ export function recordActionFailure(
     // M2.3: park the SPECIFIC account/key too (rotation skips it while
     // other keys of the same provider stay usable).
     parkAccountForKey(providerType, options?.apiKey, now + parkMs, failureKind);
+  } else if (failureKind === 'credit-exhausted') {
+    // ── An account that cannot serve this call is DEFINITIVE for the session ─
+    // There is no window to wait out: an unfunded account or a reached
+    // plan/usage cap is restored by funding/upgrading, never by a cooldown.
+    //
+    // This branch used to fall into the transient `else` — a 60s provider
+    // exclusion — which is the same re-admit-and-retry shape the registry
+    // already fixed at its own layer (see `model-registry.recordCall`: "a park
+    // would expire and the router would offer the pair again, which is
+    // precisely how `openrouter/deepseek-v4.1-flash` kept being chosen and kept
+    // answering 402"). The registry now DEMOTES the pair to `unavailable`
+    // (`recordRegistryFailure` below), and this makes the session agree with it:
+    // the exhausted provider cannot serve the rest of THIS session either.
+    //
+    // PAIR-scoped when the model is known, so only the entry that cannot be
+    // served rests — the same rule rate-limit and empty-response follow — and
+    // the failover walk is free to reach the SAME model on a provider that can
+    // serve it. Provider-scoped only when we have no model attribution.
+    const failingModel = options?.model;
+    if (session.sessionFailedModels && failingModel && failingModel !== 'default') {
+      session.sessionFailedModels.set(
+        modelExclusionKey(providerType, failingModel),
+        Number.MAX_SAFE_INTEGER,
+      );
+    } else {
+      session.sessionFailedProviders.set(providerType, Number.MAX_SAFE_INTEGER);
+    }
+    // No ledger park on purpose — a park expires, and this does not.
   } else if (failureKind === 'empty-response') {
     // ── An empty completion is a MODEL failure, not a provider outage ──────
     // The provider answered (HTTP 200, a real response body) and simply carried

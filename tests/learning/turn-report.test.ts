@@ -113,12 +113,16 @@ describe('buildTurnReport — verification verdict', () => {
         { id: 's1', description: 'edit', status: 'done' },
         { id: 's2', description: 'test', status: 'done' },
       ]),
-      toolCalls: ['edit_file', 'run_terminal'],
-      successfulToolCalls: ['edit_file', 'run_terminal'],
+      // A turn whose plan shows two DONE steps necessarily advanced it via
+      // `plan_todo` — the fixture states that, so the report does not read the
+      // plan as carried context.
+      toolCalls: ['plan_todo', 'edit_file', 'run_terminal'],
+      successfulToolCalls: ['plan_todo', 'edit_file', 'run_terminal'],
       mutations: 1,
       changedPaths: ['src/a.ts'],
     });
     expect(r.verification).toBe('verified');
+    expect(r.planCarried).toBe(false);
     expect(r.summary).toContain('2/2 steps done');
     expect(r.summary).toContain('1 file(s) changed');
     expect(r.summary).toContain('verification: verified');
@@ -366,5 +370,86 @@ describe('C6 — what the turn COST', () => {
     });
     const text = formatTurnReport(r);
     expect(text).toContain('💰 cost: $0.000400 / 12.3K tok (2 calls)');
+  });
+});
+
+describe('turn-report — a plan that outlives its turn, and per-file verification truth', () => {
+  it('marks a plan carried when THIS turn never touched it', () => {
+    // Measured 2026-10-09 (trace-1791542886258-pg42ox): a 7-step plan created
+    // two days earlier surfaced as "1/7 steps" on an unrelated turn ("review the
+    // project"), so the user read stale progress as that turn's own work.
+    const r = buildTurnReport({
+      goal: 'review the project',
+      plan: plan([
+        { id: 'a', description: 'define the domain model', status: 'done' },
+        { id: 'b', description: 'architecture', status: 'running' },
+        { id: 'c', description: 'routing', status: 'pending' },
+      ]),
+      toolCalls: ['suggest_followups'],
+      successfulToolCalls: ['suggest_followups'],
+    });
+    expect(r.planTouched).toBe(false);
+    expect(r.planCarried).toBe(true);
+    expect(r.summary).toContain('plan carried from an earlier turn');
+    // It must NOT read as this turn's step tally.
+    expect(r.summary).not.toContain('1/3 steps done');
+    expect(formatTurnReport(r)).toContain('did not advance it');
+  });
+
+  it('does NOT mark a plan carried when the turn advanced it', () => {
+    const r = buildTurnReport({
+      goal: 'work the plan',
+      plan: plan([
+        { id: 'a', description: 'define the domain model', status: 'done' },
+        { id: 'b', description: 'architecture', status: 'done' },
+      ]),
+      toolCalls: ['plan_todo'],
+      successfulToolCalls: ['plan_todo'],
+    });
+    expect(r.planTouched).toBe(true);
+    expect(r.planCarried).toBe(false);
+    expect(r.summary).toContain('2/2 steps done');
+  });
+
+  it('carries the loop per-file split onto the report and the console block', () => {
+    const r = buildTurnReport({
+      goal: 'change two files',
+      toolCalls: ['edit_file', 'run_terminal'],
+      successfulToolCalls: ['edit_file', 'run_terminal'],
+      mutations: 2,
+      changedPaths: ['src/a.ts', 'src/b.ts'],
+      verifiedPaths: ['src/a.ts'],
+      unverifiedPaths: ['src/b.ts'],
+    });
+    expect(r.verifiedPaths).toEqual(['src/a.ts']);
+    expect(r.unverifiedPaths).toEqual(['src/b.ts']);
+    // The aggregate verdict cannot say WHICH file is owed a check; the split can.
+    expect(r.summary).toContain('partially verified');
+    expect(r.summary).toContain('src/b.ts');
+    expect(formatTurnReport(r)).toContain('1 changed path(s) no check exercised this turn: src/b.ts');
+  });
+
+  it('falls back to an honest split when the caller omits it', () => {
+    // An unverified mutation owes a check on every changed path; a verified turn
+    // owes none. A caller that omits the split still gets a truthful one.
+    const unverified = buildTurnReport({
+      goal: 'change it',
+      toolCalls: ['edit_file'],
+      successfulToolCalls: ['edit_file'],
+      mutations: 1,
+      changedPaths: ['src/a.ts'],
+    });
+    expect(unverified.verification).toBe('unverified');
+    expect(unverified.unverifiedPaths).toEqual(['src/a.ts']);
+
+    const verified = buildTurnReport({
+      goal: 'change it and check',
+      toolCalls: ['edit_file', 'run_terminal'],
+      successfulToolCalls: ['edit_file', 'run_terminal'],
+      mutations: 1,
+      changedPaths: ['src/a.ts'],
+    });
+    expect(verified.verification).toBe('verified');
+    expect(verified.unverifiedPaths).toEqual([]);
   });
 });

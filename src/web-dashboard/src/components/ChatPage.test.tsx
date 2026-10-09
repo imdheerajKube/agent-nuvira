@@ -658,6 +658,67 @@ describe('ChatPage', () => {
     expect(screen.getByText(/edited without verifying/)).toBeTruthy();
   });
 
+  it('E — the heavy evidence sections start COLLAPSED (answer + tracker own the screen)', async () => {
+    // Measured 2026-10-09: a turn with 34 tool calls, a resume card, a turn
+    // report and findings expanded every section up front, so the user had to
+    // scroll past a screenful of evidence to reach the answer and the plan
+    // tracker. The verdict, the counts and the summary stay on the header line;
+    // the DETAILS are one click away instead of always on screen.
+    mockAuthed('admin');
+    let toolCb: ((t: { id: string; tool: string; phase: 'started' | 'called'; ok?: boolean; result?: string; durationMs?: number }) => void) | null = null;
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sid, handlers) => {
+      toolCb = handlers.onTool ?? null;
+      return () => {};
+    });
+    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({ ok: true, matches: [] });
+    let resolveSend: (v: typeof OK_RESPONSE & Record<string, unknown>) => void = () => {};
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(
+      () => new Promise((resolve) => { resolveSend = resolve as never; }) as Promise<typeof OK_RESPONSE>,
+    );
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'assess the repo' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    await waitFor(() => expect(toolCb).toBeTruthy());
+    // Two completed tool calls — the evidence behind the answer.
+    toolCb!({ id: 'call_1', tool: 'read_file', phase: 'started' });
+    toolCb!({ id: 'call_1', tool: 'read_file', phase: 'called', ok: true, result: 'x', durationMs: 5 });
+    toolCb!({ id: 'call_2', tool: 'list_dir', phase: 'started' });
+    toolCb!({ id: 'call_2', tool: 'list_dir', phase: 'called', ok: true, result: 'y', durationMs: 3 });
+    resolveSend({
+      ...OK_RESPONSE,
+      resume: { id: 'cp-1', replayed: 0, modelCalls: 2, saved: true, notice: 'recorded' },
+      findings: [
+        { claim: 'the build is green', outcome: 'ran it', verdict: 'PLAUSIBLE', evidence: [] },
+      ],
+      turnReport: {
+        goal: 'assess the repo',
+        planned: true,
+        steps: [{ id: 's1', description: 'read the entry point', status: 'done' }],
+        stepCounts: { done: 1, blocked: 0, pending: 0, running: 0, total: 1 },
+        toolCalls: ['read_file'],
+        successfulToolCalls: ['read_file'],
+        mutations: 0,
+        changedPaths: [],
+        verification: 'not-applicable',
+        flags: {},
+        summary: '1/1 steps done · verification: not-applicable',
+      },
+    });
+    await waitFor(() => expect(screen.getByText('Turn report')).toBeTruthy());
+
+    // Every evidence section is present in the DOM but CLOSED by default.
+    for (const cls of ['.chat-tool-details', '.chat-turn-card', '.chat-resume-card', '.chat-findings']) {
+      const el = document.querySelector(cls) as HTMLDetailsElement | null;
+      expect(el, `${cls} should render`).toBeTruthy();
+      expect(el!.open, `${cls} should start collapsed`).toBe(false);
+    }
+    // The gist is on the collapsed header, so nothing needs expanding to read it.
+    expect(screen.getByText('0 steps replayed')).toBeTruthy();
+    expect(screen.getByText(/2 findings?|1 findings?: 0 confirmed, 1 plausible/)).toBeTruthy();
+  });
+
   it('P6a — renders the skill draft preview card: accept saves, reject discards', async () => {
     mockAuthed('admin');
     let draftCb: ((d: { name: string; description: string; markdown: string; updatedAt: number }) => void) | null = null;

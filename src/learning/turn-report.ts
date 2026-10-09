@@ -125,8 +125,22 @@ export interface TurnReportStepCounts {
 
 export interface TurnReport {
   goal: string;
-  /** Did the turn declare a plan at all? */
+  /** Did a plan exist for this turn (declared now, or carried from earlier)? */
   planned: boolean;
+  /**
+   * Did THIS turn declare or advance the plan (`plan_todo` ran successfully)?
+   * The distinction `planned` cannot make: a plan outlives a turn, so a report
+   * can carry a plan THIS turn never touched. Measured 2026-10-09 — a 7-step
+   * plan created two days earlier surfaced as "1/7 steps" on an unrelated turn.
+   */
+  planTouched: boolean;
+  /**
+   * TRUE when a plan exists but this turn did not advance it, so the step
+   * statuses are CARRIED context, not this turn's progress. Read by the
+   * summary and the dashboard card, which must not present stale progress as
+   * the current turn's own.
+   */
+  planCarried: boolean;
   steps: TurnReportStep[];
   stepCounts: TurnReportStepCounts;
   toolCalls: string[];
@@ -150,6 +164,18 @@ export interface TurnReport {
   checksPassed?: boolean;
   mutations: number;
   changedPaths: string[];
+  /**
+   * PER-FILE verification truth, carried onto the report (and therefore onto the
+   * trace, which persists the report verbatim). `changedPaths` says WHAT changed;
+   * these two say which of those paths a check actually EXERCISED this turn. A
+   * partially-verified turn (`verifiedPaths` and `unverifiedPaths` both non-empty)
+   * used to be visible only in the working-state ledger — a reader of the trace
+   * saw the turn's tools and its aggregate verdict, never which files were still
+   * owed a check. Empty arrays mean "nothing changed / no split was recorded".
+   */
+  verifiedPaths: string[];
+  /** @see TurnReport.verifiedPaths */
+  unverifiedPaths: string[];
   verification: TurnVerification;
   flags: TurnReportFlags;
   /**
@@ -188,6 +214,16 @@ export interface BuildTurnReportInput {
   /** Distinct files changed this turn (from the run trace). */
   changedPaths?: readonly string[];
   flags?: TurnReportFlags;
+  /**
+   * Did THIS turn touch the plan? Omitted, it is derived from
+   * `successfulToolCalls` containing `plan_todo` — the same evidence the rest of
+   * the report is built from, so the default cannot drift from reality.
+   */
+  planTouched?: boolean;
+  /** Per-file verification truth from the loop (see TurnReport.verifiedPaths). */
+  verifiedPaths?: readonly string[];
+  /** @see BuildTurnReportInput.verifiedPaths */
+  unverifiedPaths?: readonly string[];
   /** E1 — recorded decisions taken on the user's behalf (see TurnReport). */
   assumptions?: readonly string[];
   /** C6 — the turn's measured cost from the ledger (see `TurnReport.cost`). */
@@ -257,6 +293,19 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
         ...(s.note ? { note: s.note } : {}),
       }))
     : [];
+  // A plan outlives a turn: `plan_todo` running is the ONLY evidence this turn
+  // declared or advanced it, so an untouched plan's statuses are carried
+  // context. Derived (not taken on trust) unless the caller states it.
+  const planTouched = input.planTouched ?? successfulToolCalls.includes('plan_todo');
+  const planCarried = Boolean(plan) && steps.length > 0 && !planTouched;
+  // PER-FILE verification truth: the loop's precise split when it was handed
+  // over, and otherwise the honest aggregate fallback — an unverified mutated
+  // turn owes a check on every changed path, a verified one owes none.
+  const verifiedPaths = [...new Set(input.verifiedPaths ?? [])];
+  const unverifiedPaths =
+    input.unverifiedPaths !== undefined
+      ? [...new Set(input.unverifiedPaths)]
+      : [];
 
   const stepCounts: TurnReportStepCounts = {
     done: steps.filter((s) => s.status === 'done').length,
@@ -318,6 +367,15 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
     verification = 'not-applicable';
   }
 
+  // The fallback per-file split, computed AFTER the verdict: when the caller did
+  // not hand over the loop's precise truth, an unverified mutation owes a check
+  // on every changed path (nothing exercised them), and a verified/settled turn
+  // owes none. This is the same rule the ledger applies, restated so a caller
+  // that omits the split still gets an honest one.
+  if (input.unverifiedPaths === undefined && verification === 'unverified' && mutated) {
+    for (const p of changedPaths) if (!verifiedPaths.includes(p)) unverifiedPaths.push(p);
+  }
+
   // E4 — bind each step's status to the turn's verification evidence. A step
   // marked done while the turn itself is unverified/blocked is annotated, so
   // the report cannot read as a clean checklist over unverified work.
@@ -333,10 +391,13 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
 
   const summary = buildSummary({
     planned: Boolean(plan),
+    planCarried,
     stepCounts,
     verification,
     mutations: input.mutations ?? 0,
     changedPaths,
+    verifiedPaths,
+    unverifiedPaths,
     assumptions,
     cost: input.cost,
   });
@@ -344,6 +405,8 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
   return {
     goal: input.goal,
     planned: Boolean(plan),
+    planTouched,
+    planCarried,
     steps,
     stepCounts,
     toolCalls,
@@ -352,6 +415,8 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
     ...(checksPassed === undefined ? {} : { checksPassed }),
     mutations: input.mutations ?? 0,
     changedPaths,
+    verifiedPaths,
+    unverifiedPaths,
     verification,
     flags,
     assumptions,
@@ -364,22 +429,44 @@ export function buildTurnReport(input: BuildTurnReportInput): TurnReport {
 
 function buildSummary(input: {
   planned: boolean;
+  planCarried: boolean;
   stepCounts: TurnReportStepCounts;
   verification: TurnVerification;
   mutations: number;
   changedPaths: string[];
+  verifiedPaths: string[];
+  unverifiedPaths: string[];
   assumptions: string[];
   cost?: { usd: number; tokens: number; calls: number };
 }): string | null {
   const parts: string[] = [];
   if (input.planned) {
-    parts.push(`${input.stepCounts.done}/${input.stepCounts.total} steps done`);
-    if (input.stepCounts.blocked > 0) parts.push(`${input.stepCounts.blocked} blocked`);
+    if (input.planCarried) {
+      // A plan this turn never touched must NOT read as this turn's progress:
+      // measured 2026-10-09, a two-day-old plan surfaced as "1/7 steps" on the
+      // turn the user was reading.
+      parts.push(
+        `plan carried from an earlier turn — ${input.stepCounts.done}/${input.stepCounts.total} done, not advanced this turn`,
+      );
+    } else {
+      parts.push(`${input.stepCounts.done}/${input.stepCounts.total} steps done`);
+      if (input.stepCounts.blocked > 0) parts.push(`${input.stepCounts.blocked} blocked`);
+    }
   }
   if (input.changedPaths.length > 0) {
     parts.push(`${input.changedPaths.length} file(s) changed`);
   } else if (input.mutations > 0) {
     parts.push(`${input.mutations} change(s)`);
+  }
+  // PER-FILE debt, said out loud when the turn was only PARTIALLY verified:
+  // some changed paths a check exercised and some it did not. The aggregate
+  // verdict cannot express that, so the number of paths still owed a check is
+  // the one fact a reader needs to finish the job.
+  if (input.unverifiedPaths.length > 0 && input.verifiedPaths.length > 0) {
+    parts.push(
+      `partially verified — ${input.unverifiedPaths.length} path(s) still unverified: ${input.unverifiedPaths.slice(0, 6).join(', ')}` +
+        (input.unverifiedPaths.length > 6 ? ` +${input.unverifiedPaths.length - 6} more` : ''),
+    );
   }
   // E1 — an assumption is always worth saying: it is a decision the USER did not
   // make, and it must not be silent even on a turn that changed nothing.
@@ -447,6 +534,21 @@ export function formatTurnReport(report: TurnReport): string {
   // C6 — the price of the turn, from the ledger. Printed after the work, because
   // "what it did" and "what it cost" are the two things a user judges a turn on.
   if (report.cost) lines.push(`   💰 ${formatCost(report.cost)}`);
+  // The carried-plan disclosure: the steps above are CONTEXT from an earlier
+  // turn, not this turn's progress. Without it the step list reads as work the
+  // turn just reported (measured 2026-10-09).
+  if (report.planCarried) {
+    lines.push('   📋 that plan was carried from an earlier turn — THIS turn did not advance it.');
+  }
+  // PER-FILE debt: name the changed paths no check exercised, so a partially
+  // verified turn says WHICH files are still owed a check.
+  if (report.unverifiedPaths.length > 0) {
+    const shown = report.unverifiedPaths.slice(0, 8).join(', ');
+    lines.push(
+      `   ⚠️ ${report.unverifiedPaths.length} changed path(s) no check exercised this turn: ${shown}` +
+        (report.unverifiedPaths.length > 8 ? ` (+${report.unverifiedPaths.length - 8} more)` : ''),
+    );
+  }
   if (report.verification === 'unverified') {
     lines.push('   ⚠️ UNVERIFIED — a change or claim was not confirmed by any observation.');
   } else if (report.verification === 'delivered-and-read-back') {

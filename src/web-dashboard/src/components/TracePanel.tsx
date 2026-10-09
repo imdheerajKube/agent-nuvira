@@ -592,6 +592,17 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
             {`🔎 ${findingsSummary(trace.findings)}`}
           </span>
         )}
+        {/* PER-FILE truth on the outcome: a partially verified turn names the
+            paths still owed a check, which the aggregate `unverifiedEdit` bit
+            cannot — 1 of 3 checked used to read like 0 of 3. */}
+        {trace.outcome?.unverifiedPaths && trace.outcome.unverifiedPaths.length > 0 && (
+          <span
+            title={trace.outcome.unverifiedPaths.join(', ')}
+            style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12, background: 'var(--warn-soft)', border: '1px solid var(--accent-yellow)', color: 'var(--accent-yellow)' }}
+          >
+            {`⚠️ ${trace.outcome.unverifiedPaths.length} path(s) unverified`}
+          </span>
+        )}
       </div>
 
       {/* WS1 (#23) — the run's recorded findings, above the steps: a verdict is
@@ -643,7 +654,23 @@ function TraceDetail({ trace }: { trace: TraceEntry }) {
                 {`${trace.turnReport.changedPaths.length} file(s) changed`}
               </span>
             ) : null}
+            {trace.turnReport.planCarried ? (
+              <span style={{ marginLeft: 8, color: 'var(--text-secondary)' }}>
+                plan carried from an earlier turn — not advanced this turn
+              </span>
+            ) : null}
           </div>
+          {trace.turnReport.unverifiedPaths && trace.turnReport.unverifiedPaths.length > 0 ? (
+            <div style={{ marginBottom: 6, fontSize: 11, color: 'var(--accent-yellow)' }}>
+              {`⚠️ ${trace.turnReport.unverifiedPaths.length} changed path(s) no check exercised: `}
+              <code>
+                {trace.turnReport.unverifiedPaths.slice(0, 6).join(', ')}
+                {trace.turnReport.unverifiedPaths.length > 6
+                  ? ` +${trace.turnReport.unverifiedPaths.length - 6} more`
+                  : ''}
+              </code>
+            </div>
+          ) : null}
           {trace.turnReport.steps.length > 0 ? (
             <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 3 }}>
               {trace.turnReport.steps.map((s) => (

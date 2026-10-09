@@ -732,11 +732,19 @@ export class Orchestrator {
         const verificationRan = (result?.agentResults ?? []).some(
           (r) => r.success && /test|runner|verif|audit/i.test(r.agent),
         );
+        const verifiedAll = result?.success === true && verificationRan;
         recordWorkingState(process.cwd(), {
           filesTouched: changed,
           toolsUsed: ['pipeline'],
-          verified: result?.success === true && verificationRan,
-          unverifiedEdit: changed.length > 0 && !(result?.success === true && verificationRan),
+          verified: verifiedAll,
+          // Per-file mode: this path verifies the RUN as a whole (a test/runner
+          // agent ran and the pipeline succeeded), so it either covered every
+          // file it changed or none of them. Stated as paths so the ledger's debt
+          // is a list of files on both entry points, not a bare count here and a
+          // list there.
+          verifiedPaths: verifiedAll ? changed : [],
+          unverifiedPaths: verifiedAll ? [] : changed,
+          unverifiedEdit: changed.length > 0 && !verifiedAll,
           userMessage: goal,
         });
       } catch {

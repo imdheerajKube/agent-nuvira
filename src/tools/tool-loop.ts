@@ -758,6 +758,17 @@ export interface ToolLoopResult {
    */
   unverifiedEdit?: boolean;
   /**
+   * PER-FILE verification truth, from `assessEditActivity`. `verifiedPaths` are
+   * the changed paths a check actually exercised this turn; `unverifiedPaths`
+   * are the ones nothing did. The caller records both in the working-state
+   * ledger, so the debt it owes is a set of paths — a whole-turn boolean cannot
+   * say which change still needs a look, and (in a monorepo) cannot tell a root
+   * check from the nested package's own suite that never ran.
+   */
+  verifiedPaths?: string[];
+  /** @see ToolLoopResult.verifiedPaths */
+  unverifiedPaths?: string[];
+  /**
    * HONESTY FLAG (G13b) — the request asked for an AUTHORED deliverable to be
    * PRODUCED and this turn wrote NOTHING to disk, so the answer is prose about
    * the work rather than the work.
@@ -1397,6 +1408,8 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // `toolCallsRun`, because a multi-step job runs many steps in one turn.
   let planTodoCreates = 0;
   let planTodoUpdates = 0;
+  // The PLAN CLOSE-OUT gate's own once-per-turn budget (see `planCloseoutNudge`).
+  let planCloseoutNudges = 0;
   // Every collected suggestion passes through the shared normalizer, so the
   // loop's output is ALWAYS clean + structured (1–3 items, deduped, no leaked
   // tool JSON, capped prompt/label) regardless of what the model emitted —
@@ -1684,7 +1697,12 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     if (progress.mutatedPaths.length === 0) return null;
     // The verification gate owns "did you check it"; self-review only runs once
     // that question is settled, so the two can never both fire in one turn.
-    const activity = assessEditActivity(progress.successfulToolCalls, progress.verificationEvidence, progress.mutatedPaths);
+    const activity = assessEditActivity(
+      progress.successfulToolCalls,
+      progress.verificationEvidence,
+      progress.mutatedPaths,
+      ctx.cwd ?? process.cwd(),
+    );
     if (activity.needsVerification) return null;
     return selfReviewNudge(currentAsk(opts));
   };
@@ -2278,8 +2296,12 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         verificationNudges < 1 &&
         opts.requireVerification !== false &&
         schemas.length > 0 &&
-        assessEditActivity(progress.successfulToolCalls, progress.verificationEvidence, progress.mutatedPaths)
-          .needsVerification
+        assessEditActivity(
+          progress.successfulToolCalls,
+          progress.verificationEvidence,
+          progress.mutatedPaths,
+          ctx.cwd ?? process.cwd(),
+        ).needsVerification
       ) {
         verificationNudges += 1;
         stepLimit += 1;
@@ -2312,6 +2334,28 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         thread.push({ role: 'assistant', content: response.content });
         harness.push(thread, 'self-review', review);
         continue;
+      }
+      // PLAN CLOSE-OUT gate (no-tools exit) — same bounded pass as the concluding
+      // exit, for a model that marks a step done and then answers in prose with
+      // the rest of its plan still open. Fires ONLY when this turn engaged the
+      // plan; a turn that merely carried one is left alone (the report labels it
+      // carried, and the plan context is re-shown next turn).
+      if (planCloseoutNudges < 1 && opts.requirePlan !== false && (planTodoCreates > 0 || planTodoUpdates > 0)) {
+        const planSnapshot = opts.context?.planStore?.snapshot?.() ?? null;
+        if (planSnapshot && planSnapshot.steps.some((s) => s.status !== 'done')) {
+          planCloseoutNudges += 1;
+          stepLimit += 1;
+          deps.onEvent?.('   📋 The plan this turn opened still has unsettled steps — asking the model to close them out.');
+          traceEvent({
+            kind: 'gate',
+            gate: 'plan-closeout',
+            summary:
+              'the turn declared or advanced a plan and is ending with steps still open — one bounded nudge to settle them',
+          });
+          thread.push({ role: 'assistant', content: response.content });
+          harness.push(thread, 'plan-closeout', planCloseoutNudge(planSnapshot));
+          continue;
+        }
       }
       return {
         content: response.content.length >= lastContent.length ? response.content : lastContent,
@@ -3161,8 +3205,12 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         verificationNudges < 1 &&
         opts.requireVerification !== false &&
         schemas.length > 0 &&
-        assessEditActivity(progress.successfulToolCalls, progress.verificationEvidence, progress.mutatedPaths)
-          .needsVerification
+        assessEditActivity(
+          progress.successfulToolCalls,
+          progress.verificationEvidence,
+          progress.mutatedPaths,
+          ctx.cwd ?? process.cwd(),
+        ).needsVerification
       ) {
         verificationNudges += 1;
         stepLimit += 1;
@@ -3233,6 +3281,29 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         thread.push({ role: 'assistant', content: response.content });
         harness.push(thread, 'self-review', review);
         continue;
+      }
+      // PLAN CLOSE-OUT gate (concluding exit) — the plan was engaged THIS turn
+      // and the turn is ending with steps unsettled. Spent LAST so every earlier
+      // gate (verify / deliverable / action / self-review) has settled its own
+      // question first, and bounded once so it can never nag. It is the direct fix
+      // for the frozen checklist (trace-1791542886258-pg42ox: "1/7 steps" for two
+      // days): a plan declared and then abandoned mid-turn is worse than none.
+      if (planCloseoutNudges < 1 && opts.requirePlan !== false && (planTodoCreates > 0 || planTodoUpdates > 0)) {
+        const planSnapshot = opts.context?.planStore?.snapshot?.() ?? null;
+        if (planSnapshot && planSnapshot.steps.some((s) => s.status !== 'done')) {
+          planCloseoutNudges += 1;
+          stepLimit += 1;
+          deps.onEvent?.('   📋 The plan this turn opened still has unsettled steps — asking the model to close them out.');
+          traceEvent({
+            kind: 'gate',
+            gate: 'plan-closeout',
+            summary:
+              'the turn declared or advanced a plan and is ending with steps still open — one bounded nudge to settle them',
+          });
+          thread.push({ role: 'assistant', content: response.content });
+          harness.push(thread, 'plan-closeout', planCloseoutNudge(planSnapshot));
+          continue;
+        }
       }
       const content = response.content.length >= lastContent.length ? response.content : lastContent;
       return {
@@ -3840,7 +3911,14 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       result.successfulToolCalls,
       progress.verificationEvidence,
       progress.mutatedPaths,
+      opts.context.cwd ?? process.cwd(),
     );
+    // The PER-FILE split of that judgement, so the caller's ledger owes a check
+    // on the paths nothing exercised rather than on the turn as a whole. A root
+    // `npm test` never loaded a nested package's suite, and until now the ledger
+    // could not tell — it recorded a count, so any verification settled the lot.
+    result.verifiedPaths = activity.verifiedPaths;
+    result.unverifiedPaths = activity.unverifiedPaths;
     // Bundle 21/25 — the authored-document demotion, applied WHERE THE FLAGS ARE
     // SET so every surface agrees without a per-caller conditional: the trace
     // outcome, the console warning, the working-state ledger and the turn report all
@@ -4360,6 +4438,38 @@ export function planContextBlock(plan: {
     `Advance THIS plan: call \`plan_todo\` with action "update", the step id above and its new status. ` +
       'Do NOT declare it again with action "create" — the checklist the user is watching is this one, and ' +
       're-declaring replaces its steps. Work the next open step.',
+  ].join('\n');
+}
+
+/**
+ * The bounded PLAN CLOSE-OUT nudge — the loop asking the model to settle the
+ * plan it opened this turn before the turn ends.
+ *
+ * WHY. The plan is the checklist the user watches, and a plan left with steps
+ * `running`/`pending` at the end of a turn that engaged it is exactly the failure
+ * the tracker exists to prevent: measured 2026-10-09
+ * (trace-1791542886258-pg42ox), a plan sat frozen at "1/7 steps" for two days and
+ * was only advanced after the user asked why. One nudge, once, naming the open
+ * steps and requiring a REAL status (done, or blocked with a one-line note)
+ * closes it. It fires only when this turn DECLARED or UPDATED the plan — never on
+ * a turn that merely carried one, so an unrelated turn is not asked to advance
+ * somebody else's checklist (the report labels a carried plan instead).
+ */
+export function planCloseoutNudge(plan: {
+  goal: string;
+  steps: Array<{ id: string; description: string; status: string; note?: string }>;
+}): string {
+  const open = plan.steps.filter((s) => s.status !== 'done');
+  const shown = open.slice(0, PLAN_CONTEXT_MAX_STEPS);
+  const hidden = open.length - shown.length;
+  return [
+    'Before you finish: the plan you declared this turn still has UNSETTLED steps, so the checklist the user is watching is stale.',
+    `  goal: ${plan.goal}`,
+    ...shown.map((s) => `  - ${s.id} [${s.status}] ${s.description}`),
+    ...(hidden > 0 ? [`  … and ${hidden} more unsettled step(s).`] : []),
+    'Call `plan_todo` with action "update" for each one NOW and set its REAL status: "done" for work you completed,' +
+      ' or "blocked" (with a one-line note saying why) for work you could not. Do not leave a step "running" or' +
+      ' "pending" unless it genuinely has not started — say so in your answer instead of marking it done.',
   ].join('\n');
 }
 

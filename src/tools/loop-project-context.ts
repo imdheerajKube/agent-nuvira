@@ -33,7 +33,7 @@ import { buildGitStateDigest } from './git-digest.js';
 import { assessProject } from '../agents/prompt-assembly.js';
 import { handoffBlockFor } from '../agents/step-handoff.js';
 import { describeProjectInterpreter } from '../utils/project-env.js';
-import { formatWorkingState, getWorkingState } from '../learning/working-state.js';
+import { workingStateBlock as readWorkingStateBlock } from '../learning/working-state.js';
 import { formatCrossSessionMemory } from '../learning/context-assembly.js';
 
 /** Hard budget: the tree block is truncated to this many lines (~1.5K tokens). */
@@ -169,7 +169,7 @@ export async function buildLoopProjectContext(
     // closes the drift where the orchestrator remembered across turns and the
     // loop did not. Self-labelled and self-bounded; omits itself when empty.
     try {
-      const workingState = formatWorkingState(getWorkingState(dir));
+      const workingState = readWorkingStateBlock(dir);
       if (workingState) lines.push(workingState);
     } catch {
       // Working-state read is best-effort — omit on failure.

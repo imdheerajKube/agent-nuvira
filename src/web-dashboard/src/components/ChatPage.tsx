@@ -861,10 +861,27 @@ function usableEvidence(finding: TraceFinding): NonNullable<TraceFinding['eviden
   return (finding.evidence ?? []).filter((e) => typeof e?.ref === 'string' && e.ref.trim().length > 0);
 }
 
+/**
+ * The one-line gist of a finding set — "4 findings: 1 confirmed, 3 plausible".
+ * Computed here for the same reason TracePanel computes it: "4 findings" reads
+ * as four facts, while the split cannot. A CONFIRMED verdict with no usable
+ * evidence counts as PLAUSIBLE (the gate forbids it; a renderer must not relax
+ * the rule).
+ */
+function findingsSummary(findings: TraceFinding[]): string {
+  const confirmed = findings.filter((f) => f.verdict === 'CONFIRMED' && usableEvidence(f).length > 0).length;
+  return `${findings.length} finding${findings.length === 1 ? '' : 's'}: ${confirmed} confirmed, ${findings.length - confirmed} plausible`;
+}
+
 function FindingCards({ findings }: { findings: TraceFinding[] }) {
   if (!findings || findings.length === 0) return null;
+  // Findings are EVIDENCE, not the answer: collapsed to one summary line by
+  // default (the same discipline the tool-call and step lists use), so, a long
+  // evidence list cannot push the answer and the followup chips off screen.
   return (
-    <div className="chat-finding-cards">
+    <details className="chat-steps chat-findings">
+      <summary>{`🔎 ${findingsSummary(findings)}`}</summary>
+      <div className="chat-finding-cards">
       {findings.map((f, i) => {
         const evidence = usableEvidence(f);
         const confirmed = f.verdict === 'CONFIRMED' && evidence.length > 0;
@@ -901,7 +918,8 @@ function FindingCards({ findings }: { findings: TraceFinding[] }) {
           </div>
         );
       })}
-    </div>
+      </div>
+    </details>
   );
 }
 
@@ -957,11 +975,20 @@ function WorktreeCard({ worktree }: { worktree: WorktreeOutcome }) {
  * told that will read the missing replay as the feature not working.
  */
 function ResumeCard({ resume }: { resume: ResumeOutcome }) {
+  // Collapsed to ONE line by default: the counts a reader actually compares
+  // (replayed vs paid) belong on the summary line, and the id/notice — which
+  // only matter when something looks wrong — stay behind the disclosure. A
+  // resume card that ate half the thread pushed the ANSWER off screen for a
+  // turn that did not change anything.
   return (
-    <div className="chat-resume-card">
-      <div className="chat-resume-head">
+    <details className="chat-resume-card">
+      <summary className="chat-resume-head">
         <span className="chat-resume-icon" aria-hidden="true">↩️</span>
         <span className="chat-resume-title">Resumed a recorded run</span>
+        <span className="chat-resume-count">
+          <span>{resume.replayed} step{resume.replayed === 1 ? '' : 's'} replayed</span>
+          <span>{resume.modelCalls} model call{resume.modelCalls === 1 ? '' : 's'} made</span>
+        </span>
         <span
           className={`chat-resume-state ${resume.saved ? 'chat-resume-saved' : 'chat-resume-unsaved'}`}
           title={
@@ -972,10 +999,9 @@ function ResumeCard({ resume }: { resume: ResumeOutcome }) {
         >
           {resume.saved ? 'recorded' : 'not recorded'}
         </span>
-      </div>
+        <span className="chat-card-caret" aria-hidden="true">▸</span>
+      </summary>
       <div className="chat-resume-meta">
-        <span>{resume.replayed} step{resume.replayed === 1 ? '' : 's'} replayed</span>
-        <span>{resume.modelCalls} model call{resume.modelCalls === 1 ? '' : 's'} made</span>
         {typeof resume.callsAvoided === 'number' && resume.callsAvoided > 0 && (
           <span className="chat-resume-saved-calls" title="model calls the resume did not re-pay for">
             {resume.callsAvoided} model call{resume.callsAvoided === 1 ? '' : 's'} saved
@@ -984,7 +1010,7 @@ function ResumeCard({ resume }: { resume: ResumeOutcome }) {
         <code className="chat-resume-id" title="the checkpoint record this run used">{resume.id}</code>
       </div>
       <div className="chat-resume-note">{resume.notice}</div>
-    </div>
+    </details>
   );
 }
 
@@ -1015,14 +1041,24 @@ function TurnReportCard({ report }: { report: TurnReport }) {
   if (report.flags.undeliveredChange) flagChips.push('asked for a change, delivered a plan');
   if (report.flags.unbackedHealthClaim) flagChips.push('verdict on the product nothing exercised');
   return (
-    <div className={`chat-turn-card chat-turn-${report.verification}`}>
-      <div className="chat-turn-head">
+    <details className={`chat-turn-card chat-turn-${report.verification}`}>
+      <summary className="chat-turn-head">
         <span className="chat-turn-icon" aria-hidden="true">📋</span>
         <span className="chat-turn-title">Turn report</span>
         {report.planned ? (
-          <span className="chat-turn-count">
-            {report.stepCounts.done}/{report.stepCounts.total} steps
+          <span
+            className="chat-turn-count"
+            title={
+              report.planCarried
+                ? 'the tracked plan was carried from an earlier turn — THIS turn did not advance it'
+                : 'plan steps recorded as done this turn'
+            }
+          >
+            {report.stepCounts.done}/{report.stepCounts.total} steps{report.planCarried ? ' · carried' : ''}
           </span>
+        ) : null}
+        {report.summary ? (
+          <span className="chat-turn-headline" title={report.summary}>{report.summary}</span>
         ) : null}
         <span
           className="chat-turn-verdict"
@@ -1030,8 +1066,9 @@ function TurnReportCard({ report }: { report: TurnReport }) {
         >
           {verdictLabel}
         </span>
-      </div>
-      {report.summary ? <div className="chat-turn-summary">{report.summary}</div> : null}
+        <span className="chat-card-caret" aria-hidden="true">▸</span>
+      </summary>
+      <div className="chat-turn-body">
       {report.steps.length > 0 ? (
         <ul className="chat-turn-steps">
           {report.steps.map((s) => (
@@ -1055,6 +1092,20 @@ function TurnReportCard({ report }: { report: TurnReport }) {
           </code>
         </div>
       ) : null}
+      {report.planCarried ? (
+        <div className="chat-turn-carried">
+          📋 that plan is carried from an earlier turn — THIS turn did not advance it.
+        </div>
+      ) : null}
+      {report.unverifiedPaths && report.unverifiedPaths.length > 0 ? (
+        <div className="chat-turn-owed">
+          ⚠️ {report.unverifiedPaths.length} changed path{report.unverifiedPaths.length === 1 ? '' : 's'} no check exercised:{' '}
+          <code>
+            {report.unverifiedPaths.slice(0, 6).join(', ')}
+            {report.unverifiedPaths.length > 6 ? ` +${report.unverifiedPaths.length - 6} more` : ''}
+          </code>
+        </div>
+      ) : null}
       {flagChips.length > 0 ? (
         <div className="chat-turn-flags">
           {flagChips.map((f) => (
@@ -1062,7 +1113,8 @@ function TurnReportCard({ report }: { report: TurnReport }) {
           ))}
         </div>
       ) : null}
-    </div>
+      </div>
+    </details>
   );
 }
 
@@ -2674,7 +2726,11 @@ export default function ChatPage() {
                     <FindingCards findings={m.findings} />
                   ) : null}
                   {m.role === 'assistant' && m.tools && m.tools.length > 0 ? (
-                    <details className="chat-steps" open>
+                    // COLLAPSED by default: the tool cards are the EVIDENCE behind
+                    // the answer, not the answer. A 34-call turn used to expand
+                    // every card up front and push the summary, the plan tracker
+                    // and the followup chips below the fold.
+                    <details className="chat-steps chat-tool-details">
                       <summary>
                         {m.tools.length} tool call{m.tools.length === 1 ? '' : 's'}
                       </summary>

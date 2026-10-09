@@ -968,9 +968,26 @@ describe('/api/projects — P3 project attach', () => {
     const lAfter = (await listAfter.json()) as { ok: boolean; projects: Array<{ path: string; name: string; kind: string }> };
     expect(lAfter.projects.some((p) => p.path === testDir)).toBe(true);
 
-    // A bogus path is rejected with 400.
+    // A bogus path is rejected with 400 — and the reason NAMES the real cause.
+    // Reported live: attaching a folder under /tmp answered "not a readable
+    // directory", which reads as a permissions problem; the folder simply did
+    // not exist (macOS clears /tmp when the machine restarts).
     const bad = await authedFetch('/api/projects/attach', 'POST', { path: '/no/such/dir-xyz' });
     expect(bad.status).toBe(400);
+    const badBody = (await bad.json()) as { ok: boolean; error: string };
+    expect(badBody.ok).toBe(false);
+    expect(badBody.error).toMatch(/does not exist/);
+    expect(badBody.error).not.toMatch(/not a readable directory/i);
+  });
+
+  it('reports a FILE as a file, not as an unreadable directory', async () => {
+    const filePath = join(testDir, 'attach-file-fixture.txt');
+    writeFileSync(filePath, 'not a directory\n', 'utf-8');
+    const res = await authedFetch('/api/projects/attach', 'POST', { path: filePath });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/Not a directory/);
+    expect(body.error).toMatch(/is a file/);
   });
 
   it('/api/chat/routable-models lists only routable pairs, each with a capability band', async () => {

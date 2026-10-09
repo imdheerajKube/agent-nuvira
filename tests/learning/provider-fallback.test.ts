@@ -171,6 +171,49 @@ describe('classifyFallbackError — an unfunded account (A4)', () => {
   });
 });
 
+/**
+ * A reached PLAN/USAGE cap, reproduced verbatim from the failing run.
+ *
+ * Live (trace-1791547245754-dmqwmu, 2026-10-09): the chosen pair was
+ * `local/gpt-oss:120b-cloud`; the account had hit Ollama's monthly usage limit.
+ * The body names a 429, so it classified as `rate-limit` with no parseable reset
+ * hint — a TEN-SECOND park — and the pair was re-admitted, re-picked and
+ * re-failed on the very next step, with verified agentic-capable pairs on other
+ * providers sitting unused.
+ */
+const LIVE_OLLAMA_USAGE_LIMIT =
+  'Ollama API error (429): {"error":"you (imdheeraj) have reached your monthly usage limit, ' +
+  'upgrade for higher limits: https://ollama.com/upgrade or add usage credits: ' +
+  'https://ollama.com/settings (ref: 4e7dec63-24fd-4805-9a84-57900faeb895)"}\n\n' +
+  'Ensure Ollama is running: ollama serve';
+
+describe('classifyFallbackError — a reached plan/usage cap is an EXHAUSTED account, not a 429 blip', () => {
+  it('classifies the live Ollama usage-limit 429 as credit-exhausted', () => {
+    expect(classifyFallbackError(new Error(LIVE_OLLAMA_USAGE_LIMIT))).toBe('credit-exhausted');
+  });
+
+  it('is NOT retried in place (ten seconds of waiting cannot restore a monthly cap)', () => {
+    // The whole defect: as `rate-limit` this was retried on the SAME pair after
+    // MIN_RATE_LIMIT_PARK_MS (10s), so the next step re-picked it and failed again.
+    expect(isTransientForRetry(new Error(LIVE_OLLAMA_USAGE_LIMIT))).toBe(false);
+  });
+
+  it('IS retryable on a DIFFERENT provider — the failover walk is the remedy', () => {
+    expect(isRetryableError('credit-exhausted')).toBe(true);
+  });
+
+  it('still classifies a plain 429 (a real, short blip) as rate-limit', () => {
+    // The narrowness is the point: a genuine per-minute limit must keep its
+    // short park and its same-provider retry.
+    expect(classifyFallbackError(new Error('429 Too Many Requests'))).toBe('rate-limit');
+    expect(
+      classifyFallbackError(
+        new Error('Rate limit reached for model `x` — please try again in 36.36s'),
+      ),
+    ).toBe('rate-limit');
+  });
+});
+
 describe('classifyFallbackError — a rejected ANSWER is its own class (measured 2026-10-09)', () => {
   // The Requests panel counts a failure as `outcome !== 'verified' && !== 'partial'`.
   // A reply the answer-quality gate REJECTED used to book as `unknown` — which is

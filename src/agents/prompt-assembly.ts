@@ -19,7 +19,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, basename } from 'node:path';
 import { homedir } from 'node:os';
-import { formatWorkingState, getWorkingState } from '../learning/working-state.js';
+import { workingStateBlock as readWorkingStateBlock } from '../learning/working-state.js';
 import { handoffBlockFor } from './step-handoff.js';
 // P5 (scoped) — the ONE cross-session-memory composer, shared with the loop
 // engine (`tools/loop-project-context.ts`). The orchestrator reads the same block
@@ -151,7 +151,7 @@ export function assessProject(workingDirectory: string): ProjectAssessment {
   // the ORCHESTRATOR path stops re-deriving what previous turns established.
   // Best-effort and empty for a pristine project (no prompt weight added).
   try {
-    assessment.workingState = formatWorkingState(getWorkingState(workingDirectory)) || undefined;
+    assessment.workingState = readWorkingStateBlock(workingDirectory) || undefined;
   } catch {
     // Best-effort — the ledger must never break assessment.
   }

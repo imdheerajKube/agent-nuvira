@@ -84,9 +84,12 @@ export type FallbackErrorType =
   | 'empty-response'
   /**
    * The provider's ACCOUNT cannot pay for the call (HTTP 402 / "Insufficient
-   * credits"). Its own class on purpose, for the same reason `empty-response`
-   * has one: an unfunded account was booking as `unknown`, so nothing could act
-   * on it. Semantics differ on each axis, and both matter:
+   * credits"), or has hit a plan/usage CAP the provider states as a billing
+   * remedy ("reached your monthly usage limit … upgrade or add usage credits").
+   * Both are the same shape on every axis that matters here: waiting fixes
+   * neither, and a different provider may still serve the model. Its own class
+   * on purpose, for the same reason `empty-response` has one: an unfunded
+   * account was booking as `unknown`, so nothing could act on it. Semantics differ on each axis, and both matter:
    *
    *   - SAME provider: definitive. No backoff, retry or prompt change conjures
    *     funds, so it is deliberately ABSENT from `TRANSIENT_RETRY_TYPES`.
@@ -165,6 +168,28 @@ export function classifyFallbackError(err: unknown): FallbackErrorType {
     /purchase (more )?credits?/.test(lower) ||
     /credit balance/.test(lower) ||
     /out of credits/.test(lower) ||
+    // A PLAN/USAGE limit is the SAME class as an unfunded account, and it must
+    // be caught here — before the 429 branch below — because 429-shaped wording
+    // is all most providers give it. Nothing about waiting ten seconds,
+    // re-phrasing the prompt or re-asking the same pair restores it, and the
+    // remedy the provider itself names is "upgrade / add credits".
+    //
+    // Measured live (trace-1791547245754-dmqwmu, 2026-10-09): the run's pair was
+    // `local/gpt-oss:120b-cloud`, which answered
+    //   `Ollama API error (429): {"error":"you (…) have reached your monthly
+    //    usage limit, upgrade for higher limits: … or add usage credits: …"}`
+    // That matched none of these patterns, fell to the 429 branch, and became
+    // `rate-limit` with NO reset hint in the body — a TEN-SECOND park
+    // (`MIN_RATE_LIMIT_PARK_MS`). The pair was re-admitted and re-picked on the
+    // very next step, and again on the next turn, while verified
+    // agentic-capable pairs on other providers sat configured and unused. The
+    // user's report — "despite having genuine working models it just keeps
+    // failing" — is exactly this: an exhaustion classified as a blip.
+    /monthly usage limit/.test(lower) ||
+    /(?:daily|weekly|monthly|yearly) (?:usage )?(?:limit|quota)/.test(lower) ||
+    /reached your .{0,24}(?:usage|plan|quota) limit/.test(lower) ||
+    /upgrade for higher limits/.test(lower) ||
+    /add usage credits/.test(lower) ||
     /"?code"?\s*:\s*402/.test(lower)
   ) {
     return 'credit-exhausted';

@@ -374,6 +374,84 @@ describe('resolveWorkingModel', () => {
       warnSpy.mockRestore();
     }
   });
+
+  // ─── The repair FLOOR (measured, trace-1791547245754-dmqwmu) ──────────────
+  // Live: a parked `local/gpt-oss:120b-cloud` was repaired to
+  // `local/qwen2.5:0.5b` — a ≤4B toy. The toy answered with confident nonsense
+  // (a "plan" describing `generate_song` / `send_kashvi_song.py` for a RAG-app
+  // goal), but it ANSWERED: the call succeeded, the failover walk never left the
+  // provider, and the trace blamed the 120B model that was asked for. A repair
+  // may not drop a model that NAMES a large size down to one that cannot hold
+  // the task when the provider has nothing capable; the provider's own error is
+  // the honest outcome, and the walk then reaches a provider that can serve it.
+  it('refuses to hand a named-large pin to a ≤4B toy when the provider has nothing capable', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const registry = getModelRegistry();
+      registry.markUnavailable('local', 'gpt-oss:120b-cloud', 'credit-exhausted', 'telemetry');
+      // Health-first AND a toy: a 50ms 0%-error model always wins that ranking.
+      registry.markVerified('local', 'qwen2.5:0.5b', 'telemetry', 50);
+
+      const provider = makeProvider([]);
+      const result = await resolveWorkingModel(provider, 'local', 'gpt-oss:120b-cloud');
+
+      // The pin is handed back instead of the toy: the caller's walk advances
+      // (and the pair is registry-blocked, so no doomed call is even made).
+      expect(result).toBe('gpt-oss:120b-cloud');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('still uses an agentic-capable sibling when the provider has one', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const registry = getModelRegistry();
+      registry.markUnavailable('local', 'gpt-oss:120b-cloud', 'credit-exhausted', 'telemetry');
+      registry.markVerified('local', 'qwen2.5:0.5b', 'telemetry', 50); // fastest → health-first
+      registry.markVerified('local', 'deepseek-coder:latest', 'telemetry', 300);
+
+      const provider = makeProvider([]);
+      const result = await resolveWorkingModel(provider, 'local', 'gpt-oss:120b-cloud');
+
+      // The floor NARROWS the downgrade, it never blocks a repair.
+      expect(result).toBe('deepseek-coder:latest');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('refuses the toy on the LIVE-LIST repair path too (the measured path)', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      // The local live list does not enumerate a cloud model id, which is what
+      // made repair fall back to the installed models on that machine.
+      getModelRegistry().markUnavailable('local', 'gpt-oss:120b-cloud', 'not in live model list', 'probe');
+      const provider = makeProvider([model('qwen2.5:0.5b', ['chat'])]);
+
+      const result = await resolveWorkingModel(provider, 'local', 'gpt-oss:120b-cloud');
+
+      expect(result).toBe('gpt-oss:120b-cloud');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('keeps the provider\u2019s own repair for a pin that names NO size (the floor needs evidence)', async () => {
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      getModelRegistry().markUnavailable('local', 'some-gone-model', 'not in live model list', 'probe');
+      const provider = makeProvider([model('qwen2.5:0.5b', ['chat'])]);
+
+      const result = await resolveWorkingModel(provider, 'local', 'some-gone-model');
+
+      // No size in the id → no positive evidence to protect, so an unrecognised
+      // name still gets the provider's best attempt.
+      expect(result).toBe('qwen2.5:0.5b');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 describe('verify-on-demand (max mode)', () => {
