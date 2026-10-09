@@ -25,6 +25,8 @@ const {
   withTraceCapture,
   recordTraceFindings,
   recordTurnReport,
+  traceOutcomeSucceeded,
+  degradedCallsFromTraces,
   MAX_TRACES,
 } = await import('../../src/learning/reasoning-trace.js');
 
@@ -114,6 +116,68 @@ describe('reasoning-trace — the summary provider is the SERVED one (D3)', () =
     expect(detour!.summary).toContain('local/deepseek-coder:latest ×1');
     expect(detour!.summary).toContain('deepseek/deepseek-flash');
     expect(detour!.summary).toContain('1 of 3');
+  });
+
+  it('downgrades a turn served by a non-agentic-capable pair (measured 2026-10-09)', () => {
+    // The detour event alone made the substitution AUDITABLE but changed nothing:
+    // `trace-1791521608671-1bjnfa` answered step 2 of 2 on `local/qwen2.5:0.5b`,
+    // delivered the result, kept `success: true` and re-enabled the chat box. A
+    // pair that cannot hold an agentic task is a capability failure, so it is
+    // never a success.
+    const id = beginTrace({
+      goal: 'fix the add-document and settings buttons',
+      source: 'chat',
+      provider: 'gemini',
+      model: 'gemma-4-31b-it',
+    });
+    recordStep(id, step('gemini', 'gemma-4-31b-it'));
+    recordStep(id, step('local', 'qwen2.5:0.5b'));
+    endTrace(id, true);
+
+    const trace = getTrace(id)!;
+    expect(trace.success).toBe(false);
+    expect(trace.outcome?.degradedBy).toEqual([{ provider: 'local', model: 'qwen2.5:0.5b' }]);
+    expect(traceOutcomeSucceeded(trace.outcome)).toBe(false);
+    expect((trace.events ?? []).some((e) => e.summary.includes('degraded'))).toBe(true);
+  });
+
+  it('does NOT downgrade a detour onto an agentic-capable pair (a legitimate failover)', () => {
+    const id = beginTrace({
+      goal: 'build a knowledge base web app',
+      source: 'chat',
+      provider: 'groq',
+      model: 'openai/gpt-oss-120b',
+    });
+    recordStep(id, step('deepseek', 'deepseek-flash'));
+    recordStep(id, step('local', 'deepseek-coder:latest'));
+    endTrace(id, true);
+
+    const trace = getTrace(id)!;
+    expect(trace.success).toBe(true);
+    expect(trace.outcome?.degradedBy).toBeUndefined();
+    expect((trace.events ?? []).some((e) => e.summary.includes('degraded'))).toBe(false);
+  });
+
+  it('derives degraded calls from the traces, read-only (the telemetry correction)', () => {
+    // The Requests panel's `0.0% error rate` for a weak model cannot be corrected
+    // by rewriting the hash-chained action log — `origin` is only live|test, so an
+    // appended correction would look exactly like a real provider call. This is
+    // the read-only equivalent: the served pairs come from the traces.
+    const a = beginTrace({ goal: 'fix the buttons', source: 'chat', provider: 'gemini' });
+    recordStep(a, step('gemini', 'gemma-4-31b-it'));
+    recordStep(a, step('local', 'qwen2.5:0.5b'));
+    endTrace(a, true);
+    const b = beginTrace({ goal: 'another ask', source: 'chat', provider: 'gemini' });
+    recordStep(b, step('local', 'qwen2.5:0.5b'));
+    endTrace(b, true);
+
+    const degraded = degradedCallsFromTraces([getTrace(a)!, getTrace(b)!]);
+    expect(degraded).toEqual([
+      { provider: 'local', model: 'qwen2.5:0.5b', steps: 2, traces: [a, b] },
+    ]);
+    // An agentic-capable pair is never reported, and nothing is written back.
+    expect(degraded.some((d) => d.model === 'gemma-4-31b-it')).toBe(false);
+    expect(getTrace(b)!.steps).toHaveLength(1);
   });
 
   it('records NO detour when every step ran on the same pair', () => {

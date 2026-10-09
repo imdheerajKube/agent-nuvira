@@ -2,6 +2,93 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.3.16 — a change request answered with a plan is no longer a success, a weak model that served a step downgrades the turn, and the Requests panel's `0.0%` stops vouching for the model that produced the poor answer
+
+> Two live turns exposed one doctrine and five ways to violate it. A three-bug
+> report was answered with the model's own plan, nothing was changed, and the turn
+> was booked `success: true` / `kind: "acted"` — because every honesty flag the
+> product had was ACTION-shaped ("said it edited, but nothing ran"), so an answer
+> that promised work and delivered a plan tripped none of them. The same turn's
+> second step was served by `local/qwen2.5:0.5b`, which is not agentic-capable:
+> the substitution was detected, logged, and then ignored — the turn stayed green
+> and the dashboard's Requests panel showed the weak model at **4 requests / 0.0%
+> errors**, a counter-signal that actively vouched for the model that produced the
+> bad answer. Alongside it, a turn that called a broken app *"ready for use"* on
+> the strength of `npm test` (18 tests of one module, while `/app.js` 404'd and
+> every control on the page was dead) showed the same gap from the assessment
+> side. **A verdict may now only be derived from evidence that the request was
+> satisfied, never from evidence that *something* ran** — an unfinished change, an
+> unobserved health verdict and a degraded pair are all verdict-bearing, on every
+> surface that reads them.
+
+### Changed: a change that was asked for and never made is unfinished work
+
+`undeliveredChange` is the edit-shaped sibling of `undeliveredArtifact`: it fires
+when the request directed a change to the workspace, the turn mutated nothing, and
+the answer was the model's plan or promise. `unbackedHealthClaim` covers the
+assessment Ask the action-shaped flags could never reach — an answer that vouched
+for the product ("works", "ready for use", "fully implemented") while nothing in
+the turn exercised it through its user-facing interface. Both are in
+`UNFINISHED_FLAGS`, so the turn report, the trace outcome and the cache-honesty gate
+move together, and both render as their own dashboard chips (`⚠️ unchanged
+workspace — a change was requested and a plan delivered instead`, `⚠️ unbacked
+verdict — vouched for the product with nothing exercising it`). A read-only ask is
+untouched: the existing read-only tests stay green, and the nudge that asks for the
+work now also fires for a plan-shaped answer that follows reads.
+
+### Changed: a pair that cannot hold the task downgrades the turn it served
+
+The failover walk's "say so ONCE so a degraded answer is never mistaken for a real
+one" contract landed in `logger.warn`, which no user reads. A step served by a pair
+`isAgenticCapableModel` rejects now records a `degraded` decision event, a
+`degradedBy` outcome, and `success: false` — the dashboard's Trace panel renders
+`degradedBy` as the FIRST badge, because it explains every other badge on the turn,
+and an agentic-capable detour is left alone.
+
+### Changed: `quality-rejected` is its own error class, and chat stops writing `verified` for an unusable answer
+
+A provider that resolved with HTTP 200 and returned a reply the answer-quality gate
+rejected matched no error class, so it booked as `unknown` — teaching the router
+nothing while the Requests panel counted it as health. It is now
+`quality-rejected`, recognised from the gate's own wording and deliberately absent
+from `TRANSIENT_RETRY_TYPES` (re-asking the same pair reproduces the same reply, so
+the failover walk is the remedy). The chat call site no longer records `verified`
+for a pair that cannot hold an agentic task — gated on the turn having actually
+needed agentic work, since a tiny local model answering a plain conversational turn
+is not a quality failure. The chat path also now passes the turn's measured model
+time into both registry writes, so the panel's latency column receives a number
+instead of `—`.
+
+### Fixed: `reporting` was missing from the reasoning-leak openers, and a character cap was standing in for content
+
+The live leak that opened `The user is reporting three main bugs…` walked past the
+high-precision detector because `reporting` was not in the verb family. It is, now.
+Separately, a `> 240 characters` bail-out was removed from the
+`highPrecisionOnly`-adjacent narration check: it treated "long" as "an answer", so
+a 986-character reply that opened `Let's start by reading …` and delivered nothing
+was never judged. The check is anchored to the FIRST LINE instead, so a real answer
+that merely mentions a search is still left alone, and a long narration is caught.
+
+### New: the derived degraded census has surfaces — Requests panel and `nuvira trace degraded`
+
+`degradedCallsFromTraces` derives, from the traces' own per-step records, which
+pairs served steps they cannot hold. Measured against the live store it reports
+`local/qwen2.5:0.5b` across 10 steps in 6 traces — the panel's "4 requests" was an
+undercount. That census is now read where the `0.0%` is read:
+
+- **Requests panel** — a `⚠️ degraded` chip on every row whose pair the traces
+derive as non-agentic-capable, a danger tile counting the pairs, and a banner
+naming them with step counts. The row's error rate is left intact and *qualified*,
+never rewritten (the action log is hash-chained, so the truth is derived rather
+than appended).
+- **CLI** — `nuvira trace degraded [-l <n>]`, read-only, saying plainly that it is
+derived rather than written back.
+
+`degradedCallsFromTraces` now takes a structural input (`id` plus
+`steps[].provider`/`model`) instead of a full `ReasoningTrace`, so the dashboard
+server's own trace reader feeds it with no second file read and the Requests and
+Trace panels cannot disagree about which pairs served.
+
 ## v3.3.15 — a divergent parity row names the reason it missed, two modules nothing imported stop shipping, and the changelog's stale `Unreleased` block is given the release it actually shipped in
 
 > A housekeeping release with one behavioural change: the parity harness. When a

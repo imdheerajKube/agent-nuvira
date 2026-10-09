@@ -52,6 +52,33 @@ function fmtTokens(n: number | undefined): string {
 function outcomeBadge(outcome: TraceEntry['outcome']): { text: string; color: string; bg: string; border: string } | null {
   if (!outcome) return null;
   const base = { bg: 'var(--bg-primary)', border: 'var(--border)' };
+  // §6.5 — DEGRADATION FIRST, because it explains every other badge on the turn:
+  // part of this answer came from a pair that cannot hold the task (measured
+  // 2026-10-09: step 2 of a two-step turn on `local/qwen2.5:0.5b`). The fact used
+  // to exist only as a `model detour` audit note and a console warning, so the
+  // dashboard showed a clean turn for a degraded one.
+  if (outcome.degradedBy && outcome.degradedBy.length > 0) {
+    const pairs = outcome.degradedBy.map((d) => `${d.provider}/${d.model}`).join(', ');
+    return {
+      text: `⬇️ degraded — ${pairs} is not agentic-capable, so part of this answer is a weak model's`,
+      color: 'var(--accent-yellow)', bg: 'var(--warn-soft)', border: 'var(--accent-yellow)',
+    };
+  }
+  // Measured 2026-10-09 — the two verdicts that used to leave no visible trace on
+  // any surface: a change request answered with a plan, and a health verdict
+  // nothing observed. Both look exactly like success from the outside.
+  if (outcome.undeliveredChange) {
+    return {
+      text: '⚠️ unchanged workspace — a change was requested and a plan delivered instead',
+      color: 'var(--accent-yellow)', bg: 'var(--warn-soft)', border: 'var(--accent-yellow)',
+    };
+  }
+  if (outcome.unbackedHealthClaim) {
+    return {
+      text: '⚠️ unbacked verdict — vouched for the product with nothing exercising it',
+      color: 'var(--accent-yellow)', bg: 'var(--warn-soft)', border: 'var(--accent-yellow)',
+    };
+  }
   if (outcome.unverifiedClaim) {
     return { text: '⚠️ unverified claim — said it acted, but no tool ran', color: 'var(--accent-yellow)', bg: 'var(--warn-soft)', border: 'var(--accent-yellow)' };
   }

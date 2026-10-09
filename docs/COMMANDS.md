@@ -1226,12 +1226,14 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ### 12.3 Traces (per-step reasoning)
 
 - **Objective:** Inspect and replay every LLM call in a pipeline.
-- **Command:** `nuvira trace list [-l <n>]` · `nuvira trace show <id>` · `nuvira trace replay <id> [-f]` · `nuvira trace clear`
+- **Command:** `nuvira trace list [-l <n>]` · `nuvira trace show <id>` · `nuvira trace replay <id> [-f]` · `nuvira trace degraded [-l <n>]` · `nuvira trace clear`
 - **Examples:**
   ```bash
   nuvira trace list -l 10
   nuvira trace replay t_abc123 --full
+  nuvira trace degraded               # pairs that served steps without agentic capability
   ```
+- **`trace degraded`** derives, read-only, the provider × model pairs that served traced steps while **not agentic-capable**. The action log records that a provider *answered*, so such a pair books as `verified` and its Requests-panel error rate reads 0.0% even when the answer was unusable — and the log is hash-chained, so a correction cannot be appended without inventing an event. This census comes from the traces (which record the served pair per step) and writes nothing back.
 
 ### 12.4 Retrieval (vector, token-efficient context)
 

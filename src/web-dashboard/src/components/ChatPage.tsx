@@ -1012,6 +1012,8 @@ function TurnReportCard({ report }: { report: TurnReport }) {
   if (report.flags.undeliveredArtifact) flagChips.push('deliverable never written');
   if (report.flags.unfulfilledPromise) flagChips.push('promised an action it did not take');
   if (report.flags.noActionTaken) flagChips.push('no action taken');
+  if (report.flags.undeliveredChange) flagChips.push('asked for a change, delivered a plan');
+  if (report.flags.unbackedHealthClaim) flagChips.push('verdict on the product nothing exercised');
   return (
     <div className={`chat-turn-card chat-turn-${report.verification}`}>
       <div className="chat-turn-head">

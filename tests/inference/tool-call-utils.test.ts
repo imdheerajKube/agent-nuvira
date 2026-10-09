@@ -495,6 +495,25 @@ describe('looksLikeReasoningLeakReply', () => {
       'the second travel trace',
       'The user is planning a trip in December 2026 from Delhi, India.\nOptions: Vietnam or Philippines.\nInterests: Indian food, Casinos, Beaches.\nDuration: 7-10 days.\n\n**Vietnam Analysis:**',
     ],
+    [
+      // LIVE, trace-1791521608671-1bjnfa: a project's three bugs were reported
+      // and this was the turn's delivered answer — the model's own working
+      // notes. Every other opener verb was covered; `reporting` was the one
+      // word that let it through, and the step CARRIED a tool call, so only
+      // this (pre-`highPrecisionOnly`) branch could have caught it.
+      'the verbatim live leak ("reporting" opener, on a tool-carrying step)',
+      'The user is reporting three main bugs/issues with the project:\n' +
+        '1.  "Add document" button doesn\'t work. It should open a selectbox and allow drag-and-drop.\n' +
+        '2.  "Settings" button doesn\'t respond.\n' +
+        '3.  Confusion about how to configure the LLM provider and model for answering users, as the page feels like a "demo webpage with no functionality".\n\n' +
+        'I need to investigate the frontend code (`public/app.js`) and the backend code (`server.js`, `retriever.js`) to understand why these buttons aren\'t working and how the LLM configuration is handled.\n\n' +
+        'Plan:\n' +
+        '1.  Examine `public/app.js` to see how the "Add document" and "Settings" buttons are wired up.\n' +
+        '2.  Check `server.js` to see how it handles requests and where the LLM integration (if any) is located.\n' +
+        '3.  Analyze the "Settings" functionality to see if it\'s actually implemented or just a UI shell.\n' +
+        '4.  Look for LLM configuration logic (API keys, endpoints, model names) in both frontend and backend.\n\n' +
+        "Let's start by reading `public/app.js`.",
+    ],
   ];
 
   it.each(REAL_LEAKS)('catches %s', (_name, leak) => {
@@ -581,7 +600,20 @@ describe('looksLikeReasoningLeakReply', () => {
     }
   });
 
-  it('does NOT report it for a step that carries tool calls', () => {
+  it('reports a LONG narration too — length is not evidence of an answer (§6.7)', () => {
+    // The detector used to refuse anything over 240 characters, on the theory
+    // that a long reply must be an answer. Measured 2026-10-09: a 986-character
+    // reply that opened `Let's start by reading public/app.js.` and delivered
+    // nothing was therefore never judged. The four content guards already prove
+    // a deliverable, so the cap was standing in for them and hiding real leaks.
+    const longNarration =
+      'We need to find router selection logic. Let\'s search for "router" and "model". ' +
+      'The router ranks candidates by score and the model registry tracks health. '.repeat(6);
+    expect(longNarration.length).toBeGreaterThan(240);
+    expect(looksLikeReasoningLeakReply(longNarration)).toBe(true);
+  });
+
+  it('does NOT report a step that carries tool calls', () => {
     // The step that runs `list_dir` may legitimately narrate the action; a wrong
     // verdict here throws its tool call away (see highPrecisionOnly).
     expect(
@@ -589,6 +621,20 @@ describe('looksLikeReasoningLeakReply', () => {
         highPrecisionOnly: true,
       }),
     ).toBe(false);
+  });
+
+  it('STILL reports the conversation-narration leak on a tool-carrying step', () => {
+    // `highPrecisionOnly` narrows the WEAK signals, never the high-precision
+    // ones: narrating the user's request is not something a step does before
+    // legitimately calling a tool. This is the live shape that shipped — the
+    // leak CARRIED `read_file`, so only this branch could have caught it.
+    const live =
+      'The user is reporting three main bugs/issues with the project:\n\nPlan:\n1.  Examine `public/app.js`.\n2.  Check `server.js`.\n\n' +
+      "Let's start by reading `public/app.js`.";
+    expect(looksLikeReasoningLeakReply(live, { highPrecisionOnly: true })).toBe(true);
+    expect(detectAnswerQualityFailure(live, ['read_file'], { highPrecisionOnly: true })).toEqual({
+      kind: 'reasoning',
+    });
   });
 
   it('is empty-safe', () => {

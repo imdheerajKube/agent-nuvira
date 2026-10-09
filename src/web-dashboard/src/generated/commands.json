@@ -2,7 +2,7 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 289,
+  "commandCount": 290,
   "groupCount": 57,
   "groups": [
     {
@@ -2159,6 +2159,13 @@
           "description": "Step-by-step replay of a trace — every LLM call with prompt digest, model, tokens, latency, and routing",
           "flags": [
             "--full"
+          ]
+        },
+        {
+          "name": "trace degraded",
+          "description": "List provider × model pairs that served steps without agentic capability (derived, read-only, from the traces)",
+          "flags": [
+            "--limit <limit>"
           ]
         },
         {

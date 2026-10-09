@@ -268,3 +268,142 @@ describe('tool loop nudges a dangling promise and flags the residue', () => {
     expect(result.unfulfilledPromise).toBeFalsy();
   });
 });
+
+// ─── UNCHANGED WORKSPACE (measured 2026-10-09, trace-1791521608671-1bjnfa) ────
+// A user reported three concrete bugs. The turn read one file and replied with
+// its own working notes. `noActionTaken` could not see it (a read succeeded) and
+// `unfulfilledPromise` could not either (its list exemption — correct in general
+// — exempts exactly the plan-and-stop shape). It was recorded `success: true`.
+
+describe('tool loop flags a change request answered with a plan', () => {
+  /** The verbatim ask and the verbatim answer that shipped, from the live trace. */
+  const LIVE_ASK =
+    'when i tried to run i found few bugs - 1. add document button doesnot work ! ideally it should open ' +
+    "selectbox and allow drag and drop . 2. setting button doesn't respons when i clisked on it 3. how to i " +
+    'configure LLP provider and tell which model to be used for answering the user ? it appears just a demo ' +
+    'webpage with no functionality !!';
+  const LIVE_PLAN_REPLY =
+    'The user is reporting three main bugs/issues with the project:\n' +
+    '1.  "Add document" button doesn\'t work.\n2.  "Settings" button doesn\'t respond.\n' +
+    '3.  Confusion about how to configure the LLM provider and model.\n\n' +
+    'I need to investigate the frontend and backend to understand why these buttons aren\'t working.\n\n' +
+    'Plan:\n1.  Examine `public/app.js`.\n2.  Check `server.js`.\n\n' +
+    "Let's start by reading `public/app.js`.";
+
+  it('flags the live turn AND spends the nudge asking for the work', async () => {
+    const callModel = vi.fn();
+    let i = 0;
+    const script: StepResponse[] = [
+      { content: '', toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'public/app.js' } }] },
+      { content: LIVE_PLAN_REPLY, toolCalls: [] },
+    ];
+    callModel.mockImplementation(async () => script[Math.min(i++, script.length - 1)]);
+    const executeTool = vi.fn(async (name: string) => (name === 'read_file' ? 'const x = 1;' : 'ok'));
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: LIVE_ASK }],
+      context: ctx,
+      deps: { callModel, executeTool: executeTool as unknown as ToolLoopDeps['executeTool'], onEvent: vi.fn() },
+    });
+    expect(result.undeliveredChange).toBe(true);
+    // The distinction that made this invisible before: a READ counts as a
+    // productive action, so the zero-action gate stays silent — deliberately.
+    expect(result.successfulToolCalls).toContain('read_file');
+    expect(result.noActionTaken).toBeUndefined();
+    // read → plan → the bounded nudge asking for the work. Without the new arm
+    // the plan would have been delivered on the SECOND call and the turn ended.
+    expect(callModel).toHaveBeenCalledTimes(3);
+  });
+
+  it('does NOT flag a plan-shaped answer that IS the deliverable (a completion claim)', async () => {
+    const executeTool = vi.fn(async () => 'const x = 1;');
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'public/app.js' } }] },
+        { content: LIVE_PLAN_REPLY.replace("Let's start by reading `public/app.js`.", 'Here is the fix applied.'), toolCalls: [] },
+      ],
+      executeTool as unknown as ToolLoopDeps['executeTool'],
+    );
+    const result = await runToolLoop({ messages: [{ role: 'user', content: LIVE_ASK }], context: ctx, deps });
+    expect(result.undeliveredChange).toBeUndefined();
+  });
+
+  it('does NOT flag a plan for an ask that did not request a change', async () => {
+    const deps = mockDeps([
+      {
+        content: 'Plan:\n1. Server first.\n2. Then the client.\n\nAny preference on the order?',
+        toolCalls: [],
+      },
+    ]);
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'sketch an approach for the deployment story' }],
+      context:ctx,
+      deps,
+    });
+    expect(result.undeliveredChange).toBeUndefined();
+  });
+});
+
+// ─── UNBACKED HEALTH CLAIM (measured 2026-10-09, trace-1791521454725-e7s5ew) ──
+// "what's the state of this project?" was answered "ready for use" off `npm test`
+// and 20 lines of README. `GET /app.js` returned 404, so every button was inert.
+
+describe('tool loop flags a health verdict nothing observed the product for', () => {
+  const LIVE_HEALTH_REPLY =
+    'The project is a local RAG document repository, designed as a zero-dependency, pure Node.js application.\n\n' +
+    'Functionality: the core features are fully implemented.\n\n' +
+    'Health: The project is in a stable, working state. All 18 automated tests in `retriever.test.js` passed successfully.\n\n' +
+    'The project is ready for use or further development.';
+
+  function depsRunning(command: string, content: string): ToolLoopDeps {
+    const executeTool = vi.fn(async () => 'ok');
+    return mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 't1', name: 'run_terminal', arguments: { command } }] },
+        { content, toolCalls: [] },
+      ],
+      executeTool as unknown as ToolLoopDeps['executeTool'],
+    );
+  }
+
+  it('flags a health verdict backed only by a unit-suite run', async () => {
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: "what's the state of this project?" }],
+      context: ctx,
+      deps: depsRunning('npm test', LIVE_HEALTH_REPLY),
+    });
+    expect(result.unbackedHealthClaim).toBe(true);
+  });
+
+  it('does NOT flag the same verdict when the turn actually exercised the product', async () => {
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: "what's the state of this project?" }],
+      context: ctx,
+      deps: depsRunning('npm start', LIVE_HEALTH_REPLY),
+    });
+    expect(result.unbackedHealthClaim).toBeUndefined();
+  });
+
+  it('does NOT flag an answer that makes no health claim', async () => {
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'how does retrieval rank passages?' }],
+      context: ctx,
+      deps: depsRunning('npm test', 'BM25 scores each chunk by term frequency and inverse document frequency.'),
+    });
+    expect(result.unbackedHealthClaim).toBeUndefined();
+  });
+});
+
+// ─── Both flags make the TRACE outcome `incomplete` ────────────────────────
+
+describe('buildTraceOutcome treats both new flags as unfinished work', () => {
+  it('is `incomplete`, never `acted`, for an unchanged workspace or an unbacked verdict', () => {
+    expect(buildTraceOutcome({ tools: ['read_file'], undeliveredChange: true }).kind).toBe('incomplete');
+    expect(buildTraceOutcome({ tools: ['run_terminal'], unbackedHealthClaim: true }).kind).toBe('incomplete');
+    expect(buildTraceOutcome({ tools: ['read_file'], undeliveredChange: true }).undeliveredChange).toBe(true);
+    expect(buildTraceOutcome({ tools: ['run_terminal'], unbackedHealthClaim: true }).unbackedHealthClaim).toBe(true);
+  });
+
+  it('leaves an ordinary acted turn alone', () => {
+    expect(buildTraceOutcome({ tools: ['read_file'] }).kind).toBe('acted');
+  });
+});

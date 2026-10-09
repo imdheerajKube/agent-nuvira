@@ -69,6 +69,7 @@ next to a 5/5 taskPlan, and the resume gate that never loads any of it. Untracke
 the next session re-derives all of that from scratch and re-ships the same bug;
 tracked, it is the document each completion change is checked against.
 !docs/rca_false_success_and_no_resume.md
+!docs/rca_praised_a_broken_app_and_no_op_success.md
 # The desktop architecture decision record (Electron shell, ONE GUI-only
 # interface, Hermes Desktop as the reference). It settles questions that cost a
 # full research pass to answer — renderer choice, single-interface vs panes,
