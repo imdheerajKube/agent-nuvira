@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
@@ -242,6 +242,26 @@ describe('/api/admin/workspace — the unattached-turn workspace', () => {
     // …and the rejection did not half-apply.
     const after = (await (await authedFetch('/api/admin/workspace', 'GET')).json()) as { effective: string | null };
     expect(after.effective).toBeNull();
+  });
+
+  it('NAMES the real cause — a missing folder, not a permissions problem', async () => {
+    // Reported live: a folder under /tmp that worked earlier was rejected as
+    // "not a readable directory", which sent the user hunting for a permission
+    // problem. The folder had been cleared; the message must say so.
+    const res = await authedFetch('/api/admin/workspace', 'PUT', { cwd: '/no/such/dir-xyz-123' });
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/does not exist/);
+    expect(body.error).not.toMatch(/not a readable directory/i);
+  });
+
+  it('names a FILE differently from a missing path', async () => {
+    const filePath = join(testDir, 'workspace-file-fixture.txt');
+    writeFileSync(filePath, 'not a directory\n', 'utf-8');
+    const res = await authedFetch('/api/admin/workspace', 'PUT', { cwd: filePath });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/Not a directory/);
+    expect(body.error).toMatch(/is a file/);
   });
 
   it('saves a real directory and reports it as effective', async () => {

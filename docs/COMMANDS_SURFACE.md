@@ -1240,6 +1240,11 @@ Show summary + metadata for one session (transcript: nuvira history show)
 Run D1 auto-recall for a project and print the recall card
 
    - flags: `--project <project>, --since <since>`
+### `nuvira state`
+
+Print this project’s tracked state in one read: plan, open sessions, per-file verification debt, git drift
+
+   - flags: `--dir <dir>, --json`
 ### `nuvira marketplace`
 
 Browse and install community plugins and workflow templates
@@ -1552,4 +1557,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*500 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*502 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

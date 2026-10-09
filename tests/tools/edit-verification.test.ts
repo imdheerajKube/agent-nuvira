@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   assessEditActivity,
+  checkRootFor,
   classifyEditActivity,
   detectAvailableChecks,
   detectUnverifiedEditClaim,
@@ -22,9 +23,175 @@ import {
   isVerificationTool,
   verificationExercisedArtifact,
   verificationNudgeFor,
+  verifiedPathsFor,
   MUTATION_TOOLS,
   VERIFICATION_TOOLS,
 } from '../../src/tools/edit-verification.js';
+
+/**
+ * NESTED-PACKAGE COVERAGE — a root check is not proof for a sub-package.
+ *
+ * MEASURED on this repository. The root vitest config includes only the root
+ * `tests` directory, while `src/web-dashboard` is a SECOND package with its own
+ * test script (52 files / 1,067 tests, run through the root script
+ * `test:dashboard`). So a turn that edited a dashboard component and ran
+ * `npm test` was recorded as VERIFIED — while the only suite that covers that
+ * file never ran. That is the same false "verified" this module exists to
+ * prevent, one level down, and it is why the gate now asks WHICH package a
+ * check runs in.
+ */
+describe('nested-package coverage — a root check is not proof for a sub-package', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'nuvira-nested-'));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const run = (command: string) => ({ tool: 'run_terminal', args: { command }, result: 'ok' });
+  const rootPkg = (scripts: Record<string, string>): void => {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'root', scripts }), 'utf-8');
+  };
+  /** A nested package that declares its OWN test command. */
+  const nestedPkg = (dir = 'src/web-dashboard'): void => {
+    mkdirSync(join(root, dir), { recursive: true });
+    writeFileSync(
+      join(root, dir, 'package.json'),
+      JSON.stringify({ name: 'sub', scripts: { test: 'vitest run' } }),
+      'utf-8',
+    );
+  };
+  const DASH = 'src/web-dashboard/src/components/ChatPage.tsx';
+
+  it('REJECTS a root check for a file inside a package with its own suite', () => {
+    rootPkg({ test: 'vitest run' });
+    nestedPkg();
+    expect(verificationExercisedArtifact([run('npm test')], [DASH], root)).toBe(false);
+  });
+
+  it('ACCEPTS the command that actually runs that package', () => {
+    rootPkg({ test: 'vitest run', 'test:dashboard': 'cd src/web-dashboard && npm test' });
+    nestedPkg();
+    for (const cmd of [
+      'npm run test:dashboard',
+      'cd src/web-dashboard && npm test',
+      'npm --prefix src/web-dashboard test',
+    ]) {
+      expect(verificationExercisedArtifact([run(cmd)], [DASH], root), cmd).toBe(true);
+    }
+  });
+
+  it('still accepts the root check for the root project’s own files', () => {
+    rootPkg({ test: 'vitest run' });
+    nestedPkg();
+    expect(
+      verificationExercisedArtifact([run('npm test')], ['src/cli/chat.ts', 'tests/x.test.ts'], root),
+    ).toBe(true);
+  });
+
+  it('stays permissive for a nested manifest with NO suite of its own', () => {
+    // A bare package.json (a deps-only stub) declares no suite, so a change
+    // under it is judged the old way — the rule is deliberately narrow.
+    rootPkg({ test: 'vitest run' });
+    mkdirSync(join(root, 'tools/scripts'), { recursive: true });
+    writeFileSync(join(root, 'tools/scripts/package.json'), JSON.stringify({ name: 'stub' }), 'utf-8');
+    expect(verificationExercisedArtifact([run('npm test')], ['tools/scripts/build.js'], root)).toBe(true);
+  });
+
+  it('splits the changed files into covered and owed', () => {
+    rootPkg({ test: 'vitest run', 'test:dashboard': 'cd src/web-dashboard && npm test' });
+    nestedPkg();
+    const changed = ['src/core/a.ts', DASH];
+    expect(verifiedPathsFor([run('npm run test:dashboard')], changed, root)).toEqual([DASH]);
+    expect(verifiedPathsFor([run('npm test')], changed, root)).toEqual(['src/core/a.ts']);
+  });
+
+  it('reports the owed file when only PART of the change was covered', () => {
+    // Before the rule, the root run settled the whole turn — including the
+    // dashboard file nothing had exercised. The turn is not wholly unverified
+    // (one file WAS checked), so the gate stays quiet; the owed file is what the
+    // caller records, and it is named rather than counted.
+    rootPkg({ test: 'vitest run' });
+    nestedPkg();
+    const a = assessEditActivity(
+      ['edit_file', 'run_terminal'],
+      [run('npm test')],
+      ['src/core/a.ts', DASH],
+      root,
+    );
+    expect(a.verifiedPaths).toEqual(['src/core/a.ts']);
+    expect(a.unverifiedPaths).toEqual([DASH]);
+  });
+
+  it('keeps the gate OPEN when the ONLY change is inside the sub-package', () => {
+    // The measured defect, end to end: the whole change is a dashboard file and
+    // the turn's only run was the root suite, which never loads it.
+    rootPkg({ test: 'vitest run' });
+    nestedPkg();
+    const a = assessEditActivity(['edit_file', 'run_terminal'], [run('npm test')], [DASH], root);
+    expect(a.needsVerification).toBe(true);
+    expect(a.verifiedPaths).toEqual([]);
+    expect(a.unverifiedPaths).toEqual([DASH]);
+  });
+
+  it('reads the root a command actually runs in', () => {
+    expect(checkRootFor('cd src/web-dashboard && npm test', root)).toBe(join(root, 'src/web-dashboard'));
+    expect(checkRootFor('npm --prefix sub run test', root)).toBe(join(root, 'sub'));
+    expect(checkRootFor('npm test', root)).toBe(root);
+    // A subcommand is not a script: `npm install` never becomes a check root.
+    expect(checkRootFor('npm install', root)).toBe(root);
+  });
+});
+
+describe('detectAvailableChecks — the nested package\u2019s own suite', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'nuvira-nested-checks-'));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const rootPkg = (scripts: Record<string, string>): void => {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'root', scripts }), 'utf-8');
+  };
+  const addPkg = (dir: string, scripts: Record<string, string> = { test: 'vitest run' }): void => {
+    mkdirSync(join(root, dir), { recursive: true });
+    writeFileSync(join(root, dir, 'package.json'), JSON.stringify({ name: dir, scripts }), 'utf-8');
+  };
+
+  it('finds the root script that checks a nested package', () => {
+    rootPkg({ test: 'vitest run', 'test:dashboard': 'cd src/web-dashboard && npm test' });
+    addPkg('src/web-dashboard');
+    const commands = detectAvailableChecks(root).map((c) => c.command);
+    expect(commands).toContain('npm test');
+    expect(commands).toContain('npm run test:dashboard');
+  });
+
+  it('names the direct command when no root script covers the nested package', () => {
+    rootPkg({ test: 'vitest run' });
+    addPkg('examples/sdk');
+    expect(detectAvailableChecks(root).map((c) => c.command)).toContain('cd examples/sdk && npm test');
+  });
+
+  it('does not walk vendor or hidden directories', () => {
+    rootPkg({ test: 'vitest run' });
+    addPkg('node_modules/dep');
+    addPkg('.cache/pkg');
+    addPkg('dist/bundle');
+    expect(detectAvailableChecks(root).map((c) => c.command)).toEqual(['npm test']);
+  });
+
+  it('PREPENDS the check that covers the file the turn changed', () => {
+    rootPkg({ test: 'vitest run', 'test:dashboard': 'cd src/web-dashboard && npm test' });
+    addPkg('src/web-dashboard');
+    const nudge = verificationNudgeFor(root, ['src/web-dashboard/src/components/ChatPage.tsx']);
+    const listed = nudge.split('\n').filter((l) => /^  \d\./.test(l));
+    expect(listed[0]).toContain('npm run test:dashboard');
+    expect(nudge).toMatch(/COVERS the file/);
+  });
+});
 
 describe('edit-verification — classification', () => {
   it('knows which tools mutate the workspace', () => {

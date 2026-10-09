@@ -244,6 +244,47 @@ describe('FailureBookkeeping — recordActionFailure', () => {
     expect(parkExpiry).toBeLessThan(before + 300_000 + 100);
   });
 
+  /**
+   * The failing run's own error text (trace-1791547245754-dmqwmu, 2026-10-09),
+   * verbatim. It names a 429, so without the exhaustion patterns in
+   * `classifyFallbackError` it classified as `rate-limit` — and this branch was
+   * never reached.
+   */
+  const LIVE_OLLAMA_USAGE_LIMIT =
+    'Ollama API error (429): {"error":"you (imdheeraj) have reached your monthly usage limit, ' +
+    'upgrade for higher limits: https://ollama.com/upgrade or add usage credits: ' +
+    'https://ollama.com/settings (ref: 4e7dec63-24fd-4805-9a84-57900faeb895)"}';
+
+  it('an exhausted account excludes the PAIR for the WHOLE session — there is no window to wait out', () => {
+    const session = makeSession();
+
+    recordActionFailure(session, 'local', new Error(LIVE_OLLAMA_USAGE_LIMIT), makeConfig(), {
+      model: 'gpt-oss:120b-cloud',
+      action: 'execute',
+    });
+
+    // DEFINITIVE, like auth: `Number.MAX_SAFE_INTEGER` and not a 60s "transient"
+    // re-admit, which is exactly what let the next step re-pick the exhausted
+    // pair ten seconds later while working pairs sat unused.
+    expect(session.sessionFailedModels!.get('local|gpt-oss:120b-cloud')).toBe(Number.MAX_SAFE_INTEGER);
+    expect(session.sessionFailedProviders.has('local')).toBe(false);
+    expect(session.sessionTransientFailedProviders.has('local')).toBe(false);
+    // NO ledger park: a park expires, and this must not (the registry demotes
+    // the pair to `unavailable`, which the router skips predictively).
+    expect(mockLedger.parkModel).not.toHaveBeenCalled();
+    expect(mockLedger.parkProvider).not.toHaveBeenCalled();
+    expect(getModelRegistry().getEntry('local', 'gpt-oss:120b-cloud')?.status).toBe('unavailable');
+  });
+
+  it('an exhausted account with NO attributable model excludes the PROVIDER for the session', () => {
+    const session = makeSession();
+
+    recordActionFailure(session, 'local', new Error(LIVE_OLLAMA_USAGE_LIMIT), makeConfig(), { action: 'chat' });
+
+    expect(session.sessionFailedProviders.get('local')).toBe(Number.MAX_SAFE_INTEGER);
+    expect(session.sessionTransientFailedProviders.has('local')).toBe(false);
+  });
+
   it('transient failure (server): short cooldown + re-verify marker, registry decays (not unavailable)', () => {
     const session = makeSession();
     const before = Date.now();

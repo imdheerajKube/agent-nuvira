@@ -23,11 +23,29 @@
  */
 
 import { envBuff, resolveNuviraHome } from '../config/paths.js';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, parse, resolve } from 'node:path';
+import { isAbsolute, join, parse, relative, resolve } from 'node:path';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
+
+/**
+ * One outstanding unverified change: a path that mutated and that no check has
+ * since exercised.
+ *
+ * WHY THIS IS A SET AND NOT A COUNT. The ledger used to record only
+ * `unverifiedEdits: 2` — which cannot be reconciled: the next turn cannot tell
+ * WHICH file is owed a check, so a verification of anything (or a root-level
+ * `npm test` that never loaded the file's own suite) settled the whole backlog.
+ * The calculator audit's lesson was "the artifact is the source of truth"; a
+ * debt you cannot name an artifact for is not one.
+ */
+export interface UnverifiedPath {
+  path: string;
+  /** Epoch ms this path was last changed while unverified. */
+  at: number;
+}
 
 /** One project's working state — everything worth remembering between turns. */
 export interface ProjectWorkingState {
@@ -40,10 +58,16 @@ export interface ProjectWorkingState {
   /** Turns recorded against this project. */
   turns: number;
   /**
-   * Consecutive unverified edit turns still outstanding. Reset to 0 the
-   * moment a turn verifies, because a verified state supersedes the backlog.
+   * Turns that left unverified changes outstanding. Reset to 0 when the debt set
+   * empties. `unverifiedPaths` is the authoritative list; this is the count a
+   * reader shows when it only has room for a number.
    */
   unverifiedEdits: number;
+  /**
+   * The outstanding per-file debt (see {@link UnverifiedPath}). A path leaves
+   * this list only when a verification actually covered it.
+   */
+  unverifiedPaths: UnverifiedPath[];
   /** Epoch ms of the last turn that verified (ran tests/typecheck/browser). */
   lastVerifiedAt?: number;
   /**
@@ -68,6 +92,14 @@ export interface TurnRecord {
   verified?: boolean;
   /** The turn mutated the workspace and verified nothing. */
   unverifiedEdit?: boolean;
+  /**
+   * PER-FILE truth from `assessEditActivity` — the changed paths a check
+   * actually exercised. When either list is supplied the turn is recorded in
+   * per-path mode: the debt is settled per file, not wholesale.
+   */
+  verifiedPaths?: readonly string[];
+  /** The changed paths no check covered this turn — the new debt. */
+  unverifiedPaths?: readonly string[];
   /** The user's message for this turn (scanned for a regression signal). */
   userMessage?: string;
 }
@@ -86,6 +118,10 @@ export const MAX_FILES = 40;
 export const MAX_ISSUES = 8;
 /** Cap on remembered tools per project. */
 export const MAX_TOOLS = 24;
+/** Cap on outstanding unverified paths (oldest drop first). */
+export const MAX_UNVERIFIED_PATHS = 40;
+/** Git read timeout — a repository read must never stall a turn. */
+const GIT_TIMEOUT_MS = 2_500;
 
 // ─── Storage ────────────────────────────────────────────────────────────────
 
@@ -103,6 +139,11 @@ function readFileSafe(): WorkingStateFile {
     const data = JSON.parse(readFileSync(statePath(), 'utf-8')) as WorkingStateFile;
     if (!data || typeof data !== 'object' || !data.projects || typeof data.projects !== 'object') {
       return { version: CURRENT_VERSION, projects: {} };
+    }
+    // Normalize on read: an entry written before per-path debt existed has no
+    // `unverifiedPaths`, and every reader treats it as a list.
+    for (const project of Object.values(data.projects)) {
+      if (!Array.isArray(project.unverifiedPaths)) project.unverifiedPaths = [];
     }
     return data;
   } catch {
@@ -222,12 +263,19 @@ export function recordWorkingState(projectPath: string, turn: TurnRecord): Proje
       toolsUsed: [],
       turns: 0,
       unverifiedEdits: 0,
+      unverifiedPaths: [],
       openIssues: [],
       corrections: 0,
       updatedAt: now,
     };
 
-  const next: ProjectWorkingState = { ...prev, filesTouched: [...prev.filesTouched], toolsUsed: [...prev.toolsUsed], openIssues: [...prev.openIssues] };
+  const next: ProjectWorkingState = {
+    ...prev,
+    filesTouched: [...prev.filesTouched],
+    toolsUsed: [...prev.toolsUsed],
+    unverifiedPaths: [...(prev.unverifiedPaths ?? [])],
+    openIssues: [...prev.openIssues],
+  };
   next.turns = prev.turns + 1;
   next.updatedAt = now;
 
@@ -250,9 +298,32 @@ export function recordWorkingState(projectPath: string, turn: TurnRecord): Proje
     next.toolsUsed = next.toolsUsed.slice(-MAX_TOOLS);
   }
 
-  // Verification debt.
-  if (turn.verified) {
+  // ── Verification debt ───────────────────────────────────────────────────
+  // PER-PATH mode (either list supplied): settle the debt file by file. A
+  // verification of one change must not clear the debt on another, and a root
+  // check that never loaded a nested package's suite must not clear it either —
+  // which is exactly why the caller now hands over the paths a check covered.
+  const perPath = turn.verifiedPaths !== undefined || turn.unverifiedPaths !== undefined;
+  if (perPath) {
+    const settled = new Set((turn.verifiedPaths ?? []).filter(Boolean));
+    const kept = next.unverifiedPaths.filter((u) => !settled.has(u.path));
+    const byPath = new Map(kept.map((u) => [u.path, u]));
+    for (const p of turn.unverifiedPaths ?? []) {
+      if (p) byPath.set(p, { path: p, at: now });
+    }
+    next.unverifiedPaths = [...byPath.values()].slice(-MAX_UNVERIFIED_PATHS);
+    if (settled.size > 0) {
+      next.lastVerifiedAt = now;
+      // A proven fix answers the open reports.
+      next.openIssues = [];
+    }
+    next.unverifiedEdits =
+      next.unverifiedPaths.length === 0
+        ? 0
+        : prev.unverifiedEdits + ((turn.unverifiedPaths ?? []).length > 0 ? 1 : 0);
+  } else if (turn.verified) {
     next.unverifiedEdits = 0;
+    next.unverifiedPaths = [];
     next.lastVerifiedAt = now;
     // A proven fix answers the open reports.
     next.openIssues = [];
@@ -291,6 +362,141 @@ export function clearWorkingState(projectPath?: string): void {
   writeFileSafe(data);
 }
 
+// ─── Workspace reconciliation (what the FILESYSTEM says) ─────────────────────
+
+/** What a git read says about the workspace behind the ledger. */
+export interface WorkspaceReconciliation {
+  /** True when `projectPath` is inside a git work tree we could read. */
+  isGitRepo: boolean;
+  /** Repo-relative paths with uncommitted changes. */
+  dirty: string[];
+  /**
+   * Dirty paths the ledger never recorded as touched — an edit made outside the
+   * agent, or a session that died before it could record. This is the gap the
+   * ledger alone cannot see: it trusts its own report of what it changed.
+   */
+  unrecorded: string[];
+  /**
+   * Dirty paths MODIFIED AFTER the last verification. These are the changes no
+   * passing check can speak for; empty when the ledger has never verified
+   * anything (then `unverifiedPaths` carries the signal instead, and listing the
+   * whole dirty tree would just be noise).
+   */
+  staleSinceVerification: string[];
+}
+
+/** No git answer — used on every best-effort failure path. */
+const NO_RECONCILIATION: WorkspaceReconciliation = {
+  isGitRepo: false,
+  dirty: [],
+  unrecorded: [],
+  staleSinceVerification: [],
+};
+
+/** Run a read-only git command in `dir`; '' on any failure (never throws). */
+function gitRead(dir: string, args: string[]): string {
+  try {
+    const r = spawnSync('git', args, {
+      cwd: dir,
+      encoding: 'utf-8',
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    if (r.status !== 0 || !r.stdout) return '';
+    return r.stdout;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Parse `git status --porcelain` output into repo-relative paths.
+ *
+ * Handles the two shapes that are not straight line-slices: a rename prints
+ * `R  old -> new` (the NEW path is the one on disk), and git QUOTES a path with
+ * unusual bytes. Malformed lines are skipped rather than guessed at.
+ */
+function parsePorcelainPaths(out: string): string[] {
+  const paths: string[] = [];
+  for (const line of out.split('\n')) {
+    if (line.length < 4) continue;
+    let rest = line.slice(3);
+    const arrow = rest.lastIndexOf(' -> ');
+    if (arrow !== -1) rest = rest.slice(arrow + 4);
+    if (rest.startsWith('"') && rest.endsWith('"') && rest.length > 1) {
+      rest = rest.slice(1, -1).replace(/\\(.)/g, '$1');
+    }
+    if (rest.trim()) paths.push(rest);
+  }
+  return paths;
+}
+
+/** Are two paths the same file? (One may be absolute, the other repo-relative.) */
+function samePath(a: string, b: string, projectPath: string): boolean {
+  if (a === b) return true;
+  const abs = (p: string): string => (isAbsolute(p) ? resolve(p) : resolve(projectPath, p));
+  try {
+    return abs(a) === abs(b);
+  } catch {
+    return false;
+  }
+}
+
+/** File mtime in ms, or 0 when it cannot be read (never throws). */
+function mtimeMs(path: string): number {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Re-read the WORLD behind the ledger: what is actually changed on disk, and
+ * whether anything changed after the last verification.
+ *
+ * WHY THIS EXISTS. The ledger records what the LOOP said it changed. That is a
+ * report, and the repo's own invariant (see `docs/rca_false_success_and_no_resume.md`
+ * §6) is that a report is a proposal — "re-read the world: files on disk, VCS
+ * status". Two real cases the report cannot cover: an edit made by something
+ * other than the agent, and a turn killed before it recorded anything. Both are
+ * exactly "work from the previous session whose state nobody knows".
+ *
+ * Read-only, bounded by a timeout, and best-effort: a directory that is not a
+ * repository (or has no git) reconciles to nothing rather than throwing.
+ */
+export function reconcileWithWorkspace(
+  state: ProjectWorkingState | null,
+  projectPath: string,
+  now: number = Date.now(),
+): WorkspaceReconciliation {
+  try {
+    const dir = normalizeProjectPath(projectPath);
+    const inside = gitRead(dir, ['rev-parse', '--is-inside-work-tree']).trim();
+    if (inside !== 'true') return NO_RECONCILIATION;
+    // `-uall` lists untracked FILES individually; the paths are what matter here.
+    const dirty = parsePorcelainPaths(gitRead(dir, ['status', '--porcelain', '-uall']));
+    if (dirty.length === 0) return { isGitRepo: true, dirty: [], unrecorded: [], staleSinceVerification: [] };
+
+    const touched = state?.filesTouched ?? [];
+    const unrecorded = dirty.filter((p) => !touched.some((t) => samePath(t, p, dir)));
+
+    const verifiedAt = state?.lastVerifiedAt;
+    const staleSinceVerification =
+      verifiedAt === undefined
+        ? []
+        : dirty.filter((p) => {
+            const at = mtimeMs(resolve(dir, p));
+            return at > verifiedAt;
+          });
+
+    return { isGitRepo: true, dirty, unrecorded, staleSinceVerification };
+  } catch {
+    // Best-effort — the ledger must never break a turn.
+    return NO_RECONCILIATION;
+  }
+}
+
 // ─── Formatting (the injected block) ────────────────────────────────────────
 
 function relativeAge(ts: number, now: number): string {
@@ -309,7 +515,11 @@ function relativeAge(ts: number, now: number): string {
  * Kept short on purpose: this rides in EVERY turn, so a verbose block would
  * recreate the very drift it exists to prevent.
  */
-export function formatWorkingState(state: ProjectWorkingState | null, now: number = Date.now()): string {
+export function formatWorkingState(
+  state: ProjectWorkingState | null,
+  now: number = Date.now(),
+  reconciled?: WorkspaceReconciliation,
+): string {
   if (!state) return '';
   const lines: string[] = [];
   if (state.filesTouched.length > 0) {
@@ -323,8 +533,36 @@ export function formatWorkingState(state: ProjectWorkingState | null, now: numbe
       `• ⚠️ ${state.unverifiedEdits} edit turn(s) were NEVER verified — do not assume they work; re-check before building on them.`,
     );
   }
+  // The per-file debt, named. A count cannot be acted on ("re-check before
+  // building on THEM" leaves the model to guess which files); the paths can.
+  const owed = state.unverifiedPaths ?? [];
+  if (owed.length > 0) {
+    const shown = owed.slice(-5);
+    const named = shown.map((u) => `${u.path} (${relativeAge(u.at, now)})`).join(', ');
+    lines.push(
+      `• ⚠️ Unverified changes (${owed.length}): ${named}${owed.length > shown.length ? ', …' : ''} — no check has exercised these.`,
+    );
+  }
   if (state.lastVerifiedAt !== undefined) {
     lines.push(`• Last verified: ${relativeAge(state.lastVerifiedAt, now)} (a test/typecheck/browser run passed).`);
+  }
+  // What GIT says the workspace holds, when it disagrees with (or adds to) the
+  // ledger's own report. Capped: this rides in every prompt.
+  if (reconciled?.isGitRepo) {
+    const stale = reconciled.staleSinceVerification;
+    if (stale.length > 0) {
+      const shown = stale.slice(0, 5);
+      lines.push(
+        `• ⚠️ ${stale.length} file(s) changed on disk AFTER the last verification: ${shown.join(', ')}${stale.length > shown.length ? ', …' : ''} — nothing has checked them.`,
+      );
+    }
+    const extra = reconciled.unrecorded;
+    if (extra.length > 0) {
+      const shown = extra.slice(0, 5);
+      lines.push(
+        `• ${extra.length} changed file(s) this ledger never recorded (an edit outside the agent, or a turn that died mid-work): ${shown.join(', ')}${extra.length > shown.length ? ', …' : ''}`,
+      );
+    }
   }
   if (state.openIssues.length > 0) {
     const latest = state.openIssues[state.openIssues.length - 1];
@@ -334,4 +572,22 @@ export function formatWorkingState(state: ProjectWorkingState | null, now: numbe
   }
   if (lines.length === 0) return '';
   return `[Working state — carried from previous turns in THIS project]\n${lines.join('\n')}`;
+}
+
+/**
+ * The block every surface injects: the ledger PLUS the git reconciliation of the
+ * same workspace. One call so the CLI loop, the dashboard prompt assembly and the
+ * orchestrator cannot read the ledger without re-reading the world beside it.
+ *
+ * Returns '' for a project with nothing to say (a pristine workspace must add no
+ * prompt weight). Best-effort throughout.
+ */
+export function workingStateBlock(projectPath: string, now: number = Date.now()): string {
+  try {
+    const state = getWorkingState(projectPath);
+    if (!state) return '';
+    return formatWorkingState(state, now, reconcileWithWorkspace(state, projectPath, now));
+  } catch {
+    return '';
+  }
 }

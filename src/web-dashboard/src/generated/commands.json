@@ -3,7 +3,7 @@
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
   "commandCount": 290,
-  "groupCount": 57,
+  "groupCount": 58,
   "groups": [
     {
       "name": "admin",
@@ -1771,6 +1771,11 @@
           ]
         }
       ]
+    },
+    {
+      "name": "state",
+      "description": "Print this project’s tracked state in one read: plan, open sessions, per-file verification debt, git drift",
+      "commands": []
     },
     {
       "name": "marketplace",

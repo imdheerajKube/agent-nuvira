@@ -63,6 +63,24 @@ describe('buildTraceOutcome — kinds', () => {
   it('cancelled outranks incomplete', () => {
     expect(buildTraceOutcome({ cancelled: true, unverifiedActionClaim: true }).kind).toBe('cancelled');
   });
+
+  it('carries the PER-FILE verification split onto the outcome', () => {
+    // A partially verified turn (some changed paths checked, some not) cannot be
+    // expressed by the one-bit `unverifiedEdit`, so the trace must carry the
+    // split itself — otherwise re-opening the run after the fact shows the tools
+    // and the flag but never WHICH file is still owed a check.
+    const o = buildTraceOutcome({
+      tools: ['edit_file', 'run_terminal'],
+      unverifiedEdit: true,
+      verifiedPaths: ['src/a.ts'],
+      unverifiedPaths: ['src/b.ts', 'src/c.ts'],
+    });
+    expect(o.verifiedPaths).toEqual(['src/a.ts']);
+    expect(o.unverifiedPaths).toEqual(['src/b.ts', 'src/c.ts']);
+    // Absent when there is no split to record — never an empty array that a
+    // reader would mistake for "everything was checked".
+    expect(buildTraceOutcome({ tools: ['read_file'] }).unverifiedPaths).toBeUndefined();
+  });
 });
 
 describe('traceOutcomeSucceeded — nothing unfinished is a success', () => {

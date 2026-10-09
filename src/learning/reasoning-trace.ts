@@ -222,6 +222,18 @@ export interface TraceOutcome {
    * not conclude.
    */
   artifactShortfall?: boolean;
+  /**
+   * PER-FILE verification truth for this turn: the changed paths a check actually
+   * exercised, and the ones still OWED one. `unverifiedEdit` is one bit for the
+   * whole turn, which cannot express a PARTIALLY verified turn — 1 of 3 files
+   * checked reads exactly like 0 of 3. The split used to live only in the
+   * working-state ledger, so re-opening the trace after the fact showed the tools
+   * and the aggregate flag but never WHICH file was still unproven. Absent when
+   * the turn changed nothing or no split was recorded.
+   */
+  verifiedPaths?: string[];
+  /** @see TraceOutcome.verifiedPaths */
+  unverifiedPaths?: string[];
 }
 
 /**
@@ -288,6 +300,14 @@ export type TraceGateName =
   // having declared a plan, so the loop spent one bounded nudge to plan first —
   // the "plan → track → verify" contract made structural instead of optional.
   | 'plan'
+  // PLAN CLOSE-OUT gate: the turn DECLARED or advanced a plan and is ending with
+  // steps still `running`/`pending`, so the loop spent one bounded nudge to settle
+  // them (update each to its real status). Distinct from 'plan' so the two cannot
+  // dedupe each other out of the thread, and because it is a different decision:
+  // 'plan' is "plan before you change", this is "the checklist you opened is
+  // stale". Measured 2026-10-09 (trace-1791542886258-pg42ox): a plan sat frozen at
+  // "1/7 steps" for two days and only advanced after the user asked why.
+  | 'plan-closeout'
   // MID-TURN MODEL HANDOFF (fix_model_routing P2): the model serving the turn
   // resolved with NOTHING usable (no answer text, no tool call) twice in a row,
   // so the loop handed the work to a DIFFERENT model instead of re-asking the
@@ -989,6 +1009,10 @@ export function buildTraceOutcome(input: {
    * degradation invisible to exactly the check meant to honour it.
    */
   degradedBy?: Array<{ provider: string; model: string }>;
+  /** Per-file verification truth (see `TraceOutcome.verifiedPaths`). */
+  verifiedPaths?: readonly string[];
+  /** @see verifiedPaths */
+  unverifiedPaths?: readonly string[];
 }): TraceOutcome {
   const tools = [...(input.tools ?? [])];
   if (input.cancelled) return { kind: 'cancelled', tools };
@@ -1030,6 +1054,14 @@ export function buildTraceOutcome(input: {
     ...(input.undeliveredChange ? { undeliveredChange: true } : {}),
     ...(input.unbackedHealthClaim ? { unbackedHealthClaim: true } : {}),
     ...(input.degradedBy && input.degradedBy.length > 0 ? { degradedBy: input.degradedBy } : {}),
+    // PER-FILE truth, so a partially verified turn is auditable by path from the
+    // trace alone. Carried only when there is a split to record.
+    ...(input.verifiedPaths && input.verifiedPaths.length > 0
+      ? { verifiedPaths: [...input.verifiedPaths] }
+      : {}),
+    ...(input.unverifiedPaths && input.unverifiedPaths.length > 0
+      ? { unverifiedPaths: [...input.unverifiedPaths] }
+      : {}),
   };
 }
 

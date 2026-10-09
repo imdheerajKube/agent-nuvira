@@ -3397,6 +3397,40 @@ const projectBundleCache = new Map<string, { mtimeMs: number; bundle: ProjectCon
 const recentProjects = new Set<string>();
 
 /** Get (or build) the cached bundle for a project path; null when invalid. */
+/**
+ * WHY a directory could not be attached, in words that name the REAL cause.
+ *
+ * The attach and workspace routes answered every failure with "Not a readable
+ * directory: <path>", which reads as a permissions problem. Reported live: a
+ * user typed a folder under `/tmp` that worked earlier, and the message sent
+ * them looking for a permissions issue when the folder was simply GONE — macOS
+ * clears `/tmp` (`/private/tmp`) when the machine restarts. Three different
+ * causes produce a null bundle (missing path, a file, an unreadable directory)
+ * and each has a different fix, so the message states which one it is.
+ *
+ * Returns null when the directory is fine. Never throws.
+ */
+function directoryRejectionReason(path: string): string | null {
+  const shown = path.trim();
+  try {
+    if (!existsSync(resolve(shown))) {
+      return (
+        `Directory does not exist: ${shown} — check the path. ` +
+        '(A folder under /tmp is temporary: macOS clears it when the machine restarts.)'
+      );
+    }
+    if (!statSync(resolve(shown)).isDirectory()) {
+      return `Not a directory: ${shown} — that path is a file. Pick a folder.`;
+    }
+    return null;
+  } catch (err) {
+    // A real access error (EACCES/EPERM, a broken symlink) — the only case where
+    // "not readable" is the honest description.
+    const code = (err as NodeJS.ErrnoException)?.code;
+    return `Not a readable directory: ${shown}${code ? ` (${code})` : ''} — check its permissions.`;
+  }
+}
+
 function getProjectBundle(path: string): ProjectContextBundle | null {
   try {
     const mtimeMs = statSync(path).mtimeMs;
@@ -5687,8 +5721,11 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         return;
       }
       const target = resolve(body.cwd.trim());
-      if (!existsSync(target) || !statSync(target).isDirectory()) {
-        writeJson(res, 400, { ok: false, error: `Not a readable directory: ${body.cwd.trim()}` });
+      // Name the actual cause (missing / a file / unreadable) — see
+      // `directoryRejectionReason`.
+      const rejection = directoryRejectionReason(body.cwd.trim());
+      if (rejection) {
+        writeJson(res, 400, { ok: false, error: rejection });
         return;
       }
       configManager.save({ dashboard: { cwd: target } } as never);
@@ -7117,9 +7154,18 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         writeJson(res, 400, { ok: false, error: 'Missing path — expected { path: string }.' });
         return;
       }
+      // State the ACTUAL reason before building: a missing folder is by far the
+      // most common failure (a cleared /tmp), and "not a readable directory"
+      // sent the user hunting for a permissions problem that did not exist.
+      const rejection = directoryRejectionReason(path);
+      if (rejection) {
+        writeJson(res, 400, { ok: false, error: rejection });
+        return;
+      }
       const bundle = getProjectBundle(path);
       if (!bundle) {
-        writeJson(res, 400, { ok: false, error: `Not a readable directory: ${path}` });
+        // The directory is readable, so the bundle build is what failed.
+        writeJson(res, 400, { ok: false, error: `Could not read a project at ${path} — the directory is there but nothing in it could be mapped.` });
         return;
       }
       recentProjects.add(bundle.path);

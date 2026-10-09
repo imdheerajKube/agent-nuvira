@@ -26,7 +26,54 @@ import { logger } from '../utils/logger.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { preferredModelsFor } from '../learning/model-selection.js';
 import { nonDowngradeCandidates, filterAtLeastCapability } from '../learning/model-capability.js';
+import { isAgenticCapableModel } from '../learning/model-harness.js';
 import { getDefaultModel } from './provider-catalog.js';
+
+// ─── The repair FLOOR (never hand an agentic task to a toy) ─────────────────
+
+/**
+ * Does this id literally name a parameter count at or above a few B? Positive
+ * evidence, read the same way `model-capability` reads it (`120b`, `70b`, `27b`,
+ * `e4b`; the LAST `<n>b` wins). No match → `false` (no evidence either way).
+ */
+function namesLargeParameterCount(modelId: string | undefined): boolean {
+  const matches = [...String(modelId ?? '').toLowerCase().matchAll(/(\d+(?:\.\d+)?)\s*b\b/g)];
+  if (matches.length === 0) return false;
+  const params = Number.parseFloat(matches[matches.length - 1][1]);
+  return Number.isFinite(params) && params >= 4;
+}
+
+/**
+ * Pick the repair target, or `undefined` when the only target would drop a
+ * model that NAMES a large size down to one that cannot hold an agentic task.
+ *
+ * WHY THIS EXISTS (measured, trace-1791547245754-dmqwmu, 2026-10-09). A parked
+ * `local/gpt-oss:120b-cloud` was repaired to `local/qwen2.5:0.5b` — a ≤4B toy.
+ * The toy's answers were confident nonsense (a "plan" describing
+ * `generate_song` / `send_kashvi_song.py` for a RAG-app goal), but they were
+ * ANSWERS: the call succeeded, the failover walk never left the provider, and
+ * the trace attributed the garbage to the 120B model it had asked for. A wasted
+ * call to an exhausted provider is recoverable — the walk advances to one that
+ * can serve the task — while a wrong answer recorded as success is not.
+ *
+ * NARROW ON PURPOSE: the request must NAME its size. An unknown id
+ * (`gpt-4-gone`, `some-gone-model`) carries no such evidence and keeps the
+ * provider's own repair, so this can never turn an unrecognised name into a
+ * refusal. When the provider DOES have an agentic-capable candidate, that is
+ * the one returned — the floor narrows a downgrade, it never blocks a repair.
+ */
+function repairTarget(
+  providerType: string,
+  requested: string | undefined,
+  candidates: readonly string[],
+): string | undefined {
+  const first = candidates[0];
+  if (!first) return undefined;
+  if (!namesLargeParameterCount(requested) || isAgenticCapableModel(first, providerType)) {
+    return first;
+  }
+  return candidates.find((m) => isAgenticCapableModel(m, providerType));
+}
 
 // ─── Dynamic preference — never hardcoded model names ──────────────────────
 // Repair/selection prefers models the registry has VERIFIED working for this
@@ -234,8 +281,14 @@ export async function resolveWorkingModel(
       // health ranking to models in the request's capability band or above
       // (order preserved), and falls back to the full list when nothing is that
       // capable — so this can never dead-end, only avoid a silent downgrade.
-      const verified = nonDowngradeCandidates(explicit, preferredModelsFor(providerType))[0];
+      const verifiedCandidates = nonDowngradeCandidates(explicit, preferredModelsFor(providerType));
+      const verified = repairTarget(providerType, explicit, verifiedCandidates);
       if (verified) return verified;
+      // Nothing here can hold the task, and the only alternatives would drop a
+      // named-large pin to a toy. Hand the dead pin back (the caller's walk then
+      // advances — the pair is registry-blocked, so no doomed call is even made)
+      // rather than run a ≤4B model against an agentic ask.
+      if (verifiedCandidates.length > 0) return explicit;
     }
   }
 
@@ -289,18 +342,23 @@ export async function resolveWorkingModel(
   // `unavailable`/quota-parked registry entry is proof it FAILED. Repair
   // routes AROUND it, not into it.
   if (live.length > 0) {
-    const liveRanked = [...live].sort((a, b) => modelFallbackScore(a) - modelFallbackScore(b));
-    const preferred = [...preferredModelsFor(providerType), ...liveRanked.map((m) => m.id)];
+    const liveRanked = [...live].sort((a, b) => modelFallbackScore(a) - modelFallbackScore(b));    const preferred = [...preferredModelsFor(providerType), ...liveRanked.map((m) => m.id)];
     // Never pick speech/audio (score >= 100) or a registry-blocked model.
-    const chosen = preferred.find((id) => {
+    const eligible = preferred.filter((id) => {
       const m = live.find((mm) => mm.id === id);
       return !!m && modelFallbackScore(m) < 100 && !registryBlocks(id);
     });
+    // The repair FLOOR applies on THIS path too — and this is where the measured
+    // downgrade happened: a parked `gpt-oss:120b-cloud` was absent from the
+    // local live list, so repair ranked the installed models by health and the
+    // ≤4B toy won (see `repairTarget`). Health-first is kept whenever the top
+    // candidate can hold an agentic task.
+    const chosen = repairTarget(providerType, explicit, eligible);
     if (chosen) {
       // (capability-aware narrowing happens on the DEAD-pin path above; the
-    // live-list path keeps its curated/health-first behavior so a stale pin is
-    // still repaired to the provider's known-good model.)
-    if (explicit && announce) {
+      // live-list path keeps its curated/health-first behavior so a stale pin is
+      // still repaired to the provider's known-good model.)
+      if (explicit && announce) {
         const fromVerified = preferredModelsFor(providerType).includes(chosen);
         logger.warn(
           `♻️  Auto routing: model '${explicit}' is not available on '${providerType}' — using '${chosen}'${fromVerified ? ' (verified working)' : ''}.`,
@@ -308,6 +366,12 @@ export async function resolveWorkingModel(
       }
       return chosen;
     }
+    // Every repair available here would drop a named-large pin to a model that
+    // cannot hold the task. Keep the requested model: the provider's own error
+    // (rate limit / not-served) surfaces honestly and the failover walk reaches
+    // a provider that CAN serve it — rather than a toy answering with nonsense
+    // that the trace then attributes to the strong model that was asked for.
+    if (explicit && eligible.length > 0) return explicit;
   }
 
   // ── 4. Can't validate (list unavailable / only speech models) ─────────

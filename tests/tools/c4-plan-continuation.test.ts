@@ -213,3 +213,66 @@ describe('C4 experiment — what happens to the plan across a continuation', () 
     expect(firstRequestText).toContain('Do NOT declare it again');
   });
 });
+
+describe('PLAN CLOSE-OUT gate — a plan engaged this turn must not end stale', () => {
+  it('fires ONCE when the turn opens a plan and tries to end with steps unsettled', async () => {
+    // Measured 2026-10-09 (trace-1791542886258-pg42ox): a plan sat frozen at
+    // "1/7 steps" for two days — the model marked one step and answered in prose,
+    // and only advanced the rest after the user asked why. The gate closes that.
+    const store = new PlanStore();
+    const events: Array<{ kind: string; gate?: string }> = [];
+    const results: string[] = [];
+    const requests: unknown[][] = [];
+    const d = deps(
+      [
+        CREATE('ship it', ['s1', 's2']),
+        UPDATE('s1'),
+        DONE('step one done'), // tries to end with s2 still pending
+        UPDATE('s2'), // the model settles it after the nudge
+        DONE('all done'),
+      ],
+      results,
+      requests,
+    );
+    const result = await runLoop(
+      { context: { configManager: {}, planStore: store }, onTraceEvent: (e) => events.push(e as never) },
+      d,
+    );
+
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'plan-closeout')).toHaveLength(1);
+    // The nudge reached the model as a harness directive.
+    expect(JSON.stringify(requests)).toContain('UNSETTLED steps');
+    // …and the plan it left behind is settled, not frozen.
+    const after = view(store);
+    expect(after.steps.every((s) => s.status === 'done')).toBe(true);
+    expect(result.content).toContain('all done');
+  });
+
+  it('does NOT fire on a turn that merely CARRIED a plan it never touched', async () => {
+    // An unrelated ask ("review the project") must not be told to advance a
+    // checklist somebody else's work opened — the report labels a carried plan
+    // instead, and the plan context is re-shown next turn.
+    const store = new PlanStore();
+    store.create('ship it', [{ id: 's1', description: 'do s1' }, { id: 's2', description: 'do s2' }]);
+    store.update('s1', 'done');
+    const events: Array<{ kind: string; gate?: string }> = [];
+    const results: string[] = [];
+    const requests: unknown[][] = [];
+    const d = deps(
+      [
+        { content: '', toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'a.js' } }] },
+        DONE('here is the review'),
+      ],
+      results,
+      requests,
+    );
+    await runLoop(
+      { context: { configManager: {}, planStore: store }, onTraceEvent: (e) => events.push(e as never) },
+      d,
+    );
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'plan-closeout')).toHaveLength(0);
+    expect(JSON.stringify(requests)).not.toContain('UNSETTLED steps');
+    // The carried plan is untouched — the turn did not invent progress for it.
+    expect(view(store).steps.map((s) => s.status)).toEqual(['done', 'pending']);
+  });
+});
