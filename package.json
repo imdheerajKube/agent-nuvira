@@ -18,7 +18,7 @@
     "access": "public"
   },
   "scripts": {
-    "build:cli": "tsc && node -e \"require('fs').cpSync('src/resources','dist/resources',{recursive:true})\" && node scripts/fix-esm-extensions.mjs && node -e \"if(process.platform!=='win32')require('child_process').execSync('chmod +x dist/index.js')\"",
+    "build:cli": "node -e \"const fs=require('fs');fs.rmSync('dist',{recursive:true,force:true})\" && tsc && node -e \"require('fs').cpSync('src/resources','dist/resources',{recursive:true})\" && node scripts/fix-esm-extensions.mjs && node -e \"if(process.platform!=='win32')require('child_process').execSync('chmod +x dist/index.js')\"",
     "build": "npm run build:cli && node scripts/build-dashboard.mjs",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
