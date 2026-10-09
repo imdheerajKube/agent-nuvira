@@ -1,4 +1,4 @@
-{"version":2,"width":104,"height":32,"timestamp":1791478010,"title":"nuvira — CLI tour","env":{"SHELL":"/bin/bash","TERM":"xterm-256color"}}
+{"version":2,"width":104,"height":32,"timestamp":1791519514,"title":"nuvira — CLI tour","env":{"SHELL":"/bin/bash","TERM":"xterm-256color"}}
 [0,"o","$ "]
 [0.3,"o","n"]
 [0.318,"o","u"]
@@ -17,7 +17,7 @@
 [0.552,"o","o"]
 [0.57,"o","n"]
 [0.588,"o","\r\n"]
-[0.708,"o","3.3.14\r\n"]
+[0.708,"o","3.3.15\r\n"]
 [1.023,"o","\r\n$ "]
 [1.443,"o","n"]
 [1.461,"o","u"]
@@ -33,7 +33,7 @@
 [1.641,"o","o"]
 [1.659,"o","r"]
 [1.677,"o","\r\n"]
-[1.797,"o","══════════════════════════════════════════════════════════════\r\n  🏥  Buff System Health Diagnosis\r\n══════════════════════════════════════════════════════════════\r\n\r\nℹ    💻 $ docker info --format \"{{.ServerVersion}}\"\r\nℹ    ❌ $ docker info --format \"{{.ServerVersion}}\" (exit 1, 827ms)\r\n\r\n  ── System Health ──\r\n  ✅ Config Directory: ~/.nuvira exists\r\n  ✅ Secret Vault: OS keychain active (Tier 1)\r\n  ✅ Memory Directory: ~/.nuvira/memory/ exists\r\n  ✅ Workspace DB: SQLite project registry — 68 project(s) tracked\r\n  ⚠️ Current Project: No project row for the current directory yet\r\n  ⚠️ Fact Memory: 0 fact(s) stored\r\n  ✅ Vector Index: faiss-native (native FAISS) · 249 vector(s) across 5 namespace(s)\r\n  ⚠️ Docker: Docker is not available\r\n  ✅ Plugin Directories: plugins/✅ agents/✅ workflows/✅\r\n  ✅ CLI: node: node v26.7.0\r\n  ✅ CLI: npm: npm 11.19.0\r\n  ✅ CLI: git: git git version 2.50.1 (Apple Git-155)\r\n  ✅ CLI: python3: python3 Python 3.14.6\r\n  ✅ Internet Connectivity: Internet reachable\r\n  ⚠️ Acceptance / quality fit: not ready — 0 labelled turn(s); needs 20 with ≥5 of each class\r\n\r\n  ── Provider Health ──\r\n\r\n  … (161 more lines)\r\n"]
+[1.797,"o","══════════════════════════════════════════════════════════════\r\n  🏥  Buff System Health Diagnosis\r\n══════════════════════════════════════════════════════════════\r\n\r\nℹ    💻 $ docker info --format \"{{.ServerVersion}}\"\r\nℹ    ❌ $ docker info --format \"{{.ServerVersion}}\" (exit 1, 791ms)\r\n\r\n  ── System Health ──\r\n  ✅ Config Directory: ~/.nuvira exists\r\n  ✅ Secret Vault: OS keychain active (Tier 1)\r\n  ✅ Memory Directory: ~/.nuvira/memory/ exists\r\n  ✅ Workspace DB: SQLite project registry — 68 project(s) tracked\r\n  ⚠️ Current Project: No project row for the current directory yet\r\n  ⚠️ Fact Memory: 0 fact(s) stored\r\n  ✅ Vector Index: faiss-native (native FAISS) · 249 vector(s) across 5 namespace(s)\r\n  ⚠️ Docker: Docker is not available\r\n  ✅ Plugin Directories: plugins/✅ agents/✅ workflows/✅\r\n  ✅ CLI: node: node v26.7.0\r\n  ✅ CLI: npm: npm 11.19.0\r\n  ✅ CLI: git: git git version 2.50.1 (Apple Git-155)\r\n  ✅ CLI: python3: python3 Python 3.14.6\r\n  ✅ Internet Connectivity: Internet reachable\r\n  ⚠️ Acceptance / quality fit: not ready — 0 labelled turn(s); needs 20 with ≥5 of each class\r\n\r\n  ── Provider Health ──\r\n\r\n  … (161 more lines)\r\n"]
 [3.542,"o","\r\n$ "]
 [3.962,"o","n"]
 [3.98,"o","u"]
@@ -345,7 +345,7 @@
 [31.011,"o","u"]
 [31.029,"o","s"]
 [31.047,"o","\r\n"]
-[31.167,"o","🌐 Gateway status\r\n\r\n  ✅ gateway RUNNING — pid 41874, up 1m 5s, 4/4 adapters live, beat 5s ago\r\n\r\n  ✅ Telegram (long-poll, Bot API)\r\n  ✅ Slack (webhook)\r\n  ✅ WhatsApp (Baileys bridge — paired, self-chat mode, session: ~/.nuvira/whatsapp/session)\r\n  ✅ SMS (Twilio +••••••••••)\r\n  ⬜ Discord (not configured)\r\n  ⬜ WhatsApp Business (Meta Cloud API, not configured)\r\n  ⬜ DingTalk (not configured)\r\n  ⬜ Feishu (not configured)\r\n  ⬜ WeCom (not configured)\r\n  ⬜ Mattermost (not configured)\r\n  ⬜ Matrix (not configured)\r\n  ⬜ Webhook (not configured)\r\n  ⬜ BlueBubbles (not configured)\r\n  ⬜ ntfy (not configured — set BUFF_NTFY_TOPIC)\r\n  ⬜ Teams (not configured)\r\n  ⬜ Google Chat (not configured)\r\n  ⬜ Weixin (not configured — set BUFF_WEIXIN_TOKEN)\r\n  ⬜ IRC (not configured — set IRC_SERVER)\r\n  ⬜ SimpleX (not configured — set SIMPLEX_WS_URL)\r\n  ⬜ Home Assistant (not configured — set HASS_TOKEN)\r\n  ⬜ Email (not configured — set BUFF_SMTP_HOST + BUFF_SMTP_USER)\r\n  ⬜ Signal (not configured — set BUFF_SIGNAL_ACCOUNT)\r\n  … (11 more lines)\r\n"]
+[31.167,"o","🌐 Gateway status\r\n\r\n  ✅ gateway RUNNING — pid 92994, up 22m 3s, 4/4 adapters live, beat 3s ago\r\n\r\n  ✅ Telegram (long-poll, Bot API)\r\n  ✅ Slack (webhook)\r\n  ✅ WhatsApp (Baileys bridge — paired, self-chat mode, session: ~/.nuvira/whatsapp/session)\r\n  ✅ SMS (Twilio +••••••••••)\r\n  ⬜ Discord (not configured)\r\n  ⬜ WhatsApp Business (Meta Cloud API, not configured)\r\n  ⬜ DingTalk (not configured)\r\n  ⬜ Feishu (not configured)\r\n  ⬜ WeCom (not configured)\r\n  ⬜ Mattermost (not configured)\r\n  ⬜ Matrix (not configured)\r\n  ⬜ Webhook (not configured)\r\n  ⬜ BlueBubbles (not configured)\r\n  ⬜ ntfy (not configured — set BUFF_NTFY_TOPIC)\r\n  ⬜ Teams (not configured)\r\n  ⬜ Google Chat (not configured)\r\n  ⬜ Weixin (not configured — set BUFF_WEIXIN_TOKEN)\r\n  ⬜ IRC (not configured — set IRC_SERVER)\r\n  ⬜ SimpleX (not configured — set SIMPLEX_WS_URL)\r\n  ⬜ Home Assistant (not configured — set HASS_TOKEN)\r\n  ⬜ Email (not configured — set BUFF_SMTP_HOST + BUFF_SMTP_USER)\r\n  ⬜ Signal (not configured — set BUFF_SIGNAL_ACCOUNT)\r\n  … (11 more lines)\r\n"]
 [32.912,"o","\r\n$ "]
 [33.332,"o","n"]
 [33.35,"o","u"]
