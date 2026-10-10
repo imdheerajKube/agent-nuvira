@@ -9,7 +9,7 @@
    the dashboard could not be themed at all, and adding a light mode on top
    would have produced a light shell wrapped around dark cards.
 
-   Every token this file consumes is now defined in `themes.css`: five palettes
+   Every token this file consumes is now defined in `themes.css`: seven palettes
    x light/dark, plus the opt-in accessibility layer. Nothing below changed its
    token names on purpose, so all 796 `var(--token)` references — and therefore
    every route — re-theme without being touched.
@@ -65,8 +65,9 @@ html .layout select:focus-visible {
   padding: 0 var(--space-3);
   background: transparent;
   color: var(--text-primary);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-edge);
   border-radius: var(--radius-md);
+  box-shadow: var(--control-glow);
   font: inherit;
   font-size: calc(var(--text-sm) * var(--font-scale));
   cursor: pointer;
@@ -75,7 +76,7 @@ html .layout select:focus-visible {
 
 .btn-secondary:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--border-hover);
+  border-color: var(--control-edge-hover);
 }
 
 .btn-secondary:disabled {
@@ -2396,18 +2397,19 @@ body {
 .admin-refresh-btn {
   background: var(--bg-tertiary);
   color: var(--text-primary);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-edge);
   border-radius: 8px;
   padding: 8px 16px;
   font-size: 13px;
+  box-shadow: var(--control-glow);
   cursor: pointer;
   transition: var(--transition);
 }
 
 .admin-refresh-btn:hover:not(:disabled) {
-  border-color: var(--accent-blue);
-  color: var(--accent-blue);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--accent-blue) 15%, transparent);
+  border-color: var(--control-edge-active);
+  color: var(--control-edge-active);
+  box-shadow: var(--control-glow-hover);
 }
 
 .admin-refresh-btn:disabled {
@@ -2968,10 +2970,11 @@ body {
 .hub-tab {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
-  border: 1px solid var(--border-light);
+  border: 1px solid var(--control-edge-soft);
   border-radius: 8px;
   padding: 8px 14px;
   font-size: 13px;
+  box-shadow: var(--control-glow);
   cursor: pointer;
   transition: var(--transition);
 }
@@ -2979,12 +2982,12 @@ body {
 .hub-tab:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: var(--border);
+  border-color: var(--control-edge);
 }
 
 .hub-tab.active {
-  background: var(--accent-blue);
-  border-color: var(--accent-blue);
+  background: var(--control-edge-active);
+  border-color: var(--control-edge-active);
   color: var(--bg-primary);
   font-weight: 600;
 }

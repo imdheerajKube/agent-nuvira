@@ -128,11 +128,11 @@ describe('ThemeSwitcher — group semantics', () => {
     }
   });
 
-  it('offers all five palettes as radios, with the current one checked', () => {
+  it('offers all seven palettes as radios, with the current one checked', () => {
     render(<ThemeSwitcher />);
     openPanel();
     const radios = screen.getAllByRole('radio');
-    expect(radios.length).toBeGreaterThanOrEqual(11); // 5 palettes + 2 modes + 4 scales
+    expect(radios.length).toBeGreaterThanOrEqual(13); // 7 palettes + 2 modes + 4 scales
     const checked = radios.filter((r) => (r as HTMLInputElement).checked);
     expect(checked.length).toBe(3); // one per group
     expect((screen.getByRole('radio', { name: new RegExp(PALETTE_LABELS.enterprise) }) as HTMLInputElement).checked).toBe(true);

@@ -1,10 +1,10 @@
 /**
  * Every theme must be readable, and that is a measurement, not an opinion.
  *
- * WHY THIS TEST EXISTS. Adding five palettes x light/dark turns "does this look
- * good?" into "are these ten colour sets legible?", which no reviewer can check
+ * WHY THIS TEST EXISTS. Adding seven palettes x light/dark turns "does this look
+ * good?" into "are these fourteen colour sets legible?", which no reviewer can check
  * by eye — the pastel accent that passed on white is invisible on the pastel
- * canvas, and eyeballing ten themes x twelve pairings is exactly the kind of
+ * canvas, and eyeballing fourteen themes x twelve pairings is exactly the kind of
  * work that silently stops being done. So the palettes are READ OUT OF THE
  * STYLESHEET and every pairing a user actually looks at is computed here.
  *
@@ -82,7 +82,7 @@ function readThemes(): Theme[] {
   for (const match of paletteSection.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const selector = match[1];
     const body = match[2];
-    const paletteMatch = selector.match(/data-palette='([a-z]+)'/);
+    const paletteMatch = selector.match(/data-palette='([a-z-]+)'/);
     const modeMatch = selector.match(/data-mode='([a-z]+)'/);
     if (!paletteMatch || !modeMatch) continue;
     if (selector.includes('data-a11y') || selector.includes('data-font-scale')) continue;
@@ -233,7 +233,7 @@ function composite(fg: string, bg: string, alpha: number): string {
  * trusted at its declared alpha.
  *
  * The measurement that produced this list: an accent wash over a surface only
- * reaches 3:1 from ~90% alpha upward. At 50% every one of the ten themes lands
+ * reaches 3:1 from ~90% alpha upward. At 50% every one of the fourteen themes lands
  * between 1.6:1 and 3.1:1, and in the light modes even 60% fails. A wash is
  * therefore fine as a decoration or as reinforcement NEXT TO a text label, but
  * it cannot be the only thing carrying a state — which is what the first test
@@ -245,10 +245,10 @@ const STATE_BOUNDARY_WASHES: Array<[string, string, number, string]> = [
 ];
 
 describe('theme contrast — WCAG 2.2 AA', () => {
-  it('found every palette, and all five x both modes', () => {
+  it('found every palette, and all seven x both modes', () => {
     // A parse that silently returns nothing would make every assertion below
     // vacuous — the failure mode this guard exists for.
-    expect(THEMES.length).toBe(10);
+    expect(THEMES.length).toBe(14);
     const seen = THEMES.map((t) => `${t.palette}/${t.mode}`).sort();
     expect(seen).toEqual([
       'contrast/dark',
@@ -261,6 +261,10 @@ describe('theme contrast — WCAG 2.2 AA', () => {
       'neutral/light',
       'pastel/dark',
       'pastel/light',
+      'premium-amoled/dark',
+      'premium-amoled/light',
+      'premium/dark',
+      'premium/light',
     ]);
   });
 
@@ -342,18 +346,18 @@ describe('theme contrast — WCAG 2.2 AA', () => {
     // nobody with low vision can see. (Four dark themes happen to pass here,
     // which is exactly why this has to be measured per theme rather than argued.)
     const lightAt50 = failing(0.5, 'light');
-    expect(lightAt50.length).toBe(5);
+    expect(lightAt50.length).toBe(7);
     expect(Math.min(...at(0.5).map((t) => t.ratio))).toBeLessThan(2.5);
 
-    // "Just tint it a bit harder" is not the fix: four of the five light themes
+    // "Just tint it a bit harder" is not the fix: six of the seven light themes
     // are still short at 60%.
-    expect(failing(0.6, 'light').length).toBe(4);
+    expect(failing(0.6, 'light').length).toBe(6);
 
     // 75% is where the whole set clears it, which is the number to reach for.
     expect(failing(0.75)).toEqual([]);
 
-    // …and at the alpha the selected-state boundary actually uses, all ten pass
-    // with room to spare (4.2:1 at worst, 9.3:1 at best).
+    // …and at the alpha the selected-state boundary actually uses, all fourteen
+    // pass with room to spare.
     expect(failing(0.9)).toEqual([]);
   });
 });

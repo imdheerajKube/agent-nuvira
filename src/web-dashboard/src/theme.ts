@@ -25,7 +25,7 @@
  *    into a state that has no styles for it.
  */
 
-export const PALETTES = ['enterprise', 'neutral', 'pastel', 'executive', 'contrast'] as const;
+export const PALETTES = ['enterprise', 'neutral', 'pastel', 'executive', 'contrast', 'premium', 'premium-amoled'] as const;
 export type Palette = (typeof PALETTES)[number];
 
 export const MODES = ['light', 'dark'] as const;
@@ -50,6 +50,8 @@ export const PALETTE_LABELS: Record<Palette, string> = {
   pastel: 'Pastel',
   executive: 'Executive',
   contrast: 'High contrast',
+  premium: 'Premium',
+  'premium-amoled': 'Premium AMOLED',
 };
 
 const STORAGE_KEY = 'nuvira.dashboard.theme';
@@ -91,7 +93,7 @@ function prefersDarkScheme(): boolean | null {
  * values and the components ~950 more, all written for a dark UI, so a light
  * palette rendered them white-on-white. They are all tokens now —
  * `token-coverage.test.ts` fails if one returns, and `theme-contrast.test.ts`
- * computes 4.5:1 / 3:1 against all ten themes.
+ * computes 4.5:1 / 3:1 against all fourteen themes.
  *
  * Deliberately NOT covered: the one frame before this module runs, which
  * themes.css's `:root` fallback serves and which is therefore always enterprise
