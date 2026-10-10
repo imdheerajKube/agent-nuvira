@@ -103,7 +103,7 @@ describe('MetricTiles', () => {
   });
 
   it('drives every tone from an accent the contrast suite pins on the card', () => {
-    // The colour coding is only verified in all 10 themes because the four
+    // The colour coding is only verified in all 14 themes because the four
     // accents resolve to primitives `theme-contrast.test.ts` asserts at 4.5:1
     // against `--p-surface`. Point a tone at anything else and that guarantee
     // quietly lapses, so the chain is asserted rather than trusted.

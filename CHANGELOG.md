@@ -2,6 +2,41 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.4.0 — the dashboard gets two brand themes: Premium and Premium AMOLED
+
+Two palettes drawn from the Agent-Nuvira wallpapers, so the product wears its own
+launch art. **Premium** is warm-black surfaces with a vivid `#e8bd4a` gold accent.
+**Premium AMOLED** pushes the same identity to a true-black (`#000`) canvas for
+OLED displays and — the reason it is its own palette — turns the border of
+buttons and tabs into a **gold lining**.
+
+### Added: Premium and Premium AMOLED (7 palettes, 14 light/dark themes)
+
+The palette layer already made a theme ~30 lines with no component changes, so
+these are pure additions to `themes.css` plus one entry each in `PALETTES` and
+`PALETTE_LABELS`. The dark Premium accent is the wallpaper's display gold; the
+light-mode accent is a deeper amber (`#836008`) because the display gold cannot
+reach WCAG AA as text on a warm-ivory page. The AMOLED dark block keeps the canvas
+and rail at true `#000` and lifts the top bar a hair so the two chrome surfaces
+still read as distinct (the browser walk asserts it).
+
+### Added: a token-driven gold control lining
+
+Buttons and tabs now take their border from `--control-edge` /
+`--control-edge-hover` / `--control-edge-active`, with an optional
+`--control-glow`. The defaults map to the existing `--border` / `--border-hover`
+/ `--accent-blue`, so nothing moves in the other five palettes — only Premium
+AMOLED overrides them with the gold rim.
+
+### Verified
+
+- `theme-contrast.test.ts` computes every pairing in **all 14 themes** against
+  WCAG 2.2 AA (text 4.5:1, UI 3:1): 731 assertions, all passing.
+- The dashboard suite: **1279 tests passing**, and the committed bundle matches a
+  fresh build (`dashboard-bundle.test.ts`).
+- A real browser walked **premium-amoled/light, premium-amoled/dark, premium/light
+  and premium/dark across 29 routes** clean.
+
 ## v3.3.19 — a reachability probe can no longer spend the model you pinned, and a client-side wait ceiling stops reporting itself as an unreachable dashboard
 
 > Two lies, both measured on the same turn. **First**: `trace-1791551810613-mnn84h`

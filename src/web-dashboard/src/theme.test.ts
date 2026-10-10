@@ -65,8 +65,8 @@ afterEach(() => {
 });
 
 describe('theme — defaults', () => {
-  it('ships all five palettes and the four font steps', () => {
-    expect(PALETTES).toEqual(['enterprise', 'neutral', 'pastel', 'executive', 'contrast']);
+  it('ships all seven palettes and the four font steps', () => {
+    expect(PALETTES).toEqual(['enterprise', 'neutral', 'pastel', 'executive', 'contrast', 'premium', 'premium-amoled']);
     expect(FONT_SCALES).toEqual([100, 112, 125, 150]);
   });
 

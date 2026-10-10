@@ -17,14 +17,14 @@
    THREE LAYERS
    ------------
      1. DESIGN  — colour-independent: space, radius, type, motion, targets.
-     2. PALETTE — primitive ramps (`--p-*`): 5 palettes x light/dark.
+     2. PALETTE — primitive ramps (`--p-*`): 7 palettes x light/dark.
      3. SEMANTIC— the names components use, mapped from the primitives. ONE
                   block, because the mapping is identical in every theme; only
-                  the primitives differ. This is why 10 themes cost ~10 short
+                  the primitives differ. This is why 14 themes cost ~14 short
                   blocks instead of 10 long ones.
 
    STATE IS ON <html>, not <body>:  html[data-palette][data-mode]
-     data-palette = enterprise | neutral | pastel | executive | contrast
+     data-palette = enterprise | neutral | pastel | executive | contrast | premium | premium-amoled
      data-mode    = light | dark
      data-a11y    = off | on
      data-font-scale = 100 | 112 | 125 | 150
@@ -618,6 +618,230 @@ html[data-palette='contrast'][data-mode='dark'] {
   --p-shadow: rgba(255, 255, 255, 0.25);
 }
 
+/* Premium — the Agent-Nuvira brand palette, drawn from the launch wallpaper:
+   near-BLACK with a metallic gold glow, warm ivory text, and gold everywhere the
+   eye lands. The chrome and rail stay dark in BOTH modes (the wallpaper's
+   signature is black shot through with gold), while the light mode puts the warm
+   ivory on the page so it still reads as a light theme. Surfaces are warm-black,
+   not blue-grey — that warmth is what makes the gold read as gold. */
+html[data-palette='premium'][data-mode='light'] {
+  --p-canvas: #f7f1e3;
+  --p-surface: #ffffff;
+  --p-sunken: #f1ebdb;
+  --p-raised: #ffffff;
+  --p-hover: #ece4cf;
+  --p-input: #ffffff;
+  --p-ink: #241d12;
+  --p-ink-2: #57503c;
+  --p-ink-3: #6b6349;
+  --p-ink-inverse: #ffffff;
+  --p-line: #dccfb0;
+  --p-line-soft: #eae2cd;
+  --p-line-strong: #b3a682;
+  /* A rich gold, just dark enough to clear AA as TEXT on the warm-ivory page.
+     The display gold (#e8bd4a) is a fill/glow and cannot be text here. */
+  --p-accent: #836008;
+  --p-accent-strong: #694b05;
+  --p-accent-soft: #f6e9c9;
+  --p-on-accent: #ffffff;
+  --p-chrome: #16120b;
+  --p-chrome-ink: #f7f1e3;
+  --p-chrome-ink-2: #c9bc9e;
+  --p-chrome-hover: #2c2618;
+  --p-chrome-line: #37301e;
+  --p-sidebar: #0d0a05;
+  --p-sidebar-ink: #f7f1e3;
+  --p-sidebar-ink-2: #bdb194;
+  --p-sidebar-hover: #2b2416;
+  --p-sidebar-active: #2f2813;
+  --p-sidebar-line: #292317;
+  --p-sidebar-line-control: #7d7050;
+  --p-ok: #2b6b3d;
+  --p-ok-soft: #e2f0e5;
+  --p-warn: #7d5608;
+  --p-warn-soft: #f8eed6;
+  --p-danger: #a52a1c;
+  --p-danger-soft: #f8e3de;
+  /* Steel blue, echoing the cold spiral of the wallpaper against the warm gold —
+     it also keeps the info/status hue distinct from the accent. */
+  --p-info: #1f5a86;
+  --p-info-soft: #e1edf3;
+  --p-purple: #6b3fa0;
+  --p-cyan: #0f6a78;
+  --p-focus: #7a5606;
+  --p-focus-chrome: #f0cf7a;
+  --p-line-control: #7d7050;
+  --p-shadow: rgba(46, 36, 12, 0.15);
+}
+
+html[data-palette='premium'][data-mode='dark'] {
+  --p-canvas: #0a0906;
+  --p-surface: #15110a;
+  --p-sunken: #100d07;
+  --p-raised: #1d1810;
+  --p-hover: #262019;
+  --p-input: #17130c;
+  --p-ink: #f6efdf;
+  --p-ink-2: #cdbfa0;
+  --p-ink-3: #ab9d80;
+  --p-ink-inverse: #0a0906;
+  --p-line: #3d3627;
+  --p-line-soft: #272218;
+  --p-line-strong: #635839;
+  /* The wallpaper's display gold: brilliant as a fill/glow on warm-black and
+     still clears AA as text here. This is the palette's whole point. */
+  --p-accent: #e8bd4a;
+  --p-accent-strong: #f2cf72;
+  --p-accent-soft: #302712;
+  --p-on-accent: #1c1404;
+  --p-chrome: #060503;
+  --p-chrome-ink: #f6efdf;
+  --p-chrome-ink-2: #c8bb9c;
+  --p-chrome-hover: #24201a;
+  --p-chrome-line: #35301f;
+  --p-sidebar: #040302;
+  --p-sidebar-ink: #f6efdf;
+  --p-sidebar-ink-2: #bdb197;
+  --p-sidebar-hover: #262018;
+  --p-sidebar-active: #2c2513;
+  --p-sidebar-line: #2b2619;
+  --p-sidebar-line-control: #8f8259;
+  --p-ok: #82ca8b;
+  --p-ok-soft: #16281a;
+  --p-warn: #e8bc55;
+  --p-warn-soft: #332712;
+  --p-danger: #ff9d8f;
+  --p-danger-soft: #3a1d18;
+  --p-info: #9ec3ff;
+  --p-info-soft: #182437;
+  --p-purple: #d0a9f2;
+  --p-cyan: #7fdde6;
+  --p-focus: #f2cf72;
+  --p-focus-chrome: #ffe9a8;
+  --p-line-control: #8f8259;
+  --p-shadow: rgba(0, 0, 0, 0.65);
+}
+
+/* Premium AMOLED — the same gold identity as Premium, pushed to a TRUE-BLACK
+   canvas (#000) for OLED displays: black pixels are simply off, so the gold and
+   the ivory carry the whole design. It is the palette that also turns the
+   button and tab borders into a gold lining (the --control-* overrides at the
+   end of each block), which is the wallpaper's "gold rim around the panels"
+   look. Dark is the palette's defining mode; light is its warm champagne day
+   variant so it remains a complete theme. */
+html[data-palette='premium-amoled'][data-mode='light'] {
+  --p-canvas: #f8f3e6;
+  --p-surface: #ffffff;
+  --p-sunken: #f2ecda;
+  --p-raised: #ffffff;
+  --p-hover: #eee6cd;
+  --p-input: #ffffff;
+  --p-ink: #221b0f;
+  --p-ink-2: #544c36;
+  --p-ink-3: #685f43;
+  --p-ink-inverse: #ffffff;
+  --p-line: #ddd0ad;
+  --p-line-soft: #ebe3ca;
+  --p-line-strong: #b4a67c;
+  --p-accent: #7f5c06;
+  --p-accent-strong: #654904;
+  --p-accent-soft: #f7ead0;
+  --p-on-accent: #ffffff;
+  --p-chrome: #110e07;
+  --p-chrome-ink: #f8f3e6;
+  --p-chrome-ink-2: #cabd9c;
+  --p-chrome-hover: #282216;
+  --p-chrome-line: #342e1c;
+  --p-sidebar: #0a0804;
+  --p-sidebar-ink: #f8f3e6;
+  --p-sidebar-ink-2: #bfb392;
+  --p-sidebar-hover: #292315;
+  --p-sidebar-active: #2e2711;
+  --p-sidebar-line: #292316;
+  --p-sidebar-line-control: #7e7148;
+  --p-ok: #2b6b3d;
+  --p-ok-soft: #e2f0e5;
+  --p-warn: #7d5608;
+  --p-warn-soft: #f8eed6;
+  --p-danger: #a52a1c;
+  --p-danger-soft: #f8e3de;
+  --p-info: #1f5a86;
+  --p-info-soft: #e1edf3;
+  --p-purple: #6b3fa0;
+  --p-cyan: #0f6a78;
+  --p-focus: #76550a;
+  --p-focus-chrome: #f0cf7a;
+  --p-line-control: #7e7148;
+  --p-shadow: rgba(48, 38, 14, 0.15);
+  /* Gold lining for buttons and tabs (a shade deeper than the display gold so
+     it reads as a rim on a LIGHT surface rather than washing out). */
+  --control-edge: #b99a3e;
+  --control-edge-soft: #d8c47e;
+  --control-edge-hover: #8a6c1c;
+  --control-edge-active: #7f5c06;
+  --control-glow: 0 0 0 1px rgba(185, 154, 62, 0.28);
+  --control-glow-hover: 0 0 10px rgba(185, 154, 62, 0.3);
+}
+
+html[data-palette='premium-amoled'][data-mode='dark'] {
+  /* True black — OLED pixels off. Surfaces step up in tiny increments so the
+     hierarchy survives without ever leaving near-black. */
+  --p-canvas: #000000;
+  --p-surface: #050505;
+  --p-sunken: #030303;
+  --p-raised: #0c0c0c;
+  --p-hover: #161613;
+  --p-input: #070707;
+  --p-ink: #f6efdf;
+  --p-ink-2: #cabfa3;
+  --p-ink-3: #a89c7f;
+  --p-ink-inverse: #000000;
+  --p-line: #2e2a1e;
+  --p-line-soft: #1c1a13;
+  --p-line-strong: #5a5133;
+  --p-accent: #e8bd4a;
+  --p-accent-strong: #f2cf72;
+  --p-accent-soft: #241d0d;
+  --p-on-accent: #1a1204;
+  /* The rail and canvas keep true black; the top bar is lifted a hair so the
+     two chrome surfaces read as distinct (the smoke walk asserts it, and a bar
+     and a rail painted the identical black read as one slab). */
+  --p-chrome: #0a0a0a;
+  --p-chrome-ink: #f6efdf;
+  --p-chrome-ink-2: #c8bb9c;
+  --p-chrome-hover: #17140f;
+  --p-chrome-line: #2a261a;
+  --p-sidebar: #000000;
+  --p-sidebar-ink: #f6efdf;
+  --p-sidebar-ink-2: #bdb197;
+  --p-sidebar-hover: #232016;
+  --p-sidebar-active: #241e0c;
+  --p-sidebar-line: #221f15;
+  --p-sidebar-line-control: #7d7251;
+  --p-ok: #82ca8b;
+  --p-ok-soft: #10200f;
+  --p-warn: #e8bc55;
+  --p-warn-soft: #241c09;
+  --p-danger: #ff9d8f;
+  --p-danger-soft: #2a1410;
+  --p-info: #9ec3ff;
+  --p-info-soft: #101a28;
+  --p-purple: #d0a9f2;
+  --p-cyan: #7fdde6;
+  --p-focus: #f2cf72;
+  --p-focus-chrome: #ffe9a8;
+  --p-line-control: #7d7251;
+  --p-shadow: rgba(0, 0, 0, 0.7);
+  /* The gold rim. A dim gold by default, brightening to the display gold on
+     hover/active, with a faint outer glow — "gold lining around the panels". */
+  --control-edge: #5a4d22;
+  --control-edge-soft: #3a3218;
+  --control-edge-hover: #a1872f;
+  --control-edge-active: #e8bd4a;
+  --control-glow: 0 0 0 1px rgba(232, 189, 74, 0.1);
+  --control-glow-hover: 0 0 12px rgba(232, 189, 74, 0.28);
+}
+
 
 /* ── 2b. PALETTE PREVIEW SWATCHES ──────────────────────────────────────────
    The appearance switcher shows each palette as a two-tone disc (chrome + its
@@ -633,6 +857,8 @@ html[data-palette='contrast'][data-mode='dark'] {
 .theme-swatch[data-swatch='pastel'] { background: linear-gradient(135deg, #dce8f7 50%, #35619f 50%); }
 .theme-swatch[data-swatch='executive'] { background: linear-gradient(135deg, #23282a 50%, #0f6055 50%); }
 .theme-swatch[data-swatch='contrast'] { background: linear-gradient(135deg, #000000 50%, #0b3d91 50%); }
+.theme-swatch[data-swatch='premium'] { background: linear-gradient(135deg, #16120b 50%, #e8bd4a 50%); }
+.theme-swatch[data-swatch='premium-amoled'] { background: linear-gradient(135deg, #000000 50%, #e8bd4a 50%); }
 
 
 /* ── 3. SEMANTIC LAYER ──────────────────────────────────────────────────────
@@ -719,13 +945,24 @@ html[data-palette='contrast'][data-mode='dark'] {
 
   /* A chip background for the "partial"/purple status. DERIVED rather than a
      twenty-first primitive: a 14% wash of the palette's purple over its own
-     surface keeps the chip in the palette's hue in all ten themes, and costs no
+     surface keeps the chip in the palette's hue in all fourteen themes, and costs no
      per-theme block. `--accent-purple` is the text/line on top of it. */
   --purple-soft: color-mix(in srgb, var(--p-purple) 14%, var(--p-surface));
 
   /* Modal/page scrim. Tinted by the palette rather than fixed black, because a
      pure-black scrim over a light palette reads as a hole. */
   --scrim: var(--p-shadow);
+
+  /* Interactive control edge — the lining around buttons and tabs. The defaults
+     reproduce the previous borders exactly, so nothing moves for the other
+     palettes; Premium AMOLED overrides these with a gold lining. Kept as tokens
+     so the treatment stays a palette concern and the components never change. */
+  --control-edge: var(--border);
+  --control-edge-soft: var(--border-light);
+  --control-edge-hover: var(--border-hover);
+  --control-edge-active: var(--accent-blue);
+  --control-glow: none;
+  --control-glow-hover: 0 0 8px color-mix(in srgb, var(--accent-blue) 15%, transparent);
 
   /* DELIBERATELY NOT PER-THEME: a QR code is read by a camera, which needs dark
      modules on a light background. Theming this would have "fixed" the palette
