@@ -128,14 +128,30 @@ export class ChatRetryBroker {
    * an empty "0 models" report that silently drops the offer AND the queue
    * entry. Omitted only by callers that have no turn of their own to attribute.
    */
-  onFailure(sessionId: string, text: string, mark?: number): string | undefined {
+  onFailure(
+    sessionId: string,
+    text: string,
+    mark?: number,
+    /**
+     * `offerOnly` — the caller already showed the FACTS (the engine delivered its
+     * own exhaustion report), so return just the closing offer line. Without it a
+     * failed turn is explained TWICE in one bubble, with different pool counts
+     * (measured live: "422 models across 9 providers" then "435 eligible models
+     * across 22 providers" in the same answer). See `renderModelBreadthReport`.
+     */
+    opts?: { offerOnly?: boolean },
+  ): string | undefined {
     try {
       const report = (this.deps.breadth ?? modelBreadthReport)(mark ?? this.mark(), this.deps.configManager);
       // A dashboard turn that failed to produce an answer is a model-layer
       // failure, so the retry offer is appropriate (G9 uses this hint to keep
       // the offer and the queue in step).
-      const rendered = renderModelBreadthReport(report, { task: text, modelLayerFailure: true });
-      if (!rendered) return undefined;
+      const full = renderModelBreadthReport(report, { task: text, modelLayerFailure: true });
+      if (!full) return undefined;
+      const rendered =
+        opts?.offerOnly === true
+          ? renderModelBreadthReport(report, { task: text, modelLayerFailure: true, offerOnly: true }) ?? full
+          : full;
       // G9: the report only promises a retry when one can help. When it says
       // "this was not a model shortage", queueing would contradict the reply
       // the user is about to read — so the queue and the offer stay in step.
@@ -146,7 +162,10 @@ export class ChatRetryBroker {
         text,
         kind: 'chat',
         ...(report.nextFreeInMs !== undefined ? { nextFreeInMs: report.nextFreeInMs } : {}),
-        lastError: rendered.split('\n')[0] ?? '',
+        // The deferred task's own label keeps the FULL report's headline even when
+        // only the offer line is shown, so the queue is never less informative
+        // than the bubble the user read.
+        lastError: full.split('\n')[0] ?? '',
       });
       return rendered;
     } catch (err) {

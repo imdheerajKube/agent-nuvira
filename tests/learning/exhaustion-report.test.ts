@@ -227,3 +227,36 @@ describe('formatting helpers', () => {
     expect(formatWaitShort(3 * 3_600_000)).toBe('3h');
   });
 });
+
+// ─── A PIN changes the levers ───────────────────────────────────────────────
+// A pinned turn carries an explicit quality bar. Offering "allow a weaker or
+// cheaper model" as free advice contradicts the choice the user just made — and
+// for an agentic ask the machine reading is worse than a weaker answer: a small
+// local model cannot call tools, so its "answer" is fabricated. With the pin
+// known, the lever says what releasing it would actually mean.
+describe('exhaustion report — a pinned model is respected', () => {
+  it('names the pin instead of inviting a downgrade', () => {
+    const report = buildExhaustionReport(
+      input({
+        attempts: [
+          { provider: 'deepseek', model: 'deepseek-v4-pro', kind: 'timeout', reason: 'timed out' },
+        ],
+        pinnedModel: 'deepseek/deepseek-v4-pro',
+      }),
+    );
+
+    expect(report.text).toContain('You pinned deepseek/deepseek-v4-pro');
+    expect(report.text).not.toContain('Allow a weaker or cheaper model');
+    // The lever is still offered — as a deliberate choice, not a suggestion.
+    expect(report.options.some((o) => o.code === 'weaker-model')).toBe(true);
+  });
+
+  it('keeps the generic wording when no model was pinned', () => {
+    const report = buildExhaustionReport(
+      input({
+        attempts: [{ provider: 'groq', model: 'llama-3.3-70b', kind: 'timeout', reason: 'timed out' }],
+      }),
+    );
+    expect(report.text).toContain('Allow a weaker or cheaper model');
+  });
+});

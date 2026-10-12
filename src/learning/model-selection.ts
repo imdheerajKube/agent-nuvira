@@ -134,6 +134,45 @@ function definitivelyMissing(entry: ModelRegistryEntry | undefined): boolean {
 }
 
 /**
+ * POOL HYGIENE: could this provider really serve this model id?
+ *
+ * MOVED HERE (from `model-first-router.ts`) because this module is the one that
+ * hands out model ids to the ADAPTERS — `resolveAdapterDefault` and
+ * `resolveWorkingModel`'s fast path both read `preferredModelsFor`, so a bogus
+ * row that survives this filter is not merely a bad ranking, it becomes the
+ * literal `model` of a real request.
+ *
+ * MEASURED (trace-1791732980335-omkv62, 2026-10-11). The provider-WIRE harness
+ * (`src/parity/wire-fixtures.ts`) left `local|wire-stub-model` in the real
+ * registry as `status: verified`, `source: telemetry`, errorRate 0. Telemetry
+ * outranks spot-check and errorRate 0 beats every real Ollama model, so it
+ * sorted FIRST for `local` — and when a pinned `deepseek` turn failed over, the
+ * walk resolved `local`'s model to `wire-stub-model` and sent it to a provider
+ * that cannot serve it. The turn burned its whole failover walk and reported a
+ * model shortage while healthy models sat in the pool.
+ *
+ * Deliberately CONSERVATIVE — only two rules, both decidable from the id alone:
+ *   1. Fixture/stub ids (`wire-…`, `test-…`, `…-stub`) come from test harnesses
+ *      and must never be routed to.
+ *   2. An Ollama-style TAGGED id (`name:tag`) is a LOCAL runner's naming scheme;
+ *      a hosted provider does not serve `qwen2.5:0.5b`.
+ * Anything needing a catalog to adjudicate is NOT guessed at: a wrong exclusion
+ * silently removes a working model, which is the more expensive mistake.
+ */
+export function isPairPlausible(provider: string, model: string): boolean {
+  const id = (model ?? '').trim().toLowerCase();
+  if (!id) return false;
+  // 1. Fixture/stub ids.
+  if (/^(wire-|test-|fixture-|stub-)/.test(id) || /-stub(-|$)|\.stub\./.test(id)) return false;
+  // 2. Ollama-style tags only on a local runner.
+  if (id.includes(':')) {
+    const localRunner = KEYLESS_PROVIDERS.includes(provider) || provider === 'ollama';
+    if (!localRunner) return false;
+  }
+  return true;
+}
+
+/**
  * Verified working models for a provider, ranked by learned health:
  * strongest verification source first, then lowest error rate, then lowest
  * latency, then most recently verified.
@@ -165,6 +204,11 @@ export function preferredModelsFor(provider: string): string[] {
     // This is the read-side half of the cross-provider poisoning measured live
     // on 2026-10-06 — see `definitivelyMissing`.
     .filter((m) => !definitivelyMissing(registry.getEntry(provider, m)))
+    // Never rank a pair that CANNOT exist — a test fixture id, or an
+    // Ollama-tagged id on a hosted provider. A `verified` stub row would
+    // otherwise win the health ranking and become the literal model of the
+    // next real request (see `isPairPlausible`).
+    .filter((m) => isPairPlausible(provider, m))
     .sort((a, b) => {
       const ea = registry.getEntry(provider, a);
       const eb = registry.getEntry(provider, b);

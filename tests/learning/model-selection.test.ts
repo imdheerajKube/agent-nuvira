@@ -187,6 +187,46 @@ describe('model selection — dynamic defaults (nothing hardcoded)', () => {
       expect(preferredModelsFor('groq')).toEqual(['llama-3.3-70b-versatile']);
     });
 
+    it('never offers a test-fixture model as a provider default (live: trace-1791732980335-omkv62)', () => {
+      const registry = getModelRegistry();
+      // MEASURED 2026-10-11. The provider-WIRE harness seeds its fixture id into
+      // the REAL registry as `status: verified`, `source: telemetry`, errorRate
+      // 0. Telemetry outranks spot-check and errorRate 0 beats every real Ollama
+      // model, so `local|wire-stub-model` won the health ranking — and because
+      // `requireAdapterModel`/`resolveAdapterDefault` read THIS ranking, the id
+      // became the literal model of a real request. A pinned deepseek turn that
+      // failed over walked to `local` and sent `wire-stub-model` to a provider
+      // that cannot serve it, so the whole failover walk failed and the turn
+      // reported a model shortage.
+      registry.markVerified('local', 'wire-stub-model', 'telemetry', 77_143);
+      registry.markVerified('local', 'qwen2.5:0.5b', 'telemetry', 979);
+      // Make the REAL model look worse than the stub, exactly as it did live
+      // (the registry had `local|qwen2.5:0.5b` at errorRate 0.2 beside the
+      // stub's 0) — so this test fails if the filter, not luck, is what keeps
+      // the fixture id out.
+      registry.recordCall('local', 'qwen2.5:0.5b', false, 'timeout');
+      // A fixture id on a KEYED provider too, so the rule is not local-only.
+      registry.markVerified('groq', 'wire-stub-model', 'telemetry');
+      registry.markVerified('groq', 'llama-3.3-70b-versatile', 'telemetry', 100);
+
+      expect(preferredModelsFor('local')).toContain('qwen2.5:0.5b');
+      expect(preferredModelsFor('local')).not.toContain('wire-stub-model');
+      expect(preferredModelsFor('groq')).not.toContain('wire-stub-model');
+      // The exact path the fallback walk takes: an unset/'default' pin resolves
+      // to the adapter's last-resort model.
+      expect(requireAdapterModel('local', 'default')).toBe('qwen2.5:0.5b');
+    });
+
+    it('never offers an Ollama-tagged id on a hosted provider (impossible pair)', () => {
+      const registry = getModelRegistry();
+      registry.markVerified('gemini', 'qwen2.5:0.5b', 'telemetry');
+      registry.markVerified('gemini', 'gemini-3.1-flash-lite', 'telemetry', 100);
+      expect(preferredModelsFor('gemini')).toEqual(['gemini-3.1-flash-lite']);
+      // …while the SAME tagged id stays perfectly usable on the local runner.
+      registry.markVerified('local', 'qwen2.5:0.5b', 'telemetry', 100);
+      expect(preferredModelsFor('local')).toContain('qwen2.5:0.5b');
+    });
+
     it('ranks a telemetry-proven model ABOVE a spot-check-only sibling (live bug: deepseek-v4-pro)', () => {
       const registry = getModelRegistry();
       // Observed live on the native deepseek provider: `deepseek-v4-pro` had six

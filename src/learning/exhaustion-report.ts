@@ -70,6 +70,18 @@ export interface ExhaustionInput {
   /** What the user asked for, for the header. */
   task?: string;
   /**
+   * The model the user PINNED for this turn, when there was one.
+   *
+   * WHY THIS IS AN INPUT. The report's levers must respect the user's own
+   * contract: a pinned turn carries an explicit quality bar, so offering "allow a
+   * weaker or cheaper model" as though it were free advice contradicts the choice
+   * the user just made — and the machine reading is worse, because the turn may
+   * already have been handed to a small local model whose "answer" for an agentic
+   * ask is fabricated rather than merely weaker. With the pin known, the lever
+   * says what releasing it would actually mean.
+   */
+  pinnedModel?: string;
+  /**
    * The underlying failure line, when there is one (e.g. the provider's own
    * rejection text). Rendered as a `Reason:` line so a specific, actionable
    * cause is never lost behind the report.
@@ -287,7 +299,9 @@ export function buildExhaustionReport(input: ExhaustionInput): ExhaustionReport 
   }
   options.push({
     code: 'weaker-model',
-    text: 'Allow a weaker or cheaper model for this task and accept that its answer may need more checking.',
+    text: input.pinnedModel
+      ? `You pinned ${input.pinnedModel}, so nothing was run on a weaker model — say so explicitly if you would rather allow a weaker or cheaper one for this task.`
+      : 'Allow a weaker or cheaper model for this task and accept that its answer may need more checking.',
   });
   options.push({
     code: 'narrow',

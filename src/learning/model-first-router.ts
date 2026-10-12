@@ -21,7 +21,8 @@ import { classifyPairEntitlement, orderByEntitlement, type PairEntitlement } fro
 import { getCatalogProvider, type CatalogProviderEntry, CATALOG_PROVIDER_IDS } from '../inference/provider-catalog.js';
 import { analyzeComplexity, isSmallTalk, type ComplexityLevel } from './hybrid-router.js';
 import { getTaskType, type TaskType } from './model-router.js';
-import { hasCredentials, preferredModelsFor, KEYLESS_PROVIDERS } from './model-selection.js';
+import { hasCredentials, preferredModelsFor, isPairPlausible } from './model-selection.js';
+export { isPairPlausible };
 import { isNonChatModel } from '../inference/model-catalog.js';
 import { logger } from '../utils/logger.js';
 import type { ConfigManager } from '../config/manager.js';
@@ -286,40 +287,12 @@ function scoreModelOnProvider(
 }
 
 /**
- * P6 (fix_model_routing) — POOL HYGIENE: could this provider really serve this
- * model id?
- *
- * The registry can hold pairs that are syntactically fine and physically
- * impossible, and a `verified` status on one of them is worse than useless — it
- * spends a fallback slot, a round trip, and (as an "eligible model") credibility
- * on a call that cannot succeed. Observed on disk: `gemini/qwen2.5:0.5b` and
- * `groq/wire-stub-model` marked verified.
- *
- * Deliberately CONSERVATIVE — only two rules, both of which are decidable from
- * the id alone:
- *
- *   1. An Ollama-style TAGGED id (`name:tag`) is a LOCAL runner's naming
- *      scheme. A hosted provider does not serve `qwen2.5:0.5b`; the `:tag` form
- *      belongs to the local-ops providers (see KEYLESS_PROVIDERS).
- *   2. Stub/fixture ids (`wire-stub-model`, `test-…`, `…-stub`) come from test
- *      harnesses and must never be routed to.
- *
- * Anything needing a catalog to adjudicate (a vendor that does not serve a
- * family) is NOT guessed at here: a wrong exclusion silently removes a working
- * model, which is the more expensive mistake.
+ * `isPairPlausible` lives in `model-selection.ts` (re-exported above): that
+ * module is where a ranked model id actually reaches an adapter request
+ * (`resolveAdapterDefault`), so the filter has to sit on THAT ranking too — not
+ * only on this router's candidate list. See its doc for the measured case
+ * (trace-1791732980335-omkv62).
  */
-export function isPairPlausible(provider: string, model: string): boolean {
-  const id = (model ?? '').trim().toLowerCase();
-  if (!id) return false;
-  // 2. Fixture/stub ids.
-  if (/^(wire-|test-|fixture-|stub-)/.test(id) || /-stub(-|$)|\.stub\./.test(id)) return false;
-  // 1. Ollama-style tags only on a local runner.
-  if (id.includes(':')) {
-    const localRunner = KEYLESS_PROVIDERS.includes(provider) || provider === 'ollama';
-    if (!localRunner) return false;
-  }
-  return true;
-}
 
 /**
  * Build the full model candidate list across all providers.

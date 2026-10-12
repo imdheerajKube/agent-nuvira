@@ -15,6 +15,10 @@ import {
   estimateModelCapability,
   capabilityBand,
   nonDowngradeCandidates,
+  sameClassFallback,
+  strongestFirst,
+  capabilityClassOf,
+  bandRank,
   isHighCapabilityModel,
   NEUTRAL_CAPABILITY,
   CAPABILITY_HIGH_MIN,
@@ -85,5 +89,62 @@ describe('nonDowngradeCandidates', () => {
 
   it('is a pure filter — an empty input stays empty', () => {
     expect(nonDowngradeCandidates('openai/gpt-oss-120b', [])).toEqual([]);
+  });
+});
+
+// ─── Same-class fallback (the pinned + auto-fallback rule) ──────────────────
+// A user who pins a model and leaves auto-fallback on has chosen a QUALITY BAR,
+// not merely a first attempt. These pin the rule that keeps a handoff inside it:
+// the pin's own class wins, a HIGHER class is not a compromise, and a step DOWN
+// is only ever taken when nothing else exists — and is reported, so the caller
+// can say so instead of the user discovering it.
+describe('sameClassFallback', () => {
+  it('keeps a strong pin in its own class — a tiny sibling never outranks a same-class model', () => {
+    const pick = sameClassFallback('openai/gpt-oss-120b', [
+      'local/qwen2.5:0.5b',
+      'qwen/qwen3.8-27b',
+      'llama3:70b',
+    ]);
+    expect(pick?.crossClass).toBe(false);
+    expect(pick?.model).not.toBe('local/qwen2.5:0.5b');
+    expect(['qwen/qwen3.8-27b', 'llama3:70b']).toContain(pick?.model);
+  });
+
+  it('takes a HIGHER class without calling it a step down', () => {
+    expect(sameClassFallback('qwen2.5:0.5b', ['openai/gpt-oss-120b'])).toEqual({
+      model: 'openai/gpt-oss-120b',
+      crossClass: false,
+    });
+  });
+
+  it('steps down ONLY when the class has nothing, and says so', () => {
+    expect(sameClassFallback('openai/gpt-oss-120b', ['local/qwen2.5:0.5b', 'allam-2-7b'])).toEqual({
+      model: 'allam-2-7b',
+      crossClass: true,
+    });
+  });
+
+  it('never invents a model for an empty list', () => {
+    expect(sameClassFallback('openai/gpt-oss-120b', [])).toBeUndefined();
+    expect(sameClassFallback(undefined, ['', '   '])).toBeUndefined();
+  });
+
+  it('reads the class of a model id, and ranks the bands', () => {
+    expect(capabilityClassOf('openai/gpt-oss-120b')).toBe('high');
+    expect(capabilityClassOf('qwen2.5:0.5b')).toBe('low');
+    expect(bandRank('high')).toBeGreaterThan(bandRank('medium'));
+    expect(bandRank('medium')).toBeGreaterThan(bandRank('low'));
+  });
+
+  it('orders candidates strongest-first, stably within a band', () => {
+    expect(strongestFirst(['qwen2.5:0.5b', 'openai/gpt-oss-120b', 'qwen/qwen3.8-27b'])).toEqual([
+      'openai/gpt-oss-120b',
+      'qwen/qwen3.8-27b',
+      'qwen2.5:0.5b',
+    ]);
+    // Equal scores keep their incoming order (a curated order still decides).
+    const a = 'model-one-pro';
+    const b = 'model-two-pro';
+    expect(strongestFirst([a, b])).toEqual([a, b]);
   });
 });

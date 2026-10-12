@@ -1495,7 +1495,19 @@ export function formatWait(ms: number): string {
  */
 export function renderModelBreadthReport(
   report: ModelBreadthReport,
-  opts: { task?: string } & FailureContext = {},
+  /**
+   * `offerOnly` — return JUST the closing offer/next-step paragraph.
+   *
+   * WHY: on the dashboard a failed turn can be explained twice in one bubble — the
+   * engine delivers its own exhaustion report, and the retry broker appends this
+   * renderer's full report on top, so the reader sees two "I couldn't finish"
+   * blocks with different pool counts (measured live: "422 models across 9
+   * providers" then "435 eligible models across 22 providers" in ONE answer). The
+   * facts belong to whichever report already ran; the OFFER is the one part the
+   * broker must add. The wording still comes from here either way, so the two
+   * surfaces cannot drift.
+   */
+  opts: { task?: string; offerOnly?: boolean } & FailureContext = {},
 ): string | undefined {
   const tried = report.tried.filter((a) => !a.skipped);
   const skipped = report.tried.filter((a) => a.skipped);
@@ -1572,7 +1584,6 @@ export function renderModelBreadthReport(
     );
   }
 
-  lines.push('');
   // MODELS WERE AVAILABLE AND UNREACHED — a routing gap, not a shortage — so
   // do not LEAD WITH A WAIT. A user reported exactly this: the reply said "a
   // model frees up in ~4m" while a healthy pool (other providers, credentialed
@@ -1580,40 +1591,37 @@ export function renderModelBreadthReport(
   // model was tried and other eligible models remain, the honest next step is an
   // immediate retry that routes to a different model, not "wait".
   const modelsRemain = poolMeasured && tried.length > 0 && poolSize > tried.length;
-  if (report.nextFreeInMs !== undefined) {
-    if (modelsRemain) {
-      lines.push(
-        `Note: ${formatCount(poolSize)} model${poolSize === 1 ? '' : 's'} were eligible but only ${tried.length} ${tried.length === 1 ? 'was' : 'were'} tried — so waiting is not the fix. ` +
-          'Want me to retry now and route to one of the untried models? Reply *yes* and I will run it.',
-      );
-    } else {
+  const offerLine = ((): string => {
+    if (report.nextFreeInMs !== undefined) {
+      if (modelsRemain) {
+        return `Note: ${formatCount(poolSize)} model${poolSize === 1 ? '' : 's'} were eligible but only ${tried.length} ${tried.length === 1 ? 'was' : 'were'} tried — so waiting is not the fix. ` +
+          'Want me to retry now and route to one of the untried models? Reply *yes* and I will run it.';
+      }
       // `nextFreeInMs` is computed from ACTIVE exclusions with an expiry, so a
       // retired pair (expiresAt 0) can never be the thing we are waiting for.
-      lines.push(
-        `A model frees up in about ${formatWait(report.nextFreeInMs)}. Want me to keep checking and run this the moment one is available, then update you here? Reply *yes* and I will keep trying until it is done.`,
-      );
+      return `A model frees up in about ${formatWait(report.nextFreeInMs)}. Want me to keep checking and run this the moment one is available, then update you here? Reply *yes* and I will keep trying until it is done.`;
     }
-  } else if (emptyPool) {
-    lines.push(
-      'No suitable model is available right now — the eligible pool is empty. Want me to keep checking in the background and run this as soon as one comes back? Reply *yes* and I will keep trying until it is done.',
-    );
-  } else if (reportWarrantsRetry(report, opts)) {
-    // Availability-shaped: models were reached and failed (or the caller knows
-    // the model layer itself failed). Waiting is a real remedy, so the offer
-    // stands and the caller queues it.
-    lines.push(
-      'Want me to keep checking in the background and run this as soon as one comes back? Reply *yes* and I will keep trying until it is done.',
-    );
-  } else {
+    if (emptyPool) {
+      return 'No suitable model is available right now — the eligible pool is empty. Want me to keep checking in the background and run this as soon as one comes back? Reply *yes* and I will keep trying until it is done.';
+    }
+    if (reportWarrantsRetry(report, opts)) {
+      // Availability-shaped: models were reached and failed (or the caller knows
+      // the model layer itself failed). Waiting is a real remedy, so the offer
+      // stands and the caller queues it.
+      return 'Want me to keep checking in the background and run this as soon as one comes back? Reply *yes* and I will keep trying until it is done.';
+    }
     // Healthy pool, nothing attempted: NOT a model shortage. Queuing a retry
     // would burn hours reproducing an identical failure (live: 6 identical
     // orchestrator runs in 32 minutes), so no retry is offered — and the user
     // is told why, instead of being asked to wait for a model that was never
     // the problem. The retry decision uses the same predicate the QUEUE uses,
     // so the offer and the queue can never disagree.
-    lines.push(
-      'This was not a model shortage, so queuing a retry would only repeat the same failure. The ask needs a different approach rather than a different model.',
-    );
-  }
+    return 'This was not a model shortage, so queuing a retry would only repeat the same failure. The ask needs a different approach rather than a different model.';
+  })();
+  // A caller that already delivered the FACTS asks for the offer alone (see
+  // `offerOnly`) — the same failure must not be explained twice in one bubble.
+  if (opts.offerOnly) return offerLine;
+  lines.push('');
+  lines.push(offerLine);
   return lines.join('\n');
 }

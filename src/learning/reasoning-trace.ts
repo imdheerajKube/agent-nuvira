@@ -282,6 +282,13 @@ export type TraceGateName =
   // model was told, deterministically, to install it itself rather than declare
   // itself unable and hand the user a manual step.
   | 'tool-takeover'
+  // NUDGE INTERRUPTED: a bounded nudge step failed (the model call died) AFTER
+  // the turn had already produced an answer. The answer is delivered and the
+  // turn is NOT reported as a failure — recorded here so the trace explains why
+  // a turn that ended in a generation error still carries an answer. Measured
+  // (`trace-1791754367868-vedwmp`): a 3,831-char answer was replaced by an
+  // exhaustion report because the nudge that followed it died.
+  | 'nudge-interrupted'
   // ROUTING self-instrumentation (A2): the router chose a provider×model for a
   // turn and the harness recorded the CONTEXT of that choice — the pair, its
   // complexity/score, whether the model is agentic-capable, and (for a weak

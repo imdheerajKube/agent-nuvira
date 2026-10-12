@@ -1640,6 +1640,40 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // with an empty/bounded response (the "where is the essay?" bug).
   let lastContent = '';
   /**
+   * The last SUBSTANTIVE answer this turn produced, kept ACROSS the bounded
+   * NUDGE gates — `lastContent` is not.
+   *
+   * WHY THIS EXISTS (measured: `trace-1791754367868-vedwmp`, 2026-10-12, on the
+   * dashboard surface). Step 0 delivered a complete 3,831-character answer to a
+   * design question ("what if I add a button on chat…how will that be?"). The
+   * ZERO-ACTION gate then judged that ask to be "work on the workspace" and
+   * spent its one bounded nudge — clearing `lastContent` on the way out, because
+   * a non-answer must not be handed back as the answer. The nudge step then died
+   * (`local/wire-stub-model`, two empty steps). `delivered` was read from the
+   * now-empty `lastContent`, so the turn reported `generationFailed` and the
+   * caller replaced the answer with an EXHAUSTION REPORT: "Tried 25 models…".
+   * The user's answer was thrown away and a failure message was shown for a turn
+   * that had answered correctly — the complaint that produced this fix.
+   *
+   * The rule: a gate may invalidate the text it is judging as the FINAL answer,
+   * but it may never erase the fact that an answer was produced. If the turn
+   * dies on a nudge, the delivered answer is the best available truth, and
+   * `generationFailed` (which answers exactly one question — "was an answer
+   * delivered?") is FALSE. The turn's honesty flags (`undeliveredChange`,
+   * `unverifiedEdit`, …) still carry the residual warning.
+   */
+  let lastDeliveredAnswer = '';
+  /**
+   * Store answer text: `lastContent` (nudge-clearable) AND the answer memory
+   * (never cleared). Every assignment of a REAL answer goes through this, so the
+   * two cannot drift; `lastContent = ''` stays a deliberate clear of the former
+   * only.
+   */
+  const rememberContent = (text: string): void => {
+    lastContent = text;
+    if (text.trim()) lastDeliveredAnswer = text;
+  };
+  /**
    * How many PRODUCTIVE actions had SUCCEEDED when `lastContent` was written.
    *
    * WHY THIS EXISTS (D1 — the delivered answer contradicted the run's own
@@ -1869,7 +1903,25 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // belongs — deciding whether a no-model turn may be re-run through the
       // rules' pipeline fallback (E3c) — and a turn with NO answer at all is a
       // failure either way, because there is nothing to deliver.
-      const delivered = lastContent.trim();
+      //
+      // The answer memory is consulted second: a step that died while running a
+      // NUDGE still leaves the turn with the answer it already produced, and
+      // reporting that turn as a failure (with an exhaustion report in place of
+      // the answer) is the measured 2026-10-12 defect on this very line — see
+      // `lastDeliveredAnswer`.
+      const deliveredFromNudge = lastContent.trim() === '' && lastDeliveredAnswer.trim() !== '';
+      const delivered = lastContent.trim() || lastDeliveredAnswer.trim();
+      if (deliveredFromNudge) {
+        // Recorded, never printed: the answer stands on its own, and the fact a
+        // follow-up step died is a trace fact, not something to pad the answer
+        // with. The turn's honesty flags still mark any unverified work.
+        traceEvent({
+          kind: 'gate',
+          gate: 'nudge-interrupted',
+          summary:
+            'a bounded nudge step failed after an answer was delivered — delivering the answer, not a failure report',
+        });
+      }
       return {
         content: delivered || toUserFacingGenerationError(err),
         followups,
@@ -1882,7 +1934,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // Nothing to deliver means the provider walk itself gave up — every
         // candidate was tried and none answered. That IS the evidenced shortage.
         termination: delivered === '' ? 'no-capable-candidate' : 'delivered',
-        generationFailed: delivered === '' || !madeProgress,
+        generationFailed: delivered === '',
       };
     }
 
@@ -1922,7 +1974,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       response.content.trim() !== '' && !responseThinkOnly && !isBareAcknowledgment(response.content);
     const workSinceLastContent = workAtIterationStart > workCallsBeforeLastContent;
     if (responseIsSubstantive && (response.content.length >= lastContent.length || workSinceLastContent)) {
-      lastContent = response.content;
+      rememberContent(response.content);
       // Stamp what this answer is an account OF, so the next step can tell an
       // update from a wrapper (see `workCallsBeforeLastContent`). Deferred to the
       // top of the next iteration so it includes THIS step's own work.
@@ -2186,8 +2238,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         if (progress.successfulToolCalls.length === 0) {
           lastContent = '';
         } else {
-          lastContent = stripTrailingPermissionSeek(
-            response.content.length >= lastContent.length ? response.content : lastContent,
+          rememberContent(
+            stripTrailingPermissionSeek(
+              response.content.length >= lastContent.length ? response.content : lastContent,
+            ),
           );
         }
         thread.push({ role: 'assistant', content: response.content });
@@ -2226,7 +2280,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         if (progress.successfulToolCalls.length === 0) {
           lastContent = '';
         } else {
-          lastContent = stripTrailingPermissionSeek(closing);
+          rememberContent(stripTrailingPermissionSeek(closing));
         }
         thread.push({ role: 'assistant', content: response.content });
         harness.push(thread, 'repeat', repeatNudge(closing, runTrace.priorAnswer(closing)));

@@ -49,7 +49,7 @@ import {
   getModelRegistry,
 } from '../learning/model-registry.js';
 import { classifyModelEntitlement } from '../inference/model-entitlement.js';
-import { capabilityBand, estimateModelCapability } from '../learning/model-capability.js';
+import { capabilityBand, estimateModelCapability, capabilityClassOf, bandRank } from '../learning/model-capability.js';
 import type { ActionTelemetryInsights } from '../learning/model-registry.js';
 import { listUnattendedJobs } from '../learning/unattended-job.js';
 import {
@@ -7920,11 +7920,35 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         const requested = `${provider}${model ? `/${model}` : ''}`;
         const served = result.provider ? `${result.provider}${result.model ? `/${result.model}` : ''}` : '';
         const substituted = Boolean(served) && result.provider !== provider;
+        /**
+         * CAPABILITY CLASS — did the turn drop a class against the user's pin?
+         *
+         * Decided HERE from the pin the request carried and the model the engine
+         * reported serving, because that is the one place both are known. The
+         * rule is the user's own: a pinned model is a quality bar, so a handoff
+         * that steps DOWN a class must be said out loud, not discovered later.
+         */
+        const pinnedClass = model ? capabilityClassOf(model) : undefined;
+        const servedClass = result.model ? capabilityClassOf(result.model) : undefined;
+        const steppedDown =
+          pinnedClass !== undefined &&
+          servedClass !== undefined &&
+          bandRank(servedClass) < bandRank(pinnedClass);
         if (strict) {
           if (result.generationFailed === true) {
             routingNotice =
               'Strict model mode is on, so the turn stopped rather than falling back to another model.';
+          } else if (substituted) {
+            // Strict mode did NOT substitute on its own — the user chose a switch
+            // from the pinned-failure question. Saying "the turn stopped" here
+            // would contradict the answer they are reading.
+            routingNotice =
+              `Strict model mode is on: this turn ran on ${served} because you chose to switch after your pinned ${requested} did not answer.`;
           }
+        } else if (steppedDown) {
+          routingNotice =
+            `We had to fall to a different model because no ${pinnedClass}-class model was available: ` +
+            `your pinned ${requested} is ${pinnedClass} class, and this turn ran on ${served} (${servedClass} class).`;
         } else if (substituted) {
           routingNotice = `Auto routing took over: this turn ran on ${served} because your pinned ${requested} was not available. To work with ${requested} only, enable strict model mode.`;
         } else if (result.generationFailed === true) {
@@ -7942,7 +7966,18 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // that reason with a "keep trying" offer for a request that cannot succeed,
       // and would queue a background re-run of the very ask that refused.
       if (result.generationFailed === true && result.refused !== true) {
-        const report = chatRetryBroker.onFailure(sessionId, message, attemptMark);
+        // Does the engine's own content ALREADY explain this failure? Then the
+        // broker adds only the OFFER — one failure, explained once (see
+        // `renderModelBreadthReport`'s `offerOnly`).
+        const alreadyExplained = /I couldn't finish|Tried \d+ model|was unable to do it|language model was unavailable/i.test(
+          content,
+        );
+        const report = chatRetryBroker.onFailure(
+          sessionId,
+          message,
+          attemptMark,
+          alreadyExplained ? { offerOnly: true } : undefined,
+        );
         if (report) {
           content = content.trim() ? `${content}\n\n${report}` : report;
           retryQueued = true;

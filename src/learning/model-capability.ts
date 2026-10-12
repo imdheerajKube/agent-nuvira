@@ -126,6 +126,61 @@ export function isHighCapabilityModel(modelId: string | undefined): boolean {
 /** Ordered rank of a band, for "at least as capable as" comparisons. */
 const BAND_ORDER: Record<CapabilityBand, number> = { low: 0, medium: 1, high: 2 };
 
+/** The numeric rank of a band (higher = more capable). */
+export function bandRank(band: CapabilityBand): number {
+  return BAND_ORDER[band];
+}
+
+/** The capability CLASS of a model id — `high`/`medium`/`low`. */
+export function capabilityClassOf(modelId: string | undefined): CapabilityBand {
+  return capabilityBand(estimateModelCapability(modelId));
+}
+
+/**
+ * Order candidates STRONGEST-FIRST, stable within a band (ties keep their
+ * incoming order, so a curated/health order still decides among equals).
+ *
+ * Used wherever a candidate list is offered to a user or chosen for a fallback:
+ * "which of these can hold the task" is a capability question and must be asked
+ * before the health ranking, which a small/fast model always wins (see this
+ * module's header).
+ */
+export function strongestFirst(candidates: readonly string[]): string[] {
+  return candidates
+    .map((model, index) => ({ model, index, score: estimateModelCapability(model) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((x) => x.model);
+}
+
+/**
+ * Choose the fallback model for a provider under a PIN, staying in the pin's own
+ * capability class whenever that provider can.
+ *
+ * THE RULE (user-set, from the pinned-model contract): a user who pins a strong
+ * model and leaves auto-fallback on has said "keep me in this class". So:
+ *   1. a candidate in the pin's OWN class wins `strongestFirst` (never a
+ *      health-first pick, which is how a ≤4B toy outranked a 120B);
+ *   2. otherwise a HIGHER class is acceptable — it is not a compromise;
+ *   3. only when neither exists does the list drop a class, and then the caller
+ *      is TOLD (`crossClass: true`) so it can say so in the answer.
+ *
+ * Returning `false`/`undefined` for an empty list is deliberate: the caller must
+ * not invent a model name (a fabricated pair is the issue-#9 class of bug).
+ */
+export function sameClassFallback(
+  requestedModel: string | undefined,
+  candidates: readonly string[],
+): { model: string; crossClass: boolean } | undefined {
+  const usable = candidates.filter((m) => typeof m === 'string' && m.trim() !== '');
+  if (usable.length === 0) return undefined;
+  const want = capabilityClassOf(requestedModel);
+  const same = usable.filter((m) => capabilityClassOf(m) === want);
+  if (same.length > 0) return { model: strongestFirst(same)[0], crossClass: false };
+  const better = usable.filter((m) => bandRank(capabilityClassOf(m)) > bandRank(want));
+  if (better.length > 0) return { model: strongestFirst(better)[0], crossClass: false };
+  return { model: strongestFirst(usable)[0], crossClass: true };
+}
+
 /**
  * Filter a HEALTH-ORDERED candidate list down to the models that are at least
  * as capable as `requestedModel` (same band or higher), preserving the input

@@ -3354,3 +3354,53 @@ describe('Bundle 21/25 — the authored read-back demotes the edit-verification 
     }
   });
 });
+
+// ─── An answer survives a nudge that dies ───────────────────────────────────
+// MEASURED (trace-1791754367868-vedwmp, 2026-10-12, dashboard surface): step 0
+// delivered a complete 3,831-character answer. The ZERO-ACTION gate judged the ask
+// to be workspace work and spent its one bounded nudge, clearing `lastContent` so
+// the non-answer could not be delivered. The nudge step then died. `delivered` was
+// read from the now-empty `lastContent`, so `generationFailed` was TRUE and the
+// caller replaced the answer with an exhaustion report — "Tried 25 models…" — for
+// a turn that had answered correctly. A gate may invalidate the text it judges as
+// the final answer; it may never erase the fact that an answer was produced.
+describe('tool loop — nudge interrupted after an answer', () => {
+  it('delivers the answer, not a failure, when the nudge step dies', async () => {
+    const callModel = vi
+      .fn()
+      .mockResolvedValueOnce({
+        content: 'The toggle is a mode switch: Scoped keeps deny-by-default per subtask.',
+        toolCalls: [],
+      })
+      .mockRejectedValueOnce(new Error('503: server error'));
+    const deps: ToolLoopDeps = { callModel, executeTool: vi.fn(), onEvent: vi.fn() };
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: WORK_ASK }],
+      context: ctx,
+      deps,
+    });
+
+    // The zero-action gate fired (step 2 is the nudge) and the nudge died.
+    expect(callModel).toHaveBeenCalledTimes(2);
+    expect(result.content).toBe('The toggle is a mode switch: Scoped keeps deny-by-default per subtask.');
+    expect(result.generationFailed).toBe(false);
+    expect(result.termination).toBe('delivered');
+  });
+
+  it('still reports a failure when NOTHING was ever delivered', async () => {
+    // The guard on the fix: no answer at any point is still an honest failure —
+    // the exhaustion-report path exists for exactly this turn.
+    const callModel = vi.fn().mockRejectedValue(new Error('503: server error'));
+    const deps: ToolLoopDeps = { callModel, executeTool: vi.fn(), onEvent: vi.fn() };
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: WORK_ASK }],
+      context: ctx,
+      deps,
+    });
+
+    expect(result.generationFailed).toBe(true);
+    expect(result.termination).toBe('no-capable-candidate');
+  });
+});

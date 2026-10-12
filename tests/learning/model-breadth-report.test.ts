@@ -260,3 +260,45 @@ describe('modelBreadthReport', () => {
     expect(typeof report.poolProviders).toBe('number');
   });
 });
+
+// ─── offerOnly ──────────────────────────────────────────────────────────────
+// On the dashboard a failed turn could be explained TWICE in one bubble: the
+// engine delivered its own exhaustion report, and the retry broker appended this
+// renderer's full report on top — two "I couldn't finish" blocks with two
+// different pool counts, measured live ("422 models across 9 providers" then
+// "435 eligible models across 22 providers"). The facts belong to whichever
+// report already ran; the OFFER is the part the broker must add, and its wording
+// still comes from here so the surfaces cannot drift.
+describe('renderModelBreadthReport — offerOnly', () => {
+  it('returns just the offer paragraph, never the facts again', () => {
+    const report = {
+      tried: [attempt('gemini', 'gemini-2.0-flash', 'timeout')],
+      parked: [],
+      poolSize: 0,
+      poolProviders: 0,
+    };
+    const full = renderModelBreadthReport(report)!;
+    const offer = renderModelBreadthReport(report, { offerOnly: true })!;
+
+    expect(full).toMatch(/couldn't finish/);
+    expect(offer).not.toMatch(/couldn't finish/);
+    expect(offer).toMatch(/keep checking/);
+    expect(offer.split('\n')).toHaveLength(1);
+  });
+
+  it('carries the "not a model shortage" line when a retry is not warranted', () => {
+    // A healthy pool with nothing attempted (the G9 shape): no retry is offered,
+    // and `offerOnly` must not manufacture one.
+    const report = {
+      tried: [],
+      parked: [
+        { provider: 'local', model: 'nonexistent-fast-fail', kind: 'model-not-found' as never, scope: 'model' as never, recordedAt: 0, expiresAt: 0, active: true, source: 'registry' as never },
+      ],
+      poolSize: 500,
+      poolProviders: 6,
+    };
+    const offer = renderModelBreadthReport(report, { offerOnly: true })!;
+    expect(offer).toMatch(/not a model shortage/);
+    expect(offer).not.toMatch(/Reply \*yes\*/);
+  });
+});

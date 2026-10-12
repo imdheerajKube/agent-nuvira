@@ -339,6 +339,69 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
     expect(fallbackAttempt!.model).not.toBe('llama-3.3-70b-versatile');
   });
 
+  /**
+   * A FAILED fallback candidate must not become the session's model.
+   *
+   * MEASURED (trace-1791732980335-omkv62, 2026-10-11). `tryGenerate` used to
+   * install the resolved model on the session BEFORE the call. A pinned
+   * `deepseek` turn whose step failed walked the chain; the walk's last
+   * candidate (`local`, resolved to the fixture id `wire-stub-model`) also
+   * failed, but its model stayed on the session — so the loop's NEXT step called
+   * the PINNED provider with that foreign id ("The supported API model names are
+   * deepseek-flash, deepseek-v4-pro, but you passed wire-stub-model"), every
+   * attempt failed, and the turn reported a model shortage after burning 25
+   * attempts. A failed attempt may name itself in the report; it may not become
+   * the model of the next request.
+   */
+  it('a FAILED fallback candidate does not overwrite the session model (poisoned next step)', async () => {
+    const attempts: Array<{ name: string; model?: string }> = [];
+    const generate = vi.fn().mockImplementation(function (
+      this: { name: string },
+      _prompt: string,
+      opts?: { model?: string },
+    ) {
+      attempts.push({ name: this.name, model: opts?.model });
+      // BOTH the pinned pair and the fallback candidate fail.
+      return Promise.reject(new Error('429 rate limit exceeded'));
+    });
+
+    const cmd = new ChatCommand() as any;
+    cmd.configManager = {
+      getAll: () => ({
+        fallback: { enabled: true, providers: ['gemini'], maxAttempts: 3, retryDelayMs: 0 },
+        providers: { gemini: { model: 'gemini-2.0-flash' } },
+      }),
+      hasRequiredCredentials: (p: string) => p === 'gemini',
+      getProviderConfig: (p: string) => ({ type: p, config: {} }),
+    };
+    vi.mocked(resolveProvider).mockImplementation(((_cm: any, type: string) => ({
+      type,
+      provider: { name: type === 'groq' ? 'Groq' : 'Gemini', isAvailable: vi.fn().mockResolvedValue(true), generate },
+    })) as any);
+
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generate },
+      model: 'llama-3.3-70b-versatile',
+    };
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: false });
+    await expect(callModel([{ role: 'user', content: 'explain this' }], [])).rejects.toThrow(/429/);
+
+    // Both pairs WERE attempted, each with its own model…
+    expect(attempts.some((a) => a.name === 'Groq' && a.model === 'llama-3.3-70b-versatile')).toBe(true);
+    expect(attempts.some((a) => a.name === 'Gemini' && a.model === 'gemini-2.0-flash')).toBe(true);
+    // …and the failed candidate's model was NOT left behind for the next step.
+    expect(session.model).toBe('llama-3.3-70b-versatile');
+    // The report still names the pair that failed, and never crosses a model id
+    // onto a provider that did not run it (the old poisoning shape).
+    const reported = (cmd as any).turnAttempts as Array<{ provider: string; model: string }>;
+    expect(reported.some((a) => a.provider === 'groq' && a.model === 'llama-3.3-70b-versatile')).toBe(true);
+    for (const attempt of reported) {
+      const ran = attempts.some((a) => a.name.toLowerCase().includes(attempt.provider) || attempt.provider === 'groq');
+      expect(ran, `reported ${attempt.provider}/${attempt.model} was never attempted`).toBe(true);
+    }
+  });
+
   it('does not waste the walk on a fallback provider the user has no credential for', async () => {
     const attempts: string[] = [];
     const generate = vi.fn().mockImplementation(function (this: { name: string }) {
@@ -482,6 +545,224 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
     expect(cmd.routeMessageAuto).toHaveBeenCalledTimes(2);
     for (const call of cmd.routeMessageAuto.mock.calls) {
       expect(call[2]).toMatchObject({ routingText: 'build the macOS app' });
+    }
+  });
+});
+
+// ─── PINNED + STRICT — wait on the pin, then ASK ────────────────────────────
+// The user's contract: "when I have selected a pin and strict, it should ask me
+// whether to keep trying with this model or switch to <the model the agent plans
+// to switch to>… these settings clearly call out that I am in no mood to
+// compromise the quality, so sending my request to a weak model or a local is
+// very wrong."
+//
+// So: the SAME pair is retried inside a grace window (nothing routed anywhere),
+// and if it still will not answer the USER is asked — with a same-class model
+// named as the offer, and a headless run left to the honest strict refusal.
+import { withStrictModel } from '../../src/inference/route-resolver.js';
+
+/** A pinned (non-auto) session on groq whose provider never answers. */
+function setupPinned(): {
+  cmd: ChatCommand;
+  session: { type: string; provider: { name: string; generate: ReturnType<typeof vi.fn> }; model: string };
+  pinnedGenerate: ReturnType<typeof vi.fn>;
+} {
+  const pinnedGenerate = vi.fn().mockRejectedValue(new Error('503: server error'));
+  const cmd = new ChatCommand() as any;
+  const session = {
+    type: 'groq',
+    provider: { name: 'Groq', generate: pinnedGenerate },
+    model: 'llama-3.3-70b-versatile',
+  };
+  return { cmd, session, pinnedGenerate };
+}
+
+describe('pinned + strict — the pin is waited on, then the user decides', () => {
+  it('retries the SAME pinned pair, then asks — and serves the model the user picks', async () => {
+    const { cmd, session, pinnedGenerate } = setupPinned();
+
+    // The alternative the agent may OFFER — and the only pair allowed to serve.
+    const switchGenerate = vi.fn().mockResolvedValue('answer from the switched model');
+    vi.mocked(resolveProvider).mockImplementation(
+      (_cm: any, type: string) =>
+        ({
+          type,
+          provider: {
+            name: type === 'groq' ? 'Groq' : 'Gemini',
+            generate: switchGenerate,
+            isAvailable: vi.fn().mockResolvedValue(true),
+          },
+        }) as never,
+    );
+    // Same-class discovery is exercised on its own; here it is pinned so the
+    // OFFER is deterministic (the agent must NAME what it plans to switch to).
+    (cmd as any).pinAlternatives = () => ({
+      sameClass: [{ provider: 'gemini', model: 'gemini-2.0-flash' }],
+      crossClass: [],
+    });
+
+    const askUser = vi.fn().mockResolvedValue({ index: 1, answer: 1 });
+    const callModel = (cmd as any).buildToolCallModel(
+      'explain this',
+      session,
+      {},
+      { auto: false },
+      undefined,
+      undefined,
+      undefined,
+      askUser,
+    );
+
+    vi.useFakeTimers();
+    try {
+      const pending = withStrictModel(true, () =>
+        callModel([{ role: 'user', content: 'explain this' }], []),
+      );
+      // Let the grace window elapse: the pin is retried, nothing substituted.
+      await vi.advanceTimersByTimeAsync(130_000);
+      const result = await pending;
+
+      expect(askUser).toHaveBeenCalledTimes(1);
+      const [question, choices] = askUser.mock.calls[0] as [string, Array<{ label: string }>];
+      expect(question).toMatch(/NOT sent this to another model/);
+      expect(question).toContain('groq/llama-3.3-70b-versatile');
+      expect(choices[0].label).toBe('Keep trying with groq/llama-3.3-70b-versatile');
+      expect(choices[1].label).toBe('Switch to gemini/gemini-2.0-flash');
+      // The SAME pair was retried inside the window before anyone was asked.
+      expect(pinnedGenerate.mock.calls.length).toBeGreaterThanOrEqual(2);
+      // …and only the user's choice served the turn.
+      expect(result.content).toBe('answer from the switched model');
+      expect(session.type).toBe('gemini');
+      expect(session.model).toBe('gemini-2.0-flash');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops honestly (no ask, no substitution) when there is no one to ask', async () => {
+    const { cmd, session } = setupPinned();
+    (cmd as any).pinAlternatives = () => ({ sameClass: [], crossClass: [] });
+
+    const callModel = (cmd as any).buildToolCallModel(
+      'explain this',
+      session,
+      {},
+      { auto: false },
+    );
+
+    Object.defineProperty(process.stdin, 'isTTY', { value: undefined, configurable: true });
+    vi.useFakeTimers();
+    try {
+      // The settlement handler is attached BEFORE the clock moves: the turn
+      // rejects while the grace window is elapsing, and a rejection with no
+      // handler yet is an unhandled rejection (it fails the whole suite).
+      const settled = withStrictModel(true, () =>
+        callModel([{ role: 'user', content: 'explain this' }], []),
+      ).then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error: error as Error }),
+      );
+      await vi.advanceTimersByTimeAsync(130_000);
+      const outcome = await settled;
+      // Strict + headless: the pin's own failure is the honest outcome — it is
+      // never released on the user's behalf, and nothing else is ever called.
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('expected the pinned turn to fail');
+      expect(outcome.error.message).toMatch(/503: server error/);
+      expect(session.type).toBe('groq');
+      expect(session.model).toBe('llama-3.3-70b-versatile');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── The pin question must be BOUNDED, and a definitive failure never waits ──
+// Two flaws found while probing the live endpoint after the first implementation:
+//   1. a pin to a model the provider does not serve spent the whole 2-minute grace
+//      window on a 400 that could never change (the classifier can only call that
+//      error `unknown`);
+//   2. an UNANSWERED question held the turn open FOREVER — the console's
+//      `askQuestion` promise is deliberately never rejected, so a closed tab or a
+//      headless caller left the HTTP request (and the session's busy slot) hanging
+//      until it was cancelled by hand.
+describe('pinned + strict — waiting is bounded', () => {
+  it('does not wait or ask when the provider does not serve the pinned model', async () => {
+    const { cmd, session, pinnedGenerate } = setupPinned();
+    // The exact shape DeepSeek returns for an unknown id.
+    pinnedGenerate.mockRejectedValue(
+      new Error(
+        'The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-doesnotexist',
+      ),
+    );
+    const askUser = vi.fn();
+    const callModel = (cmd as any).buildToolCallModel(
+      'explain this',
+      session,
+      {},
+      { auto: false },
+      undefined,
+      undefined,
+      undefined,
+      askUser,
+    );
+
+    vi.useFakeTimers();
+    try {
+      const settled = withStrictModel(true, () =>
+        callModel([{ role: 'user', content: 'explain this' }], []),
+      ).then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error: error as Error }),
+      );
+      // No clock movement at all: a definitive failure must not enter the window.
+      const outcome = await settled;
+      expect(outcome.ok).toBe(false);
+      expect(askUser).not.toHaveBeenCalled();
+      // One attempt (plus the same-provider transient retry policy, which this
+      // class is not part of) — never the grace-window walk.
+      expect(pinnedGenerate.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops honestly when nobody answers the question', async () => {
+    const { cmd, session } = setupPinned();
+    (cmd as any).pinAlternatives = () => ({
+      sameClass: [{ provider: 'gemini', model: 'gemini-2.0-flash' }],
+      crossClass: [],
+    });
+    // A question that is never answered (a closed tab, a headless caller).
+    const askUser = vi.fn().mockReturnValue(new Promise(() => {}));
+    const callModel = (cmd as any).buildToolCallModel(
+      'explain this',
+      session,
+      {},
+      { auto: false },
+      undefined,
+      undefined,
+      undefined,
+      askUser,
+    );
+
+    vi.useFakeTimers();
+    try {
+      const settled = withStrictModel(true, () =>
+        callModel([{ role: 'user', content: 'explain this' }], []),
+      ).then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error: error as Error }),
+      );
+      // Past the grace window AND past the answer timeout.
+      await vi.advanceTimersByTimeAsync(130_000 + 300_000 + 1_000);
+      const outcome = await settled;
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(outcome.ok).toBe(false);
+      expect(session.type).toBe('groq');
+      expect(session.model).toBe('llama-3.3-70b-versatile');
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

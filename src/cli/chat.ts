@@ -40,7 +40,7 @@ import { ConfigManager } from '../config/manager.js';
 import { capabilityReasoningEffort, isMaxCapability } from '../config/capability-mode.js';
 import { InferenceProvider } from '../inference/interface.js';
 import type { ProviderType } from '../config/types.js';
-import { getProviderFallback, classifyFallbackError, isRetryableError, isTransientForRetry, recordRegistrySuccess, recordRegistryFailure } from '../learning/provider-fallback.js';
+import { getProviderFallback, classifyFallbackError, isRetryableError, isTransientForRetry, isHarnessFault, recordRegistrySuccess, recordRegistryFailure } from '../learning/provider-fallback.js';
 import {
   recordActionFailure,
   RATE_LIMIT_EXCLUSION_MS,
@@ -94,7 +94,8 @@ import { assertAgenticRoute, setWeakModelConsent, resolveWeakModelPolicy, weakRo
 import { resolvePromptBudget, measurePromptBudget, formatPromptBudgetBreakdown } from '../learning/prompt-budget.js';
 import { buildTurnReport, formatTurnReport, type TurnReport } from '../learning/turn-report.js';
 import { turnOutcomeObservation } from '../learning/outcome-observation.js';
-import { resolveAdapterDefault, hasCredentials } from '../learning/model-selection.js';
+import { resolveAdapterDefault, hasCredentials, preferredModelsFor } from '../learning/model-selection.js';
+import { sameClassFallback, capabilityClassOf } from '../learning/model-capability.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
 import { sweepTransientFailures, collectionRevivalStore } from '../learning/provider-revival.js';
 import { analyzeComplexity } from '../learning/hybrid-router.js';
@@ -401,6 +402,65 @@ export async function runDeveloperMode(
  * to the background runners, not the interactive turn.
  */
 export const TRANSIENT_RETRY_DELAYS_MS = [1_000, 3_000] as const;
+
+/**
+ * How long a PINNED + STRICT pair is given to answer before the user is asked
+ * what to do next (ms).
+ *
+ * WHY A WAIT AT ALL, and why two minutes. A pinned+strict turn is an explicit
+ * quality contract: the user would rather wait than be answered by a model they
+ * did not choose. A provider having a slow moment (or an upstream batch job) is
+ * exactly the case that contract covers, so the SAME pair is retried inside this
+ * window before anything else can happen. Two minutes is the bar the user set: it
+ * rides out a bad minute at a shared endpoint, while a genuinely dead provider no
+ * longer holds the turn for the ~5 minutes that prompted the complaint. NOTHING
+ * is routed to another model inside this window.
+ */
+export const PINNED_SAME_PAIR_GRACE_MS = 120_000;
+
+/**
+ * Backoff between retries of the SAME pinned pair. Summed with the call time,
+ * these reach the {@link PINNED_SAME_PAIR_GRACE_MS} budget.
+ */
+export const PINNED_GRACE_BACKOFF_MS = [5_000, 15_000, 30_000, 45_000] as const;
+
+/**
+ * Failure kinds a WAIT can plausibly fix.
+ *
+ * A rejected credential, a model the provider does not serve, an over-long prompt
+ * or a request-encoding fault are DEFINITIVE: retrying them for two minutes only
+ * makes the user wait longer for the same answer. A pinned+strict turn refuses
+ * those immediately (the honest strict stop) instead of presenting them as a
+ * delay.
+ */
+const PINNED_WAITABLE_KINDS = new Set(['server', 'network', 'timeout', 'rate-limit', 'unknown']);
+
+/**
+ * How long the user has to answer the pinned-failure question before the turn
+ * stops honestly (ms).
+ *
+ * Without a bound the turn waits on the question FOREVER: the console's
+ * `askQuestion` promise is deliberately never rejected (worst case the model
+ * proceeds on best judgment), so a client that renders the card and is then
+ * closed — or a headless caller that never answers — would hold the turn (and its
+ * `busy` slot) open indefinitely. Measured live while probing the endpoint: the
+ * HTTP request sat open until it was cancelled by hand. Five minutes is generous
+ * for a person reading the options, and the answer is a choice, not a dependency:
+ * stopping with the pin's own error is the honest outcome once nobody answers.
+ */
+export const PINNED_ANSWER_TIMEOUT_MS = 300_000;
+
+/**
+ * Message shapes that name a DEFINITIVE model problem — the pair does not exist,
+ * or the request shape is wrong. A wait cannot fix either (see
+ * `pinnedFailureIsWaitable`).
+ *
+ * Deliberately NOT blanket-applied: it is consulted only for a failure the
+ * classifier could not place (`unknown`), so a DNS/network blip whose text happens
+ * to say "not found" still gets its grace window.
+ */
+const PINNED_DEFINITIVE_ERROR_RE =
+  /(?:does not exist|not found|no such model|invalid model|unknown model|unsupported model|but you passed|model_not_found)/i;
 
 /**
  * Run one provider attempt, retrying transient failures against the SAME
@@ -2671,6 +2731,9 @@ export class ChatCommand extends BaseCommand {
       ctxOverrides?.onToken,
       ctxOverrides?.signal,
       continuationSoftwareText(message, history) ?? undefined,
+      // PINNED + STRICT: the escalation asks the USER when a pinned model will not
+      // answer (keep trying / switch to a same-class model / name one / go auto).
+      ctxOverrides?.askUser,
     );
 
     let result: ToolLoopResult;
@@ -2955,13 +3018,34 @@ export class ChatCommand extends BaseCommand {
       try {
         const chain = getProviderFallback(this.configManager, this.configManager.getAll().fallback)
           .getFallbackChain(session.type);
+        /**
+         * PINNED + AUTO-FALLBACK stays in the PIN'S CAPABILITY CLASS.
+         *
+         * A user who pins a strong model and leaves auto-fallback on has said
+         * "keep me in this class" — they have not agreed to a small/fast model
+         * because it happens to have the best health score. `sameClassFallback`
+         * chooses within the class first and reports when it must step down, so
+         * the handoff can SAY so instead of arriving as a silent downgrade.
+         */
+        const pinModel = session.model;
         for (const fbType of chain) {
           if (fbType === session.type) continue;
           if (!hasCredentials(this.configManager, fbType)) continue;
           if (!governanceVerdict(this.configManager, fbType, { taskText: message }).allowed) continue;
           try {
             const resolved = resolveProvider(this.configManager, fbType);
-            const model = getAutoRouter().resolveModel(fbType, 'chat', this.configManager);
+            const base = getAutoRouter().resolveModel(fbType, 'chat', this.configManager);
+            const pick = sameClassFallback(pinModel, [
+              ...(base ? [base] : []),
+              ...preferredModelsFor(resolved.type),
+            ]);
+            const model = pick?.model ?? base;
+            if (pick?.crossClass) {
+              logger.warn(
+                `   ⚠️ ${pinModel ?? 'the pinned model'} is not available anywhere; handing over to ` +
+                  `${resolved.type}/${model} (${capabilityClassOf(model)} class — no same-class model was available).`,
+              );
+            }
             if (install({ type: resolved.type, provider: resolved.provider, model })) return true;
           } catch {
             // Next fallback candidate.
@@ -3161,6 +3245,10 @@ export class ChatCommand extends BaseCommand {
             ...(typeof breadth.poolSize === 'number' ? { poolSize: breadth.poolSize } : {}),
             ...(typeof breadth.poolProviders === 'number' ? { poolProviders: breadth.poolProviders } : {}),
             task: message,
+            // The user's PIN, when there was one — so the report's own advice
+            // respects the quality bar they set instead of inviting a downgrade
+            // (see ExhaustionInput.pinnedModel).
+            ...(session.model && session.model !== 'default' ? { pinnedModel: session.model } : {}),
             // The underlying line is kept as the REASON, so a specific,
             // actionable cause is never buried by the report.
             ...(result.generationFailed && result.content.trim() ? { cause: result.content } : {}),
@@ -3565,6 +3653,302 @@ export class ChatCommand extends BaseCommand {
   }
 
   /**
+   * Providers that could TAKE OVER from a pin, split by capability class.
+   *
+   * Only providers with credentials are considered, and each contributes the
+   * model `sameClassFallback` would choose for it — so the "switch to …" offer
+   * is a pair the router would actually serve, never a name invented here.
+   */
+  private pinAlternatives(
+    pinModel: string | undefined,
+    excludeProvider: string,
+  ): {
+    sameClass: Array<{ provider: string; model: string }>;
+    crossClass: Array<{ provider: string; model: string }>;
+  } {
+    const sameClass: Array<{ provider: string; model: string }> = [];
+    const crossClass: Array<{ provider: string; model: string }> = [];
+    let types: string[] = [];
+    try {
+      const all = this.configManager.getAll() as { providers?: Record<string, unknown> };
+      types = Object.keys(all.providers ?? {});
+    } catch {
+      return { sameClass, crossClass };
+    }
+    for (const providerType of types) {
+      if (providerType === excludeProvider) continue;
+      try {
+        if (!hasCredentials(this.configManager, providerType)) continue;
+        const resolved = resolveProvider(this.configManager, providerType);
+        const base = resolveAdapterDefault(resolved.type, undefined);
+        const pick = sameClassFallback(pinModel, [
+          ...(base ? [base] : []),
+          ...preferredModelsFor(resolved.type),
+        ]);
+        if (!pick) continue;
+        (pick.crossClass ? crossClass : sameClass).push({ provider: resolved.type, model: pick.model });
+      } catch {
+        // Next provider.
+      }
+    }
+    return { sameClass, crossClass };
+  }
+
+  /**
+   * Read a user-typed choice as `provider/model` (or a bare model id).
+   *
+   * A bare id keeps the PINNED provider — that is what "another model" means when
+   * the user was asked about a pinned turn. A prefixed value is only accepted as a
+   * provider when it RESOLVES to one, so a model id that merely contains a slash
+   * (`openai/gpt-oss-120b`) is not mistaken for a provider name.
+   */
+  private parsePinChoice(
+    text: string,
+    pinnedProvider: string,
+  ): { provider: string; model: string } | null {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const sep = trimmed.includes('/') ? '/' : trimmed.includes(':') ? ':' : null;
+    if (sep) {
+      const [head, ...rest] = trimmed.split(sep);
+      const tail = rest.join(sep);
+      if (head && tail) {
+        try {
+          const resolved = resolveProvider(this.configManager, head);
+          return { provider: resolved.type, model: tail };
+        } catch {
+          // Not a provider name — treat the whole value as a model id below.
+        }
+      }
+    }
+    return { provider: pinnedProvider, model: trimmed };
+  }
+
+  /**
+   * Serve ONE step on a pair the USER named, validated AS A PAIR.
+   *
+   * `resolveRoute` is asked in strict mode, so a pair the provider cannot serve is
+   * REFUSED rather than silently substituted — the same guarantee every other
+   * pinned call gets (issue #9: a model id sent to the wrong provider is the bug
+   * class this covers). Returns null when the pair cannot be used or the call
+   * fails, leaving the honest stop in place rather than switching anyway.
+   */
+  private async serveChosenPair(
+    input: {
+      session: { type: string; provider: InferenceProvider; model: string | undefined };
+      tryGenerate: (prov: InferenceProvider, typ: string, mdl: string | undefined) => Promise<StepResponse>;
+    },
+    providerType: string,
+    model: string,
+  ): Promise<StepResponse | null> {
+    try {
+      const resolved = resolveProvider(this.configManager, providerType);
+      // Validated as a PAIR via `resolveRoute` in strict mode (see above).
+      const route = await resolveRoute({
+        providerType: resolved.type,
+        provider: resolved.provider,
+        model,
+        source: 'chat',
+        strict: true,
+      });
+      const resp = await input.tryGenerate(resolved.provider, resolved.type, route.model);
+      input.session.type = resolved.type;
+      input.session.provider = resolved.provider;
+      input.session.model = route.model;
+      logger.warn(`   ✅ continuing on ${resolved.provider.name} / ${route.model} (your choice).`);
+      return resp;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * PINNED + STRICT and the pin did not answer: wait on the SAME model, then let
+   * the USER decide — never a silent substitution.
+   *
+   * WHY THIS EXISTS. The user pinned a model AND turned strict mode on. That is a
+   * quality contract, and the old behaviour broke it in the one direction they
+   * explicitly forbade: rather than wait, or say what was happening, a failed pin
+   * either dead-ended in "the language model was unavailable" or (non-strict) was
+   * handed to whatever the health ranking liked — including `local/qwen2.5:0.5b`, a
+   * model that cannot call tools at all, so its "answer" was fabricated rather
+   * than merely weaker. Sending that work to a weak model is not a degraded answer;
+   * for an agentic turn it is a wrong one.
+   *
+   * So: the SAME pair is retried inside {@link PINNED_SAME_PAIR_GRACE_MS} first
+   * (nothing is routed anywhere in that window), and if it still does not answer
+   * the user is asked — keep trying, switch to the closest SAME-CLASS model the
+   * agent can find and name, type another model/provider, or release the pin to
+   * auto. The question says outright that nothing has been routed elsewhere.
+   *
+   * Returns a served response when the user's choice works; `null` when the turn
+   * must fail honestly — headless (no one to ask: the strict refusal stands, as
+   * it must, because silently choosing FOR the user is the original defect), or
+   * when the chosen pair could not serve.
+   */
+  private async pinnedStrictEscalation(input: {
+    session: { type: string; provider: InferenceProvider; model: string | undefined };
+    /** The failed attempt — classified to decide whether a wait can help at all. */
+    err: unknown;
+    tryGenerate: (prov: InferenceProvider, typ: string, mdl: string | undefined) => Promise<StepResponse>;
+    askUser?: ToolContext['askUser'];
+    signal?: AbortSignal;
+  }): Promise<StepResponse | null> {
+    const { session } = input;
+    const pin = `${session.type}/${session.model ?? 'default'}`;
+    const kind = classifyFallbackError(input.err);
+    // A DEFINITIVE failure is not a delay (see PINNED_WAITABLE_KINDS) — and a model
+    // the provider does not serve, or a request-shape fault, is definitive even
+    // though the classifier can only call it `unknown` (measured: a pin to a
+    // nonexistent id spent the whole 2-minute grace window on a 400 that could
+    // never change).
+    if (!PINNED_WAITABLE_KINDS.has(kind)) return null;
+    if (kind === 'unknown') {
+      const message = input.err instanceof Error ? input.err.message : String(input.err);
+      if (isHarnessFault(input.err) || PINNED_DEFINITIVE_ERROR_RE.test(message)) return null;
+    }
+
+    const attemptPin = async (): Promise<StepResponse | null> => {
+      try {
+        return await input.tryGenerate(session.provider, session.type, session.model);
+      } catch (err) {
+        const k = classifyFallbackError(err);
+        this.recordTurnAttempt({
+          provider: this.lastAttempt?.provider ?? session.type,
+          model: this.lastAttempt?.model ?? session.model ?? 'default',
+          kind: k,
+          reason: describeFailureKind(k),
+        });
+        return null;
+      }
+    };
+
+    // ── 1. The SAME pair gets its grace window. Nothing is routed anywhere. ──
+    let served = await attemptPin();
+    if (served) return served;
+    const startedAt = Date.now();
+    for (const backoff of PINNED_GRACE_BACKOFF_MS) {
+      if (input.signal?.aborted) return null;
+      if (Date.now() - startedAt + backoff > PINNED_SAME_PAIR_GRACE_MS) break;
+      // Visible on BOTH surfaces: the CLI reads it on the console, the dashboard
+      // renders the same line as a progress step.
+      logger.warn(
+        `   ⏳ your pinned ${pin} has not answered (${describeFailureKind(kind)}) — retrying it in ` +
+          `${Math.round(backoff / 1000)}s (${Math.round((Date.now() - startedAt) / 1000)}s of ` +
+          `${Math.round(PINNED_SAME_PAIR_GRACE_MS / 1000)}s). Nothing has been sent to another model.`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, backoff));
+      served = await attemptPin();
+      if (served) return served;
+    }
+
+    // ── 2. ASK. The pin is the user's contract; only they may release it. ────
+    const alternatives = this.pinAlternatives(session.model, session.type);
+    const switchTarget = alternatives.sameClass[0];
+    // Headless (a pipeline, a cron, a queue worker) has no one to ask: the strict
+    // refusal stands. Choosing silently FOR the user is the defect this fixes.
+    if (!input.askUser && !process.stdin.isTTY) return null;
+    const ask = input.askUser ?? (await import('../tools/ask-user.js')).renderAskUser;
+
+    const choices: Array<{ label: string; description: string }> = [
+      {
+        label: `Keep trying with ${pin}`,
+        description: 'Stay on your pinned model — nothing is routed to another model.',
+      },
+    ];
+    if (switchTarget) {
+      choices.push({
+        label: `Switch to ${switchTarget.provider}/${switchTarget.model}`,
+        description: `The closest same-class model available (${capabilityClassOf(switchTarget.model)}).`,
+      });
+    }
+    choices.push({
+      label: 'Type another model or provider…',
+      description: 'Name any model id, or provider/model, and it is used exactly as given.',
+    });
+    const keepIdx = 0;
+    const switchIdx = switchTarget ? 1 : -1;
+    const otherIdx = switchTarget ? 2 : 1;
+    // NOTE — there is deliberately NO "go to auto" option. It was considered and
+    // removed: it is the one choice that serves a model the user never named, and
+    // a strict pin exists precisely to rule that out. A user who wants routing to
+    // decide turns strict mode off, which is a decision they own and can see.
+    // Nothing in this method can therefore serve a pair the user did not pick.
+
+    const question =
+      `I have NOT sent this to another model — you pinned ${pin} and strict mode is on, so that choice is yours.\n` +
+      `${pin} did not answer within ${Math.round(PINNED_SAME_PAIR_GRACE_MS / 1000)}s (${describeFailureKind(kind)}).\n` +
+      (switchTarget
+        ? `If you would rather switch, ${switchTarget.provider}/${switchTarget.model} is the closest same-class model available.`
+        : 'No same-class model is available to switch to right now.');
+
+    let answer: { index?: number | number[]; custom?: string } = {};
+    /** The bounded-answer timer — cleared or unref'd as soon as it is not needed. */
+    let answerTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // BOUNDED: an unanswered question must not hold the turn open forever
+      // (see PINNED_ANSWER_TIMEOUT_MS). A late answer is simply ignored — the
+      // honest stop already happened.
+      const raced = await Promise.race([
+        ask(question, choices as never, false).then((a) => ({ answered: true as const, a })),
+        new Promise<{ answered: false }>((resolve) => {
+          answerTimer = setTimeout(() => resolve({ answered: false }), PINNED_ANSWER_TIMEOUT_MS);
+          // Never hold the process open for an answer that already arrived: an
+          // un-unref'd 5-minute timer kept the CLI alive long after the turn was
+          // finished (the `chat` command would appear to hang on exit).
+          answerTimer.unref?.();
+        }),
+      ]);
+      if (answerTimer) clearTimeout(answerTimer);
+      if (!raced.answered) {
+        logger.warn(
+          `   ⌛ no answer to the pinned-model question after ${Math.round(PINNED_ANSWER_TIMEOUT_MS / 60_000)} minutes — ` +
+            `stopping on ${pin} rather than choosing for you.`,
+        );
+        return null;
+      }
+      answer = raced.a as { index?: number | number[]; custom?: string };
+    } catch {
+      return null;
+    }
+    const chosen = typeof answer.index === 'number' ? answer.index : -1;
+
+    if (chosen === keepIdx) {
+      // One more full window on the SAME pair, then the honest stop. Bounded on
+      // purpose: "keep trying" must not become an unbounded loop the user cannot
+      // interrupt — they can ask again, and the dashboard's retry offer queues it.
+      const retryStart = Date.now();
+      for (;;) {
+        if (input.signal?.aborted) return null;
+        const again = await attemptPin();
+        if (again) return again;
+        if (Date.now() - retryStart >= PINNED_SAME_PAIR_GRACE_MS) break;
+        await new Promise((resolve) => setTimeout(resolve, 15_000));
+      }
+      return null;
+    }
+
+    if (switchIdx >= 0 && chosen === switchIdx && switchTarget) {
+      return await this.serveChosenPair(input, switchTarget.provider, switchTarget.model);
+    }
+
+    if (chosen === otherIdx) {
+      const custom = (answer.custom ?? '').trim();
+      if (custom) {
+        const pair = this.parsePinChoice(custom, session.type);
+        if (pair) {
+          const servedCustom = await this.serveChosenPair(input, pair.provider, pair.model);
+          if (servedCustom) return servedCustom;
+        }
+        logger.warn(
+          `   ⚠️ could not use "${custom}" — check that the model is served by that provider.`,
+        );
+      }
+    }
+    return null;
+  }
+
+  /**
    * E3b — the model-call step for the tool loop:
    * native generateTools when the provider supports it, JSON fallback
    * otherwise. Auto-mode failover + the shared fallback chain live here — a
@@ -3609,6 +3993,13 @@ export class ChatCommand extends BaseCommand {
      * signal-free message and can land on a tiny local model.
      */
     routingText?: string,
+    /**
+     * PINNED + STRICT escalation needs to ASK the user (see
+     * `pinnedStrictEscalation`). The dashboard console injects a real question
+     * card; a TTY falls back to the CLI prompt; headless has neither, and there
+     * the strict refusal stands rather than anything being chosen for the user.
+     */
+    askUser?: ToolContext['askUser'],
   ): ToolLoopDeps['callModel'] {
     return async (messages, schemas, stepOnToken, stepSignal) => {
       // The effective token sink: the caller's stream wins; when a step-level
@@ -3723,11 +4114,23 @@ export class ChatCommand extends BaseCommand {
         // One resolution per attempt — the request, the trace, the telemetry
         // and the cache key all read the same value (see above).
         const effectiveModel = resolveEffectiveModel(typ, mdl);
-        // Record the ATTEMPTED model immediately so a failed step's trace and
-        // telemetry name the model that failed, instead of "unknown".
-        if (effectiveModel) session.model = effectiveModel;
-        // G5 — and name the attempt itself, so the trace recorder reports the
-        // real provider/model (post-failover) rather than the session default.
+        // Name the ATTEMPT itself — the trace recorder and the failure report
+        // read `lastAttempt` — but NEVER install its model on the session
+        // before the call succeeds.
+        //
+        // MEASURED (trace-1791732980335-omkv62, 2026-10-11). This used to assign
+        // `session.model = effectiveModel` here, BEFORE the request. A pinned
+        // `deepseek` turn whose step failed walked the fallback chain, and the
+        // walk's last candidate — which also FAILED — left its own model on the
+        // session. The loop's NEXT step then called the pinned provider with
+        // that foreign id (`deepseek` + `wire-stub-model`), which the API
+        // rejected outright: "The supported API model names are deepseek-flash,
+        // deepseek-v4-pro, but you passed wire-stub-model". The turn burned its
+        // whole failover walk (25 attempts) and ended in a model-shortage report
+        // while healthy models sat in the pool. A failed attempt must never
+        // become the model of the next request; the success paths
+        // (`answered()`, and the walks that install what they served) are the
+        // ones that own `session.model`.
         this.lastAttempt = { provider: typ, model: effectiveModel };
         const nativeKey = `${typ}|${effectiveModel ?? ''}`;
         // Answer-quality resilience: a CONFUSED reply — the model talking about
@@ -3858,9 +4261,11 @@ export class ChatCommand extends BaseCommand {
         // phrase (never the raw provider text, which is how a JSON quota dump
         // once reached a user verbatim) so the exhaustion report can name it.
         const primaryKind = classifyFallbackError(err);
+        // The pair that FAILED is the one the attempt named — `session.model`
+        // still holds the pair the turn RAN on (see `tryGenerate`).
         this.recordTurnAttempt({
-          provider: session.type,
-          model: session.model ?? 'default',
+          provider: this.lastAttempt?.provider ?? session.type,
+          model: this.lastAttempt?.model ?? session.model ?? 'default',
           kind: primaryKind,
           reason: describeFailureKind(primaryKind),
         });
@@ -3982,7 +4387,45 @@ export class ChatCommand extends BaseCommand {
             // the walk now installs what it serves (see below), and the warning
             // must still name the provider that actually failed.
             const pinnedType = session.type;
-            for (const fbType of ordered) {
+            /**
+             * The model the USER pinned — for the same-class rule below.
+             */
+            const pinnedModel = this.lastAttempt?.model ?? session.model;
+            /**
+             * PINNED + AUTO-FALLBACK: providers that can hold the PIN'S
+             * CAPABILITY CLASS are tried FIRST, and only then the ones that can
+             * only step down.
+             *
+             * WHY (the user's own rule): "if a strong model is selected then only
+             * strong should be the priority". The chain order was health/registry
+             * order, so a provider whose only usable model was a small local one
+             * could be reached while a provider with a same-class strong model sat
+             * later in the chain — the exact silent downgrade this ordering
+             * prevents. `crossClass` is what keeps it honest: when nothing in the
+             * pin's class can serve, the step-down still happens, but it is named
+             * in the log AND in the answer (see `routingNotice`).
+             */
+            const sameClassFirst: string[] = [];
+            const crossClass: string[] = [];
+            for (const t of ordered) {
+              if (t === session.type) continue;
+              let stepsDown = true;
+              try {
+                const r = resolveProvider(this.configManager, t);
+                const base = resolveEffectiveModel(r.type, undefined);
+                const pick = sameClassFallback(pinnedModel, [
+                  ...(base ? [base] : []),
+                  ...preferredModelsFor(r.type),
+                ]);
+                stepsDown = pick?.crossClass ?? true;
+              } catch {
+                // A provider we cannot describe cannot be promised a same-class
+                // model — it waits for the second pass rather than being dropped.
+                stepsDown = true;
+              }
+              (stepsDown ? crossClass : sameClassFirst).push(t);
+            }
+            for (const fbType of [...sameClassFirst, ...crossClass]) {
               if (fbType === session.type) continue;
               // ADMIN POLICY: never fall back to a provider the policy rules
               // out. This was the leak — a PII task whose pinned (compliant)
@@ -4017,7 +4460,26 @@ export class ChatCommand extends BaseCommand {
                 // the dashboard console and the gateway chat engine - looked
                 // dead.) Undefined = that provider's configured/adapter
                 // default, which tryGenerate resolves per attempt.
-                const fallbackModel = resolveEffectiveModel(resolved.type, undefined);
+                /**
+                 * The fallback provider gets a model from the PIN'S CLASS when
+                 * it has one — never merely its healthiest adapter default, which
+                 * is how a strong pin could be answered by a weak one (see
+                 * `sameClassFallback`). A class step-down is LOGGED, so a
+                 * reduced-quality handoff is never silent.
+                 */
+                const baseModel = resolveEffectiveModel(resolved.type, undefined);
+                const pick = sameClassFallback(pinnedModel, [
+                  ...(baseModel ? [baseModel] : []),
+                  ...preferredModelsFor(resolved.type),
+                ]);
+                if (pick?.crossClass) {
+                  logger.warn(
+                    `   ⚠️ no ${capabilityClassOf(pinnedModel)}-class model available to take over — ` +
+                      `${resolved.type}/${pick.model} (${capabilityClassOf(pick.model)} class) is standing in for ` +
+                      `${pinnedType}/${pinnedModel ?? 'default'}.`,
+                  );
+                }
+                const fallbackModel = pick?.model ?? baseModel;
                 const resp = await tryGenerate(resolved.provider, resolved.type, fallbackModel);
                 // ── The pair that ANSWERED is the pair the turn ran on ───────
                 // This walk used to serve the fallback and leave `session` still
@@ -4075,6 +4537,19 @@ export class ChatCommand extends BaseCommand {
                 .join('; ')}`,
             );
           }
+        } else if (strictModelMode()) {
+          /**
+           * PINNED + STRICT — wait on the SAME model, then ASK. Never substitute:
+           * that is the whole meaning of the pin. See `pinnedStrictEscalation`.
+           */
+          const decided = await this.pinnedStrictEscalation({
+            session,
+            err,
+            tryGenerate,
+            ...(askUser ? { askUser } : {}),
+            signal: abort,
+          });
+          if (decided) return decided;
         }
         // Answer-quality resilience: every candidate failed (or none was
         // tried) and the error carries the model's raw confused reply —
