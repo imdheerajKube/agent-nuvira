@@ -135,8 +135,16 @@ export type { InferenceProvider, ModelDescriptor } from './inference/interface.j
 export type { ProviderType, ProviderConfig, InferenceOptions } from './config/types.js';
 export { getPluginRegistry, PluginRegistry } from './plugins/registry.js';
 export type { ProviderPlugin, PluginMetadata } from './plugins/registry.js';
-export { runAutoDiscovery, discoverProviderPlugins, discoverAgentPlugins, discoverWorkflowPlugins } from './plugins/agent-plugin.js';
-export type { AgentPlugin, AgentPluginMetadata } from './plugins/agent-plugin.js';
+export {
+  runAutoDiscovery,
+  discoverProviderPlugins,
+  discoverAgentPlugins,
+  discoverWorkflowPlugins,
+  // Registers discovered agent plugins with the ModuleRegistry, so a plan step
+  // that asks for a plugin's agentType can actually execute it.
+  installAgentPlugins,
+} from './plugins/agent-plugin.js';
+export type { AgentPlugin, AgentPluginMetadata, InstallAgentPluginsResult } from './plugins/agent-plugin.js';
 
 // ─── Phase 1.4: Init Command exports ────────────────────────────────────────
 export { InitCommand } from './cli/init.js';

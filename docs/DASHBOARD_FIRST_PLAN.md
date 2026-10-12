@@ -38,7 +38,7 @@
 |---|---|---|
 | One conversation window | ✅ `/chat` route | ✅ the whole product |
 | Agent decides answer-vs-act | ✅ via tool loop + `run_cli` | ✅ via tool loop |
-| Confirm cards for commands | ✅ ⚡ Run-this-command card (`chatResolve` pre-resolve) | ✅ |
+| Confirm cards for commands | ➖ **removed 2026-10-12** — the agent owns execution (`run_cli`); the pre-model `chatResolve` card asked permission for the ask the user had just made, and its "confident" match fired on ordinary prose | ✅ |
 | Ambiguous-ask choices | ✅ shows options | ✅ |
 | Live progress steps | ✅ step list | ✅ streaming tokens |
 | **Token streaming** | ❌ shows steps, then full answer at once | ✅ typewriter streaming |
@@ -89,7 +89,7 @@ the same window works, because those are all just tools the agent can call.
 
 **Everything the chat needs already has a server endpoint:**
 - `/api/chat` (POST) — one agent turn (exists, `server.ts:3629`)
-- `/api/chat/resolve` (POST) — pre-resolve to confirm cards (exists, `server.ts:3608`)
+- `/api/chat/resolve` (POST) — the intent router as an API (exists, `server.ts:7646`; the CLI twin is `nuvira intent resolve`). The chat UI no longer calls it (see the removed confirm card above).
 - `/api/chat/reset` (POST) — session reset (exists, `server.ts:3677`)
 - `/api/tasks` (GET/POST) — run CLI commands as tasks, RBAC-gated (exists, `server.ts:3225/3236`)
 - `/api/hub` (GET) — the full data surface (exists, `server.ts:2417`)
@@ -170,16 +170,18 @@ This is what makes it feel like Claude/Cursor rather than a terminal in a box.
       subset contract (commit with files=[...], re-confirmed by ask_user). The
       dashboard surfaces the selection, it does NOT re-implement diff
       application (no engine changes).
-- [x] Inline command-run cards: the ⚡ Run-this-command confirm card now runs
-      through a full execution card in the thread — command, live status badge,
-      SSE-streamed logs (same P1 task runner + subscribeTask as TaskConsole),
-      exit code + duration on settle, ⏹ Cancel while running. Replaces the old
-      poll-then-append-plain-text path.
+- [x] Inline command-run cards (shipped, then **removed 2026-10-12**): the
+      ⚡ Run-this-command confirm card ran a resolved command through a full
+      execution card in the thread (live status, SSE logs, exit code, ⏹ Cancel).
+      Gone with the card: it asked the user to approve the ask they had just
+      made, and the resolver behind it scored prose at 1.0 (live: "agent-nuvira
+      is hosted in <dir>, have a read" → `nuvira trace list`). The agent runs
+      CLI commands itself via `run_cli`; the Command Console runs one by hand.
 - [x] **Tests:** `artifacts.test.ts` (13: diff sections incl. b-side paths,
       pass/fail verdicts, deploy extraction + dedupe, combined answer, empty
       prose) + ChatPage tests (artifact cards render from answer text, diff
-      accept/reject commits the subset, ⚡ Run renders the live execution card
-      with logs + exit code). Dashboard suite **263** green.
+      accept/reject commits the subset, and no ask — not even a CLI-shaped one —
+      is intercepted by a command card). Dashboard suite green.
 
 ### Phase 3 — Project context: "assess THIS project" (2–3 days)
 The killer use case: the agent should understand the project the user is talking
@@ -234,7 +236,7 @@ about without being told how.
       stay reachable as panels, never required
 - [x] Empty-state onboarding chips: assess this project · run the tests · stop the
       gateway · publish the release — each sends its prompt through the normal
-      flow (chatResolve → intent router → confirm card or agent)
+      flow (the agent decides; it runs a CLI command via `run_cli`)
 - [x] **Tests:** onboarding-chip test (click → chatSend with the prompt)
 
 ### Phase 6 — Polish & hardening (ongoing)
@@ -457,7 +459,7 @@ CLI surface stay exactly as they are — consistent with the plan's north star.
 | ~~Markdown lib adds bundle weight~~ | **Superseded by the 2026-08-17 quality principle** — resolved with react-markdown + remark-gfm + rehype-highlight (+117 KB gzipped, accepted). Bundle weight is a tradeoff to measure and justify, never a veto on capability |
 | Dependency introduces platform breakage | Every dep is checked for cross-platform support (Windows/macOS/Linux) before adoption; paths via `join()`/`homedir()`, no shell-out idioms, no `process.platform` branches (audited: none in the dashboard stack) |
 | "12 rooms" become dead weight | Keep them as linked panels; chat surfaces them contextually |
-| Chat quality depends on model | Same engine as CLI — no regression; confirm cards make commands deterministic |
+| Chat quality depends on model | Same engine as CLI — no regression; a CLI ask is run by the agent itself, so it still depends on the turn reaching a model |
 | Session persistence privacy | Store transcripts in the existing `~/.buff` memory dir, same as CLI history |
 | /learn drafts vary with model quality | The preview card (accept/edit/reject) is the gate — a bad draft is rejected, never saved silently; authoring standards in the prompt (Hermes parity) narrow variance |
 | Community skills could be hostile | Already mitigated: installs are sandboxed (name ^[a-z0-9-]+$), checksum-verified, quarantined on mismatch (`skills-hub.ts`); marketplace skills load through the same hub catalog |

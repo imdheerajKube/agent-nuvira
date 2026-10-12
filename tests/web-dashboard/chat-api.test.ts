@@ -1429,15 +1429,18 @@ describe('/api/projects — P3 project attach', () => {
         const res = await fetch(`${baseUrl}${a}`);
         expect(res.status).toBe(200);
       }
-      // The JS bundle carries the Phase-2 artifact-card code (rendered markers
+      // The JS bundle carries the Phase-2 chat-code markers (rendered markers
       // survive minification): diff card + accept/reject, the artifact nav
-      // stack, and the task-run stream separation.
+      // stack, and the live tool card. (The ⚡ command-run card's
+      // `chat-task-log-sep` was removed with the card on 2026-10-12 — reading a
+      // marker here proves the SPA still ships the chat chrome, so it has to
+      // name something the chat still renders.)
       const jsAsset = assets.find((a) => a.endsWith('.js'));
       expect(jsAsset).toBeTruthy();
       const js = await (await fetch(`${baseUrl}${jsAsset}`)).text();
       expect(js).toContain('Commit accepted');
       expect(js).toContain('chat-artifacts');
-      expect(js).toContain('chat-task-log-sep');
+      expect(js).toContain('chat-tool-card');
     });
   });
 

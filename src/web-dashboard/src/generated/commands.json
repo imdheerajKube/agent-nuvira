@@ -2,7 +2,7 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 290,
+  "commandCount": 295,
   "groupCount": 58,
   "groups": [
     {
@@ -1527,6 +1527,7 @@
           "name": "sdk register",
           "description": "Register a custom agent with the orchestrator",
           "flags": [
+            "--description <description>",
             "--icon <icon>",
             "--orchestrator-path <orchestrator_path>"
           ]
@@ -1535,6 +1536,7 @@
           "name": "sdk unregister",
           "description": "Remove a custom agent from the orchestrator",
           "flags": [
+            "--class-name <class_name>",
             "--orchestrator-path <orchestrator_path>"
           ]
         }
@@ -1710,6 +1712,18 @@
             "--disable <disable>",
             "--enable <enable>"
           ]
+        },
+        {
+          "name": "tools install",
+          "description": "Install the optional dependency an optional tool needs (see `nuvira tools optional`)",
+          "flags": [
+            "--package-only"
+          ]
+        },
+        {
+          "name": "tools optional",
+          "description": "List tools that are shipped but need an optional dependency installed",
+          "flags": []
         }
       ]
     },
@@ -1843,16 +1857,49 @@
         },
         {
           "name": "mcp catalog",
-          "description": "List the curated MCP server catalog (vetted, exact-version pins)",
+          "description": "List MCP capability slots, their variants, and what each one needs on this machine",
           "flags": [
             "--search <search>"
           ]
         },
         {
           "name": "mcp install",
-          "description": "Install a vetted MCP server from the catalog (writes ~/.nuvira/mcp/<name>.json)",
+          "description": "Install a catalog capability, choosing the best variant this machine can actually run",
           "flags": [
-            "--env <env>"
+            "--command <command>",
+            "--env <env>",
+            "--force",
+            "--no-verify",
+            "--runtime <runtime>",
+            "--variant <variant>"
+          ]
+        },
+        {
+          "name": "mcp add",
+          "description": "Add a server that is NOT in the catalog — any stdio command or remote URL, like a config file",
+          "flags": [
+            "--arg <arg>",
+            "--command <command>",
+            "--env <env>",
+            "--force",
+            "--header <header>",
+            "--json <json>",
+            "--no-verify",
+            "--transport <transport>",
+            "--url <url>"
+          ]
+        },
+        {
+          "name": "mcp settings",
+          "description": "Show the resolved mcp.* configuration (caps, auto-connect, subagent inheritance)",
+          "flags": []
+        },
+        {
+          "name": "mcp authorize",
+          "description": "Authorize an OAuth MCP server (opens the consent page, captures the loopback redirect, stores the token)",
+          "flags": [
+            "--no-browser",
+            "--redirect-uri <redirect_uri>"
           ]
         },
         {
@@ -1864,6 +1911,7 @@
           "name": "mcp serve",
           "description": "Expose the agent's H1 tools as an MCP server over stdio (MCP clients / IDEs / other agents can connect)",
           "flags": [
+            "--memory",
             "--with <with>"
           ]
         }

@@ -12,6 +12,8 @@ import { CATALOG_PROVIDER_IDS, getCatalogProvider, catalogEnvVar, isCatalogKeyle
 import { Vault } from '../enterprise/vault.js';
 import { guardRbacAction } from './rbac-guard.js';
 import { countKeyStates } from '../config/manager.js';
+import { commandExists } from '../mcp/prereqs.js';
+import { mergeMcpSetting, parseMcpSetting } from '../mcp/settings.js';
 import {
   PLATFORM_ENV_VARS,
   type Platform,
@@ -727,6 +729,14 @@ export class ConfigCommand extends BaseCommand {
       this.configManager.save({
         routing: { gatewayTelemetry: { ...existing, [field]: typedValue } },
       } as Partial<BuffConfig>);
+    } else if (parts[0] === 'mcp') {
+      // MCP configuration surface (`src/mcp/settings.ts` owns defaults + bounds).
+      // This is the "nothing requires code" rule made literal: caps, auto-connect,
+      // subagent inheritance and per-server overrides (including the runtime
+      // override that lets an outlier server run under its own interpreter) are
+      // all set here, not in a fork.
+      this.setMcpValue(key, parts, value);
+      return;
     } else if (parts.length === 3 && parts[0] === 'modality' && parts[1] === 'image') {
       // modality.image.provider | modality.image.model | modality.image.baseUrl
       // — which backend `generate_image` uses (gemini | openai | stability |
@@ -759,6 +769,35 @@ export class ConfigCommand extends BaseCommand {
       return;
     }
 
+    logger.success(`Set ${key} = ${value}`);
+  }
+
+  /**
+   * `nuvira config set mcp.*` — the MCP configuration surface.
+   *
+   * The VALIDATION and the merge live in `src/mcp/settings.ts`
+   * (`parseMcpSetting` / `mergeMcpSetting`) because the dashboard's MCP page
+   * writes the same keys through the same section: one parser means the CLI
+   * cannot accept a value the dashboard rejects, or coerce it differently, and
+   * both end up in the same `buffconfig.json`.
+   */
+  private setMcpValue(key: string, _parts: string[], value: string): void {
+    const parsed = parseMcpSetting(key, value);
+    if (!parsed.ok) {
+      logger.error(parsed.error);
+      return;
+    }
+    // A path that does not exist is saved anyway (the binary may be installed
+    // later) but never silently: it is the one value whose correctness we can
+    // check for free.
+    if (/^mcp\.servers\.[^.]+(\.runtime)?\.command$/.test(key)) {
+      const command = value.trim();
+      if (command && !commandExists(command)) {
+        logger.warn(`  ⚠️  '${command}' is not executable — saved, but the server will not start until it exists.`);
+      }
+    }
+    const current = this.configManager.getAll().mcp ?? {};
+    this.configManager.save({ mcp: mergeMcpSetting(current, parsed.mcp) } as Partial<BuffConfig>);
     logger.success(`Set ${key} = ${value}`);
   }
 

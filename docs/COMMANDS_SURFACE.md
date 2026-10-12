@@ -1078,12 +1078,12 @@ Show SDK package info and version
 
 Register a custom agent with the orchestrator
 
-   - flags: `--icon <icon>, --orchestrator-path <orchestrator_path>`
+   - flags: `--description <description>, --icon <icon>, --orchestrator-path <orchestrator_path>`
 ### `nuvira sdk unregister`
 
 Remove a custom agent from the orchestrator
 
-   - flags: `--orchestrator-path <orchestrator_path>`
+   - flags: `--class-name <class_name>, --orchestrator-path <orchestrator_path>`
 ### `nuvira provider`
 
 List and check health of all inference providers
@@ -1198,6 +1198,15 @@ Show a tool's description and input schema
 List toolset groups (capability gating) with enabled state; enable/disable a group
 
    - flags: `--disable <disable>, --enable <enable>`
+### `nuvira tools install`
+
+Install the optional dependency an optional tool needs (see `nuvira tools optional`)
+
+   - flags: `--package-only`
+### `nuvira tools optional`
+
+List tools that are shipped but need an optional dependency installed
+
 ### `nuvira parity`
 
 Surface-parity harness — prove the same experience on chat, execute, dashboard, gateway and subagents
@@ -1294,14 +1303,28 @@ Re-discover and reconnect to all MCP servers
 
 ### `nuvira mcp catalog`
 
-List the curated MCP server catalog (vetted, exact-version pins)
+List MCP capability slots, their variants, and what each one needs on this machine
 
    - flags: `--search <search>`
 ### `nuvira mcp install`
 
-Install a vetted MCP server from the catalog (writes ~/.nuvira/mcp/<name>.json)
+Install a catalog capability, choosing the best variant this machine can actually run
 
-   - flags: `--env <env>`
+   - flags: `--command <command>, --env <env>, --force, --no-verify, --runtime <runtime>, --variant <variant>`
+### `nuvira mcp add`
+
+Add a server that is NOT in the catalog — any stdio command or remote URL, like a config file
+
+   - flags: `--arg <arg>, --command <command>, --env <env>, --force, --header <header>, --json <json>, --no-verify, --transport <transport>, --url <url>`
+### `nuvira mcp settings`
+
+Show the resolved mcp.* configuration (caps, auto-connect, subagent inheritance)
+
+### `nuvira mcp authorize`
+
+Authorize an OAuth MCP server (opens the consent page, captures the loopback redirect, stores the token)
+
+   - flags: `--no-browser, --redirect-uri <redirect_uri>`
 ### `nuvira mcp uninstall`
 
 Remove an installed MCP server config
@@ -1310,7 +1333,7 @@ Remove an installed MCP server config
 
 Expose the agent's H1 tools as an MCP server over stdio (MCP clients / IDEs / other agents can connect)
 
-   - flags: `--with <with>`
+   - flags: `--memory, --with <with>`
 ### `nuvira ci`
 
 Headless CI/CD mode — structured JSON output and exit codes for pipelines
@@ -1557,4 +1580,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*502 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*510 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

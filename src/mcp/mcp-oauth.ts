@@ -12,7 +12,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { resolveNuviraHome } from '../config/paths';
+import { resolveNuviraDataPath } from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
@@ -69,8 +69,23 @@ export interface OAuthState {
 
 // ─── OAuth Manager ────────────────────────────────────────────────────────
 
-const OAUTH_DIR = join(resolveNuviraHome(), 'mcp', 'oauth');
-const OAUTH_STATE_FILE = join(OAUTH_DIR, 'oauth-state.json');
+/**
+ * Where the token store lives, resolved PER OPERATION.
+ *
+ * It used to be a module constant built from `homedir()`, which broke the
+ * project's own rule for persisted state (`resolveNuviraDataPath`: "a process
+ * pointed at an isolated config dir never reads or writes the real ~/.nuvira").
+ * Tokens are the most sensitive thing the agent stores, so honouring
+ * `NUVIRA_CONFIG_DIR` is not a test convenience — it is what lets an operator
+ * isolate a credential store, and what keeps a test run out of the user's home.
+ */
+function oauthDir(): string {
+  return resolveNuviraDataPath('mcp', 'oauth');
+}
+
+function oauthStateFile(): string {
+  return join(oauthDir(), 'oauth-state.json');
+}
 
 export class MCPOAuthManager {
   private states: Map<string, OAuthState> = new Map();
@@ -115,6 +130,48 @@ export class MCPOAuthManager {
     this.states.set(serverName, state);
     this.saveStates();
     logger.debug(`MCP OAuth: Stored tokens for '${serverName}'`);
+  }
+
+  /**
+   * Record a server's OAuth configuration WITHOUT touching its tokens.
+   *
+   * WHY THIS IS NEEDED. `refreshToken()` reads the stored `state.config` to find
+   * the token endpoint and client, and that config used to be written ONLY by
+   * `startAuthorizationCodeFlow()` — so a server whose config came from the
+   * catalog (or from a hand-written JSON file) could never refresh: the manager
+   * had no entry, `getTokens()` returned null and `refreshToken()` bailed out
+   * with "no config". Seeding the config from the server config makes a refresh
+   * possible in a process that never ran the interactive flow, which is exactly
+   * the case for a scheduled turn or the gateway.
+   *
+   * Tokens are deliberately left alone: this is the HOW, not the credential.
+   */
+  setConfig(serverName: string, config: OAuthConfig): void {
+    const existing = this.states.get(serverName);
+    const next: OAuthState = existing
+      ? { ...existing, config: { ...existing.config, ...config } }
+      : { serverName, config, createdAt: Date.now() };
+    this.states.set(serverName, next);
+    this.saveStates();
+  }
+
+  /** The stored OAuth configuration for a server, when there is one. */
+  getConfig(serverName: string): OAuthConfig | null {
+    return this.states.get(serverName)?.config ?? null;
+  }
+
+  /**
+   * Every server this manager knows about, with whether its token is usable.
+   * Deliberately reports NO token values — a status surface is for "am I
+   * authorized", not for reading credentials out of the store.
+   */
+  listServers(): Array<{ server: string; authorized: boolean; hasRefreshToken: boolean; expiresAt: number | null }> {
+    return [...this.states.entries()].map(([server, state]) => ({
+      server,
+      authorized: Boolean(state.tokens?.accessToken) && (state.tokens?.expiresAt ?? 0) > Date.now(),
+      hasRefreshToken: Boolean(state.tokens?.refreshToken),
+      expiresAt: state.tokens?.expiresAt ?? null,
+    }));
   }
 
   /**
@@ -359,8 +416,9 @@ export class MCPOAuthManager {
 
   private loadStates(): void {
     try {
-      if (existsSync(OAUTH_STATE_FILE)) {
-        const data = readFileSync(OAUTH_STATE_FILE, 'utf-8');
+      const stateFile = oauthStateFile();
+      if (existsSync(stateFile)) {
+        const data = readFileSync(stateFile, 'utf-8');
         const parsed = JSON.parse(data) as Record<string, OAuthState>;
         for (const [key, value] of Object.entries(parsed)) {
           this.states.set(key, value);
@@ -373,14 +431,15 @@ export class MCPOAuthManager {
 
   private saveStates(): void {
     try {
-      if (!existsSync(OAUTH_DIR)) {
-        mkdirSync(OAUTH_DIR, { recursive: true });
+      const dir = oauthDir();
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
       }
       const data: Record<string, OAuthState> = {};
       for (const [key, value] of this.states.entries()) {
         data[key] = value;
       }
-      writeFileSync(OAUTH_STATE_FILE, JSON.stringify(data, null, 2));
+      writeFileSync(oauthStateFile(), JSON.stringify(data, null, 2));
     } catch (err) {
       logger.warn(`MCP OAuth: Failed to save state: ${err}`);
     }

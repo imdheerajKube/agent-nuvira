@@ -8,6 +8,7 @@ import { resolveDefaultProvider } from '../learning/model-selection.js';
 import { CATALOG_ENV_VARS, isCatalogKeyless } from '../inference/provider-catalog.js';
 import { Vault, isVaultRef, VAULT_REF_PREFIX } from '../enterprise/vault.js';
 import { WorkspaceStore, getWorkspaceStore } from './workspace.js';
+import { resolveMcpSettings, type ResolvedMCPSettings } from '../mcp/settings.js';
 
 // NO hardcoded provider/model defaults: the default provider is the routing
 // directive 'auto' (the best AVAILABLE provider is resolved at runtime from
@@ -94,6 +95,18 @@ const DEFAULT_CONFIG: BuffConfig = {
   // I1 toolsets: empty by default = every toolset enabled (absent = enabled).
   tools: {
     toolsets: {},
+  },
+  // MCP: written out explicitly so `nuvira config get mcp.maxToolsPerServer`
+  // answers without a server installed, and so the caps have ONE home
+  // (`src/mcp/settings.ts` owns the same defaults + bounds).
+  mcp: {
+    enabled: true,
+    autoConnect: true,
+    connectTimeoutMs: 2000,
+    maxToolsPerServer: 15,
+    maxToolsTotal: 60,
+    subagent: { inherit: 'conservative' },
+    servers: {},
   },
 };
 
@@ -223,6 +236,13 @@ export class ConfigManager {
     // Deep clone tools (toolsets) defaults
     config.tools = { toolsets: { ...(DEFAULT_CONFIG.tools?.toolsets || {}) } };
 
+    // Deep clone MCP defaults (nested section + per-server map)
+    config.mcp = {
+      ...(DEFAULT_CONFIG.mcp || {}),
+      subagent: { ...(DEFAULT_CONFIG.mcp?.subagent || {}) },
+      servers: { ...(DEFAULT_CONFIG.mcp?.servers || {}) },
+    };
+
     if (existsSync(this.configPath)) {
       try {
         const raw = readFileSync(this.configPath, 'utf-8');
@@ -285,6 +305,28 @@ export class ConfigManager {
             ...(config.tools || {}),
             ...userConfig.tools,
             toolsets: { ...(config.tools?.toolsets || {}), ...(userConfig.tools.toolsets || {}) },
+          };
+        }
+
+        // Merge MCP config. Deep per-key merge so separate `config set`
+        // commands preserve each other (maxToolsTotal + subagent.inherit +
+        // servers.<name>.runtime), and per-server so one server's override
+        // never drops another's.
+        if (userConfig.mcp) {
+          const loadedMcp = userConfig.mcp;
+          config.mcp = {
+            ...(config.mcp || {}),
+            ...loadedMcp,
+            subagent: { ...(config.mcp?.subagent || {}), ...(loadedMcp.subagent || {}) },
+            servers: {
+              ...(config.mcp?.servers || {}),
+              ...Object.fromEntries(
+                Object.entries(loadedMcp.servers ?? {}).map(([name, override]) => [
+                  name,
+                  { ...(config.mcp?.servers?.[name] || {}), ...(override || {}) },
+                ]),
+              ),
+            },
           };
         }
 
@@ -598,6 +640,15 @@ export class ConfigManager {
   }
 
   /**
+   * The RESOLVED `mcp` settings (defaults + bounds applied) — the accessor the
+   * MCP layer and the dashboard share, so both read the same numbers.
+   */
+  getMcpConfig(): ResolvedMCPSettings {
+    this.refreshIfChanged();
+    return resolveMcpSettings(this.config.mcp ?? null);
+  }
+
+  /**
    * Save current configuration to disk
    */
   save(config: Partial<BuffConfig>): void {
@@ -680,6 +731,29 @@ export class ConfigManager {
         ...(this.config.modality || {}),
         ...config.modality,
         image: { ...(this.config.modality?.image || {}), ...(config.modality.image || {}) },
+      };
+    }
+
+    if (config.mcp) {
+      // Per-key merge within the section, per-server within `servers`, so
+      // `config set mcp.maxToolsTotal 40` never wipes
+      // `mcp.servers.context7.runtime`, and setting two different servers'
+      // overrides preserves both (`servers: {}` in the section REPLACES nothing
+      // it did not name).
+      const incoming = config.mcp;
+      this.config.mcp = {
+        ...(this.config.mcp || {}),
+        ...incoming,
+        subagent: { ...(this.config.mcp?.subagent || {}), ...(incoming.subagent || {}) },
+        servers: {
+          ...(this.config.mcp?.servers || {}),
+          ...Object.fromEntries(
+            Object.entries(incoming.servers ?? {}).map(([name, override]) => [
+              name,
+              { ...(this.config.mcp?.servers?.[name] || {}), ...(override || {}) },
+            ]),
+          ),
+        },
       };
     }
 

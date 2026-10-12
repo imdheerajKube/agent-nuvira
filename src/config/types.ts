@@ -1,3 +1,9 @@
+// The `mcp` section shape lives with its behaviour (`src/mcp/settings.ts` owns
+// the defaults + bounds); it is re-used here so the section is part of the config
+// schema that `nuvira config set`, the dashboard and the load/merge path share.
+// Type-only, so the config layer gains no runtime dependency on the MCP layer.
+import type { MCPConfigSection } from '../mcp/settings.js';
+
 /**
  * Supported built-in inference providers.
  */
@@ -554,6 +560,23 @@ export interface BuffConfig {
    * or `nuvira config set dashboard.cwd <dir>`.
    */
   dashboard?: DashboardConfig;
+  /**
+   * MCP configuration (see `src/mcp/settings.ts`). Every key is optional and
+   * every default reproduces today's behaviour: an install that never touches
+   * this section is unaffected.
+   *
+   *   mcp.enabled                  master switch (false = no MCP anywhere)
+   *   mcp.autoConnect              connect at turn start (existence-gated)
+   *   mcp.connectTimeoutMs         wall-clock budget for the connect step
+   *   mcp.maxToolsPerServer        eager-schema cap per server (default 15)
+   *   mcp.maxToolsTotal            eager-schema cap across servers (default 60)
+   *   mcp.subagent.inherit         'conservative' (default) | 'full'
+   *   mcp.servers.<name>.*         per-server enable / variant / runtime / args
+   *
+   * Set with `nuvira config set mcp.subagent.inherit full` or directly in
+   * buffconfig.json.
+   */
+  mcp?: MCPConfigSection;
   /**
    * Gateway per-platform inbound policies (who may trigger the agent). Managed
    * via `nuvira config gateway allow/disallow/reply` or the dashboard Permissions

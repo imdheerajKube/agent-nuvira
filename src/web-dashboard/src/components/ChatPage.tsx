@@ -34,8 +34,7 @@ import Markdown from './Markdown';
 // P2 — structured artifacts extracted from the answer TEXT (```diff blocks,
 // test/build output, deploy URLs) rendered as cards, not raw markdown.
 import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
-import { stripAnsi } from '../ansi';
-import type { ResumeOutcome, TaskLogLine, TaskStatus, TraceFinding, TurnReport, WorktreeOutcome } from '../types';
+import type { ResumeOutcome, TraceFinding, TurnReport, WorktreeOutcome } from '../types';
 import { formatCount } from '../format';
 import PageHeader from './PageHeader';
 
@@ -103,18 +102,6 @@ interface ChatMessage {
    * never offered a Retry, since re-sending unchanged fails the same way.
    */
   needsProject?: boolean;
-  /** P2 — a CLI command run as an inline execution card (the ⚡ Run path). */
-  task?: TaskRunView;
-}
-
-/** P2 — a running CLI task rendered as a live execution card in the thread. */
-interface TaskRunView {
-  id: string;
-  command: string;
-  status: TaskStatus;
-  exitCode: number | null;
-  durationMs: number | null;
-  logs: TaskLogLine[];
 }
 
 /** P8 — one composer attachment (file / paste / drop). */
@@ -269,39 +256,6 @@ function toolIcon(tool: string): string {
   return '🔧';
 }
 
-/** A CLI command the intent router resolved for a chat message. */
-interface ResolvedCommand {
-  intent: string;
-  summary: string;
-  command?: string;
-  example?: string;
-  ambiguous?: boolean;
-  options?: Array<{ when: string; command: string; example: string; summary: string }>;
-  confirmation?: boolean;
-  score: number;
-}
-
-/** A plain-English ask that maps to CLI command(s) — shown as a confirm card. */
-interface PendingResolve {
-  ask: string;
-  top: ResolvedCommand | null;
-}
-
-/**
- * Is this message an EXPLICIT agent-nuvira CLI ask?
- *
- * The pre-model command resolver now fires only for a message that literally
- * begins with the CLI name (`buff` / `agent-nuvira` / `nuvira`) — the one case
- * where the user is unambiguously driving the CLI by hand. Every other message
- * goes to the agent, which decides whether a command is the right move and runs
- * it via `run_cli`. Without this gate a normal ask could be intercepted by a
- * keyword match and shown as a confirm card before the model saw it — the nag
- * a user reads as the agent refusing to act.
- */
-export function isExplicitCliAsk(text: string): boolean {
-  return /^\s*(?:buff|agent-nuvira|nuvira)\b/i.test(text ?? '');
-}
-
 /** The two capability modes (a local mirror of the server's `CapabilityMode`). */
 export type CapabilityMode = 'balanced' | 'max';
 
@@ -317,16 +271,6 @@ export function capabilityModeFromValue(raw: string | null | undefined): Capabil
     ? 'max'
     : 'balanced';
 }
-
-/** P2 — status label for one inline command-run card. */
-const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
-  running: '⏳ running',
-  done: '✅ done',
-  failed: '❌ failed',
-  cancelled: '⏹ cancelled',
-  timeout: '⏰ timed out',
-  error: '💥 error',
-};
 
 /**
  * P3b — render a git diff card: per-file sections with +/− colored lines
@@ -510,59 +454,6 @@ function ArtifactNav({ children }: { children: React.ReactNode }) {
   return (
     <div className="chat-artifacts" ref={ref} role="group" aria-label="Artifacts" onKeyDown={onKeyDown}>
       {children}
-    </div>
-  );
-}
-
-/**
- * P2 — an inline command-run execution card (the ⚡ Run path). Shows the
- * command, a live status badge, streamed logs, exit code + duration when
- * settled, and a Cancel button while running. Reuses the P1 task runner
- * (the REAL CLI as a child process) exactly like TaskConsole.
- */
-function TaskRunCard({ task, onCancel }: { task: TaskRunView; onCancel?: () => void }) {
-  const running = task.status === 'running';
-  // P2 — the copy button captures the FULL output, ANSI-stripped, so what
-  // lands on the clipboard is the clean text the user sees (no color codes).
-  const outputText = task.logs.map((l) => stripAnsi(l.text)).join('\n');
-  return (
-    <div className={`chat-task-card${running ? ' chat-task-running' : task.status === 'done' ? ' chat-task-ok' : ' chat-task-err'}`}>
-      <div className="chat-task-head">
-        <span className="chat-task-icon">⚙️</span>
-        <code className="chat-task-cmd">{task.command}</code>
-        <span className="chat-task-status" title={task.status}>{TASK_STATUS_LABEL[task.status]}</span>
-        {!running && task.exitCode !== null ? <span className="chat-task-exit">exit {task.exitCode}</span> : null}
-        {!running && task.durationMs !== null ? <span className="chat-task-dur">{task.durationMs}ms</span> : null}
-        {outputText ? <CopyButton text={outputText} label="task output" /> : null}
-        {running && onCancel ? (
-          <button className="admin-mini-btn" type="button" onClick={onCancel}>⏹ Cancel</button>
-        ) : null}
-      </div>
-      <pre className="chat-task-logs" role="log">
-        {task.logs.length > 0 ? (
-          task.logs.map((l, i) => {
-            // Stream separation: a divider marks where the output switched
-            // streams (stdout → stderr → system), and each line is styled by
-            // its stream. ANSI escapes (chalk colors, progress-bar cursor
-            // control) are stripped so the card shows clean text.
-            const prev = task.logs[i - 1];
-            const switched = prev && prev.stream !== l.stream;
-            const text = stripAnsi(l.text) || ' ';
-            return (
-              <div key={i}>
-                {switched ? (
-                  <div className={`chat-task-log-sep chat-task-log-sep-${l.stream}`} aria-hidden="true">
-                    {l.stream}
-                  </div>
-                ) : null}
-                <div className={`chat-task-log chat-task-log-${l.stream}`}>{text}</div>
-              </div>
-            );
-          })
-        ) : (
-          <div className="admin-hint">{running ? 'Waiting for output…' : '(no output)'}</div>
-        )}
-      </pre>
     </div>
   );
 }
@@ -1286,9 +1177,6 @@ export default function ChatPage() {
   // PA4 — skill env-var notification card (non-blocking: shows missing vars).
   const [secretRequests, setSecretRequests] = useState<Array<{ skillName: string; missing: string[]; persisted: Record<string, boolean> }>>([]);
   const [executionResults, setExecutionResults] = useState<Array<{ skillName: string; runtime: string; success: boolean; durationMs: number; exitCode: number; stdout: string; stderr: string; timestamp: number }>>([]);
-  // Plain-English → CLI short-circuit: a confident command match shows a
-  // confirm card instead of burning a model turn; ambiguous asks show choices.
-  const [pendingResolve, setPendingResolve] = useState<PendingResolve | null>(null);
   // Mirrors liveSteps/liveTools for the async send callback (state would be
   // stale in the closure when the POST resolves) — the final message snapshots
   // every step.
@@ -1438,7 +1326,6 @@ export default function ChatPage() {
     setRetryAsk(null);
     setError('');
     setMeta(null);
-    setPendingResolve(null);
     setPendingQuestion(null);
     setRailOpen(true);
     // P8 — restore the conversation's server-persisted model pin, so resuming a
@@ -1487,7 +1374,6 @@ export default function ChatPage() {
     setRetryAsk(null);
     setError('');
     setMeta(null);
-    setPendingResolve(null);
     setPendingQuestion(null);
     setAttachments([]);
     setPasteOffer(null);
@@ -1786,10 +1672,9 @@ export default function ChatPage() {
   }, [openBrowse, attachProject]);
 
   const send = useCallback(
-    async (text: string, withAttachments?: AttachmentChip[] | { skipResolve: boolean }) => {
+    async (text: string, withAttachments?: AttachmentChip[]) => {
       const clean = text.trim();
       const chipList = Array.isArray(withAttachments) ? withAttachments : attachments;
-      const skipResolve = !Array.isArray(withAttachments) && withAttachments?.skipResolve === true;
       if ((!clean && chipList.length === 0) || busy) return;
       setError('');
       setMeta(null);
@@ -1814,35 +1699,26 @@ export default function ChatPage() {
       // P8 — smart rail: while the agent works, the results own the window.
       setRailOpen(false);
 
-      // Pre-resolve the ask against the command manifest ONLY for an EXPLICIT
-      // CLI ask — a message that literally begins with `buff` / `agent-nuvira` /
-      // `nuvira`. Everything else goes straight to the agent, which decides for
-      // itself whether a CLI command is the right move and runs it via run_cli.
+      // The pre-model command resolver used to run HERE: a "confident" match to
+      // a CLI command became a "⚡ Run this command? / ✕ No — ask the agent"
+      // confirm card, shown BEFORE the model saw the message. It is REMOVED
+      // (2026-10-12), for two reasons the code could not argue with:
       //
-      // Why the gate: resolving EVERY message meant a normal ask ("build the
-      // mac app") could be intercepted by a keyword match and shown as a
-      // "⚡ Run this command? / ✕ No — ask the agent" card BEFORE the model ever
-      // saw it — the nagging a user reads as the agent refusing to act. The
-      // agent owns execution now; the card survives only for the case it was
-      // built for, where the user is unambiguously driving the CLI by hand.
-      // skipResolve: when the user already declined a resolved command
-      // ("No — ask the agent"), skip re-resolution and go straight to the agent.
-      if (!skipResolve && isExplicitCliAsk(clean)) {
-        const resolved = await dashboardAPI.chatResolve(clean);
-        const matches = (resolved.matches ?? []) as ResolvedCommand[];
-        const top = matches[0] ?? null;
-        if (top && top.command && !top.ambiguous && top.score >= 0.6) {
-          setPendingResolve({ ask: clean, top });
-          setBusy(false);
-          return;
-        }
-        if (top && top.ambiguous && !pendingResolve) {
-          setPendingResolve({ ask: clean, top });
-          setBusy(false);
-          return;
-        }
-      }
-
+      //  1. It asked permission for the thing the user had just asked for. The
+      //     card's own second button ("No — ask the agent") is what the agent
+      //     does anyway, so the card's only outcome was a wasted round-trip.
+      //  2. "Confident" was not confident. `resolveAsk` scores an intent by how
+      //     many of its alias words appear ANYWHERE in the message, so prose
+      //     scores 1.0 against unrelated intents — measured live: "give me
+      //     answers for following questions…" → `nuvira mcp install <name>`,
+      //     and "agent-nuvira is hosted in <dir>, have a read" →
+      //     `nuvira trace list`. The gate added to fix that (resolve only when
+      //     the message BEGINS with the CLI name) could not hold either: talking
+      //     ABOUT agent-nuvira also begins with it.
+      //
+      // The agent owns execution: an ask that needs a CLI command is run by the
+      // agent through `run_cli`, after it has read what the ask actually wants.
+      // To run one by hand, the Command Console starts it directly.
       const sessionId = sessionIdRef.current;
       // P4 — arm the abort controller for this turn (the Cancel button fires
       // it; the server cancels the turn when the aborted fetch closes).
@@ -2157,84 +2033,6 @@ export default function ChatPage() {
   }, []);
 
   /**
-   * Run the resolved CLI command directly (the user confirmed the card).
-   * P2 — instead of polling then appending plain text, this renders a LIVE
-   * execution card in the thread (command, streamed logs, status, exit code,
-   * cancel) via the same P1 task runner + SSE the Command Console uses.
-   */
-  const runResolvedCommand = useCallback(async (ask: string) => {
-    const resolved = await dashboardAPI.chatResolve(ask);
-    const matches = (resolved.matches ?? []) as ResolvedCommand[];
-    const top = matches[0] ?? null;
-    if (!top?.command) {
-      setPendingResolve(null);
-      return;
-    }
-    setPendingResolve(null);
-    setBusy(true);
-    // Execute via the real CLI as a task (same runner as the Command Console)
-    // — deterministic, no model turn, RBAC-gated by the dashboard session.
-    const argv = top.command.split(/\s+/);
-    const started = await dashboardAPI.startTask(argv, 60_000);
-    if (!started.ok || !started.task) {
-      setError(started.error || 'The command could not be started.');
-      setBusy(false);
-      return;
-    }
-    const id = started.task.id;
-    const initial: TaskRunView = {
-      id,
-      command: top.command,
-      status: started.task.status,
-      exitCode: started.task.exitCode,
-      durationMs: started.task.durationMs,
-      logs: started.task.logs ?? [],
-    };
-    // Insert the execution card into the thread; it updates in place as
-    // log/status events stream in (patched by matching task id).
-    setMessages((m) => [...m, { role: 'assistant', content: '', task: initial }]);
-    const patch = (p: Partial<TaskRunView>) =>
-      setMessages((m) => m.map((msg) => (msg.task && msg.task.id === id ? { ...msg, task: { ...msg.task, ...p } } : msg)));
-    let unsub: (() => void) | null = null;
-    unsub = dashboardAPI.subscribeTask(id, {
-      onLog: (line) =>
-        setMessages((m) =>
-          m.map((msg) => (msg.task && msg.task.id === id ? { ...msg, task: { ...msg.task, logs: [...msg.task.logs, line] } } : msg)),
-        ),
-      onStatus: (status) => {
-        patch({ status });
-        if (status !== 'running') {
-          // The status event carries no exit code/duration — grab one final
-          // snapshot so the settled card shows them.
-          void dashboardAPI.getTask(id).then((t) => {
-            if (t?.task) patch({ exitCode: t.task.exitCode, durationMs: t.task.durationMs, logs: t.task.logs ?? [] });
-          });
-          unsub?.();
-          setBusy(false);
-        }
-      },
-    });
-    // Seed with the full log snapshot (the start response may lag the run).
-    const init = await dashboardAPI.getTask(id);
-    if (init?.task) {
-      patch({ status: init.task.status, exitCode: init.task.exitCode, durationMs: init.task.durationMs, logs: init.task.logs ?? [] });
-    }
-    // The task may already have settled (short command) — close the stream.
-    const settled = await dashboardAPI.getTask(id);
-    if (settled?.task && settled.task.status !== 'running') {
-      unsub?.();
-      patch({ status: settled.task.status, exitCode: settled.task.exitCode, durationMs: settled.task.durationMs, logs: settled.task.logs ?? [] });
-      setBusy(false);
-    }
-  }, []);
-
-  /** User declined the command card — ask the agent normally instead. */
-  const declineResolvedCommand = useCallback((ask: string) => {
-    setPendingResolve(null);
-    void send(ask, { skipResolve: true });
-  }, [send]);
-
-  /**
    * P2 — the diff card's "Commit accepted" action. Sends the accepted file
    * subset back as a chat turn; the agent commits exactly those files via the
    * git tool's accepted-subset contract (commit with files=[...], re-confirmed
@@ -2254,11 +2052,6 @@ export default function ChatPage() {
     },
     [send, attachedProject],
   );
-
-  /** P2 — cancel a running inline command-run card. */
-  const cancelTaskRun = useCallback(async (id: string) => {
-    await dashboardAPI.cancelTask(id);
-  }, []);
 
   /** P0.1 — submit the agent's clarifying-question answer; the turn resumes. */
   const answerQuestion = useCallback(
@@ -2341,7 +2134,6 @@ export default function ChatPage() {
     setRetryAsk(null);
     setError('');
     setMeta(null);
-    setPendingResolve(null);
     setPendingQuestion(null);
     // Refresh the sidebar (the just-abandoned session is now in it).
     const s = await dashboardAPI.listChatSessions();
@@ -2691,9 +2483,6 @@ export default function ChatPage() {
                       ))}
                     </ArtifactNav>
                   ) : null}
-                  {m.role === 'assistant' && m.task ? (
-                    <TaskRunCard task={m.task} onCancel={m.task.status === 'running' ? () => void cancelTaskRun(m.task!.id) : undefined} />
-                  ) : null}
                   {m.role === 'assistant' && m.draft ? (
                     <details className="chat-steps" open>
                       <summary>Skill draft: {m.draft.name}</summary>
@@ -2840,46 +2629,6 @@ export default function ChatPage() {
                 ↻ Retry
               </button>
               <span className="admin-hint">Re-send the last message — the turn failed.</span>
-            </div>
-          ) : null}
-
-          {pendingResolve && !busy ? (
-            <div className="chat-resolve-card">
-              {pendingResolve.top?.ambiguous && pendingResolve.top.options?.length ? (
-                <>
-                  <div className="chat-resolve-head">
-                    <strong>🤔 Which do you mean?</strong> — "{pendingResolve.ask}" maps to more than one action.
-                  </div>
-                  <div className="chat-resolve-options">
-                    {pendingResolve.top.options.map((o) => (
-                      <button key={o.command} className="chat-chip" type="button" onClick={() => void send(o.command)}>
-                        {o.summary} — <code>{o.command}</code>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="chat-resolve-foot">
-                    <button className="admin-mini-btn" type="button" onClick={() => { setPendingResolve(null); }}>✕ Not that — ask the agent</button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="chat-resolve-head">
-                    <strong>⚡ Run this command?</strong> — "{pendingResolve.ask}"
-                  </div>
-                  <div className="chat-resolve-cmd"><code>{pendingResolve.top?.command}</code></div>
-                  {pendingResolve.top?.confirmation ? (
-                    <div className="admin-hint">⚠ This changes running services/state.</div>
-                  ) : null}
-                  <div className="chat-resolve-foot">
-                    <button className="admin-refresh-btn" type="button" onClick={() => void runResolvedCommand(pendingResolve.ask)}>
-                      ▶ Run
-                    </button>
-                    <button className="admin-mini-btn" type="button" onClick={() => declineResolvedCommand(pendingResolve.ask)}>
-                      ✕ No — ask the agent
-                    </button>
-                  </div>
-                </>
-              )}
             </div>
           ) : null}
 

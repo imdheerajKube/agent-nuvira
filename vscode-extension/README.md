@@ -105,9 +105,11 @@ code --install-extension agent-nuvira-vscode.vsix
 
 ### Prerequisites
 
-The extension ships on the **same version number as the CLI** — `3.3.6` matches
-`agent-nuvira@3.3.6` — so "which version are you on" has one answer across the
-editor and the terminal. It requires the [agent-nuvira CLI](https://www.npmjs.com/package/agent-nuvira) to be installed:
+The extension is **versioned to track the CLI** and releases on its own train
+(`vscode-v*`, while the CLI publishes on `v*`), so it can sit one train behind a
+newer CLI. It is a thin wrapper around the installed CLI, and **the CLI version
+is what decides behaviour** — check it with `nuvira --version`. It requires the
+[agent-nuvira CLI](https://www.npmjs.com/package/agent-nuvira) to be installed:
 
 ```bash
 npm install -g agent-nuvira

@@ -236,12 +236,23 @@ const RULES: Rule[] = [
   },
   {
     id: 'docker-daemon',
-    test: (_cmd, out) => /Cannot connect to the Docker daemon|Is the docker daemon running/i.test(out),
+    // Two generations of message: the classic "Cannot connect to the Docker
+    // daemon … Is the docker daemon running?" and the newer CLI wording
+    // ("failed to connect to the docker API at unix://…: dial unix …: connect:
+    // no such file or directory") that a Homebrew/Colima install prints. The
+    // second form was NOT matched, so a stopped daemon fell through to no
+    // remediation at all and the CLI binary read as missing.
+    test: (_cmd, out) =>
+      /Cannot connect to the Docker daemon|Is the docker daemon running|failed to connect to the docker API|error during connect|docker daemon is not running|dial (?:unix|tcp) [^\s)]+: connect: (?:no such file or directory|connection refused)/i.test(
+        out,
+      ),
     build: () => ({
       id: 'docker-daemon',
       summary: 'Docker is installed but its daemon is not running.',
       fix: [
+        'The `docker` CLI is on PATH — do NOT reinstall Docker. Start the DAEMON instead.',
         'Start it: `open -a Docker` (macOS), `sudo systemctl start docker` (Linux), or start Docker Desktop.',
+        'On a Colima or Homebrew setup: `colima start` (then `docker context use colima`).',
         'Wait for `docker info` to succeed, then re-run the original command.',
         'If it cannot be started, choose a non-container path for the build rather than retrying.',
       ],

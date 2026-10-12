@@ -29,10 +29,13 @@ afterEach(() => {
 // ─── I2 browser ─────────────────────────────────────────────────────────────
 
 import {
+  closeBrowserSession,
   executeBrowserAction,
   isBrowserAvailable,
   resetBrowserAvailability,
+  runBrowserTool,
   setBrowserAvailable,
+  setBrowserLauncherForTests,
 } from '../../src/tools/modality/browser.js';
 
 /** A minimal fake playwright Page. */
@@ -110,6 +113,125 @@ describe('I2 browser', () => {
     const page = fakePage();
     expect((await executeBrowserAction(page, 'open', {})).text).toContain('url is required');
     expect((await executeBrowserAction(page, 'click', {})).text).toContain('selector is required');
+  });
+});
+
+// ─── I2 browser: the persistent session ──────────────────────────────────────
+//
+// WHY THESE EXIST. The tool used to launch a browser per call, so a multi-step
+// flow was impossible: `click` acted on a blank page and `extract` returned
+// nothing the model had just produced — for exactly the flows the tool's own
+// description recommends (login forms, dynamic sites). These assert the SESSION
+// contract: one page across calls, closed on demand, dropped after a failure,
+// and never interleaved.
+describe('I2 browser session', () => {
+  /** A launcher that records launches and hands back one recording page. */
+  function fakeLauncher() {
+    const events: string[] = [];
+    const pages: any[] = [];
+    const launcher = async () => {
+      events.push('launch');
+      const page = fakePage();
+      pages.push(page);
+      return {
+        browser: {
+          async newPage() { return page; },
+          async close() { events.push('browser.close'); },
+        },
+        page,
+      };
+    };
+    return { launcher, events, pages };
+  }
+
+  afterEach(async () => {
+    await closeBrowserSession();
+    setBrowserLauncherForTests(null);
+    resetBrowserAvailability();
+  });
+
+  it('reuses ONE page across calls, so open → type → click → extract is a flow', async () => {
+    const { launcher, events, pages } = fakeLauncher();
+    setBrowserLauncherForTests(launcher);
+
+    await runBrowserTool('open', { url: 'https://example.com' });
+    await runBrowserTool('type', { selector: '#user', text: 'ada' });
+    await runBrowserTool('click', { selector: '#submit' });
+    await runBrowserTool('extract', { selector: 'body' });
+
+    // ONE browser launch for the whole flow...
+    expect(events).toEqual(['launch']);
+    // ...and every action landed on the SAME page, in call order (`open` also
+    // reads the body, which is what makes the fake page record it).
+    expect(pages).toHaveLength(1);
+    expect(pages[0].calls).toEqual([
+      'goto:https://example.com',
+      'text:body',
+      'fill:#user:ada',
+      'click:#submit',
+      'text:body',
+    ]);
+  });
+
+  it('closes the session on action=close and relaunches on the next action', async () => {
+    const { launcher, events } = fakeLauncher();
+    setBrowserLauncherForTests(launcher);
+
+    await runBrowserTool('open', { url: 'https://example.com' });
+    expect(await runBrowserTool('close', {})).toContain('session closed');
+    expect(events).toEqual(['launch', 'browser.close']);
+    // Closing twice is not an error — it reports the truth.
+    expect(await runBrowserTool('close', {})).toContain('no session was open');
+    // A later action starts a fresh session rather than failing.
+    await runBrowserTool('extract', {});
+    expect(events).toEqual(['launch', 'browser.close', 'launch']);
+  });
+
+  it('drops a session whose action FAILED, so the next call starts clean', async () => {
+    const { launcher, events, pages } = fakeLauncher();
+    // First page throws on click (a wedged page / detached frame).
+    setBrowserLauncherForTests(async () => {
+      const launched = await launcher();
+      launched.page.click = async () => { throw new Error('element is not attached to the DOM'); };
+      return launched;
+    });
+
+    const failed = await runBrowserTool('click', { selector: '#gone' });
+    expect(failed).toContain('browser: click failed');
+    expect(failed).toContain('element is not attached to the DOM');
+    // The bad session was torn down rather than left for the next call.
+    expect(events).toContain('browser.close');
+
+    const next = await runBrowserTool('extract', {});
+    expect(next).toContain('Fake page body text');
+    expect(pages).toHaveLength(2);
+  });
+
+  it('serializes concurrent calls instead of interleaving them on one page', async () => {
+    const { launcher, events, pages } = fakeLauncher();
+    setBrowserLauncherForTests(launcher);
+
+    await Promise.all([
+      runBrowserTool('open', { url: 'https://example.com' }),
+      runBrowserTool('type', { selector: '#user', text: 'ada' }),
+      runBrowserTool('click', { selector: '#submit' }),
+    ]);
+
+    // Still one browser, and the actions landed in call order — not interleaved.
+    expect(events).toEqual(['launch']);
+    expect(pages[0].calls).toEqual([
+      'goto:https://example.com',
+      'text:body',
+      'fill:#user:ada',
+      'click:#submit',
+    ]);
+  });
+
+  it('reports the install command (not a bare npm incantation) when playwright is absent', async () => {
+    setBrowserLauncherForTests(null);
+    setBrowserAvailable(false);
+    const text = await runBrowserTool('open', { url: 'https://example.com' });
+    expect(text).toContain('nuvira tools install browser');
   });
 });
 

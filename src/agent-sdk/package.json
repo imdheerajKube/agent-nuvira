@@ -1,6 +1,6 @@
 {
   "name": "@agent-nuvira/sdk",
-  "version": "3.3.6",
+  "version": "3.5.0",
   "description": "Agent-Nuvira SDK — Build custom agents for the Agent-Nuvira multi-agent orchestration system",
   "type": "module",
   "main": "dist/index.js",

@@ -1130,15 +1130,30 @@ async function checkDocker(): Promise<CheckResult> {
     const { getSandboxManager } = await import('../sandbox/manager.js');
     const manager = getSandboxManager();
     const available = await manager.isDockerAvailable();
+    const reason = manager.getDockerError();
+    // Report the SAME distinction the sandbox manager draws: `dockerError` says
+    // whether the binary is missing or the daemon is down. "Docker is not
+    // available" alone sent a user with a stopped daemon off to reinstall.
+    const notInstalled = !available && reason.includes('not installed');
 
     return {
       name: 'Docker',
       status: available ? 'pass' : 'warn',
-      message: available ? 'Docker is available' : 'Docker is not available',
+      message: available
+        ? 'Docker is available'
+        : notInstalled
+          ? 'Docker is not installed'
+          : 'Docker is installed but its daemon is not running',
       detail: available
         ? 'Sandbox mode can use Docker for isolated code execution'
-        : 'Code execution will use temp directories (less secure)',
-      fix: !available ? 'Install Docker Desktop: https://docs.docker.com/get-docker/' : undefined,
+        : notInstalled
+          ? 'Code execution will use temp directories (less secure)'
+          : reason || 'Code execution will use temp directories until the daemon is up',
+      fix: !available
+        ? notInstalled
+          ? 'Install Docker Desktop: https://docs.docker.com/get-docker/'
+          : 'START Docker Desktop (or `colima start`) — the CLI is on PATH, the daemon is not up'
+        : undefined,
     };
   } catch {
     return {

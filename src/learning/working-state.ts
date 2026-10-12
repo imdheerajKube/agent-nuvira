@@ -374,6 +374,13 @@ export interface WorkspaceReconciliation {
    * Dirty paths the ledger never recorded as touched — an edit made outside the
    * agent, or a session that died before it could record. This is the gap the
    * ledger alone cannot see: it trusts its own report of what it changed.
+   *
+   * EMPTY when the ledger has recorded no file activity at all: with no
+   * baseline, "never recorded" describes every dirty path rather than a
+   * discrepancy, and printing the whole tree is the noise the sibling rule below
+   * refuses for the same reason (see the rule in `reconcileWithWorkspace`, which
+   * is also what keeps the block identical across two turns of an unchanged
+   * world — the property a resumed step's replay depends on).
    */
   unrecorded: string[];
   /**
@@ -478,8 +485,32 @@ export function reconcileWithWorkspace(
     const dirty = parsePorcelainPaths(gitRead(dir, ['status', '--porcelain', '-uall']));
     if (dirty.length === 0) return { isGitRepo: true, dirty: [], unrecorded: [], staleSinceVerification: [] };
 
+    // NO BASELINE, NO DISCREPANCY — and the two are not the same statement.
+    //
+    // `unrecorded` is meant to be the gap between what the ledger REMEMBERS
+    // changing and what the tree holds. With no recorded file activity there is
+    // no memory to disagree with: every dirty path is "unrecorded", so the line
+    // reduces to the whole dirty tree, which is the noise the sibling rule below
+    // (`staleSinceVerification`, empty until something has been verified) already
+    // refuses to print.
+    //
+    // MEASURED (2026-10-12), and this is why the rule is written down here: a
+    // FRESH ledger printed nothing on its first turn and "N changed file(s) this
+    // ledger never recorded" on its second, in a workspace where nothing had
+    // changed — the only difference was that turn 1 created the ledger entry. The
+    // block rides in the prompt, so two identical turns over an unchanged world
+    // had DIFFERENT inputs: a resumed run's unchanged step stopped replaying
+    // (`stepDigest` covers the thread, and the thread had grown a message no edit
+    // earned), and the parity resume probe went red on any checkout with
+    // uncommitted work. The ledger's self-description is that it is DETERMINISTIC
+    // — the same world produces the same block — and this restores it.
     const touched = state?.filesTouched ?? [];
-    const unrecorded = dirty.filter((p) => !touched.some((t) => samePath(t, p, dir)));
+    const recordedPaths =
+      touched.length > 0 ? touched : (state?.unverifiedPaths ?? []).map((u) => u.path);
+    const unrecorded =
+      recordedPaths.length === 0
+        ? []
+        : dirty.filter((p) => !recordedPaths.some((t) => samePath(t, p, dir)));
 
     const verifiedAt = state?.lastVerifiedAt;
     const staleSinceVerification =

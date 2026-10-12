@@ -801,7 +801,7 @@ export class DashboardAPI {
    * stale server must never crash on res.json()). Returns null on network
    * failure.
    */
-  private async sendAdminRequest(
+  async sendAdminRequest(
     path: string,
     method: string,
     body?: unknown,
@@ -2733,4 +2733,157 @@ export class DashboardAPI {
   }
 }
 
+/**
+ * MCP configuration (2026-10-12).
+ *
+ * These call `/api/mcp*`, which writes the SAME `mcp.*` section of
+ * `buffconfig.json` that `nuvira config set mcp.*` writes — one set of keys, one
+ * validator, two surfaces (CLI + dashboard). Secrets typed here go to the server
+ * and are never returned: the read route reports env KEY NAMES only.
+ */
+export interface McpSettingsShape {
+  enabled: boolean;
+  autoConnect: boolean;
+  connectTimeoutMs: number;
+  maxToolsPerServer: number;
+  maxToolsTotal: number;
+  subagentInheritance: string;
+  servers: Record<string, { enabled?: boolean; command?: string; variant?: string; args?: string[]; maxTools?: number; runtime?: { command: string; args?: string[] } }>;
+  warnings: string[];
+}
+
+export interface McpConfiguredServer {
+  name: string;
+  transport: string;
+  enabled: boolean;
+  variant: string | null;
+  command: string | null;
+  args: string[];
+  url: string | null;
+  runtime: { command: string; args?: string[] } | null;
+  /** Env KEY NAMES only — the values are never sent to the page. */
+  envKeys: string[];
+  /** Header NAMES only, for the same reason. */
+  headerKeys: string[];
+  /** `catalog` for a curated install, `custom` for a server added by hand. */
+  origin: 'catalog' | 'custom';
+  connected: boolean;
+  toolCount: number;
+}
+
+export interface McpCatalogVariant {
+  id: string;
+  label: string;
+  transport: string;
+  command: string | null;
+  args: string[];
+  url: string | null;
+  trust: string;
+  optIn: boolean;
+  note: string | null;
+  requires: Array<{ kind: string; name: string; minVersion: string | null; hint: string }>;
+  status: { ok: boolean; problems: string[]; unverified: string[]; needsDeep: boolean };
+}
+
+export interface McpCatalogEntryView {
+  name: string;
+  description: string;
+  offers: string[];
+  supersedes: string | null;
+  installed: boolean;
+  variants: McpCatalogVariant[];
+}
+
+export interface McpConfigView {
+  ok: boolean;
+  canWrite: boolean;
+  configDir: string;
+  deep: boolean;
+  settings: McpSettingsShape;
+  servers: McpConfiguredServer[];
+  catalog: McpCatalogEntryView[];
+}
+
+export interface McpInstallResult {
+  ok: boolean;
+  reason?: string;
+  variantId?: string;
+  path?: string;
+  missing?: string[];
+  unverifiedPins?: boolean;
+  error?: string;
+}
+
+export interface McpSettingsResult {
+  ok: boolean;
+  settings?: McpSettingsShape;
+  error?: string;
+}
+
+/** Result of adding a server that is NOT in the catalog (see `/api/mcp/servers`). */
+export interface McpAddResult {
+  ok: boolean;
+  reason?: string;
+  path?: string;
+  overwrote?: boolean;
+  warnings?: string[];
+  error?: string;
+}
+
 export const dashboardAPI = new DashboardAPI();
+
+// MCP config API — see the interfaces above. Kept as free functions (the same
+// shape as `getCapabilities`) so a component in a test can mock the module.
+export async function getMcpConfig(deep = false): Promise<McpConfigView | null> {
+  const r = await dashboardAPI.sendAdminRequest(`/api/mcp${deep ? '?deep=1' : ''}`, 'GET');
+  if (!r || r.status !== 200) return null;
+  return r.data as McpConfigView;
+}
+
+export async function saveMcpSettings(
+  patch: Array<{ key: string; value: string }>,
+): Promise<McpSettingsResult> {
+  const r = await dashboardAPI.sendAdminRequest('/api/mcp/settings', 'POST', { patch });
+  const data = (r?.data ?? null) as McpSettingsResult | null;
+  if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+  return data ?? { ok: r.status === 200, error: `Server returned HTTP ${r.status}` };
+}
+
+export async function installMcpServer(body: {
+  name: string;
+  variant?: string;
+  env?: Record<string, string>;
+  runtime?: string;
+  command?: string;
+  force?: boolean;
+}): Promise<McpInstallResult> {
+  const r = await dashboardAPI.sendAdminRequest('/api/mcp/install', 'POST', body);
+  if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+  return (r.data ?? { ok: false, error: `Server returned HTTP ${r.status}` }) as McpInstallResult;
+}
+
+/**
+ * Add (or replace) an arbitrary MCP server — the dashboard half of `nuvira mcp
+ * add`. The catalog is a convenience, not a gate: any stdio command or remote
+ * endpoint can be configured here, and it reaches the agent with no code change.
+ */
+export async function addMcpServer(body: {
+  name: string;
+  transport?: 'stdio' | 'sse';
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  overwrite?: boolean;
+}): Promise<McpAddResult> {
+  const r = await dashboardAPI.sendAdminRequest('/api/mcp/servers', 'POST', body);
+  if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+  return (r.data ?? { ok: false, error: `Server returned HTTP ${r.status}` }) as McpAddResult;
+}
+
+export async function uninstallMcpServer(name: string): Promise<{ ok: boolean; reason?: string }> {
+  const r = await dashboardAPI.sendAdminRequest('/api/mcp/uninstall', 'POST', { name });
+  if (!r) return { ok: false, reason: 'Could not reach the dashboard server.' };
+  return (r.data ?? { ok: false, reason: `Server returned HTTP ${r.status}` }) as { ok: boolean; reason?: string };
+}

@@ -95,6 +95,10 @@ export const NAV_GROUPS: NavGroup[] = [
     label: 'Integrations',
     items: [
       { path: '/platforms', label: 'Platforms', icon: '🌐' },
+      // MCP sits with the other integrations: external services the agent
+      // reaches. Its configuration is the SAME `mcp.*` data the CLI writes —
+      // the page exists because MCP was configurable only from the terminal.
+      { path: '/mcp', label: 'MCP', icon: '🔌' },
       { path: '/gateway', label: 'Gateway', icon: '📡' },
       { path: '/contacts', label: 'Contacts', icon: '📇' },
       { path: '/bedrock', label: 'Bedrock', icon: '🪨' },

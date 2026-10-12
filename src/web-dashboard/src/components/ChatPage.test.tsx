@@ -8,9 +8,9 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
-import ChatPage, { isExplicitCliAsk, capabilityModeFromValue } from './ChatPage';
+import ChatPage, { capabilityModeFromValue } from './ChatPage';
 import { dashboardAPI, setAdminToken } from '../api';
-import type { TaskLogLine, TaskStatus, TraceFinding } from '../types';
+import type { TraceFinding } from '../types';
 
 function mockAuthed(role: 'admin' | 'operator' | 'viewer' = 'admin', authenticated = true) {
   vi.spyOn(dashboardAPI, 'fetchAdminAuthStatus').mockResolvedValue({
@@ -48,22 +48,6 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   setAdminToken(null);
-});
-
-describe('isExplicitCliAsk — only an explicit CLI ask is pre-resolved', () => {
-  it('recognizes the three CLI names as the leading word', () => {
-    expect(isExplicitCliAsk('buff gateway status')).toBe(true);
-    expect(isExplicitCliAsk('agent-nuvira models list')).toBe(true);
-    expect(isExplicitCliAsk('nuvira dashboard')).toBe(true);
-    expect(isExplicitCliAsk('  buff test run')).toBe(true);
-  });
-
-  it('does NOT fire for a normal ask (the agent owns execution)', () => {
-    expect(isExplicitCliAsk('run the tests')).toBe(false);
-    expect(isExplicitCliAsk('build the mac app')).toBe(false);
-    expect(isExplicitCliAsk('what is the state of this project?')).toBe(false);
-    expect(isExplicitCliAsk('buffer the output')).toBe(false); // not a word boundary
-  });
 });
 
 describe('capabilityModeFromValue — the toggle mirrors the server parse', () => {
@@ -1353,125 +1337,48 @@ describe('ChatPage', () => {
     expect(commitMsg).not.toContain('b.ts');
   });
 
-  it('P2 — the ⚡ Run path renders a live execution card with logs and exit code', async () => {
-    mockAuthed('admin');
-    mockChatStream();
-    vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({
-      ok: true,
-      matches: [{ intent: 'run tests', summary: 'Run the test suite', command: 'test run', score: 0.9 }],
-    });
-    let statusCb: ((s: TaskStatus) => void) | null = null;
-    let logCb: ((l: TaskLogLine) => void) | null = null;
-    const taskBase = {
-      id: 'task-1',
-      command: 'test run',
-      args: ['test', 'run'],
-      cwd: '.',
-      startedAt: 1,
-      finishedAt: null,
-      timeoutMs: 60000,
-      logs: [] as Array<{ stream: 'stdout' | 'stderr' | 'system'; text: string; at: number }>,
-    };
-    const unsub = vi.fn();
-    vi.spyOn(dashboardAPI, 'subscribeTask').mockImplementation((_id, handlers) => {
-      statusCb = handlers.onStatus ?? null;
-      logCb = handlers.onLog ?? null;
-      return unsub;
-    });
-    void statusCb;
-    void logCb;
-    // The task runs then SETTLES: the mock stays running until the test flips
-    // `settled` (before firing onStatus('done')), after which snapshots carry
-    // the exit code + final logs — exactly what the real server returns.
-    let settled = false;
-    const runningTask = { ...taskBase, status: 'running' as TaskStatus, exitCode: null, durationMs: null };
-    vi.spyOn(dashboardAPI, 'getTask').mockImplementation(async () => ({
-      status: 200,
-      task: settled
-        ? { ...taskBase, status: 'done' as TaskStatus, exitCode: 0, finishedAt: 2, durationMs: 100, logs: [{ stream: 'stdout', text: '1 test passed', at: 1 }] }
-        : runningTask,
-    }));
-    vi.spyOn(dashboardAPI, 'startTask').mockResolvedValue({ ok: true, task: runningTask });
-    const cancelSpy = vi.spyOn(dashboardAPI, 'cancelTask').mockResolvedValue({ ok: true });
-    render(<ChatPage />);
-    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
-
-    // An EXPLICIT CLI ask (starts with `buff`) shows the ⚡ confirm card — the
-    // resolver now fires only for that case; a plain "run the tests" goes to the
-    // agent, which decides and runs it itself.
-    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'buff test run' } });
-    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
-    await waitFor(() => expect(screen.getByText(/Run this command/)).toBeTruthy());
-
-    // ▶ Run starts the task and inserts a LIVE execution card.
-    fireEvent.click(screen.getByText('▶ Run'));
-    await waitFor(() => expect(screen.getByText('test run')).toBeTruthy());
-    expect(screen.getByText(/⏳ running/)).toBeTruthy();
-
-    // Streamed logs land in the card.
-    logCb!({ stream: 'stdout', text: '1 test passed', at: 1 });
-    await waitFor(() => expect(screen.getByText('1 test passed')).toBeTruthy());
-
-    // ANSI escapes are stripped, and a stream switch (stdout → stderr) shows
-    // a separator + the error line is marked by stream.
-    logCb!({ stream: 'stdout', text: '\u001b[32mstarting\u001b[0m', at: 2 });
-    await waitFor(() => expect(screen.getByText('starting')).toBeTruthy());
-    expect(screen.queryByText('\u001b[32mstarting\u001b[0m')).toBeNull();
-    logCb!({ stream: 'stderr', text: '\u001b[31mboom\u001b[0m', at: 3 });
-    await waitFor(() => expect(screen.getByText('boom')).toBeTruthy());
-    expect(screen.getByText('stderr')).toBeTruthy();
-    expect(document.querySelector('.chat-task-log-stderr')?.textContent).toBe('boom');
-
-    // The copy button copies the FULL output, ANSI-stripped (clean text, no
-    // color codes — matching what the card renders).
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-    const copyBtn = document.querySelector('.chat-task-card .chat-card-copy') as HTMLButtonElement;
-    expect(copyBtn).toBeTruthy();
-    fireEvent.click(copyBtn);
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(['1 test passed', 'starting', 'boom'].join('\n')),
-    );
-
-    // Cancel is available while running (scope to the TASK card — the busy
-    // composer also renders a ⏹ Cancel for the agent turn).
-    const taskCancel = document.querySelector('.chat-task-card .admin-mini-btn') as HTMLButtonElement;
-    expect(taskCancel).toBeTruthy();
-    fireEvent.click(taskCancel);
-    await waitFor(() => expect(cancelSpy).toHaveBeenCalledWith('task-1'));
-
-    // Settling the status shows the exit code and releases busy (the status
-    // event itself carries no exit code — the final snapshot provides it).
-    settled = true;
-    statusCb!('done');
-    await waitFor(() => expect(screen.getByText(/exit 0/)).toBeTruthy());
-    expect(unsub).toHaveBeenCalled();
-  });
-
-  it('a NORMAL ask is NOT intercepted by the resolver — the agent owns execution', async () => {
-    // The nag a user reads as the agent refusing to act: resolving EVERY message
-    // meant a keyword match could show "⚡ Run this command? / ✕ No — ask the
-    // agent" BEFORE the model saw the message. Now only an explicit CLI ask
-    // (starting with `buff`/`agent-nuvira`/`nuvira`) resolves; everything else
-    // goes straight to the agent.
+  it('never intercepts an ask with a command card — the resolver is not consulted at all', async () => {
+    // The nag a user reads as the agent refusing to act: the pre-model resolver
+    // matching a message to a CLI command and showing "⚡ Run this command? /
+    // ✕ No — ask the agent" BEFORE the model saw it. Gating that to messages
+    // beginning with the CLI name was not enough — prose ABOUT the CLI also
+    // begins with it ("agent-nuvira is hosted in <dir>, have a read"), and the
+    // scorer counts alias words anywhere in the message, so that ask resolved
+    // to `nuvira trace list` at score 1.0. The resolver is gone from the send
+    // path entirely; every ask goes to the agent, which runs what it needs.
     mockAuthed('admin');
     mockChatStream();
     const resolve = vi.spyOn(dashboardAPI, 'chatResolve').mockResolvedValue({
       ok: true,
-      matches: [{ intent: 'run tests', summary: 'Run the test suite', command: 'test run', score: 0.9 }],
+      matches: [{ intent: 'run tests', summary: 'Run the test suite', command: 'test run', score: 1 }],
     });
+    const startTask = vi.spyOn(dashboardAPI, 'startTask');
     const send = mockChatSend(OK_RESPONSE);
     render(<ChatPage />);
     await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
 
-    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'build the mac app' } });
-    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+    // The plain ask AND the CLI-shaped one — the case that used to be
+    // intercepted — both go straight to the agent.
+    const input = screen.getByPlaceholderText(/Message the agent/);
+    fireEvent.change(input, { target: { value: 'build the mac app' } });
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
 
-    // The resolver was never consulted and the confirm card never appeared —
-    // the ask went to the agent.
-    await waitFor(() => expect(send).toHaveBeenCalled());
+    const lived = 'agent-nuvira is hosted in /tmp/project, have a read';
+    fireEvent.change(input, { target: { value: lived } });
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    // Let the second turn land (the reply renders, busy clears) so nothing
+    // updates state after the test's last assertion.
+    await waitFor(() => expect(screen.getAllByText(/build is green/).length).toBe(2));
+
+    // No confirm card, no resolver round-trip, no command started behind the
+    // agent's back — the CLI-shaped ask reached the agent like any other.
+    expect(send.mock.calls[1][1]).toBe(lived);
     expect(resolve).not.toHaveBeenCalled();
+    expect(startTask).not.toHaveBeenCalled();
     expect(screen.queryByText(/Run this command/)).toBeNull();
+    expect(screen.queryByText(/No — ask the agent/)).toBeNull();
   });
 
   it('P2 — result and deploy cards have copy buttons that copy their content', async () => {

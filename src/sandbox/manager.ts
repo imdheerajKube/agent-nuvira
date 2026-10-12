@@ -39,6 +39,7 @@ import { mkdtempSync, readdirSync } from 'node:fs';
 
 import { logger } from '../utils/logger.js';
 import { getHostShell, runShellSync } from '../utils/shell.js';
+import { resolveCommandPath } from '../mcp/prereqs.js';
 import type {
   ResourceLimits,
   SandboxConfig,
@@ -80,14 +81,37 @@ export class SandboxManager {
   /**
    * Check if Docker is installed and the daemon is running.
    * Caches the result so repeated calls are instant.
+   *
+   * TWO DIFFERENT FAILURES, TWO DIFFERENT MESSAGES (2026-10-12). This used to
+   * report both as "Docker is not available … Is Docker installed and running?",
+   * which is what a user with Docker 29.7 installed and the daemon stopped saw —
+   * the message sent them to INSTALL something they already had. The binary and
+   * the daemon are now checked separately: absent means install it (and says
+   * where we looked), present-but-unreachable means start it (and quotes the
+   * daemon's own error, plus the path and version so the finding is falsifiable).
    */
   async isDockerAvailable(): Promise<boolean> {
     if (this.dockerChecked) return this.dockerAvailable;
 
     try {
+      const binary = resolveCommandPath('docker');
+      if (!binary) {
+        this.dockerAvailable = false;
+        this.dockerError =
+          'Docker is not installed — no `docker` executable on PATH. Install Docker Desktop: https://docs.docker.com/get-docker/';
+        this.dockerChecked = true;
+        return this.dockerAvailable;
+      }
+
       const result = await this.execHostCommand('docker info --format "{{.ServerVersion}}"');
       this.dockerAvailable = result.exitCode === 0 && result.stdout.trim().length > 0;
-      this.dockerError = result.stderr;
+      if (!this.dockerAvailable) {
+        const version = await this.dockerVersion(binary);
+        const why = this.firstLine(result.stderr) || 'the daemon did not respond';
+        this.dockerError =
+          `Docker is INSTALLED at ${binary}${version ? ` (v${version})` : ''} but its daemon is not running: ${why}. ` +
+          'START Docker Desktop (or `colima start`), then retry — installing Docker again will not help.';
+      }
     } catch (err) {
       this.dockerAvailable = false;
       this.dockerError = err instanceof Error ? err.message : String(err);
@@ -95,6 +119,23 @@ export class SandboxManager {
 
     this.dockerChecked = true;
     return this.dockerAvailable;
+  }
+
+  /** Best-effort `docker --version` → the bare version string ('' when unknown). */
+  private async dockerVersion(binary: string): Promise<string> {
+    try {
+      const result = await this.execHostCommand(`"${binary}" --version`);
+      const match = `${result.stdout} ${result.stderr}`.match(/Docker version (\S+)/);
+      return match?.[1]?.replace(/,$/, '') ?? '';
+    } catch {
+      return '';
+    }
+  }
+
+  /** The last non-empty line of a tool's stderr — its actual complaint. */
+  private firstLine(text: string | undefined): string {
+    const lines = String(text ?? '').trim().split('\n').map((l) => l.trim()).filter(Boolean);
+    return lines.length > 0 ? lines[lines.length - 1] : '';
   }
 
   /**
@@ -127,9 +168,9 @@ export class SandboxManager {
     workDir?: string,
   ): Promise<string> {
     if (!(await this.isDockerAvailable())) {
-      throw new Error(
-        'Docker is not available. ' + (this.dockerError || 'Is Docker installed and running?'),
-      );
+      // `dockerError` now distinguishes "not installed" from "daemon down";
+      // the old generic fallback is only reached if the check itself never ran.
+      throw new Error(this.dockerError || 'Docker is not available — the availability check did not run.');
     }
 
     // Enforce max container limit

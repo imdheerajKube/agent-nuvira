@@ -4,15 +4,19 @@
 
 The SDK is a clean-room types + base-class package: it has **no runtime dependency on the Agent-Nuvira internals**, so a custom agent can be built, unit-tested, and published without pulling in the whole CLI. Its type surface is kept structurally compatible with the main package by an in-repo compatibility test.
 
-**Version:** the SDK ships on the **same version number as the CLI and the VS Code extension** — `3.3.6` — so `nuvira sdk info`, `nuvira --version` and the extension's `version` export agree. A custom agent built against a mismatched SDK is the usual reason one fails to load, so check that first.
+**Version:** the SDK ships on the **same version number as the CLI** — `3.5.0` — so `nuvira --version` and the SDK version always tell you the same number. A custom agent built against a mismatched SDK is the usual reason one fails to load, so check that first. (`nuvira sdk scaffold` pins this automatically; a test fails the release if the constant and this package's version disagree.)
 
-> **📖 The full guide is [`docs/AGENT_SDK.md`](../../docs/AGENT_SDK.md).** It covers the
-authoritative version of everything below — the complete agent contract, `defineAgent()`'s
-failure modes, the context bus field by field, the ten testing helpers with their real
-signatures, registration (including what registering genuinely edits), troubleshooting, and
-a section stating **what depth the SDK offers and what it deliberately does not** (no tool
-calling, no direct filesystem writes, no runtime agent registry). This README is the npm
-landing page; that guide is the manual.
+> **📖 The guides.** [`docs/AGENT_SDK.md`](../../docs/AGENT_SDK.md) is the API manual — the
+complete agent contract, `defineAgent()`'s failure modes, the context bus field by field, the
+ten testing helpers with their real signatures, registration (including what registering
+genuinely edits), troubleshooting, and a section stating **what depth the SDK offers and what
+it deliberately does not** (no tool calling, no direct filesystem writes, no runtime agent
+registry).
+>
+> [`docs/SDK_PLUGIN_GUIDE.md`](../../docs/SDK_PLUGIN_GUIDE.md) is the task-oriented guide:
+which of the three shipping paths to take (plugin file vs source checkout vs embedded), the
+rate-limit contract, where the model belongs versus where code must, publishing a plugin
+package, and three worked examples with tests. This README is the npm landing page.
 
 A runnable example agent with its own tests lives in `examples/sdk/`; verify it against
 the SDK source with `npm run examples:verify` from the repository root.
@@ -87,11 +91,19 @@ describe('CodeFormatter', () => {
 
 ### 4. Register it with the orchestrator
 
-> Registration edits a **source checkout**: it adds an import, a `case` in
-> `createAgent()` and an `AGENT_ICONS` entry to `src/agents/orchestrator.ts`. With the CLI
-> installed from npm there is no such file, and the call reports
-> `Orchestrator file not found at: …` rather than pretending. To install an agent into a
-> normal CLI install, distribute it as a plugin file instead (`nuvira plugins list`).
+> Registration edits a **source checkout**, and it adapts to the layout it finds: on a
+> current checkout it adds an import plus a `registry.registerOrOverride(...)` call inside
+> `createWithBuiltins()` in `src/agents/module-registry.ts`; on a checkout that still has the
+> old hardcoded switch it edits `src/agents/orchestrator.ts` instead. With the CLI installed
+> from npm there is no source tree, and the call reports `Orchestrator file not found at: …`
+> rather than pretending.
+>
+> **To add an agent to a normal CLI install, ship a plugin file** into `~/.nuvira/agents/`:
+> a compiled ESM module with a `default` export carrying `metadata` (including `agentTypes`)
+> and `execute`. Discovery registers it under each declared agent type, so a plan step whose
+> `agentType` matches will run it — no fork, no rebuild. See
+> [`docs/SDK_PLUGIN_GUIDE.md`](../../docs/SDK_PLUGIN_GUIDE.md) §3, and check what loaded with
+> `nuvira plugins list`.
 
 ```ts
 import { registerAgent } from '@agent-nuvira/sdk/register';

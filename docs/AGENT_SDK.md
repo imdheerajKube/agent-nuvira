@@ -18,10 +18,16 @@ statement.
 - **Module format:** ESM only (`"type": "module"`, `NodeNext` resolution)
 - **Peer dependency:** TypeScript `>= 5.0.0`
 - **Guide version:** the SDK ships on the same version number as the CLI
-  (`3.3.6`), so `nuvira --version` and the SDK version always tell you the same
+  (`3.5.0`), so `nuvira --version` and the SDK version always tell you the same
   number. A mismatch between the SDK you built against and the CLI running your
   agent is the single most common reason a custom agent fails to load; check
   both with `nuvira sdk info`.
+
+> **Task-oriented companion:** [`SDK_PLUGIN_GUIDE.md`](./SDK_PLUGIN_GUIDE.md)
+> covers the three shipping paths (plugin file for npm installs, source checkout,
+> embedded), the rate-limit contract, where the model belongs versus where code
+> must, and publishing a plugin package — with three worked examples under
+> `examples/sdk/`, verified by `npm run examples:verify`.
 
 ---
 
@@ -362,24 +368,34 @@ Types: `TaskStatus`, `TaskStep`, `Artifact`, `FileChange`, `AgentMessage`,
 
 ## 7. Registering it (and what registering really means)
 
-`registerAgent()` is a **source-tree edit**, not a runtime registry call. It
-opens an `orchestrator.ts` file and makes three insertions: an `import`, a `case`
-in the `createAgent()` switch, and an entry in the `AGENT_ICONS` map. Calling it
-twice is a no-op, and it reports what it changed:
+`registerAgent()` is a **source-tree edit**, not a runtime registry call, and it
+targets whichever layout the checkout has:
+
+- **`ModuleRegistry` layout (current)** — inserts an `import` and a
+  `registry.registerOrOverride('<agentType>', () => new <Class>(), { … })` block
+  into `createWithBuiltins()` in `src/agents/module-registry.ts`.
+  `registerOrOverride` (not `register`) is used so re-registering cannot make
+  boot throw on a duplicate agent type.
+- **Legacy switch layout** — inserts an `import`, a `case` in the old
+  `createAgent()` switch and an `AGENT_ICONS` entry in `orchestrator.ts`.
+
+Calling it twice is a no-op, and it reports which file it changed:
 
 ```ts
 import { registerAgent } from '@agent-nuvira/sdk/register';
 
 const result = registerAgent({
-  sourceModule: './agents/conventional-commit.js', // relative to orchestrator.ts
+  sourceModule: './agents/conventional-commit.js', // relative to src/agents/
   className: 'ConventionalCommit',
   agentType: 'conventional-commit',
   icon: '📝',
+  description: 'Drafts a Conventional Commits message',
 });
 
 console.log(result.success, result.message, result.modifiedFiles);
-// true, "Registered agent 'conventional-commit' (ConventionalCommit) with the
-//  orchestrator. Added: import, switch case, icon.", ['/…/src/agents/orchestrator.ts']
+// true, "Registered agent 'conventional-commit' (ConventionalCommit) in
+//  module-registry.ts. Added: import, registry call.",
+// ['/…/src/agents/module-registry.ts']
 ```
 
 | Option | Required | Default |

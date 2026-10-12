@@ -15,8 +15,11 @@ shared with whatever you run in a terminal. If a goal works from
 - **Extension:** `dheerajsharma.agent-nuvira-vscode` (Marketplace and
   Open VSX), version `3.3.6`
 - **Requires:** VS Code `>= 1.85.0`, Node `>= 18`, and the `agent-nuvira` CLI
-- **Same version number as the CLI**, so "the extension says 3.3.6, the CLI says
-  3.3.6" is the whole compatibility question.
+- **Versioned to track the CLI, on its own release train** (the CLI publishes on
+  a `v*` tag, the extension on `vscode-v*`). The extension is a thin wrapper that
+  shells out to the installed CLI, so the CLI version is what decides behaviour;
+  an extension one train behind a newer CLI is expected, not a mismatch. Check
+  the CLI with `nuvira --version`.
 
 ---
 

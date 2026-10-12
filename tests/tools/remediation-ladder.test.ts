@@ -65,6 +65,23 @@ describe('diagnoseFailure (A4)', () => {
     expect(r?.id).toBe('node-engines');
   });
 
+  it('recognises a stopped Docker daemon from the modern (Homebrew/Colima) message', () => {
+    // The live 2026-10-12 case: docker 29.7 installed at /opt/homebrew/bin/docker
+    // with the daemon stopped. The classic sentence is absent, so this used to
+    // fall through to NO remediation — and the CLI binary read as "missing".
+    const out =
+      'Error: run_terminal: `docker ps` ❌ failed (exit 1).\n' +
+      'Output:\nfailed to connect to the docker API at unix:///Users/dheeraj/.docker/run/docker.sock; ' +
+      'check if the path is correct and if the daemon is running: dial unix ' +
+      '/Users/dheeraj/.docker/run/docker.sock: connect: no such file or directory';
+    const r = diagnoseFailure('docker ps', out);
+    expect(r?.id).toBe('docker-daemon');
+    expect(r?.summary).toMatch(/installed but its daemon is not running/);
+    // The fix must START the daemon and explicitly forbid reinstalling.
+    expect(r?.fix.join(' ')).toMatch(/do NOT reinstall Docker/);
+    expect(r?.fix.join(' ')).toMatch(/colima start/);
+  });
+
   it('returns null for an unknown failure (never invents a fix)', () => {
     expect(diagnoseFailure('npm test', 'Error: run_terminal: `npm test` failed.\nOutput:\n1 test failed: expected 2 to be 3')).toBeNull();
     expect(diagnoseFailure('', '')).toBeNull();

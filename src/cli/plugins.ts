@@ -9,10 +9,26 @@
 import { Command } from 'commander';
 
 import { BaseCommand, getCliName } from './commands.js';
-import { getPluginStats, discoverProviderPlugins, discoverAgentPlugins, discoverWorkflowPlugins, runAutoDiscovery } from '../plugins/agent-plugin.js';
+import { getPluginStats, discoverProviderPlugins, discoverAgentPlugins, discoverWorkflowPlugins, pluginDirectories, runAutoDiscovery } from '../plugins/agent-plugin.js';
+import { homedir } from 'node:os';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { getWorkflowTemplates } from '../workflow/templates.js';
+
+/**
+ * The plugin dirs the RUN is actually reading, with the home prefix shortened.
+ *
+ * Hard-coding `~/.nuvira/…` in the output named a directory the process may never
+ * have looked in: with `$NUVIRA_CONFIG_DIR` set (an isolated profile, a sandbox,
+ * CI) discovery reads THAT dir, so the listing has to name it. The `~` shortening
+ * keeps today's output byte-identical for the default profile.
+ */
+function dirsForDisplay(): { provider: string; agents: string; workflows: string } {
+  const dirs = pluginDirectories();
+  const home = homedir();
+  const short = (p: string): string => (p.startsWith(home) ? `~${p.slice(home.length)}` : p);
+  return { provider: short(dirs.provider), agents: short(dirs.agents), workflows: short(dirs.workflows) };
+}
 
 export class PluginsCommand extends BaseCommand {
   create(): Command {
@@ -37,6 +53,7 @@ export class PluginsCommand extends BaseCommand {
   private async listPlugins(): Promise<void> {
     const stats = getPluginStats();
     const registry = getPluginRegistry();
+    const dirs = dirsForDisplay();
 
     logger.highlight(`${'═'.repeat(60)}`);
     logger.highlight('  🔌  Plugin System');
@@ -53,8 +70,8 @@ export class PluginsCommand extends BaseCommand {
         }
       }
     } else {
-      console.log('    (no provider plugins found in ~/.nuvira/plugins/)');
-      console.log('    Tip: Drop a .js file exporting a ProviderPlugin into ~/.nuvira/plugins/');
+      console.log(`    (no provider plugins found in ${dirs.provider}/)`);
+      console.log(`    Tip: Drop a .js file exporting a ProviderPlugin into ${dirs.provider}/`);
     }
 
     // ── Built-in workflow templates ──────────────────────────────────────
@@ -76,7 +93,7 @@ export class PluginsCommand extends BaseCommand {
         console.log('    (run `${getCliName()} plugins scan` to reload)');
       }
     } else {
-      console.log('    (no agent plugins found in ~/.nuvira/agents/)');
+      console.log(`    (no agent plugins found in ${dirs.agents}/)`);
     }
 
     // ── Discovered workflow plugins ──────────────────────────────────────
@@ -91,14 +108,14 @@ export class PluginsCommand extends BaseCommand {
         console.log('    (run `${getCliName()} plugins scan` to reload)');
       }
     } else {
-      console.log('    (no workflow plugins found in ~/.nuvira/workflows/)');
+      console.log(`    (no workflow plugins found in ${dirs.workflows}/)`);
     }
 
     // ── Plugin directories ──────────────────────────────────────────────
     console.log(`\n  📁 Plugin Directories:`);
-    console.log(`    Provider plugins: ~/.nuvira/plugins/`);
-    console.log(`    Agent plugins: ~/.nuvira/agents/`);
-    console.log(`    Workflow templates: ~/.nuvira/workflows/`);
+    console.log(`    Provider plugins: ${dirs.provider}/`);
+    console.log(`    Agent plugins: ${dirs.agents}/`);
+    console.log(`    Workflow templates: ${dirs.workflows}/`);
     console.log('');
   }
 
@@ -130,7 +147,8 @@ export class PluginsCommand extends BaseCommand {
     }
 
     if (registeredPlugins.length === 0 && agentPlugins.size === 0 && workflowPlugins.length === 0) {
-      console.log('  Tip: Place .js provider files in ~/.nuvira/plugins/, .js agent files in ~/.nuvira/agents/,\n        or .json workflow files in ~/.nuvira/workflows/');
+      const tips = dirsForDisplay();
+      console.log(`  Tip: Place .js provider files in ${tips.provider}/, .js agent files in ${tips.agents}/,\n        or .json workflow files in ${tips.workflows}/`);
     }
   }
 }

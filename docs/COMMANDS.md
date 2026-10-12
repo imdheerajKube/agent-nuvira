@@ -732,22 +732,120 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ### 6.5 MCP (Model Context Protocol) servers
 
 - **Objective:** Connect the agent to MCP servers, or expose its own tools as an MCP server.
-- **Command:** `nuvira mcp list` · `nuvira mcp connect <server> [--all]` · `nuvira mcp call <tool> [-s <server>] [-a '<json>']` · `nuvira mcp install <name> [--env K=V]` · `nuvira mcp uninstall <name>` · `nuvira mcp serve [--with <tool>]` · `nuvira mcp catalog [--search <q>]`
+- **Command:** `nuvira mcp list` · `nuvira mcp connect <server> [--all]` · `nuvira mcp call <tool> [-s <server>] [-a '<json>']` · `nuvira mcp catalog [--search <q>]` · `nuvira mcp install <name> [--variant <id>] [--env K=V] [--runtime <cmd>] [--command <path>] [--force] [--no-verify]` · `nuvira mcp add <name> [--command <cmd>] [--arg <v>] [--env K=V] [--url <url>] [--header 'N: v'] [--json <spec>] [--force] [--no-verify]` · `nuvira mcp authorize <name> [--redirect-uri <uri>] [--no-browser]` · `nuvira mcp uninstall <name>` · `nuvira mcp settings` · `nuvira mcp serve [--with <tool>] [--memory]`
+
+  A catalog entry is a **capability**, not one package: `nuvira mcp catalog` lists every way to run it
+  (hosted remote · local binary · `npx` · `uvx` · docker), each marked ✅/⛔ with the dependency it
+  needs on this machine. `install` picks the best one that can run here and **refuses before writing**
+  when none can, naming what to install; an opt-in variant is chosen only by naming it.
+
 - **Examples:**
   ```bash
-  nuvira mcp list
+  nuvira mcp catalog                          # capabilities, their ways to run, and what each needs
+  nuvira mcp list                             # configured servers
   nuvira mcp call fetch_webpage -s browser -a '{"url":"https://example.com"}'
-  nuvira mcp install github --env GITHUB_TOKEN=ghp_…
-  nuvira mcp serve --with gateway_send      # expose agent tools over stdio (Claude/IDEs)
+  nuvira mcp install github --env GITHUB_PERSONAL_ACCESS_TOKEN=ghp_…   # hosted remote (no local install)
+  nuvira mcp install github --variant local-binary --command ~/.local/bin/github-mcp-server \
+    --env GITHUB_PERSONAL_ACCESS_TOKEN=ghp_…  # a binary that is installed but NOT on PATH
+  nuvira mcp install context7 --runtime "/opt/node20/bin/node /usr/local/bin/npx"
+                                              # context7 4.x needs Node ≥20.18.1; run THIS server on
+                                              # its own Node instead of changing the product's floor
+  nuvira mcp add mine --command node --arg /opt/servers/mine.mjs --arg --stdio --env TOKEN=abc
+                                              # ANY server, catalog or not: writes ~/.nuvira/mcp/mine.json
+  nuvira mcp add vendor --url https://mcp.vendor.example/http --header 'Authorization: Bearer sk-…'
+  nuvira mcp add pasted --json @vendor-config.json    # start from a README's JSON snippet
+  nuvira mcp add mine --command node --arg /opt/servers/mine.mjs --force   # replace an existing config
+  nuvira mcp settings                         # resolved mcp.* config (caps, auto-connect, subagents)
+  nuvira mcp serve --with gateway_send        # expose agent tools over stdio (Claude/IDEs)
+  nuvira mcp serve --memory                   # also expose MEMORY (search/add/replace/delete/list + stats)
+  nuvira mcp authorize gmail                  # OAuth: open the consent page, capture the loopback redirect
   ```
-- **Worked example — give the agent a GitHub MCP server, then let Claude Desktop call it:**
+
+- **OAuth servers (`nuvira mcp authorize`).** Google Workspace's official MCP servers (and Slack's,
+  Figma's) authenticate with a **token**, not a static key: `install` writes HOW to get one (endpoints,
+  client, scopes) and `authorize` completes the authorization-code flow once, opening the consent page
+  and capturing the redirect on `http://localhost:3456/mcp/oauth/callback` — which must be registered as
+  a redirect URI on your OAuth client (or pass `--redirect-uri`). From then on the access token is
+  **refreshed silently** on every connect, including in a scheduled run where no browser exists. The
+  tokens live in the OAuth store inside your config dir (never in a server config file), and
+  `mcp_oauth` reports which servers are authorized. If a token is missing, the connect error names
+  `nuvira mcp authorize <name>` rather than surfacing an opaque 401.
+
+- **Configuration instead of code** (`mcp.*` in `buffconfig.json` — `nuvira config set mcp.<key> <value>`):
   ```bash
-  nuvira mcp catalog --search github          # 1. find the vetted server
-  nuvira mcp install github --env GITHUB_TOKEN=ghp_xxx   # 2. install it (writes ~/.nuvira/mcp/github.json)
+  nuvira config set mcp.enabled true                 # master switch; false = MCP is inert everywhere
+  nuvira config set mcp.maxToolsTotal 40             # cross-server tool cap (default 60) — parsed and
+                                                     # reported; enforcement is NOT wired yet
+  nuvira config set mcp.subagent.inherit full        # a subagent gets the parent's whole MCP set
+                                                     # (default 'conservative': parent had it AND the
+                                                     # child's allowance covers it)
+  nuvira config set mcp.servers.gitlab.enabled false            # disable one server without editing it
+  nuvira config set mcp.servers.filesystem.args /Users/me/app   # replace a server's args (e.g. roots)
+  nuvira config set mcp.servers.context7.runtime.command /opt/node20/bin/node
+  ```
+
+- **Worked example — give the agent GitHub MCP, then let Claude Desktop call the agent's own tools:**
+  ```bash
+  nuvira mcp catalog --search github         # 1. what this capability needs + how it can run here
+  nuvira mcp install github --env GITHUB_PERSONAL_ACCESS_TOKEN=ghp_xxx   # 2. writes ~/.nuvira/mcp/github.json
   nuvira mcp list                            # 3. confirm it connected + its tools are live
   nuvira mcp call get_issue -s github -a '{"repo":"acme/app","number":42}'
   nuvira mcp serve --with gateway_send       # 4. expose agent tools to Claude Desktop / IDEs
   ```
+
+- **The same config from the dashboard.** `/#/mcp` is the GUI half of exactly these commands: it
+  reads and writes the SAME `mcp.*` keys in the SAME `buffconfig.json`, through the SAME validator
+  (`/api/mcp`, `/api/mcp/settings`, `/api/mcp/install`, `/api/mcp/servers`, `/api/mcp/uninstall`). A value
+  accepted in the terminal can never be refused in the browser, and vice versa. Secrets typed into the
+  page are written to the config file and are **never** returned — the page lists credential KEY NAMES
+  only. "Check dependencies" re-reads with `?deep=1`, which is what actually probes a service. The
+  page's **Add a server** form is the GUI half of `nuvira mcp add` (so a server that is in no catalog
+  can be configured without the terminal), and **Edit** on a configured server rewrites its file
+  while keeping the credentials the page is not allowed to display.
+
+- **"Docker is not installed" when docker IS installed.** Two different failures, two different
+  fixes: *no* `docker` executable on PATH means install it; a `docker` on PATH whose **daemon** is
+  down means start it (`open -a Docker`, `colima start`). `nuvira doctor`, `nuvira mcp catalog` and the
+  sandbox all draw that distinction, and the install report quotes the daemon's own error plus the
+  binary's absolute path so the finding is falsifiable in one command (`ls -l /opt/homebrew/bin/docker`).
+
+- **The catalog — the servers you can configure by name** (`nuvira mcp catalog`; each capability has
+  one or more ways to run it, and the three Google Workspace entries authenticate with OAuth):
+
+  | Capability | What it gives the agent | Ways to run it |
+  |---|---|---|
+  | `filesystem` | read/write/search files under roots YOU allow | `npx` (official) |
+  | `fetch` | a URL → clean markdown (docs, changelogs, articles) | `npx` (community, exactly pinned) · `uvx` (official) · `docker` (`mcp/fetch`) |
+  | `github` | repos, issues, PRs, code search — read *and* write with your token | hosted `remote` (default) · `local-binary` (opt-in) |
+  | `memory` | a knowledge graph of entities/relations/observations | `npx` (official) |
+  | `sequential-thinking` | an explicit, revisable reasoning scratchpad | `npx` (official) |
+  | `context7` | current (not training-cutoff) library docs | `npx` 4.3.0 · `npx-node18` 2.0.0 |
+  | `gmail` | search/read mail, create drafts — **your** Gmail permissions | hosted `remote` (OAuth) |
+  | `gdrive` | search, list, read files; upload with `drive.file` only | hosted `remote` (OAuth) |
+  | `gcalendar` | list calendars, read events, check free/busy | hosted `remote` (OAuth) |
+
+  The three Google Workspace servers are Google's own (`*mcp.googleapis.com/mcp/v1`). They need a Google
+  Cloud project with the product API **and its MCP API** enabled, a Desktop-app OAuth client set as
+  `GOOGLE_MCP_CLIENT_ID` / `GOOGLE_MCP_CLIENT_SECRET`, and Developer Preview membership; the scopes
+  chosen here are read-mostly, so the agent can see a schedule or an inbox but cannot silently write to
+  it. `nuvira mcp install gmail --env GOOGLE_MCP_CLIENT_ID=… --env GOOGLE_MCP_CLIENT_SECRET=…` then
+  `nuvira mcp authorize gmail`.
+
+  `filesystem` needs its allowed roots as args — `nuvira mcp install filesystem` then
+  `nuvira config set mcp.servers.filesystem.args /path/to/project`.
+
+- **Any server, not just the catalog** (`nuvira mcp add`). The catalog is a curated set, not a limit: a
+  server we have never heard of is configuration, exactly like `claude_desktop_config.json`. `add`
+  writes `~/.nuvira/mcp/<name>.json` for a local command (`{"transport":"stdio","command":"npx","args":[…],
+  "env":{…}}`) or for a remote endpoint (`{"transport":"sse","url":"https://…","headers":{…}}`), and
+  discovery picks it up on the next turn, with no code change. Hand-writing that file still works;
+  `add` is the same thing with the mistakes caught first:
+  the name must be usable as a filename *and* as an `mcp.servers.<name>` settings key (so no dots or
+  slashes), stdio and remote fields cannot be mixed, the url must be http(s), and a stdio command that
+  is not on PATH is refused (`--no-verify` overrides) rather than written as a server that cannot
+  start. Credentials land in the config file with mode `0600` and are never printed. `--force`
+  replaces an existing file and **names any credential it dropped**; `nuvira mcp uninstall <name>`
+  removes a hand-written server exactly like an installed one.
 
 ---
 
@@ -1311,14 +1409,23 @@ nuvira models excluded         # show what routing is skipping, and WHY
 
 ### 12.10 Tool registry
 
-- **Objective:** Inspect the agent's tool-calling surface.
-- **Command:** `nuvira tools list` · `nuvira tools show <tool>` · `nuvira tools toolsets [-e <name>] [-d <name>]`
+- **Objective:** Inspect the agent's tool-calling surface, and install the optional dependency a shipped-but-optional tool needs.
+- **Command:** `nuvira tools list` · `nuvira tools show <tool>` · `nuvira tools toolsets [-e <name>] [-d <name>]` · `nuvira tools optional` · `nuvira tools install [name] [--package-only]`
 - **Examples:**
   ```bash
   nuvira tools list
   nuvira tools show gateway_send
   nuvira tools toolsets -e web
+
+  nuvira tools optional          # which shipped tools need an extra dependency, and whether it is installed
+  nuvira tools install browser   # installs playwright + the chromium binary, then RE-PROBES the tool
   ```
+- **First-timer detail:** some tools are OPTIONAL by design so a fresh clone does not pay
+  for a heavy download. `browser` is the current one: it needs the `playwright` package *and* a
+  one-time chromium download (~150 MB), which is why `tools install` runs both steps and then
+  verifies with the tool's OWN availability check — a successful install command is not reported
+  as success on its own. `--package-only` skips the binary download if you want to do it later
+  (`npx playwright install chromium`).
 
 ---
 
@@ -1715,5 +1822,5 @@ section of this document — the router picks it up automatically.
 
 ---
 
-*Document generated from the live CLI surface (`nuvira` v3.3.x). When in doubt,
+*Document generated from the live CLI surface (`nuvira` v3.5.x). When in doubt,
 `nuvira <command> --help` shows the authoritative signature for your installed version.*

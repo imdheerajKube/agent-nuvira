@@ -331,6 +331,24 @@ const MISSING_BINARY_RE =
   /(?:command not found|not found in (?:the )?\$?PATH|no such file or directory|\bENOENT\b|exit (?:code )?127|\.sh: [a-z0-9_.+-]+: command not found|is not recognized as an internal or external command|is not recognized as the name of a cmdlet|not recognized as the name of a cmdlet|exit (?:code )?9009)/i;
 
 /**
+ * A service behind a CLI binary that is DOWN — the opposite of a missing binary.
+ *
+ * WHY THIS EXISTS (live, 2026-10-12). Docker 29.7 was installed at
+ * /opt/homebrew/bin/docker with its daemon stopped. `docker ps` failed with
+ * "failed to connect to the docker API at unix:///…/docker.sock; check if the
+ * path is correct and if the daemon is running: dial unix …: connect: no such
+ * file or directory". The tail of that message matches MISSING_BINARY_RE's bare
+ * `no such file or directory`, so the takeover fired, told the user docker was
+ * missing, and offered `brew install --cask docker` for a tool that was already
+ * installed — exactly the wrong fix, since the daemon is what needs starting.
+ *
+ * The signal names the failing SERVICE (docker's socket / colima / the daemon
+ * itself), so a genuine "docker: command not found" still reports as missing.
+ */
+const SERVICE_DOWN_RE =
+  /(?:cannot connect to the docker daemon|is the docker daemon running|failed to connect to the docker API|error during connect|docker daemon is not running|dial (?:unix|tcp) [^\s)]+: connect: (?:no such file or directory|connection refused))/i;
+
+/**
  * Candidate tool names in a shell command line: the first token of every
  * pipeline / `&&` / `;` segment, with `sudo`/`env`-style prefixes stripped.
  * Pure; never throws.
@@ -360,7 +378,12 @@ export function commandToolNames(command: string): string[] {
  * remembers: "agent kicks in and says I can install all of those software".
  */
 export function installableToolsFromFailure(command: string, output: string): string[] {
-  if (!MISSING_BINARY_RE.test(String(output ?? ''))) return [];
+  const out = String(output ?? '');
+  if (!MISSING_BINARY_RE.test(out)) return [];
+  // The binary may be present while the SERVICE behind it is down (docker with
+  // a stopped daemon reads as "no such file or directory" on the socket). That
+  // is a service to START, never a package to install — see SERVICE_DOWN_RE.
+  if (SERVICE_DOWN_RE.test(out)) return [];
   const found: string[] = [];
   for (const name of commandToolNames(command)) {
     if (isKnownSystemTool(name) && !found.includes(name)) found.push(name);

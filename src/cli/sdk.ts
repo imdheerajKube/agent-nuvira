@@ -68,10 +68,11 @@ export class SDKCommand extends BaseCommand {
       .description('Register a custom agent with the orchestrator')
       .argument('<className>', 'Exported class name (e.g. CodeFormatter)')
       .argument('<agentType>', 'Agent type for task plans (e.g. code-formatter)')
-      .argument('<sourceModule>', 'Import module path relative to orchestrator.ts (e.g. ./agents/my-agent.js)')
+      .argument('<sourceModule>', 'Import module path relative to src/agents/ (e.g. ./agents/my-agent.js)')
       .option('-i, --icon <emoji>', 'Emoji icon for the agent (default: 🧩)', '🧩')
+      .option('-d, --description <text>', 'Description shown in plans and the progress UI')
       .option('--orchestrator-path <path>', 'Path to orchestrator.ts (auto-detected if not set)')
-      .action(async (className: string, agentType: string, sourceModule: string, options: { icon?: string; orchestratorPath?: string }) => {
+      .action(async (className: string, agentType: string, sourceModule: string, options: { icon?: string; description?: string; orchestratorPath?: string }) => {
         await this.handleRegister(className, agentType, sourceModule, options);
       });
 
@@ -81,8 +82,9 @@ export class SDKCommand extends BaseCommand {
     const unregisterCmd = new Command('unregister')
       .description('Remove a custom agent from the orchestrator')
       .argument('<agentType>', 'Agent type to remove (e.g. code-formatter)')
+      .option('-c, --class-name <name>', 'Exported class name — also removes the import it added')
       .option('--orchestrator-path <path>', 'Path to orchestrator.ts (auto-detected if not set)')
-      .action(async (agentType: string, options: { orchestratorPath?: string }) => {
+      .action(async (agentType: string, options: { className?: string; orchestratorPath?: string }) => {
         await this.handleUnregister(agentType, options);
       });
 
@@ -147,7 +149,8 @@ export class SDKCommand extends BaseCommand {
       console.log('   npm run build');
       console.log('   npm test');
       console.log('');
-      logger.info('To register this agent with the orchestrator, add it to the createAgent() switch in src/agents/orchestrator.ts');
+      logger.info(`To wire it in: ${getCliName()} sdk register ${agentName} <agent-type> ./agents/${agentName.toLowerCase()}.js`);
+      console.log('   (source checkout only — for an npm install, ship a plugin file to ~/.nuvira/agents/)');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error(`Failed to scaffold agent: ${msg}`);
@@ -177,6 +180,8 @@ export class SDKCommand extends BaseCommand {
     console.log('   Subcommands:');
     console.log('     scaffold    Generate a new custom agent project');
     console.log('     templates   List available scaffold templates');
+    console.log('     register    Wire a custom agent into the orchestrator (source checkout)');
+    console.log('     unregister  Remove a registered custom agent');
     console.log('     info        Show this information');
     console.log('');
     console.log('   Entry points:');
@@ -190,7 +195,7 @@ export class SDKCommand extends BaseCommand {
     className: string,
     agentType: string,
     sourceModule: string,
-    options: { icon?: string; orchestratorPath?: string },
+    options: { icon?: string; description?: string; orchestratorPath?: string },
   ): Promise<void> {
     // Validate className (must be PascalCase)
     if (!className.match(/^[A-Z][a-zA-Z0-9]*$/)) {
@@ -211,6 +216,7 @@ export class SDKCommand extends BaseCommand {
       className,
       agentType,
       icon: options.icon,
+      ...(options.description ? { description: options.description } : {}),
       orchestratorPath: options.orchestratorPath,
     });
 
@@ -233,12 +239,13 @@ export class SDKCommand extends BaseCommand {
 
   private async handleUnregister(
     agentType: string,
-    options: { orchestratorPath?: string },
+    options: { className?: string; orchestratorPath?: string },
   ): Promise<void> {
     logger.info(`Unregistering agent '${agentType}'...`);
 
     const result = unregisterAgent({
       agentType,
+      ...(options.className ? { className: options.className } : {}),
       orchestratorPath: options.orchestratorPath,
     });
 

@@ -60,6 +60,31 @@ export const AGENT_MCP_TOOL_NAMES = [
   'read_page',
 ] as const;
 
+/**
+ * The agent's MEMORY surface, opt-in via `nuvira mcp serve --memory`.
+ *
+ * WHY A SEPARATE ALLOWLIST. Memory is private by default: it holds what the user
+ * told the agent, facts learned from their sessions, and their profile. Serving
+ * it is therefore a deliberate choice a user makes for a trusted client, not
+ * something the default public surface should leak by adding a name to a list.
+ * It is also the half that makes agent-nuvira usable AS a memory server: a client
+ * (Claude Code, Cursor, an IDE) gets semantic recall over the same store the
+ * agent writes to, instead of spawning a fourth, disconnected memory.
+ *
+ * Writes are included because the registry's own effect classes govern them
+ * (`add_memory`/`replace_memory`/`delete_memory` are non-read), and the MCP host
+ * is where the user sees and approves the call.
+ */
+export const MEMORY_MCP_TOOL_NAMES = [
+  'search_memory',
+  'add_memory',
+  'replace_memory',
+  'delete_memory',
+  'list_memories',
+  'memory_stats',
+  'memory',
+] as const;
+
 /** Options for createAgentMcpServer. */
 export interface AgentMcpServerOptions {
   /** Working directory for tool runs (defaults to process.cwd()). */
@@ -71,6 +96,11 @@ export interface AgentMcpServerOptions {
    * default — explicit opt-in for irreversible/loop-dependent tools.
    */
   extraTools?: string[];
+  /**
+   * Also expose the MEMORY surface ({@link MEMORY_MCP_TOOL_NAMES}). Off by
+   * default: memory is private, so serving it is an explicit opt-in.
+   */
+  includeMemory?: boolean;
 }
 
 /**
@@ -88,7 +118,11 @@ export async function createAgentMcpServer(
   const cwd = opts.cwd ?? process.cwd();
   const configManager = opts.configManager ?? new ConfigManager();
   const configManagerCtx = configManager;
-  const toolNames = new Set<string>([...AGENT_MCP_TOOL_NAMES, ...(opts.extraTools ?? [])]);
+  const toolNames = new Set<string>([
+    ...AGENT_MCP_TOOL_NAMES,
+    ...(opts.includeMemory ? MEMORY_MCP_TOOL_NAMES : []),
+    ...(opts.extraTools ?? []),
+  ]);
 
   for (const tool of listTools()) {
     if (!toolNames.has(tool.name)) continue;

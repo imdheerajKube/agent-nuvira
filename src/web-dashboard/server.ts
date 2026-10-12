@@ -23,6 +23,7 @@ import { resolveBuffConfigDir, resolveBuffConfigPath, resolveNuviraHome } from '
 import { createRequire } from 'node:module';
 import { loadEnv } from '../utils/env.js';
 import { ConfigManager } from '../config/manager.js';
+import { parseRuntimeSpec } from '../mcp/runtime.js';
 import { runAllChecks, type CheckResult, type HealthStatus } from '../cli/doctor.js';
 import type { ProviderConfig } from '../config/types.js';
 import type { WireFinding } from '../findings/verdicts.js';
@@ -4261,6 +4262,332 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       } catch (err) {
         writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
       }
+    })();
+    return;
+  }
+
+  // ── MCP configuration (2026-10-12) ─────────────────────────────────────
+  //
+  // ONE SOURCE OF TRUTH. These routes write the SAME `mcp.*` section of
+  // `buffconfig.json` that `nuvira config set mcp.*` writes, through the same
+  // parser (`parseMcpSetting` / `mergeMcpSetting`) and the same install path
+  // (`installCatalogServer` + pin verification). A dashboard key cannot be
+  // accepted here and rejected there, and neither surface can develop its own
+  // idea of what a cap or a runtime override means.
+  //
+  // Secrets: the env VALUES a user types are written to the server's own config
+  // file (0600 when it carries one) and are never echoed back — the read route
+  // returns env KEY NAMES only, so a token cannot leak into the page or a log.
+  if (pathname === '/api/mcp' && req.method === 'GET') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      // `?deep=1` runs the service checks (e.g. `docker info`); a plain page load
+      // stays cheap and says which checks it skipped.
+      const deep = new URL(req.url ?? '', 'http://localhost').searchParams.get('deep') === '1';
+      const [{ loadMcpSettings }, { getMCPManager }, catalog, { resolveMcpConfigDir }] = await Promise.all([
+        import('../mcp/settings.js'),
+        import('../mcp/manager.js'),
+        import('../mcp/catalog.js'),
+        import('../config/paths.js'),
+      ]);
+      const { evaluateVariants, effectiveProbeEnv, isCatalogServerInstalled } = catalog;
+      const { describePrereqProblems } = await import('../mcp/prereqs.js');
+
+      const manager = getMCPManager();
+      const configs = manager.discoverConfigs();
+      const states = manager.getAllStates();
+      const servers = configs.map((config) => {
+        const state = states.find((s) => s.name === config.name);
+        return {
+          name: config.name,
+          transport: config.transport,
+          enabled: config.enabled !== false,
+          variant: config.variant ?? null,
+          command: config.command ?? null,
+          args: config.args ?? [],
+          url: config.url ?? null,
+          runtime: config.runtime ?? null,
+          // KEY NAMES only — never the values.
+          envKeys: Object.keys(config.env ?? {}),
+          headerKeys: Object.keys(config.headers ?? {}),
+          // A curated install and a hand-written file are both legitimate; the
+          // label lets the page offer "edit" only for the editable kind.
+          origin: config.variant || catalog.getCatalogEntry(config.name) ? 'catalog' : 'custom',
+          connected: state?.status === 'connected',
+          toolCount: state?.tools.length ?? 0,
+        };
+      });
+
+      const probe = { deep, env: effectiveProbeEnv() };
+      const catalogEntries = catalog.MCP_CATALOG.map((entry) => ({
+        name: entry.name,
+        description: entry.description,
+        offers: entry.offers,
+        supersedes: entry.supersedes ?? null,
+        installed: isCatalogServerInstalled(entry.name),
+        variants: evaluateVariants(entry, { probe }).map(({ variant, status }) => ({
+          id: variant.id,
+          label: variant.label,
+          transport: variant.transport,
+          command: variant.command ?? null,
+          args: variant.args ?? [],
+          url: variant.url ?? null,
+          trust: variant.trust,
+          optIn: variant.optIn === true,
+          note: variant.note ?? null,
+          requires: variant.requires.map((r) => ({
+            kind: r.kind,
+            name: r.name,
+            minVersion: r.minVersion ?? null,
+            hint: r.hint,
+          })),
+          status: {
+            ok: status.ok,
+            problems: describePrereqProblems(status),
+            unverified: status.unverified,
+            // A service prerequisite is only established in deep mode — say so
+            // rather than implying the daemon was checked.
+            needsDeep: !deep && variant.requires.some((r) => r.kind === 'service'),
+          },
+        })),
+      }));
+
+      writeJson(res, 200, {
+        ok: true,
+        canWrite: roleCan(session.role, 'routing.operate'),
+        configDir: resolveMcpConfigDir(),
+        deep,
+        settings: loadMcpSettings(),
+        servers,
+        catalog: catalogEntries,
+      });
+    })();
+    return;
+  }
+
+  // POST /api/mcp/settings — write `mcp.*` values (same keys as the CLI).
+  if (pathname === '/api/mcp/settings' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot change MCP configuration (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const patch = Array.isArray(body?.patch) ? (body.patch as Array<{ key?: unknown; value?: unknown }>) : null;
+      if (!patch || patch.length === 0) {
+        writeJson(res, 400, {
+          ok: false,
+          error: 'Expected { patch: [{ key: "mcp.maxToolsTotal", value: "40" }, …] }.',
+        });
+        return;
+      }
+      const { parseMcpSetting, mergeMcpSetting, loadMcpSettings } = await import('../mcp/settings.js');
+      const configManager = new ConfigManager();
+      let merged = configManager.getAll().mcp ?? {};
+      const errors: string[] = [];
+      for (const item of patch) {
+        if (typeof item?.key !== 'string') {
+          errors.push('Every patch entry needs a string `key`.');
+          continue;
+        }
+        const parsed = parseMcpSetting(item.key, item.value === undefined ? '' : String(item.value));
+        if (!parsed.ok) errors.push(parsed.error);
+        else merged = mergeMcpSetting(merged, parsed.mcp);
+      }
+      if (errors.length > 0) {
+        writeJson(res, 400, { ok: false, error: errors.join('\n') });
+        return;
+      }
+      configManager.save({ mcp: merged });
+      writeJson(res, 200, { ok: true, settings: loadMcpSettings() });
+    })();
+    return;
+  }
+
+  // POST /api/mcp/install — install a catalog capability through the same
+  // gates the CLI uses (prerequisites probed, pin verified, refuse loudly).
+  if (pathname === '/api/mcp/install' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot install MCP servers (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const name = typeof body?.name === 'string' ? body.name.trim() : '';
+      const catalog = await import('../mcp/catalog.js');
+      const entry = catalog.getCatalogEntry(name);
+      if (!entry) {
+        writeJson(res, 400, { ok: false, error: `'${name}' is not in the catalog.` });
+        return;
+      }
+      const variantId = typeof body?.variant === 'string' && body.variant.trim() ? body.variant.trim() : undefined;
+      const runtime = parseRuntimeSpec(typeof body?.runtime === 'string' ? body.runtime : undefined);
+      const command = typeof body?.command === 'string' && body.command.trim() ? body.command.trim() : undefined;
+      const force = body?.force === true;
+      const env: Record<string, string> = {};
+      if (body?.env && typeof body.env === 'object') {
+        for (const [k, v] of Object.entries(body.env as Record<string, unknown>)) {
+          if (typeof v === 'string' && v.trim()) env[k] = v;
+        }
+      }
+
+      const { verifyNpmSpec } = await import('../mcp/pin-verifier.js');
+      const probeEnv = catalog.effectiveProbeEnv(undefined, env);
+      const chosen = catalog.chooseVariant(entry, {
+        ...(variantId ? { variantId } : {}),
+        ...(runtime ? { runtime } : {}),
+        probe: { env: probeEnv, deep: true },
+      });
+      const variant = chosen.ok
+        ? chosen.choice.variant
+        : variantId
+          ? chosen.choices.find((c) => c.variant.id === variantId)?.variant
+          : undefined;
+
+      // Registry check (network, bounded) before anything is written.
+      let pinVerdict: unknown;
+      const specs = variant ? catalog.npmSpecsForVariant(variant) : [];
+      if (specs.length > 0) {
+        const verdicts = await Promise.all(specs.map((spec) => verifyNpmSpec(spec)));
+        pinVerdict = verdicts.find((v) => v.checked && !v.ok) ?? verdicts.find((v) => !v.checked) ?? { checked: true, ok: true };
+      }
+
+      const result = catalog.installCatalogServer(entry, env, undefined, {
+        ...(variantId ? { variantId } : {}),
+        ...(command ? { command } : {}),
+        ...(runtime ? { runtime } : {}),
+        ...(pinVerdict ? { pinVerdict: pinVerdict as never } : {}),
+        ...(force ? { force: true } : {}),
+        probe: { env: probeEnv, deep: true },
+      });
+      // The written path is returned; secret VALUES never are.
+      writeJson(res, result.ok ? 200 : 400, {
+        ok: result.ok,
+        reason: result.reason,
+        variantId: result.variantId,
+        path: result.path,
+        missing: result.missing,
+        unverifiedPins: result.unverifiedPins,
+      });
+    })();
+    return;
+  }
+
+  // POST /api/mcp/servers — CREATE or REPLACE a server by hand.
+  //
+  // The Claude-Desktop-parity path: the catalog is a convenience, not a gate, so
+  // the dashboard can configure ANY MCP server by name — a stdio command this
+  // project has never heard of, or a remote endpoint with its own headers. It
+  // goes through the SAME validator/writer the CLI's `mcp add` uses, so a config
+  // accepted in one surface cannot be refused in the other, and like every other
+  // MCP write it rides the `routing.operate` capability (admin or operator).
+  //
+  // Secrets: values arrive here and go to a 0600 config file; the response
+  // reports the path and env KEY NAMES, never a value.
+  if (pathname === '/api/mcp/servers' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot configure MCP servers (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const { validateServerSpec, writeServerConfig } = await import('../mcp/custom-server.js');
+
+      // Blank values are dropped, not written: the edit form cannot show an
+      // existing secret (the API never returns values), so it submits the KEY
+      // with an empty value — which must mean "unchanged", never "erase".
+      const collect = (input: unknown): Record<string, string> => {
+        if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+          if (typeof v === 'string' && v.trim()) out[k] = v;
+        }
+        return out;
+      };
+
+      const validated = validateServerSpec({
+        name: typeof body?.name === 'string' ? body.name : '',
+        ...(typeof body?.transport === 'string' ? { transport: body.transport } : {}),
+        ...(typeof body?.command === 'string' && body.command.trim() ? { command: body.command } : {}),
+        ...(Array.isArray(body?.args) ? { args: body.args.filter((a: unknown) => typeof a === 'string') } : {}),
+        ...(typeof body?.url === 'string' && body.url.trim() ? { url: body.url } : {}),
+        env: collect(body?.env),
+        headers: collect(body?.headers),
+        ...(typeof body?.enabled === 'boolean' ? { enabled: body.enabled } : {}),
+      });
+      if (!validated.ok) {
+        writeJson(res, 400, { ok: false, error: validated.error });
+        return;
+      }
+
+      const overwrite = body?.overwrite === true;
+      const result = writeServerConfig(validated.config, {
+        ...(overwrite ? { force: true } : {}),
+        // An overwrite from the page is an EDIT: it must not delete a credential
+        // it was never allowed to display.
+        ...(overwrite ? { mergeEnv: true } : {}),
+        warnings: validated.warnings,
+      });
+      writeJson(res, result.ok ? 200 : 400, {
+        ok: result.ok,
+        reason: result.reason,
+        path: result.path,
+        overwrote: result.overwrote,
+        warnings: result.warnings,
+      });
+    })();
+    return;
+  }
+
+  // POST /api/mcp/uninstall — remove a server's config file (catalog-installed or
+  // hand-written; it is the same file either way).
+  if (pathname === '/api/mcp/uninstall' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot remove MCP servers (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const name = typeof body?.name === 'string' ? body.name.trim() : '';
+      const { uninstallCatalogServer } = await import('../mcp/catalog.js');
+      const result = uninstallCatalogServer(name);
+      writeJson(res, result.ok ? 200 : 404, { ok: result.ok, reason: result.reason });
     })();
     return;
   }

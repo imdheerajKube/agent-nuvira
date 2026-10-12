@@ -27,6 +27,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
 import { logger } from '../utils/logger.js';
+import { resolveStdioCommand } from './runtime.js';
+import { resolveOAuthAccessToken, withOAuthHeader } from './oauth-connect.js';
 import {
   type Tool,
   type ToolAnnotations,
@@ -121,7 +123,7 @@ export class MCPClient extends EventEmitter {
     try {
       const transport = this.transportFactory
         ? this.transportFactory(this.config)
-        : this.buildTransport();
+        : await this.buildTransport();
       this.transport = transport;
 
       const client = new Client({ name: CLIENT_NAME, version: CLIENT_VERSION }, { capabilities: {} });
@@ -291,14 +293,27 @@ export class MCPClient extends EventEmitter {
   // ─── Private: Transport Construction ─────────────────────────────────────
 
   /** Build the SDK transport for this server's config (stdio vs sse). */
-  private buildTransport(): Transport {
+  /**
+   * Build the transport. Async because a remote server whose `oauth` block is
+   * set needs a token resolved here (and possibly refreshed) BEFORE the
+   * handshake — that is what makes an OAuth-authenticated remote server
+   * connectable rather than merely configurable.
+   */
+  private async buildTransport(): Promise<Transport> {
     if (this.config.transport === 'stdio') {
       if (!this.config.command) {
         throw new Error(`MCP[${this.config.name}]: No command specified for stdio transport`);
       }
+      // A per-server runtime override lets one server run under its own Node
+      // (e.g. context7 4.x needs ≥20.18.1) without raising the product floor.
+      // See `resolveStdioCommand`.
+      const { command, args, runtimeApplied } = resolveStdioCommand(this.config);
+      if (runtimeApplied) {
+        logger.debug(`MCP[${this.config.name}]: runtime override → ${command} ${args.join(' ')}`);
+      }
       const transport = new StdioClientTransport({
-        command: this.config.command,
-        args: this.config.args ?? [],
+        command,
+        args,
         env: this.config.env ?? {},
         // Pipe stderr so the old client's debug logging behavior is preserved
         // (the getter returns a PassThrough immediately — safe to attach
@@ -317,10 +332,27 @@ export class MCPClient extends EventEmitter {
     if (!this.config.url) {
       throw new Error(`MCP[${this.config.name}]: No URL specified for SSE transport`);
     }
+
+    // OAuth: resolve a live token (stores/refreshes it) and send it as the
+    // bearer. An explicit Authorization header in the config wins — a user who
+    // pasted a token should not have it silently replaced.
+    let headers = this.config.headers;
+    if (this.config.oauth) {
+      const token = await resolveOAuthAccessToken(this.config);
+      if (!token.ok) {
+        // Fail with the ACTIONABLE reason (which names `nuvira mcp authorize`)
+        // rather than letting the server answer 401 to an unauthenticated
+        // handshake the user cannot see.
+        throw new Error(`MCP[${this.config.name}]: ${token.reason}`);
+      }
+      headers = withOAuthHeader(headers, token);
+      logger.debug(`MCP[${this.config.name}]: OAuth token ${token.how}`);
+    }
+
     // Request-level timeouts are enforced per-call via `{ timeout }` on the
     // client; the transport itself doesn't take one in SDK v1.30.
     return new StreamableHTTPClientTransport(new URL(this.config.url), {
-      requestInit: this.config.headers ? { headers: this.config.headers } : undefined,
+      requestInit: headers ? { headers } : undefined,
     });
   }
 

@@ -58,6 +58,9 @@ import HooksPage from './components/HooksPage';
 // page is the human view: per-verb readiness, the executables that are missing,
 // and the live session grants.
 import CapabilitiesPage from './components/CapabilitiesPage';
+// MCP configuration (install / enable / caps / runtime overrides) — the
+// dashboard half of the `mcp.*` config the CLI writes.
+import MCPPage from './components/MCPPage';
 
 export default function App() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -169,6 +172,7 @@ export default function App() {
           <Route path="/tasks" element={<TasksPage />} />
           <Route path="/evals" element={<EvalsPage data={data} />} />
           <Route path="/platforms" element={<PlatformsPage />} />
+          <Route path="/mcp" element={<MCPPage />} />
           <Route path="/bedrock" element={<BedrockOnboarding canWrite={true} sessionExpired={(msg) => console.error(msg)} />} />
           <Route path="/contacts" element={<ContactsPage />} />
           <Route path="/gateway" element={<GatewayPage />} />

@@ -37,6 +37,53 @@ describe('ConfigManager', () => {
     }
   });
 
+  describe('mcp config section', () => {
+    it('exposes the MCP defaults (caps, auto-connect, conservative subagent rule)', () => {
+      const manager = new ConfigManager(join(testDir, 'mcp-defaults'));
+      const mcp = manager.getMcpConfig();
+      expect(mcp.enabled).toBe(true);
+      expect(mcp.maxToolsPerServer).toBe(15);
+      expect(mcp.maxToolsTotal).toBe(60);
+      expect(mcp.subagentInheritance).toBe('conservative');
+      expect(mcp.warnings).toEqual([]);
+    });
+
+    it('persists and re-reads mcp.* (the config-only MCP surface survives a reload)', () => {
+      const configDir = join(testDir, 'mcp-roundtrip');
+      const manager = new ConfigManager(configDir);
+      manager.save({ mcp: { maxToolsTotal: 25, subagent: { inherit: 'full' } } } as Partial<BuffConfig>);
+      // Separate writes must not clobber each other (per-key + per-server merge).
+      manager.save({
+        mcp: { servers: { context7: { runtime: { command: '/opt/node20/bin/node' } } } },
+      } as Partial<BuffConfig>);
+      manager.save({ mcp: { servers: { filesystem: { enabled: false } } } } as Partial<BuffConfig>);
+
+      const reloaded = new ConfigManager(configDir);
+      const mcp = reloaded.getMcpConfig();
+      expect(mcp.maxToolsTotal).toBe(25);
+      expect(mcp.subagentInheritance).toBe('full');
+      expect(mcp.servers.context7?.runtime?.command).toBe('/opt/node20/bin/node');
+      expect(mcp.servers.filesystem?.enabled).toBe(false);
+      // Untouched keys keep their defaults after a round trip.
+      expect(mcp.maxToolsPerServer).toBe(15);
+      expect(mcp.enabled).toBe(true);
+    });
+
+    it('bounds a nonsense mcp value on read instead of propagating it', () => {
+      const configDir = join(testDir, 'mcp-bounds');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'buffconfig.json'),
+        JSON.stringify({ mcp: { connectTimeoutMs: 900000, subagent: { inherit: 'whatever' } } }),
+        'utf-8',
+      );
+      const mcp = new ConfigManager(configDir).getMcpConfig();
+      expect(mcp.connectTimeoutMs).toBe(15000);
+      expect(mcp.subagentInheritance).toBe('conservative');
+      expect(mcp.warnings.length).toBeGreaterThan(0);
+    });
+  });
+
   describe('constructor and defaults', () => {
     it('should create with default configuration', () => {
       const manager = new ConfigManager(join(testDir, 'test-a'));

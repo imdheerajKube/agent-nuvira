@@ -31,6 +31,7 @@ function makeCommand() {
         ...configState,
         providers: { ...configState.providers, ...(patch.providers || {}) },
         routing: { ...configState.routing, ...(patch.routing || {}) },
+        mcp: { ...configState.mcp, ...(patch.mcp || {}) },
       };
     }),
   };
@@ -45,6 +46,75 @@ function runSet(cmd: ReturnType<typeof makeCommand>, key: string, value: string)
   cli.addCommand(cmd.create());
   cli.parse(['node', 'buff', 'config', 'set', key, value]);
 }
+
+describe('ConfigCommand set — mcp.* configuration surface', () => {
+  beforeEach(() => {
+    saved = null;
+    configState = {
+      defaultProvider: 'local',
+      providers: { groq: { model: 'llama-3.3-70b-versatile' } },
+    } as BuffConfig;
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sets the master switch and auto-connect flags', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'mcp.enabled', 'false');
+    expect(saved?.mcp?.enabled).toBe(false);
+    runSet(cmd, 'mcp.autoConnect', 'off');
+    expect(saved?.mcp?.autoConnect).toBe(false);
+  });
+
+  it('sets numeric caps as numbers, never strings', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'mcp.maxToolsTotal', '25');
+    expect(saved?.mcp?.maxToolsTotal).toBe(25);
+    runSet(cmd, 'mcp.connectTimeoutMs', '1500');
+    expect(saved?.mcp?.connectTimeoutMs).toBe(1500);
+  });
+
+  it('sets subagent inheritance to the documented two values only', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'mcp.subagent.inherit', 'full');
+    expect(saved?.mcp?.subagent?.inherit).toBe('full');
+
+    saved = null;
+    runSet(cmd, 'mcp.subagent.inherit', 'everything');
+    expect(saved).toBeNull(); // refused, nothing written
+  });
+
+  it('sets a per-server runtime override (the Node-floor escape hatch)', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'mcp.servers.context7.runtime.command', '/opt/node20/bin/node');
+    expect(saved?.mcp?.servers?.context7?.runtime?.command).toBe('/opt/node20/bin/node');
+  });
+
+  it('sets per-server args (filesystem roots) as an array', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'mcp.servers.filesystem.args', '/Users/me/project, /tmp/scratch');
+    expect(saved?.mcp?.servers?.filesystem?.args).toEqual(['/Users/me/project', '/tmp/scratch']);
+  });
+
+  it('disables one server without touching another', () => {
+    const cmd = makeCommand();
+    configState = { ...configState, mcp: { servers: { github: { enabled: true } } } };
+    runSet(cmd, 'mcp.servers.github.enabled', 'false');
+    expect(saved?.mcp?.servers?.github?.enabled).toBe(false);
+  });
+
+  it('rejects an unknown mcp key rather than writing a key nothing reads', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'mcp.whatever', '1');
+    expect(saved).toBeNull();
+    runSet(cmd, 'mcp.servers.github.nope', '1');
+    expect(saved).toBeNull();
+  });
+});
 
 describe('ConfigCommand set — M2.3 multi-account apiKeys', () => {
   beforeEach(() => {

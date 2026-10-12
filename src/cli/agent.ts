@@ -21,8 +21,22 @@ import { join } from 'node:path';
 import inquirer from 'inquirer';
 
 import { BaseCommand } from './commands.js';
-import { discoverAgentPlugins, getPluginStats } from '../plugins/agent-plugin.js';
+import { discoverAgentPlugins, getPluginStats, pluginDirectories } from '../plugins/agent-plugin.js';
+import { homedir } from 'node:os';
 import { logger } from '../utils/logger.js';
+
+/**
+ * The agent-plugin directory the RUN reads, home-shortened for display.
+ *
+ * The next-step instruction and the tip used to name `~/.nuvira/agents/` while
+ * discovery reads the active profile (`$NUVIRA_CONFIG_DIR`), so an isolated run
+ * told the user to copy a plugin into a directory it would never scan.
+ */
+function agentsDirForDisplay(): string {
+  const dir = pluginDirectories().agents;
+  const home = homedir();
+  return dir.startsWith(home) ? `~${dir.slice(home.length)}` : dir;
+}
 
 // ─── Agent Template ─────────────────────────────────────────────────────────
 
@@ -338,7 +352,7 @@ export class AgentCommand extends BaseCommand {
       console.log('     npm install');
       console.log('     npm test');
       console.log('     npm run build');
-      console.log('     cp dist/agent.js ~/.nuvira/agents/');
+      console.log(`     cp dist/agent.js ${agentsDirForDisplay()}/`);
       console.log('');
       logger.info('Edit src/agent.ts to implement your custom agent logic.');
     } catch (err) {
@@ -355,7 +369,7 @@ export class AgentCommand extends BaseCommand {
 
     if (stats.agentPlugins === 0) {
       console.log('\n  (no custom agent plugins found)');
-      console.log('  Tip: Place compiled .js agent files in ~/.nuvira/agents/');
+      console.log(`  Tip: Place compiled .js agent files in ${agentsDirForDisplay()}/`);
       console.log('  Tip: Use `nuvira agent create <name>` to scaffold a new agent');
       console.log('');
       return;

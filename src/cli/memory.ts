@@ -33,7 +33,7 @@ import { BaseCommand } from './commands.js';
 import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { getMemoryStats, clearMemory } from '../memory/memory-integration.js';
 import { getPatternStore } from '../learning/pattern-extractor.js';
-import { getVectorStore } from '../memory/vector-store.js';
+import { describeBackendTier, getVectorStore } from '../memory/vector-store.js';
 import { getFeedbackStore } from '../learning/feedback.js';
 import { getFactStore } from '../memory/fact-store.js';
 import { getMemoryStore } from '../tools/memory-tools.js';
@@ -253,7 +253,8 @@ export class MemoryCommand extends BaseCommand {
       console.log(`\n  🔍 Vector Index:`);
       console.log(`     Entries: ${vsStats.totalEntries}`);
       console.log(`     Dimensions: ${vsStats.dimensions}`);
-      console.log(`     Backend: ${backend}${backend === 'faiss-native' ? ' (native FAISS)' : backend === 'faiss-ivf' ? ' (FAISS-style IVF-flat ANN)' : ' (exact flat cosine)'}`);
+      // One phrase for the tier, shared with the MCP memory surface (memory_stats).
+      console.log(`     Backend: ${backend} — ${describeBackendTier(backend)}`);
 
       // Pattern store stats
       const patternStore = getPatternStore();

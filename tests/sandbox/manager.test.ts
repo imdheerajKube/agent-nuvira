@@ -4,6 +4,21 @@ import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 
+/**
+ * PATH LOOKUP IS INJECTED so the two Docker failures are testable on ANY
+ * machine. `isDockerAvailable` resolves the `docker` executable with
+ * `resolveCommandPath`; whether the dev/CI machine happens to have docker
+ * installed decided which of the two messages a test saw, which made the
+ * assertion below environment-dependent. Hoisted so the `vi.mock` factory
+ * (which vitest hoists above the imports) can close over it.
+ */
+const resolveCommandPathMock = vi.hoisted(() => vi.fn<(command: string) => string | null>(() => null));
+
+vi.mock('../../src/mcp/prereqs.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/mcp/prereqs.js')>();
+  return { ...actual, resolveCommandPath: resolveCommandPathMock };
+});
+
 import {
   SandboxManager,
   getSandboxManager,
@@ -31,6 +46,10 @@ describe('SandboxManager', () => {
 
   beforeEach(() => {
     resetSandboxManager();
+    // Default: no `docker` on PATH (see the hoisted mock). Tests that need the
+    // installed-but-down branch set their own return value.
+    resolveCommandPathMock.mockReset();
+    resolveCommandPathMock.mockReturnValue(null);
     manager = new SandboxManager();
   });
 
@@ -92,17 +111,32 @@ describe('SandboxManager', () => {
   });
 
   describe('createContainer', () => {
-    it('throws if Docker is not available', async () => {
-      // Stub docker unavailable so the guard branch is deterministic everywhere
-      // (a real `docker info` spawn hangs on Windows CI).
+    /** Stub docker unavailable so the guard branch is deterministic everywhere
+     *  (a real `docker info` spawn hangs on Windows CI). */
+    function stubDockerUnavailable() {
       vi.spyOn(manager as any, 'execHostCommand').mockResolvedValue({
         exitCode: 1,
         stdout: '',
         stderr: 'Cannot connect to the Docker daemon',
       });
-      await expect(
-        manager.createContainer('node:20-slim'),
-      ).rejects.toThrow(/Docker is not available/);
+    }
+
+    it('names a MISSING binary as "not installed" — install it', async () => {
+      resolveCommandPathMock.mockReturnValue(null);
+      stubDockerUnavailable();
+      await expect(manager.createContainer('node:20-slim')).rejects.toThrow(
+        /Docker is not installed — no `docker` executable on PATH/,
+      );
+    });
+
+    it('says an INSTALLED CLI with a stopped daemon needs a START, not a reinstall', async () => {
+      // The live 2026-10-12 case: docker 29.7 at /opt/homebrew/bin/docker, daemon down.
+      // "Is Docker installed?" sent that user off to reinstall what they had.
+      resolveCommandPathMock.mockReturnValue('/opt/homebrew/bin/docker');
+      stubDockerUnavailable();
+      await expect(manager.createContainer('node:20-slim')).rejects.toThrow(
+        /Docker is INSTALLED at \/opt\/homebrew\/bin\/docker(?: \(v[^)]+\))? but its daemon is not running: Cannot connect to the Docker daemon/,
+      );
     });
   });
 

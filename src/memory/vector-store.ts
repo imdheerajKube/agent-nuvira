@@ -470,6 +470,30 @@ export function getVectorStore(namespace: string = 'default', backend?: VectorSt
   return store;
 }
 
+/**
+ * The active backend, in the words a user needs — ONE source for the phrase.
+ *
+ * `nuvira memory stats`, the dashboard and the MCP memory surface all describe
+ * the same three tiers, and they used to each carry their own inline ternary
+ * mapping `faiss-native` / `faiss-ivf` / `json` to prose. Three copies means a
+ * fourth backend (or a rename) reaches two of them. The distinction is not
+ * cosmetic: it tells a user whether semantic recall is real FAISS, the pure-JS
+ * IVF approximation, or an exact scan — which is what decides whether a larger
+ * store is fast.
+ */
+export function describeBackendTier(name: string): string {
+  switch (name) {
+    case 'faiss-native':
+      return 'native FAISS';
+    case 'faiss-ivf':
+      return 'FAISS-style IVF-flat ANN (pure JS) — native FAISS is not installed';
+    case 'json':
+      return 'exact flat cosine scan (no ANN index)';
+    default:
+      return name || 'unknown';
+  }
+}
+
 // ─── Test / diagnostics hooks ───────────────────────────────────────────────
 
 /**

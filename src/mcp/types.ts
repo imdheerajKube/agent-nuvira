@@ -199,6 +199,42 @@ export interface GetPromptRequest {
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
+/**
+ * OAuth 2.0 for a remote MCP server whose credential is a TOKEN, not a static
+ * key — the flow Google Workspace, Slack and Figma's official remote servers
+ * require (none of them accept a long-lived API key).
+ *
+ * WHY IT LIVES IN THE SERVER CONFIG. The credential those servers want is a
+ * short-lived access token that must be refreshed, so "install the server" and
+ * "authorize the server" are two different moments: the config declares HOW to
+ * get a token, and the first connect obtains or refreshes one. Tokens themselves
+ * are NEVER written here — they live in the OAuth manager's own store
+ * (`~/.nuvira/mcp-oauth.json`), which is where refresh and expiry belong.
+ */
+export interface MCPOAuthServerConfig {
+  /** Token endpoint (required — the code exchange and every refresh go here). */
+  tokenEndpoint: string;
+  /** Authorization endpoint. Required for the interactive (authorization-code) flow. */
+  authorizationEndpoint?: string;
+  /**
+   * Client credentials. May reference an env var (`${VAR}`), which the catalog
+   * installer expands from the resolved environment at install time — so a
+   * secret can come from the environment and still land in a 0600 config file.
+   */
+  clientId?: string;
+  clientSecret?: string;
+  /** Scopes to request. Also written into the store so a refresh asks for the same set. */
+  scopes?: string[];
+  /** Use PKCE (S256) — required by Google's installed-app clients. */
+  usePKCE?: boolean;
+  /**
+   * `client_credentials` for a server-to-server token (no user, no browser);
+   * default is `authorization_code`, where a user token is obtained once
+   * (`nuvira mcp authorize <name>`) and then refreshed forever.
+   */
+  grant?: 'authorization_code' | 'client_credentials';
+}
+
 export interface MCPServerConfig {
   /** A unique name for this MCP server connection */
   name: string;
@@ -214,6 +250,30 @@ export interface MCPServerConfig {
   headers?: Record<string, string>;
   /** Environment variables for the stdio subprocess */
   env?: Record<string, string>;
+  /**
+   * Per-server runtime override: run the stdio `command` through a DIFFERENT
+   * interpreter — `runtime.command runtime.args… <command> <args…>`.
+   *
+   * It exists so one server with a higher Node (or Python) floor cannot raise
+   * the product's own floor: `context7-mcp@4.3.0` declares
+   * `engines.node ≥ 20.18.1`, while Nuvira ships `≥ 18.18.0`, so that server is
+   * started under its own Node instead. Set at install time (`nuvira mcp
+   * install context7 --runtime /path/to/node20`) or by configuration
+   * (`mcp.servers.<name>.runtime.command`), never by forking the codebase.
+   */
+  runtime?: { command: string; args?: string[] };
+  /**
+   * Which catalog variant produced this config (e.g. 'remote', 'npx'), when it
+   * came from `nuvira mcp install`. Reported by `nuvira mcp list` / `info`;
+   * never required to connect.
+   */
+  variant?: string;
+  /**
+   * OAuth 2.0 for a remote server. When present, the connect path resolves a
+   * valid access token (reusing or refreshing a stored one) and sends it as
+   * `Authorization: Bearer …`; an explicit `headers.Authorization` wins.
+   */
+  oauth?: MCPOAuthServerConfig;
   /** Whether this server is enabled */
   enabled: boolean;
 }

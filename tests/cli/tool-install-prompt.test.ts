@@ -166,6 +166,24 @@ describe('tool-install-prompt', () => {
     it('returns an empty list without a missing-binary signal', () => {
       expect(installableToolsFromFailure('cargo build', 'error[E0432]: unresolved import')).toEqual([]);
     });
+
+    it('never reports a CLI whose SERVICE is down as a missing binary', () => {
+      // Live 2026-10-12: docker 29.7 was installed and its daemon was stopped.
+      // The socket error ends in `connect: no such file or directory`, which
+      // matched the missing-binary signal — so the takeover told the user to
+      // install Docker they already had instead of starting the daemon.
+      const stoppedDaemon =
+        'failed to connect to the docker API at unix:///Users/x/.docker/run/docker.sock; ' +
+        'check if the path is correct and if the daemon is running: dial unix ' +
+        '/Users/x/.docker/run/docker.sock: connect: no such file or directory';
+      expect(installableToolsFromFailure('docker ps', stoppedDaemon)).toEqual([]);
+      expect(
+        installableToolsFromFailure('docker compose up -d', 'Cannot connect to the Docker daemon. Is the docker daemon running?'),
+      ).toEqual([]);
+
+      // A genuinely absent binary still reports — the guard is narrow.
+      expect(installableToolsFromFailure('docker ps', 'sh: docker: command not found')).toEqual(['docker']);
+    });
   });
 
   describe('installNeedsHumanInput', () => {

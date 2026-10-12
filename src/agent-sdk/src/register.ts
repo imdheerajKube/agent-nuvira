@@ -1,10 +1,21 @@
 /**
  * @agent-nuvira/sdk/register — Register a custom agent with the orchestrator.
  *
- * Modifies `src/agents/orchestrator.ts` to:
- * 1. Add an import statement for the custom agent class
- * 2. Add a `case` to the `createAgent()` switch statement
- * 3. Add an icon to the `AGENT_ICONS` map
+ * WHICH FILE THIS EDITS depends on the checkout it runs in, and it has to: the
+ * harness replaced its hardcoded `createAgent()` switch with a
+ * `ModuleRegistry` (see `src/agents/module-registry.ts`), so a registration tool
+ * that only knew about the switch would edit a block that no longer exists and
+ * report success while the agent stayed unrunnable.
+ *
+ * 1. **ModuleRegistry layout** (current): adds an import plus a
+ *    `registry.registerOrOverride(...)` call to
+ *    `src/agents/module-registry.ts`, inside `createWithBuiltins()`.
+ * 2. **Legacy switch layout**: adds the import, a `case` in `createAgent()` and
+ *    an `AGENT_ICONS` entry in `src/agents/orchestrator.ts`.
+ *
+ * Both are SOURCE-CHECKOUT edits. With the CLI installed from npm there is no
+ * such file, and the call says so rather than pretending; distribute a
+ * prebuilt plugin file into `~/.nuvira/agents/` instead (`nuvira plugins list`).
  *
  * ## Usage
  *
@@ -34,16 +45,21 @@ const DEFAULT_ICON = '🧩';
 export interface RegisterOptions {
   /** Absolute or relative path to the orchestrator source file (default: auto-detected) */
   orchestratorPath?: string;
-  /** The import module path for the agent class, relative to orchestrator.ts dir. Example: './agents/my-agent.js' */
+  /**
+   * The import module path for the agent class, relative to the directory the
+   * registration is written into (`src/agents/`). Example: './agents/my-agent.js'
+   */
   sourceModule: string;
   /** The exported class name to import. Example: 'MyAgent' */
   className: string;
-  /** The agent type string used in task plans and the switch case. Example: 'my-agent' */
+  /** The agent type string used in task plans and the registry call. Example: 'my-agent' */
   agentType: string;
-  /** Optional emoji icon for the AGENT_ICONS map (default: 🧩) */
+  /** Optional emoji icon for the agent (default: 🧩) */
   icon?: string;
   /** Optional human-readable name (defaults to className) */
   name?: string;
+  /** Optional description shown in the plan/UI (defaults to a generic line). */
+  description?: string;
 }
 
 /** Result of a register/unregister operation */
@@ -67,7 +83,15 @@ export interface RegisterResult {
  * and writes the file back.
  */
 export function registerAgent(options: RegisterOptions): RegisterResult {
-  const { orchestratorPath: inputPath, sourceModule, className, agentType, icon = DEFAULT_ICON, name = className } = options;
+  const {
+    orchestratorPath: inputPath,
+    sourceModule,
+    className,
+    agentType,
+    icon = DEFAULT_ICON,
+    name = className,
+    description = `Custom agent '${name}'`,
+  } = options;
   const orchestratorPath = inputPath || resolve(process.cwd(), 'src/agents/orchestrator.ts');
 
   if (!existsSync(orchestratorPath)) {
@@ -75,6 +99,26 @@ export function registerAgent(options: RegisterOptions): RegisterResult {
   }
 
   const originalContent = readFileSync(orchestratorPath, 'utf-8');
+
+  // ── 0. Which layout is this? ────────────────────────────────────────
+  // The registry layout is detected by the file it edits, not by a version
+  // string: a checkout that has `module-registry.ts` with a `createWithBuiltins`
+  // body is the current one, and the switch is legacy.
+  if (!hasLegacySwitch(originalContent)) {
+    const registryPath = resolve(orchestratorPath, '..', 'module-registry.ts');
+    if (existsSync(registryPath)) {
+      return registerInModuleRegistry({ registryPath, sourceModule, className, agentType, icon, name, description });
+    }
+    return {
+      success: false,
+      message:
+        `Neither a createAgent() switch in ${orchestratorPath} nor a module-registry.ts beside it — ` +
+        `this checkout has no place to register '${agentType}'. Distribute a prebuilt plugin file to ` +
+        `~/.nuvira/agents/ instead (see \`nuvira plugins list\`).`,
+      modifiedFiles: [],
+      agentType,
+    };
+  }
 
   // ── 1. Check if already registered ──────────────────────────────────
   if (originalContent.includes(`case '${agentType}':`)) {
@@ -163,6 +207,21 @@ export function unregisterAgent(options: {
 
   const originalContent = readFileSync(orchestratorPath, 'utf-8');
 
+  // Registry layout: the registration was written into module-registry.ts, so
+  // looking for a switch case here would report a registered agent as missing.
+  if (!hasLegacySwitch(originalContent)) {
+    const registryPath = resolve(orchestratorPath, '..', 'module-registry.ts');
+    if (existsSync(registryPath)) {
+      const result = unregisterFromModuleRegistry({
+        registryPath,
+        agentType,
+        ...(className ? { className } : {}),
+      });
+      if (result) return result;
+    }
+    return { success: true, message: `Agent '${agentType}' is not registered. No changes needed.`, modifiedFiles: [], agentType };
+  }
+
   if (!originalContent.includes(`case '${agentType}':`)) {
     return { success: true, message: `Agent '${agentType}' is not registered. No changes needed.`, modifiedFiles: [], agentType };
   }
@@ -236,6 +295,145 @@ export function unregisterAgent(options: {
     success: true,
     message: `Unregistered agent '${agentType}' from the orchestrator. Removed: ${removed.join(', ')}.`,
     modifiedFiles: [orchestratorPath],
+    agentType,
+  };
+}
+
+// ─── ModuleRegistry layout (current) ────────────────────────────────────────
+
+/** Does this orchestrator still carry the legacy `createAgent()` switch? */
+function hasLegacySwitch(content: string): boolean {
+  return content.includes('default:\n      return null;') && content.includes('function createAgent');
+}
+
+/** The exact import a registration adds, so unregister can find it again. */
+function importLine(className: string, sourceModule: string): string {
+  return `import { ${className} } from '${sourceModule}';`;
+}
+
+/** The registry call a registration adds, keyed by agentType. */
+function registryBlock(agentType: string, className: string, name: string, description: string, icon: string): string {
+  return [
+    // No backticks in this comment: it is emitted into another source file, and
+    // the removal regex matches it literally.
+    `    // Added by nuvira sdk register ${className} ${agentType}`,
+    `    registry.registerOrOverride('${agentType}', () => new ${className}(), {`,
+    `      name: '${name}',`,
+    `      description: '${description.replace(/'/g, "\\'")}',`,
+    `      icon: '${icon}',`,
+    `      isBuiltin: false,`,
+    `    });`,
+  ].join('\n');
+}
+
+/**
+ * Register into `createWithBuiltins()` in module-registry.ts.
+ *
+ * The insertion point is the method's final `return registry;` — the only stable
+ * anchor in that file — and `registerOrOverride` (not `register`) is used so a
+ * re-registration cannot make boot throw on a duplicate agent type.
+ */
+function registerInModuleRegistry(args: {
+  registryPath: string;
+  sourceModule: string;
+  className: string;
+  agentType: string;
+  icon: string;
+  name: string;
+  description: string;
+}): RegisterResult {
+  const { registryPath, sourceModule, className, agentType, icon, name, description } = args;
+  const originalContent = readFileSync(registryPath, 'utf-8');
+
+  if (originalContent.includes(`registerOrOverride('${agentType}'`)) {
+    return {
+      success: true,
+      message: `Agent '${agentType}' is already registered in module-registry.ts. No changes made.`,
+      modifiedFiles: [],
+      agentType,
+    };
+  }
+
+  const returnMarker = '    return registry;';
+  const returnIndex = originalContent.lastIndexOf(returnMarker);
+  if (returnIndex < 0) {
+    return {
+      success: false,
+      message: `Could not find the \`return registry;\` insertion point in ${registryPath}.`,
+      modifiedFiles: [],
+      agentType,
+    };
+  }
+
+  let newContent = originalContent;
+  const added: string[] = [];
+
+  const imp = importLine(className, sourceModule);
+  if (!newContent.includes(imp)) {
+    const importLines = newContent.match(/^import .+;$/gm);
+    if (!importLines || importLines.length === 0) {
+      return { success: false, message: 'Could not find the import section in module-registry.ts.', modifiedFiles: [], agentType };
+    }
+    const lastImport = importLines[importLines.length - 1]!;
+    const insertPos = newContent.lastIndexOf(lastImport) + lastImport.length;
+    newContent = newContent.slice(0, insertPos) + '\n' + imp + newContent.slice(insertPos);
+    added.push('import');
+  }
+
+  const block = registryBlock(agentType, className, name, description, icon);
+  const blockIndex = newContent.lastIndexOf(returnMarker);
+  newContent = newContent.slice(0, blockIndex) + block + '\n\n' + newContent.slice(blockIndex);
+  added.push('registry call');
+
+  writeFileSync(registryPath, newContent, 'utf-8');
+  return {
+    success: true,
+    message: `Registered agent '${agentType}' (${name}) in module-registry.ts. Added: ${added.join(', ')}.`,
+    modifiedFiles: [registryPath],
+    agentType,
+  };
+}
+
+/** Remove a `sdk register` block from module-registry.ts. */
+function unregisterFromModuleRegistry(args: {
+  registryPath: string;
+  agentType: string;
+  className?: string;
+}): RegisterResult | null {
+  const { registryPath, agentType, className } = args;
+  const originalContent = readFileSync(registryPath, 'utf-8');
+  if (!originalContent.includes(`registerOrOverride('${agentType}'`)) return null;
+
+  // The comment line makes the block unambiguous, so removal cannot take a
+  // neighbouring registration with it.
+  const blockRegex = new RegExp(
+    '    // Added by nuvira sdk register [^\\n]*\\n' +
+      "    registry\\.registerOrOverride\\('" +
+      escapeRegex(agentType) +
+      "'[\\s\\S]*?\\n    \\}\\);\\n\\n?",
+    'g',
+  );
+  let newContent = originalContent.replace(blockRegex, '');
+  const removedBlock = newContent !== originalContent;
+
+  let importRemoved = false;
+  if (className) {
+    const importRegex = new RegExp(`^import \\{ ${escapeRegex(className)} \\} from '[^']+';\\n`, 'gm');
+    const afterImport = newContent.replace(importRegex, '').replace(/\n{3,}/g, '\n\n');
+    if (afterImport !== newContent) {
+      newContent = afterImport;
+      importRemoved = true;
+    }
+  }
+
+  if (!removedBlock && !importRemoved) return null;
+  writeFileSync(registryPath, newContent, 'utf-8');
+
+  const removed = [...(removedBlock ? ['registry call'] : []), ...(importRemoved ? ['import'] : [])];
+  return {
+    success: true,
+    message: `Unregistered agent '${agentType}' from module-registry.ts. Removed: ${removed.join(', ')}.`,
+    modifiedFiles: [registryPath],
     agentType,
   };
 }

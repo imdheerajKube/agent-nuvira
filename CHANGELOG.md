@@ -2,6 +2,112 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.5.0 — any MCP server by configuration, and a plugin path that actually runs
+
+MCP had a curated catalog and a working connect path, but adding anything *outside*
+that catalog meant hand-writing JSON in a directory the dashboard could not reach — and
+two features that were documented did nothing at all. This release closes the
+configuration gap, makes the SDK's plugin story real, and corrects the docs wherever
+they described an intention as a behaviour.
+
+### Added: `nuvira mcp add` — configure any MCP server, no code change
+
+`nuvira mcp add <name> --command …` (stdio) or `--url …` (remote) writes
+`~/.nuvira/mcp/<name>.json`, the same file discovery already read. `--json @file` (or
+`--json -`) takes a vendor README snippet verbatim. Gates that fire before anything is
+written: the name must be usable as both a filename and an `mcp.servers.<name>` settings
+key (no dots or slashes), stdio and remote fields cannot be mixed, the url must be
+http(s), and a stdio command that is not on PATH is refused with the fix named
+(`--no-verify` overrides). Credentials land in the file at mode 0600 and are never
+printed; `--force` replaces a file and **names the credentials it dropped**.
+
+### Added: the dashboard's Add/Edit server form
+
+`POST /api/mcp/servers` (admin/operator gated) is the GUI half of `mcp add`, through the
+same validator. **Edit** rewrites a server's file while keeping credentials and settings
+the page is not allowed to display — env/header values, and the `oauth`, `variant` and
+`runtime` fields it has no control for. A transport switch drops the other transport's
+fields, so a config never means two things at once.
+
+### Fixed: `nuvira mcp connect` hung; `mcp call` could never work
+
+A stdio child kept the process alive, so `connect` — the step `mcp install` prints as
+"verify" — never returned to the shell. It now releases the child and **exits 1 when the
+connection fails**, so a script cannot read a dead server as a working one. `mcp call`
+had the mirror-image bug: it required a connection that only existed inside a long-lived
+process, so it could never work from a shell. It now connects, calls and disconnects.
+
+### Fixed: `~/.nuvira/agents/*.js` plugins were discovered but never executed
+
+Discovery built a map nobody read: `nuvira plugins list` showed the plugin while the
+orchestrator — which resolves agents through the `ModuleRegistry` — had no idea it
+existed. Discovered agent plugins are now registered as `Agent` adapters under each
+`metadata.agentTypes` entry, so a plan step whose `agentType` matches runs them, and a
+plugin that replaces a built-in type is reported rather than silently winning.
+
+### Fixed: the plugin directories ignored the profile override
+
+The three plugin directories were module-level constants built from `resolveNuviraHome()`, which
+always answers `~/.nuvira` and ignores `$NUVIRA_CONFIG_DIR` — the reach that helper's own note warns
+about. Measured: a boot from an isolated run created `package.json` markers in the developer's real
+`~/.nuvira/agents/` and `~/.nuvira/plugins/`, and "drop a `.js` file in and it loads" could only be
+exercised against the machine it ran on, which is how discovery came to build a map nobody read
+without a test noticing. The directories now resolve per call through the active profile, a boot with
+the override set leaves the real profile untouched (verified by mtime), the discovery path is covered
+by tests against a temp profile — file → discovered → registered → the plugin's own `execute()` runs —
+and `nuvira plugins list` prints the directories it actually read instead of a hard-coded `~/.nuvira/…`.
+With no override set every path is unchanged.
+
+### Fixed: `nuvira sdk register` targeted a switch statement that no longer exists
+
+The harness replaced its hardcoded `createAgent()` switch with a `ModuleRegistry`, so
+registration edited a block that was gone and reported success while the agent stayed
+unrunnable. It now detects the layout and registers through
+`registry.registerOrOverride(...)` in `src/agents/module-registry.ts` (falling back to
+the old switch on an old checkout), and `unregister --class-name` removes both the block
+and the import. Verified round-trip: the agent resolves from the built registry, and
+unregister restores the file byte-for-byte.
+
+### Fixed: a resumed run stopped replaying on a checkout with uncommitted work
+
+`reconcileWithWorkspace` reports the dirty paths the ledger never recorded (an edit made
+outside the agent, or a turn killed mid-work). With a FRESH ledger nothing has been
+recorded yet, so *every* dirty path answered that description and the block listed the
+whole dirty tree — but only from the SECOND turn, because the first turn had no ledger
+entry to reconcile against. The only thing that had changed between the two was the
+ledger's own creation, so an unchanged world produced two different prompts: a resumed
+run's step stopped replaying (`stepDigest` covers the thread, and the thread had grown a
+message no edit earned), and the parity resume probe went red on any checkout carrying
+uncommitted work — a state a clean CI clone never reaches. `unrecorded` is now empty when
+the ledger names no path at all: with no baseline there is no discrepancy to report,
+which is the rule `staleSinceVerification` already applied to the same whole-dirty-tree
+case. Pinned by two cases in `tests/learning/working-state.test.ts`, one of which asserts
+the property the block is documented to have — the same world yields the same block
+before and after the first recorded turn.
+
+### Docs: what the knobs actually do
+
+- **New [`docs/MCP_GUIDE.md`](docs/MCP_GUIDE.md)** — every `mcp.*` key, every per-server
+  override, credentials and OAuth, governance, the catalog, dashboard routes,
+  troubleshooting, and a plainly-stated known-limits section.
+- **New [`docs/SDK_PLUGIN_GUIDE.md`](docs/SDK_PLUGIN_GUIDE.md)** — the three shipping
+  paths, the plugin-file contract, the rate-limit contract, where the model belongs
+  versus where code must, publishing a plugin package.
+- **Corrected:** `mcp.maxToolsPerServer`, `mcp.maxToolsTotal` and
+  `mcp.servers.<name>.maxTools` are parsed, validated and reported but **not enforced**
+  (`effectiveToolCap()` has no callers). The CLI, the dashboard hints and `COMMANDS.md`
+  said they capped eager schemas; they now say what is true.
+- **Corrected:** the SDK README and `docs/AGENT_SDK.md` described registration as
+  editing the orchestrator switch, and the extension docs promised a tri-aligned version
+  number. Both now match the code and the release trains.
+
+### Added: three worked SDK examples (`examples/sdk/`, verified by `npm run examples:verify`)
+
+`api-contract-differ.ts` (model for extraction, code for the diff),
+`migration-guard.ts` (the full context bus plus the rate-limit contract) and
+`release-notes-plugin.ts` (the plugin-file shape), each with tests that run without a
+provider — 25 example tests, all green.
+
 ## v3.4.0 — the dashboard gets two brand themes: Premium and Premium AMOLED
 
 Two palettes drawn from the Agent-Nuvira wallpapers, so the product wears its own

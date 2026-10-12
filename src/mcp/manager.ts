@@ -13,6 +13,7 @@ import { resolveMcpConfigDir } from '../config/paths.js';
 import { logger } from '../utils/logger.js';
 import { getMCPSchemaCache, MCPSchemaCache } from './mcp-schema-cache.js';
 import { MCPClient } from './client.js';
+import { applyServerOverrides, loadMcpSettings } from './settings.js';
 import {
   type MCPServerConfig,
   type MCPConnectionState,
@@ -27,18 +28,27 @@ import {
 export class MCPManager {
   private clients: Map<string, MCPClient> = new Map();
   private configDir: string;
+  /**
+   * Where `buffconfig.json` is read from for `mcp.*` overrides. Undefined =
+   * the resolved config dir (honouring `$NUVIRA_CONFIG_DIR`). When a caller
+   * passes an explicit MCP dir (tests), settings resolve from its PARENT so a
+   * temp dir never picks up the developer's own `mcp.servers` overrides.
+   */
+  private settingsDir?: string;
 
   constructor(configDir?: string) {
     // Resolved through `config/paths`, never `join(homedir(), '.nuvira', …)`:
     // that reach made every test run discover — and spawn — the developer's real
     // MCP servers. See `resolveMcpConfigDir`.
     this.configDir = resolveMcpConfigDir(configDir);
+    this.settingsDir = configDir ? join(this.configDir, '..') : undefined;
   }
 
   // ─── Server Discovery ─────────────────────────────────────────────────────
 
   /**
-   * Discover MCP server configurations from the config directory.
+   * Discover MCP server configurations from the config directory, with the
+   * `mcp.servers.*` overrides applied (enable/disable, runtime override, args).
    * Looks for *.json files in ~/.nuvira/mcp/ and subdirectories.
    */
   discoverConfigs(): MCPServerConfig[] {
@@ -81,7 +91,10 @@ export class MCPManager {
       logger.debug(`MCP: Failed to scan config directory: ${err}`);
     }
 
-    return configs;
+    // Configuration-only overrides (`mcp.enabled`, `mcp.servers.<name>.*`): the
+    // single place every caller (connect, connectAll, getAllStates, discovery)
+    // passes through, so a config change reaches every surface at once.
+    return applyServerOverrides(configs, loadMcpSettings(this.settingsDir));
   }
 
   // ─── Connection Management ────────────────────────────────────────────────

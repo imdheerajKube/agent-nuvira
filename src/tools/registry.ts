@@ -574,7 +574,11 @@ const readPageSchema = z.object({
 
 /** I2 — browser tool args: Playwright automation (optional install). */
 const browserSchema = z.object({
-  action: z.enum(['open', 'click', 'type', 'extract', 'screenshot']).describe('What to do: open a URL, click a selector, type into a field, extract page text, or screenshot'),
+  action: z
+    .enum(['open', 'click', 'type', 'extract', 'screenshot', 'close'])
+    .describe(
+      'What to do: open a URL, click a selector, type into a field, extract page text, screenshot, or close the session. The page PERSISTS between calls, so a flow is open → type → click → extract; call close when finished.',
+    ),
   url: z.string().url().optional().describe('URL for action=open'),
   selector: z.string().optional().describe('CSS selector for click/type/extract'),
   text: z.string().optional().describe('Text to type (action=type)'),
@@ -1380,7 +1384,7 @@ registerTool({
 registerTool({
   name: 'browser',
   capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
-  description: 'Automate a real browser (open/click/type/extract/screenshot). Requires the optional playwright package (npm i playwright && npx playwright install chromium). Use for tasks that need a live page (login flows, scraping dynamic sites).',
+  description: 'Automate a real browser (open/click/type/extract/screenshot/close). Requires the optional playwright package (nuvira tools install browser). The session persists between calls, so multi-step flows (login, form fill, then extract) work in one turn. Use for tasks that need a live page (login flows, scraping dynamic sites).',
   category: 'workflow',
   inputSchema: browserSchema,
   endsAgentStep: false,
@@ -1704,18 +1708,40 @@ registerTool({
     state: z.string().optional().describe('OAuth state'),
   }),
   endsAgentStep: false,
-  run: (args) => import('../mcp/mcp-oauth.js').then((m) => {
+  run: async (args) => {
     const { action, serverId, code, state } = args as any;
+    const m = await import('../mcp/mcp-oauth.js');
     const mgr = m.getMCPOAuthManager();
     switch (action) {
-      case 'status': return JSON.stringify({ servers: Array.from((mgr as any).states?.keys() || []) });
-      case 'authorize': return serverId ? mgr.startAuthorizationCodeFlow(serverId, { authorizationUrl: '', tokenEndpoint: '' } as any).then((r: any) => JSON.stringify(r)) : 'serverId required';
+      case 'status':
+        // Public accessors only — this used to read the manager's private
+        // `states` map, so a renamed field would have made it silently empty.
+        return JSON.stringify({ servers: mgr.listServers() });
+      case 'authorize': {
+        if (!serverId) return 'serverId required';
+        // A client-credentials server needs no human, so mint the token here.
+        // The interactive flow needs a browser and a loopback redirect that a
+        // tool call cannot hold open — it lives in the CLI, and saying so is
+        // better than returning an authorization URL built from an empty config
+        // (which is what this action used to do).
+        const { resolveOAuthAccessToken } = await import('../mcp/oauth-connect.js');
+        const { getMCPManager } = await import('../mcp/manager.js');
+        const config = getMCPManager().discoverConfigs().find((c) => c.name === serverId);
+        if (config?.oauth?.grant === 'client_credentials') {
+          const outcome = await resolveOAuthAccessToken(config);
+          return JSON.stringify(outcome.ok ? { ok: true, how: outcome.how } : { ok: false, reason: outcome.reason });
+        }
+        return (
+          `Run \`nuvira mcp authorize ${serverId}\` in the terminal: the consent step needs a browser and a loopback ` +
+          'redirect that stays open until the provider calls back, which a tool call cannot do.'
+        );
+      }
       case 'callback': return code && state ? mgr.exchangeCode(serverId || 'default', code, state).then((r: any) => JSON.stringify(r)) : 'code, state, and serverId required';
       case 'refresh': return serverId ? mgr.refreshToken(serverId).then((r: any) => JSON.stringify(r)) : 'serverId required';
       case 'revoke': return serverId ? (mgr.clearTokens(serverId), 'Cleared') : 'serverId required';
       default: return 'Unknown action';
     }
-  }),
+  },
 });
 
 // MCP Schema Cache tool
@@ -4185,12 +4211,45 @@ registerTool({
 registerTool({
   name: 'memory_stats',
   capability: { effectClass: 'read' },
-  description: 'Get memory statistics.',
+  description:
+    'Get memory statistics, including which VECTOR BACKEND is live (native FAISS / pure-JS IVF / exact scan), the number of indexed entries and dimensions, and how many semantic facts are stored. This is the honest answer to "what memory do you have and how does recall work here".',
   category: 'workflow',
   inputSchema: z.object({}),
   endsAgentStep: false,
-  run: () => import('./memory-tools.js').then((m) => {
-    const store = m.getMemoryStore();
-    return JSON.stringify(store.getStats());
-  }),
+  run: async () => {
+    const m = await import('./memory-tools.js');
+    const base = m.getMemoryStore().getStats();
+    // The vector half is reported here because this tool is also served over
+    // MCP to EXTERNAL clients (see `nuvira mcp serve --memory`): a client asking
+    // what it can recall must be told which tier actually backs the store, not
+    // just how many keyword entries exist. Degrades honestly — a backend that
+    // cannot be resolved is reported as such, never as zero.
+    try {
+      const { getVectorStore, describeBackendTier } = await import('../memory/vector-store.js');
+      const vs = getVectorStore();
+      const vsStats = vs.stats();
+      const backend = await vs.backendName();
+      let facts: number | null = null;
+      try {
+        facts = (await (await import('../memory/fact-store.js')).getFactStore().stats()).total;
+      } catch {
+        // The fact store is optional (it needs an embedding tier) — omit it.
+      }
+      return JSON.stringify({
+        ...base,
+        vector: {
+          backend,
+          tier: describeBackendTier(backend),
+          entries: vsStats.totalEntries,
+          dimensions: vsStats.dimensions,
+          facts,
+        },
+      });
+    } catch (err) {
+      return JSON.stringify({
+        ...base,
+        vector: { error: err instanceof Error ? err.message : String(err) },
+      });
+    }
+  },
 });

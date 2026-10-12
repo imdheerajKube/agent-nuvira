@@ -285,6 +285,38 @@ describe('reconcileWithWorkspace', () => {
     expect(block).toContain('never recorded');
     expect(block).toContain('unrecorded.js');
   });
+
+  it('has no baseline to contradict, so a fresh ledger reports no `unrecorded` gap', () => {
+    // MEASURED (2026-10-12): with a dirty tree and a FRESH ledger, the first turn
+    // printed nothing and the second printed "2 changed file(s) this ledger never
+    // recorded" — the only thing that had changed was that turn 1 created the
+    // entry. That is not a discrepancy between memory and the world; it is the
+    // absence of memory, and "never recorded" then describes the whole dirty tree.
+    writeFileSync(join(repo, 'a.txt'), 'one\ntwo\n', 'utf-8');
+    writeFileSync(join(repo, 'user-work.js'), 'x\n', 'utf-8');
+
+    const r = reconcileWithWorkspace(getWorkingState(repo), repo);
+    expect(r.dirty).toContain('user-work.js');
+    expect(r.unrecorded).toEqual([]);
+  });
+
+  it('is IDENTICAL before and after the first recorded turn of an unchanged world', () => {
+    // The property a resumed run leans on: a step whose INPUT did not change must
+    // keep replaying, so the block must not move just because the ledger now has
+    // an entry (`stepDigest` hashes the whole thread, and the block rides in it).
+    // The parity resume probe went red on any checkout with uncommitted work.
+    writeFileSync(join(repo, 'a.txt'), 'one\ntwo\n', 'utf-8');
+    writeFileSync(join(repo, 'user-work.js'), 'x\n', 'utf-8');
+
+    const firstTurn = workingStateBlock(repo);
+    // Turn 1 of a session that touched no file: read-only work, so the ledger
+    // records a turn but names no path.
+    recordWorkingState(repo, { filesTouched: [], toolsUsed: ['list_dir'] });
+    const secondTurn = workingStateBlock(repo);
+
+    expect(secondTurn).toBe(firstTurn);
+    expect(firstTurn).toBe('');
+  });
 });
 
 describe('formatWorkingState', () => {
