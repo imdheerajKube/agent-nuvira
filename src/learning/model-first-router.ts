@@ -23,6 +23,13 @@ import { analyzeComplexity, isSmallTalk, type ComplexityLevel } from './hybrid-r
 import { getTaskType, type TaskType } from './model-router.js';
 import { hasCredentials, preferredModelsFor, isPairPlausible } from './model-selection.js';
 export { isPairPlausible };
+// ONE capability taxonomy. The tier below used to be computed from this
+// module's OWN `capabilityFit` score while every other decision (pinned
+// handoffs, the local last resort, the router's band checks) used
+// `model-capability` bands — two taxonomies, so the same pair could be
+// `medium` on one path and `low` on another, which is how a 0.5B and a 120B
+// ended up as "same tier".
+import { capabilityClassOf, estimateModelCapability } from './model-capability.js';
 import { isNonChatModel } from '../inference/model-catalog.js';
 import { logger } from '../utils/logger.js';
 import type { ConfigManager } from '../config/manager.js';
@@ -538,14 +545,44 @@ export type CapabilityTier = 'high' | 'medium' | 'low' | 'local';
 
 /**
  * Classify a model into a capability tier.
+ *
+ * TWO AXES, and they are different questions:
+ *   1. WHERE the model runs — a keyless local runner (`local`, `lmstudio`,
+ *      `vllm`) is the LAST resort whatever its size, so it keeps its own tier.
+ *   2. HOW MUCH it can do — `model-capability` bands, name-derived and
+ *      deterministic, the SAME bands the pinned-handoff repair, the local
+ *      last-resort pick and the router's capability floors already use.
+ *
+ * The band used to come from this module's own `capabilityFit` dimension, a
+ * task-relative score: a fast small model fits a trivial task well, so it read
+ * `high` HERE and `low` to everything else — two taxonomies for one fact, and
+ * the reason a 0.5B and a 120B could land in the same tier. `capabilityFit`
+ * still decides the candidate ORDER (it is the task fit); it no longer decides
+ * the BAND.
  */
 export function classifyTier(candidate: ModelCandidate): CapabilityTier {
   if (candidate.provider === 'local' || candidate.provider === 'lmstudio' || candidate.provider === 'vllm') {
     return 'local';
   }
-  if (candidate.dimensions.capabilityFit >= 0.8) return 'high';
-  if (candidate.dimensions.capabilityFit >= 0.5) return 'medium';
-  return 'low';
+  return capabilityClassOf(candidate.model);
+}
+
+/**
+ * Order the candidates of ONE tier strongest-first, stable within equal
+ * capability (so the scorer's task fit still decides among equals).
+ *
+ * WHY, and why here: the tiers were ordered by the scorer, which is a HEALTH-
+ * AND-COST ranking, and a small model wins that ranking precisely because it is
+ * fast and cheap. Inside a tier that is the wrong question — the tier already
+ * said "these are equally suitable", so the strongest must go first. MEASURED
+ * (trace-1791879575576-x731yp): the LOCAL tier is where it bit, because a local
+ * tier holds every local model from a 0.5B to a 120B and nothing ranked them by
+ * size, so the agentic ask was answered by the weakest one on the machine.
+ */
+function strongestFirstInTier(candidates: readonly ModelCandidate[]): ModelCandidate[] {
+  return [...candidates].sort(
+    (a, b) => estimateModelCapability(b.model) - estimateModelCapability(a.model),
+  );
 }
 
 /**
@@ -608,13 +645,14 @@ export function buildTieredFailoverChain(
     sameModelDifferentProvider.forEach(c => tried.add(`${c.provider}:${c.model}`));
   }
 
-  // Phase 2: Same capability tier, different models (pre-check quota)
-  const sameTier = allCandidates.filter(
+  // Phase 2: Same capability tier, different models (pre-check quota).
+  // STRONGEST-FIRST within the tier — see `strongestFirstInTier`.
+  const sameTier = strongestFirstInTier(allCandidates.filter(
     c => classifyTier(c) === bestTier
       && c.model !== bestCandidate.model
       && !tried.has(`${c.provider}:${c.model}`)
       && isCandidateAvailable(c)
-  );
+  ));
   if (sameTier.length > 0) {
     tiers.push({
       phase: 'same-tier',
@@ -629,11 +667,11 @@ export function buildTieredFailoverChain(
     : bestTier === 'medium' ? ['high']
     : [];
   for (const tier of higherTiers) {
-    const escalation = allCandidates.filter(
+    const escalation = strongestFirstInTier(allCandidates.filter(
       c => classifyTier(c) === tier
         && !tried.has(`${c.provider}:${c.model}`)
         && isCandidateAvailable(c)
-    );
+    ));
     if (escalation.length > 0) {
       tiers.push({
         phase: 'escalate',
@@ -649,11 +687,11 @@ export function buildTieredFailoverChain(
     : bestTier === 'medium' ? ['low']
     : [];
   for (const tier of lowerTiers) {
-    const deescalation = allCandidates.filter(
+    const deescalation = strongestFirstInTier(allCandidates.filter(
       c => classifyTier(c) === tier
         && !tried.has(`${c.provider}:${c.model}`)
         && isCandidateAvailable(c)
-    );
+    ));
     if (deescalation.length > 0) {
       tiers.push({
         phase: 'de-escalate',
@@ -664,11 +702,15 @@ export function buildTieredFailoverChain(
     }
   }
 
-  // Phase 5: Local models (always available, last resort before neural)
-  const localModels = allCandidates.filter(
+  // Phase 5: Local models (always available, last resort before neural).
+  // STRONGEST-FIRST is the whole point of this phase: the local tier is a
+  // single tier by necessity (keyless, no quota, no account), so without this
+  // the weakest model on the machine — the one that wins a health ranking for
+  // being fast — is what an agentic ask lands on.
+  const localModels = strongestFirstInTier(allCandidates.filter(
     c => classifyTier(c) === 'local'
       && !tried.has(`${c.provider}:${c.model}`)
-  );
+  ));
   if (localModels.length > 0) {
     tiers.push({
       phase: 'local',
@@ -679,10 +721,10 @@ export function buildTieredFailoverChain(
   }
 
   // Phase 6: Any remaining available models (last resort)
-  const remaining = allCandidates.filter(
+  const remaining = strongestFirstInTier(allCandidates.filter(
     c => !tried.has(`${c.provider}:${c.model}`)
       && isCandidateAvailable(c)
-  );
+  ));
   if (remaining.length > 0) {
     tiers.push({
       phase: 'remaining',

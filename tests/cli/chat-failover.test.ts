@@ -58,12 +58,37 @@ vi.mock('../../src/inference/model-validator.js', () => ({
 
 import { shouldConfirmFailover, promptFailoverChoice } from '../../src/cli/failover-prompt.js';
 import { resolveProvider } from '../../src/cli/router.js';
+// The walk now writes every failed candidate through the SHARED composition
+// (registry telemetry + the provider-fallback circuit breaker), exactly like
+// `requestModelSwitch` already did. Both are singletons, so a test that fails a
+// provider must start from a clean one or it pollutes the next test in the file
+// (measured: an earlier test's gemini failures opened gemini's breaker, and a
+// later test could then no longer reach gemini). `loop-handoff-same-turn`
+// already resets both for the same reason.
+import { resetModelRegistry } from '../../src/learning/model-registry.js';
+import { resetProviderFallback } from '../../src/learning/provider-fallback.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const mockedShouldConfirm = vi.mocked(shouldConfirmFailover);
 const mockedPromptChoice = vi.mocked(promptFailoverChoice);
 
 describe('tool-loop auto failover — promptOnFailover confirmation', () => {
+  // A fresh memory store per test: the registry and quota ledger PERSIST to
+  // disk, so `resetModelRegistry()` alone reloads the previous test's parks
+  // (measured: an earlier test's gemini 429 parked gemini on disk and the next
+  // test could no longer reach it). `hermetic-env` gives the FILE a throwaway
+  // dir; this gives each TEST one.
+  let memoryDir: string;
+  let priorMemoryDir: string | undefined;
   beforeEach(() => {
+    priorMemoryDir = process.env.NUVIRA_MEMORY_DIR;
+    memoryDir = mkdtempSync(join(tmpdir(), 'chat-failover-memory-'));
+    process.env.NUVIRA_MEMORY_DIR = memoryDir;
+    process.env.BUFF_MEMORY_DIR = memoryDir;
+    resetModelRegistry();
+    resetProviderFallback();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'success').mockImplementation(() => {});
@@ -83,6 +108,14 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
     vi.clearAllMocks();
     // Restore the real (non-TTY) stdin for the next test.
     Object.defineProperty(process.stdin, 'isTTY', { value: undefined, configurable: true });
+    if (priorMemoryDir === undefined) {
+      delete process.env.NUVIRA_MEMORY_DIR;
+      delete process.env.BUFF_MEMORY_DIR;
+    } else {
+      process.env.NUVIRA_MEMORY_DIR = priorMemoryDir;
+      process.env.BUFF_MEMORY_DIR = priorMemoryDir;
+    }
+    try { rmSync(memoryDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   });
 
   /**
@@ -619,7 +652,10 @@ describe('pinned + strict — the pin is waited on, then the user decides', () =
         callModel([{ role: 'user', content: 'explain this' }], []),
       );
       // Let the grace window elapse: the pin is retried, nothing substituted.
-      await vi.advanceTimersByTimeAsync(130_000);
+      // Fake time is free, and each retry now spends the same-provider transient
+      // backoff (5s/10s/20s/30s) before the pin is handed to the walk — so the
+      // advance covers the window AND those waits. The ASSERTIONS are unchanged.
+      await vi.advanceTimersByTimeAsync(600_000);
       const result = await pending;
 
       expect(askUser).toHaveBeenCalledTimes(1);
@@ -662,7 +698,7 @@ describe('pinned + strict — the pin is waited on, then the user decides', () =
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error: error as Error }),
       );
-      await vi.advanceTimersByTimeAsync(130_000);
+      await vi.advanceTimersByTimeAsync(600_000);
       const outcome = await settled;
       // Strict + headless: the pin's own failure is the honest outcome — it is
       // never released on the user's behalf, and nothing else is ever called.
@@ -754,8 +790,9 @@ describe('pinned + strict — waiting is bounded', () => {
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error: error as Error }),
       );
-      // Past the grace window AND past the answer timeout.
-      await vi.advanceTimersByTimeAsync(130_000 + 300_000 + 1_000);
+      // Past the grace window, past its transient-retry backoff, AND past the
+      // answer timeout.
+      await vi.advanceTimersByTimeAsync(900_000);
       const outcome = await settled;
       expect(askUser).toHaveBeenCalledTimes(1);
       expect(outcome.ok).toBe(false);

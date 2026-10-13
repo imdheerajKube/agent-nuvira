@@ -1798,7 +1798,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           });
           if (digest) upsertWorkDigest(thread, digest);
         }
-        deps.onEvent?.(`   ✂️ ${trimmedResult.trimmed} old tool result(s) trimmed to fit the ${Math.round(budgetChars / 1000)}K-char context budget.`);
+        deps.onEvent?.(`   ✂️ ${trimmedResult.trimmed} message(s) trimmed to fit the ${Math.round(budgetChars / 1000)}K-char context budget.`);
       }
     }
     // ── The route feed, re-synced before every call ────────────────────────
@@ -2033,6 +2033,47 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           }
           if (switched) {
             modelHandoffs += 1;
+            // ── CONTEXT HANDOFF NOTE (Proposal 2, reassessed) ─────────────
+            //
+            // The CONTEXT already travels: one `thread` is kept across the
+            // switch, so the replacement receives the ask, every tool call and
+            // every result. What deliberately does NOT travel is the previous
+            // model's `reasoningContent` (replaying a stranger's chain-of-
+            // thought is either rejected outright or anchors the new model to
+            // the failed reading of the task) — that stays dropped.
+            //
+            // What was missing is the plain STATEMENT of the handoff: a model
+            // that starts mid-thread with no note reads the transcript as its
+            // own and re-plans from the ask, re-running finished commands and
+            // re-reading files whose results are already in front of it. The
+            // note names the change, tells it the context is its own, and hands
+            // it the facts (files changed, commands with their verdicts) so it
+            // continues instead of restarting.
+            let servedNow: string | undefined;
+            try {
+              const route = opts.servedRoute?.();
+              if (route?.model && !isUnresolvedModel(route.model)) {
+                servedNow = `${route.providerType}/${route.model}`;
+              }
+            } catch {
+              // An unknown route is fine — the note reads generically then.
+            }
+            upsertHandoffNote(
+              thread,
+              buildHandoffNote({
+                route: servedNow,
+                facts: isWorkDigestEnabled(context.configManager)
+                  ? buildWorkDigest({
+                      successfulTools: progress.successfulToolCalls,
+                      mutatedPaths: progress.mutatedPaths,
+                      executedActions: progress.executedActions,
+                    })
+                  : '',
+              }),
+            );
+            deps.onEvent?.(
+              '   🤝 handoff note written into the thread — the replacement model starts from the work already done.',
+            );
             // ── C5 — RE-FIT THE THREAD TO THE MODEL THAT NOW ANSWERS ──────
             // `budgetChars` was resolved before this loop started, from the pair
             // the turn BEGAN on — and the handoff worth catching is the one to a
@@ -4721,17 +4762,135 @@ const RECENT_KEEP = 6;
 /** Stub left in place of a trimmed tool result. */
 const TRIM_STUB = '[earlier tool result trimmed to fit the context budget]';
 
+/**
+ * Floor for the per-message tool-result clamp (the tail clamp). A single tool
+ * result may never exceed half the thread budget, so one oversized output cannot
+ * dominate the prompt; this floor keeps the clamp sane for a tiny budget.
+ */
+const MIN_TOOL_RESULT_CHARS = 8_000;
+
+/**
+ * Bounded scan window for the clamp's error-line rescue. An elided middle can be
+ * megabytes, and scanning all of it would cost more CPU than the prompt costs
+ * tokens, so only the EDGES of the middle are searched. Nothing here is
+ * unrecoverable: a clipped result is re-runnable (`run_terminal` again) or
+ * re-readable (`read_file` with offset/limit), which the notice says out loud.
+ */
+const CLAMP_SCAN_CHARS = 250_000;
+
+/** Cap on rescued error-looking lines, and on the chars they may add back. */
+const CLAMP_ERROR_LINES = 12;
+const CLAMP_ERROR_CHARS = 2_000;
+
+/**
+ * A line that looks like the REASON something failed. Deliberately broad: one
+ * extra line costs a few tokens, while dropping the only line that says WHY the
+ * build broke costs a wrong fix built on a log the model never saw.
+ */
+const ERROR_LINE_RE =
+  /\b(?:error|errors|fail|failed|failing|failure|exception|panic|fatal|traceback|assert|assertion|expected|received|refused|denied|unhandled|cannot|unable|timeout|enoent|econnrefused)\b|\btimed out\b|\bexit(?:ed)?(?: with)?(?: code)? [1-9]\d*\b|[✗✘✕]/i;
+
+/** `5234567` → `5,234,567` (deterministic grouping — no locale/ICU dependence). */
+function withThousands(n: number): string {
+  return String(Math.max(0, Math.trunc(n))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
 /** Estimated character size of one thread message (chars/4 ≈ tokens). */
 function messageChars(m: ToolMessage): number {
   return (m.content?.length ?? 0) + (m.toolCalls?.length ? JSON.stringify(m.toolCalls).length : 0);
 }
 
 /**
+ * Rescue the error-looking lines from the MIDDLE of a result that is about to be
+ * clamped away. The clamp keeps head + tail, and a tool's verdict usually lands
+ * in the tail — but the REASON for a failure (an assertion, a stack frame, `exit
+ * code 1`) can sit in the middle, and a model that never sees it fixes the wrong
+ * thing. Deterministic: a line filter, no LLM, no summary, no drift.
+ */
+function errorLinesFrom(middle: string): string[] {
+  const regions =
+    middle.length <= CLAMP_SCAN_CHARS * 2
+      ? [middle]
+      : [middle.slice(0, CLAMP_SCAN_CHARS), middle.slice(-CLAMP_SCAN_CHARS)];
+  const out: string[] = [];
+  let used = 0;
+  for (const region of regions) {
+    for (const raw of region.split('\n')) {
+      const line = raw.trim();
+      if (!line) continue;
+      // NO length filter. A tool's output rarely ends on a newline, so the tail
+      // cut lands MID-LINE and fuses the last real line with the kept tail —
+      // MEASURED: a 38-char `AssertionError: 2 !== 3 (received 3)` arrived here
+      // as 1,036 chars, and a `> 1000` skip dropped it, i.e. the rescue silently
+      // lost exactly the line it exists to save. Long lines are kept by their
+      // first 200 chars instead (an error keyword in a minified blob is still
+      // the start of the reason).
+      if (!ERROR_LINE_RE.test(line)) continue;
+      const kept = line.slice(0, 200);
+      if (out.includes(kept)) continue;
+      if (used + kept.length > CLAMP_ERROR_CHARS) return out;
+      out.push(kept);
+      used += kept.length;
+      if (out.length >= CLAMP_ERROR_LINES) return out;
+    }
+  }
+  return out;
+}
+
+/**
+ * The notice a clamp leaves behind: it names the tool, counts the elided
+ * characters and says how to get them back. A model handed a SILENTLY partial
+ * result cannot tell whether anything is missing; one handed a QUANTIFIED cut
+ * can re-run the command or re-read the file — far cheaper than a fix built on a
+ * log it never saw.
+ */
+function clampNotice(tool: string | undefined, elided: number, errorLines: string[]): string {
+  const who = tool ? `${tool}: ` : '';
+  const rescued =
+    errorLines.length > 0 ? '; the error-looking lines from the elided middle are kept below' : '';
+  return (
+    `\n[tool result trimmed to fit the context budget — ${who}${withThousands(elided)} chars elided ` +
+    `from the middle${rescued}. The beginning and the end are kept verbatim; re-run the command, or ` +
+    `read the file again with offset/limit, to see the rest.]\n` +
+    (errorLines.length > 0 ? `${errorLines.join('\n')}\n` : '')
+  );
+}
+
+/**
+ * Clamp one oversized tool result to `cap` chars, keeping its HEAD and TAIL so
+ * the model still sees which tool ran and how its output ended, plus any
+ * error-looking lines from the elided middle. Deterministic — no summary, no
+ * model call. The result never exceeds `cap`: the head absorbs what the notice
+ * and the rescued lines do not use.
+ */
+function clampToolResult(content: string, cap: number, tool?: string): string {
+  if (content.length <= cap) return content;
+  const tailLen = Math.min(1_000, Math.floor(cap / 4));
+  const tailStart = Math.max(0, content.length - tailLen);
+  const middle = content.slice(0, tailStart);
+  const errors = errorLinesFrom(middle);
+  // Sized with the LARGEST possible elided count, so the exact (smaller) notice
+  // that follows can never push the result past `cap`.
+  const headLen = Math.max(0, cap - tailLen - clampNotice(tool, middle.length, errors).length);
+  const head = content.slice(0, headLen);
+  return head + clampNotice(tool, Math.max(0, middle.length - headLen), errors) + content.slice(tailStart);
+}
+
+/**
  * Deterministically trim a thread to `maxChars`:
  * 1. Never touch the system prompt or the FIRST user message (the ask).
- * 2. Never touch the last `RECENT_KEEP` messages (recent context).
- * 3. Oldest-first: tool results longer than 500 chars collapse to the stub;
- *    if still over budget, remaining old tool results collapse entirely.
+ * 2. Never touch the last `RECENT_KEEP` messages (recent context) — except for
+ *    the tail clamps in steps 4–5, which run ONLY when the oldest-first passes
+ *    could not pay for the overage.
+ * 3. Oldest-first pays FIRST, and only as much as the deficit needs: tool
+ *    results longer than 500 chars collapse to the stub; if still over budget,
+ *    remaining old tool results collapse entirely; then oversized old user
+ *    messages shrink.
+ * 4. Only if the thread is STILL over does the protected tail pay: an oversized
+ *    recent tool result is clamped to head + rescued error lines + tail, and
+ *    then clamped harder, so the prompt actually fits the window it goes to.
+ *    The ORDER is what protects delivery: recent context is the model's working
+ *    memory, so it is spent only when nothing older can cover the overage.
  * Returns a NEW array (input untouched) + how many messages were trimmed.
  */
 export function trimThreadBudget(
@@ -4754,6 +4913,10 @@ export function trimThreadBudget(
 
   let over = total - maxChars;
   let trimmed = 0;
+  // A single result may never exceed half the budget, whatever the passes below
+  // do (see MIN_TOOL_RESULT_CHARS).
+  const perMessageCap = Math.max(MIN_TOOL_RESULT_CHARS, Math.floor(maxChars / 2));
+
   // Pass 1: collapse long OLD tool results to the stub (keep the first 500
   // chars so the model retains the gist of what it did).
   for (const i of eligible) {
@@ -4790,6 +4953,60 @@ export function trimThreadBudget(
       if (delta <= 0) continue;
       out[i] = { ...m, content: m.content.slice(0, 200) + TRIM_STUB };
       over -= delta;
+      trimmed++;
+    }
+  }
+  // ── Pass 4 — only NOW does the PROTECTED TAIL pay ─────────────────────────
+  // Nothing older could cover the deficit, so an oversized RECENT tool result
+  // must be clamped — otherwise the prompt goes out verbatim and either the
+  // provider rejects it or the model silently loses its middle.
+  //
+  // MEASURED (trace-1791879575576-x731yp): step 4 ran a 24s test command; its
+  // result landed in the tail, the oldest-first passes could not reach it, and
+  // step 5 — handed to `local/qwen2.5:0.5b` (32K window) — recorded 5,292,237
+  // context chars (~1.18M tokens), carried into the dashboard and cost ledger
+  // as REAL input. Running this pass here (rather than before the oldest-first
+  // passes) is deliberate: recent context is the model's working memory, so it
+  // is spent only when older output cannot pay for the overage.
+  // A tool message carries only the call ID, so the notice's tool name comes
+  // from the assistant message that made the call. Built lazily: a turn whose
+  // thread fits never walks the thread for names it will not print.
+  const toolNameById = new Map<string, string>();
+  const toolNameOf = (m: ToolMessage): string | undefined => {
+    if (!m.toolCallId) return undefined;
+    if (toolNameById.size === 0) {
+      for (const t of thread) {
+        for (const call of t.toolCalls ?? []) {
+          if (call?.id) toolNameById.set(call.id, call.name);
+        }
+      }
+    }
+    return toolNameById.get(m.toolCallId);
+  };
+  if (over > 0) {
+    for (let i = Math.max(0, out.length - RECENT_KEEP); i < out.length && over > 0; i++) {
+      const m = out[i];
+      if (m.role !== 'tool' || m.content.length <= perMessageCap) continue;
+      const clamped = clampToolResult(m.content, perMessageCap, toolNameOf(m));
+      if (clamped.length >= m.content.length) continue;
+      out[i] = { ...m, content: clamped };
+      over -= m.content.length - clamped.length;
+      trimmed++;
+    }
+  }
+  // Pass 5: STILL over — the protected tail holds the bulk even after the clamp
+  // above; clamp its tool results harder rather than ship a prompt the model's
+  // window cannot hold. Only TOOL results in the tail are touched — the user's
+  // ask and the latest assistant turn stay.
+  if (over > 0) {
+    const tailFloor = Math.max(500, Math.floor(perMessageCap / 4));
+    for (let i = Math.max(0, out.length - RECENT_KEEP); i < out.length && over > 0; i++) {
+      const m = out[i];
+      if (m.role !== 'tool') continue;
+      const clamped = clampToolResult(m.content, tailFloor, toolNameOf(m));
+      if (clamped.length >= m.content.length) continue;
+      out[i] = { ...m, content: clamped };
+      over -= m.content.length - clamped.length;
       trimmed++;
     }
   }
@@ -4842,6 +5059,56 @@ export function buildWorkDigest(input: {
   if (tools.length > 0) lines.push(`• Tools used: ${tools.join(', ')}`);
   if (lines.length === 0) return '';
   return `${WORK_DIGEST_MARKER}\n${lines.join('\n')}`;
+}
+
+/** Marker prefix identifying the loop's mid-turn HANDOFF note. */
+export const HANDOFF_NOTE_MARKER = '[handoff — the model serving this turn changed]';
+
+/**
+ * The note a mid-turn model switch leaves in the thread.
+ *
+ * It says three things the TRANSCRIPT cannot say by itself: that the pair
+ * answering this step is not the pair that answered the previous ones, that the
+ * context above is genuinely this model's to use (nothing was restarted), and
+ * which work is already DONE (files changed, commands and their verdicts) — so
+ * the replacement continues instead of re-deriving a plan from the ask. It also
+ * states the rule that costs real steps when broken: do not re-run finished
+ * commands or restate the work in more words.
+ *
+ * Deterministic and LLM-free, like the digest it borrows its facts from — a
+ * handoff must not spend a model call to describe itself.
+ */
+export function buildHandoffNote(input: { route?: string; facts?: string }): string {
+  const served = input.route
+    ? ` This step is served by ${input.route}.`
+    : ' This step is served by a different model.';
+  const facts = (input.facts ?? '').trim();
+  return (
+    `${HANDOFF_NOTE_MARKER}${served}\n` +
+    'The pair that had been answering returned nothing usable, so the turn was handed to you mid-flight —\n' +
+    'everything above is YOUR context: the ask, every tool call and every result. Nothing was restarted.\n' +
+    (facts ? `${facts}\n` : '') +
+    'Continue from the work that is already done. Do not re-run finished commands, re-read files whose results\n' +
+    'are above, or restate the work in more words.'
+  );
+}
+
+/**
+ * Insert or refresh the single handoff note. Idempotent — a turn may hand off
+ * more than once (a second pair can also answer with nothing), and stacking a
+ * note per handoff would fill the thread with the same information. Kept with
+ * the run's framing (right after the leading system prompt) so it is a `system`
+ * message: the thread-budget passes never trim one, and it therefore survives
+ * every compaction between the handoff and the answer.
+ */
+export function upsertHandoffNote(thread: ToolMessage[], note: string): void {
+  const existing = thread.findIndex((m) => m.content.startsWith(HANDOFF_NOTE_MARKER));
+  if (existing !== -1) {
+    thread[existing] = { ...thread[existing], content: note };
+    return;
+  }
+  const insertAt = thread.length > 0 && thread[0].role === 'system' ? 1 : 0;
+  thread.splice(insertAt, 0, { role: 'system', content: note });
 }
 
 /**

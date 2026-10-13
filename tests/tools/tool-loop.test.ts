@@ -16,6 +16,9 @@ import {
   buildWorkDigest,
   upsertWorkDigest,
   WORK_DIGEST_MARKER,
+  HANDOFF_NOTE_MARKER,
+  buildHandoffNote,
+  upsertHandoffNote,
   selfReviewNudge,
   zeroActionNudge,
   planRequiredNudge,
@@ -2676,6 +2679,78 @@ describe('tool loop — mid-turn model handoff (P2)', () => {
     // B's first empty did NOT immediately drop B: its streak started at zero.
     expect(requestModelSwitch).toHaveBeenCalledTimes(1);
     expect(result.modelHandoffs).toBe(1);
+  });
+
+  it('writes an explicit HANDOFF NOTE — the replacement continues instead of restarting', async () => {
+    // The context already travels with the switch (one thread). What did not was
+    // the STATEMENT of the handoff, so a replacement that opens mid-transcript
+    // read it as its own and re-planned from the ask — re-running finished work.
+    const seenThreads: string[] = [];
+    let model = 'A';
+    let aCalls = 0;
+    const callModel = vi.fn(
+      async (thread: readonly { role: string; content?: string }[]): Promise<StepResponse> => {
+        seenThreads.push(thread.map((m) => String(m.content ?? '')).join('\n'));
+        if (model === 'A') {
+          aCalls += 1;
+          // Step 1 does REAL work; the next two answer with nothing.
+          return aCalls === 1
+            ? { content: 'reading it', toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'src/a.ts' } }] }
+            : { content: '', toolCalls: [] };
+        }
+        return { content: 'B finished it.', toolCalls: [] };
+      },
+    );
+    const requestModelSwitch = vi.fn(async () => {
+      model = 'B';
+      return true;
+    });
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'finish the job' }],
+      context: ctx,
+      // Read fresh by the loop (the same seam the route feed uses), so the note
+      // can name the pair that actually took over.
+      servedRoute: () => ({ providerType: 'local', model: 'gpt-oss:120b-cloud' }),
+      deps: {
+        callModel,
+        executeTool: vi.fn(async () => 'file contents'),
+        onEvent: vi.fn(),
+        requestModelSwitch,
+      },
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.content).toBe('B finished it.');
+    const afterSwitch = seenThreads[seenThreads.length - 1];
+    expect(afterSwitch).toContain(HANDOFF_NOTE_MARKER);
+    expect(afterSwitch).toContain('everything above is YOUR context');
+    // The replacement is TOLD which pair now serves it…
+    expect(afterSwitch).toContain('local/gpt-oss:120b-cloud');
+    // …and what is already done, so it continues rather than re-deriving a plan.
+    expect(afterSwitch).toContain('Tools used: read_file');
+    expect(afterSwitch).toContain('Do not re-run finished commands');
+    // Nothing was restarted: the original ask is still the ask.
+    expect(afterSwitch).toContain('finish the job');
+  });
+
+  it('keeps ONE handoff note, as a system message beside the run framing', () => {
+    const thread = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'the ask' },
+    ] as unknown as Parameters<typeof upsertHandoffNote>[0];
+    upsertHandoffNote(thread, buildHandoffNote({ route: 'groq/one', facts: '• Files changed (1): a.ts' }));
+    upsertHandoffNote(thread, buildHandoffNote({ route: 'gemini/two' }));
+
+    const notes = thread.filter((m) => m.content.startsWith(HANDOFF_NOTE_MARKER));
+    // A turn can hand off more than once — the note is refreshed, never stacked.
+    expect(notes).toHaveLength(1);
+    expect(notes[0].content).toContain('gemini/two');
+    // `system` on purpose: the thread-budget passes never trim a system message,
+    // so the note survives every compaction between the handoff and the answer.
+    expect(thread[1].role).toBe('system');
+    expect(thread[2].role).toBe('user'); // the ask is still second
   });
 
   // ─── C5 — the thread must fit the model that ANSWERS ─────────────────────
