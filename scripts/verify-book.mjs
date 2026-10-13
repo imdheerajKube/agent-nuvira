@@ -18,6 +18,10 @@
  *   4. live chapter numbers are unique and strictly increasing in reading order
  *   5. the appendices sit after the last chapter, not in the middle
  *   6. the generated Part XII is in sync with the live CLI
+ *   7. every one of the sixteen parts carries a description (`class="callout"`
+ *      block explaining what it covers and why the code is shaped that way), and
+ *      no part has two — a part that silently loses its description is exactly
+ *      the regression this check exists for
  */
 
 import { readFileSync } from 'node:fs';
@@ -111,6 +115,41 @@ if (navStart === -1 || tocStart === -1 || tocEnd === -1) {
   } catch {
     fail('the generated command reference is stale — run: node scripts/generate-book-chapters.mjs');
   }
+}
+
+// ── 7. every part carries exactly one description ────────────────────────────
+const PART_NUMERALS = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII', 'XIII', 'XIV', 'XV', 'XVI'];
+{
+  const missing = [];
+  const doubled = [];
+  for (const id of PART_NUMERALS) {
+    const n = html.split(`<!-- PART:${id}:START -->`).length - 1;
+    const e = html.split(`<!-- PART:${id}:END -->`).length - 1;
+    if (n === 0 || e === 0) missing.push(id);
+    else if (n > 1 || e > 1) doubled.push(`${id} (${n}×/${e}×)`);
+  }
+  missing.length ? fail(`part(s) with no description: ${missing.join(', ')}`) : ok(`all ${PART_NUMERALS.length} parts carry a description`);
+  doubled.length ? fail(`part(s) with a duplicated description: ${doubled.join(', ')}`) : ok('no part carries its description twice');
+
+  // A description must actually say something: a part block shorter than this
+  // is a stub that would pass the presence check and inform nobody.
+  const thin = [];
+  for (const id of PART_NUMERALS) {
+    const m = new RegExp(`<!-- PART:${id}:START -->([\\s\\S]*?)<!-- PART:${id}:END -->`).exec(html);
+    const text = (m?.[1] ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (m && text.split(' ').length < 60) thin.push(`${id} (${text.split(' ').length} words)`);
+  }
+  thin.length ? fail(`part description(s) too thin to be useful: ${thin.join(', ')}`) : ok('every part description is substantive (60+ words)');
+
+  // The Parts I–IV heading shape is `<h1 …>Part N</h1>`, Parts V–XI use the
+  // `<h1 class="part-title">` form; a part heading that lost its hierarchy would
+  // break the sidebar grouping silently.
+  const headingParts = new Set([
+    ...[...html.matchAll(/<h1[^>]*>Part ([IVX]+)<\/h1>/g)].map((m) => m[1]),
+    ...[...html.matchAll(/<h1 class="part-title">Part ([IVX]+)\b/g)].map((m) => m[1]),
+  ]);
+  const headless = PART_NUMERALS.filter((id) => !headingParts.has(id));
+  headless.length ? fail(`part(s) with no heading in the body: ${headless.join(', ')}`) : ok('all 16 parts have a heading in the body');
 }
 
 // ── report ───────────────────────────────────────────────────────────────────

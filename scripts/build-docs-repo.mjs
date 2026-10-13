@@ -287,12 +287,15 @@ const MANUAL_FIXES = [
     '> **Honest scope note:** today the key rotation runs in the `plan` and `edit` walks.\n> `chat`, `execute` and the pipeline fail over by *provider*. Unifying every surface onto\n> one account-aware walk is the next milestone — see\n> [Limitations and roadmap](#13-limitations-and-roadmap).',
   ],
   [
-    '| `docs/COMMANDS_SURFACE.md` | **Generated** from the live commander tree — 289 entries, the authoritative list. |',
-    '| [Full Command Surface](reference/commands-surface.md) | **Generated** from the live commander tree — 289 entries, the authoritative list. |',
+    // These counts are typed, so they go stale silently — 289/48 was three
+    // releases behind the tree (see `bugs_identified_during full review.md` §4).
+    // Corrected to the measured values; generating them is the real fix.
+    '| `docs/COMMANDS_SURFACE.md` | **Generated** from the live commander tree — 353 commands, the authoritative list. |',
+    '| [Full Command Surface](reference/commands-surface.md) | **Generated** from the live commander tree — 353 commands, the authoritative list. |',
   ],
   [
-    '| `docs/COMMANDS.md` | Curated prose: objective, command, example per entry (88 sections). |',
-    '| [Command reference](commands.md) | Curated prose: objective, command, example per entry (88 sections). |',
+    '| `docs/COMMANDS.md` | Curated prose: objective, command, example per entry (93 entries with a curated example). |',
+    '| [Command reference](commands.md) | Curated prose: objective, command, example per entry (93 entries with a curated example). |',
   ],
   // A private build script cannot be invoked from the published repository.
   [
@@ -398,8 +401,8 @@ you can run yourself.
 
 | Surface | Size | Command |
 |---|---|---|
-| Agent tools | **110** | \`nuvira tools list\` |
-| CLI command entries | **289** across **48** groups | see [Full Command Surface](reference/commands-surface.md) |
+| Agent tools | **114** | \`nuvira tools list\` |
+| CLI command entries | **353** across **58** top-level groups | see [Full Command Surface](reference/commands-surface.md) |
 | Inference providers | **22** | \`nuvira provider list\` |
 | Messaging platforms | **22** | \`nuvira gateway status\` |
 | Skills | **155** on disk | \`nuvira skills list\` |
@@ -463,7 +466,7 @@ providers and models, hard cost cap, privacy floor), and RBAC.
 
 \`\`\`bash
 nuvira doctor                              # full environment diagnosis
-nuvira tools list                          # the 110 tools, with descriptions
+nuvira tools list                          # the 114 tools, with descriptions
 nuvira skills search docker                # find a skill by need
 nuvira skill run security-audit --dry-run  # print the plan, run nothing
 nuvira workflow list                       # the ten built-in pipelines
@@ -490,7 +493,7 @@ terminal, a web dashboard, or any of 22 messaging platforms.
 - **[User Manual](user-manual.md)** — install, configure, and use every surface in depth.
 - **[Capabilities](capabilities.md)** — what it can do beyond writing code.
 - **[Command Reference](commands.md)** — curated commands with examples.
-- **[Full Command Surface](reference/commands-surface.md)** — all 289 command entries,
+- **[Full Command Surface](reference/commands-surface.md)** — all 353 command entries,
   generated from the live CLI tree.
 - **[Architecture](architecture.md)** — how the execution engine is put together.
 - **[Building custom agents (SDK)](agent-sdk.md)** — write, test and register your
@@ -503,8 +506,8 @@ terminal, a web dashboard, or any of 22 messaging platforms.
 
 | Surface | Size |
 |---|---|
-| Agent tools | **110** |
-| CLI command entries | **289** across **48** groups |
+| Agent tools | **114** |
+| CLI command entries | **353** across **58** top-level groups |
 | Inference providers | **22** |
 | Messaging platforms | **22** |
 | Skills | **155** |

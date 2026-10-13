@@ -70,10 +70,10 @@ configured.
 | | |
 |---|---|
 | **110** agent tools | filesystem, execution, browser, vision, voice, sandbox, integrations |
-| **289** CLI command entries | across 48 groups, with a generated, drift-guarded reference |
-| **22** providers · **22** messaging platforms | Telegram, Slack, WhatsApp, SMS, IRC, Signal, Teams, … |
+| **353** CLI command entries | across 58 top-level groups, with a generated, drift-guarded reference |
+| **23** providers · **22** messaging platforms | Telegram, Slack, WhatsApp, SMS, IRC, Signal, Teams, … |
 | **155** skills · **10** workflow pipelines | reusable plans and fixed multi-agent pipelines |
-| **22** dashboard pages | chat, routing, traces, cost, models, memory, admin governance |
+| **30** dashboard destinations | chat, routing, traces, cost, models, memory, admin governance |
 | **6** vetted MCP servers | connect external tools, or expose these tools as an MCP server |
 
 Beyond code, it drives a browser, reads PDFs and spreadsheets, generates and describes
@@ -112,7 +112,7 @@ interface that does not exist.
 | [`docs/user-manual.md`](docs/user-manual.md) | Install, configure, and use every surface in depth |
 | [`docs/capabilities.md`](docs/capabilities.md) | What it can do beyond writing code |
 | [`docs/commands.md`](docs/commands.md) | Curated command reference with examples |
-| [`docs/reference/commands-surface.md`](docs/reference/commands-surface.md) | All 289 entries, generated from the live CLI |
+| [`docs/reference/commands-surface.md`](docs/reference/commands-surface.md) | All 353 commands, generated from the live CLI |
 | [`docs/architecture.md`](docs/architecture.md) | Modular execution engine design |
 | [`docs/whats-new.md`](docs/whats-new.md) | Release index |
 | [`docs/demos/`](docs/demos/index.md) | The CLI tour, and how to replay it |

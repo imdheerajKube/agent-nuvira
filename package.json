@@ -48,6 +48,9 @@
     "docs:wire:check": "node scripts/check-provider-wire.mjs",
     "docs:wire:update": "node scripts/check-provider-wire.mjs --update",
     "docs:citations:check": "node scripts/check-doc-citations.mjs --check",
+    "docs:commands:examples": "node scripts/check-docs-commands.mjs",
+    "docs:book": "node scripts/update-book.mjs",
+    "docs:book:check": "node scripts/verify-book.mjs && node scripts/check-book-code.mjs",
     "demo:cli": "node scripts/generate-cli-demo.mjs --only highlight",
     "demo:cli:all": "node scripts/generate-cli-demo.mjs --only all"
   },

@@ -145,7 +145,7 @@ This table highlights core capabilities for quick machine parsing and comparison
 - **Plugin system** with auto-discovery — drop `.js` files into `~/.nuvira/plugins/` for automatic loading
 - **Project scaffolding** — `agent-nuvira init` generates starter projects with interactive template + provider selection
 - **Context-preserving model switching** — `agent-nuvira model switch` changes providers mid-session without losing agent state
-- **Auto model routing** — `agent-nuvira model switch auto` lets the agent pick the best provider/model for every task based on complexity, cost, latency, privacy, and reliability (with fallback chains + circuit-breaker awareness). Cost scoring uses **real per-1K-token provider pricing** (overridable via `agent-nuvira config set pricing.<provider>.inputPer1K`), adjusted at runtime by **benchmark quality + per-agent best-model stats**. See why a decision was made with `agent-nuvira model explain` (or `--json` for CI) — walk through a full decision with the 🎯 fit / 📏 measured / ⏳ ctx chips in [`MODELS_EXPLAIN_DEMO.md`](MODELS_EXPLAIN_DEMO.md). Benchmark the router's exact picks with `agent-nuvira benchmark --routing`, validate them end-to-end with `agent-nuvira eval --routing`, and track actual picks + a full audit trail in the dashboard's **Routing** panel
+- **Auto model routing** — `agent-nuvira model switch auto` lets the agent pick the best provider/model for every task based on complexity, cost, latency, privacy, and reliability (with fallback chains + circuit-breaker awareness). Cost scoring uses **real per-1K-token provider pricing** (overridable via `agent-nuvira config set pricing.<provider>.inputPer1K`), adjusted at runtime by **benchmark quality + per-agent best-model stats**. See why a decision was made with `agent-nuvira model explain` (or `--json` for CI) — walk through a full decision with the 🎯 fit / 📏 measured / ⏳ ctx chips in [`MODELS_EXPLAIN_DEMO.md`](MODELS_EXPLAIN_DEMO.md). Benchmark the router's exact picks with `agent-nuvira benchmark run --routing`, validate them end-to-end with `agent-nuvira eval run --routing`, and track actual picks + a full audit trail in the dashboard's **Routing** panel
 - **Learned-from-real-usage telemetry** — every LLM call (chat, execute, plan, edit, skill, learn, ci, doctor) writes through to the Model Availability Registry **with its action tag**, so the registry learns which provider × model each action **killed** (predictive skip) or **verified** (routable) from real usage — not just probes. `agent-nuvira models status --verbose` prints registry-blocked providers + per-action verified/killed chips, and the dashboard's **Models** panel shows the same per-action feed with a daily timeline chart. A provider killed by ANY action is skipped predictively by all others; a later real success re-verifies it and un-parks it (the recovery loop), and `agent-nuvira models unblock <provider>` is the manual escape hatch (demotes the block, clears quota parks + ledger cooldown, then re-probes the live API with an honest `stillBlocked` verdict — `--json` for CI). Proven end-to-end by a hermetic `tests/e2e/` test (mock 429 provider → registry learns → next pick skips). The **VS Code extension** attributes its usage too — every IDE-driven call (chat panel → `ide-chat`, inline suggestions → `ide-inline`, execute/edit/workflow → `ide-<command>`) is tagged via `BUFF_TELEMETRY_ACTION` at spawn, so the same per-action panel shows IDE usage as its own rows
 - **Skill compiler** — automatically extracts reusable patterns from successful agent runs into executable skills (`agent-nuvira skill run`)
 - **Context-window memory pruner** — prevents long multi-agent chains from exceeding model token limits
@@ -1078,10 +1078,10 @@ agent-nuvira model explain "your task" --json  # machine-readable (scripting/CI)
 # → see MODELS_EXPLAIN_DEMO.md for a full annotated example
 
 # Benchmark the exact provider/model pairs the Auto router picks
-agent-nuvira benchmark --routing
+agent-nuvira benchmark run --routing
 
 # Evaluate the Auto router's picks end-to-end (full multi-agent pipeline + hidden tests)
-agent-nuvira eval --routing
+agent-nuvira eval run --routing
 
 # Every explain snapshot + routing-mode pick is recorded to the dashboard's audit trail
 # (Routing panel → 'Audit Trail — routing decision timeline')
@@ -1598,11 +1598,11 @@ agent-nuvira skills uninstall code-assessment
 # Create a cross-skill bundle (Hermes parity)
 agent-nuvira skills bundle backend-dev --create --name "Backend Dev" --description "Full workflow" --skills code-assessment,test-strategy
 
-# List bundles
-agent-nuvira skills bundle --list
+# List bundles (no slug = list)
+agent-nuvira skills bundle
 
-# Show bundle contents
-agent-nuvira skills bundle backend-dev --show
+# Show bundle contents (slug = show)
+agent-nuvira skills bundle backend-dev
 ```
 
 ### Skill Execution — Language-Agnostic Marketplace Skills
@@ -1611,13 +1611,13 @@ Execute skills from the marketplace in any language (Python, Node.js, Shell, Typ
 
 ```bash
 # Execute a Python skill (e.g., image generation)
-agent-nuvira skill execute image-gen --prompt "A sunset over mountains"
+agent-nuvira skill run image-gen --params "prompt=A sunset over mountains"
 
 # Execute a Node.js skill (e.g., API call)
-agent-nuvira skill execute api-call --endpoint /users --method GET
+agent-nuvira skill run api-call --params "endpoint=/users,method=GET"
 
 # Execute a Shell skill (e.g., system check)
-agent-nuvira skill execute system-check --check disk
+agent-nuvira skill run system-check --params "check=disk"
 
 # The skill tool also supports execution via the agent
 # Agent calls: skill tool → execute: { skill: "image-gen", args: { prompt: "..." } }
@@ -1700,8 +1700,8 @@ Browse, search, and install workflow templates and plugins from the unified mark
 agent-nuvira marketplace browse
 
 # Browse only workflows or plugins
-agent-nuvira marketplace browse --type workflows
-agent-nuvira marketplace browse --type plugins
+agent-nuvira marketplace browse --workflows
+agent-nuvira marketplace browse --plugins
 
 # Search across all sources
 agent-nuvira marketplace search "deploy"
@@ -1926,7 +1926,7 @@ agent-nuvira execute "refactor the database layer" --provider groq
 agent-nuvira execute "add rate limiting" --dry-run
 
 # Configure models per agent type
-agent-nuvira execute "add tests" --agent-model planner=gemini --agent-model writer=groq
+agent-nuvira execute "add tests" --planner-model gemini --writer-model groq
 
 # Use persistent memory across sessions
 agent-nuvira execute "fix the login bug" --memory

@@ -177,7 +177,12 @@ function renderDoc(program) {
     }
   }
 
-  const commandCount = rows.filter((r) => r.name).length;
+  // `walk` pushes a command row AND, when it has options, a second row that
+  // carries the SAME `name` with `optionLine` set — so counting truthy `name`s
+  // counted every command with flags twice (this file claimed 510 while the
+  // live tree had 354: 354 command rows + 156 flag rows). Only the command rows
+  // are commands.
+  const commandCount = rows.filter((r) => r.name && !r.optionLine).length;
   lines.push('---');
   lines.push('');
   lines.push(`*${commandCount} commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*`);

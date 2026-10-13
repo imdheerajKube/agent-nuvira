@@ -755,7 +755,7 @@ runs). Ten ship built-in:
 ```bash
 nuvira workflow list
 nuvira workflow run quick-fix "fix the failing test in auth"
-nuvira workflow run feature-implement "add CSV export" --auto-route
+nuvira workflow run feature-implement "add CSV export" --provider auto   # let the router pick per step
 nuvira workflow search security        # search the registry
 nuvira workflow install <name>
 nuvira workflow info <name>
@@ -1376,10 +1376,24 @@ Verified by reading the call sites: key rotation lives in the single-shot walk u
 your primary key switches *provider* instead of trying your second key from the *same*
 provider. See `proposed-apikeymultirouting.md`.
 
-### 13.3 `docs/COMMANDS.md` documents a command that does not exist
+### 13.3 `docs/COMMANDS.md` documented a command that does not exist — **fixed 2026-10-13**
 
-It lists `nuvira models list`; the live CLI has `nuvira models` (and `nuvira model list`
-for the registry). `docs/COMMANDS_SURFACE.md` is correct — it is generated.
+The forms it carried, and the ones that replaced them (this block is deliberately not
+a shell — the wrong forms are kept visible, not deleted):
+
+```text
+nuvira models list                          ->  nuvira models          (the bare command lists)
+nuvira skills install acme/skills --skill release --yes
+                                            ->  nuvira skills install <name>
+nuvira gateway run                          ->  nuvira gateway start
+```
+
+`docs/COMMANDS_SURFACE.md` was correct all along — it is generated, which is exactly why
+it never drifted. The curated file is now checked the same way: `npm run
+docs:commands:examples` resolves every `nuvira …` command line in the hand-written docs
+against the live command tree (`node scripts/check-docs-commands.mjs`), and
+`node scripts/check-book-code.mjs` does the same for the HTML book. Both are fail-closed:
+an unresolvable command exits non-zero.
 
 ---
 
@@ -1411,7 +1425,7 @@ NUVIRA_DEBUG_LOG=1 nuvira chat "list the working directory, then answer"
 
 ```bash
 NUVIRA_DEBUG_LOG=1 nuvira dashboard      # the server process logs every dashboard turn
-NUVIRA_DEBUG_LOG=1 nuvira gateway run    # every inbound messaging turn
+NUVIRA_DEBUG_LOG=1 nuvira gateway start  # every inbound messaging turn
 NUVIRA_DEBUG_LOG=1 nuvira execute "run the failing test"
 ```
 
@@ -1523,7 +1537,7 @@ The same switch works on every surface and in the forked child, so a gateway
 
 ```bash
 NUVIRA_OTEL=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 nuvira dashboard
-NUVIRA_OTEL=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 nuvira gateway run
+NUVIRA_OTEL=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 nuvira gateway start
 NUVIRA_OTEL=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 nuvira execute "run the failing test"
 ```
 
@@ -1680,7 +1694,7 @@ The details that matter:
   with `NUVIRA_ISOLATE=1` still isolates.
 - **Deployments ask through the environment**, which is how the surfaces with no
   command line do it: `NUVIRA_ISOLATE=1 nuvira dashboard` isolates every dashboard
-  turn, and the same for `nuvira gateway run`. A delegated subagent is isolated by
+  turn, and the same for `nuvira gateway start`. A delegated subagent is isolated by
   its parent (`subagent` takes `worktree: true`), which forks the child into the
   worktree and measures the diff itself; a child spawned from an isolated turn
   inherits the directory rather than making a worktree of a worktree.
