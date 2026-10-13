@@ -2,6 +2,74 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.5.1 — a blinking model is waited out, not traded away, and only one process runs the sweep
+
+Two failures share a cause: a fixed schedule doing two jobs that need opposite
+answers, and a duty that every process was willing to run at once.
+
+### A transient blip no longer costs you the model you chose
+
+A cloud endpoint does not go down for a turn. It returns 200, then a few empty or
+5xx answers for a handful of seconds, then serves normally again — measured
+repeatedly on `deepseek`. There were two ways to get that wrong, and the old
+schedule used both at once: fail fast and the turn silently continues on a weaker
+model you did not choose; wait blindly and a genuinely dead provider costs every
+user a minute. `retry-patience.ts` picks the schedule from evidence already in
+hand — whether a same-or-better CAPABILITY band is reachable, whether this pair
+has a track record, and whether it already failed an earlier step of this same
+turn — as one reviewable table:
+
+| Situation | What happens |
+|---|---|
+| The same pair failed an earlier step | a token wait, then move on — two in a row is a pattern, not a blip |
+| A same-or-better band candidate is reachable | ~2s of courtesy retries, then the walk — failing over costs no quality |
+| A proven pair, only degrading alternatives | retries at ≈1s, 3s, 7s, 15s, 30s, 60s — dense early, so a 2-second blink is caught |
+| An unproven pair | a token wait, then the walk or an honest failure |
+
+The early retries are the point: a blip that clears in two seconds used to be
+slept through until `t=5s`, and exhausting the schedule is also what started the
+failover walk. Empty-response patience follows the same rules, and a proven pair
+whose only alternatives would de-escalate gets the longest schedule instead of a
+downgrade. `NUVIRA_TRANSIENT_RETRY_DELAYS_MS` still overrides everything.
+
+### One process runs the background duties, not every process that starts
+
+Every CLI run, the dashboard and the gateway were each willing to run the warmup
+sweep — so two of them spent the same free-tier budget on the same candidates,
+and a spot-check is a real generation. `duty-lease.ts` gives each duty one owner
+across processes: an exclusive create decides the winner, the mtime decides
+staleness, and a lease older than its window is stolen and re-taken with that
+reported, so a killed holder cannot switch a duty off forever. A long cycle
+renews its lease; a release refuses a lease this process no longer owns.
+
+### Added: `nuvira models warm`
+
+Run one warmup cycle now instead of waiting for the sweep: keep hot models warm,
+spot-check never-verified ones to widen the pool, and re-probe the stale end of
+it. Same duty lease as the background cycle, so a manual run can never
+double-spend — if one is already running, the command says so. `--json` for the
+counters; the bounds are the `NUVIRA_WARMUP_*` knobs.
+
+### A model pick is ordered by capability, and a switch explains itself
+
+A health-first ranking wins on latency and error rate, so a ≤4B tag beat a
+capable sibling — measured live, an agentic assessment ended on
+`local/qwen2.5:0.5b` while stronger verified local models sat available. The
+last-resort local pick now upgrades to the strongest model the provider has, a
+resolved pick can no longer be a downgrade a usable sibling would have avoided,
+and `model-first-router` reads the same taxonomy instead of a second one. When a
+turn does switch models, the replacement gets a handoff note naming the change
+and the facts so far, so it continues the work rather than re-planning from the
+ask.
+
+### Docs and the book are generated and checked
+
+The book quoted a version four minors behind the package and a release checklist
+that tagged a version two bumps late; `scripts/update-book.mjs` now derives those
+from the tree, `check-book-code.mjs` re-runs every published code block, and
+`check-docs-commands.mjs` resolves each documented command and flag against the
+live CLI. The background-duty design record is `docs/DESIGN_BACKGROUND_DAEMON.md`.
+
 ## v3.5.0 — any MCP server by configuration, and a plugin path that actually runs
 
 MCP had a curated catalog and a working connect path, but adding anything *outside*

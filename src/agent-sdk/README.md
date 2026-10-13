@@ -4,7 +4,7 @@
 
 The SDK is a clean-room types + base-class package: it has **no runtime dependency on the Agent-Nuvira internals**, so a custom agent can be built, unit-tested, and published without pulling in the whole CLI. Its type surface is kept structurally compatible with the main package by an in-repo compatibility test.
 
-**Version:** the SDK ships on the **same version number as the CLI** — `3.5.0` — so `nuvira --version` and the SDK version always tell you the same number. A custom agent built against a mismatched SDK is the usual reason one fails to load, so check that first. (`nuvira sdk scaffold` pins this automatically; a test fails the release if the constant and this package's version disagree.)
+**Version:** the SDK ships on the **same version number as the CLI** — `3.5.1` — so `nuvira --version` and the SDK version always tell you the same number. A custom agent built against a mismatched SDK is the usual reason one fails to load, so check that first. (`nuvira sdk scaffold` pins this automatically; a test fails the release if the constant and this package's version disagree.)
 
 > **📖 The guides.** [`docs/AGENT_SDK.md`](../../docs/AGENT_SDK.md) is the API manual — the
 complete agent contract, `defineAgent()`'s failure modes, the context bus field by field, the

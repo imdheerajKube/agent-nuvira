@@ -28,7 +28,7 @@
  * role wording) and verifies at the end that every anchor it wrote resolves.
  */
 
-import { readFileSync, writeFileSync, existsSync, copyFileSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -429,10 +429,10 @@ const TEXT_FIXES = [
   // ch50/ch66 — the release examples quoted a version four minors behind the
   // shipped package.json.
   ['// npm version 2.7.0 --no-git-tag-version',
-   '// npm version 3.5.0 --no-git-tag-version'],
-  ['Release v2.7.0: [description]', 'Release v3.5.0: [description]'],
+   '// npm version 3.5.1 --no-git-tag-version'],
+  ['Release v2.7.0: [description]', 'Release v3.5.1: [description]'],
   ['npm version 2.7.0 --no-git-tag-version',
-   'npm version 3.5.0 --no-git-tag-version'],
+   'npm version 3.5.1 --no-git-tag-version'],
 
   // ── Part XI: containers, security, workflow, publishing ──────────────────
   // ch67 — the specialist roster is not a fixed number. Name the directory the
@@ -476,7 +476,7 @@ const TEXT_FIXES = [
   // package to 3.5.0 (the same two lines chapter 50 still carried), and the
   // `files` list omitted `.agents/skills/`, which is what ships the bundled
   // skills Part VII describes.
-  ['git tag v2.7.0\ngit push origin v2.7.0', 'git tag v3.5.0\ngit push origin v3.5.0'],
+  ['git tag v2.7.0\ngit push origin v2.7.0', 'git tag v3.5.1\ngit push origin v3.5.1'],
   ['"files": ["dist/", "src/web-dashboard/public/", "README.md", "LICENSE"],',
    '"files": ["dist/", "src/web-dashboard/public/", "README.md", "LICENSE", ".agents/skills/"],'],
 ];
@@ -1521,7 +1521,7 @@ present would fail at its first step rather than at install time.</p>
     html: `<pre><code class="language-json">
 {
   "name": "agent-nuvira",
-  "version": "3.5.0",
+  "version": "3.5.1",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -1810,11 +1810,40 @@ if (dead.length) {
 // frozen here — the cover has been wrong about it twice.
 const cliCommandCount = (/exposes — (\d+) commands across/.exec(part12) ?? [])[1] ?? '353';
 
+// ── The counts the book states, MEASURED from this tree ─────────────────────
+// The stale-fact list below can normalize the HISTORIC ways a count was written
+// ("512 test files", "364 test files", "1,000+ TypeScript files"), but it cannot
+// know today's number — so a session that adds a test file left the book quoting
+// last week's total (measured: the five test files added on 2026-10-13 made
+// "576 test files" wrong in five chapters, and the checker failed). These are
+// the same definitions `scripts/check-book-code.mjs` verifies against, so the
+// book's counts and the checker's counts are ONE measurement rather than two
+// lists that can disagree.
+const bookRepoFiles = (() => {
+  const out = [];
+  const skip = new Set(['node_modules', 'dist', 'out', '.git', 'book']);
+  const go = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      if (skip.has(entry) || entry === '.DS_Store') continue;
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) go(full);
+      else out.push(full.slice(repoRoot.length + 1));
+    }
+  };
+  go(repoRoot);
+  return out;
+})();
+const bookCounts = {
+  testFiles: bookRepoFiles.filter((p) => /\.test\.(ts|tsx)$/.test(p)).length.toLocaleString('en-US'),
+  tsFiles: bookRepoFiles.filter((p) => /\.tsx?$/.test(p)).length.toLocaleString('en-US'),
+  dirLearning: bookRepoFiles.filter((p) => p.startsWith('src/learning/') && /\.tsx?$/.test(p)).length,
+};
+
 const facts = [
   // The cover's version div: matched whole, so the chapter count is always the
   // count we just computed rather than a value frozen by an earlier run.
   [/<div class="version">[^<]*<\/div>/g,
-   `<div class="version">Version 3.5.0 · October 2026 · ${chapterCount} Chapters + 4 Appendices · ${cliCommandCount} CLI Commands</div>`],
+   `<div class="version">Version 3.5.1 · October 2026 · ${chapterCount} Chapters + 4 Appendices · ${cliCommandCount} CLI Commands</div>`],
   // Counts corrected against the live tree (2026-10-13):
   //   23 providers (src/inference/provider-catalog.ts) · 21 registered agent types
   //   (src/agents/module-registry.ts) · 22 gateway platforms
@@ -1902,6 +1931,15 @@ const facts = [
   [/\b1,000\+ TypeScript files\b/g, '667 source files'],
   [/\b1,000\+ source files\b/g, '660+ source files'],
   [/\b1,000\+ file TypeScript codebase\b/g, '1,180-file TypeScript codebase'],
+
+  // ── …and the CANONICAL forms the entries above normalize to, mapped to what
+  // THIS tree measures (see `bookCounts`). Order matters: these run last, so a
+  // value a rule above just rewrote is measured in the same pass.
+  [/\b576 test files\b/g, `${bookCounts.testFiles} test files`],
+  [/\b1,180-file TypeScript codebase\b/g, `${bookCounts.tsFiles}-file TypeScript codebase`],
+  [/\b1,250-file TypeScript codebase\b/g, `${bookCounts.tsFiles}-file TypeScript codebase`],
+  [/\b1,180 TypeScript files\b/g, `${bookCounts.tsFiles} TypeScript files`],
+  [/self-improvement \(115 files\)/g, `self-improvement (${bookCounts.dirLearning} files)`],
 ];
 let corrected = 0;
 for (const [re, to] of facts) {
