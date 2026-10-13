@@ -2,7 +2,7 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 295,
+  "commandCount": 296,
   "groupCount": 58,
   "groups": [
     {
@@ -362,6 +362,13 @@
           "flags": [
             "--json",
             "--no-spot-check"
+          ]
+        },
+        {
+          "name": "models warm",
+          "description": "Run one warmup cycle now: keep hot models warm, verify new ones, refresh the stale pool",
+          "flags": [
+            "--json"
           ]
         },
         {

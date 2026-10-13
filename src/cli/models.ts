@@ -8,6 +8,7 @@ import { ProviderType } from '../config/types.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { refreshModelRegistry, startRegistryWatcher, defaultProbeProviders } from '../inference/model-probe.js';
+import { runWarmupCycle, warmupConfig } from '../learning/model-warmup.js';
 import { CATALOG_PROVIDER_IDS, isCatalogKeyless } from '../inference/provider-catalog.js';
 import { describeRoutingExclusions, formatRoutingExclusion } from '../learning/resilient-call.js';
 import { governanceVerdict } from '../learning/auto-router.js';
@@ -216,6 +217,67 @@ export class ModelsCommand extends BaseCommand {
         }
         console.log('');
         console.log(await registry.formatStatus());
+      });
+
+    // ── Subcommand: models warm — run ONE warmup cycle, on demand ─────────
+    //
+    // The warmup sweep is the thing that keeps in-use models from going cold,
+    // grows the verified pool out of the never-verified backlog, and re-probes
+    // the stale end of the pool. All three used to be reachable only by WAITING
+    // for the background timer, in a process that may exit first — so a user who
+    // wanted the pool fresher before a big task had no way to ask, and no way to
+    // see what the sweep would do. This is that ask.
+    //
+    // It runs exactly one cycle (bounded: `hotPerCycle + explorePerCycle +
+    // poolRefreshPerCycle` one-token spot-checks by default — see `warmupConfig`)
+    // and reports what it did. It goes through `runWarmupCycle`, which holds the
+    // warmup DUTY LEASE, so a manual run can never double-spend against a
+    // background cycle: one of the two is refused, and the refusal is named.
+    command
+      .command('warm')
+      .description('Run one warmup cycle now: keep hot models warm, verify new ones, refresh the stale pool')
+      .option('-j, --json', 'Output as JSON', false)
+      .action(async (opts?: { json?: boolean }, cmd?: Command) => {
+        const json = this.isJsonMode(opts, cmd);
+        if (!json) {
+          const cfg = warmupConfig();
+          logger.highlight('\n🔥 Running one model warmup cycle…');
+          logger.info(
+            `  Bounds: ${cfg.hotPerCycle} hot · ${cfg.explorePerCycle} unverified · ${cfg.poolRefreshPerCycle} stale pool`,
+          );
+          console.log('');
+        }
+        // The cycle's own bounds come from `warmupConfig` (env-overridable), so
+        // what this reports is exactly what the background cycle would have
+        // done — not a different, command-specific budget.
+        const result = await runWarmupCycle(this.configManager);
+        if (json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        if (!result.ran) {
+          // NOT a failure and not "nothing to do" — another process is sweeping
+          // right now. Saying which is the difference between "the command did
+          // nothing" and "the sweep is already covered".
+          logger.warn('⏸️  Another process is running the warmup sweep — nothing done here.');
+          if (result.leaseHeldBy) {
+            logger.info(
+              `   Held by pid ${result.leaseHeldBy.pid} on ${result.leaseHeldBy.host}` +
+                (result.leaseHeldBy.purpose ? ` (${result.leaseHeldBy.purpose})` : ''),
+            );
+          }
+          logger.info('   The background cycle renews its lease while it works; retry in a minute.');
+          return;
+        }
+        logger.success(
+          `✅ Warmup cycle done — ${result.warmed} warm · ${result.explored} explored · ` +
+            `${result.poolRefreshed} pool refreshed · ${result.verified} verified`,
+        );
+        if (result.catalogRefreshed) {
+          logger.info('   Credentials changed — the catalog was re-probed first.');
+        }
+        console.log('');
+        console.log(await getModelRegistry().formatStatus());
       });
 
     // ── Subcommand: models excluded — WHY a provider is not being tried ──

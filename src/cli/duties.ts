@@ -26,6 +26,7 @@ import type { ConfigManager } from '../config/manager.js';
 import { resolveBuffConfigDir } from '../config/paths.js';
 import { logger } from '../utils/logger.js';
 import { getModelRegistry } from '../learning/model-registry.js';
+import { acquireDutyLease, releaseDutyLease, type DutyLeaseInfo } from '../learning/duty-lease.js';
 
 // ─── Throttle state ─────────────────────────────────────────────────────────
 
@@ -76,7 +77,18 @@ export interface BackgroundDutiesResult {
   ran: boolean;
   healthLine?: string;
   modelsLine?: string;
+  /**
+   * Why a run was REFUSED, when it was not the throttle. `lease` means another
+   * process is running the duties right now — a different situation from "not
+   * due yet", and one that must not mark the throttle as spent (see below).
+   */
+  refusedBy?: 'lease';
+  /** Who held the lease, when `refusedBy` is `lease`. Diagnostics only. */
+  leaseHeldBy?: DutyLeaseInfo;
 }
+
+/** The duty name the session-start checks contend on. */
+export const DUTIES_LEASE = 'session-duties';
 
 /**
  * Run the throttled session-start duties. Never throws; never blocks long —
@@ -89,7 +101,39 @@ export async function maybeRunBackgroundDuties(
   if (!opts.force && !shouldRun(opts.throttleMs ?? DEFAULT_THROTTLE_MS)) {
     return { ran: false };
   }
+
+  // ── One process runs the duties, not every process that starts ───────────
+  // The throttle file is a PER-MACHINE "not due yet" record, and it cannot
+  // answer "is someone doing this RIGHT NOW": five CLI processes launched
+  // together all read the same stale file before any of them writes it, and all
+  // five run the duties. The lease is the piece that closes it, and its
+  // steal-after-stale rule is what keeps a killed process from switching the
+  // duties off forever.
+  //
+  // Note the ORDER: the lease is taken (and only then) the throttle marked. A
+  // process that loses the race must NOT spend the window, or a second run in
+  // the same window would be skipped as "already done" when nothing was.
+  const lease = acquireDutyLease(DUTIES_LEASE, { purpose: 'session-start duties' });
+  if (!lease.owned) {
+    return {
+      ran: false,
+      refusedBy: 'lease',
+      ...(lease.holder ? { leaseHeldBy: lease.holder } : {}),
+    };
+  }
   markRun();
+  try {
+    return await runDuties(configManager, opts);
+  } finally {
+    releaseDutyLease(DUTIES_LEASE);
+  }
+}
+
+/** The checks themselves, run while holding {@link DUTIES_LEASE}. */
+async function runDuties(
+  configManager: ConfigManager,
+  opts: BackgroundDutiesOptions,
+): Promise<BackgroundDutiesResult> {
 
   // ── Health line (config + vault + workspace — all local, fast) ─────────
   // Each source is individually best-effort (a failing source drops only its

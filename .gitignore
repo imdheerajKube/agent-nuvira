@@ -132,6 +132,14 @@ docs/demos/nuvira-commands-all.cast
 # whole value is that a reader can check each claim against the code; an
 # untracked ledger would be a claim no fresh clone can verify.
 !docs/CAPABILITY_LEDGER.md
+# The background-duty / daemon design record: the five rules the duties are held
+# to, what already exists (supervision, PID discovery, WAL SQLite, the persisted
+# queues), the per-workload verdicts — including the workloads that must NOT get a
+# daemon — and the phases with explicit entry criteria. Untracked, the next
+# session re-derives "should this be a daemon?" from scratch and re-proposes the
+# items this document already refuses; tracked, it is what each new duty is
+# checked against, and it is the written half of the lease shipped with it.
+!docs/DESIGN_BACKGROUND_DAEMON.md
 # These three were cited from CODE (`@see …` / "see the G18 entry in …") while
 # being ignored by `*.md`, so on a fresh clone those citations pointed at nothing
 # — the same failure that lost the tracker above. `scripts/check-doc-citations.mjs`

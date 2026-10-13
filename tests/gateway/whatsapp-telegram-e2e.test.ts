@@ -25,6 +25,17 @@ import {
 import type { ChannelAdapter, InboundMessage, MessageHandler } from '../../src/gateway/adapters.js';
 import { resetWorkspaceStore } from '../../src/config/workspace.js';
 
+// ─── The retry schedule is DIALED DOWN for this file ────────────────────────
+//
+// The mock pipeline's model call fails ("fast-fail"), and a failing call is
+// retried on the SAME provider — 5 attempts, 5s/10s/20s/30s apart by default.
+// The scenarios here send several messages at once, so the default schedule put
+// a whole test past its timeout: measured 5.9s with this dial, a timeout
+// without it. This file asserts the MESSAGE LIFECYCLE (policy gate → pipeline →
+// reply, ordering, serialization), never how long a flapping provider is given;
+// the schedule is configuration (see `transientRetryDelaysMs`).
+process.env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS = '1';
+
 // ─── Test fixtures ──────────────────────────────────────────────────────────
 
 const cfgDir = mkdtempSync(join(tmpdir(), 'buff-gw-e2e-'));

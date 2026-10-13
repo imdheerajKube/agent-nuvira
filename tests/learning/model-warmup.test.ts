@@ -13,13 +13,19 @@
  *   2. The daemon only ever started from the COLD-START branch (registry has NO
  *      verified providers), so from the first verified model onward nothing
  *      warmed or verified anything at all.
+ *   3. Nothing refreshed a VERIFIED model either: exploration selects
+ *      `unverified` rows only, so a pooled model could only AGE toward the
+ *      registry's 7-day retirement — and since the health ranking reads
+ *      `lastVerifiedAt`, routing kept ranking it on evidence that had stopped
+ *      describing it. The third half re-spot-checks the stale end of the pool,
+ *      bounded and old-first.
  *
  * Hermetic: a throwaway memory dir, and an INJECTED spot-check (the real one
  * talks to a provider).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,6 +36,7 @@ import {
 } from '../../src/learning/model-registry.js';
 import {
   selectExplorationCandidates,
+  selectPoolRefreshCandidates,
   runWarmupCycle,
   startWarmupDaemon,
   stopWarmupDaemon,
@@ -204,9 +211,13 @@ describe('runWarmupCycle — exploration runs even with nothing in use', () => {
     expect(result).toEqual({
       warmed: 0,
       explored: 0,
+      poolRefreshed: 0,
       verified: 0,
       skipped: 0,
       catalogRefreshed: false,
+      // It RAN — and did nothing, which is different from being refused the
+      // duty lease (see the `ran: false` case below).
+      ran: true,
     });
   });
 
@@ -250,6 +261,78 @@ describe('runWarmupCycle — exploration runs even with nothing in use', () => {
   });
 });
 
+/**
+ * ONE SWEEP AT A TIME, ACROSS PROCESSES.
+ *
+ * Every warmup candidate is a REAL generation on the user's free tier, so two
+ * processes sweeping the same list is not merely redundant — it is the exact
+ * traffic that turns warmup into 429s, and it wastes the budget the pool growth
+ * depends on. The in-process `isRunning` guard cannot see the other process; the
+ * duty lease can (see `duty-lease.ts`).
+ */
+describe('runWarmupCycle — the duty lease', () => {
+  const LEASE = 'model-warmup';
+
+  /** Write a lease as if another process had taken it `ageMs` ago. */
+  function writeForeignLease(ageMs: number): void {
+    const path = join(dir, 'duties', `${LEASE}.lease`);
+    mkdirSync(join(dir, 'duties'), { recursive: true });
+    const at = Date.now() - ageMs;
+    writeFileSync(
+      path,
+      JSON.stringify({ name: LEASE, pid: 999_999, host: 'another-machine', startedAt: at, renewedAt: at }),
+    );
+    const seconds = at / 1000;
+    utimesSync(path, seconds, seconds);
+  }
+
+  it('REFUSES a cycle while another process holds the lease — and spends nothing', async () => {
+    seed([entry('groq', 'never-used', 'unverified', AGED)]);
+    writeForeignLease(1_000);
+    const spotCheck = vi.fn(async () => 'verified' as const);
+
+    const result = await runWarmupCycle(configManager, {
+      spotCheck,
+      detectCredentialChange: () => ({ changed: false }),
+    });
+
+    expect(result.ran).toBe(false);
+    expect(result.explored).toBe(0);
+    expect(result.verified).toBe(0);
+    expect(result.leaseHeldBy?.pid).toBe(999_999);
+    // The point of the lease: no generation was spent.
+    expect(spotCheck).not.toHaveBeenCalled();
+  });
+
+  it('steals a STALE lease and sweeps — a killed holder must not switch warmup off', async () => {
+    seed([entry('groq', 'never-used', 'unverified', AGED)]);
+    // Older than any stale window these tests can produce.
+    writeForeignLease(60 * 60 * 1000);
+
+    const result = await runWarmupCycle(configManager, {
+      spotCheck: async () => 'verified',
+      detectCredentialChange: () => ({ changed: false }),
+    });
+
+    expect(result.ran).toBe(true);
+    expect(result.explored).toBe(1);
+  });
+
+  it('releases the lease when the cycle finishes, so the next one can run', async () => {
+    seed([entry('groq', 'never-used', 'unverified', AGED)]);
+    const deps: WarmupDeps = {
+      spotCheck: async () => 'verified',
+      detectCredentialChange: () => ({ changed: false }),
+    };
+    const first = await runWarmupCycle(configManager, deps);
+    const second = await runWarmupCycle(configManager, deps);
+    // The second is refused by the PROBE THROTTLE (the model was just probed),
+    // not by a leaked lease — which is exactly what `ran: true` shows.
+    expect(first.ran).toBe(true);
+    expect(second.ran).toBe(true);
+  });
+});
+
 describe('warmupConfig — the sweep\'s bounds are configuration, not constants', () => {
   it('defaults every bound when nothing is overridden', () => {
     const cfg = warmupConfig({} as NodeJS.ProcessEnv);
@@ -261,6 +344,8 @@ describe('warmupConfig — the sweep\'s bounds are configuration, not constants'
       exploreThrottleMs: 600_000,
       hotWindowMs: 30_600_000,
       warmWindowMs: 86_400_000,
+      poolRefreshPerCycle: 4,
+      poolStalenessMs: 43_200_000,
     });
   });
 
@@ -301,6 +386,70 @@ describe('warmupConfig — the sweep\'s bounds are configuration, not constants'
     } finally {
       delete process.env.NUVIRA_WARMUP_EXPLORE_PER_CYCLE;
     }
+  });
+});
+
+describe('the STALE half — a verified pool must not quietly expire', () => {
+  /** Verified 13h ago: past the 12h in-pool staleness window. */
+  const VERY_OLD = Date.now() - 13 * 60 * 60 * 1000;
+
+  it('re-spot-checks a verified model that has gone stale', () => {
+    seed([entry('groq', 'pooled', 'verified', VERY_OLD)]);
+    const picked = selectPoolRefreshCandidates(getModelRegistry(), configManager, Date.now(), 5);
+    expect(picked.map((c) => `${c.provider}/${c.model}`)).toEqual(['groq/pooled']);
+  });
+
+  it('leaves a FRESHLY verified model alone (hours, not the 7-day rule)', () => {
+    seed([entry('groq', 'fresh', 'verified', Date.now() - 60 * 60 * 1000)]);
+    expect(selectPoolRefreshCandidates(getModelRegistry(), configManager, Date.now(), 5)).toEqual([]);
+  });
+
+  it('leaves unverified and unavailable rows to exploration', () => {
+    seed([
+      entry('groq', 'never-verified', 'unverified', VERY_OLD),
+      entry('groq', 'dead', 'unavailable', VERY_OLD),
+    ]);
+    expect(selectPoolRefreshCandidates(getModelRegistry(), configManager, Date.now(), 5)).toEqual([]);
+  });
+
+  it('skips a quota-parked model — a park is a rest with a known end', () => {
+    const parked = entry('groq', 'resting', 'verified', VERY_OLD);
+    parked.quotaParkedUntil = Date.now() + 60_000;
+    seed([parked]);
+    expect(selectPoolRefreshCandidates(getModelRegistry(), configManager, Date.now(), 5)).toEqual([]);
+  });
+
+  it('takes the MOST stale models first, and stays bounded per cycle', () => {
+    seed([
+      ...Array.from({ length: 10 }, (_, i) =>
+        entry('groq', `stale-${i}`, 'verified', Date.now() - (14 + i) * 60 * 60 * 1000),
+      ),
+    ]);
+    const picked = selectPoolRefreshCandidates(getModelRegistry(), configManager, Date.now(), 3);
+    expect(picked).toHaveLength(3);
+    // `stale-9` has been unverified the longest.
+    expect(picked[0].model).toBe('stale-9');
+  });
+
+  it('runs as part of a cycle and is reported separately from exploration', async () => {
+    seed([
+      entry('groq', 'pooled', 'verified', VERY_OLD),
+      entry('groq', 'never-seen', 'unverified', AGED),
+    ]);
+    const calls: string[] = [];
+    const result = await runWarmupCycle(configManager, {
+      spotCheck: async (p: string, m: string) => {
+        calls.push(`${p}/${m}`);
+        return 'verified';
+      },
+      detectCredentialChange: () => ({ changed: false }),
+    });
+
+    expect(calls).toContain('groq/pooled');
+    expect(result.poolRefreshed).toBe(1);
+    expect(result.explored).toBe(1);
+    // Refreshing the pool is not "warming a hot model" — the counters stay honest.
+    expect(result.warmed).toBe(0);
   });
 });
 

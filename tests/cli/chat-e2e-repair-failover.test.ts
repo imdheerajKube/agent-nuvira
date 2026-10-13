@@ -26,7 +26,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { ChatCommand, TRANSIENT_RETRY_DELAYS_MS } from '../../src/cli/chat.js';
+import { ChatCommand } from '../../src/cli/chat.js';
 import { logger } from '../../src/utils/logger.js';
 import type { InferenceProvider } from '../../src/inference/interface.js';
 import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-registry.js';
@@ -34,6 +34,15 @@ import { resetQuotaLedger } from '../../src/learning/quota-ledger.js';
 import { clearModelListCache } from '../../src/inference/model-validator.js';
 import { resetSubstitutionReporting } from '../../src/inference/route-resolver.js';
 import { setVectorBackendOverride, resetVectorBackendSelection } from '../../src/memory/vector-store.js';
+
+/**
+ * The same-provider backoff this harness dials via
+ * `NUVIRA_TRANSIENT_RETRY_DELAYS_MS`. Named once so the attempt-count
+ * assertions are derived from the schedule ACTUALLY IN FORCE — they used to
+ * read the shipped default and only matched because the default happened to
+ * have the same length as this dial.
+ */
+const DIALED_RETRY_DELAYS_MS = [1, 1, 1, 1] as const;
 
 // ─── Module-level mocks (plumbing only) ─────────────────────────────────────
 
@@ -155,6 +164,14 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     // real buffconfig — a multi-key gemini config there would make the
     // failover runner's M2.3 key rotation call generate() once per key and
     // break the exact call-count assertions. An empty config dir → defaults.
+    // The transient-retry schedule is a real foreground WAIT (≈60s in total by
+    // default) and this file drives the whole CLI path on real timers, several
+    // times over. DIAL IT DOWN instead of faking timers: faking `Date` would
+    // distort the quota parks, routing-cache TTLs and circuit-breaker windows
+    // this flow depends on. The attempt COUNT keeps its meaning — one attempt
+    // per scheduled delay, plus the original — which is what the assertions
+    // below check, derived from THIS list rather than from the default.
+    process.env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS = DIALED_RETRY_DELAYS_MS.join(',');
     tempDir = mkdtempSync(join(tmpdir(), 'buff-chat-e2e-'));
     configTempDir = mkdtempSync(join(tmpdir(), 'buff-chat-e2e-cfg-'));
     originalMemoryDir = process.env.NUVIRA_MEMORY_DIR;
@@ -189,6 +206,7 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
   });
 
   afterEach(() => {
+    delete process.env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS;
     resetModelRegistry();
     resetQuotaLedger();
     resetVectorBackendSelection();
@@ -243,7 +261,7 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     // the point: a transient blip at one provider must not immediately park it
     // and switch models underneath the user. The original attempt plus one per
     // scheduled backoff, then the failover below.
-    expect(geminiGenerate).toHaveBeenCalledTimes(TRANSIENT_RETRY_DELAYS_MS.length + 1);
+    expect(geminiGenerate).toHaveBeenCalledTimes(DIALED_RETRY_DELAYS_MS.length + 1);
     expect(localGenerate).toHaveBeenCalledTimes(1);
 
     // gemini was attempted with the REPAIRED model (stale pin swapped out)…
@@ -277,8 +295,9 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     const registry = getModelRegistry();
     expect(registry.getEntry('gemini', 'gemini-2.0-flash-exp')?.status).toBe('unavailable');
     expect(registry.getEntry('local', 'llama2')).toBeUndefined();
-    // Raised from the 5s default: this test now really does wait out the
-    // transient-retry backoff (1s + 3s) before failing over.
+    // The transient-retry backoff is dialed down in `beforeEach` (see the
+    // `NUVIRA_TRANSIENT_RETRY_DELAYS_MS` note) — the ATTEMPT COUNT is the contract
+    // here, and it is unchanged.
   }, 20_000);
 
   it('does not repeat the repair warnings on the next message — repairs are learned once', async () => {
@@ -287,7 +306,7 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     expect(first).toContain('local answer');
     expect(repairWarnings()).toHaveLength(1);
     // Network-class failure → retried on the same provider before failover.
-    expect(geminiGenerate).toHaveBeenCalledTimes(TRANSIENT_RETRY_DELAYS_MS.length + 1);
+    expect(geminiGenerate).toHaveBeenCalledTimes(DIALED_RETRY_DELAYS_MS.length + 1);
 
     // Message 2: a FRESH chat session (new ChatCommand, shared registry) —
     // the pin is now known-dead, so repair is SILENT. Zero warnings repeat.
@@ -300,7 +319,7 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     // each failover, so it is (1 + delays) attempts per message — and still
     // fails over to local. Failover warning fires exactly once per message, so
     // the retry never turns into a re-warned loop.
-    const attemptsPerMessage = TRANSIENT_RETRY_DELAYS_MS.length + 1;
+    const attemptsPerMessage = DIALED_RETRY_DELAYS_MS.length + 1;
     expect(geminiGenerate).toHaveBeenCalledTimes(attemptsPerMessage * 2);
     expect(localGenerate).toHaveBeenCalledTimes(2);
     const failoverWarnings = (logger.warn as any).mock.calls

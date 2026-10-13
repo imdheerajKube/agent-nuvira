@@ -42,7 +42,7 @@ chat/execute request.
 | WhatsApp bridge status | `nuvira whatsapp status` |
 | Allow a number to trigger the agent | `nuvira config gateway allow whatsapp user 919876543210` |
 | Add a send-by-name WhatsApp contact | `nuvira whatsapp contact add Alex 919876543210` |
-| List/switch AI models | `nuvira models list` · `nuvira model switch` |
+| List/switch AI models | `nuvira models` · `nuvira model switch` |
 | Open the website (capabilities/docs) | `nuvira website` |
 | See what changed / debug | `nuvira stats` · `nuvira trace list` · `nuvira admin policy` |
 
@@ -578,25 +578,32 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ### 5.1 List models
 
 - **Objective:** List available models from inference providers.
-- **Command:** `nuvira models list [-p <provider>] [-s <search>] [--all] [--verify] [-j]`
+- **Command:** `nuvira models [-p <provider>] [-s <search>] [--all] [--verify] [-j]`
 - **Examples:**
   ```bash
-  nuvira models list
-  nuvira models list -p groq --verify -j
-  nuvira models list -s llama
+  nuvira models
+  nuvira models -p groq --verify -j
+  nuvira models -s llama
   ```
 
 ### 5.2 Registry health (availability registry)
 
 - **Objective:** Show which providers/models are verified, unavailable, or quota-parked.
-- **Command:** `nuvira models refresh` · `nuvira models status [-v]` · `nuvira models unblock <provider>` · `nuvira models watch [--interval <ms>]`
+- **Command:** `nuvira models refresh` · `nuvira models status [-v]` · `nuvira models warm` · `nuvira models unblock <provider>` · `nuvira models watch [--interval <ms>]`
 - **Examples:**
   ```bash
   nuvira models refresh                 # re-probe providers + spot-check models
   nuvira models status --verbose
+  nuvira models warm                    # one warmup cycle NOW: keep hot models warm, verify new ones, refresh the stale pool
   nuvira models unblock groq            # release a registry-blocked provider (escape hatch)
   nuvira models watch --interval 3600000
   ```
+
+  `models warm` is the on-demand half of the background sweep: it runs exactly one
+  cycle and reports what it did (`nuvira models warm --json` for the counters). It
+  holds the same duty lease as the background cycle, so if one is already running
+  the command says so instead of spending a second round of quota on the same
+  models. Bounds come from `NUVIRA_WARMUP_*` (see `nuvira config` env docs).
 
 ### 5.3 Switch / inspect active model
 
@@ -699,11 +706,12 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ### 6.2 Skills hub (community skills)
 
 - **Objective:** Search, install, update, audit community skills (SKILL.md packages).
-- **Command:** `nuvira skills search <q>` · `nuvira skills install <owner/repo> --skill <name>` · `nuvira skills update` · `nuvira skills list [--origin <origin>]`
+- **Command:** `nuvira skills search <q>` · `nuvira skills install <name> [--source <kind>]` · `nuvira skills update` · `nuvira skills list [--origin <origin>]`
 - **Examples:**
   ```bash
   nuvira skills search git-release
-  nuvira skills install acme/skills --skill release --yes
+  nuvira skills install git-release
+  nuvira skills install release --source git-repo
   nuvira skills update
   nuvira skills list --origin registry
   ```
@@ -1774,7 +1782,7 @@ The routing layer's job is to map the ask to **one of the two contact lists** �
 | "Is this prompt safe?" | `nuvira security scan --prompt "<text>" --json` | security intent |
 | "Clear the chat history" | `nuvira history clear` | destructive → confirm |
 | "Index the repo for search" | `nuvira retrieval index ./src` | retrieval intent |
-| "Install the git-release skill" | `nuvira skills install acme/skills --skill release --yes` | skills intent |
+| "Install the git-release skill" | `nuvira skills install git-release` | skills intent |
 
 ### What exists today (this is now built)
 

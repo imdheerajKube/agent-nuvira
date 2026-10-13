@@ -28,6 +28,13 @@
 import { getModelRegistry, type ModelRegistryEntry } from './model-registry.js';
 import { spotCheckModel, refreshModelRegistry } from '../inference/model-probe.js';
 import { detectCredentialChange } from './credential-fingerprint.js';
+import {
+  acquireDutyLease,
+  releaseDutyLease,
+  renewDutyLease,
+  dutyLeaseStaleMs,
+  type DutyLeaseInfo,
+} from './duty-lease.js';
 import { ProviderFactory } from '../inference/factory.js';
 import type { ConfigManager } from '../config/manager.js';
 import { logger } from '../utils/logger.js';
@@ -60,6 +67,33 @@ export interface WarmupConfig {
   hotWindowMs: number;
   /** Models used within this window are "warm" (ms). */
   warmWindowMs: number;
+  /**
+   * Max VERIFIED, in-pool models re-spot-checked per cycle to keep the pool
+   * FRESH. Separate from `hotPerCycle` because the two halves spend on
+   * different things: `hotPerCycle` keeps in-use models warm, this one stops
+   * the routable pool from ageing out.
+   */
+  poolRefreshPerCycle: number;
+  /**
+   * How long a VERIFIED model may go without re-verification (ms).
+   *
+   * WHY HOURS, NOT THE 7-DAY RULE. The registry retires a model nothing
+   * re-verifies, and NOTHING was re-verifying a verified one: the exploration
+   * half selects `status === 'unverified'` rows only, so a model that had been
+   * verified once could only age — the measured pool showed verified entries at
+   * 142.8h and shrinking, while routing kept serving from a pool that was
+   * quietly expiring. Freshness IS a routing input (health ranking reads
+   * `lastVerifiedAt`, latency and errorRate), so a stale pool is a routing
+   * signal that stops describing reality.
+   *
+   * WHY THIS STAYS BOUNDED. Only VERIFIED rows are eligible (the pool the
+   * router would actually serve — never the hundreds of catalog entries), only
+   * `poolRefreshPerCycle` of them per cycle, parked rows are skipped (a park is
+   * a rest, not staleness), and a 1-token spot-check per model every 12h is a
+   * few hundred tokens a day for a pool of ~12 — not a catalog-wide sweep,
+   * which on free tiers is where RPM/TPM limits would turn warmup into 429s.
+   */
+  poolStalenessMs: number;
 }
 
 /** Parse a positive-integer env override; anything else falls back. */
@@ -84,6 +118,11 @@ export function warmupConfig(env: NodeJS.ProcessEnv = process.env): WarmupConfig
     exploreThrottleMs: positiveInt(env.NUVIRA_WARMUP_EXPLORE_THROTTLE_MS, 600_000),
     hotWindowMs: positiveInt(env.NUVIRA_WARMUP_HOT_WINDOW_MS, 30_600_000),
     warmWindowMs: positiveInt(env.NUVIRA_WARMUP_WARM_WINDOW_MS, 86_400_000),
+    poolRefreshPerCycle: positiveInt(env.NUVIRA_WARMUP_POOL_PER_CYCLE, 4),
+    // 12 hours: a verified model is re-probed twice a day, so a provider that
+    // silently stopped serving one is noticed within a working session rather
+    // than at the 7-day retirement.
+    poolStalenessMs: positiveInt(env.NUVIRA_WARMUP_POOL_STALENESS_MS, 43_200_000),
   };
 }
 
@@ -248,6 +287,8 @@ export interface WarmupCycleResult {
   warmed: number;
   /** NEVER-VERIFIED models spot-checked to grow the routing pool. */
   explored: number;
+  /** STALE, verified in-pool models re-spot-checked to keep the pool fresh. */
+  poolRefreshed: number;
   /** Spot-checks of either kind that came back `verified`. */
   verified: number;
   /** Hot candidates the per-cycle cap left for the next cycle. */
@@ -258,6 +299,18 @@ export interface WarmupCycleResult {
    * did noticeably more network work than its neighbours.
    */
   catalogRefreshed: boolean;
+  /**
+   * False when a cycle was REFUSED because another process holds the warmup
+   * duty lease (see `duty-lease.ts`) — every other counter is zero then.
+   *
+   * Reported rather than silent because it is the one outcome that looks
+   * identical to "there was nothing to do", and the two call for opposite
+   * responses: one is good news, the other means this process will never do the
+   * sweep on its own.
+   */
+  ran: boolean;
+  /** Who held the lease, when `ran` is false. Diagnostics only. */
+  leaseHeldBy?: DutyLeaseInfo;
 }
 
 /** Injectable seams for tests — the real spot-check talks to a provider. */
@@ -331,6 +384,62 @@ export function selectExplorationCandidates(
 }
 
 /**
+ * Pick VERIFIED, in-pool models that have gone STALE, oldest verification
+ * first.
+ *
+ * This is the half the module was missing: exploration (`status ===
+ * 'unverified'`) grows the pool, hot records keep THIS process's models warm,
+ * and nothing refreshed a verified model that stopped being used — so a pool
+ * model aged toward the registry's 7-day retirement and, because the health
+ * ranking reads `lastVerifiedAt`, routing kept ranking it on evidence that was
+ * no longer true.
+ *
+ * Deliberately narrow:
+ *   - VERIFIED rows only. An `unverified` row belongs to exploration, and an
+ *     `unavailable` one is not stale — it is broken, and re-probing it is
+ *     exploration's job once it is re-listed.
+ *   - Unservable providers are excluded, so a cycle never spends its budget on
+ *     a provider with no credentials.
+ *   - Quota-parked rows are skipped: a park is a rest with a known end, and
+ *     re-probing it would be exactly the extra traffic the park prevents.
+ *   - The exploration throttle still applies per model, so this can never
+ *     re-probe the same model twice in one `exploreThrottleMs` window.
+ */
+export function selectPoolRefreshCandidates(
+  registry: ReturnType<typeof getModelRegistry>,
+  configManager: ConfigManager,
+  now: number,
+  limit: number,
+): WarmupCandidate[] {
+  if (limit <= 0) return [];
+  const cfg = warmupConfig();
+  const rows: Array<WarmupCandidate & { lastVerifiedAt: number }> = [];
+
+  for (const provider of registry.getTrackedProviders()) {
+    if (!isServable(provider, configManager)) continue;
+    for (const entry of registry.getAllModelsForProvider(provider)) {
+      if (entry.status !== 'verified') continue;
+      if (!entry.model || entry.model === 'default') continue;
+      if (entry.quotaParkedUntil > now) continue;
+      if (now - (entry.lastProbedAt ?? 0) < cfg.exploreThrottleMs) continue;
+      const lastVerifiedAt = entry.lastVerifiedAt ?? 0;
+      if (now - lastVerifiedAt < cfg.poolStalenessMs) continue;
+      rows.push({ provider, model: entry.model, priority: 0, lastVerifiedAt });
+    }
+  }
+
+  // Oldest verification first: the most-stale model is the one whose routing
+  // evidence is furthest from reality.
+  rows.sort(
+    (a, b) =>
+      a.lastVerifiedAt - b.lastVerifiedAt ||
+      a.provider.localeCompare(b.provider) ||
+      a.model.localeCompare(b.model),
+  );
+  return rows.slice(0, limit).map(({ provider, model, priority }) => ({ provider, model, priority }));
+}
+
+/**
  * Run one warmup cycle: keep hot models warm, and grow the verified pool.
  *
  * Both halves matter and neither is optional. The hot half keeps in-use models
@@ -339,9 +448,72 @@ export function selectExplorationCandidates(
  * a fresh process (the old `if (records.length === 0) return;` made the first
  * cycle of every short-lived CLI run a no-op).
  */
+/** The duty name every warmup caller contends on — one lease per machine. */
+export const WARMUP_DUTY_LEASE = 'model-warmup';
+
+/**
+ * How long an un-renewed warmup lease may live before another process may steal
+ * it (ms).
+ *
+ * A live cycle re-news at half this window (see the loop below), so this is
+ * purely the CRASH-RECOVERY delay: how long a dead holder can keep the sweep
+ * switched off. It is also the floor under the interval — a lease that expired
+ * inside one cycle would let two processes sweep at once.
+ */
+export function warmupLeaseStaleMs(env: NodeJS.ProcessEnv = process.env): number {
+  return Math.max(dutyLeaseStaleMs(env), warmupConfig(env).intervalMs * 2);
+}
+
+/**
+ * Run one warmup cycle UNDER the warmup duty lease, or refuse and say who holds
+ * it.
+ *
+ * WHY THE LEASE LIVES HERE AND NOT IN THE CALLERS. Every caller wants the same
+ * thing — "one sweep at a time" — and there are four of them (the daemon timer,
+ * the first-cycle kick at startup, `nuvira models warm`, and any future
+ * dashboard trigger). Putting the guard in each one means the fifth caller, or a
+ * refactor, silently re-introduces the waste. Putting it here means the sweep
+ * cannot be started un-leased at all.
+ *
+ * The work a cycle does is a real generation per candidate, on the user's free
+ * tier — which is why two processes sweeping the same candidate list is not
+ * merely redundant, it is the exact traffic that turns warmup into 429s.
+ */
 export async function runWarmupCycle(
   configManager: ConfigManager,
   deps: WarmupDeps = {},
+): Promise<WarmupCycleResult> {
+  const staleMs = warmupLeaseStaleMs();
+  const taken = acquireDutyLease(WARMUP_DUTY_LEASE, { staleMs, purpose: 'model warmup sweep' });
+  if (!taken.owned) {
+    logger.debug(
+      `[warmup] ${WARMUP_DUTY_LEASE} lease held by pid ${taken.holder?.pid ?? '?'} on ${taken.holder?.host ?? '?'} — skipping this cycle`,
+    );
+    return {
+      warmed: 0,
+      explored: 0,
+      poolRefreshed: 0,
+      verified: 0,
+      skipped: 0,
+      catalogRefreshed: false,
+      ran: false,
+      ...(taken.holder ? { leaseHeldBy: taken.holder } : {}),
+    };
+  }
+  try {
+    return await runWarmupCycleBody(configManager, deps, { name: WARMUP_DUTY_LEASE, staleMs });
+  } finally {
+    // Released even on a throw: a failing cycle must not switch the sweep off
+    // until the lease expires.
+    releaseDutyLease(WARMUP_DUTY_LEASE);
+  }
+}
+
+/** The cycle itself. Call it through {@link runWarmupCycle}, which leases it. */
+async function runWarmupCycleBody(
+  configManager: ConfigManager,
+  deps: WarmupDeps,
+  lease: { name: string; staleMs: number },
 ): Promise<WarmupCycleResult> {
   const registry = getModelRegistry();
   const now = Date.now();
@@ -350,9 +522,11 @@ export async function runWarmupCycle(
   const result: WarmupCycleResult = {
     warmed: 0,
     explored: 0,
+    poolRefreshed: 0,
     verified: 0,
     skipped: 0,
     catalogRefreshed: false,
+    ran: true,
   };
 
   // ── Half 0: did the KEY SET change since the last run? ──────────────────
@@ -397,20 +571,46 @@ export async function runWarmupCycle(
     cfg.explorePerCycle,
   );
 
+  // ── Half 3: verified pool models that have gone STALE ──────────────────
+  // WITHOUT this half a verified model could only age: exploration looks at
+  // `unverified` rows, the hot half only knows THIS process's usage, and the
+  // registry retires what nothing re-verifies (7 days). Measured pool: verified
+  // entries at 142.8h and shrinking.
+  const stalePool = selectPoolRefreshCandidates(
+    registry,
+    configManager,
+    now,
+    cfg.poolRefreshPerCycle,
+  );
+
   const exploreKeys = new Set(exploration.map((c) => usageKey(c.provider, c.model)));
-  const cycle = [...toWarm, ...exploration];
+  const poolKeys = new Set(stalePool.map((c) => usageKey(c.provider, c.model)));
+  const cycle = [...toWarm, ...exploration, ...stalePool];
   if (cycle.length === 0) return result;
 
   logger.debug(
-    `[warmup] ${toWarm.length} hot · ${exploration.length} unverified candidates`,
+    `[warmup] ${toWarm.length} hot · ${exploration.length} unverified · ${stalePool.length} stale pool candidates`,
   );
 
+  // Keep the lease alive across a long cycle. A cycle is up to
+  // `hotPerCycle + explorePerCycle + poolRefreshPerCycle` real generations, each
+  // bounded by the probe timeout, so it can outlive the stale window — and a
+  // lease that expired MID-cycle would invite a second process to start
+  // sweeping the same models, which is the waste the lease exists to stop.
+  const renewEveryMs = Math.max(1_000, Math.floor(lease.staleMs / 2));
+  let lastRenewAt = Date.now();
+
   for (const candidate of cycle) {
+    if (Date.now() - lastRenewAt >= renewEveryMs) {
+      renewDutyLease(lease.name);
+      lastRenewAt = Date.now();
+    }
     const key = usageKey(candidate.provider, candidate.model);
     try {
       const outcome = await spotCheck(candidate.provider, candidate.model, configManager);
       if (outcome === 'verified') result.verified += 1;
       if (exploreKeys.has(key)) result.explored += 1;
+      else if (poolKeys.has(key)) result.poolRefreshed += 1;
       else result.warmed += 1;
       if (outcome === 'verified') {
         const record = usageMap.get(key);

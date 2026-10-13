@@ -294,6 +294,11 @@ Show the Model Availability Registry (verified / unavailable / quota-parked mode
 Manually release a registry-blocked provider (escape hatch) and re-probe it against the live API
 
    - flags: `--json, --no-spot-check`
+### `nuvira models warm`
+
+Run one warmup cycle now: keep hot models warm, verify new ones, refresh the stale pool
+
+   - flags: `--json`
 ### `nuvira models excluded`
 
 Show which providers routing is currently skipping, and why (failure cooldowns, registry blocks, governance policy)
@@ -1580,4 +1585,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*510 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*355 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

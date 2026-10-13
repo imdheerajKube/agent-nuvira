@@ -28,6 +28,21 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
+// ─── The retry schedule is DIALED DOWN for this file ────────────────────────
+//
+// These scenarios inject a fault that fails EVERY call (a 500 that never
+// clears), so the same-provider transient retry — 5 attempts, 5s/10s/20s/30s
+// apart by default — is spent in full on each of the five surfaces. That is
+// correct product behaviour (a flapping provider is given a real window before
+// the walk declares it dead) and irrelevant to what this file asserts, which is
+// that a failed turn is reported as FAILED and no answer is fabricated. Paying
+// ~65s of backoff per surface measured 120s+ (a timeout) instead of ~2s.
+//
+// Set at MODULE scope, before `beforeAll` builds the harness, so a forked child
+// (the process-boundary surface) inherits it. Attempt COUNTS are untouched by
+// this — the schedule's LENGTH is what the retry loop walks.
+process.env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS = '1';
+
 import type { InferenceProvider } from '../../src/inference/interface.js';
 import { ProviderFactory } from '../../src/inference/factory.js';
 import {

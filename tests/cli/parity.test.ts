@@ -9,7 +9,7 @@
  * empty graph.
  */
 
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import {
   ParityCommand,
@@ -20,7 +20,19 @@ import {
 import { logger } from '../../src/utils/logger.js';
 
 describe('nuvira parity', () => {
+  beforeEach(() => {
+    // The driven comparison EXERCISES failure paths on purpose, and the
+    // same-provider transient retry waits 5s/10s/20s/30s per attempt before
+    // failing over — so a single drive of every surface would spend minutes of
+    // wall clock on backoff (measured: 240s+, and 68s with this dial). The
+    // schedule is configuration (see `transientRetryDelaysMs`), and the
+    // assertions below are about surface PARITY, not about how long a flapping
+    // provider is given. Attempt COUNTS are unchanged.
+    process.env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS = '1';
+  });
+
   afterEach(() => {
+    delete process.env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS;
     // `report()` sets `process.exitCode = 1` on failure; a leaked failure code
     // would fail the suite itself.
     process.exitCode = undefined;

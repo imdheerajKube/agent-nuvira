@@ -94,8 +94,14 @@ import { assertAgenticRoute, setWeakModelConsent, resolveWeakModelPolicy, weakRo
 import { resolvePromptBudget, measurePromptBudget, formatPromptBudgetBreakdown } from '../learning/prompt-budget.js';
 import { buildTurnReport, formatTurnReport, type TurnReport } from '../learning/turn-report.js';
 import { turnOutcomeObservation } from '../learning/outcome-observation.js';
-import { resolveAdapterDefault, hasCredentials, preferredModelsFor } from '../learning/model-selection.js';
+import { resolveAdapterDefault, hasCredentials, preferredModelsFor, rankAvailableProviders } from '../learning/model-selection.js';
 import { sameClassFallback, capabilityClassOf } from '../learning/model-capability.js';
+import {
+  planBlipPatience,
+  EMPTY_PATIENCE_MS,
+  TRANSIENT_BLIP_DELAYS_MS,
+  type PatienceEvidence,
+} from '../learning/retry-patience.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
 import { sweepTransientFailures, collectionRevivalStore } from '../learning/provider-revival.js';
 import { analyzeComplexity } from '../learning/hybrid-router.js';
@@ -396,12 +402,210 @@ export async function runDeveloperMode(
  * caller, never to skip the loop).
  */
 /**
- * Backoff schedule for a SAME-provider retry on a transient failure. Two extra
- * attempts, deliberately short: a capacity spike at a shared endpoint clears in
- * seconds, and the user is waiting in the foreground. Long/looping retries belong
- * to the background runners, not the interactive turn.
+ * Backoff schedule for a SAME-provider retry on a TRANSIENT failure
+ * (server/network/timeout): dense early, sparse late — attempts at ≈1s, 3s, 7s,
+ * 15s, 30s, 60s.
+ *
+ * WHY THE SHAPE CHANGED (it was `[5s, 10s, 20s, 30s]`, front-loaded). A fixed
+ * front-loaded schedule is wrong in BOTH directions at once:
+ *
+ *   - A TWO-SECOND BLINK WAS NOT CAUGHT. A cloud endpoint routinely returns 200,
+ *     then a couple of empty/5xx answers for a handful of seconds, then serves
+ *     normally again (measured repeatedly on `deepseek`). The first retry sat at
+ *     t=5s, so the wait outlived the blink AND, because exhausting this schedule
+ *     is what starts the failover walk, a healthy strong model was declared dead
+ *     and the turn folded onto a weaker one. A retry at t≈1s catches the blink
+ *     outright.
+ *   - THE TOTAL STILL HAS TO RIDE OUT A REAL SPIKE. A capacity spike, an
+ *     upstream batch job or a rolling restart lasts tens of seconds, so the late
+ *     delays stay sparse and the total stays ~60s. Nothing that used to be
+ *     ridden out is given up on; the wait is just spent where the evidence is.
+ *
+ * THIS IS THE NO-EVIDENCE DEFAULT, NOT THE WHOLE POLICY. The schedule used per
+ * call comes from {@link planBlipPatience} — which also decides whether walking
+ * away is a remedy at all, from the pair's alternatives, its track record, and
+ * whether it already failed an earlier step of this turn. This constant is what
+ * every caller with no evidence gets, and it is what the `models`/parity
+ * harnesses see.
+ *
+ * Every sleep is CANCELLABLE (see `abortableSleep`), so an Esc during a 30s wait
+ * stops the turn immediately instead of after it.
  */
-export const TRANSIENT_RETRY_DELAYS_MS = [1_000, 3_000] as const;
+export const TRANSIENT_RETRY_DELAYS_MS = TRANSIENT_BLIP_DELAYS_MS;
+
+/**
+ * Resolve the backoff schedule actually used (env override → default).
+ *
+ * `NUVIRA_TRANSIENT_RETRY_DELAYS_MS` takes a comma-separated list of ms
+ * (`"5000,10000"`), so how long a foreground turn waits on a flapping provider
+ * is a CONFIGURATION decision rather than a property of the build — the same
+ * rule the warmup sweep's bounds follow. A headless gateway, a CI contract
+ * test or a user on a metered connection can dial it down (or to `0`) without a
+ * source edit and a rebuild; nonsense is ignored and the default stands.
+ *
+ * Read PER CALL, not captured at import, so a test observes the value in force
+ * at that moment.
+ */
+export function transientRetryDelaysMs(
+  env: NodeJS.ProcessEnv = process.env,
+): readonly number[] {
+  const raw = env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS;
+  if (raw === undefined || raw.trim() === '') return TRANSIENT_RETRY_DELAYS_MS;
+  const parsed = raw
+    .split(',')
+    .map((part) => Number(part.trim()))
+    .filter((n) => Number.isFinite(n) && n >= 0);
+  return parsed.length > 0 ? parsed : TRANSIENT_RETRY_DELAYS_MS;
+}
+
+/**
+ * Is the transient schedule overridden by the environment right now?
+ *
+ * The dial is authoritative when set (it is an explicit configuration decision,
+ * and it is what makes attempt COUNTS deterministic in the parity/E2E
+ * contracts), so callers ask this BEFORE substituting an evidence-derived
+ * schedule — otherwise a test would silently get the learned schedule and its
+ * exact call-count assertions would be about a different policy than the one it
+ * dialed.
+ *
+ * A set-but-nonsense value does NOT count as an override: `transientRetryDelaysMs`
+ * ignores it and falls back to the shipped schedule, so the evidence-derived
+ * schedule would be overridden by nothing.
+ */
+export function transientRetryScheduleOverridden(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS;
+  if (raw === undefined || raw.trim() === '') return false;
+  return raw.split(',').some((part) => {
+    const n = Number(part.trim());
+    return Number.isFinite(n) && n >= 0;
+  });
+}
+
+/**
+ * Bounded extra same-model patience for an `empty-response` — the "final verse"
+ * case, granted ONLY to a pair that has already delivered real work this turn.
+ *
+ * THE TWO CASES LOOK IDENTICAL TO THE CLASSIFIER AND MUST NOT BE TREATED ALIKE:
+ *
+ *   - a BROKEN pair answers nothing, forever. The codebase already measured the
+ *     cost of re-asking it: "5 empty responses on one model" in one turn, no
+ *     failover, which is why `empty-response` was removed from
+ *     `TRANSIENT_RETRY_TYPES` and why the handoff/walk is what remedies it.
+ *   - a pair that just finished four GOOD steps and then returns nothing is
+ *     having a blip at the END of real work — the expensive case, because the
+ *     turn already paid for the context, the tool results and the edits, and a
+ *     single empty reply would otherwise discard all of it.
+ *
+ * The discriminator is EVIDENCE, not a heuristic on the reply. Two halves, both
+ * required to be absent before we give up on a pair: a completed tool call in
+ * THIS turn (`threadHasDeliveredWork`), and the registry's own record for the
+ * pair — verified by TELEMETRY or a spot-check, with a low error rate
+ * (`hasProvenTrackRecord` in `retry-patience.ts`, which is where the rule now
+ * lives so it cannot drift). So a pair that answers nothing from the start with
+ * no track record still fails over immediately, a proven pair's FIRST empty
+ * reply gets these two short waits, and a proven pair whose only alternatives
+ * would DE-ESCALATE gets the longer
+ * `EMPTY_PATIENCE_WAIT_BEATS_FOLDING_MS` schedule rather than folding down a
+ * capability band. Bounded by design, and always finite.
+ *
+ * The value is re-exported from `retry-patience.ts`: ONE table for the whole
+ * blip policy, so the CLI and any other caller cannot drift apart.
+ */
+export const EMPTY_RESPONSE_PATIENCE_MS = EMPTY_PATIENCE_MS;
+
+/**
+ * Sleep that a CANCELLED turn interrupts.
+ *
+ * The old retry slept with a bare `setTimeout`, so an Esc during a backoff was
+ * only honored when the timer happened to fire — with a 30s step in the
+ * schedule that is a 30s delay before the turn admits it was cancelled. This
+ * resolves the moment the signal aborts, so the caller's abort checks see the
+ * cancellation immediately.
+ */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener('abort', finish, { once: true });
+  });
+}
+
+/**
+ * Has this turn already produced real, OBSERVED work on this thread?
+ *
+ * Structural, not a counter: an assistant step that ASKED for a tool and the
+ * tool result that came back for it. That is the cheapest honest evidence that
+ * the pair under us has already served this turn — a pair that has not is given
+ * no `empty-response` patience at all, so the "ask a broken model five times"
+ * loop stays impossible.
+ */
+export function threadHasDeliveredWork(thread: readonly { role: string; toolCalls?: unknown[] }[]): boolean {
+  const asked = thread.some((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0);
+  const answered = thread.some((m) => m.role === 'tool');
+  return asked && answered;
+}
+
+/**
+ * The pairs this surface could actually switch to right now, best-first, for
+ * {@link planBlipPatience}.
+ *
+ * DELIBERATELY NARROW. Only providers with at least one registry-VERIFIED model
+ * count, and the model offered is the one that provider would actually lead
+ * with (`preferredModelsFor`'s health order). A provider we cannot name a model
+ * for is not evidence of a same-band alternative — treating a cold-start or
+ * unverified provider as one would SHORTEN patience on the strength of a guess,
+ * and the whole point of the policy is that waiting is better than an
+ * unproven downgrade. Unknown therefore reads as "no known alternative", the
+ * conservative direction.
+ *
+ * Pure read, best-effort: any failure to rank means the same thing (no known
+ * alternative), never a thrown turn.
+ */
+function failoverAlternatives(
+  configManager: ConfigManager,
+  excludeProvider: string,
+): Array<{ provider: string; model: string }> {
+  const out: Array<{ provider: string; model: string }> = [];
+  try {
+    for (const ranked of rankAvailableProviders(configManager)) {
+      if (ranked.provider === excludeProvider) continue;
+      const model = ranked.verifiedModels[0];
+      if (!model) continue;
+      out.push({ provider: ranked.provider, model });
+    }
+  } catch {
+    // Best-effort — see the note above: unknown is the conservative reading.
+  }
+  return out;
+}
+
+/**
+ * Registry evidence for one pair, shaped for {@link planBlipPatience}.
+ * `undefined` when nothing is recorded — an untracked pair earns no patience.
+ *
+ * The `default` sentinel is not a model id, so it has no evidence by definition
+ * (the same reasoning that keeps it out of `preferredModelsFor`).
+ */
+function registryPatienceEvidence(provider: string, model: string): PatienceEvidence | undefined {
+  if (!model || model === 'default') return undefined;
+  try {
+    const entry = getModelRegistry().getEntry(provider, model);
+    if (!entry) return undefined;
+    return {
+      verified: entry.status === 'verified',
+      source: entry.source,
+      errorRate: entry.errorRate,
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * How long a PINNED + STRICT pair is given to answer before the user is asked
@@ -475,20 +679,48 @@ const PINNED_DEFINITIVE_ERROR_RE =
  *
  * Never retries: non-transient classes (auth, rate-limit, model/harness faults),
  * a cancelled turn, or once the schedule is exhausted.
+ *
+ * `emptyResponseDelaysMs` is the ONE narrowly-scoped exception, and it exists in
+ * this helper rather than in `TRANSIENT_RETRY_TYPES` because retryability here
+ * depends on the TURN, not only on the error class: pass it only when the pair
+ * has a track record this turn (see {@link threadHasDeliveredWork}). Omitted →
+ * an empty response is not retried at all, byte for byte the old behaviour.
+ *
+ * `transientDelaysMs` is the caller's EVIDENCE-DERIVED schedule
+ * ({@link planBlipPatience}) for server/network/timeout failures. Omitted → the
+ * shipped default / env dial (`transientRetryDelaysMs`), which is what a caller
+ * with no evidence (a test, a headless path) gets.
  */
 export async function generateWithTransientRetry<T>(
   attempt: () => Promise<T>,
   signal?: AbortSignal,
   onRetry?: (attemptNumber: number, err: unknown) => void,
+  opts: { emptyResponseDelaysMs?: readonly number[]; transientDelaysMs?: readonly number[] } = {},
 ): Promise<T> {
-  for (let i = 0; ; i += 1) {
+  let transientRetries = 0;
+  let emptyRetries = 0;
+  const emptySchedule = opts.emptyResponseDelaysMs ?? [];
+  const transientSchedule = opts.transientDelaysMs ?? transientRetryDelaysMs();
+  for (;;) {
     try {
       return await attempt();
     } catch (err) {
-      const canRetry = i < TRANSIENT_RETRY_DELAYS_MS.length && isTransientForRetry(err);
-      if (!canRetry || signal?.aborted) throw err;
-      onRetry?.(i + 1, err);
-      await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_DELAYS_MS[i]));
+      if (signal?.aborted) throw err;
+      // The attempt number a human sees: 1-based, counting every retry so far.
+      const attemptNumber = transientRetries + emptyRetries + 1;
+      let delay: number | undefined;
+      if (isTransientForRetry(err)) {
+        delay = transientRetries < transientSchedule.length
+          ? transientSchedule[transientRetries++]
+          : undefined;
+      } else if (classifyFallbackError(err) === 'empty-response' && emptyRetries < emptySchedule.length) {
+        delay = emptySchedule[emptyRetries++];
+      }
+      if (delay === undefined) throw err;
+      onRetry?.(attemptNumber, err);
+      await abortableSleep(delay, signal);
+      // A cancelled turn must not pay for another attempt.
+      if (signal?.aborted) throw err;
     }
   }
 }
@@ -4239,13 +4471,38 @@ export class ChatCommand extends BaseCommand {
         // R2 — this IS the fallback transport, so say so: the same fact the
         // subagent child announces, and what makes a chat turn comparable with it.
         return answered({ content: text, toolCalls: calls, transport: 'json' as const });
-      };
-
-      try {
-        // Same-provider transient retry FIRST (see the helper's contract): a
-        // 503 spike at a shared endpoint must not become a dead run. Failover
-        // only helps if a DIFFERENT provider exists — and it also hides the real
-        // failure from the user while parking a healthy provider for 120s.
+      };        // ── HOW PATIENT TO BE, AND WHY ────────────────────────────────────────
+        // A fixed schedule cannot tell a 2-second blink from a dead endpoint, so
+        // the schedule is chosen per pair from evidence the caller ALREADY HAS:
+        // is a same-or-better-band candidate reachable, does this pair have a
+        // track record, and has it already failed an EARLIER step of this turn.
+        // Both ways of getting this wrong are expensive — fail fast and a
+        // blinking strong model is silently replaced by a weaker one nobody
+        // chose; wait blindly and every user of a dead provider pays the full
+        // backoff. The plan's `reason` goes to the debug log, because "why was
+        // that turn slow / why did it change model" is asked after the fact.
+        const patiencePair = {
+          provider: session.type,
+          model: this.lastAttempt?.model ?? session.model ?? 'default',
+        };
+        const patience = planBlipPatience({
+          current: patiencePair,
+          alternatives: failoverAlternatives(this.configManager, patiencePair.provider),
+          evidence: registryPatienceEvidence(patiencePair.provider, patiencePair.model),
+          // An entry here means an EARLIER step of this same turn already failed
+          // on this pair — the same pair failing twice is a pattern, not a blip,
+          // and patience collapses there whatever the alternatives look like.
+          failedEarlierStep: this.turnAttempts.some(
+            (a) => a.provider === patiencePair.provider && a.model === patiencePair.model,
+          ),
+          deliveredWorkThisTurn: threadHasDeliveredWork(messages),
+        });
+        try {
+          logger.debug(`[patience] ${patience.reason}`);
+        } catch {
+          // Logging must never break a turn.
+        }
+        try {
         return await generateWithTransientRetry(
           () => tryGenerate(session.provider, session.type, session.model),
           abort,
@@ -4255,6 +4512,22 @@ export class ChatCommand extends BaseCommand {
                 err instanceof Error ? err.message.split('\n')[0] : String(err)
               }`,
             ),
+          // Empty-response patience from the plan: granted for a proven pair
+          // (registry track record or real work this turn), LONGER when every
+          // alternative would de-escalate a capability band. A pair with neither
+          // gets none — the measured "5 empty responses on one model" loop stays
+          // impossible — while a pair that just finished real steps never has
+          // them thrown away by a single empty reply.
+          {
+            // The env dial stays authoritative when set (tests, headless
+            // gateways, metered connections) — it is an explicit configuration
+            // decision, and the attempt COUNTS in the parity/E2E contracts are
+            // derived from it.
+            transientDelaysMs: transientRetryScheduleOverridden()
+              ? undefined
+              : patience.transientDelaysMs,
+            emptyResponseDelaysMs: patience.emptyResponseDelaysMs,
+          },
         );
       } catch (err) {
         // P4 — the model this turn STARTED on failed. Recorded with a human
@@ -4269,13 +4542,34 @@ export class ChatCommand extends BaseCommand {
           kind: primaryKind,
           reason: describeFailureKind(primaryKind),
         });
+        // ── LEARN the failure, don't just survive it ───────────────────────────
+        // A failed attempt was recorded in an in-memory per-turn list only, so
+        // the registry's health score, the quota timeline and the shared
+        // breaker all stayed untouched: the model kept its `verified` badge and
+        // was re-picked on the next turn, and a degraded turn left no on-disk
+        // evidence of WHICH candidate failed or WHY. `recordAutoProviderFailure`
+        // runs the full shared composition (model-scoped session exclusion,
+        // registry write-through, quota-timeline event, shared breaker) exactly
+        // as the empty-response handoff already does.
+        try {
+          this.recordAutoProviderFailure(
+            this.lastAttempt?.provider ?? session.type,
+            err,
+            this.lastAttempt?.model ?? session.model,
+          );
+        } catch {
+          // Best-effort — bookkeeping must never break the turn.
+        }
         // Auto mode: fail over across the ranked candidates (never stuck).
         if (mode.auto) {
           const firstType = session.type;
           // Observable telemetry, identical to the shared single-shot runner
           // (the E2E repair-failover contract): one warn per walk, one
-          // success log per landed candidate.
-          logger.warn(`   ⚠️ ${session.provider.name} failed — trying the next auto candidate...`);
+          // success log per landed candidate — and now the failure KIND in the
+          // line, so the console says what went wrong instead of only that it did.
+          logger.warn(
+            `   ⚠️ ${session.provider.name} failed (${describeFailureKind(primaryKind)}) — trying the next auto candidate...`,
+          );
           const failed = new Set<string>([session.type]);
           // Intent-aware escalation for the FAILOVER walk (the live junk path):
           // a mid-turn failure used to re-route on the bare message alone, so a
@@ -4348,6 +4642,22 @@ export class ChatCommand extends BaseCommand {
                 kind: nextKind,
                 reason: describeFailureKind(nextKind),
               });
+              // ── DIAGNOSABILITY: every failed candidate gets a reason LINE and
+              // a REGISTRY write, not only an in-memory entry. A live turn
+              // walked gemini → openrouter → groq → local and left NO on-disk
+              // record of why the first three died — the walk was undebuggable
+              // and those candidates never lost health, so the router kept
+              // offering them. `recordAutoProviderFailure` writes the pair's
+              // own row (and, for a rate-limit, parks it for the real reset
+              // window) while leaving a healthy provider's siblings routable.
+              try {
+                this.recordAutoProviderFailure(next.type, nextErr, next.model);
+              } catch {
+                // Best-effort — bookkeeping must never break the turn.
+              }
+              logger.warn(
+                `   ⚠️ ${next.type}/${next.model ?? 'default'} failed (${describeFailureKind(nextKind)}) — trying the next auto candidate...`,
+              );
               // Next candidate.
             }
           }
@@ -4447,6 +4757,10 @@ export class ChatCommand extends BaseCommand {
               // waiting for a reply that is already failing. Same credential
               // gate `loop-executor`'s pinned pool applies.
               if (!hasCredentials(this.configManager, fbType)) continue;
+              // The model THIS candidate actually used — hoisted so the failure
+              // handler below can name the pair without relying on block-scoped
+              // bindings from the `try` body.
+              let fbAttemptedModel: string | undefined;
               try {
                 const resolved = resolveProvider(this.configManager, fbType);
                 // The fallback provider gets ITS OWN model, not the primary's
@@ -4480,6 +4794,7 @@ export class ChatCommand extends BaseCommand {
                   );
                 }
                 const fallbackModel = pick?.model ?? baseModel;
+                fbAttemptedModel = fallbackModel;
                 const resp = await tryGenerate(resolved.provider, resolved.type, fallbackModel);
                 // ── The pair that ANSWERED is the pair the turn ran on ───────
                 // This walk used to serve the fallback and leave `session` still
@@ -4514,7 +4829,28 @@ export class ChatCommand extends BaseCommand {
                   `   🔀 ${pinnedType} was unavailable — answered from ${resolved.provider.name} (${fallbackModel ?? 'default'})`,
                 );
                 return resp;
-              } catch {
+              } catch (fbErr) {
+                // DIAGNOSABILITY (pinned walk): name and LEARN each failed
+                // fallback candidate instead of swallowing it. The silent catch
+                // meant a pinned turn that stepped through three dead providers
+                // reported only the primary error, and none of those providers
+                // lost health — the same undebuggable-walk defect the auto walk
+                // had.
+                const fbKind = classifyFallbackError(fbErr);
+                this.recordTurnAttempt({
+                  provider: fbType,
+                  model: fbAttemptedModel ?? 'default',
+                  kind: fbKind,
+                  reason: describeFailureKind(fbKind),
+                });
+                try {
+                  this.recordAutoProviderFailure(fbType, fbErr, fbAttemptedModel);
+                } catch {
+                  // Best-effort — bookkeeping must never break the turn.
+                }
+                logger.warn(
+                  `   ⚠️ ${fbType}/${fbAttemptedModel ?? 'default'} failed (${describeFailureKind(fbKind)}) — trying the next fallback...`,
+                );
                 // Next fallback candidate.
               }
             }
