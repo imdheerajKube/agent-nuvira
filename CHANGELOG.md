@@ -2,17 +2,33 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## v3.5.3 — the v3.5.2 features, checked on the platforms they actually run on
+## v3.5.4 — the v3.5.2 features, checked on the platforms they actually run on
+
+> **v3.5.3 was never published to npm.** Its release gate caught a stale artifact
+> before anything was uploaded — the committed CLI demo cast pins the version, and
+> bumping the package for that release made it stale — so the fix and the release
+> both land here. No package, tag content or download depends on 3.5.3.
 
 A patch for what v3.5.2 introduced: three cross-platform defects in the
 liveness/identity work, found by the release gate of that very release — its test
 matrix failed on Windows and on Linux while passing on macOS, which is exactly the
 signal a single-platform check cannot give.
 
+**What upgrading from 3.5.2 gives you is this patch and nothing else.** The CLI
+presentation layer — the cards, syntax highlighting, Markdown rendering, answer
+view and theme that make up the CLI's look and feel — landed in 3.5.2 and is
+published with it; no CLI surface is added, removed or renamed in this release,
+and its share of the diff here is zero. Everything between the published 3.5.2 and
+this tag is the fixes below plus the release bookkeeping the tag itself needs
+(version, regenerated demo cast, changelog); `git log v3.5.2..HEAD -- src/cli` is
+empty, which is the check to run if in doubt.
+
 - **A recovered run stops its OWN process again** — the identity check compares the command that was recorded against the shell's own process line, and on Windows the quotes of the inner command arrive ESCAPED (`bash.exe -c "node -e \"…\""`, `cmd.exe /d /s /c "…"`). Stripping the quote but keeping its backslash left `node -e \for (…)`, which does not contain the recorded `node -e for (…)` — so the run refused to signal the process it had started itself, and told the operator the pid now ran a different command line.
 - **A verdict is not rewritten while the process is being stopped** — between signalling a hung task and its `close` event the pid can already be gone from the process table while the handle still calls it alive, and the sample then read “no CPU” from the ABSENCE OF A ROW rather than from an absence of work. A task just reported HUNG flipped back to `stalled` on the slower Windows runners.
 - **The identity read is patient on Windows** — the token is read through a PowerShell/CIM snapshot that takes the better part of a second, so a process milliseconds old is routinely not in it yet. One retry at 250ms recorded nothing and wrote its warning into the task's own log, where it became the **first** line of the task's output (and of its SSE stream). It is retried at 250ms / 900ms / 2s now — unref'd, so waiting never holds the dashboard open — and the warning stays the honest outcome when every attempt misses.
 - **The liveness suite is cross-platform** — its long-running fixtures were `sleep`, run through `spawn(..., { shell: true })`, whose shell is cmd.exe on Windows: not a long-running command there but a command that does not exist, which exited immediately and made the tree, CPU and kill assertions fail for a reason unrelated to the code under test. The fixtures are `node`-based now (on PATH everywhere) and compound, so the shell cannot `exec` into them and the tree keeps the shape under test.
+- **The SSE test asserts what it claims** — it subscribed only after starting the task, so a fixture that printed once and exited could be over before anything was listening, and the `log` assertion was a race against machine speed (it passed on one runner and timed out on another). It now drives a fixture that keeps talking and asserts a log event produced while the stream is attached, plus a status event it causes itself.
+- **The CLI demo cast is regenerated with the release** — it pins the version, so it is part of the release commit rather than an afterthought; leaving it stale is what stopped v3.5.3 at the gate.
 - **9,351 tests across 524 files** in the root suite (20 skipped) plus **1,298 dashboard tests**.
 
 ### Session 51 — the release gate found what a macOS-only run could not

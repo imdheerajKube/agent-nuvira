@@ -33,6 +33,13 @@ if (mode === 'ok') {
   process.exit(0);
 } else if (mode === 'sleep') {
   setTimeout(() => {}, 120000);
+} else if (mode === 'tick') {
+  // Keeps talking, so a subscriber that attaches a moment AFTER the task starts
+  // still receives a LIVE log event. An instantly-finishing fixture can be over
+  // before anything is listening — which is a property of when a stream is
+  // attached, not of the stream.
+  let i = 0;
+  setInterval(() => { console.log('tick ' + ++i); }, 100);
 }
 `;
 const entryPath = join(testDir, 'fixture.cjs');
@@ -222,27 +229,34 @@ describe('/api/tasks', () => {
   });
 
   it('streams log + status events over SSE (?token= auth)', async () => {
-    process.env.NUVIRA_TASK_FIXTURE_MODE = 'ok';
-    const start = await authedFetch('/api/tasks', 'POST', { args: ['fixture'], timeoutMs: 10_000 });
+    // A fixture that KEEPS TALKING, not one that prints once and exits. The stream
+    // is attached after the task is started (subscribing needs its id), so a task
+    // that finishes first has produced its output before anything was listening,
+    // and that event then legitimately never arrives — the assertion is a race
+    // against how fast the machine is, which passed on one runner and timed out on
+    // another. This fixture keeps emitting, so the log event below is provably a
+    // LIVE one, and the status event is one this test causes itself.
+    process.env.NUVIRA_TASK_FIXTURE_MODE = 'tick';
+    const start = await authedFetch('/api/tasks', 'POST', { args: ['fixture'], timeoutMs: 0 });
     const startBody = (await start.json()) as { ok: boolean; task: { id: string } };
+    expect(startBody.ok).toBe(true);
 
     const sse = await openSSE(`${baseUrl}/api/tasks/${startBody.task.id}/events?token=${encodeURIComponent(token)}`);
     try {
       const init = await sse.waitFor('init');
       expect((init.data as { id: string }).id).toBe(startBody.task.id);
-      // The task's OUTPUT, over the stream — and deliberately not "the FIRST log
-      // line": when the OS will not describe the spawned process, the runner emits
-      // a system line saying so, which is a real part of what an operator sees
-      // (and on the Windows runners that line arrived before the fixture printed).
-      // The claim under test is that the output streams, not that nothing else does.
-      const log = await sse.waitForLogContaining('fixture-ok');
-      expect((log.data as { text: string }).text).toContain('fixture-ok');
+      // Output produced while we are subscribed.
+      const log = await sse.waitForLogContaining('tick');
+      expect((log.data as { text: string }).text).toContain('tick');
+      // …and a status event, from a cancel we make ourselves.
+      const cancel = await authedFetch(`/api/tasks/${startBody.task.id}/cancel`, 'POST');
+      expect(((await cancel.json()) as { ok: boolean }).ok).toBe(true);
       const status = await sse.waitFor('status');
-      expect((status.data as { status: string }).status).toBe('done');
+      expect((status.data as { status: string }).status).toBe('cancelled');
     } finally {
       sse.close();
     }
-  }, 15_000);
+  }, 20_000);
 
   it('rejects the SSE stream without a valid token (401)', async () => {
     const res = await fetch(`${baseUrl}/api/tasks/nope/events?token=invalid`);
