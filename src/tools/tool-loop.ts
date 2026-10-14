@@ -422,6 +422,45 @@ export interface ToolLoopDeps {
    */
   requestModelSwitch?(reason: UnusableResponseKind): Promise<boolean> | boolean;
   /**
+   * P5 — HOW LONG TO STAY ON A PAIR THAT JUST ANSWERED WITH NOTHING, before the
+   * loop is allowed to hand the turn to a different model.
+   *
+   * The loop owns ONE retry (`MAX_SAME_MODEL_EMPTY_RETRIES`) and then asks for a
+   * handoff. That is the right shape for a pair that is simply broken, but it is
+   * the wrong shape for a BLINK: a cloud endpoint routinely answers 200 with an
+   * empty body for a few seconds and then serves normally again (that is the
+   * measured behaviour the whole blip policy in `learning/retry-patience.ts`
+   * exists for), and folding over a blink is how a strong model gets silently
+   * replaced by a weaker one nobody chose.
+   *
+   * The schedule already guards the THROWN empty-response path (chat's
+   * `generateWithTransientRetry`), but a 200 carrying no content never reaches it
+   * — the loop handles that case, which is why the policy has to be reachable
+   * from HERE as well. Two live turns failed exactly there
+   * (trace-1791906998502-txddq4, trace-1791907393457-7seewg): both emptied out,
+   * both handed off after the loop's single retry, and both ended up on the local
+   * last resort while the granted patience was never spent.
+   *
+   * The caller owns the evidence (the registry track record, the reachable
+   * alternatives, the plan), so it — not the loop — returns the delays (ms) to
+   * spend on THIS pair. `[]` means "hand off on the next empty", which is the
+   * previous behaviour and the honest answer for a caller with no evidence.
+   *
+   * The loop asks ONCE per empty streak and memoizes the answer, so a plan that
+   * shifts mid-blip cannot extend the wait; each granted delay is slept and the
+   * SAME pair is re-asked; only once the schedule is spent does the loop call
+   * `requestModelSwitch`. Omitted entirely (mocks, sub-agent children, older
+   * callers) → byte-for-byte the previous behaviour.
+   */
+  emptyResponsePatienceMs?(info: {
+    /** Empties in a row on the current pair, including the one being handled. */
+    emptyStreak: number;
+    /** Handoffs already spent this turn. */
+    handoffs: number;
+    /** Has this turn produced real, observed work (a completed tool call)? */
+    deliveredWorkThisTurn: boolean;
+  }): readonly number[];
+  /**
    * C5 — RE-FIT THE THREAD TO THE MODEL THAT NOW ANSWERS.
    *
    * `threadBudgetChars` (see `LoopOptions`) is resolved ONCE by the caller —
@@ -1147,6 +1186,13 @@ export const MAX_THINK_CONTINUES = 3;
  * demonstrated it is not answering this step, and re-calling it is the loop that
  * killed a real turn (five consecutive empties, then the turn reported itself
  * bounded with zero tool calls).
+ *
+ * THIS IS THE HANDOFF TRIGGER, NOT THE WHOLE PATIENCE POLICY. Since P5 the caller
+ * may grant extra same-pair attempts (`emptyResponsePatienceMs`), spent as
+ * bounded waits BEFORE this threshold is honored — which is what tells a two
+ * second blink apart from a dead pair. The threshold itself is unchanged, so a
+ * caller that grants nothing, and every mock/sub-agent child, behaves exactly as
+ * before.
  */
 export const MAX_SAME_MODEL_EMPTY_RETRIES = 1;
 /**
@@ -1263,6 +1309,25 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Sleep that a CANCELLED turn interrupts.
+ *
+ * The blip patience below can wait ten seconds on a pair, and a 10s wait that
+ * ignores Esc is a 10s delay before the turn admits it was cancelled — the same
+ * defect `chat.ts`'s `abortableSleep` was written to fix. Sliced rather than
+ * event-driven because the loop only holds an `AbortSignal`, and at 250ms a slice
+ * the granularity is imperceptible next to the wait it is bounding.
+ */
+async function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  const deadline = Date.now() + Math.max(0, ms);
+  for (;;) {
+    if (signal?.aborted) return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return;
+    await sleep(Math.min(250, remaining));
+  }
+}
+
+/**
  * Mutable turn-level progress shared with the wrapper. Kept OUT of the many
  * `runToolLoopInner` return sites so every exit path (cancel, bounded, terminal
  * dispatch, end-of-response) reports the same honest accounting.
@@ -1360,6 +1425,12 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // bounds how many times the turn may move.
   let emptyRetriesOnCurrentModel = 0;
   let modelHandoffs = 0;
+  // P5 — the empty-response patience plan for the CURRENT streak, asked for once
+  // (see `emptyResponsePatienceMs`) plus how many of its delays have been spent.
+  // `undefined` = not asked yet; an empty array = asked, and the caller granted
+  // nothing. Both are reset wherever the streak resets.
+  let emptyPatienceSchedule: readonly number[] | undefined;
+  let emptyPatienceSpent = 0;
   // P3 — the ATTEMPT budget (see MAX_HANDOFF_ATTEMPT_CREDIT): step credit
   // granted by mid-turn handoffs, so a run against several dead models cannot
   // exhaust its road before it has done any work.
@@ -1984,7 +2055,14 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // P2 — the model just produced something usable (text, or at least one tool
     // call), so its empty-response streak is over: a later blip starts a NEW
     // streak rather than inheriting one from twenty steps ago.
-    if (toolCalls.length > 0 || !responseThinkOnly) emptyRetriesOnCurrentModel = 0;
+    if (toolCalls.length > 0 || !responseThinkOnly) {
+      emptyRetriesOnCurrentModel = 0;
+      // P5 — a usable response ends the blink, so the next streak asks for a
+      // FRESH patience plan instead of inheriting spent patience from a step
+      // twenty turns of the loop ago.
+      emptyPatienceSchedule = undefined;
+      emptyPatienceSpent = 0;
+    }
 
     if (toolCalls.length === 0) {
       // No tools → end turn UNLESS the content is think-only (
@@ -2006,6 +2084,67 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // is the exact class of defect this work exists to remove, so the two
         // cases are named apart even though they are bounded together.
         const emptyResponse = response.content.trim().length === 0;
+        // ── P5 — WAIT OUT A BLINK ON THE PAIR THAT ANSWERED NOTHING ──────────
+        //
+        // An empty 200 is the one unusable response that never reaches the blip
+        // policy: `chat.generateWithTransientRetry` applies the empty-response
+        // schedule only when the attempt THROWS, and a provider that answers 200
+        // with no content does not throw — it lands here. So the policy has to be
+        // reachable from the loop too, or it is inert for exactly the failure it
+        // was written for. Both traces that motivated this did precisely that:
+        // two empties in a row, the loop's single retry spent, handoff, local last
+        // resort, weak answer (trace-1791906998502-txddq4,
+        // trace-1791907393457-7seewg).
+        //
+        // The caller decides how long to stay (see `emptyResponsePatienceMs`); the
+        // loop memoizes that answer per streak so a shifting plan cannot extend the
+        // wait, sleeps each granted delay, and re-asks the SAME pair. Cancelling
+        // mid-wait is honored.
+        if (emptyResponse && !opts.signal?.aborted) {
+          if (emptyPatienceSchedule === undefined) {
+            try {
+              emptyPatienceSchedule = deps.emptyResponsePatienceMs?.({
+                emptyStreak: emptyRetriesOnCurrentModel + 1,
+                handoffs: modelHandoffs,
+                deliveredWorkThisTurn: progress.successfulToolCalls.length > 0,
+              }) ?? [];
+            } catch {
+              // A broken patience hook must neither extend nor block a turn.
+              emptyPatienceSchedule = [];
+            }
+          }
+          if (emptyPatienceSpent < emptyPatienceSchedule.length) {
+            const waitMs = emptyPatienceSchedule[emptyPatienceSpent++];
+            emptyRetriesOnCurrentModel += 1;
+            thinkContinues = 0;
+            // Name the pair generically when the route is unknown — a wrong name
+            // would be worse than none (see `servedRoute`).
+            let pairLabel = 'the same model';
+            try {
+              const route = opts.servedRoute?.();
+              if (route?.model && !isUnresolvedModel(route.model)) {
+                pairLabel = `${route.providerType}/${route.model}`;
+              }
+            } catch {
+              // Unknown route reads generically.
+            }
+            if (waitMs > 0) {
+              deps.onEvent?.(
+                `   👀 ${pairLabel} returned nothing — waiting ${Math.round(waitMs / 100) / 10}s ` +
+                  `before re-asking it (blip patience ${emptyPatienceSpent}/${emptyPatienceSchedule.length}).`,
+              );
+              await sleepUnlessAborted(waitMs, opts.signal);
+            }
+            traceEvent({
+              kind: 'decision',
+              gate: 'wait',
+              summary:
+                `the provider returned an empty response — waiting ${waitMs}ms and re-asking the SAME pair ` +
+                `(blip patience ${emptyPatienceSpent}/${emptyPatienceSchedule.length}) instead of handing off`,
+            });
+            continue;
+          }
+        }
         // ── P2 — MID-TURN MODEL HANDOFF ────────────────────────────────────
         // An empty completion is a PROVIDER failure, not a state of mind, and
         // re-asking the model that just returned nothing is what killed a real
@@ -2102,6 +2241,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             // The streak and the think streak belong to the model that failed.
             emptyRetriesOnCurrentModel = 0;
             thinkContinues = 0;
+            // P5 — the replacement pair gets its OWN plan, not the one granted to
+            // (and half-spent on) the model that just returned nothing.
+            emptyPatienceSchedule = undefined;
+            emptyPatienceSpent = 0;
             // ── DROP THE FAILED MODEL'S PRIVATE REASONING ─────────────────
             // Every assistant turn records `reasoningContent`, and the wire
             // layer echoes it back on that assistant message — which is

@@ -17,6 +17,15 @@ import { decisionsRecordingEnabled, recallDecisionBlock } from '../learning/deci
 import { getMemoryManager } from '../memory/manager.js';
 import { logger } from '../utils/logger.js';
 import { printOrchestrationResult } from './execute.js';
+import {
+  AnswerStream,
+  attachShellCards,
+  gitDiffCard,
+  presentAnswer,
+  shouldUseRichUi,
+  toolCallCard,
+  type PresenterOptions,
+} from './ui/index.js';
 // WS5 (#27) — isolation (a git worktree around the turn) and resume (replaying
 // recorded steps instead of re-paying for them). See the module headers for why
 // the worktree is created HERE, around the whole turn, and why a replay is
@@ -49,7 +58,7 @@ import type { ComplexityLevel } from '../learning/hybrid-router.js';
 import { getRouterBandit } from '../learning/router-bandit.js';
 import { UnusableModelResponseError } from '../learning/response-usability.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
-import { getAutoRouter, isAgentAutoRoute, isAutoModel, isAutoProvider, governanceVerdict, adminBudgetVerdict } from '../learning/auto-router.js';
+import { getAutoRouter, isAgentAutoRoute, isAutoModel, isAutoProvider, governanceVerdict, adminBudgetVerdict, isAgenticTask } from '../learning/auto-router.js';
 import { continuationSoftwareText } from '../learning/continuation-intent.js';
 import { TaskModelContinuity, taskSignature } from '../learning/task-model-continuity.js';
 import {
@@ -1768,6 +1777,74 @@ export class ChatCommand extends BaseCommand {
     };
   }
 
+  /**
+   * Live answer streaming for the interactive REPL.
+   *
+   * Returns the per-turn context overrides that paint the answer as it is
+   * generated, plus a `stop()` the caller MUST invoke once the turn returns.
+   * `stop()` unmounts the live view WITHOUT archiving, because the turn's own
+   * answer-printing path renders the authoritative final `answer.content` —
+   * archiving here as well would print the answer twice. The streamed tokens
+   * are a PREVIEW; the final frame is what stays in the transcript.
+   *
+   * ON A REAL TERMINAL ONLY. A pipe, CI run or `--json-events` gets no Ink view
+   * and no `onToken`, so a later step never streams and the bytes on stdout are
+   * exactly what they were before this existed.
+   *
+   * WHY THE RESET ON `tool:started`. `onToken` is invoked for EVERY model call
+   * in the tool loop, not only for the answer, so a turn that calls a tool
+   * would otherwise append the next step's answer onto the previous step's
+   * preamble. A tool starting is the boundary between steps, so the preview is
+   * cleared there.
+   */
+  private liveAnswer(
+    header?: string,
+    opts: PresenterOptions = {},
+  ): {
+    overrides: {
+      onToken?: (token: string) => void;
+      onToolCall?: (phase: 'started' | 'called', info: ToolCallInfo) => void;
+      onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
+    };
+    stop: () => void;
+    /** The live stream, or null when rich output is unavailable. */
+    stream: AnswerStream | null;
+  } {
+    if (!shouldUseRichUi(opts)) return { overrides: {}, stop: () => {}, stream: null };
+    const stream = new AnswerStream({ header, headerColor: 'assistant' }, opts);
+    let begun = false;
+    // Shell commands are emitted on the process-wide bus (utils/shell.ts owns
+    // them), so the turn subscribes for its own duration and detaches on stop().
+    const detachShell = attachShellCards((card) => stream.card(card));
+    return {
+      stream,
+      overrides: {
+        onToken: (token) => {
+          if (!begun) {
+            begun = true;
+            stream.begin();
+          }
+          stream.append(token);
+        },
+        onToolCall: (phase, info) => {
+          if (phase === 'started') {
+            // The step's preamble is not the answer: clear it so the preview
+            // shows the step that is actually producing the reply.
+            if (begun) stream.reset();
+            return;
+          }
+          // Completed call → an archived card (this is what the turn DID).
+          stream.card(toolCallCard({ tool: info.tool, ok: info.ok, error: info.error, result: info.result, durationMs: info.durationMs, args: info.args }));
+        },
+        onGitDiff: (payload) => stream.card(gitDiffCard(payload)),
+      },
+      stop: () => {
+        detachShell();
+        stream.finish({ archive: false });
+      },
+    };
+  }
+
   private async execute(prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean }): Promise<void> {
     // Apply the active model state from `nuvira model switch` as defaults
     const activeOpts = applyActiveModel({ provider: options?.provider, model: options?.model });
@@ -1904,6 +1981,10 @@ export class ChatCommand extends BaseCommand {
       const parsed = parseRequestSync(prompt);
       const dispatchDecision = resolvePipelineDispatch(parsed, { dev: options?.dev, text: prompt });
 
+      // P7 — paint the answer live while it generates (TTY only; a no-op
+      // elsewhere). `stop()` unmounts the preview once the turn returns; the
+      // final frame is printed by the answer path below.
+      const live = this.liveAnswer(`nuvira · ${provider.name}${model ? ` / ${model}` : ''}`);
       const answer = await this.runChatAnswer(
         prompt,
         [],
@@ -1914,8 +1995,8 @@ export class ChatCommand extends BaseCommand {
         parsed,
         // WS5 (#27) — isolation and resume ride on the CLI's own flags. Passed
         // per turn: in the REPL each message is its own turn (see the manual).
-        this.ws5Overrides(options),
-      );
+        { ...this.ws5Overrides(options), ...live.overrides },
+      ).finally(() => live.stop());
 
       // No-model fallback: the tool loop could not generate a single response
       // AND the rules assessed a high-confidence pipeline intent — run the
@@ -1954,7 +2035,8 @@ export class ChatCommand extends BaseCommand {
       // JSON blob, or the empty ```json fence the fallback transport leaves
       // behind) — see stripToolCallArtifacts.
       else if (answer.content.trim()) {
-        console.log('\n' + stripToolCallArtifacts(answer.content) + '\n');
+        console.log('');
+        presentAnswer(stripToolCallArtifacts(answer.content));
       }
       if (!process.stdin.isTTY) {
         await this.renderFollowups(answer.followups ?? [], false);
@@ -1970,6 +2052,7 @@ export class ChatCommand extends BaseCommand {
       while (true) {
         const picked = await this.renderFollowups(singleAnswer.followups ?? [], true);
         if (!picked) break;
+        const liveNext = this.liveAnswer(`nuvira · ${provider.name}${model ? ` / ${model}` : ''}`);
         const next = await this.runChatAnswer(
           picked,
           history,
@@ -1979,11 +2062,12 @@ export class ChatCommand extends BaseCommand {
           { auto: autoMode },
           parseRequestSync(picked),
           // P5 — a picked followup continues the previous execution.
-          { continuation: true, ...this.ws5Overrides(options) },
-        );
+          { continuation: true, ...this.ws5Overrides(options), ...liveNext.overrides },
+        ).finally(() => liveNext.stop());
         const nextText = stripToolCallArtifacts(next.content);
         if (nextText) {
-          console.log('\n' + nextText + '\n');
+          console.log('');
+          presentAnswer(nextText);
           // NOTE: no history.push here — runChatAnswer already recorded the
           // assistant turn. The old duplicate push gave every subsequent turn
           // TWO copies of the previous answer (relevance noise).
@@ -2081,6 +2165,8 @@ export class ChatCommand extends BaseCommand {
         resolvePipelineDispatch(parsed, { dev: this.devModeAuto, text: message }),
       );
       const session = { type, provider, model: effectiveModel };
+      // P7 — live preview for this turn (see `liveAnswer`).
+      const live = this.liveAnswer(`nuvira · ${provider.name}${effectiveModel ? ` / ${effectiveModel}` : ''}`);
       const answer = await withLogCorrelation({ sessionId: chatSessionId }, () =>
         recordMetricTime('llm.answer.ms', () =>
           this.runChatAnswer(
@@ -2096,10 +2182,11 @@ export class ChatCommand extends BaseCommand {
             {
               continuation: pickedFollowup || isSuggestedFollowup(message, lastFollowups),
               ...this.ws5Overrides(options),
+              ...live.overrides,
             },
           ),
         ),
-      );
+      ).finally(() => live.stop());
 
       // No-model fallback: the tool loop could not generate a single response
       // AND the rules assessed a high-confidence pipeline intent — run the
@@ -2120,7 +2207,8 @@ export class ChatCommand extends BaseCommand {
       // followup pick becomes the next message). The user asked for the
       // content — the menu must never print before it.
       if (answer.content.trim()) {
-        console.log('\n' + answer.content + '\n');
+        console.log('');
+        presentAnswer(answer.content);
       }
       lastFollowups = answer.followups ?? [];
       const followupPrompt = await this.renderFollowups(lastFollowups, true);
@@ -2293,9 +2381,10 @@ export class ChatCommand extends BaseCommand {
        */
       projectPath?: string;
       /**
-       * P4 — stream answer tokens live to the GUI (dashboard opt-in; the CLI
-       * never passes it). Delivered verbatim from the tool loop — see
-       * ToolLoopOptions.onToken.
+       * P4 — stream answer tokens live. The dashboard console feeds the GUI's
+       * answer typewriter; the CLI REPL feeds its live Ink view (see
+       * `ChatCommand.liveAnswer`), and neither is used off a real terminal.
+       * Delivered verbatim from the tool loop — see ToolLoopOptions.onToken.
        */
       onToken?: (token: string) => void;
       /**
@@ -3331,6 +3420,38 @@ export class ChatCommand extends BaseCommand {
           callModel: callModelWithTrace,
           // P2 — the empty-response handoff (see `requestModelSwitch` above).
           requestModelSwitch,
+          // P5 — the SAME blip policy the thrown-empty path uses, reachable from
+          // the loop's empty-response path too. A provider that answers 200 with
+          // no content never throws, so it never reached
+          // `generateWithTransientRetry` and its empty schedule was computed but
+          // never spent: both live failures (trace-1791906998502-txddq4,
+          // trace-1791907393457-7seewg) handed off after the loop's single retry
+          // and landed on the local last resort. The plan knows whether waiting
+          // is worth it (a proven pair, or alternatives that would de-escalate),
+          // so the loop asks the CALLER rather than inventing a backoff.
+          emptyResponsePatienceMs: ({ emptyStreak, deliveredWorkThisTurn }) => {
+            try {
+              const pair = {
+                provider: session.type,
+                model: this.lastAttempt?.model ?? session.model ?? 'default',
+              };
+              return planBlipPatience({
+                current: pair,
+                alternatives: failoverAlternatives(this.configManager, pair.provider),
+                evidence: registryPatienceEvidence(pair.provider, pair.model),
+                // An entry here means an EARLIER step of this turn already failed
+                // on this pair — the same pair failing twice is a pattern, not a
+                // blip, and patience collapses there.
+                failedEarlierStep: this.turnAttempts.some(
+                  (a) => a.provider === pair.provider && a.model === pair.model,
+                ),
+                deliveredWorkThisTurn,
+              }).emptyResponseDelaysMs;
+            } catch {
+              // No evidence → no extra patience (the pre-P5 behaviour).
+              return [];
+            }
+          },
           // C5 — `requestModelSwitch` installs the replacement on `session`, so
           // re-resolve the thread budget from the session AFTER a handoff: a
           // handoff to a smaller window is the case that overflows, and the
@@ -4364,6 +4485,10 @@ export class ChatCommand extends BaseCommand {
         // (`answered()`, and the walks that install what they served) are the
         // ones that own `session.model`.
         this.lastAttempt = { provider: typ, model: effectiveModel };
+        // G5/P6 — and the trace's routing snapshot follows the ATTEMPT, so a step
+        // can never record a pair the request did not go to (see
+        // `noteServedRoute`).
+        this.noteServedRoute(typ, effectiveModel ?? 'default');
         const nativeKey = `${typ}|${effectiveModel ?? ''}`;
         // Answer-quality resilience: a CONFUSED reply — the model talking about
         // the tool contract (e.g. apologizing that "the provided example call
@@ -4570,7 +4695,43 @@ export class ChatCommand extends BaseCommand {
           logger.warn(
             `   ⚠️ ${session.provider.name} failed (${describeFailureKind(primaryKind)}) — trying the next auto candidate...`,
           );
-          const failed = new Set<string>([session.type]);
+          /**
+           * ── PAIR-SCOPED WALK: follow what is ROUTABLE, not one model per
+           *    provider ────────────────────────────────────────────────────────
+           *
+           * The walk used to track PROVIDERS: the failing provider was put in
+           * `failed` and every re-route passed it as `excludeProviders`, so each
+           * iteration could only ever land on a DIFFERENT provider — one model
+           * tried per provider no matter how many that provider serves. Measured
+           * live (trace-1791906998502-txddq4): a per-model 429 on
+           * `gemini/gemma-4-31b-it` ended gemini's part of the turn, a `model not
+           * found` on one openrouter id ended openrouter's, and the walk reached
+           * the local last resort while ~370 routable pairs were never tried.
+           *
+           * The registry, the quota ledger and the exclusion filter all treat
+           * these failures as PAIR-scoped (`recordActionFailure` parks the pair,
+           * `ledger.parkModel` parks the model, and only
+           * `PROVIDER_RATE_LIMIT_ESCALATION_MODELS` distinct models 429ing
+           * escalates to a provider park). The walk was the one place
+           * contradicting that, so it is the one place fixed here: it follows the
+           * pair-scoped exclusions the bookkeeping just wrote, and only leaves a
+           * provider when the EVIDENCE says the provider itself is out — a
+           * transient/server failure, a provider-wide rate limit, a refused
+           * account or a provider the registry has blocked.
+           */
+          const firstPair = `${this.lastAttempt?.provider ?? session.type}|${this.lastAttempt?.model ?? session.model ?? 'default'}`;
+          const failedPairs = new Set<string>([firstPair]);
+          const failedProviders = new Set<string>();
+          try {
+            // The bookkeeping already ran for the failure above: a provider still
+            // carrying an ACTIVE provider-scoped exclusion is out for this walk,
+            // whatever kind the failure was classified as.
+            if ((this.sessionFailedProviders.get(session.type) ?? 0) > Date.now()) {
+              failedProviders.add(session.type);
+            }
+          } catch {
+            // Best-effort — evidence must never break the walk.
+          }
           // Intent-aware escalation for the FAILOVER walk (the live junk path):
           // a mid-turn failure used to re-route on the bare message alone, so a
           // software turn whose first cloud provider died fell through to a tiny
@@ -4580,23 +4741,31 @@ export class ChatCommand extends BaseCommand {
           // applies here too — but NEVER drop a candidate the floor would keep,
           // so auto still cannot dead-end (local stays the last resort).
           const failoverRoutingText = routingText;
-          // Try ALL ranked candidates (no 3-candidate cap) — bounded by
-          // the number of known providers to prevent infinite loops.
+          // Try ALL routable candidates (no 3-candidate cap) — bounded by a
+          // fixed attempt count so a churning pool cannot spin the turn.
           const maxAttempts = 10;
           for (let i = 0; i < maxAttempts; i++) {
             let next: AutoRoutedMessage | null = null;
             try {
               next = failoverRoutingText
-                ? await this.routeMessageAuto(message, [...failed], {
+                ? await this.routeMessageAuto(message, [...failedProviders], {
                     routingText: failoverRoutingText,
                     fallbackFrom: firstType,
+                    excludePairs: [...failedPairs],
                   })
-                : await this.routeMessageAuto(message, [...failed], { fallbackFrom: firstType });
+                : await this.routeMessageAuto(message, [...failedProviders], {
+                    fallbackFrom: firstType,
+                    excludePairs: [...failedPairs],
+                  });
             } catch {
               break;
             }
-            if (!next || next.type === session.type || failed.has(next.type)) break;
-            failed.add(next.type);
+            if (!next) break;
+            const nextPair = `${next.type}|${next.model ?? 'default'}`;
+            // A pair this walk already tried means nothing NEW is routable — stop
+            // rather than re-paying for a known-bad call.
+            if (failedPairs.has(nextPair)) break;
+            failedPairs.add(nextPair);
             // Last-resort truthfulness: if even the agentic floor could not
             // avoid a weak model, say so ONCE so a degraded answer is never
             // mistaken for a real one (the tiny local model fabricated tool
@@ -4655,8 +4824,22 @@ export class ChatCommand extends BaseCommand {
               } catch {
                 // Best-effort — bookkeeping must never break the turn.
               }
+              // Is the PROVIDER out, or only this PAIR? The bookkeeping just
+              // wrote the answer; read it rather than re-deriving the rule, so
+              // the walk and the exclusion filter can never disagree.
+              let providerOut = false;
+              try {
+                providerOut = (this.sessionFailedProviders.get(next.type) ?? 0) > Date.now();
+              } catch {
+                // Unknown scope → treat it as pair-scoped (the conservative
+                // direction for staying routable).
+              }
+              if (providerOut) failedProviders.add(next.type);
               logger.warn(
-                `   ⚠️ ${next.type}/${next.model ?? 'default'} failed (${describeFailureKind(nextKind)}) — trying the next auto candidate...`,
+                `   ⚠️ ${next.type}/${next.model ?? 'default'} failed (${describeFailureKind(nextKind)}) — ` +
+                  (providerOut
+                    ? 'that provider is out; trying the next auto candidate...'
+                    : `trying ${next.type}'s next model, then the next provider...`),
               );
               // Next candidate.
             }
@@ -5032,6 +5215,42 @@ export class ChatCommand extends BaseCommand {
    * the ranked candidates and picks the first one whose isAvailable() passes —
    * so Auto routing never sends a request to a provider that would 401.
    */
+  /**
+   * Point the routing snapshot at the pair this step will ACTUALLY use.
+   *
+   * THE DEFECT THIS CLOSES (measured 2026-10-13). The snapshot was assigned once
+   * per `routeMessageAuto` call, from the router's DECISION — before the
+   * candidate walk had a chance to substitute a pair — so a step could record
+   * `routing: gemini/gemini-3.1-flash-lite, agenticCapable: true` while the
+   * request went to `local/deepseek-coder:latest`: the Trace tab, the console
+   * line and the capability verdict all named a model the turn never ran, and the
+   * disagreement was invisible (trace-1791907393457-7seewg). The pair that really
+   * ran was in `lastAttempt` only.
+   *
+   * So the snapshot now FOLLOWS the attempt: provider/model are the pair being
+   * asked, the capability verdict is recomputed for THAT pair (the field asks
+   * "may the final routed model hold an agentic software task", so it must
+   * describe the model that ran), and the router's intended pair is kept once as
+   * `substitutedFor` so the substitution stays auditable instead of being erased.
+   * The first substitution wins, because that is the DECISION the walk moved away
+   * from — a later hop does not overwrite it with an intermediate pair.
+   */
+  private noteServedRoute(provider: string, model: string): void {
+    const snap = this.lastRouteSnapshot;
+    if (!snap) return;
+    const served = `${provider}/${model}`;
+    const intended = `${snap.provider}/${snap.model}`;
+    const next: import('../learning/reasoning-trace.js').TraceRoutingSnapshot = {
+      ...snap,
+      provider,
+      model,
+      agenticCapable: isAgenticCapableModel(model, provider),
+    };
+    if (snap.substitutedFor) next.substitutedFor = snap.substitutedFor;
+    else if (served !== intended) next.substitutedFor = intended;
+    this.lastRouteSnapshot = next;
+  }
+
   private async routeMessageAuto(
     message: string,
     excludeProviders: string[] = [],
@@ -5060,6 +5279,23 @@ export class ChatCommand extends BaseCommand {
        * fresh.
        */
       noCache?: boolean;
+      /**
+       * `provider|model` keys this route must NOT return (see the pair-scoped
+       * failover walk in `answer`).
+       *
+       * WHY A PAIR AND NOT A PROVIDER. The walk used to exclude the failing
+       * PROVIDER, so ONE bad pair took its siblings with it: measured live
+       * (trace-1791906998502-txddq4) a per-model 429 on `gemini/gemma-4-31b-it`
+       * removed all twelve gemini pairs from the turn, a `model not found` on one
+       * openrouter id removed all of openrouter, and the walk landed on the local
+       * last resort while ~370 routable pairs sat untried. Free tiers meter PER
+       * MODEL, so a sibling is very often perfectly healthy — which is the rule
+       * the registry, the quota ledger and the exclusion filter already follow
+       * (`recordActionFailure` parks the pair, the ledger parks the model, and
+       * `PROVIDER_RATE_LIMIT_ESCALATION_MODELS` is what escalates to a provider).
+       * The walk now follows that same rule instead of contradicting it.
+       */
+      excludePairs?: readonly string[];
     },
   ): Promise<AutoRoutedMessage> {
     // The text ROUTING is decided from — the prior software ask for a bare
@@ -5129,6 +5365,13 @@ export class ChatCommand extends BaseCommand {
       opts?.noCache === true
         ? resolveFresh()
         : withRoutingCache(cacheSignature, 30_000, resolveFresh);
+    /**
+     * Does this ask need CAPACITY (not just a healthy model)? One predicate for
+     * the whole route, shared by the capability floor, the model-first override
+     * and this walk's per-provider model resolution — so a `default` model is
+     * resolved capability-first exactly when the ask is agentic.
+     */
+    const agenticAsk = isAgenticTask(decision.complexity, decision.taskProfile);
     // G5 — record the routing snapshot now (the winner + why), so the reasoning
     // trace for this turn can show the decision instead of a blank column.
     // P3 — the TASK this turn belongs to, as far as model continuity is
@@ -5271,6 +5514,9 @@ export class ChatCommand extends BaseCommand {
       // Model-scoped session exclusion — only THIS model, never its siblings.
       if (isModelExcluded(prov, model)) return;
       const key = `${prov}|${model}`;
+      // Pairs this WALK already tried (see `opts.excludePairs`) — a pair-scoped
+      // exclusion, so a provider's remaining models stay reachable.
+      if (opts?.excludePairs?.includes(key)) return;
       if (seenPairs.has(key)) return;
       // NOTE: deliberately NO registry-usability skip here. `resolveWorkingModel`
       // below OWNS model health — it repairs a dead/parked model to a live one
@@ -5320,9 +5566,18 @@ export class ChatCommand extends BaseCommand {
       try {
         const resolved = resolveProvider(this.configManager, candidate.provider);
         if (await resolved.provider.isAvailable()) {
+          // A `default` model is resolved by the router, and for a task that
+          // NEEDS capacity that resolution is told so: the health ranking it
+          // otherwise follows picks the fastest model, which is how a keyless
+          // local rung ended up on `local/deepseek-coder:latest` (a
+          // confabulation) with a verified `gpt-oss:120b-cloud` unused
+          // (trace-1791907393457-7seewg). `agenticAsk` is the same predicate the
+          // router's own capability floor uses, so the two cannot disagree.
           const desired = candidate.model !== 'default'
             ? candidate.model
-            : getAutoRouter().resolveModel(candidate.provider, 'chat', this.configManager);
+            : getAutoRouter().resolveModel(candidate.provider, 'chat', this.configManager, undefined, {
+                agenticAsk,
+              });
           // Model health: only use models that actually exist on the provider.
           // A provider's pinned config.model can be deprecated or a placeholder
           // (e.g. gemini-2.0-flash-exp → 404) — repair to a live model. The pair

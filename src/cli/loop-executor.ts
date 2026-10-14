@@ -254,6 +254,18 @@ export interface LoopExecutorOptions {
   model?: string;
   /** Stream content tokens live (CLI prints; eval ignores). */
   onToken?: (token: string) => void;
+  /**
+   * Live tool-call lifecycle — parity with the chat surfaces' `onToolCall`.
+   * `started` fires before execution (with the arguments), `called` after (with
+   * the outcome). Without this an interactive `execute` could only report tool
+   * outcomes once the whole run was over.
+   */
+  onToolCall?: (
+    phase: 'started' | 'called',
+    info: { tool: string; ok?: boolean; result?: string; error?: string; durationMs?: number; args?: Record<string, unknown> },
+  ) => void;
+  /** Live `git diff` payload — parity with the chat surfaces' `onGitDiff`. */
+  onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
   /** External cancellation (execute's Ctrl+C). */
   signal?: AbortSignal;
   /** Skip the ambient [Project context] injection (tests). */
@@ -1241,6 +1253,21 @@ export async function runLoopExecutor(
         // reason" reviewable after the fact instead of inferred from a missing
         // round trip.
         emit: (event, data) => {
+          // Cards (parity with the chat surface's onToolCall/onGitDiff). These
+          // events were dropped here, so `execute` could only report what ran
+          // after the run was already over.
+          if (event === 'tool:started' || event === 'tool:called') {
+            opts.onToolCall?.(event === 'tool:started' ? 'started' : 'called', data as {
+              tool: string;
+              ok?: boolean;
+              result?: string;
+              error?: string;
+              durationMs?: number;
+              args?: Record<string, unknown>;
+            });
+          } else if (event === 'git:diff') {
+            opts.onGitDiff?.(data as import('../tools/git-tool.js').GitDiffPayload);
+          }
           // WS1 — a finding the turn recorded, with the gate's verdict.
           if (event === FINDING_EVENT) {
             findings.push(data as import('../findings/verdicts.js').WireFinding);

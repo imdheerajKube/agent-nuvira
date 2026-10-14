@@ -3479,3 +3479,132 @@ describe('tool loop — nudge interrupted after an answer', () => {
     expect(result.termination).toBe('no-capable-candidate');
   });
 });
+
+// ─── P5 — blip patience on an EMPTY 200 ─────────────────────────────────────
+//
+// An empty completion is the ONE unusable response that never reaches the blip
+// policy: `chat.generateWithTransientRetry` applies the empty-response schedule
+// only when the attempt THROWS, and a provider that answers 200 with no content
+// does not throw — it lands in the loop. So the loop's own single retry was the
+// whole policy for it, and both live failures (trace-1791906998502-txddq4,
+// trace-1791907393457-7seewg) handed off after that one retry and ended on the
+// local last resort while the caller's granted patience was never spent.
+//
+// The caller owns the evidence, so it is asked; the loop only spends what it is
+// granted, ONCE per streak, on the SAME pair — and a caller that grants nothing
+// (or omits the hook) keeps the previous behaviour exactly.
+describe('tool loop — empty-response blip patience', () => {
+  /**
+   * The callModel count at each handoff — the number that says whether the loop
+   * waited before moving off the pair.
+   */
+  function withHandoff(base: ToolLoopDeps, outcomes: boolean[]) {
+    const atHandoff: number[] = [];
+    let i = 0;
+    const requestModelSwitch = vi.fn(async () => {
+      atHandoff.push((base.callModel as unknown as { mock: { calls: unknown[] } }).mock.calls.length);
+      return outcomes[Math.min(i++, outcomes.length - 1)];
+    });
+    return { deps: { ...base, requestModelSwitch } as ToolLoopDeps, atHandoff, requestModelSwitch };
+  }
+
+  it('re-asks the SAME pair for every granted delay instead of handing off', async () => {
+    const emptyResponsePatienceMs = vi.fn().mockReturnValue([0, 0]);
+    const onTraceEvent = vi.fn();
+    const base = mockDeps([
+      { content: '', toolCalls: [] },
+      { content: '', toolCalls: [] },
+      { content: 'The real answer.', toolCalls: [] },
+    ]);
+    const { deps, requestModelSwitch } = withHandoff(base, [true]);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'q' }],
+      context: ctx,
+      deps: { ...deps, emptyResponsePatienceMs },
+      onTraceEvent,
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.content).toBe('The real answer.');
+    // Three calls on ONE pair: the first empty, then one per granted delay.
+    expect(base.callModel).toHaveBeenCalledTimes(3);
+    // The handoff was NEVER asked for — the blink was waited out.
+    expect(requestModelSwitch).not.toHaveBeenCalled();
+    // Asked once per streak (a shifting plan cannot extend the wait)…
+    expect(emptyResponsePatienceMs).toHaveBeenCalledTimes(1);
+    // …and each spent wait is on the record, naming the pair.
+    const waits = onTraceEvent.mock.calls
+      .map((c) => c[0] as LoopTraceEvent)
+      .filter((e) => e.gate === 'wait');
+    expect(waits).toHaveLength(2);
+    expect(String(waits[0].summary)).toMatch(/re-asking the SAME pair/);
+  });
+
+  it('hands off after the loop\'s single retry when the caller grants NO patience', async () => {
+    const emptyResponsePatienceMs = vi.fn().mockReturnValue([]);
+    const onTraceEvent = vi.fn();
+    const base = mockDeps([{ content: '', toolCalls: [] }]);
+    const { deps, atHandoff } = withHandoff(base, [false]);
+
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'q' }],
+      context: ctx,
+      deps: { ...deps, emptyResponsePatienceMs },
+      onTraceEvent,
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    // No evidence → the walk is the remedy, reached exactly where it was before
+    // this change: after the second empty (the loop's one retry).
+    expect(atHandoff[0]).toBe(2);
+    expect(emptyResponsePatienceMs).toHaveBeenCalledTimes(1);
+    // And nothing was waited on.
+    const waits = onTraceEvent.mock.calls
+      .map((c) => c[0] as LoopTraceEvent)
+      .filter((e) => e.gate === 'wait');
+    expect(waits).toHaveLength(0);
+  });
+
+  it('keeps the pre-P5 behaviour byte for byte when no hook is supplied at all', async () => {
+    const base = mockDeps([{ content: '', toolCalls: [] }]);
+    const { deps, atHandoff } = withHandoff(base, [false]);
+
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'q' }],
+      context: ctx,
+      deps,
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(atHandoff[0]).toBe(2);
+  });
+
+  it('asks again after the pair produces something usable (a new streak, a new plan)', async () => {
+    const emptyResponsePatienceMs = vi.fn().mockReturnValue([]);
+    const base = mockDeps([
+      { content: '', toolCalls: [] },                                     // empty #1 → plan (nothing granted)
+      { content: '', toolCalls: [] },                                     // handoff here
+      { content: 'Working on it.', toolCalls: [{ id: 'c1', name: 'read_file', arguments: { path: 'a' } }] },
+      { content: '', toolCalls: [] },                                     // a LATER streak → a FRESH plan
+      { content: '', toolCalls: [] },
+      { content: 'Done.', toolCalls: [] },
+    ]);
+    const { deps } = withHandoff(base, [true, false]);
+
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'q' }],
+      context: ctx,
+      deps: { ...deps, emptyResponsePatienceMs },
+      executeTool: async () => 'file contents',
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    // Two distinct streaks, two plans — spent patience is never inherited.
+    expect(emptyResponsePatienceMs).toHaveBeenCalledTimes(2);
+  });
+});

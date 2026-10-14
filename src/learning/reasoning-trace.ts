@@ -56,6 +56,26 @@ export interface TraceRoutingSnapshot {
   /** C3 — the pair this route failed over FROM (the failover chain's head). */
   fallbackFrom?: string;
   /**
+   * The pair the ROUTER decided on, when the walk that followed served the step
+   * from a DIFFERENT one.
+   *
+   * WHY THIS IS NOT `fallbackFrom`. `fallbackFrom` is the chain's head on a
+   * failover; this is the gap between the DECISION and the REQUEST. The two are
+   * different facts, and conflating them is how a trace came to name a model the
+   * turn never ran: measured 2026-10-13 (trace-1791907393457-7seewg), every step
+   * carried `routing: gemini/gemini-3.1-flash-lite, agenticCapable: true` while
+   * the debug log recorded `served: local/deepseek-coder:latest` — the snapshot
+   * was written from the router's decision, before the candidate walk could
+   * substitute a pair. The pair that actually ran was in `lastAttempt` only, and
+   * no field said the two disagreed.
+   *
+   * `provider`/`model` on this snapshot are the SERVED pair (so the capability
+   * verdict, the score and this note describe the same request); this field
+   * names the decision it replaced, when there was one. Optional: entries written
+   * before this field parse unchanged.
+   */
+  substitutedFor?: string;
+  /**
    * Bundle 36 — the task INTENT the router bucketed this decision under
    * (`coding` / `creative` / …), recorded so a LATER explicit verdict
    * (`nuvira rate bad`) can correct the exact bandit arm the turn was learned
@@ -307,6 +327,15 @@ export type TraceGateName =
   // having declared a plan, so the loop spent one bounded nudge to plan first —
   // the "plan → track → verify" contract made structural instead of optional.
   | 'plan'
+  // BLIP PATIENCE (P5): the provider answered 200 with NOTHING usable, and the
+  // loop spent one bounded, caller-granted wait on the SAME pair (rather than
+  // handing the turn to a weaker model over a blink). A gate name because it is
+  // exactly that: a decision the loop made about its own behaviour, from evidence
+  // the caller owns. Recorded with the delay and the schedule position, so a slow
+  // turn is explainable after the fact — the absence of this record is what made
+  // two live downgrades (trace-1791906998502-txddq4,
+  // trace-1791907393457-7seewg) look like an unexplained model switch.
+  | 'wait'
   // PLAN CLOSE-OUT gate: the turn DECLARED or advanced a plan and is ending with
   // steps still `running`/`pending`, so the loop spent one bounded nudge to settle
   // them (update each to its real status). Distinct from 'plan' so the two cannot

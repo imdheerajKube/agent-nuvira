@@ -52,6 +52,7 @@ import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { listCheckpoints } from '../agents/checkpoint-store.js';
 import { logger, setSilent } from '../utils/logger.js';
 import { PipelineBoard, PipelineEventStream } from './pipeline-board.js';
+import { createCardSink, presentAnswer } from './ui/index.js';
 import {
   formatBatchReport,
   getUnattendedJob,
@@ -1839,7 +1840,8 @@ export class ExecuteCommand extends BaseCommand {
           ts: Date.now(),
         }) + '\n');
       } else if (content) {
-        console.log('\n' + content + '\n');
+        console.log('');
+        presentAnswer(content);
         // E — the honest plan → track → verify close-out. Rendered only when the
         // report has something to say (a plan, changes, or a non-trivial
         // verdict), so an ordinary answer stays clean.
@@ -1897,9 +1899,14 @@ export class ExecuteCommand extends BaseCommand {
       // Best-effort — warmup must never break the run.
     }
     try {
+      // P8 — render tool / shell / git-diff events as cards while the loop runs.
+      // The sink is inert off a real terminal, so a piped or CI run keeps its
+      // exact bytes (see `createCardSink`).
+      const cards = createCardSink();
       const result = await runLoopExecutor(goal, this.configManager, {
         provider,
         model,
+        ...cards.overrides,
         // WS5 (#27) — the command's own flags. `--resume` means the SAME run
         // here as it does on the pipeline arm: the last run of this ask in this
         // directory (both ids come from `checkpointIdFor`), so one flag resumes
@@ -1926,7 +1933,7 @@ export class ExecuteCommand extends BaseCommand {
         // it, "the gate applied the edit autonomously" and "the model passed
         // confirm:true" were indistinguishable from the console.
         verbose: options.verbose,
-      });
+      }).finally(() => cards.stop());
       // The loop engine's answer is rendered by THIS command while the gateway
       // and dashboard console both sanitize it before showing it. Without this
       // the execute CLI printed a `**suggest_followups**` caption plus its raw
@@ -1972,7 +1979,7 @@ export class ExecuteCommand extends BaseCommand {
         }) + '\n');
       } else {
         console.log('');
-        if (content) console.log(content + '\n');
+        if (content) presentAnswer(content);
         if (!success) {
           logger.error(content || 'The loop engine could not complete this goal.');
         }

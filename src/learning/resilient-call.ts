@@ -38,6 +38,9 @@ import { buildModelCandidates, buildTieredFailoverChain, countEligibleModels } f
 import { assertUsableModelResponse, isUnusableModelResponseError } from './response-usability.js';
 import { recordModelUsage } from './model-warmup.js';
 import { getDefaultModel } from '../inference/provider-catalog.js';
+import { LOCAL_RUNTIME_IDS } from '../inference/model-entitlement.js';
+import { preferredModelsFor } from './model-selection.js';
+import { strongestFirst } from './model-capability.js';
 import { resolveRoute } from '../inference/route-resolver.js';
 import { getModelRegistry } from './model-registry.js';
 import {
@@ -1103,7 +1106,18 @@ export function buildDeepFailoverPool(
   // provider. The reserve is strictly last-resort: scored below every ranked
   // candidate so it is only reached once the verified pool is exhausted.
   for (const fb of decision.fallbackChain) {
-    const model = fb.model && fb.model !== 'default' ? fb.model : 'default';
+    // A bare `default` on a keyless local runner is resolved to the STRONGEST
+    // servable local model here rather than left for the health ranking at call
+    // time — see `placeholderModel`.
+    //
+    // THE SCORE FOLLOWS THE CHAIN'S OWN MODEL, not the substituted one. A chain
+    // entry that NAMES a model is a real candidate (0.5); a provider-level rung is
+    // an ordering placeholder (0.05). Scoring the substituted id instead would
+    // PROMOTE the local rung — measured while writing this: the strongest local
+    // model took a 0.5 row and jumped to pool position 3, ahead of healthy cloud
+    // pairs, which is the opposite of "local as the last resort".
+    const chainModel = fb.model && fb.model !== 'default' ? fb.model : undefined;
+    const model = chainModel ?? placeholderModel(fb.provider);
     // The primary candidate is already candidates[0].
     if (fb.provider === decision.provider && model === decision.model) continue;
     const key = `${fb.provider}|${model}`;
@@ -1116,7 +1130,7 @@ export function buildDeepFailoverPool(
       // chain outranks a bare provider placeholder.
       // A placeholder, deliberately: the chain's ORDER is meaningful, its number
       // is not evidence about the pair. Hence no `scoreBasis`.
-      score: model === 'default' ? 0.05 : 0.5,
+      score: chainModel ? 0.5 : 0.05,
     });
   }
 
@@ -1128,7 +1142,9 @@ export function buildDeepFailoverPool(
     if (candidates.some(c => c.provider === ranked.provider)) continue;
     candidates.push({
       provider: ranked.provider,
-      model: 'default', // Will be resolved at call time
+      // Still a placeholder for a cloud provider (resolved at call time); a
+      // keyless local runner gets its strongest servable model named up front.
+      model: placeholderModel(ranked.provider),
       score: ranked.score,
       scoreBasis: 'provider',
     });
@@ -1141,7 +1157,7 @@ export function buildDeepFailoverPool(
       if (candidates.some(c => c.provider === fb)) continue;
       candidates.push({
         provider: fb,
-        model: 'default',
+        model: placeholderModel(fb),
         // A placeholder — last-resort ordering only, no `scoreBasis`.
         score: 0.1,
       });
@@ -1168,6 +1184,54 @@ export function buildDeepFailoverPool(
   }
 
   return candidates;
+}
+
+/**
+ * The MODEL to name for a provider-level placeholder row — never `default` for a
+ * keyless local runner.
+ *
+ * WHY THIS EXISTS. The tail of the pool carries provider-level entries (the
+ * router's fallback chain, its reserve, the config fallback chain) whose model is
+ * a bare `default`. `default` is not a model id, so it is resolved at call time
+ * by `AutoRouter.resolveModel`, and THAT is a HEALTH ranking: evidence strength,
+ * then error rate, then LATENCY — which a small model always wins. Measured
+ * 2026-10-13, `preferredModelsFor('local')` = `deepseek-coder:latest` (medium
+ * band, no size evidence), `qwen2.5:0.5b`, `gemma4:e4b`, `gpt-oss:120b-cloud`
+ * (0.80, high) — the strongest verified model on the machine LAST. Two live turns
+ * fell through to the weak end of that list (`local/gemma4:e4b` on
+ * trace-1791906998502-txddq4; `local/deepseek-coder:latest` on
+ * trace-1791907393457-7seewg, whose answer was a confabulation) while the 120B sat
+ * verified and unused.
+ *
+ * A keyless local runner is the zero-config LAST RESORT, so the right model there
+ * is its strongest SERVABLE one — the same rule the router's own last-resort
+ * local upgrade and the tiered chain's strongest-first local phase already
+ * apply. Naming it here (rather than leaving a placeholder to be health-picked
+ * later) fixes every walker of this pool — chat, execute, the orchestrator — at
+ * the point where the pair is chosen, and keeps the rung LAST in the pool: the
+ * score sort would otherwise hoist a strong local model above healthy cloud pairs
+ * (measured: `local/gpt-oss:120b-cloud` scored 0.876, above every gemini sibling),
+ * which is not "local as a last resort" at all.
+ *
+ * Models that are currently parked are still named when nothing else is servable
+ * (`resolveRoute` repairs a resting pair, and the registry re-admits it), so this
+ * can never make a rung unreachable. Best-effort: an unreadable registry keeps the
+ * previous behaviour.
+ */
+function placeholderModel(provider: string): string {
+  if (!LOCAL_RUNTIME_IDS.includes(provider)) return 'default';
+  try {
+    const preferred = preferredModelsFor(provider).filter((m) => m !== 'default');
+    if (preferred.length === 0) return 'default';
+    const registry = getModelRegistry();
+    const servable = preferred.filter((m) => {
+      const entry = registry.getEntry(provider, m);
+      return !entry || registry.isUsable(provider, m);
+    });
+    return strongestFirst(servable)[0] ?? strongestFirst(preferred)[0] ?? 'default';
+  } catch {
+    return 'default';
+  }
 }
 
 /**

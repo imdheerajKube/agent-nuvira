@@ -15,6 +15,7 @@ import { maybeAutoRecall, recallCard, recallContextBlock, recallPolicy } from '.
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
 import { sweepTransientFailures, sessionRevivalStore } from '../learning/provider-revival.js';
 import { resolveProvider } from './router.js';
+import { presentAnswer } from './ui/index.js';
 
 /**
  * Edit command — edit files using AI assistance
@@ -127,7 +128,7 @@ export class EditCommand extends BaseCommand {
       if (options?.dryRun) {
         spinner.stop();
         logger.highlight('\n--- Proposed Changes ---\n');
-        console.log(result);
+        presentAnswer(result);
         logger.highlight('\n--- End ---\n');
         return;
       }
@@ -278,7 +279,7 @@ export class EditCommand extends BaseCommand {
 
       if (options?.dryRun) {
         logger.highlight('\n--- Proposed Changes ---\n');
-        console.log(result);
+        presentAnswer(result);
         logger.highlight('\n--- End ---\n');
         return;
       }

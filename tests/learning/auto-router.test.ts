@@ -47,7 +47,7 @@ import { resetRouterPromotion, getRouterPromotion } from '../../src/learning/rou
 import { resetMlRouter, getMlRouter } from '../../src/learning/ml-router.js';
 import { resetModelRegistry, getModelRegistry } from '../../src/learning/model-registry.js';
 import { PRIOR_FULL_SAMPLES } from '../../src/learning/capability-evidence.js';
-import { PROVIDER_CONTEXT_WINDOWS } from '../../src/learning/model-selection.js';
+import { PROVIDER_CONTEXT_WINDOWS, preferredModelsFor } from '../../src/learning/model-selection.js';
 import { CATALOG_PROVIDER_IDS, isCatalogKeyless } from '../../src/inference/provider-catalog.js';
 
 /**
@@ -2908,5 +2908,64 @@ describe('R4 — agentic capability floor', () => {
     const decision = new AutoModelRouter().resolve('writer', 'deploy to production', opts, allTiny);
     expect(decision.ranked.length).toBeGreaterThan(0);
     expect(decision.provider).toBeTruthy();
+  });
+});
+
+// ─── P6/P7 — the capability-guarded model pick ──────────────────────────────
+//
+// `resolveModel` is the last thing that names a model before a request, so its
+// guard is the difference between "a weak model answered" and "the strongest
+// model this provider can serve answered". The guard used to fire on BAND alone
+// (`capabilityClassOf(model) === 'low'`), which caught a 0.5B but not the
+// medium-band model that a HEALTH ranking puts first — and that list is ordered
+// by evidence strength, error rate and LATENCY, so a small model always leads it.
+//
+// Measured live 2026-10-13: `preferredModelsFor('local')` led with
+// `deepseek-coder:latest` (medium, no size evidence, telemetry-verified) and put
+// the verified `gpt-oss:120b-cloud` (high, 0.80) LAST. Two turns then fell to the
+// weak end of it (trace-1791906998502-txddq4 → `local/gemma4:e4b`;
+// trace-1791907393457-7seewg → `local/deepseek-coder:latest`) while the 120B sat
+// unused.
+describe('resolveModel — capability-guarded pick', () => {
+  /** The health ranking the traces were served by: fast first, strongest last. */
+  function seedLocalLikeTheTrace(): void {
+    const r = getModelRegistry();
+    r.markVerified('local', 'deepseek-coder:latest', 'telemetry', 400);
+    r.markVerified('local', 'qwen2.5:0.5b', 'telemetry', 900);
+    r.markVerified('local', 'gemma4:e4b', 'telemetry', 700);
+    r.markVerified('local', 'gpt-oss:120b-cloud', 'telemetry', 9_000);
+  }
+
+  it('picks the STRONGEST servable model on a keyless local runner, not the healthiest', () => {
+    seedLocalLikeTheTrace();
+    // The health order really is the weak-first order this is guarding against.
+    expect(preferredModelsFor('local')[0]).toBe('deepseek-coder:latest');
+    expect(getAutoRouter().resolveModel('local', 'chat')).toBe('gpt-oss:120b-cloud');
+  });
+
+  it('leaves a healthy hosted provider on its health pick for a non-agentic ask', () => {
+    const r = getModelRegistry();
+    r.markVerified('gemini', 'gemini-2.5-flash', 'telemetry', 300);
+    r.markVerified('gemini', 'gemini-2.5-pro', 'telemetry', 8_000);
+    // Both are high band, so the original band rule has nothing to say here — a
+    // cheap fast model stays a legitimate choice for a plain ask.
+    expect(getAutoRouter().resolveModel('gemini', 'chat')).toBe('gemini-2.5-flash');
+  });
+
+  it('upgrades a hosted pick when the caller says the ask is AGENTIC', () => {
+    const r = getModelRegistry();
+    r.markVerified('gemini', 'gemini-2.5-flash', 'telemetry', 300);
+    r.markVerified('gemini', 'gemini-2.5-pro', 'telemetry', 8_000);
+    expect(getAutoRouter().resolveModel('gemini', 'chat', undefined, undefined, { agenticAsk: true }))
+      .toBe('gemini-2.5-pro');
+  });
+
+  it('never trades DOWN to a weaker sibling that happens to be healthier', () => {
+    // The guard is a one-way door: a pick that is already the strongest usable
+    // model stays, whatever the health ranking prefers.
+    const r = getModelRegistry();
+    r.markVerified('local', 'gpt-oss:120b-cloud', 'telemetry', 9_000);
+    r.markVerified('local', 'deepseek-coder:latest', 'telemetry', 100);
+    expect(getAutoRouter().resolveModel('local', 'chat')).toBe('gpt-oss:120b-cloud');
   });
 });

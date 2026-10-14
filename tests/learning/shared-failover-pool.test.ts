@@ -43,6 +43,7 @@ import { getModelRegistry, resetModelRegistry } from '../../src/learning/model-r
 import { getQuotaLedger, resetQuotaLedger } from '../../src/learning/quota-ledger.js';
 import { resetRouterBandit } from '../../src/learning/router-bandit.js';
 import { resetProviderFallback } from '../../src/learning/provider-fallback.js';
+import { preferredModelsFor } from '../../src/learning/model-selection.js';
 
 let tempDir: string;
 let originalMemoryDir: string | undefined;
@@ -334,5 +335,84 @@ describe('createFailoverExclusionFilter — one rule for chat, execute and the o
     expect(filter('groq', 'openai/gpt-oss-120b')).toBe(true);
     // The sibling of the model-scoped persisted failure is untouched.
     expect(filter('groq', 'llama-3.3-70b-versatile')).toBe(false);
+  });
+});
+
+// ─── P7 — the local rung names its STRONGEST servable model ─────────────────
+//
+// The pool's local rung is a provider-level placeholder carrying `model:
+// 'default'`, and `default` is not an id — it is resolved at call time by
+// `AutoRouter.resolveModel`, a HEALTH ranking (evidence strength, error rate,
+// then LATENCY, which a small model always wins). Measured 2026-10-13,
+// `preferredModelsFor('local')` = `deepseek-coder:latest`, `qwen2.5:0.5b`,
+// `gemma4:e4b`, `gpt-oss:120b-cloud` — the strongest verified model on the
+// machine LAST, which is how two turns (trace-1791906998502-txddq4 →
+// `local/gemma4:e4b`; trace-1791907393457-7seewg → `local/deepseek-coder:latest`,
+// a confabulation) reached the weak end of that list with a 120B sitting unused.
+//
+// Two properties are pinned, and the second is the one a first attempt at this
+// fix got wrong: the rung must NAME a real, strongest model, and it must keep its
+// PLACEHOLDER score so it stays the last thing tried.
+describe('buildDeepFailoverPool — the local rung', () => {
+  /** A decision whose chain carries a bare provider-level rung for `local`. */
+  function rungDecision(provider = 'gemini', model = 'gemini-2.5-flash', chainProvider = 'local') {
+    return {
+      provider,
+      model,
+      score: 0.4,
+      ranked: [],
+      fallbackChain: [{ provider: chainProvider, model: 'default' }],
+      complexity: 'moderate',
+    } as any;
+  }
+
+  it('names the strongest servable local model instead of a bare placeholder', () => {
+    // The health ranking the traces actually had: fastest first, strongest last.
+    seedVerified('local', 'deepseek-coder:latest', 'qwen2.5:0.5b', 'gemma4:e4b');
+    getModelRegistry().markVerified('local', 'gpt-oss:120b-cloud', 'telemetry', 9_000);
+    // The health order really is the weak-first order this is guarding against:
+    // it does NOT lead with the strongest model on the machine.
+    expect(preferredModelsFor('local')[0]).not.toBe('gpt-oss:120b-cloud');
+
+    const pool = buildDeepFailoverPool(rungDecision(), {
+      taskDescription: GOAL,
+      complexity: 'moderate',
+      configManager: makeConfig(['groq', 'gemini', 'local']),
+    });
+
+    const localEntries = pool.filter((c) => c.provider === 'local');
+    expect(localEntries).toHaveLength(1);
+    expect(localEntries[0].model).toBe('gpt-oss:120b-cloud');
+  });
+
+  it('keeps the rung a PLACEHOLDER score, so a named local model cannot jump the cloud pairs', () => {
+    seedVerified('local', 'deepseek-coder:latest');
+    getModelRegistry().markVerified('local', 'gpt-oss:120b-cloud', 'telemetry', 9_000);
+
+    const pool = buildDeepFailoverPool(rungDecision(), {
+      taskDescription: GOAL,
+      complexity: 'moderate',
+      configManager: makeConfig(['groq', 'gemini', 'local']),
+    });
+
+    // A provider-level row is an ORDERING PLACEHOLDER (0.05), never a chain entry
+    // that names a real model (0.5). Measured while writing this: scoring the
+    // substituted id promoted the strongest local model to pool position 3, ahead
+    // of healthy cloud pairs.
+    const local = pool.find((c) => c.provider === 'local')!;
+    expect(local.model).toBe('gpt-oss:120b-cloud');
+    expect(local.score).toBeLessThanOrEqual(0.1);
+  });
+
+  it('leaves a CLOUD provider rung as a placeholder (resolved per call, not here)', () => {
+    seedVerified('local', 'deepseek-coder:latest');
+    const pool = buildDeepFailoverPool(rungDecision('gemini', 'gemini-2.5-flash', 'groq'), {
+      taskDescription: GOAL,
+      complexity: 'moderate',
+      configManager: makeConfig(['groq', 'gemini']),
+    });
+    // Only a keyless local runner gets a model named up front; a hosted provider's
+    // rung keeps the per-call resolution it has always had.
+    expect(pool.find((c) => c.provider === 'groq')?.model).toBe('default');
   });
 });

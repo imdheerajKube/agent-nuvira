@@ -60,6 +60,10 @@ import { effectiveParameter } from './capability-evidence.js';
 import { isTinyModel, isAgenticCapableModel } from './model-harness.js';
 import { estimateTokens } from './cost-tracker.js';
 import { preferredModelsFor, PROVIDER_CONTEXT_WINDOWS } from './model-selection.js';
+// ONE notion of "the model runs on this machine" — shared with the entitlement
+// classifier, so a keyless GATEWAY (`nuvira`, `omniroute`) can never be treated
+// as a local runner just because it happens to need no key.
+import { LOCAL_RUNTIME_IDS } from '../inference/model-entitlement.js';
 // Last-resort LOCAL picks are ordered by CAPABILITY as well as health: a 0.5B
 // tag wins a pure health ranking, so a health-first pick is how an agentic ask
 // ended on the weakest local model. See the local-capability upgrade below.
@@ -3281,24 +3285,70 @@ export class AutoModelRouter {
    *     capable model instead of merely reshuffling the low band;
    *   - best-effort: a registry failure returns the original pick unchanged.
    */
-  private capabilityGuardedPick(provider: string, model: string): string {
+  private capabilityGuardedPick(provider: string, model: string, agenticAsk = false): string {
     try {
-      if (capabilityClassOf(model) !== 'low') return model;
       const registry = getModelRegistry();
-      const stronger = strongestFirst(
-        preferredModelsFor(provider).filter((m) => capabilityClassOf(m) !== 'low'),
-      ).filter((m) => {
+      // Every model this provider can actually serve right now, strongest first.
+      const usable = strongestFirst(preferredModelsFor(provider)).filter((m) => {
         const entry = registry.getEntry(provider, m);
         return !entry || registry.isUsable(provider, m);
       });
-      return stronger[0] ?? model;
+      const strongestUsable = usable[0];
+      if (!strongestUsable) return model;
+      if (estimateModelCapability(strongestUsable) <= estimateModelCapability(model)) {
+        // The pick is already the strongest thing this provider can serve — or the
+        // ranking cannot tell them apart. Nothing to upgrade.
+        return model;
+      }
+      /**
+       * WHEN TO PREFER THE STRONGER SIBLING.
+       *
+       * The band-only rule (`capabilityClassOf(model) !== 'low'` → keep the pick)
+       * was the whole guard, and it was too coarse: it caught a 0.5B, but not the
+       * MEDIUM-band model that outranks a HIGH one in a health ranking. Measured
+       * 2026-10-13: `preferredModelsFor('local')` = `deepseek-coder:latest`
+       * (medium, no size evidence), `qwen2.5:0.5b`, `gemma4:e4b` (medium),
+       * `gpt-oss:120b-cloud` (high, 0.80) — the strongest verified model LAST,
+       * because that list is ordered by evidence strength, error rate and LATENCY,
+       * which a small model always wins. Two live turns fell through to that weak
+       * end (trace-1791906998502-txddq4 → `local/gemma4:e4b`;
+       * trace-1791907393457-7seewg → `local/deepseek-coder:latest`, whose answer
+       * was a confabulation) while the 120B sat unused and verified.
+       *
+       * So the guard now fires in three cases, in the order they were learned:
+       *   1. the pick is LOW band — a 0.5B never leads (the original rule);
+       *   2. the provider is a KEYLESS LOCAL runner — it is the zero-config LAST
+       *      RESORT, so its strongest model is the right pick there, and this is
+       *      the same rule the router's own last-resort local upgrade already
+       *      applies (`agenticTask && provider === 'local'`);
+       *   3. the ask is AGENTIC and a strictly stronger sibling is servable — a
+       *      health ranking must not decide capacity for a task that needs it.
+       * A non-agentic ask on a hosted provider keeps the health pick (a cheap,
+       * fast model is a legitimate choice for chat/writing), which is why (3) is
+       * opt-in from the caller that knows the ask.
+       */
+      const keylessLocal = LOCAL_RUNTIME_IDS.includes(provider);
+      if (capabilityClassOf(model) === 'low' || keylessLocal || agenticAsk) return strongestUsable;
+      return model;
     } catch {
       // Best-effort — a registry failure must never change the pick.
       return model;
     }
   }
 
-  resolveModel(provider: string, agentType: string, configManager?: ConfigManager, taskDescription?: string): string {
+  resolveModel(
+    provider: string,
+    agentType: string,
+    configManager?: ConfigManager,
+    taskDescription?: string,
+    /**
+     * Does this ask need capacity (see `isAgenticTask`)? Optional and default
+     * false, so every existing caller keeps the health-first pick: only a caller
+     * that KNOWS the ask is agentic (chat's route and handoff do) can ask for the
+     * stronger sibling.
+     */
+    opts?: { agenticAsk?: boolean },
+  ): string {
     if (configManager) {
       try {
         const { config } = configManager.getProviderConfig(provider);
@@ -3310,7 +3360,10 @@ export class AutoModelRouter {
             const pinDead = !!entry && (entry.status === 'unavailable' || entry.quotaParkedUntil > Date.now());
             if (pinDead) {
               const verified = registry.resolveVerifiedModel(provider, preferredModelsFor(provider));
-              if (verified) return verified;
+              // The repair goes through the SAME capability guard as every other
+              // pick: repairing a dead local pin must not land on the weakest
+              // model on the machine just because that one is healthiest.
+              if (verified) return this.capabilityGuardedPick(provider, verified, opts?.agenticAsk === true);
             }
           } catch {
             // Fall through to the configured pin
@@ -3341,10 +3394,10 @@ export class AutoModelRouter {
           const registry = getModelRegistry();
           const entry = registry.getEntry(provider, bestModel);
           if (!entry || registry.isUsable(provider, bestModel)) {
-            return this.capabilityGuardedPick(provider, bestModel);
+            return this.capabilityGuardedPick(provider, bestModel, opts?.agenticAsk === true);
           }
           const usable = preferredModelsFor(provider)[0];
-          if (usable) return this.capabilityGuardedPick(provider, usable);
+          if (usable) return this.capabilityGuardedPick(provider, usable, opts?.agenticAsk === true);
           // Nothing usable — fall through to the parked pick (the park may have
           // lapsed, and a rejected pick is better than no model at all).
           return bestModel;
@@ -3357,7 +3410,9 @@ export class AutoModelRouter {
     // the capability guard: this is the path that handed out `local/qwen2.5:0.5b`
     // as the last resort while a capable local model sat verified beside it.
     const preferred = preferredModelsFor(provider);
-    if (preferred.length > 0) return this.capabilityGuardedPick(provider, preferred[0]);
+    if (preferred.length > 0) {
+      return this.capabilityGuardedPick(provider, preferred[0], opts?.agenticAsk === true);
+    }
     // LAST RESORT: use the catalog's curated default model for this provider.
     // This ensures resolveModel() NEVER returns 'default' — every provider
     // always resolves to a real, known-working model name.

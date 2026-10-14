@@ -67,6 +67,7 @@ import { resolveProvider } from '../../src/cli/router.js';
 // already resets both for the same reason.
 import { resetModelRegistry } from '../../src/learning/model-registry.js';
 import { resetProviderFallback } from '../../src/learning/provider-fallback.js';
+import { isAgenticCapableModel } from '../../src/learning/model-harness.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -801,5 +802,139 @@ describe('pinned + strict — waiting is bounded', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ─── PAIR-scoped walking: one model per provider is not "routable" ──────────
+//
+// The walk used to track PROVIDERS: the failing provider was passed as
+// `excludeProviders` on every re-route, so each iteration could only land on a
+// DIFFERENT provider — one model tried per provider however many that provider
+// serves. Measured live (trace-1791906998502-txddq4): a per-model 429 on
+// `gemini/gemma-4-31b-it` ended gemini's part of the turn, a `model not found` on
+// one openrouter id ended openrouter's, and the walk reached the local last resort
+// while ~370 routable pairs sat untried. The bookkeeping already treats those as
+// PAIR-scoped (the ledger parks the MODEL; only
+// `PROVIDER_RATE_LIMIT_ESCALATION_MODELS` distinct models 429ing escalates to a
+// provider) — the walk was the one place contradicting it.
+describe('tool-loop auto failover — pair-scoped walking', () => {
+  /** A route whose provider can generate, so the attempt either answers or throws. */
+  function route(type: string, name: string, model: string, generate: ReturnType<typeof vi.fn>) {
+    return {
+      type,
+      provider: { name, generate, isAvailable: vi.fn().mockResolvedValue(true) },
+      model,
+      ranked: [type],
+      complexity: 'moderate',
+      score: 0.5,
+    };
+  }
+
+  it("walks the failed provider's NEXT model when the failure is pair-scoped (a per-model 429)", async () => {
+    const generateMock = vi.fn()
+      .mockRejectedValueOnce(new Error('429: rate limit exceeded for this model'))
+      .mockResolvedValueOnce('answered by the sibling model');
+    const cmd = new ChatCommand() as any;
+    // The sibling of the SAME provider first, then (never reached) another provider.
+    const routes = [
+      route('groq', 'Groq', 'openai/gpt-oss-120b', generateMock),
+      route('gemini', 'Gemini', 'gemini-2.5-flash', generateMock),
+    ];
+    let i = 0;
+    cmd.routeMessageAuto = vi.fn(async () => routes[Math.min(i++, routes.length - 1)]);
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generate: generateMock, isAvailable: vi.fn().mockResolvedValue(true) },
+      model: 'llama-3.3-70b-versatile',
+    };
+
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: true });
+    const result = await callModel([{ role: 'user', content: 'explain this' }], []);
+
+    expect(result.content).toBe('answered by the sibling model');
+    // THE FIX: the failed provider is NOT excluded, so its siblings stay routable…
+    expect(cmd.routeMessageAuto.mock.calls[0][1]).toEqual([]);
+    // …the pair that failed IS excluded (pair-scoped)…
+    expect(cmd.routeMessageAuto.mock.calls[0][2]?.excludePairs).toContain('groq|llama-3.3-70b-versatile');
+    // …and the walk stayed on the provider instead of dropping a band.
+    expect(session.type).toBe('groq');
+    expect(session.model).toBe('openai/gpt-oss-120b');
+    expect(cmd.routeMessageAuto).toHaveBeenCalledTimes(1);
+    expect(generateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves the PROVIDER behind when the failure is provider-scoped (a dead key)', async () => {
+    const generateMock = vi.fn()
+      .mockRejectedValueOnce(new Error('401 Unauthorized: invalid API key'))
+      .mockResolvedValueOnce('answered elsewhere');
+    const cmd = new ChatCommand() as any;
+    cmd.routeMessageAuto = vi.fn().mockResolvedValue(route('gemini', 'Gemini', 'gemini-2.5-flash', generateMock));
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generate: generateMock, isAvailable: vi.fn().mockResolvedValue(true) },
+      model: 'llama-3.3-70b-versatile',
+    };
+
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: true });
+    const result = await callModel([{ role: 'user', content: 'explain this' }], []);
+
+    expect(result.content).toBe('answered elsewhere');
+    // A provider-wide outage is the case that SHOULD take the siblings with it:
+    // a dead credential cannot serve this provider's other models either.
+    expect(cmd.routeMessageAuto.mock.calls[0][1]).toContain('groq');
+  });
+});
+
+// ─── The routing snapshot must name the pair that SERVED ────────────────────
+//
+// Measured 2026-10-13 (trace-1791907393457-7seewg): the snapshot was written from
+// the router's DECISION before the candidate walk could substitute a pair, so
+// every step recorded `routing: gemini/gemini-3.1-flash-lite, agenticCapable:
+// true` while the debug log recorded `served: local/deepseek-coder:latest`. A
+// trace is the artefact meant to answer "which model ran?" — a genuine one names
+// the served pair and keeps the replaced decision visible beside it.
+describe('routing snapshot accuracy', () => {
+  it('names the served pair and preserves the router decision as substitutedFor', async () => {
+    const generateMock = vi.fn()
+      .mockRejectedValueOnce(new Error('429: rate limit exceeded for this model'))
+      .mockResolvedValueOnce('answered by the sibling model');
+    const cmd = new ChatCommand() as any;
+    // What the ROUTER decided for this step, before any attempt ran.
+    cmd.lastRouteSnapshot = {
+      provider: 'gemini',
+      model: 'gemini-3.1-flash-lite',
+      score: 0.9,
+      complexity: 'moderate',
+      explanation: 'router pick',
+      agenticCapable: true,
+    };
+    const routes = [
+      {
+        type: 'groq',
+        provider: { name: 'Groq', generate: generateMock, isAvailable: vi.fn().mockResolvedValue(true) },
+        model: 'openai/gpt-oss-120b',
+        ranked: ['groq'],
+        complexity: 'moderate',
+        score: 0.5,
+      },
+    ];
+    cmd.routeMessageAuto = vi.fn(async () => routes[0]);
+    const session = {
+      type: 'groq',
+      provider: { name: 'Groq', generate: generateMock, isAvailable: vi.fn().mockResolvedValue(true) },
+      model: 'llama-3.3-70b-versatile',
+    };
+
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: true });
+    await callModel([{ role: 'user', content: 'explain this' }], []);
+
+    const snap = cmd.lastRouteSnapshot;
+    // The pair the request actually went to.
+    expect(snap.provider).toBe('groq');
+    expect(snap.model).toBe('openai/gpt-oss-120b');
+    // The capability verdict describes the SERVED model, not the intended one.
+    expect(snap.agenticCapable).toBe(isAgenticCapableModel('openai/gpt-oss-120b', 'groq'));
+    // The replaced decision is still on the record (first substitution wins).
+    expect(snap.substitutedFor).toBe('gemini/gemini-3.1-flash-lite');
   });
 });

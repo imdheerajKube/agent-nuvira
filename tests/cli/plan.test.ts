@@ -114,6 +114,31 @@ describe('PlanCommand — shared single-shot failover runner adoption', () => {
     expect(opts.configManager).toBeDefined();
   });
 
+  it('P9: renders the plan through the presentation layer on a terminal (no ASCII banner)', async () => {
+    const chunks: string[] = [];
+    const originalTTY = (process.stdout as { isTTY?: boolean }).isTTY;
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    // BOTH channels — vitest intercepts console.log, and the card/answer goes
+    // through stdout.write, so watching one would miss half the output.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(((...args: unknown[]) => {
+      chunks.push(args.map((a) => String(a)).join(' '));
+    }) as never);
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(((c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    }) as never);
+    try {
+      await (new PlanCommand() as any).execute(tempDir, { task: 'add auth' });
+    } finally {
+      logSpy.mockRestore();
+      writeSpy.mockRestore();
+      Object.defineProperty(process.stdout, 'isTTY', { value: originalTTY, configurable: true });
+    }
+    const out = chunks.join('\n');
+    expect(out).not.toContain('='.repeat(60));
+    expect(out).toContain('PLAN OK');
+  });
+
   it('M2.5: route() passes the REAL prompt payload as contextHintTokens (codebase context)', async () => {
     const plan = new PlanCommand();
     // A non-trivial codebase context so the estimate is meaningfully > task-only

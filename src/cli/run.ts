@@ -16,6 +16,7 @@ import { Command } from 'commander';
 import { BaseCommand } from './commands.js';
 import { maybeRunBackgroundDuties } from './duties.js';
 import { PipelineBoard } from './pipeline-board.js';
+import { presentCard, shellCard, shouldUseRichUi } from './ui/index.js';
 import { RunnerAgent } from '../agents/agents/runner.js';
 import type { AgentContext } from '../agents/agent.js';
 import { logger } from '../utils/logger.js';
@@ -115,14 +116,28 @@ export class RunCommand extends BaseCommand {
         error?: string;
       } | undefined;
 
-      // Header
-      const statusIcon = result.success ? '✅' : '❌';
-      logger.highlight(`${'═'.repeat(60)}`);
-      logger.highlight(`  ${statusIcon}  Run Result — ${elapsed}s`);
-      logger.highlight(`${'═'.repeat(60)}`);
+      // Header — a shell card on a real terminal, the historical banner on a
+      // pipe/CI stream (byte parity). The command's OWN output below is printed
+      // verbatim either way: it is program output, not markdown, and rendering
+      // it would corrupt it.
+      if (shouldUseRichUi()) {
+        presentCard(
+          shellCard({
+            command,
+            exitCode: runResult?.exitCode,
+            success: Boolean(result.success),
+            durationMs: Math.round(Number(elapsed) * 1000),
+          }),
+        );
+      } else {
+        const statusIcon = result.success ? '✅' : '❌';
+        logger.highlight(`${'═'.repeat(60)}`);
+        logger.highlight(`  ${statusIcon}  Run Result — ${elapsed}s`);
+        logger.highlight(`${'═'.repeat(60)}`);
 
-      console.log(`\n  $ ${command}`);
-      console.log(`  Exit code: ${runResult?.exitCode ?? '?'}  |  Duration: ${elapsed}s`);
+        console.log(`\n  $ ${command}`);
+        console.log(`  Exit code: ${runResult?.exitCode ?? '?'}  |  Duration: ${elapsed}s`);
+      }
 
       // Show stdout (always)
       if (runResult?.stdout) {
@@ -147,7 +162,7 @@ export class RunCommand extends BaseCommand {
       }
 
       console.log('');
-      logger.highlight(`${'═'.repeat(60)}`);
+      if (!shouldUseRichUi()) logger.highlight(`${'═'.repeat(60)}`);
       console.log('');
 
     } catch (err) {

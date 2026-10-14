@@ -112,6 +112,34 @@ describe('EditCommand — auto-route adoption', () => {
     expect(opts.configManager).toBeDefined();
   });
 
+  it('P9: renders the proposed edit through the presentation layer on a terminal', async () => {
+    mockRunSingleShotAuto.mockResolvedValueOnce('Proposed change:\n\n```ts\nconst x = 2;\n```');
+    const chunks: string[] = [];
+    const originalTTY = (process.stdout as { isTTY?: boolean }).isTTY;
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(((...args: unknown[]) => {
+      chunks.push(args.map((a) => String(a)).join(' '));
+    }) as never);
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(((c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    }) as never);
+    try {
+      const edit = new EditCommand();
+      await (edit as any).execute(filePath, { autoRoute: true, instruction: 'bump', dryRun: true });
+    } finally {
+      logSpy.mockRestore();
+      writeSpy.mockRestore();
+      Object.defineProperty(process.stdout, 'isTTY', { value: originalTTY, configurable: true });
+    }
+    const out = chunks.join('\n');
+    // The fenced block is rendered as a bordered, highlighted code box rather
+    // than echoed as raw markdown fences.
+    expect(out).toContain('┌');
+    expect(out).toContain('const x = 2;');
+    expect(out).not.toContain('```');
+  });
+
   it("provider/model 'auto' also activates the ranked walk", async () => {
     const edit = new EditCommand();
     await (edit as any).execute(filePath, { provider: 'auto', model: 'auto', instruction: 'fix' });

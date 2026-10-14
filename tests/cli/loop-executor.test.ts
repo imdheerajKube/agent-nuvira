@@ -106,6 +106,34 @@ describe('loop executor — happy path (native transport)', () => {
     expect(result.erroredTools).toContain('read_file');
     expect(result.toolCalls).toContain('read_file');
   });
+
+  it('forwards the tool-call lifecycle to onToolCall (cards parity with chat)', async () => {
+    // `execute` used to learn what ran only AFTER the run. The emit seam now
+    // forwards the same lifecycle the chat surface renders as cards.
+    const provider = scriptedProvider({
+      native: true,
+      responses: [
+        { content: '', toolCalls: [{ id: 'c1', name: 'list_dir', arguments: { path: '.' } }] },
+        { content: 'Done.', toolCalls: [] },
+      ],
+    });
+    vi.doMock('../../src/cli/router.js', () => ({
+      resolveProvider: () => ({ type: 'scripted', provider }),
+    }));
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const seen: Array<{ phase: string; tool: string; ok?: boolean }> = [];
+    await runLoopExecutor('list the project files', new ConfigManager(), {
+      provider: 'scripted',
+      skipProjectContext: true,
+      quiet: true,
+      onToolCall: (phase, info) => seen.push({ phase, tool: info.tool, ok: info.ok }),
+    });
+
+    expect(seen.some((s) => s.phase === 'started' && s.tool === 'list_dir')).toBe(true);
+    const called = seen.find((s) => s.phase === 'called' && s.tool === 'list_dir');
+    expect(called).toBeDefined();
+    expect(called?.ok).toBe(true);
+  });
 });
 
 describe('loop executor — JSON fallback transport', () => {

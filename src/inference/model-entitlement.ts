@@ -49,7 +49,7 @@ export interface ModelEntitlement {
  * providers. A call through it costs whatever the provider behind it costs, so
  * labelling it free would be wrong in the most expensive direction.
  */
-const LOCAL_RUNTIME_IDS = ['local', 'lmstudio', 'vllm', 'ollama'] as const;
+export const LOCAL_RUNTIME_IDS: readonly string[] = ['local', 'lmstudio', 'vllm', 'ollama'];
 
 /** The suffix OpenRouter uses for ids the provider declares free to serve. */
 const PROVIDER_FREE_SUFFIX = ':free';
