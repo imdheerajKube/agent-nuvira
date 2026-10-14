@@ -408,16 +408,24 @@ export class TaskRunner {
     const retryDelaysMs = [250, 900, 2_000];
     let attempt = 0;
     const retry = (): void => {
+      // A task that has already SETTLED has no process left to identify, so a read
+      // for it can only cost time — and on Windows time IS the price: this read is
+      // a PowerShell/CIM snapshot taken SYNCHRONOUSLY, on the event loop every
+      // task's output flows through. Left unfiltered it also ends in a warning
+      // about being stoppable-by-hand-only, written into the log of a task that is
+      // already over. Measured on the release matrix: a burst of instant-exit
+      // tasks (the history test starts 55) walked the whole ladder for each of
+      // them, blocked the loop for minutes and timed out at 150s, while v3.5.2 —
+      // ONE retry, same test, same budget — passed.
+      const record = this.tasks.get(id);
+      if (!record || record.status !== 'running') return;
       if (remember(lookupProcess(pid))) return;
       if (attempt >= retryDelaysMs.length) {
-        const record = this.tasks.get(id);
-        if (record) {
-          this.appendLog(
-            record,
-            'system',
-            '⚠️ could not read this task\'s OS start token — if the dashboard restarts it will still be listed, but it can only be stopped by hand.',
-          );
-        }
+        this.appendLog(
+          record,
+          'system',
+          '⚠️ could not read this task\'s OS start token — if the dashboard restarts it will still be listed, but it can only be stopped by hand.',
+        );
         return;
       }
       const timer = setTimeout(retry, retryDelaysMs[attempt++]);

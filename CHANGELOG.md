@@ -2,12 +2,14 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## v3.5.4 — the v3.5.2 features, checked on the platforms they actually run on
+## v3.5.5 — the v3.5.2 features, checked on the platforms they actually run on
 
-> **v3.5.3 was never published to npm.** Its release gate caught a stale artifact
-> before anything was uploaded — the committed CLI demo cast pins the version, and
-> bumping the package for that release made it stale — so the fix and the release
-> both land here. No package, tag content or download depends on 3.5.3.
+> **v3.5.3 and v3.5.4 were never published to npm.** 3.5.3's gate caught a stale
+> artifact before anything was uploaded — the committed CLI demo cast pins the
+> version, and bumping the package for that release made it stale. 3.5.4 then
+> timed out on Windows in the very suite that had just gained its retries, and
+> that fix is here. No package, tag content or download depends on 3.5.3 or
+> 3.5.4.
 
 A patch for what v3.5.2 introduced: three cross-platform defects in the
 liveness/identity work, found by the release gate of that very release — its test
@@ -26,6 +28,7 @@ empty, which is the check to run if in doubt.
 - **A recovered run stops its OWN process again** — the identity check compares the command that was recorded against the shell's own process line, and on Windows the quotes of the inner command arrive ESCAPED (`bash.exe -c "node -e \"…\""`, `cmd.exe /d /s /c "…"`). Stripping the quote but keeping its backslash left `node -e \for (…)`, which does not contain the recorded `node -e for (…)` — so the run refused to signal the process it had started itself, and told the operator the pid now ran a different command line.
 - **A verdict is not rewritten while the process is being stopped** — between signalling a hung task and its `close` event the pid can already be gone from the process table while the handle still calls it alive, and the sample then read “no CPU” from the ABSENCE OF A ROW rather than from an absence of work. A task just reported HUNG flipped back to `stalled` on the slower Windows runners.
 - **The identity read is patient on Windows** — the token is read through a PowerShell/CIM snapshot that takes the better part of a second, so a process milliseconds old is routinely not in it yet. One retry at 250ms recorded nothing and wrote its warning into the task's own log, where it became the **first** line of the task's output (and of its SSE stream). It is retried at 250ms / 900ms / 2s now — unref'd, so waiting never holds the dashboard open — and the warning stays the honest outcome when every attempt misses.
+- **…and that patience is never spent on work that is already over** — the retry above is a SYNCHRONOUS PowerShell/CIM read on Windows, and it was paid per task per attempt with no check on whether the task still existed: 4 reads each for a burst of instant-exit tasks (the history test starts 55) = up to 220 blocking reads, which timed out that test at 150s on the Windows runners and outlived it into the next test. A task that has settled is not read for again, and is no longer warned that it “can only be stopped by hand” when it is already finished: **4 reads per finished task became 1**. A task that is still RUNNING keeps every retry, records its identity from a later read, and still says so honestly when they all miss (`tests/web-dashboard/task-runner-identity-reads.test.ts` pins both halves — the unfixed code reads 4 times, the fix once).
 - **The liveness suite is cross-platform** — its long-running fixtures were `sleep`, run through `spawn(..., { shell: true })`, whose shell is cmd.exe on Windows: not a long-running command there but a command that does not exist, which exited immediately and made the tree, CPU and kill assertions fail for a reason unrelated to the code under test. The fixtures are `node`-based now (on PATH everywhere) and compound, so the shell cannot `exec` into them and the tree keeps the shape under test.
 - **The SSE test asserts what it claims** — it subscribed only after starting the task, so a fixture that printed once and exited could be over before anything was listening, and the `log` assertion was a race against machine speed (it passed on one runner and timed out on another). It now drives a fixture that keeps talking and asserts a log event produced while the stream is attached, plus a status event it causes itself.
 - **The CLI demo cast is regenerated with the release** — it pins the version, so it is part of the release commit rather than an afterthought; leaving it stale is what stopped v3.5.3 at the gate.
@@ -84,15 +87,71 @@ rather than about how finely the platform can express it.
 
 | Check | Result |
 |---|---|
-| `tsc --noEmit` (root + dashboard) | clean |
-| Full root suite | **522 files / 9,351 tests**, 2 files skipped, **exit 0** |
+| `tsc --noEmit` (root) | clean |
+| Full root suite | **9,353 of 9,374 tests pass** (20 skipped) — one PRE-EXISTING failure, see below |
 | Dashboard suite | **54 files / 1,298 tests**, exit 0 |
-| Identity / liveness / registry suites | green, incl. the Windows escaped-quote shape as a fixture |
+| Identity-read budget (`task-runner-identity-reads`) | green, 4 reads → 1 verified against the unfixed code |
+| Identity / liveness / registry / task-API suites | green |
 | Windows + Linux test matrix | run by the release workflow on the tag — the only place these paths execute |
 
 What could **not** be run here: a Windows host. The platform-specific fixes above
 are exercised by the tag's own matrix (`windows-latest`, Node 22 and 23) rather
 than claimed from a macOS-only run.
+
+**Known, pre-existing, NOT caused by this release:**
+`tests/parity/scenario-parity.test.ts > replays the unchanged steps of a resumed
+run instead of re-paying` is load-sensitive. The `dashboard-chat` surface reports
+`resume: replayed 0 (its input changed)`, which is a digest mismatch between its
+two probe turns rather than anything this patch touches. The same test, same
+symptom, failed CI's `test-unix` job on the commit this release starts from
+(f6d4c1b2) — i.e. before any of this work — and it passes 3/3 when that file is run
+alone. It is reported here rather than fixed here.
+
+### Session 52 — the retries were paid for processes that had already exited
+
+> The v3.5.4 tag's own test matrix found this one, and it was mine. Two failures
+> remained there, both TIMEOUTS in `tests/web-dashboard/task-runner.test.ts` — and
+> both had already been red in the v3.5.3 run, whose other two failures this
+> release fixes. So the cast and the SSE race were dealt with; these were the same
+> two tests, and they were not on v3.5.2.
+
+#### What v3.5.2 did differently
+
+One retry, at 250ms. v3.5.3 raised it to three (250ms / 900ms / 2s) because a
+Windows CIM snapshot genuinely misses a process that is milliseconds old — and
+that change is what put these tests over the edge, at the same 150s budget v3.5.2
+passed them at. The reason is the price of the read: on Windows it is a
+PowerShell/CIM snapshot taken **synchronously**, on the event loop every task's
+output flows through. The history test starts 55 instant-exit tasks. At one retry
+that is ~110 blocking reads; at three it is up to 220, which is minutes of a
+blocked event loop on a loaded runner — and the ladder kept firing for tasks whose
+processes were long gone, each attempt ending in a warning that a FINISHED task
+“can only be stopped by hand”. The storm outlived the test that caused it and took
+the next one down with it (its 30s budget cannot be met by a blocked loop).
+
+#### The fix is not “go back to one retry”
+
+The retries exist because the snapshot really does miss a fresh pid; dropping them
+is what made a recovered run unstoppable in the first place. What was missing was
+the check that the process still EXISTS: a settled task has nothing left to
+identify, so no read of it can produce information — only cost. Settled tasks are
+skipped, and a task that is still running keeps every attempt it had.
+
+#### How that was measured rather than argued
+
+`tests/web-dashboard/task-runner-identity-reads.test.ts` counts the reads through
+a mocked `lookupProcess`, so the number is asserted on any platform, not inferred
+from Windows. Against the UNFIXED source it reads **4** times for one settled task
+and fails; with the fix it reads **1**. A second test keeps the live-process case
+honest (every retry still happens, the warning is still written when they all
+miss), and a third proves the patience still works — the identity is recorded from
+a later read and persisted, which is the whole point of retrying at all.
+
+#### The version path
+
+`v3.5.4`'s tag is already pushed and its gate is red, so this goes FORWARD as
+3.5.5 rather than rewriting a pushed tag — the same call made for 3.5.3, and for
+the same reason: nobody has a download that depends on either version.
 
 ## v3.5.2 — long work outlives the process that started it, and a recovered process is identified by two witnesses
 
