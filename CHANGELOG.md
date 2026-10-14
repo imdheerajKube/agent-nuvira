@@ -2,7 +2,130 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## [Unreleased] — Session 49: a hang is proven from evidence (no output AND no CPU), then acted on — silence alone never is
+## v3.5.2 — long work outlives the process that started it, and a recovered process is identified by two witnesses
+
+- **A long command is FOLLOWED, not killed** — `run_terminal` hands a command that outlives its wait budget to monitoring and returns its real exit code when the work lands. A hang is proven from evidence (no output AND no CPU), never from a clock, so a slow-but-working suite is left alone.
+- **Work outlives the process that started it** — a durable registry (a record of what is running, plus a bounded window of what it said) means a CLI exit, a dashboard restart or a crash no longer orphans a running command or a dashboard task. It is re-attached, still pollable, and still yields the verdict.
+- **A recovered process is identified by TWO witnesses** — its command line AND the OS’s own start token (`lstart` on POSIX, `CreationDate` ticks on Windows). A recycled pid is never signalled, and a hidden command line no longer leaves a live run stoppable only by hand.
+- **The dashboard’s task console survives a restart** — list, log pane and live pids come back; a task whose pid is gone is settled honestly, with no invented exit code, and it is stopped only once its identity is re-verified.
+- **Long runs keep their MIDDLE** — full output up to a cap before collapsing to a bounded head+tail window, and both state directories are swept, so state stays bounded on disk and not just in the JSON.
+- **A finished answer reaches a client whose POST gave up** — the dashboard chat delivers the completion on the live stream as well, instead of only in the response that timed out.
+- **9,350 tests across 524 files** in the root suite (20 skipped) plus **1,298 dashboard tests**.
+
+### Session 50 — a recovered process is identified by TWO witnesses, and the dashboard's tasks outlive the dashboard
+
+> Session 49 made a monitored run outlive the process that started it, and gave
+the agent a liveness verdict. Three things it left behind are closed here: a pid
+was treated as identity when the only proof offered was a command line; the
+dashboard's OWN task console still died with the dashboard process; and a long
+run's output was bounded hard enough to discard its middle.
+
+### A pid plus a command line is not an identity — the OS start token is
+
+The gap was precise. `commandMatchesProcess` could REFUSE, but it could not
+CONFIRM anything the command line did not say: a platform that hides command
+lines, a kernel process with none, or a truncated line all landed on "unknown",
+and the run could then only be stopped by hand. At the same time the check was
+blind in the other direction — a recycled pid running the SAME command (another
+`npm test`, a stranger's `node`) was adopted as ours.
+
+The process table now carries a second witness: `lstart` on POSIX (`ps -eo
+pid=,ppid=,time=,lstart=,command=`, with the old shape as the fallback for a `ps`
+without it) and `CreationDate.Ticks` on Windows (in the `Get-CimInstance
+Win32_Process` query already being run, marked so an absent value cannot shift a
+column). It is kept as an OPAQUE token and compared as one: two readings of the
+same process produce the same string, so no clock step, timezone change or
+rounding can make identity look unequal.
+
+`processIdentityVerdict` decides from both, and the rule is deliberately
+asymmetric — **a witness may veto; only the start token may accept alone**:
+
+| Command line | OS start token | Verdict |
+|---|---|---|
+| matches | matches, or was never recorded | **ours** |
+| matches | differs | **NOT ours** — the pid was recycled by a process running the same command |
+| differs | matches | **NOT ours** — a matching token is not a licence to signal something else |
+| unreadable | matches | **ours** — a value the kernel does not hand out twice |
+| anything else | — | **unknown** — never adopt, never signal |
+
+The token is read ONCE, at hand-off, while the process is certainly still ours
+(asking a recycled pid to identify itself is the thing being checked), and it
+lives in the registry record. A record without one keeps the old, safe behaviour:
+followed, not stoppable. The refusal message now names which witness failed, since
+the consequence of a refusal is a real command that keeps running.
+
+### The dashboard's task console now outlives the dashboard
+
+Measured defect, reported by the operator: restarting the dashboard left the
+child RUNNING with nothing in the world that knew its pid — the task list and log
+pane came back empty, so live work could not be seen, collected or stopped.
+`src/web-dashboard/task-registry.ts` is the durable half (records + a bounded log
+window per task, `<config>/dashboard-tasks`), and the runner hydrates from it in
+its constructor:
+
+* **The list and the pane come back** — records, statuses and the restored
+transcript, newest first, capped at the same 50 the console shows.
+* **A live task is RE-ATTACHED**, not merely listed: it is watched by the same
+  liveness sampler (from `pid`, since there is no child handle), and it can still
+  be cancelled — but only once its identity is re-verified, so the second witness
+  is what turns "stop it by hand" into "stop it from the console".
+* **A task whose pid is GONE is settled honestly**, with `exitCode: null` and the
+  reason ("it ended while the dashboard was not running — its exit code was not
+  recorded"). An identity claim is NOT a liveness claim: a pid that now belongs to
+  a different process stays listed and is never signalled, because deleting it
+  would hide work the operator may still need to stop.
+* **A refusal is on the task, with its pid** — logged in the pane, where someone
+  will actually read it, next to the command that is still running.
+* **One owner per profile**, stated rather than implied: two dashboards sharing a
+  config dir write the same records and the last write wins — the same limitation
+the monitored-run registry has.
+
+### A long run keeps its MIDDLE until it exceeds a cap
+
+A bounded head+tail window threw away the middle of a long run, which is exactly
+where a failure explains itself — but an unbounded log is disk a chatty command
+can fill. The spool now keeps EVERY byte while the run is under
+`NUVIRA_RUN_LOG_FULL_BYTES` (2MB), and collapses ONCE to the bounded head+tail
+window past it, stating how much it dropped. The common case therefore loses
+nothing at all. Memory stays bounded while appending (pending writes flush at
+256KB), `0` restores "always a bounded window", and the dashboard's task logs use
+the same writer with a larger cap. Both state directories are SWEPT on hydrate —
+the records were always capped, but a file is not a record, and without the sweep
+"bounded state" would have been true of the JSON and false of the disk.
+
+### Defects this change introduced and then fixed
+
+* Spooling started at SPAWN, so an ordinary `npm test` created
+  `<config>/run-terminal/out/<id>.log` in the developer's REAL profile for a run
+  that finished inside its budget and then deleted it — leaving the empty
+directory behind, in every test that spawned a command. Nothing is written until
+the run is DURABLE (handed to monitoring), which loses nothing: there is no
+registry entry to read it back until then.
+* The dashboard's first hydrate treated a FALSE identity verdict as "it finished",
+  which would have declared a live task over on any platform whose token read is
+  unstable — the dangerous direction. Only `kind: 'gone'` (the pid is not in the
+  table at all — a fact) settles a task now.
+* `captureIdentity` only recorded the command line when the start token was also
+  readable, so on a platform without `lstart` a recovered task lost BOTH witnesses
+  and could only be stopped by hand. Either witness is kept now.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `tsc --noEmit` (root + dashboard) | clean |
+| Full root suite | **522 files / 9369 tests**, 2 skipped, **exit 0** |
+| Dashboard suite | **54 files / 1298 tests**, exit 0 |
+| Book (`docs:book` + `:check`) | regenerated, in sync |
+| Identity / registry / timeout / liveness suites | all green, incl. real-process accept + recycled-pid refusal |
+| Real-profile leak check after a full run | neither `<config>/run-terminal` nor `<config>/dashboard-tasks` recreated |
+
+**Not verified here:** the Windows `CreationDate` host call (macOS machine — the
+parse and the decision are unit-tested against fixtures; the invocation is not),
+and new output from a recovered task (its stdout was a pipe to the process that
+died, so a re-attached task can be reported and stopped, not streamed).
+
+### Session 49 — a hang is proven from evidence (no output AND no CPU), then acted on — silence alone never is
 
 > Session 48 removed the killing. What it left open is the opposite failure: a
 > command that is genuinely STUCK — waiting on a prompt it has no stdin for, a
@@ -117,120 +240,7 @@ liveness, and still yields the real exit code recorded by whoever watched it end
   files to none. Test-only, but it is the same class of leak the watchdog exists
   to stop.
 
-## [Unreleased] — Session 50: a recovered process is identified by TWO witnesses, and the dashboard's tasks outlive the dashboard
-
-> Session 49 made a monitored run outlive the process that started it, and gave
-the agent a liveness verdict. Three things it left behind are closed here: a pid
-was treated as identity when the only proof offered was a command line; the
-dashboard's OWN task console still died with the dashboard process; and a long
-run's output was bounded hard enough to discard its middle.
-
-### A pid plus a command line is not an identity — the OS start token is
-
-The gap was precise. `commandMatchesProcess` could REFUSE, but it could not
-CONFIRM anything the command line did not say: a platform that hides command
-lines, a kernel process with none, or a truncated line all landed on "unknown",
-and the run could then only be stopped by hand. At the same time the check was
-blind in the other direction — a recycled pid running the SAME command (another
-`npm test`, a stranger's `node`) was adopted as ours.
-
-The process table now carries a second witness: `lstart` on POSIX (`ps -eo
-pid=,ppid=,time=,lstart=,command=`, with the old shape as the fallback for a `ps`
-without it) and `CreationDate.Ticks` on Windows (in the `Get-CimInstance
-Win32_Process` query already being run, marked so an absent value cannot shift a
-column). It is kept as an OPAQUE token and compared as one: two readings of the
-same process produce the same string, so no clock step, timezone change or
-rounding can make identity look unequal.
-
-`processIdentityVerdict` decides from both, and the rule is deliberately
-asymmetric — **a witness may veto; only the start token may accept alone**:
-
-| Command line | OS start token | Verdict |
-|---|---|---|
-| matches | matches, or was never recorded | **ours** |
-| matches | differs | **NOT ours** — the pid was recycled by a process running the same command |
-| differs | matches | **NOT ours** — a matching token is not a licence to signal something else |
-| unreadable | matches | **ours** — a value the kernel does not hand out twice |
-| anything else | — | **unknown** — never adopt, never signal |
-
-The token is read ONCE, at hand-off, while the process is certainly still ours
-(asking a recycled pid to identify itself is the thing being checked), and it
-lives in the registry record. A record without one keeps the old, safe behaviour:
-followed, not stoppable. The refusal message now names which witness failed, since
-the consequence of a refusal is a real command that keeps running.
-
-### The dashboard's task console now outlives the dashboard
-
-Measured defect, reported by the operator: restarting the dashboard left the
-child RUNNING with nothing in the world that knew its pid — the task list and log
-pane came back empty, so live work could not be seen, collected or stopped.
-`src/web-dashboard/task-registry.ts` is the durable half (records + a bounded log
-window per task, `<config>/dashboard-tasks`), and the runner hydrates from it in
-its constructor:
-
-* **The list and the pane come back** — records, statuses and the restored
-transcript, newest first, capped at the same 50 the console shows.
-* **A live task is RE-ATTACHED**, not merely listed: it is watched by the same
-  liveness sampler (from `pid`, since there is no child handle), and it can still
-  be cancelled — but only once its identity is re-verified, so the second witness
-  is what turns "stop it by hand" into "stop it from the console".
-* **A task whose pid is GONE is settled honestly**, with `exitCode: null` and the
-  reason ("it ended while the dashboard was not running — its exit code was not
-  recorded"). An identity claim is NOT a liveness claim: a pid that now belongs to
-  a different process stays listed and is never signalled, because deleting it
-  would hide work the operator may still need to stop.
-* **A refusal is on the task, with its pid** — logged in the pane, where someone
-  will actually read it, next to the command that is still running.
-* **One owner per profile**, stated rather than implied: two dashboards sharing a
-  config dir write the same records and the last write wins — the same limitation
-the monitored-run registry has.
-
-### A long run keeps its MIDDLE until it exceeds a cap
-
-A bounded head+tail window threw away the middle of a long run, which is exactly
-where a failure explains itself — but an unbounded log is disk a chatty command
-can fill. The spool now keeps EVERY byte while the run is under
-`NUVIRA_RUN_LOG_FULL_BYTES` (2MB), and collapses ONCE to the bounded head+tail
-window past it, stating how much it dropped. The common case therefore loses
-nothing at all. Memory stays bounded while appending (pending writes flush at
-256KB), `0` restores "always a bounded window", and the dashboard's task logs use
-the same writer with a larger cap. Both state directories are SWEPT on hydrate —
-the records were always capped, but a file is not a record, and without the sweep
-"bounded state" would have been true of the JSON and false of the disk.
-
-### Defects this change introduced and then fixed
-
-* Spooling started at SPAWN, so an ordinary `npm test` created
-  `<config>/run-terminal/out/<id>.log` in the developer's REAL profile for a run
-  that finished inside its budget and then deleted it — leaving the empty
-directory behind, in every test that spawned a command. Nothing is written until
-the run is DURABLE (handed to monitoring), which loses nothing: there is no
-registry entry to read it back until then.
-* The dashboard's first hydrate treated a FALSE identity verdict as "it finished",
-  which would have declared a live task over on any platform whose token read is
-  unstable — the dangerous direction. Only `kind: 'gone'` (the pid is not in the
-  table at all — a fact) settles a task now.
-* `captureIdentity` only recorded the command line when the start token was also
-  readable, so on a platform without `lstart` a recovered task lost BOTH witnesses
-  and could only be stopped by hand. Either witness is kept now.
-
-### Verified
-
-| Check | Result |
-|---|---|
-| `tsc --noEmit` (root + dashboard) | clean |
-| Full root suite | **522 files / 9369 tests**, 2 skipped, **exit 0** |
-| Dashboard suite | **54 files / 1298 tests**, exit 0 |
-| Book (`docs:book` + `:check`) | regenerated, in sync |
-| Identity / registry / timeout / liveness suites | all green, incl. real-process accept + recycled-pid refusal |
-| Real-profile leak check after a full run | neither `<config>/run-terminal` nor `<config>/dashboard-tasks` recreated |
-
-**Not verified here:** the Windows `CreationDate` host call (macOS machine — the
-parse and the decision are unit-tested against fixtures; the invocation is not),
-and new output from a recovered task (its stdout was a pipe to the process that
-died, so a re-attached task can be reported and stopped, not streamed).
-
-## [Unreleased] — Session 48: a turn that outlives the 5-minute wait hands over its answer instead of a dead end
+### Session 48 — a turn that outlives the 5-minute wait hands over its answer instead of a dead end
 
 > One hard 5-minute number, enforced on the CLIENT, against a server that has no
 > turn deadline at all. Measured on this machine's own trace store (57 chat turns):
