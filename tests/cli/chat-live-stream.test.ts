@@ -25,6 +25,7 @@ import { AnswerStream } from '../../src/cli/ui/index.js';
 import { EventNames, getEventBus } from '../../src/observability/event-bus.js';
 import { logger } from '../../src/utils/logger.js';
 import { resetModelRegistry } from '../../src/learning/model-registry.js';
+import { resetWorkspaceStore } from '../../src/config/workspace.js';
 import type { InferenceProvider } from '../../src/inference/interface.js';
 
 /** A fake terminal stream that records everything written to it. */
@@ -219,6 +220,12 @@ describe('chat REPL wires streaming into the turn', () => {
     else process.env.NUVIRA_MEMORY_DIR = originalMemoryDir;
     if (originalConfigDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
     else process.env.NUVIRA_CONFIG_DIR = originalConfigDir;
+    // Close the SQLite handle BEFORE deleting the config dir. The CLI opens
+    // `<config>/workspaces.db` in this process, and Windows cannot unlink an open
+    // file (POSIX can), so the removal failed with EBUSY there — and with the
+    // error thrown from `afterEach`, an otherwise-passing test was reported as a
+    // failure on the Windows runner.
+    resetWorkspaceStore();
     rmSync(tempDir, { recursive: true, force: true });
   });
 

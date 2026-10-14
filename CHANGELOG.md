@@ -2,6 +2,82 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.5.3 — the v3.5.2 features, checked on the platforms they actually run on
+
+A patch for what v3.5.2 introduced: three cross-platform defects in the
+liveness/identity work, found by the release gate of that very release — its test
+matrix failed on Windows and on Linux while passing on macOS, which is exactly the
+signal a single-platform check cannot give.
+
+- **A recovered run stops its OWN process again** — the identity check compares the command that was recorded against the shell's own process line, and on Windows the quotes of the inner command arrive ESCAPED (`bash.exe -c "node -e \"…\""`, `cmd.exe /d /s /c "…"`). Stripping the quote but keeping its backslash left `node -e \for (…)`, which does not contain the recorded `node -e for (…)` — so the run refused to signal the process it had started itself, and told the operator the pid now ran a different command line.
+- **A verdict is not rewritten while the process is being stopped** — between signalling a hung task and its `close` event the pid can already be gone from the process table while the handle still calls it alive, and the sample then read “no CPU” from the ABSENCE OF A ROW rather than from an absence of work. A task just reported HUNG flipped back to `stalled` on the slower Windows runners.
+- **The identity read is patient on Windows** — the token is read through a PowerShell/CIM snapshot that takes the better part of a second, so a process milliseconds old is routinely not in it yet. One retry at 250ms recorded nothing and wrote its warning into the task's own log, where it became the **first** line of the task's output (and of its SSE stream). It is retried at 250ms / 900ms / 2s now — unref'd, so waiting never holds the dashboard open — and the warning stays the honest outcome when every attempt misses.
+- **The liveness suite is cross-platform** — its long-running fixtures were `sleep`, run through `spawn(..., { shell: true })`, whose shell is cmd.exe on Windows: not a long-running command there but a command that does not exist, which exited immediately and made the tree, CPU and kill assertions fail for a reason unrelated to the code under test. The fixtures are `node`-based now (on PATH everywhere) and compound, so the shell cannot `exec` into them and the tree keeps the shape under test.
+- **9,351 tests across 524 files** in the root suite (20 skipped) plus **1,298 dashboard tests**.
+
+### Session 51 — the release gate found what a macOS-only run could not
+
+> Every defect below is in code this project shipped 40 minutes earlier. They were
+> not found by reading it again; they were found by running it where it had never
+> been run — the Windows and Linux jobs of the tag's own test matrix.
+
+#### The escaped quote that made a run refuse to stop itself
+
+`commandMatchesProcess` is the check that decides whether a pid recovered from the
+registry may be signalled at all, and its rule is containment: the process line
+CONTAINS what we recorded, because the shell carries the command (`sh -c npm
+test`). On Windows the line we read back is the shell's own, so the quotes inside
+the command arrive escaped — `"C:\Program Files\Git\bin\bash.exe" -c "node -e
+\"for (let i = 0; i < 400; i++) …\""`. Normalisation removed the quote but kept
+the backslash in front of it, leaving `node -e \for (…)`, and that does not
+contain `node -e for (…)`.
+
+The consequence was the worst kind for this feature: a run that had survived a
+restart could not stop the process it had started itself, and refused with “the
+pid now runs a different command line” — the refusal designed for a STRANGER,
+applied to our own work. Quotes are unescaped before they are stripped now, and a
+regression test drives the real Windows line shape.
+
+#### The verdict that changed after it was reported
+
+The watchdog samples a running task, publishes a verdict, and reaps a proven hang.
+In the window between the signal and the process's `close` event, the pid is
+already absent from the process table while the child handle still reports it
+alive — and `cpuMs` is then `null` because the row is missing, not because the
+process is idle. That is not evidence of a hang; it is evidence of a kill. A task
+that had just been reported HUNG was rewritten to `stalled`, which is the very
+claim the operator had already been told the opposite of.
+
+A sample for a task that is already being stopped no longer recomputes a verdict,
+and the first attempt at that fix was too broad — it also skipped the RECOVERED
+task case, where the process table is the only witness that can settle the task
+(the suite caught it as a cancel that never became `cancelled`). The guard is
+scoped to tasks with a child handle, which are settled by their own exit event.
+
+#### The Linux CPU reading is quoted in whole seconds
+
+`ps -o time=` is `MM:SS.cc` on macOS and `[[DD-]hh:]mm:ss` on Linux, so a process
+that burned 900ms of CPU reads `00:00:00` = 0ms there. The test asserted
+`busyCpu > 100` after 900ms of busy work, which no correct implementation could
+satisfy on Linux. The fixture now burns CPU for 5s and is sampled after 2.5s, no
+longer spawned through a shell (so the tree under the reading is one process on
+every platform), and the assertion is ≥1s: a statement about the CPU reading
+rather than about how finely the platform can express it.
+
+#### Verified
+
+| Check | Result |
+|---|---|
+| `tsc --noEmit` (root + dashboard) | clean |
+| Full root suite | **522 files / 9,351 tests**, 2 files skipped, **exit 0** |
+| Dashboard suite | **54 files / 1,298 tests**, exit 0 |
+| Identity / liveness / registry suites | green, incl. the Windows escaped-quote shape as a fixture |
+| Windows + Linux test matrix | run by the release workflow on the tag — the only place these paths execute |
+
+What could **not** be run here: a Windows host. The platform-specific fixes above
+are exercised by the tag's own matrix (`windows-latest`, Node 22 and 23) rather
+than claimed from a macOS-only run.
+
 ## v3.5.2 — long work outlives the process that started it, and a recovered process is identified by two witnesses
 
 - **A long command is FOLLOWED, not killed** — `run_terminal` hands a command that outlives its wait budget to monitoring and returns its real exit code when the work lands. A hang is proven from evidence (no output AND no CPU), never from a clock, so a slow-but-working suite is left alone.

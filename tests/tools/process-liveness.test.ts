@@ -32,6 +32,25 @@ import {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * A long-running command that EXISTS ON EVERY PLATFORM — for fixtures spawned
+ * through `spawn(..., { shell: true })`.
+ *
+ * `spawn`'s shell is cmd.exe on Windows and /bin/sh elsewhere, so a fixture
+ * written as `sleep 5` is not a long-running command there: it is a command that
+ * DOES NOT EXIST, which exits immediately. Every tree, CPU and kill assertion
+ * below then fails for a reason that has nothing to do with the code under test
+ * (it failed exactly that way on the Windows CI runners). `node` is on PATH
+ * wherever this suite runs, and the `&& echo done` is load-bearing rather than
+ * decorative: it makes the command COMPOUND, so the shell cannot `exec` into it
+ * and stays as the parent — which is the tree shape these tests are about.
+ */
+const quietFor = (ms: number) => `node -e "setTimeout(() => {}, ${ms})" && echo done`;
+
+/** The same, but BURNING CPU — the "it is computing" side of the classifier. */
+const busyFor = (ms: number) =>
+  `node -e "const t = Date.now(); while (Date.now() - t < ${ms}) {}" && echo done`;
+
 /** A fast-forwarded input: the fields a caller actually varies in a test. */
 function input(overrides: Partial<LivenessInput> = {}): LivenessInput {
   return {
@@ -157,12 +176,12 @@ describe('livenessThresholds — operator-tunable, read at call time', () => {
 
 describe('sampleProcessTree — the TREE, not just the shell we hold the handle for', () => {
   it('finds the shell AND the real work underneath it', async () => {
-    // A COMPOUND command is the case that matters: `/bin/sh -c 'sleep 5'` EXECs
-    // the command (one process), but anything with `;` / `&&` / a pipe keeps the
-    // shell as a parent — and then the work is a CHILD, so a sample that looked
-    // only at the root would report the shell's own ~0 CPU while the build below
-    // used a core.
-    const child = spawn('sleep 5; echo done', { shell: true, stdio: 'ignore' });
+    // A COMPOUND command is the case that matters: `sh -c 'sleep 5'` EXECs the
+    // command (one process), but anything with `;` / `&&` / a pipe keeps the shell
+    // as a parent — and then the work is a CHILD, so a sample that looked only at
+    // the root would report the shell's own ~0 CPU while the build below used a
+    // core. `quietFor` is a compound command in BOTH shells (see its comment).
+    const child = spawn(quietFor(5_000), { shell: true, stdio: 'ignore' });
     try {
       await sleep(300);
       const sample = sampleProcessTree(child.pid!);
@@ -176,17 +195,28 @@ describe('sampleProcessTree — the TREE, not just the shell we hold the handle 
   }, 20_000);
 
   it('CPU separates a sleeping process from a busy one', async () => {
-    const idle = spawn('sleep 5', { shell: true, stdio: 'ignore' });
-    const busy = spawn('node -e "const t=Date.now(); while(Date.now()-t<1200){}"', {
-      shell: true,
+    // Spawned WITHOUT a shell, so the sampled tree is exactly one process on
+    // every platform: this test is about the CPU READING, and the tree itself is
+    // the subject of the test above.
+    const idle = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 8000)'], { stdio: 'ignore' });
+    const busy = spawn(process.execPath, ['-e', 'const t = Date.now(); while (Date.now() - t < 5000) {}'], {
       stdio: 'ignore',
     });
     try {
-      await sleep(900);
+      // The CPU is sampled after ~2.5s of busy work, not 0.9s, and that is about
+      // the OS's clock, not about patience: Linux's `ps` reports `time` in WHOLE
+      // SECONDS (macOS reports centiseconds, Windows ticks), so a sub-second
+      // reading is legitimately `00:00:00` = 0ms there — the assertion below could
+      // not hold on Linux no matter how the code behaved. 2.5s of CPU still being
+      // ~2.5s at the sample is what makes the comparison meaningful on all three.
+      await sleep(2_500);
       const idleCpu = sampleProcessTree(idle.pid!).cpuMs ?? 0;
       const busyCpu = sampleProcessTree(busy.pid!).cpuMs ?? 0;
       expect(busyCpu).toBeGreaterThan(idleCpu);
-      expect(busyCpu).toBeGreaterThan(100);
+      // ≥1s, so the assertion is a statement about the CPU reading rather than
+      // about how finely the platform can express it (Linux would floor >100ms of
+      // real CPU to 0).
+      expect(busyCpu).toBeGreaterThanOrEqual(1_000);
     } finally {
       // The TREE, not the shell: a bare `kill()` leaves the `sleep` grandchild
       // running, and this suite's own config names leaked children as the cause of
@@ -384,14 +414,15 @@ describe('the OS start token — the second identity witness', () => {
     // And the token separates PROCESSES, which is the whole point: two commands
     // started at different moments must not share one. Spawned >1s apart so this
     // is a statement about identity rather than about the clock's resolution.
-    const first = spawn('sleep 6', { shell: true, stdio: 'ignore' });
+    const hold = () => spawn(process.execPath, ['-e', 'setTimeout(() => {}, 6000)'], { stdio: 'ignore' });
+    const first = hold();
     let second: ReturnType<typeof spawn> | null = null;
     try {
       await sleep(300);
       const firstRow = lookupProcess(first.pid!);
       expect(firstRow?.found).toBe(true);
       await sleep(1_300);
-      second = spawn('sleep 6', { shell: true, stdio: 'ignore' });
+      second = hold();
       await sleep(300);
       const secondRow = lookupProcess(second.pid!);
       expect(secondRow?.found).toBe(true);
@@ -417,7 +448,7 @@ describe('killProcessTree — the safety guard is load-bearing', () => {
   it('stops the shell and the real work under it — not just the shell', async () => {
     // Killing only the root would leave the actual work orphaned and running,
     // which is why a "stopped" hung command would otherwise keep building.
-    const child = spawn('sleep 30; echo done', { shell: true, stdio: 'ignore' });
+    const child = spawn(quietFor(30_000), { shell: true, stdio: 'ignore' });
     await sleep(300);
     const signalled = killProcessTree(child.pid!, 'SIGTERM', child);
     expect(signalled.length).toBeGreaterThan(1);

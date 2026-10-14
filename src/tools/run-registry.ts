@@ -462,7 +462,21 @@ function commandVerdict(command: string, liveLine: string | null): boolean | nul
     // Quotes and runs of whitespace are NOT differences of identity: the shell
     // strips the quotes from `node -e "…"` before the process exists, so a naive
     // containment test would refuse to stop a run we really do own.
-    const normalize = (s: string): string => s.replace(/["']/g, '').replace(/\s+/g, ' ').trim();
+    //
+    // ESCAPED quotes are stripped too, and that is not a detail — it is the
+    // Windows shape. There the command line we read back is the shell's OWN line
+    // (`bash.exe -c "node -e \"…\""`, `cmd.exe /d /s /c "…"`), so the quotes from
+    // the inner command arrive as `\"`. Removing the quote but keeping its
+    // backslash left `node -e \for (let i = 0; …)`, which does NOT contain the
+    // `node -e for (let i = 0; …)` we recorded — so a recovered run refused to
+    // stop the process it had started itself, and said the pid ran something else.
+    // Unescaping the quote before stripping it is what makes the two agree.
+    const normalize = (s: string): string =>
+      s
+        .replace(/\\(["'])/g, '$1')
+        .replace(/["']/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
     const actual = normalize(liveLine);
     const wantedNorm = normalize(wanted);
     // The process line CONTAINS what we recorded — the shell carries it

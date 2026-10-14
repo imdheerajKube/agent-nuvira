@@ -248,6 +248,31 @@ describe('processIdentityVerdict — the rule that keeps a recycled pid from bec
     expect(check.why).toContain('command line could not be read');
   });
 
+  it('recognises OUR OWN process when the shell reports it with ESCAPED quotes (the Windows shape)', () => {
+    // What Windows hands back is the SHELL's own line, so the quotes of the
+    // command we recorded arrive escaped: `bash.exe -c "node -e \"…\""`,
+    // `cmd.exe /d /s /c "…"`. Stripping the quote but keeping its backslash left
+    // `node -e \for (…)`, which does not contain `node -e for (…)` — and the
+    // consequence was not cosmetic: a run recovered from the registry refused to
+    // stop the process it had started itself, saying the pid ran a different
+    // command line (observed on the Windows CI runners).
+    const command = 'node -e "for (let i = 0; i < 400; i++) console.log(\'line-\' + i)"';
+    const shellLine =
+      '"C:\\Program Files\\Git\\bin\\bash.exe" -c "node -e \\"for (let i = 0; i < 400; i++) console.log(\'line-\' + i)\\""';
+    const check = processIdentityCheck(
+      { command },
+      { found: true, command: shellLine, startedAtText: null },
+    );
+    expect(check.verdict, check.why).toBe(true);
+
+    // …and unescaping must not turn a STRANGER into ours: the same wrapper around
+    // a DIFFERENT inner command is still refused.
+    const stranger = '"C:\\Program Files\\Git\\bin\\bash.exe" -c "node -e \\"console.log(1)\\""';
+    expect(
+      processIdentityCheck({ command }, { found: true, command: stranger, startedAtText: null }).verdict,
+    ).toBe(false);
+  });
+
   it('stays UNKNOWN when nothing can be read — never "ours" and never "gone"', () => {
     expect(processIdentityVerdict(recorded, null)).toBeNull(); // no process table
     expect(processIdentityVerdict(recorded, live({ command: null, startedAtText: null }))).toBeNull();
@@ -260,7 +285,7 @@ describe('processIdentityVerdict — the rule that keeps a recycled pid from bec
   });
 
   it('answers against a REAL process: the same run is ours, a stranger is not', async () => {
-    const child = spawn('sleep 8', { shell: true, stdio: 'ignore' });
+    const child = spawn(wrappable(8_000), { shell: true, stdio: 'ignore' });
     try {
       await new Promise((r) => setTimeout(r, 300));
       const token = lookupProcess(child.pid!)?.startedAtText ?? null;
@@ -281,7 +306,7 @@ describe('processIdentityVerdict — the rule that keeps a recycled pid from bec
         false,
       );
       // A pid nobody is using is not ours either.
-      expect(processIdentityMatches(2 ** 30, { command: 'sleep 8' })).toBe(false);
+      expect(processIdentityMatches(2 ** 30, { command: wrappable(8_000) })).toBe(false);
     } finally {
       killProcessTree(child.pid!, 'SIGKILL', child);
     }
@@ -315,12 +340,26 @@ describe('saveRun / loadRuns — the registry outlives the process, and is bound
   });
 });
 
+/**
+ * A compound command that EXISTS IN BOTH SHELLS — cmd.exe on Windows, /bin/sh
+ * elsewhere — because that is what `spawn(..., { shell: true })` uses.
+ *
+ * `sleep 30` is not a long-running command on Windows: it is a command that does
+ * not exist, so the child was already gone when these assertions ran and they
+ * failed with "the pid is not running any more" rather than testing identity.
+ * `node` is on PATH wherever this suite runs, and `&& echo done` keeps the
+ * command compound, so the shell stays as the parent and the line we read back
+ * really is the wrapper that carries the command (which is the case under test).
+ */
+const wrappable = (ms: number) => `node -e "setTimeout(() => {}, ${ms})" && echo done`;
+
 describe('commandMatchesProcess — never adopt a stranger by pid', () => {
   it('recognises the shell wrapper we spawn', async () => {
-    const child = spawn('sleep 30; echo done', { shell: true, stdio: 'ignore' });
+    const command = wrappable(30_000);
+    const child = spawn(command, { shell: true, stdio: 'ignore' });
     try {
       await new Promise((r) => setTimeout(r, 300));
-      expect(commandMatchesProcess(child.pid!, 'sleep 30; echo done')).toBe(true);
+      expect(commandMatchesProcess(child.pid!, command)).toBe(true);
     } finally {
       // The whole tree: `child.kill()` alone leaves the `sleep` grandchild behind,
       // and leaked children are what make this suite's slow files flaky under load.
@@ -342,26 +381,26 @@ describe('commandMatchesProcess — never adopt a stranger by pid', () => {
   }, 20_000);
 
   it('rejects a DIFFERENT command on a live pid', async () => {
-    const child = spawn('sleep 30', { shell: true, stdio: 'ignore' });
+    const child = spawn(wrappable(30_000), { shell: true, stdio: 'ignore' });
     try {
       await new Promise((r) => setTimeout(r, 300));
       expect(commandMatchesProcess(child.pid!, 'npm test')).toBe(false);
       // A bare binary name must not satisfy a long recorded command — that is how
       // a recycled pid would be adopted and signalled.
-      expect(commandMatchesProcess(child.pid!, 'sleep 30; rm -rf ./build')).toBe(false);
+      expect(commandMatchesProcess(child.pid!, `${wrappable(30_000)}; rm -rf ./build`)).toBe(false);
     } finally {
       killProcessTree(child.pid!, 'SIGKILL', child);
     }
   }, 20_000);
 
   it('reports "unknown" for a pid that is gone, and false for nonsense', async () => {
-    const child = spawn('sleep 30', { shell: true, stdio: 'ignore' });
+    const child = spawn(wrappable(30_000), { shell: true, stdio: 'ignore' });
     const pid = child.pid!;
     killProcessTree(pid, 'SIGKILL', child);
     await new Promise((r) => setTimeout(r, 500));
-    expect(commandMatchesProcess(pid, 'sleep 30')).not.toBe(true);
-    expect(commandMatchesProcess(-1, 'sleep 30')).toBe(false);
-    expect(commandMatchesProcess(0, 'sleep 30')).toBe(false);
+    expect(commandMatchesProcess(pid, wrappable(30_000))).not.toBe(true);
+    expect(commandMatchesProcess(-1, wrappable(30_000))).toBe(false);
+    expect(commandMatchesProcess(0, wrappable(30_000))).toBe(false);
   }, 20_000);
 });
 

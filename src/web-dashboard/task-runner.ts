@@ -395,18 +395,36 @@ export class TaskRunner {
     };
     if (remember(lookupProcess(pid))) return;
 
-    const retry = setTimeout(() => {
+    // Retried a few times, not once. On Windows this read is a PowerShell/CIM
+    // snapshot that takes the better part of a second to produce, so a process
+    // milliseconds old is routinely not in it yet — a single retry at 250ms
+    // recorded NOTHING, and then wrote its warning into the task's own log, where
+    // it became the first line an operator (and the SSE stream) saw.
+    //
+    // The timers are unref'd, so waiting on a slow probe never holds the dashboard
+    // open, and the warning is still the honest outcome once every attempt misses:
+    // a task with no recorded identity is followable after a restart, not
+    // stoppable.
+    const retryDelaysMs = [250, 900, 2_000];
+    let attempt = 0;
+    const retry = (): void => {
       if (remember(lookupProcess(pid))) return;
-      const record = this.tasks.get(id);
-      if (record) {
-        this.appendLog(
-          record,
-          'system',
-          '⚠️ could not read this task\'s OS start token — if the dashboard restarts it will still be listed, but it can only be stopped by hand.',
-        );
+      if (attempt >= retryDelaysMs.length) {
+        const record = this.tasks.get(id);
+        if (record) {
+          this.appendLog(
+            record,
+            'system',
+            '⚠️ could not read this task\'s OS start token — if the dashboard restarts it will still be listed, but it can only be stopped by hand.',
+          );
+        }
+        return;
       }
-    }, 250);
-    retry.unref?.();
+      const timer = setTimeout(retry, retryDelaysMs[attempt++]);
+      timer.unref?.();
+    };
+    const first = setTimeout(retry, retryDelaysMs[attempt++]);
+    first.unref?.();
   }
 
   /** Start the liveness watchdog for one task (spawned or recovered). */
@@ -724,6 +742,19 @@ export class TaskRunner {
       alive = tableAlive(table, pid) ?? true;
       sample = processTreeOf(table ?? new Map(), pid);
     }
+
+    // A process that is already being STOPPED must not be given a fresh (and
+    // wrong) verdict. Between signalling it and its `close` event the pid can be
+    // gone from the process table while the handle still calls it alive, so the
+    // sample reads "no CPU" from the ABSENCE OF A ROW rather than from an absence
+    // of work — which flipped a task that had just been reported HUNG (correctly)
+    // back to `stalled` on the slower Windows runners. A task with a child handle
+    // is settled by that child's own exit event, so there is nothing to say here;
+    // a RECOVERED task has no such event and the table is its only witness, which
+    // is why this deliberately does not cover it.
+    const stopping =
+      this.cancelled.has(id) || this.timedOut.has(id) || this.hung.has(id) || Boolean(record.stopReason);
+    if (child && stopping && !sample.found) return;
 
     const verdict = classifyLiveness(
       {

@@ -73,20 +73,26 @@ function authedFetch(path: string, method = 'GET', body?: unknown): Promise<Resp
   });
 }
 
-/** Open an SSE stream and resolve on the first named event. */
-function openSSE(url: string): Promise<{ waitFor: (name: string, timeoutMs?: number) => Promise<{ event: string; data: unknown }>; close: () => void }> {
+/** Open an SSE stream and resolve on the first matching event. */
+function openSSE(url: string): Promise<{
+  waitFor: (name: string, timeoutMs?: number) => Promise<{ event: string; data: unknown }>;
+  /** The first `log` event whose text contains `text` — see the SSE test below. */
+  waitForLogContaining: (text: string, timeoutMs?: number) => Promise<{ event: string; data: unknown }>;
+  close: () => void;
+}> {
   return new Promise((resolve, reject) => {
     const req = httpRequest(url, { method: 'GET' }, (res) => {
       let buffer = '';
       const received: Array<{ event: string; data: unknown }> = [];
       const waiters: Array<{
         name: string;
+        match?: (data: unknown) => boolean;
         resolve: (v: { event: string; data: unknown }) => void;
         reject: (e: Error) => void;
         timer: ReturnType<typeof setTimeout>;
       }> = [];
       const emit = (name: string, data: unknown) => {
-        const idx = waiters.findIndex((w) => w.name === name);
+        const idx = waiters.findIndex((w) => w.name === name && (!w.match || w.match(data)));
         if (idx !== -1) {
           const w = waiters.splice(idx, 1)[0];
           clearTimeout(w.timer);
@@ -117,6 +123,18 @@ function openSSE(url: string): Promise<{ waitFor: (name: string, timeoutMs?: num
           return new Promise((resolveWait, rejectWait) => {
             const timer = setTimeout(() => rejectWait(new Error(`Timed out waiting for SSE '${name}'`)), timeoutMs);
             waiters.push({ name, resolve: resolveWait, reject: rejectWait, timer });
+          });
+        },
+        waitForLogContaining: (text: string, timeoutMs = 5000) => {
+          const match = (data: unknown) => String((data as { text?: string } | null)?.text ?? '').includes(text);
+          const idx = received.findIndex((e) => e.event === 'log' && match(e.data));
+          if (idx !== -1) return Promise.resolve(received.splice(idx, 1)[0]);
+          return new Promise((resolveWait, rejectWait) => {
+            const timer = setTimeout(
+              () => rejectWait(new Error(`Timed out waiting for an SSE 'log' containing ${text}`)),
+              timeoutMs,
+            );
+            waiters.push({ name: 'log', match, resolve: resolveWait, reject: rejectWait, timer });
           });
         },
         close: () => req.destroy(),
@@ -212,7 +230,12 @@ describe('/api/tasks', () => {
     try {
       const init = await sse.waitFor('init');
       expect((init.data as { id: string }).id).toBe(startBody.task.id);
-      const log = await sse.waitFor('log');
+      // The task's OUTPUT, over the stream — and deliberately not "the FIRST log
+      // line": when the OS will not describe the spawned process, the runner emits
+      // a system line saying so, which is a real part of what an operator sees
+      // (and on the Windows runners that line arrived before the fixture printed).
+      // The claim under test is that the output streams, not that nothing else does.
+      const log = await sse.waitForLogContaining('fixture-ok');
       expect((log.data as { text: string }).text).toContain('fixture-ok');
       const status = await sse.waitFor('status');
       expect((status.data as { status: string }).status).toBe('done');
