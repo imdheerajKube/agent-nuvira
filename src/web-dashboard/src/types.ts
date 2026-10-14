@@ -1861,7 +1861,7 @@ export interface HubData {
 
 // ─── P1 task runner (dashboard command console) ─────────────────────────────
 
-export type TaskStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'error';
+export type TaskStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'timeout' | 'error' | 'hung';
 
 export interface TaskLogLine {
   stream: 'stdout' | 'stderr' | 'system';
@@ -1882,7 +1882,31 @@ export interface TaskRecord {
   durationMs: number | null;
   timeoutMs: number;
   logs: TaskLogLine[];
+  /**
+   * When the last output arrived — the silence half of the liveness check.
+   * Optional on the wire: the runner always sends it, and an older payload that
+   * omits it simply has no silence to measure.
+   */
+  lastOutputAt?: number;
+  /**
+   * The liveness watchdog's last verdict and the evidence behind it — what makes
+   * "still running" different from "running, and here is why it looks stuck".
+   */
+  liveness?: { verdict: 'finished' | 'starting' | 'working' | 'stalled' | 'hung'; why: string; at: number };
+  /** When a confirmed hang began (cleared the moment it speaks or computes). */
+  hungSince?: number | null;
+  /** Why the task stopped, when it was stopped rather than finishing on its own. */
+  stopReason?: string;
   error?: string;
+  /** The child's pid — what a RESTART needs in order to find the work again. */
+  pid?: number | null;
+  /**
+   * Present only on a task recovered from a previous dashboard process:
+   * `verified` is the identity verdict (null = this platform could not tell) and
+   * `why` is the evidence. A recovered task that cannot be verified is still
+   * shown, but is never stopped automatically — the pane says so instead.
+   */
+  recovered?: { verified: boolean | null; why: string };
 }
 
 // ─── P2 in-page WhatsApp pairing (GUI parity with `nuvira whatsapp pair`) ─────

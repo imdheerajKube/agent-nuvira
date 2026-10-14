@@ -42,7 +42,7 @@ import { stepDigest, type StepReplay } from '../learning/step-checkpoint.js';
 import type { UnusableResponseKind } from '../learning/response-usability.js';
 // P7 — the identical-command guard's memory. The loop drops it when a WRITE is
 // applied, so a repaired project can re-run its own check (see the context below).
-import { resetTerminalFailureStreaks } from './run-terminal.js';
+import { RUN_TERMINAL_INCOMPLETE_PREFIX, resetTerminalFailureStreaks } from './run-terminal.js';
 import { createRunCommandMemo } from './command-memo.js';
 // WS6 (#28) — the declared fault seam. `faultAt` is a null check when this
 // process declared no fault (`NUVIRA_INJECT_FAULT`), so an ordinary turn is
@@ -3086,8 +3086,18 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // outcome reading the same as its opposite — so the refusal classifier is
       // now the authority for both the event KIND and the success verdict.
       const refusal = classifyToolRefusal(rawResult);
+      // A command that outlived its wait budget is STILL RUNNING under
+      // monitoring: it has not verified anything yet, and it has not failed
+      // either. Neither verdict may be recorded for it — `successfulToolCalls`
+      // feeds the "did you check it" gate and the honest accounting, so counting
+      // a live run as a success is how a turn claims "the tests pass" about a
+      // suite still on its first file. The command's real verdict arrives when
+      // it lands, via `run_terminal(action:'poll')` — which is a normal success
+      // or `Error:` result and is accounted for like any other.
+      const stillRunning = rawResult.startsWith(RUN_TERMINAL_INCOMPLETE_PREFIX);
       const ranOk =
         refusal === null &&
+        !stillRunning &&
         !rawResult.startsWith('Error:') &&
         (!DELIVERY_TOOL_NAMES.has(call.name) || deliveryResultSucceeded(rawResult));
       if (ranOk) {

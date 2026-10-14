@@ -2,6 +2,364 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## [Unreleased] — Session 49: a hang is proven from evidence (no output AND no CPU), then acted on — silence alone never is
+
+> Session 48 removed the killing. What it left open is the opposite failure: a
+> command that is genuinely STUCK — waiting on a prompt it has no stdin for, a
+> lock held elsewhere, a socket that never answers — now runs forever, and *"it is
+> still running"* is not a diagnosis. A clock cannot fix that: the previous
+> mechanism was a clock, and it is exactly what destroyed real work. The signal
+> that separates a slow command from a stuck one is not time, it is **CPU**.
+
+### A liveness watchdog samples the PROCESS TREE
+
+`src/tools/process-liveness.ts` samples cumulative CPU for the run's whole process
+tree (a compound command's real work is a CHILD of the shell `spawn` returns) and
+classifies it, innocent until proven hung:
+
+| Evidence | Verdict |
+|---|---|
+| output in the last 60s | **working** |
+| silent, but CPU advanced | **working** — that is a build, not a hang |
+| silent AND no CPU for `NUVIRA_HANG_QUIET_MS` (5 min) | **hung**, with the numbers |
+| silent, CPU not measurable | **stalled** — reported, never reaped on a guess |
+
+**Both platforms sample, with one shape.** POSIX reads `ps -eo
+pid=,ppid=,time=,command=`; Windows reads ONE
+`Get-CimInstance Win32_Process` query, which reports `ParentProcessId` and
+`KernelModeTime`+`UserModeTime` (CPU in 100ns units, converted to the same ms) — so
+the rule is not weaker on Windows, and the tree walk reaches `cmd.exe → node →
+vitest` there too. `wmic … /format:csv` is the fallback, parsed header-driven
+because its column order follows the query. A process whose counters cannot be
+READ stays "unmeasurable", never zero: a zero is the evidence that certifies a
+hang. One read per sample tick is shared by every monitored run (on Windows that is
+the difference between one PowerShell start and one per run), and there is
+deliberately no time-based cache — a cached table can answer about a snapshot
+taken BEFORE a process existed, and the answer it gives is "not found", which a
+caller reads as "it is gone". The thresholds are env-tunable and read at call time.
+
+One Windows semantic difference is documented rather than papered over: Windows has
+no graceful SIGTERM, so `process.kill(pid, 'SIGTERM')` terminates immediately and
+the SIGTERM → grace → SIGKILL ladder is a POSIX-only refinement. `stop` still
+reaches the whole tree on both.
+
+### `run_terminal`: identify, report, then act — never on a clock
+
+A monitored run is now watched every `NUVIRA_HANG_POLL_MS` (30s). A confirmed hang
+is reported on `poll`/`list` (`🚫 HUNG` plus the evidence), and after a further
+`NUVIRA_HANG_REAP_MS` (5 min) of a hang that shows neither output nor CPU it is
+stopped — SIGTERM, then SIGKILL, over the whole tree, so the real work under the
+shell cannot be orphaned. Any output or any CPU at any sample clears the hang and
+restarts the grace, which is what keeps a slow-but-working command untouched.
+`run_terminal(action:'stop', process_id)` stops one on the model's own judgement,
+and it can only ever touch a command this tool started.
+
+### The task console: the same mechanism, with servers exempt
+
+The runner's default is still *no clock*, and a hung task is now flagged on the
+record, in the log (`🚫 no output and no CPU — looks HUNG. <evidence>`), and as a
+distinct terminal status (`hung`, `🚫 stopped (hung)` in the console). A
+**long-lived server/watch command** (`gateway start`, `dashboard`, `npm run dev`,
+`--watch`, a daemon) is identified but NEVER stopped for it — silent and idle is
+that class's CORRECT state, and reaping it is the failure the old one-preset-at-a-
+time exemption was papering over.
+
+### A monitored run now outlives the process that started it
+
+Monitoring a long command in memory made the record as fragile as the process
+holding it: a CLI exit, a dashboard restart, a crash — all normal — and a command
+that is still running becomes unpollable. There is nothing left to follow it with,
+its real exit code is never collected, and the turn that started it can only re-run
+the work (wrong) or guess at the outcome.
+
+`src/tools/run-registry.ts` makes both halves durable: a record of what is running
+(id, command, cwd, pid, start, and how it ended) and a **spool file** of what it
+said. Recovery is automatic on the next call in any process — `poll`, `list` and
+`stop` all hydrate first — so a recovered run is still followed, still reports its
+liveness, and still yields the real exit code recorded by whoever watched it end.
+
+* **The head is no longer thrown away.** The in-memory buffer is a bounded TAIL
+  (a 40MB build log must not be held), so the beginning of a long run was simply
+  gone — the model could read the end of a failure and not the line that explained
+  it. The spool keeps a bounded HEAD and TAIL, rewritten whole so the file stays at
+  the cap (~64KB) no matter how chatty the command is.
+* **A recovered run is never signalled on a guess.** A pid that outlived the
+  process table it came from may now belong to something else, so `stop` and the
+  hang-reaper require the pid's command line to STILL be that command
+  (`commandMatchesProcess`, quotes and shell wrappers normalised). If it cannot be
+  re-verified the run is followed and reported, and the refusal says so — signalling
+  a stranger's process is not an acceptable way to be helpful.
+* **A recovered run does not lie about being alive.** The silence clock restarts at
+  re-attach (there is no output timeline to measure from), an unreadable process
+  table reads as ALIVE rather than finished, and a run that ends with nobody
+  watching reports exactly that instead of inventing an exit code.
+* **Runs that finished inside their wait budget leave nothing behind** — no record,
+  no spool. A later process could only misread them.
+
+### Defects this change introduced and then fixed
+
+* The runner's own "looks HUNG" notice went through the log writer that stamps
+  `lastOutputAt`, so the watchdog's message reset the silence it was measuring:
+  the verdict oscillated hung → working → stalled → hung, the log filled with the
+  same warning, and the hang was never reaped. Only the CHILD's stdout/stderr
+  counts as life now.
+* `killProcessTree` is guarded against `pid <= 0` at both the sample and the
+  signal: `process.kill(-1, …)` signals every process the user can signal.
+* The spool wrote its head TWICE for a short run (head and tail overlapped), and
+  its trim kept the OLDEST bytes of the tail — so a long run's most recent output
+  was the part that went missing. Bounded at both ends now, written once.
+* `poll` reported a FAILED (or stopped) run without the `Error: ` prefix the
+  loop's accounting reads, so collecting a red suite through `poll` was recorded
+  as a successful tool call — a check that passed, for a run that did not.
+* The new tests killed the shells they spawned but left the `sleep` grandchildren
+  running. This suite's own config names leaked children as the cause of its
+  load-dependent flakiness, and a full run afterwards went from three failing
+  files to none. Test-only, but it is the same class of leak the watchdog exists
+  to stop.
+
+## [Unreleased] — Session 50: a recovered process is identified by TWO witnesses, and the dashboard's tasks outlive the dashboard
+
+> Session 49 made a monitored run outlive the process that started it, and gave
+the agent a liveness verdict. Three things it left behind are closed here: a pid
+was treated as identity when the only proof offered was a command line; the
+dashboard's OWN task console still died with the dashboard process; and a long
+run's output was bounded hard enough to discard its middle.
+
+### A pid plus a command line is not an identity — the OS start token is
+
+The gap was precise. `commandMatchesProcess` could REFUSE, but it could not
+CONFIRM anything the command line did not say: a platform that hides command
+lines, a kernel process with none, or a truncated line all landed on "unknown",
+and the run could then only be stopped by hand. At the same time the check was
+blind in the other direction — a recycled pid running the SAME command (another
+`npm test`, a stranger's `node`) was adopted as ours.
+
+The process table now carries a second witness: `lstart` on POSIX (`ps -eo
+pid=,ppid=,time=,lstart=,command=`, with the old shape as the fallback for a `ps`
+without it) and `CreationDate.Ticks` on Windows (in the `Get-CimInstance
+Win32_Process` query already being run, marked so an absent value cannot shift a
+column). It is kept as an OPAQUE token and compared as one: two readings of the
+same process produce the same string, so no clock step, timezone change or
+rounding can make identity look unequal.
+
+`processIdentityVerdict` decides from both, and the rule is deliberately
+asymmetric — **a witness may veto; only the start token may accept alone**:
+
+| Command line | OS start token | Verdict |
+|---|---|---|
+| matches | matches, or was never recorded | **ours** |
+| matches | differs | **NOT ours** — the pid was recycled by a process running the same command |
+| differs | matches | **NOT ours** — a matching token is not a licence to signal something else |
+| unreadable | matches | **ours** — a value the kernel does not hand out twice |
+| anything else | — | **unknown** — never adopt, never signal |
+
+The token is read ONCE, at hand-off, while the process is certainly still ours
+(asking a recycled pid to identify itself is the thing being checked), and it
+lives in the registry record. A record without one keeps the old, safe behaviour:
+followed, not stoppable. The refusal message now names which witness failed, since
+the consequence of a refusal is a real command that keeps running.
+
+### The dashboard's task console now outlives the dashboard
+
+Measured defect, reported by the operator: restarting the dashboard left the
+child RUNNING with nothing in the world that knew its pid — the task list and log
+pane came back empty, so live work could not be seen, collected or stopped.
+`src/web-dashboard/task-registry.ts` is the durable half (records + a bounded log
+window per task, `<config>/dashboard-tasks`), and the runner hydrates from it in
+its constructor:
+
+* **The list and the pane come back** — records, statuses and the restored
+transcript, newest first, capped at the same 50 the console shows.
+* **A live task is RE-ATTACHED**, not merely listed: it is watched by the same
+  liveness sampler (from `pid`, since there is no child handle), and it can still
+  be cancelled — but only once its identity is re-verified, so the second witness
+  is what turns "stop it by hand" into "stop it from the console".
+* **A task whose pid is GONE is settled honestly**, with `exitCode: null` and the
+  reason ("it ended while the dashboard was not running — its exit code was not
+  recorded"). An identity claim is NOT a liveness claim: a pid that now belongs to
+  a different process stays listed and is never signalled, because deleting it
+  would hide work the operator may still need to stop.
+* **A refusal is on the task, with its pid** — logged in the pane, where someone
+  will actually read it, next to the command that is still running.
+* **One owner per profile**, stated rather than implied: two dashboards sharing a
+  config dir write the same records and the last write wins — the same limitation
+the monitored-run registry has.
+
+### A long run keeps its MIDDLE until it exceeds a cap
+
+A bounded head+tail window threw away the middle of a long run, which is exactly
+where a failure explains itself — but an unbounded log is disk a chatty command
+can fill. The spool now keeps EVERY byte while the run is under
+`NUVIRA_RUN_LOG_FULL_BYTES` (2MB), and collapses ONCE to the bounded head+tail
+window past it, stating how much it dropped. The common case therefore loses
+nothing at all. Memory stays bounded while appending (pending writes flush at
+256KB), `0` restores "always a bounded window", and the dashboard's task logs use
+the same writer with a larger cap. Both state directories are SWEPT on hydrate —
+the records were always capped, but a file is not a record, and without the sweep
+"bounded state" would have been true of the JSON and false of the disk.
+
+### Defects this change introduced and then fixed
+
+* Spooling started at SPAWN, so an ordinary `npm test` created
+  `<config>/run-terminal/out/<id>.log` in the developer's REAL profile for a run
+  that finished inside its budget and then deleted it — leaving the empty
+directory behind, in every test that spawned a command. Nothing is written until
+the run is DURABLE (handed to monitoring), which loses nothing: there is no
+registry entry to read it back until then.
+* The dashboard's first hydrate treated a FALSE identity verdict as "it finished",
+  which would have declared a live task over on any platform whose token read is
+  unstable — the dangerous direction. Only `kind: 'gone'` (the pid is not in the
+  table at all — a fact) settles a task now.
+* `captureIdentity` only recorded the command line when the start token was also
+  readable, so on a platform without `lstart` a recovered task lost BOTH witnesses
+  and could only be stopped by hand. Either witness is kept now.
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `tsc --noEmit` (root + dashboard) | clean |
+| Full root suite | **522 files / 9369 tests**, 2 skipped, **exit 0** |
+| Dashboard suite | **54 files / 1298 tests**, exit 0 |
+| Book (`docs:book` + `:check`) | regenerated, in sync |
+| Identity / registry / timeout / liveness suites | all green, incl. real-process accept + recycled-pid refusal |
+| Real-profile leak check after a full run | neither `<config>/run-terminal` nor `<config>/dashboard-tasks` recreated |
+
+**Not verified here:** the Windows `CreationDate` host call (macOS machine — the
+parse and the decision are unit-tested against fixtures; the invocation is not),
+and new output from a recovered task (its stdout was a pipe to the process that
+died, so a re-attached task can be reported and stopped, not streamed).
+
+## [Unreleased] — Session 48: a turn that outlives the 5-minute wait hands over its answer instead of a dead end
+
+> One hard 5-minute number, enforced on the CLIENT, against a server that has no
+> turn deadline at all. Measured on this machine's own trace store (57 chat turns):
+> p95 **516s**, longest **2571s** — so the tail of real work outlives the cap, and
+> every turn that does loses its delivery channel. The server finishes such a turn
+> normally and PERSISTS it (a client disconnect stopped cancelling turns in P4),
+> but the answer had exactly one route back to the page: the body of the POST that
+> had already been abandoned by `AbortSignal.timeout(300_000)`. The consequence
+> arrived as two user reports about the same turn — *"The dashboard stopped waiting
+> after 5 minutes — the turn is STILL RUNNING on the server"*, and then *"A message
+> is already being answered in this session — wait for it to finish"* when the
+> Retry that same screen offered was refused by the server that was still working.
+>
+> v3.3.19 fixed the WORDING of this failure (it used to claim an unreachable
+> dashboard, on the very same 300.9s trace). What it left in place was the defect:
+> the answer still had no second delivery path, and the failure path still offered
+> an action that could not succeed.
+
+### The finish now travels on the live channel too
+
+The console's terminal `status: done` event carries the answer itself (content,
+followups, `generationFailed`, provider/model, `bounded`), and the dashboard
+forwards it over `/api/chat/:sessionId/events`. The POST response stays
+AUTHORITATIVE for a client still waiting on it — the stream is a second delivery
+path, not a replacement, and a client that recovers from it shows the same bubble
+(including the honesty guards appended to the text).
+
+### A client ceiling is a recovery, not a failed turn — and the wait has no deadline
+
+`chatSend` now marks the 5-minute ceiling distinctly (`turnStillRunning`), and the
+chat page acts on it as what it is: the composer stays busy, the Retry affordance
+is withdrawn (re-sending is refused while the turn runs — that was the dead end),
+a "still running" notice explains why, and the answer is collected from whichever
+arrives first — the stream's `done` event, or a poll of the persisted transcript.
+The turn is committed exactly once.
+
+**There is deliberately no deadline on the wait.** The server has none either, and
+this is a tool built for work measured in hours — a client-side deadline would
+reintroduce the same breaking behaviour one arbitrary number later. Recovery polls
+while the session reports the turn running, and it is the TURN that ends the wait,
+not a clock. The only stop conditions are the page going away, the server becoming
+unreachable for 10 reads in a row (reported honestly), or the turn ending with no
+answer at all — and only that last one offers Retry again.
+
+The wait is also VISIBLE, because a still screen is indistinguishable from a broken
+one: the notice counts elapsed time up (`45s`, then `3m 05s`, then `1h 04m`), the live tokens/steps/
+tool cards keep streaming alongside it, and reopening the page mid-turn shows the
+same state — the resume path waits on the same condition. A long turn is allowed
+to look long.
+
+### A command started from the dashboard runs until it finishes (the other 5-minute ceiling)
+
+The CHAT turn was not the only place a hardcoded 5 minutes was SIGTERMing real
+work. The dashboard's task console (Tasks page, Gateway ops) started every CLI
+command with `timeoutMs = 300_000`, and the runner enforces it by killing the
+child. So `npm test` on a real repo, a release build, an eval matrix — the exact
+commands worth starting from the GUI — died at 5:00 while the log pane still
+looked live, and the page reported a failure about work that was merely
+unfinished. `gateway start` had already been exempted one preset at a time (its
+comment names this exact defect), which is the tell that the default was wrong
+rather than the exception.
+
+The console now defaults to **0 = run until it finishes or you cancel it** — the
+runner already supported it, output streams live, and ⏹ Cancel is explicit. The
+Tasks page's own timeout picker opens on **until finished** (1/5/10/30 min remain
+one click away, and `EvalsPage` keeps its deliberate 15 minutes).
+
+Elapsed time is now shown beside the status on every console task, from ONE
+shared formatter (`formatElapsed`) that the chat's long-turn notice uses too, so a
+long run reads as time passing rather than as a page that stopped.
+
+`/api/tasks` callers that omit `timeoutMs` get no timeout either — the runner's
+5-minute default is gone, so the safety net is not a trap for anything that
+forgets to state a choice. A cutoff is now an explicit `timeoutMs > 0`, which is
+exactly what the GUI's picker sends.
+
+### `run_terminal` assesses the work, then FOLLOWS a long command instead of killing it
+
+Same defect, one layer deeper: the agent's own terminal tool gave every command
+that was not a quick read 60–120s and then SIGTERMed it, so `npm test` on a real
+repo — minutes by nature, and the very command the tool exists for — was
+destroyed mid-run and its partial output reported as a failure. The model then
+reasoned about the project from a run that never finished.
+
+**The wait is assessed from the command**, instead of one flat number: a test
+suite or a dependency install gets 15 minutes, a build or compiler 10, a quick
+read keeps the short default, an explicit `timeout_ms` still wins over all of it,
+and the room ranks BELOW the class (a person watching still waits less — P7 — but
+only for a command the classifier has no opinion about).
+
+**Reaching that wait is not a kill.** The child keeps running, its output keeps
+accumulating, and the tool returns what it knows: how long it has been going,
+whether it is producing output at all, and the id to follow it with —
+`run_terminal(action:'poll', process_id:'…')` for status, output tail and the
+REAL exit code when it lands; `run_terminal(action:'list')` for everything being
+monitored. That is the difference between "I stopped waiting" and "it failed".
+
+**And it says why it is slow**, which a bare `⏱ timed out after 120000ms` never
+could: no output at all is the signature of a command waiting on an interactive
+prompt (this tool gives it no stdin); output that STOPPED over a minute ago is a
+stall (a lock, a network call with no timeout, a test blocked on a server);
+output still arriving means progress — let it finish.
+
+**A live run is neither evidence nor a failure.** It is its own state
+(`RUN_TERMINAL_INCOMPLETE_PREFIX`), because both verdicts are lies: counting it as
+success is how a turn claims "the tests pass" about a suite still on its first
+file, and counting it as failure is the bug this replaces. The loop's success
+classifier excludes it; the poll that reports the real exit code is accounted for
+like any other run.
+
+**Starting the same work twice is refused**, naming the live run: the old tool
+had no such case because its first copy was already dead. Following it, or
+waiting for it to end, are the options; duplicating a suite is not.
+
+### Verified
+
+- Dashboard suite: **1298 tests passing** across 54 files, plus `tsc --noEmit`
+  clean on both the root and the dashboard tsconfig.
+- Root `tests/web-dashboard/`: **469 passing** across 33 files, including new
+  regression tests for the answer riding the terminal SSE status, the
+  `turnStillRunning` flag (and its absence on a cancel or a transport failure), and
+  the three recovery paths on the page (transcript, stream, no-answer → Retry).
+- `dashboard-bundle.test.ts` green after rebuilding the committed bundle.
+
+### Still true (not a bug)
+
+The 5-minute POST cap remains — it is what a browser wait should be. It is now
+harmless: it can no longer strand an answer.
+
 ## v3.5.1 — a blinking model is waited out, not traded away, and only one process runs the sweep
 
 Two failures share a cause: a fixed schedule doing two jobs that need opposite

@@ -1838,6 +1838,20 @@ const bookCounts = {
   tsFiles: bookRepoFiles.filter((p) => /\.tsx?$/.test(p)).length.toLocaleString('en-US'),
   dirLearning: bookRepoFiles.filter((p) => p.startsWith('src/learning/') && /\.tsx?$/.test(p)).length,
 };
+/**
+ * The dashboard HTTP server's line count, MEASURED the way the checker measures
+ * it (`split('\n').length`), because Chapter 1's file tree quotes it and it moves
+ * with every edit to that file — a frozen literal there goes stale silently.
+ */
+const bookServerLines = (() => {
+  try {
+    return readFileSync(join(repoRoot, 'src/web-dashboard/server.ts'), 'utf8')
+      .split('\n')
+      .length.toLocaleString('en-US');
+  } catch {
+    return null;
+  }
+})();
 
 const facts = [
   // The cover's version div: matched whole, so the chapter count is always the
@@ -1940,6 +1954,22 @@ const facts = [
   [/\b1,250-file TypeScript codebase\b/g, `${bookCounts.tsFiles}-file TypeScript codebase`],
   [/\b1,180 TypeScript files\b/g, `${bookCounts.tsFiles} TypeScript files`],
   [/self-improvement \(115 files\)/g, `self-improvement (${bookCounts.dirLearning} files)`],
+  // The HTTP server's line count (Chapter 1's tree). Measured, not frozen: it
+  // moved from 9,485 to 9,493 with a session's own edit to that file.
+  ...(bookServerLines
+    ? [[/server\.ts([^)\n]*?)\([\d,]+\+? lines\)/g, `server.ts$1(${bookServerLines} lines)`]]
+    : []),
+  // ...and the two counts the list ABOVE could not fix, because every entry in
+  // it names a HISTORICAL literal (`576`, `1,180`, `1,250`). A run writes today's
+  // measured count, so the next run no longer recognizes what it wrote: measured
+  // — the book quoted "581 test files" and a "1,257-file TypeScript codebase"
+  // while this tree measured 589 and 1,273, and `check-book-code.mjs` failed
+  // eight times (the two phrasings, in eight chapters). These match ANY count in
+  // those phrasings — the same breadth the checker uses — so a regeneration
+  // always writes the measured value and the book cannot drift from the tree
+  // again. Idempotent: re-matching a current count rewrites it unchanged.
+  [/\b\d[\d,]* test files\b/g, `${bookCounts.testFiles} test files`],
+  [/\b\d[\d,]*-file TypeScript codebase\b/g, `${bookCounts.tsFiles}-file TypeScript codebase`],
 ];
 let corrected = 0;
 for (const [re, to] of facts) {

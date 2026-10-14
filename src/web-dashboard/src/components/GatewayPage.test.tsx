@@ -62,7 +62,7 @@ describe('GatewayPage', () => {
     render(<GatewayPage />);
     await waitFor(() => expect(screen.getByRole('button', { name: /Gateway status/ })).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: /Gateway status/ }));
-    await waitFor(() => expect(start).toHaveBeenCalledWith(['gateway', 'status'], 300_000));
+    await waitFor(() => expect(start).toHaveBeenCalledWith(['gateway', 'status'], 0));
   });
 
   it('the custom input runs an arbitrary gateway/admin command', async () => {
@@ -73,6 +73,6 @@ describe('GatewayPage', () => {
     await waitFor(() => expect(screen.getByPlaceholderText(/admin cron run/)).toBeTruthy());
     fireEvent.change(screen.getByPlaceholderText(/admin cron run/), { target: { value: 'admin cron run nightly' } });
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
-    await waitFor(() => expect(start).toHaveBeenCalledWith(['admin', 'cron', 'run', 'nightly'], 300_000));
+    await waitFor(() => expect(start).toHaveBeenCalledWith(['admin', 'cron', 'run', 'nightly'], 0));
   });
 });

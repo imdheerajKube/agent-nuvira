@@ -426,6 +426,38 @@ describe('ChatConsole', () => {
     expect(engine.lastPlanStore).not.toBe(store1);
   });
 
+  /**
+   * The finish must ride the LIVE channel, carrying the answer.
+   *
+   * Measured failure this closes: the answer used to travel on exactly one
+   * channel — the body of the `POST /api/chat` that started the turn — and the
+   * dashboard caps that POST at 5 minutes client-side
+   * (`AbortSignal.timeout(300_000)`). A real turn ran 300.9s, so the client
+   * stopped listening while the server finished normally and PERSISTED the
+   * answer; the user could only recover it by reloading. The terminal
+   * `status: done` event now carries the answer, so the stream can finish the
+   * turn on its own.
+   */
+  it('carries the finished answer on the terminal status:done event', async () => {
+    const events: Array<{ status?: string; answer?: { content: string; generationFailed: boolean; followups: Array<{ prompt: string }> } }> = [];
+    console_.onEvent((_sid, event) => {
+      if (event.kind !== 'status') return;
+      events.push({ status: event.status, ...(event.answer ? { answer: event.answer } : {}) });
+    });
+    const r = await console_.answer('s1', 'a long job');
+    expect(r.ok).toBe(true);
+    const done = events.find((e) => e.status === 'done');
+    expect(done).toBeTruthy();
+    // The SAME answer the POST returns — the stream is a second delivery path,
+    // not a different result.
+    const content = r.ok ? r.content : '';
+    expect(done!.answer?.content).toBe(content);
+    expect(content.length).toBeGreaterThan(0);
+    expect(done!.answer?.generationFailed).toBe(false);
+    // The chips ride along too, so a recovered turn offers its followups.
+    expect(done!.answer?.followups.map((f) => f.prompt)).toEqual(r.ok ? r.followups.map((f) => f.prompt) : []);
+  });
+
   it('streams live progress lines to subscribers during a turn', async () => {
     const events: Array<{ sessionId: string; kind: string; line?: string }> = [];
     console_.onEvent((sessionId, event) => {

@@ -2002,7 +2002,21 @@ export class DashboardAPI {
          */
         findings?: TraceFinding[];
       }
-    | { ok: false; error: string; unauthorized?: boolean; forbidden?: boolean }
+    | {
+        ok: false;
+        error: string;
+        unauthorized?: boolean;
+        forbidden?: boolean;
+        /**
+         * The CLIENT stopped waiting (the 5-minute ceiling below) while the
+         * server kept running the turn. Distinct from a failed turn on purpose:
+         * the answer still exists and the caller must COLLECT it (the live
+         * `onTurnDone` stream, or the persisted transcript) rather than offer a
+         * Retry — re-sending is refused while the first turn is still running
+         * ("A message is already being answered in this session").
+         */
+        turnStillRunning?: boolean;
+      }
   > {
     const token = getAdminToken();
     try {
@@ -2070,9 +2084,14 @@ export class DashboardAPI {
       if (name === 'TimeoutError') {
         return {
           ok: false,
+          // `turnStillRunning` is the machine-readable half of this sentence:
+          // the turn was NOT cancelled and did NOT fail, so the caller recovers
+          // the answer (stream/poll) instead of offering a Retry that the
+          // server must refuse.
+          turnStillRunning: true,
           error:
             'The dashboard stopped waiting after 5 minutes — the turn is STILL RUNNING on the server. ' +
-            'Reopen this conversation (or watch Traces) to see the result when it lands.',
+            'Its answer will appear here when it lands (nothing was lost — the turn keeps running).',
         };
       }
       if (name === 'AbortError') {
@@ -2179,6 +2198,27 @@ export class DashboardAPI {
        * transcript snapshot (like every other live event).
        */
       onFinding?: (finding: TraceFinding) => void;
+      /**
+       * The turn FINISHED on the server and the answer rode in on the terminal
+       * `done` status event.
+       *
+       * WHY IT EXISTS. The answer used to arrive by exactly one route: the body
+       * of the `POST /api/chat` that started the turn. That POST is capped at 5
+       * minutes here (see `chatSend`), so a turn that outlived the cap left the
+       * server's answer unreachable — the server finished and persisted it (a
+       * measured 300.9s turn did), but the client could only recover it by
+       * reloading the page. This handler is the stream's copy of the finish.
+       * The POST response stays AUTHORITATIVE when it arrives: a caller must
+       * ignore this payload unless its own POST has already given up.
+       */
+      onTurnDone?: (answer: {
+        content: string;
+        followups: Array<{ prompt: string; label?: string }>;
+        generationFailed: boolean;
+        bounded?: boolean;
+        provider?: string | null;
+        model?: string | null;
+      }) => void;
     },
   ): () => void {
     const token = getAdminToken();
@@ -2191,8 +2231,30 @@ export class DashboardAPI {
     });
     es.addEventListener('status', (event) => {
       try {
-        const payload = JSON.parse((event as MessageEvent).data) as { status?: string };
+        const payload = JSON.parse((event as MessageEvent).data) as {
+          status?: string;
+          answer?: {
+            content?: string;
+            followups?: Array<{ prompt: string; label?: string }>;
+            generationFailed?: boolean;
+            bounded?: boolean;
+            provider?: string | null;
+            model?: string | null;
+          };
+        };
         if (payload.status) handlers.onStatus?.(payload.status);
+        // The finish, with the answer attached (absent on a server that
+        // predates it — the caller's polling fallback covers that case).
+        if (payload.status === 'done' && payload.answer && typeof payload.answer.content === 'string') {
+          handlers.onTurnDone?.({
+            content: payload.answer.content,
+            followups: Array.isArray(payload.answer.followups) ? payload.answer.followups : [],
+            generationFailed: payload.answer.generationFailed === true,
+            ...(payload.answer.bounded === undefined ? {} : { bounded: payload.answer.bounded }),
+            ...(payload.answer.provider === undefined ? {} : { provider: payload.answer.provider }),
+            ...(payload.answer.model === undefined ? {} : { model: payload.answer.model }),
+          });
+        }
       } catch { /* ignore malformed */ }
     });
     es.addEventListener('token', (event) => {

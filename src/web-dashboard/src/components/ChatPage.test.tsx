@@ -26,6 +26,17 @@ function mockChatStream() {
   vi.spyOn(dashboardAPI, 'subscribeChat').mockReturnValue(() => {});
 }
 
+/** The same subscription, with the handlers captured so a test can DRIVE the
+ *  stream (the live `done` path). */
+function mockChatStreamCapturing(): { handlers?: Parameters<typeof dashboardAPI.subscribeChat>[1] } {
+  const captured: { handlers?: Parameters<typeof dashboardAPI.subscribeChat>[1] } = {};
+  vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_sessionId, handlers) => {
+    captured.handlers = handlers;
+    return () => {};
+  });
+  return captured;
+}
+
 type ChatSendResult = Awaited<ReturnType<typeof dashboardAPI.chatSend>>;
 
 function mockChatSend(result: ChatSendResult) {
@@ -63,6 +74,130 @@ describe('capabilityModeFromValue — the toggle mirrors the server parse', () =
     expect(capabilityModeFromValue(null)).toBe('balanced');
     expect(capabilityModeFromValue(undefined)).toBe('balanced');
     expect(capabilityModeFromValue('   ')).toBe('balanced');
+  });
+});
+
+/**
+ * A turn can outlive the dashboard's own wait for it.
+ *
+ * The chat POST is capped at 5 minutes client-side (`chatSend`), and a real
+ * agentic turn routinely runs longer (measured on this machine: p95 516s,
+ * longest 2571s). The server deliberately keeps running such a turn and persists
+ * its answer, so the two things that used to go wrong here were pure delivery
+ * faults: the answer had no route back to the page (only a reload showed it), and
+ * the failure path offered a Retry that the still-busy server refused —
+ * "A message is already being answered in this session".
+ */
+describe('ChatPage — a turn that outlives the 5-minute POST ceiling', () => {
+  const CEILING_RESULT = {
+    ok: false as const,
+    turnStillRunning: true,
+    error:
+      'The dashboard stopped waiting after 5 minutes — the turn is STILL RUNNING on the server. ' +
+      'Its answer will appear here when it lands (nothing was lost — the turn keeps running).',
+  };
+
+  /**
+   * A session whose turn stays RUNNING until the test completes it — the real
+   * shape of a long turn (there is no deadline to run out; the work simply ends
+   * when it ends). Returns a control the test uses to land the turn.
+   *
+   * The reads are keyed on the POST having been sent, not on call ORDER: the page
+   * also reads a session once on mount (its resume path), and a test that assumed
+   * which of the two reads came first would be testing the test.
+   */
+  function mockRunningTurnThen(outcome: 'answered' | 'no-answer') {
+    let postSent = false;
+    let landed = false;
+    const user = { role: 'user' as const, content: 'a long job' };
+    vi.spyOn(dashboardAPI, 'chatSend').mockImplementation(async () => {
+      postSent = true;
+      return CEILING_RESULT;
+    });
+    vi.spyOn(dashboardAPI, 'getChatSession').mockImplementation(async () => {
+      // Before the turn: nothing to resume (the page is not reattaching).
+      if (!postSent) return null;
+      // While it runs: the server reports the turn live, with no answer yet.
+      if (!landed) return { title: 'long job', updatedAt: 1, busy: true, turns: [user] };
+      return {
+        title: 'long job',
+        updatedAt: 2,
+        busy: false,
+        turns:
+          outcome === 'answered'
+            ? [user, { role: 'assistant' as const, content: 'Finished after the ceiling — the review is in the doc.' }]
+            : [user],
+      };
+    });
+    return { land: () => { landed = true; } };
+  }
+
+  it('keeps waiting through a running turn, then collects the answer from the transcript', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const turn = mockRunningTurnThen('answered');
+    render(<ChatPage ceilingRecovery={{ pollMs: 5 }} />);
+    const box = await screen.findByPlaceholderText(/Message the agent/);
+    fireEvent.change(box, { target: { value: 'a long job' } });
+    fireEvent.submit(box.closest('form')!);
+
+    // The turn is live on the server: the page says so (and not that it failed),
+    // with the elapsed wait on screen so a long wait is visibly alive.
+    await waitFor(() => expect(screen.getByText(/Still working on the server/)).toBeTruthy());
+    expect(screen.getByText(/elapsed/)).toBeTruthy();
+    // No Retry while the turn runs: re-sending is refused by the busy server, and
+    // offering it was the dead end this replaces.
+    expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+
+    // The turn finishes on the server; its answer is picked up from the
+    // transcript with no reload and no second request from the user.
+    turn.land();
+    await waitFor(() => expect(screen.getByText(/Finished after the ceiling/)).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText(/Still working on the server/)).toBeNull());
+    expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+  });
+
+  it('takes the answer from the live stream when the done event arrives first', async () => {
+    mockAuthed('admin');
+    const stream = mockChatStreamCapturing();
+    mockChatSend(CEILING_RESULT);
+    // The poll must not be the path under test: it is made both slow and
+    // useless (a null transcript), so an answer can only come from the stream.
+    vi.spyOn(dashboardAPI, 'getChatSession').mockResolvedValue(null);
+    render(<ChatPage ceilingRecovery={{ pollMs: 60_000 }} />);
+    const box = await screen.findByPlaceholderText(/Message the agent/);
+    fireEvent.change(box, { target: { value: 'a long job' } });
+    fireEvent.submit(box.closest('form')!);
+    await waitFor(() => expect(screen.getByText(/Still working on the server/)).toBeTruthy());
+
+    // The server finishes and the stream carries the answer.
+    stream.handlers?.onTurnDone?.({
+      content: 'Streamed finish — the doc is updated.',
+      followups: [],
+      generationFailed: false,
+    });
+
+    // Nothing else could produce this bubble: the transcript read is null and the
+    // poll is 60s away.
+    await waitFor(() => expect(screen.getByText(/Streamed finish/)).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText(/Still working on the server/)).toBeNull());
+  });
+
+  it('offers a real Retry when the recovered turn ended without an answer', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const turn = mockRunningTurnThen('no-answer');
+    render(<ChatPage ceilingRecovery={{ pollMs: 5 }} />);
+    const box = await screen.findByPlaceholderText(/Message the agent/);
+    fireEvent.change(box, { target: { value: 'a long job' } });
+    fireEvent.submit(box.closest('form')!);
+    await waitFor(() => expect(screen.getByText(/Still working on the server/)).toBeTruthy());
+
+    // The turn ENDED with no answer at all — that IS a failed turn, so the Retry
+    // affordance is correct (and the server is no longer busy).
+    turn.land();
+    await waitFor(() => expect(screen.getByRole('button', { name: /↻ Retry/ })).toBeTruthy());
+    expect(screen.queryByText(/Still working on the server/)).toBeNull();
   });
 });
 

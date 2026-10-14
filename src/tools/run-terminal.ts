@@ -31,8 +31,9 @@
  * (maskSenderId — phone numbers never echo back in full).
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import {
   applyRemediationAutoFixes,
   diagnoseFailure,
@@ -41,6 +42,31 @@ import {
   remediationAutoApplyEnabled,
 } from './remediation-ladder.js';
 import type { ToolContext } from './registry.js';
+import {
+  classifyLiveness,
+  formatSpan,
+  killProcessTree,
+  livenessThresholds,
+  processAlive,
+  processTableSnapshot,
+  sampleProcessTree,
+  tableAlive,
+  lookupProcess,
+  type Liveness,
+  type ProcessTable,
+} from './process-liveness.js';
+import {
+  loadRuns,
+  processIdentityCheck,
+  outputWindow,
+  saveRun,
+  spoolBytes,
+  spoolPath,
+  readSpool,
+  sweepSpools,
+  SpoolWriter,
+  type PersistedRun,
+} from './run-registry.js';
 import { maskSenderId } from '../utils/mask.js';
 import { decideStateChange } from '../learning/autonomy-policy.js';
 import { envelopeCoversAction } from '../learning/intent-envelope.js';
@@ -61,12 +87,91 @@ const DEFAULT_TIMEOUT_MS = 120_000;
  * turn (4 minutes of a 5-minute run) while the dashboard console showed nothing,
  * and then the agent gave up. Two minutes of silence in front of a person is not
  * patience, it is a bug. Sixty seconds still covers a real test/build on this
- * class of project, and an explicit `timeout_ms` (up to MAX_TIMEOUT_MS) still
- * buys the model as much time as the work genuinely needs.
+ * class of project, and an explicit `timeout_ms` (up to MAX_WAIT_MS) still buys
+ * the model as much time as the work genuinely needs.
  */
 const INTERACTIVE_DEFAULT_TIMEOUT_MS = 60_000;
-/** Hard ceiling — the tool loop bounds the whole turn anyway. */
-const MAX_TIMEOUT_MS = 300_000;
+/**
+ * The longest this tool WAITS inside one call before handing the command to the
+ * monitored (`still running`) path. This is NOT a kill switch any more — see
+ * `assessCommandTime` and the detached-run registry below: reaching it means the
+ * tool stops blocking and reports, never that the work is destroyed.
+ */
+const MAX_WAIT_MS = 1_800_000;
+
+/**
+ * What a command CLASS actually needs, so the wait is chosen from the work
+ * instead of a single flat number.
+ *
+ * The measured defect this replaces: every command that was not a quick read got
+ * 60–120s and then a SIGTERM, so `npm test` on a real repo — minutes by nature,
+ * and the very command the tool exists for — was killed mid-run, its partial
+ * output reported as a failure, and the turn built conclusions on a run that
+ * never finished. Freebuff-style behaviour is the opposite: assess the time the
+ * work needs, wait for it, and when it outlives the wait, KEEP IT RUNNING and
+ * report what it is doing — never destroy it and call that a result.
+ *
+ * Order matters: the first match wins, so the most specific/expensive class is
+ * listed first (a `docker build` is not an `npm install`).
+ */
+const LONG_COMMAND_BUDGETS: Array<{ re: RegExp; budgetMs: number; why: string }> = [
+  {
+    re: /(^|\s)(docker\s+(build|compose\s+up)|make|cmake\s+--build|gradle(w)?\s|mvn\s)/,
+    budgetMs: 900_000,
+    why: 'a container/compiler build',
+  },
+  {
+    re: /(^|\s)(npm|pnpm|yarn|bun)\s+(run\s+)?(test|test:\S+|ci|install|i|add)\b|(^|\s)(vitest|jest|pytest|go\s+test|cargo\s+test|ng\s+test)\b/,
+    budgetMs: 900_000,
+    why: 'a test suite / dependency install',
+  },
+  {
+    re: /(^|\s)(npm|pnpm|yarn|bun)\s+run\s+(build|compile|bundle|dist)\b|(^|\s)(tsc|vite\s+build|webpack|rollup|esbuild|cargo\s+build|go\s+build)\b/,
+    budgetMs: 600_000,
+    why: 'a build',
+  },
+  {
+    re: /(^|\s)(pip3?|poetry|bundle|composer)\s+(install|add|sync)\b/,
+    budgetMs: 600_000,
+    why: 'a dependency install',
+  },
+];
+
+/**
+ * The wait budget this command deserves, and the reason (for the message).
+ * Exported so the assessment is testable on its own — it is a decision, not an
+ * implementation detail.
+ */
+export function assessCommandTime(command: string): { budgetMs: number; why: string } | null {
+  const cmd = command.toLowerCase();
+  for (const { re, budgetMs, why } of LONG_COMMAND_BUDGETS) {
+    if (re.test(cmd)) return { budgetMs, why };
+  }
+  return null;
+}
+
+/**
+ * How long this call waits before handing the command to monitoring.
+ *
+ * Priority, and why in that order:
+ *  1. an explicit `timeout_ms` — the model knows something the classifier does not;
+ *  2. the ASSESSED class — a full test suite or a build is minutes by nature, and
+ *     giving it the short default is what produced the kill-mid-run failures;
+ *  3. the room — a person watching waits less (P7), an unattended run waits more.
+ *
+ * Exported because this is a decision, not an implementation detail: it is what
+ * `run_terminal` believes the work needs, and it should be asserted directly
+ * rather than inferred from a message.
+ */
+export function resolveWaitMs(
+  command: string,
+  explicitMs: number | undefined,
+  interactive: boolean | undefined,
+): number {
+  const assessed = assessCommandTime(command);
+  const base = interactive ? INTERACTIVE_DEFAULT_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+  return Math.min(MAX_WAIT_MS, Math.max(1000, Math.floor(explicitMs ?? assessed?.budgetMs ?? base)));
+}
 /**
  * P7 — how many times the SAME command (at the SAME timeout) may fail before the
  * next call is refused.
@@ -125,17 +230,704 @@ function clearCommandFailure(key: string): void {
   commandFailureStreaks.delete(key);
 }
 
-/** The guidance a timed-out command gets instead of a bare "timed out". */
-export function timeoutGuidance(command: string, timeoutMs: number, repeated: boolean): string {
-  const seconds = Math.round(timeoutMs / 1000);
+/**
+ * ─── Monitored runs: a long command is FOLLOWED, never killed ───────────────
+ *
+ * This registry is the whole difference between the old behaviour and this one.
+ * The old code armed a timer that SIGTERMed the child, so a command whose real
+ * runtime is minutes — a full test suite, a build — was destroyed mid-run and
+ * the tool reported a failure about work that was merely unfinished; the model
+ * then reasoned from a run that never completed. Killing is not a result.
+ *
+ * Now the wait budget only decides how long THIS CALL blocks. When it runs out,
+ * the child keeps running, its output keeps accumulating here, and the tool
+ * returns what it knows: how long it has been going, whether it is producing
+ * output at all, and the id to follow it with. The agent polls, does other work,
+ * and gets the real exit code when the work actually lands.
+ */
+interface DetachedRun {
+  id: string;
+  command: string;
+  cwd: string;
+  /**
+   * The live handle — present only when THIS process spawned the run. A run
+   * recovered from the registry after a restart has none: it is identified by
+   * `pid` and followed through the spool.
+   */
+  child?: ChildProcess;
+  /** The process-tree root to sample and signal. */
+  pid: number | null;
+  /**
+   * Recovered from disk after a restart (no in-memory output, and the pid has to
+   * be re-verified as OURS before it is ever signalled).
+   */
+  reattached?: boolean;
+  /** `true`/`false` when the re-attached pid was checked; `null` = unverifiable. */
+  pidVerified?: boolean | null;
+  /** WHY that check came out that way — a refusal the operator can act on. */
+  pidVerifiedWhy?: string;
+  /**
+   * The OS's own start token for this run's process, read ONCE while the process
+   * is certainly still ours (at hand-off). It is the second identity witness —
+   * see `processIdentityVerdict` for why a pid plus a command line is not enough.
+   */
+  osStartedAt?: string | null;
+  /** True when the in-memory output is missing its beginning (the head is in the spool). */
+  truncatedOutput?: boolean;
+  /** The bounded head+tail spool for this run's output. */
+  spool?: SpoolWriter;
+  /** When the run ended, when it was watched to the end. */
+  endedAt?: number;
+  startedAt: number;
+  /** When the last output byte arrived — the silence detector's input. */
+  lastOutputAt: number;
+  bytes: number;
+  out: string;
+  err: string;
+  status: 'running' | 'done';
+  exitCode: number | null;
+  /** Cumulative CPU ms of the process TREE at the last sample (null = unmeasurable). */
+  cpuMs?: number | null;
+  /** When that sample was taken. */
+  sampledAt?: number;
+  /** The watchdog's last verdict for this run, and the evidence behind it. */
+  verdict?: Liveness;
+  verdictWhy?: string;
+  /** When a CONFIRMED hang began (reset the moment the run speaks or computes). */
+  hungSince?: number | null;
+  /** True when the watchdog stopped the run (never for a run that was working). */
+  reaped?: boolean;
+  /** True when the model/operator asked for it to stop. */
+  stopRequested?: boolean;
+  /** Why the run stopped, when it was stopped rather than finishing on its own. */
+  exitReason?: string;
+  /** A confirmed hang that will NOT be stopped (a re-attached run we cannot re-verify). */
+  hangUnstoppable?: boolean;
+  /** SIGKILL grace after a SIGTERM. */
+  killGrace?: ReturnType<typeof setTimeout> | null;
+}
+
+const detachedRuns = new Map<string, DetachedRun>();
+/** Bounded: a long session must not accumulate output buffers. */
+const MAX_DETACHED_RUNS = 20;
+
+/** ─── The liveness watchdog: identifying a HANG, and acting on it ────────────
+ *
+ * Monitoring without a heartbeat recreates the opposite defect: a command that
+ * is genuinely stuck (a prompt with no stdin, a lock, a socket that never
+ * answers) runs forever, and "still running" is not a diagnosis. Terminating on
+ * a clock is the bug this whole file already removed, so the replacement is:
+ *
+ *   identify — sample the run's process TREE for cumulative CPU every so often;
+ *              silence ALONE is never a hang (a real suite is quiet for
+ *              minutes), but silence AND a measurable absence of CPU is;
+ *   report   — a confirmed hang is surfaced on `poll`/`list` with its evidence;
+ *   act      — and only then, after a further grace in which the run shows
+ *              neither output nor CPU, is it stopped (SIGTERM, then SIGKILL on
+ *              the whole tree). Any output or any CPU at any sample clears the
+ *              hang, so a slow-but-working command is never touched.
+ *
+ * `NUVIRA_HANG_REAP_MS=0` keeps the identification and reporting and disables
+ * the stopping (report-only); `NUVIRA_HANG_QUIET_MS` and `NUVIRA_HANG_CPU_MS`
+ * tune what counts as a hang; `NUVIRA_HANG_POLL_MS` tunes the sample rate.
+ */
+function envMs(name: string, fallback: number): number {
+  const raw = Number.parseInt(String(process.env[name] ?? '').trim(), 10);
+  return Number.isFinite(raw) && raw >= 0 ? raw : fallback;
+}
+
+/** How often a monitored run's process tree is sampled. */
+function hangPollMs(): number {
+  return Math.max(1_000, envMs('NUVIRA_HANG_POLL_MS', 30_000));
+}
+
+/** How long a CONFIRMED hang is left running before it is stopped (0 = never). */
+export function hangReapMs(): number {
+  return envMs('NUVIRA_HANG_REAP_MS', 300_000);
+}
+
+let watchdog: ReturnType<typeof setInterval> | null = null;
+let lastSampleAt = 0;
+
+function ensureWatchdog(): void {
+  if (watchdog) return;
+  watchdog = setInterval(() => sampleMonitoredRuns(), hangPollMs());
+  // A monitored run must never hold the process open — the CLI exits when the
+  // turn ends, and the run's own exit handler is what reports its result.
+  watchdog.unref?.();
+}
+
+function stopWatchdogIfIdle(): void {
+  if (!watchdog) return;
+  if ([...detachedRuns.values()].some((r) => r.status === 'running')) return;
+  clearInterval(watchdog);
+  watchdog = null;
+}
+
+/** Stop a run the watchdog has established is hung, and say why. */
+function reapHungRun(run: DetachedRun, why: string, table?: ProcessTable | null): void {
+  if (!maySignal(run)) {
+    // A recovered run whose pid could not be re-verified is NEVER signalled — the
+    // pid may belong to someone else by now. It stays flagged and reported, and
+    // `exitReason` is NOT set: it is still running, and saying otherwise would be
+    // the kind of lie the rest of this file exists to avoid.
+    run.hangUnstoppable = true;
+    return;
+  }
+  run.reaped = true;
+  run.exitReason = why;
+  killProcessTree(run.pid ?? -1, 'SIGTERM', run.child, table);
+  run.killGrace = setTimeout(() => {
+    killProcessTree(run.pid ?? -1, 'SIGKILL', run.child);
+  }, 5_000);
+  run.killGrace.unref?.();
+  // Persisted IMMEDIATELY: the reason a run was stopped must survive the very
+  // crash the registry exists for.
+  persistRun(run);
+}
+
+/**
+ * One heartbeat over every monitored run.
+ *
+ * Exported (and takes `now`) so the decision can be driven deterministically in
+ * a test instead of waited for.
+ */
+export function sampleMonitoredRuns(now = Date.now()): void {
+  const thresholds = livenessThresholds();
+  const reapAfter = hangReapMs();
+  const sampleWindowMs = lastSampleAt > 0 ? now - lastSampleAt : hangPollMs();
+  lastSampleAt = now;
+  // ONE read per tick, shared by every run, by the reconciliation below and by any
+  // signalling: on Windows each read is a PowerShell start, and a tick must not
+  // cost one per run. The registry is read at most once too, and only when there
+  // is a recovered run to reconcile.
+  const table = processTableSnapshot();
+  const needsRegistry = [...detachedRuns.values()].some((r) => r.reattached && r.status === 'running');
+  const recorded = needsRegistry ? loadRuns() : undefined;
+
+  for (const run of [...detachedRuns.values()]) {
+    if (run.status !== 'running') continue;
+    refreshReattachedRun(run, now, { table, ...(recorded ? { recorded } : {}) });
+    if (run.status !== 'running') continue; // it ended while we were not watching
+    const sample = sampleProcessTree(run.pid ?? -1, table);
+    // A run this process spawned is alive until its own exit event says otherwise.
+    // A recovered one has no such event, so the process table is the only witness
+    // — and "cannot tell" (null) must read as alive, never as finished.
+    // `!== false` on purpose: a platform that cannot read the process table
+    // reports `null`, and "cannot tell" must read as ALIVE (a recovered run is
+    // never declared dead by a guess).
+    const alive = run.reattached
+      ? tableAlive(table, run.pid ?? -1) !== false
+      : run.child !== undefined && run.child.exitCode === null && run.child.signalCode === null;
+    const verdict = classifyLiveness(
+      {
+        alive,
+        bytes: run.bytes,
+        quietMs: now - run.lastOutputAt,
+        ageMs: now - run.startedAt,
+        cpuMs: sample.cpuMs,
+        prevCpuMs: run.cpuMs ?? null,
+        sampleWindowMs,
+      },
+      thresholds,
+    );
+    run.cpuMs = sample.cpuMs;
+    run.sampledAt = now;
+    run.verdict = verdict.verdict;
+    run.verdictWhy = verdict.why;
+
+    if (verdict.verdict === 'hung') {
+      // The grace starts once, at the FIRST confirmed hang — and every later
+      // sample that still shows a hang keeps it running toward the reap.
+      run.hungSince = run.hungSince ?? now;
+      if (reapAfter > 0 && now - run.hungSince >= reapAfter && !run.stopRequested) {
+        reapHungRun(
+          run,
+          `hung: no output and no CPU for ${formatSpan(now - run.startedAt)} ` +
+            `(confirmed hung for ${formatSpan(now - run.hungSince)})`,
+          table,
+        );
+      }
+    } else {
+      // It spoke or it computed — it is not hung, and the grace starts over.
+      run.hungSince = null;
+    }
+  }
+  stopWatchdogIfIdle();
+}
+
+/**
+ * The marker a result carries when the command OUTLIVED its wait budget and is
+ * still running under monitoring.
+ *
+ * It is neither success nor failure, and the loop must read it as neither:
+ *
+ *  - NOT success — a live run has verified nothing yet. Counting it as proof is
+ *    how a turn ends up claiming "the tests pass" about a suite that is still on
+ *    its first file.
+ *  - NOT failure — reporting it as one is the bug this whole change removes: the
+ *    work was destroyed (or, now, is still going) and the user is told it broke.
+ *
+ * So it is its own state, and this exported string is the one both the tool and
+ * the loop's success classifier read (see `ranOk` in tool-loop.ts).
+ */
+export const RUN_TERMINAL_INCOMPLETE_PREFIX = '⏳ run_terminal: still running';
+
+/**
+ * Write a run's record to the durable registry (see `run-registry.ts`).
+ *
+ * Best-effort by construction: a run must never fail because a state file could
+ * not be written. What it buys is that the NEXT process can still answer "what is
+ * running, and how did it end?" — which is otherwise lost with this one.
+ */
+function persistRun(run: DetachedRun): void {
+  if (run.pid === null || run.pid <= 0) return;
+  saveRun({
+    id: run.id,
+    command: run.command,
+    cwd: run.cwd,
+    pid: run.pid,
+    startedAt: run.startedAt,
+    status: run.status,
+    exitCode: run.exitCode,
+    ...(run.status === 'done' ? { endedAt: run.endedAt ?? Date.now() } : {}),
+    ...(run.exitReason ? { exitReason: run.exitReason } : {}),
+    ...(run.reaped ? { reaped: true } : {}),
+    ...(run.stopRequested ? { stopRequested: true } : {}),
+    ...(run.osStartedAt ? { osStartedAt: run.osStartedAt } : {}),
+  });
+}
+
+/**
+ * Re-verify a recovered run's pid against BOTH witnesses, keeping the evidence.
+ * One process-table read, and the reason is reported alongside the verdict.
+ */
+function identityOf(entry: PersistedRun): { pidVerified: boolean | null; pidVerifiedWhy: string } {
+  const check = processIdentityCheck(
+    { command: entry.command, osStartedAt: entry.osStartedAt ?? null },
+    lookupProcess(entry.pid),
+  );
+  return { pidVerified: check.verdict, pidVerifiedWhy: check.why };
+}
+
+/**
+ * Read the OS's start token for a process we are holding a handle to.
+ *
+ * Called ONCE per run, at hand-off, for a reason: it has to be read while the
+ * process is certainly still ours. Reading it later (at re-attach, after a
+ * restart) would be asking the recycled pid to identify itself — the very thing
+ * this token exists to check. A failed read is `null`, which downgrades the
+ * recovered run to the command-line witness alone rather than inventing one.
+ */
+function readOsStartToken(pid: number | null): string | null {
+  if (pid === null || pid <= 0) return null;
+  try {
+    return lookupProcess(pid)?.startedAtText ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * May this run be signalled?
+ *
+ * A run this process started — yes, we hold the child handle. A run RECOVERED
+ * from the registry — only once its pid has been re-verified as still being that
+ * command, because a pid that outlived the process table it came from may now
+ * belong to something else, and this tool only ever signals work it started.
+ */
+function maySignal(run: DetachedRun): boolean {
+  return run.reattached !== true || run.pidVerified === true;
+}
+
+/**
+ * Bring a RE-ATTACHED run up to date with the truth on disk.
+ *
+ * A recovered run has no exit event — the process that would have fired one may
+ * be gone — so nothing would ever move it out of `running`: the poll would report
+ * "still running" forever about a command that finished minutes ago. Two
+ * witnesses settle it: the registry entry (the owning process records the exit
+ * code, the stop reason and the reap), and the process table.
+ */
+function refreshReattachedRun(
+  run: DetachedRun,
+  now = Date.now(),
+  /** What a tick already read, so reconciling cost stays O(1) reads, not O(runs). */
+  context: { table?: ProcessTable | null; recorded?: PersistedRun[] } = {},
+): void {
+  if (!run.reattached || run.status !== 'running') return;
+  const recorded = (context.recorded ?? loadRuns()).find((r) => r.id === run.id);
+  if (recorded && recorded.status === 'done') {
+    run.status = 'done';
+    run.exitCode = recorded.exitCode;
+    run.endedAt = recorded.endedAt ?? now;
+    if (recorded.exitReason) run.exitReason = recorded.exitReason;
+    if (recorded.reaped) run.reaped = true;
+    if (recorded.stopRequested) run.stopRequested = true;
+    return;
+  }
+  // The tick's own table when it has one; otherwise (the poll path, a single call)
+  // a read of its own. `false` is the only value that means gone.
+  const alive =
+    context.table === undefined ? processAlive(run.pid ?? -1) : tableAlive(context.table, run.pid ?? -1);
+  if (alive === false) {
+    run.status = 'done';
+    run.endedAt = now;
+    run.exitReason =
+      run.exitReason ?? 'the process is gone, and its exit code was not recorded — nothing was watching when it ended';
+  }
+}
+
+let hydrated = false;
+
+/**
+ * Re-attach to the runs a PREVIOUS process left behind.
+ *
+ * Without this, every restart orphaned the record of work that is still going:
+ * the command keeps running, nothing can poll it, and the turn that started it
+ * has no way to collect its real verdict. Runs whose process is gone are marked
+ * finished (with an honest "its exit code was not recorded" reason), and live
+ * ones are re-attached to be polled, sampled and — only after their pid is
+ * re-verified — stopped.
+ *
+ * Returns how many runs were recovered.
+ */
+export function hydrateMonitoredRuns(): number {
+  if (hydrated) return 0;
+  hydrated = true;
+  let recovered = 0;
+  for (const entry of loadRuns()) {
+    if (detachedRuns.has(entry.id)) continue;
+    const alive = processAlive(entry.pid);
+    const finished = entry.status === 'done' || alive === false;
+    const run: DetachedRun = {
+      id: entry.id,
+      command: entry.command,
+      cwd: entry.cwd,
+      pid: entry.pid,
+      startedAt: entry.startedAt,
+      // The silence clock starts NOW, not at the start of the run: we have no
+      // output timeline for a recovered run, and running it from `startedAt`
+      // would judge a long-quiet-but-working command hung the instant we looked.
+      lastOutputAt: entry.endedAt ?? Date.now(),
+      bytes: spoolBytes(entry.id),
+      out: '',
+      err: '',
+      status: finished ? 'done' : 'running',
+      exitCode: entry.exitCode,
+      reattached: true,
+      // TWO witnesses, decided by `processIdentityVerdict`: the command line, and
+      // the OS start token captured at hand-off. The token is what turns "I cannot
+      // prove this is ours, so I will only watch it" into "this IS the process I
+      // started, so it can still be stopped" — and, in the other direction, what
+      // refuses to adopt a recycled pid running the SAME command line.
+      ...(finished
+        ? { pidVerified: false }
+        : identityOf(entry)),
+      osStartedAt: entry.osStartedAt ?? null,
+      truncatedOutput: true, // the head lives in the spool, never in memory
+      ...(entry.endedAt !== undefined ? { endedAt: entry.endedAt } : {}),
+      ...(entry.exitReason ? { exitReason: entry.exitReason } : {}),
+      ...(entry.reaped ? { reaped: true } : {}),
+      ...(entry.stopRequested ? { stopRequested: true } : {}),
+    };
+    if (run.status === 'done' && entry.status !== 'done') {
+      run.exitReason =
+        'it ended while nothing was watching (this process restarted) — its exit code was not recorded';
+      persistRun(run);
+    }
+    detachedRuns.set(run.id, run);
+    recovered += 1;
+  }
+  if (recovered > 0) {
+    pruneDetachedRuns();
+    ensureWatchdog();
+  }
+  // Records are capped; files are not a record. Sweeping here — the one moment
+  // the live set is exactly known — is what keeps "bounded state" true of the
+  // disk and not just of the JSON.
+  sweepSpools([...detachedRuns.keys()]);
+  return recovered;
+}
+
+/** Test/DI seam: forget the monitored runs. Kills nothing (they keep running). */
+export function resetDetachedRuns(): void {
+  detachedRuns.clear();
+  if (watchdog) clearInterval(watchdog);
+  watchdog = null;
+  lastSampleAt = 0;
+  hydrated = false;
+}
+
+function pruneDetachedRuns(): void {
+  if (detachedRuns.size <= MAX_DETACHED_RUNS) return;
+  // Finished first — they are only kept so a late poll can read their result.
+  for (const [id, run] of detachedRuns) {
+    if (detachedRuns.size <= MAX_DETACHED_RUNS) break;
+    if (run.status === 'done') detachedRuns.delete(id);
+  }
+  if (detachedRuns.size > MAX_DETACHED_RUNS) {
+    // All still running: drop the oldest MONITORING entry. The process is NOT
+    // killed — it simply stops being pollable by id.
+    const oldest = [...detachedRuns.values()].sort((a, b) => a.startedAt - b.startedAt)[0];
+    if (oldest) detachedRuns.delete(oldest.id);
+  }
+}
+
+/** The tail of a buffer, capped like the output this tool returns. */
+function outputTail(s: string): string {
+  return s.trim().length > MAX_OUTPUT_CHARS ? s.trim().slice(-MAX_OUTPUT_CHARS) : s.trim();
+}
+
+/** `45s` / `3m 05s` — how long, for a human reading the tool result. */
+function elapsedLabel(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  return `${Math.floor(totalSeconds / 60)}m ${String(totalSeconds % 60).padStart(2, '0')}s`;
+}
+
+/**
+ * This run's output, as the model should see it.
+ *
+ * The in-memory buffer is used when it is COMPLETE — the common case, and the
+ * existing behaviour. When the beginning was lost to the buffer's bound, or the
+ * run was recovered from disk and there is no buffer at all, the spooled
+ * head+tail is read instead: a long run's diagnosis needs the first lines (what
+ * it was doing, how it was invoked) as much as the last.
+ */
+function runOutputText(run: DetachedRun): string {
+  if (!run.truncatedOutput && !run.reattached && (run.out || run.err)) return outputTail(run.out || run.err);
+  const spooled = readSpool(run.id);
+  if (spooled) {
+    const window = outputWindow(spooled, MAX_OUTPUT_CHARS);
+    if (window.text.trim()) return window.text.trim();
+  }
+  return outputTail(run.out || run.err);
+}
+
+/** The liveness of a monitored run, as a short badge for `list`/`poll`. */
+function livenessBadge(run: DetachedRun): string {
+  if (run.reaped) return '🧯 stopped (hung)';
+  if (run.status === 'done') return `✔ finished (exit ${run.exitCode ?? '?'})`;
+  const elapsed = `⏳ running ${elapsedLabel(Date.now() - run.startedAt)}`;
+  switch (run.verdict) {
+    case 'hung':
+      return `${elapsed} · 🚫 HUNG (no output and no CPU) — will be stopped after the grace`;
+    case 'stalled':
+      return `${elapsed} · ⚠️ quiet — ${run.verdictWhy ?? 'no output recently'}`;
+    case 'working':
+      return `${elapsed} · ✅ working — ${run.verdictWhy ?? 'making progress'}`;
+    default:
+      return elapsed;
+  }
+}
+
+/**
+ * Everything currently being followed.
+ *
+ * Hydrates first, so this answers for the runs a PREVIOUS process left behind as
+ * well as this one's — otherwise a restart would make the whole list vanish while
+ * the commands are still running.
+ */
+export function listDetachedRuns(): string {
+  const recovered = hydrateMonitoredRuns();
+  if (detachedRuns.size === 0) {
+    return 'run_terminal: nothing is being monitored — no command has outlived its wait budget in this process.';
+  }
+  const lines = [...detachedRuns.values()]
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .map(
+      (r) =>
+        `- run_terminal[${r.id}] ${livenessBadge(r)} · ${r.bytes} bytes · \`${maskSenderId(r.command)}\`` +
+        (r.reattached ? ' · ↩ recovered from a previous process' : ''),
+    );
   return (
-    `\n\n⏱ TIMEOUT — that command was killed after ${seconds}s without finishing. A timeout does NOT mean the project is broken; ` +
-    `it means this command is too slow or is waiting for something that will not come. ` +
-    `Do NOT re-run the identical command${repeated ? ' — it has already timed out here' : ''}. Instead: ` +
-    `(a) narrow it (a single test file, \`--reporter=dot\`, \`-x\`, one target rather than the whole suite), ` +
-    `(b) make it non-interactive (it may be waiting on a prompt or a server), or ` +
-    `(c) if the work is genuinely long, re-call with an explicit \`timeout_ms\` up to ${MAX_TIMEOUT_MS} (${Math.round(MAX_TIMEOUT_MS / 1000)}s). ` +
-    `Tell the user what was slow rather than repeating \`${maskSenderId(command)}\` as-is.`
+    `run_terminal — monitored commands:\n${lines.join('\n')}\n\n` +
+    `Poll one with run_terminal(action:'poll', process_id:'<id>'); stop one with run_terminal(action:'stop', process_id:'<id>').` +
+    (recovered > 0
+      ? `\n(${recovered} recovered from the registry a previous process wrote — they are still being followed.)`
+      : '')
+  );
+}
+
+/**
+ * Stop one monitored run deliberately (the model's own decision after a
+ * diagnosis). Bounded on purpose: it can only ever touch a command THIS tool
+ * started and is still following — never an arbitrary pid.
+ */
+export function stopDetachedRun(id: string): string {
+  hydrateMonitoredRuns();
+  const run = id ? detachedRuns.get(id) : undefined;
+  if (!run) return unknownRunMessage(id);
+  if (run.status !== 'running') {
+    return (
+      `run_terminal[${run.id}] already finished (exit ${run.exitCode ?? '?'}) — nothing to stop. ` +
+      (runOutputText(run) ? `Its output:\n${maskSenderId(runOutputText(run))}` : '(no output)')
+    );
+  }
+  // A RECOVERED run is identified only by a pid, and a pid can be recycled — so
+  // it is stopped only once its command line has been re-verified as ours. The
+  // alternative is signalling a stranger's process, which this tool must never do.
+  if (!maySignal(run)) {
+    return (
+      `Error: run_terminal: run_terminal[${run.id}] was recovered from a previous process, and its pid ` +
+      `(${run.pid ?? '?'}) could not be re-verified as still being \`${maskSenderId(run.command)}\` — ` +
+      `${run.pidVerifiedWhy ?? 'the check could not be completed'}. Refusing to signal it rather than risk ` +
+      `stopping an unrelated process. Its output is spooled here: ${spoolPath(run.id)}. ` +
+      `If you know it is still yours, stop it by hand with its PID.`
+    );
+  }
+  run.stopRequested = true;
+  run.exitReason = 'stopped on request';
+  const signalled = killProcessTree(run.pid ?? -1, 'SIGTERM', run.child);
+  run.killGrace = setTimeout(() => {
+    killProcessTree(run.pid ?? -1, 'SIGKILL', run.child);
+  }, 5_000);
+  run.killGrace.unref?.();
+  persistRun(run);
+  return (
+    `🛑 run_terminal[${run.id}] — SIGTERM sent to ${signalled.length || 'the'} process(es) of \`${maskSenderId(run.command)}\` ` +
+    `(the shell AND the real work under it; SIGKILL follows in 5s if it does not exit).\n` +
+    `Poll it with run_terminal(action:'poll', process_id:'${run.id}') to get its output and exit code. ` +
+    `Nothing else was touched.`
+  );
+}
+
+/** The one message a poll/stop gives for an id nobody is monitoring. */
+function unknownRunMessage(id: string): string {
+  const known = [...detachedRuns.keys()];
+  return (
+    `Error: run_terminal: no monitored command with id \`${maskSenderId(id)}\`.` +
+    (known.length > 0 ? ` Known: ${known.join(', ')}.` : ' Nothing is being monitored.') +
+    ` Use run_terminal(action:'list') to see what is.`
+  );
+}
+
+/**
+ * The state of one monitored command. A finished one keeps its result available
+ * (bounded) so the agent can read the exit code and output after doing other
+ * work — the poll is how a long command's verdict finally reaches the turn.
+ */
+export function pollDetachedRun(id: string): string {
+  hydrateMonitoredRuns();
+  const run = id ? detachedRuns.get(id) : undefined;
+  if (!run) return unknownRunMessage(id);
+  // A poll is exactly when "how is it doing?" is asked, so it is also when a
+  // recovered run must be reconciled — otherwise it reports itself as running
+  // forever (see `refreshReattachedRun`).
+  refreshReattachedRun(run);
+  const elapsed = elapsedLabel(Date.now() - run.startedAt);
+  const body = runOutputText(run);
+  if (run.status === 'running') {
+    const quietMs = Date.now() - run.lastOutputAt;
+    return (
+      `${RUN_TERMINAL_INCOMPLETE_PREFIX} — run_terminal[${run.id}], ${elapsed} elapsed, ${run.bytes} bytes of output` +
+      (run.reattached ? ' (recovered from a previous process)' : '') +
+      (run.bytes === 0
+        ? ', and NOTHING produced yet'
+        : quietMs >= 60_000
+          ? `, silent for the last ${elapsedLabel(quietMs)}`
+          : '') +
+      `.\nCommand: \`${maskSenderId(run.command)}\`` +
+      // The liveness verdict, when the watchdog has one — this is the difference
+      // between "it is still running" and "it is running, and here is why I
+      // believe it is hung".
+      (run.verdict && run.verdict !== 'starting'
+        ? `\nLiveness: ${run.verdict.toUpperCase()} — ${run.verdictWhy ?? 'no evidence yet'}.`
+        : '') +
+      (body ? `\nOutput so far:\n${maskSenderId(body)}` : '') +
+      `\nIt was NOT killed. Poll again later with run_terminal(action:'poll', process_id:'${run.id}'), or do other work first.` +
+      (run.hangUnstoppable
+        ? `\nIt looks HUNG, but it was recovered after a restart and its pid could not be re-verified as this ` +
+          `command (${run.pidVerifiedWhy ?? 'the check could not be completed'}) — so it is deliberately NOT ` +
+          `being stopped automatically. Its output is spooled here: ${spoolPath(run.id)}.`
+        : run.verdict === 'hung'
+          ? `\nIf you agree it is hung (it needs input it cannot get, or a lock/port it will never get), ` +
+            `stop it with run_terminal(action:'stop', process_id:'${run.id}') and re-run it non-interactively — ` +
+            `the watchdog stops it on its own after the grace either way.`
+          : '')
+    );
+  }
+  // A run that FAILED, or that was stopped (by the watchdog or on request), did
+  // NOT verify anything — so it must carry the `Error: ` prefix the loop's honest
+  // accounting reads (`ranOk` in tool-loop.ts). Without it, collecting a failing
+  // suite through `poll` was recorded as a SUCCESSFUL tool call, which feeds the
+  // "did you check it" gate: the turn could claim a check it never got a pass
+  // from. Only a real exit-0 finish is a success here.
+  const ok = run.exitCode === 0 && !run.reaped && !run.stopRequested;
+  return (
+    `${ok ? '✅ ' : 'Error: '}run_terminal[${run.id}] ` +
+    (run.reaped || run.stopRequested
+      ? `was STOPPED (${run.exitReason ?? 'stopped'})`
+      : `finished${run.exitCode === 0 ? '' : ` (exit ${run.exitCode ?? '?'})`}`) +
+    ` — ${elapsed} total.\n` +
+    `Command: \`${maskSenderId(run.command)}\`` +
+    // A run recovered as finished has a reason instead of an exit code, and it
+    // must be stated: "finished" with no code is not the same fact as "exit 0".
+    (run.reattached && run.exitReason ? `\n${run.exitReason}.` : '') +
+    (run.reaped
+      ? `\nThe work was doing nothing (no output, no CPU) and was stopped deliberately — this is NOT a test ` +
+        `failure and NOT a verdict on the code. Fix what it was waiting for and re-run it.`
+      : '') +
+    (body ? `\nOutput:\n${maskSenderId(body)}` : '\n(no output)')
+  );
+}
+
+/**
+ * Why the command is taking as long as it is — the diagnosis a bare "timed out"
+ * never gave. A long run is either PROGRESS (let it finish) or STUCK (a prompt,
+ * a lock, a dead network call), and those need opposite responses, so the tool
+ * says which one the evidence supports.
+ */
+function longRunDiagnosis(bytes: number, quietMs: number): string {
+  if (bytes === 0) {
+    return (
+      'NO output at all yet. That is the signature of a command waiting on an interactive prompt ' +
+      '(this tool gives it no stdin, so the prompt never gets an answer), or of a first step that is genuinely slow ' +
+      '(a cold build, a large download). Make it non-interactive before re-running: `--yes`/`--no-input`/`-y`, ' +
+      '`CI=1`, `--non-interactive`, or a flag that skips the prompt.'
+    );
+  }
+  if (quietMs >= 60_000) {
+    return (
+      `Output STOPPED ${elapsedLabel(quietMs)} ago after ${bytes} bytes — it is stalled rather than working. ` +
+      'Usual causes: waiting on a prompt, a lock held by another process, a network call with no timeout, or a test ' +
+      'blocked on a server that never came up. Read the tail below for the last thing it said before going quiet.'
+    );
+  }
+  return `It IS still producing output (${bytes} bytes, last one ${elapsedLabel(quietMs)} ago), so it is making progress — let it finish and poll rather than restarting it.`;
+}
+
+/**
+ * What the model is told when a command outlives this call's wait budget.
+ * Exported so the wording is testable: the two things it MUST say are that the
+ * command was not killed and that re-running it is wrong.
+ */
+export function waitBudgetGuidance(
+  command: string,
+  id: string,
+  waitMs: number,
+  assessed: { why: string } | null,
+  bytes: number,
+  quietMs: number,
+  reapAfterMs = 0,
+): string {
+  const seconds = Math.round(waitMs / 1000);
+  return (
+    ` — \`${maskSenderId(command)}\` has outlived this call's ${seconds}s wait budget. ` +
+    `It was NOT killed and this is NOT a failure: the work is still going, and its output is accumulating.\n` +
+    `${assessed ? `It was given an extended wait because it is ${assessed.why} — a class that is minutes by nature.\n` : ''}` +
+    `Follow it with \`run_terminal(action:'poll', process_id:'${id}')\` — that returns its status, its liveness ` +
+    `(WORKING / STALLED / HUNG, from its output and its CPU), its output tail, and its REAL exit code once it lands; ` +
+    `\`run_terminal(action:'list')\` shows everything being monitored. ` +
+    `Do NOT re-run the identical command: that would start a second copy of the same work. Do something useful while ` +
+    `it finishes (read a file, plan the next step) and poll instead.` +
+    (reapAfterMs > 0
+      ? `\nA running command is WATCHED: if it stops producing output AND stops using CPU for ` +
+        `${Math.round(livenessThresholds().hangQuietMs / 60_000)} minutes it is reported as HUNG, and if it stays that way for a further ` +
+        `${Math.round(reapAfterMs / 60_000)} minutes it is stopped and its result reported — a real hang is not left running forever. ` +
+        `Output or CPU at any point clears that, so a slow-but-working command is never touched.`
+      : '')
   );
 }
 
@@ -496,6 +1288,15 @@ export function classifyCommand(command: string): CommandClass {
 
 export interface RunTerminalArgs {
   command: string;
+  /**
+   * 'run' (default) executes the command. 'poll' reports one monitored long run
+   * (`process_id`), 'list' shows them all — the follow-up half of the
+   * still-running hand-off, so a command that outlives its wait budget is
+   * followed to its REAL exit code instead of being killed or guessed at.
+   */
+  action?: 'run' | 'poll' | 'list' | 'stop';
+  /** The monitored run to stop or report on (from a `still running` result). */
+  process_id?: string;
   confirm?: boolean;
   timeout_ms?: number;
   /**
@@ -508,6 +1309,17 @@ export interface RunTerminalArgs {
 }
 
 export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): Promise<string> {
+  // The follow-up half of a long run: no command is needed to poll or list, and
+  // these must work even when the model has nothing to spawn.
+  // Recover whatever a PREVIOUS process left running, before anything is looked
+  // up. Without this a restart silently orphans the record: the command keeps
+  // running, `poll` reports no such id, and the turn can never collect it.
+  hydrateMonitoredRuns();
+
+  if (args.action === 'poll') return pollDetachedRun((args.process_id ?? '').trim());
+  if (args.action === 'list') return listDetachedRuns();
+  if (args.action === 'stop') return stopDetachedRun((args.process_id ?? '').trim());
+
   const command = normalize(args.command);
   // NOTE: every refusal below is prefixed `Error: ` on purpose. The tool-result
   // convention treats that prefix as "this did not run", and the loop's honest
@@ -650,11 +1462,34 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
     }, 'tool-loop');
   }
 
-  // P7 — the DEFAULT timeout follows the room: a person watching a chat gets a
-  // shorter one (see INTERACTIVE_DEFAULT_TIMEOUT_MS). An explicit `timeout_ms`
-  // always wins, so a genuinely long build still gets its time.
-  const defaultTimeoutMs = ctx.interactive ? INTERACTIVE_DEFAULT_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
-  const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1000, Math.floor(args.timeout_ms ?? defaultTimeoutMs)));
+  // ── Don't start the same work twice ─────────────────────────────────────────
+  // A long command handed off to monitoring is STILL RUNNING. Re-issuing it
+  // would spawn a second copy (two test suites competing for the same ports and
+  // CPU, two installs over each other). The old code had no such case because
+  // the first copy was already dead; now the honest answer is to follow it.
+  const runningSame = [...detachedRuns.values()].find(
+    (r) => r.status === 'running' && r.command === command && r.cwd === (ctx.cwd ?? process.cwd()),
+  );
+  if (runningSame) {
+    return (
+      `Error: run_terminal: \`${maskSenderId(command)}\` is ALREADY RUNNING (monitored as ` +
+      `run_terminal[${runningSame.id}], ${elapsedLabel(Date.now() - runningSame.startedAt)} elapsed). ` +
+      `Starting it again would do the same work twice. Follow it instead: ` +
+      `run_terminal(action:'poll', process_id:'${runningSame.id}').`
+    );
+  }
+
+  // P7 — the wait budget: an explicit `timeout_ms` wins; otherwise the command is
+  // ASSESSED, so a test suite or a build gets the minutes it actually needs
+  // instead of the short default meant for a quick read; otherwise the room
+  // decides (a person watching waits less — see INTERACTIVE_DEFAULT_TIMEOUT_MS).
+  // Reaching the budget now hands the command to monitoring rather than killing
+  // it, so an under-estimate costs a poll, not the work.
+  const assessed = assessCommandTime(command);
+  const waitMs = resolveWaitMs(command, args.timeout_ms, ctx.interactive);
+  // Reported so the model knows the hand-off is WATCHED: a run that goes silent
+  // and idle will be identified as hung and stopped, not left forever.
+  const reapAfterMs = hangReapMs();
   // P7 — the IDENTICAL-COMMAND guard. A command that has already failed twice at
   // this timeout in this directory will fail a third time the same way; the live
   // run spent two 120-second timeouts proving that. Refusing costs milliseconds
@@ -664,7 +1499,7 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
   // The effective timeout is part of the key on purpose: the guidance a timeout
   // carries tells the model to re-call with a longer `timeout_ms` when the work
   // is genuinely long, and that advice must not be refused by this guard.
-  const streakKey = `${ctx.cwd ?? process.cwd()}|${command}|${timeoutMs}`;
+  const streakKey = `${ctx.cwd ?? process.cwd()}|${command}|${waitMs}`;
   const priorStreak = commandFailureStreaks.get(streakKey);
   if (
     priorStreak &&
@@ -679,19 +1514,35 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
     );
   }
   const startedAt = Date.now();
-  const output = await execCommand(command, ctx.cwd, timeoutMs, runEnv);
-  // P7 — a TIMEOUT is its own, specific signal: the command was killed, so
-  // "it timed out" is not "the project is broken", and the ONE thing the model
-  // must not do is re-run the identical command. The guidance says what to do
-  // instead (narrow it, make it non-interactive, or pass a longer timeout_ms).
-  const timedOut = /run_terminal: `[^`]*` ⏱ timed out after \d+ms/.test(output);
-  const failureStreak = timedOut
-    ? recordCommandFailure(streakKey, Date.now())
-    : output.startsWith('Error:')
-      ? recordCommandFailure(streakKey, Date.now())
-      : 0;
-  if (!timedOut && !output.startsWith('Error:')) clearCommandFailure(streakKey);
-  const outputWithNotes = timedOut ? output + timeoutGuidance(command, timeoutMs, failureStreak > 1) : output;
+  const outcome = await execCommand(command, ctx.cwd, waitMs, runEnv);
+
+  // ── A command that outlived the wait budget is NOT a failure ────────────────
+  // It is still running, its output is still accumulating, and the turn can
+  // carry on: the guidance says how to follow it, what the evidence says about
+  // why it is slow, and that re-running it would duplicate the work. Crucially
+  // it does NOT record a failure streak — counting a live run as a failure is
+  // what made the old behaviour report unfinished work as broken.
+  if (outcome.kind === 'still-running') {
+    ctx.emit?.('run_terminal:monitoring', {
+      tool: 'run_terminal',
+      command,
+      processId: outcome.id,
+      waitMs,
+      bytes: outcome.bytes,
+    }, 'tool-loop');
+    return (
+      `${RUN_TERMINAL_INCOMPLETE_PREFIX}` +
+      waitBudgetGuidance(command, outcome.id, waitMs, assessed, outcome.bytes, outcome.quietMs, reapAfterMs) +
+      `\nMonitored as run_terminal[${outcome.id}].\n` +
+      longRunDiagnosis(outcome.bytes, outcome.quietMs)
+    );
+  }
+
+  const output = outcome.output;
+  // A real non-zero exit is the only thing that counts as a failure now.
+  const failureStreak = output.startsWith('Error:') ? recordCommandFailure(streakKey, Date.now()) : 0;
+  if (!output.startsWith('Error:')) clearCommandFailure(streakKey);
+  const outputWithNotes = output;
 
   // A4 — a KNOWN toolchain failure gets its known fix appended, so the model
   // repairs instead of re-trying the identical command. Advisory only: the note
@@ -751,7 +1602,7 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
   // remembered for this machine (observed), so the same OS-specific command is
   // not re-derived. Only with a verb and only on success — a failure is not a
   // fact worth remembering, and a verbless command cannot be keyed. Best-effort.
-  if (args.verb && !timedOut && !output.startsWith('Error:')) {
+  if (args.verb && !output.startsWith('Error:')) {
     try {
       const { recordLearnedCommand } = await import('../learning/learned-commands.js');
       const { leadingBinary } = await import('../learning/command-adaptation.js');
@@ -769,10 +1620,11 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
 
   // C3 — remember what a SUCCESSFUL run answered (whole command + every fact it
   // established), so the same question in the same run is answered from the
-  // output above instead of a second spawn. A timeout is a failure like any
-  // other, and `Error:`-prefixed output is a refusal or a crash — neither is a
-  // fact worth remembering.
-  if (!timedOut && !output.startsWith('Error:')) storeMemo(ctx.commandMemo, command, output, memoWhere);
+  // output above instead of a second spawn. `Error:`-prefixed output is a
+  // refusal, a crash, or a real non-zero exit — not a fact worth remembering.
+  // (A command that is merely still running never reaches here: it is followed
+  // with `poll`, and its output is stored when it lands.)
+  if (!output.startsWith('Error:')) storeMemo(ctx.commandMemo, command, output, memoWhere);
 
   if (!decidedAutonomously) return outputWithNotes + effectNote + envNote + remediationNote + autoApplyNote + missingNote;
   // Reported, never silent — a judgment call the user cannot see is
@@ -787,13 +1639,28 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
   );
 }
 
-/** Spawn the command (shell-interpreted — pipes, &&, substitutions work). */
+/**
+ * The result of one call: either the command FINISHED inside its wait budget, or
+ * it is still going and has been handed to the monitored registry.
+ */
+type ExecOutcome =
+  | { kind: 'finished'; output: string }
+  | { kind: 'still-running'; id: string; bytes: number; quietMs: number };
+
+/**
+ * Spawn the command (shell-interpreted — pipes, &&, substitutions work).
+ *
+ * `waitMs` is a WAIT budget, not a kill switch. When it runs out the child keeps
+ * running, its output keeps accumulating in the registry, and the caller is told
+ * how to follow it (`pollDetachedRun`). The only thing that changes at the budget
+ * is that THIS CALL stops blocking.
+ */
 function execCommand(
   command: string,
   cwd: string | undefined,
-  timeoutMs: number,
+  waitMs: number,
   envOverride?: Record<string, string | undefined>,
-): Promise<string> {
+): Promise<ExecOutcome> {
   return new Promise((resolve) => {
     // On Windows, use Git Bash for cross-platform shell commands (pwd, touch, etc.)
     const shellOptions: Record<string, unknown> = {
@@ -811,48 +1678,131 @@ function execCommand(
         shellOptions.shell = gitBash;
       }
     }
+    const id = randomUUID();
+    // Spooling starts at SPAWN, not at hand-off: the beginning of the output is
+    // exactly what an overflowing buffer loses while the wait budget is still
+    // running, and that is the part a diagnosis needs. A run that finishes inside
+    // its budget discards the spool (see `settleRun`).
+    const spool = new SpoolWriter(id);
     const child = spawn(command, shellOptions as any);
-    let out = '';
-    let err = '';
+    const startedAt = Date.now();
+    const run: DetachedRun = {
+      id,
+      command,
+      cwd: cwd || process.cwd(),
+      child,
+      pid: child.pid ?? null,
+      spool,
+      startedAt,
+      lastOutputAt: startedAt,
+      bytes: 0,
+      out: '',
+      err: '',
+      status: 'running',
+      exitCode: null,
+    };
+    // Whether this call has already answered (so a later exit does not resolve
+    // twice — the registry owns the result from that point on).
+    let answered = false;
     const timer = setTimeout(() => {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* best-effort */
+      if (answered) return;
+      answered = true;
+      // HAND OFF, do not kill. See the registry above.
+      detachedRuns.set(run.id, run);
+      pruneDetachedRuns();
+      // Start watching it, so a run that stops making progress is IDENTIFIED
+      // (and, on evidence, stopped) instead of running forever.
+      ensureWatchdog();
+      // …and make it DURABLE, so a restart can still follow and collect it. This
+      // is also what puts the spool on disk: until a run is durable nobody could
+      // read its output back, so writing it earlier only littered the config dir
+      // with a file that a run finishing inside its budget then deleted.
+      run.osStartedAt = readOsStartToken(run.pid);
+      run.spool?.startPersisting();
+      run.spool?.flush();
+      persistRun(run);
+      resolve({
+        kind: 'still-running',
+        id: run.id,
+        bytes: run.bytes,
+        quietMs: Date.now() - run.lastOutputAt,
+      });
+    }, waitMs);
+    const note = (chunk: Buffer, stream: 'out' | 'err'): void => {
+      const text = chunk.toString('utf-8');
+      run[stream] += text;
+      run.bytes += chunk.length;
+      run.lastOutputAt = Date.now();
+      // The spool keeps a bounded head AND tail, so what the buffer drops is still
+      // readable later (and after a restart).
+      run.spool?.write(text);
+      // Bounded buffering: a 40MB log must not be held in memory, and the tool
+      // only ever reports the tail.
+      const cap = MAX_OUTPUT_CHARS * 2;
+      if (run[stream].length > cap) {
+        run[stream] = run[stream].slice(-cap);
+        // Once anything is dropped the buffer is missing its BEGINNING, and the
+        // poll must read the spool instead of presenting a tail as the whole story.
+        run.truncatedOutput = true;
       }
-    }, timeoutMs);
-    child.stdout?.on('data', (b: Buffer) => {
-      out += b.toString('utf-8');
-      if (out.length > MAX_OUTPUT_CHARS * 2) out = out.slice(-MAX_OUTPUT_CHARS * 2);
-    });
-    child.stderr?.on('data', (b: Buffer) => {
-      err += b.toString('utf-8');
-      if (err.length > MAX_OUTPUT_CHARS) err = err.slice(-MAX_OUTPUT_CHARS);
-    });
+    };
+
+    /**
+     * The run is over. Stop spooling, and keep the durable record only when it can
+     * ever be read: a run handed to monitoring is collected by `poll` (possibly in
+     * another process), while one that finished inside its wait budget already
+     * delivered its result — its record and spool would be litter.
+     */
+    const settleRun = (): void => {
+      run.endedAt = Date.now();
+      if (detachedRuns.has(run.id)) {
+        run.spool?.close();
+        persistRun(run);
+      } else {
+        run.spool?.discard();
+      }
+    };
+    child.stdout?.on('data', (b: Buffer) => note(b, 'out'));
+    child.stderr?.on('data', (b: Buffer) => note(b, 'err'));
     child.on('error', (e) => {
       clearTimeout(timer);
-      resolve(`Error: run_terminal: failed to spawn — ${e.message}`);
+      run.status = 'done';
+      run.err += `\n${e.message}`;
+      settleRun();
+      if (answered) return;
+      answered = true;
+      resolve({ kind: 'finished', output: `Error: run_terminal: failed to spawn — ${e.message}` });
     });
     child.on('exit', (code) => {
       clearTimeout(timer);
-      const body = (out || err).trim().slice(0, MAX_OUTPUT_CHARS);
+      run.status = 'done';
+      run.exitCode = code;
+      settleRun();
+      if (answered) return; // already handed off — the poll reports the result
+      answered = true;
+      const body = (run.out || run.err).trim().slice(0, MAX_OUTPUT_CHARS);
       const masked = maskSenderId(body);
-      const timedOut = code === null;
-      const ok = !timedOut && code === 0;
-      const status = timedOut
-        ? `⏱ timed out after ${timeoutMs}ms`
+      // `code === null` now means the process was terminated by something ELSE
+      // (a signal, the OOM killer, the user) — the tool no longer kills it, so
+      // this is a real, reportable condition rather than its own timeout.
+      const terminated = code === null;
+      const ok = !terminated && code === 0;
+      const status = terminated
+        ? 'was terminated before it finished (a signal, not this tool)'
         : ok
           ? '✅ succeeded'
           : `❌ failed (exit ${code ?? '?'})`;
       // Enterprise G1: a command that FAILED is not a verification. The loop's
       // honest accounting reads the `Error:` prefix, and the verification gate
       // counts a successful run_terminal as proof — so a non-zero exit (or a
-      // timeout) MUST carry the prefix, or a failing test/build would mark the
-      // turn "verified". The real output is preserved for diagnosis.
-      resolve(
-        `${ok ? '' : 'Error: '}run_terminal: \`${maskSenderId(command)}\` ${status}.\n` +
+      // termination) MUST carry the prefix, or a failing test/build would mark
+      // the turn "verified". The real output is preserved for diagnosis.
+      resolve({
+        kind: 'finished',
+        output:
+          `${ok ? '' : 'Error: '}run_terminal: \`${maskSenderId(command)}\` ${status}.\n` +
           (masked ? `Output:\n${masked}` : '(no output)'),
-      );
+      });
     });
   });
 }

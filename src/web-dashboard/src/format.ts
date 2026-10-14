@@ -27,6 +27,26 @@ export function formatCost(usd: number | undefined): string {
   return '$' + usd.toFixed(4);
 }
 
+/**
+ * A duration that is still growing, at the precision that stays readable as it
+ * grows: `12s`, `3m 05s`, `1h 04m`.
+ *
+ * ONE implementation on purpose. The dashboard now has two surfaces that must
+ * stay visibly alive through a long wait — a chat turn running on the server (no
+ * deadline: hours are legitimate) and a command in the task console (no timeout:
+ * `npm test` is minutes, a release build more) — and a still screen is
+ * indistinguishable from a wedged one. Both count with this, so the two cannot
+ * disagree about what "2m 30s" means.
+ */
+export function formatElapsed(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '0s';
+  const totalSeconds = Math.floor(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m ${String(totalSeconds % 60).padStart(2, '0')}s`;
+  return `${Math.floor(totalMinutes / 60)}h ${String(totalMinutes % 60).padStart(2, '0')}m`;
+}
+
 /** Counts large enough to be unreadable raw: 1.2K, 3.4M. */
 export function formatNumber(n: number | undefined): string {
   if (n === undefined || n === null) return '0';

@@ -35,6 +35,7 @@ import {
   type StepResponse,
 } from '../../src/tools/tool-loop.js';
 import { getTool, type ToolContext, type FollowupSuggestion } from '../../src/tools/registry.js';
+import { RUN_TERMINAL_INCOMPLETE_PREFIX } from '../../src/tools/run-terminal.js';
 import { countWords } from '../../src/learning/long-form.js';
 import { requestAuthorizesWrites } from '../../src/learning/autonomy-policy.js';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -1980,6 +1981,81 @@ describe('WS4 tool hooks — the veto, and what it must NOT touch', () => {
     if (log === undefined) delete process.env.WS4_LOG;
     else process.env.WS4_LOG = log;
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+/**
+ * P8 — a command that outlived its wait budget is STILL RUNNING, which is
+ * neither a success nor a failure.
+ *
+ * The loop's success verdict feeds the "did you check it" gate and the turn's
+ * honest accounting, so this is where a live run could be laundered into
+ * evidence: `successfulTools` containing `run_terminal` for a suite still on its
+ * first file is how a turn ends up claiming "the tests pass". The command's real
+ * verdict arrives with the poll, and THAT is the call that counts.
+ */
+describe('P8 — a still-running command is not evidence, and not a failure either', () => {
+  it('excludes the incomplete run from successfulTools and records the finished poll', async () => {
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'run_terminal', arguments: { command: 'npm test' } }] },
+        {
+          content: '',
+          toolCalls: [{ id: 'c2', name: 'run_terminal', arguments: { action: 'poll', process_id: 'run-1', command: 'x' } }],
+        },
+        { content: 'Done.', toolCalls: [] },
+      ],
+      async (_name, args) =>
+        args.action === 'poll'
+          ? '✅ run_terminal[run-1] finished — 3m 00s total.\nOutput:\n42 passed'
+          : `${RUN_TERMINAL_INCOMPLETE_PREFIX} — \`npm test\` has outlived this call's 900s wait budget.`,
+    );
+    const seen: string[][] = [];
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'run the suite' }],
+      context: ctx,
+      deps,
+      onStep: (s) => seen.push([...s.successfulTools]),
+    });
+
+    expect(result.content).toBe('Done.');
+    // Step 1: the suite is still going — nothing was verified.
+    expect(seen[0]).not.toContain('run_terminal');
+    // Step 2: the poll reported the real exit code — that counts.
+    expect(seen[1]).toContain('run_terminal');
+  });
+
+  it('a poll that reports a FAILED (or stopped) run does NOT count as a check that passed', async () => {
+    // The other half of the same rule, and the one a poll could launder: the run
+    // really finished, so it is no longer "still running" — but it finished
+    // FAILING. `run_terminal` prefixes those results with `Error: ` precisely so
+    // this accounting is right; this pins that the loop honours it.
+    const deps = mockDeps(
+      [
+        { content: '', toolCalls: [{ id: 'c1', name: 'run_terminal', arguments: { command: 'npm test' } }] },
+        {
+          content: '',
+          toolCalls: [{ id: 'c2', name: 'run_terminal', arguments: { action: 'poll', process_id: 'run-1', command: 'x' } }],
+        },
+        { content: 'Done.', toolCalls: [] },
+      ],
+      async (_name, args) =>
+        args.action === 'poll'
+          ? 'Error: run_terminal[run-1] finished (exit 1) — 3m 00s total.\nOutput:\n3 failed'
+          : `${RUN_TERMINAL_INCOMPLETE_PREFIX} — \`npm test\` has outlived this call's 900s wait budget.`,
+    );
+    const seen: string[][] = [];
+    await runToolLoop({
+      messages: [{ role: 'user', content: 'run the suite' }],
+      context: ctx,
+      deps,
+      onStep: (s) => seen.push([...s.successfulTools]),
+    });
+
+    // Neither the incomplete run nor the failing poll it collected is evidence: a
+    // red suite must never be recorded as a check the turn passed.
+    expect(seen[0]).not.toContain('run_terminal');
+    expect(seen[1]).not.toContain('run_terminal');
   });
 });
 

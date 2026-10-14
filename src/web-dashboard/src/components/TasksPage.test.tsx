@@ -95,7 +95,9 @@ describe('TasksPage', () => {
     fireEvent.change(input, { target: { value: 'memory stats' } });
     fireEvent.click(screen.getByRole('button', { name: /▶ Run/ }));
 
-    await waitFor(() => expect(startMock).toHaveBeenCalledWith(['memory', 'stats'], 300000));
+    // 0 = no timeout: the console runs a real command until it finishes or the
+    // user cancels it (a 10–20 min suite must not be SIGTERMed at 5:00).
+    await waitFor(() => expect(startMock).toHaveBeenCalledWith(['memory', 'stats'], 0));
     await waitFor(() => expect(subMock).toHaveBeenCalledWith('t2', expect.any(Object)));
     // The console header shows the running command. Scoped to the console on
     // purpose: the command browser below the form also lists `memory stats`, so

@@ -244,6 +244,26 @@ describe('DashboardAPI.chatSend — a client ceiling is not an unreachable serve
     if (r.ok) throw new Error('expected failure');
     expect(r.error).toContain('STILL RUNNING');
     expect(r.error).not.toContain('Could not reach the dashboard server');
+    // Machine-readable half of the same sentence: the caller must COLLECT the
+    // answer (stream/poll) instead of offering a Retry the busy server refuses.
+    expect(r.turnStillRunning).toBe(true);
+  });
+
+  it('does not mark a real transport failure or a cancel as a turn still running', async () => {
+    const transport = await (async () => {
+      vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+      return new DashboardAPI('http://test').chatSend('s1', 'hi');
+    })();
+    expect(transport.ok).toBe(false);
+    if (transport.ok) throw new Error('expected failure');
+    expect(transport.turnStillRunning).toBeUndefined();
+
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(named('AbortError'));
+    const cancelled = await new DashboardAPI('http://test').chatSend('s1', 'stop');
+    expect(cancelled.ok).toBe(false);
+    if (cancelled.ok) throw new Error('expected failure');
+    expect(cancelled.turnStillRunning).toBeUndefined();
   });
 
   it('reads the user’s own Cancel as a cancellation, not a failure', async () => {

@@ -8653,7 +8653,15 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           // thread — the whole point of the row.
           res.write(`event: finding\ndata: ${JSON.stringify({ finding: event.finding })}\n\n`);
         } else if (event.kind === 'status') {
-          res.write(`event: status\ndata: ${JSON.stringify({ status: event.status })}\n\n`);
+          // The terminal `done` status carries the finished answer, so a client
+          // whose POST outlived its own wait ceiling can finish the turn from
+          // the stream instead of reloading to find it (see ChatConsoleEvent).
+          res.write(
+            `event: status\ndata: ${JSON.stringify({
+              status: event.status,
+              ...(event.answer ? { answer: event.answer } : {}),
+            })}\n\n`,
+          );
         } else if (event.kind === 'token') {
           // P4 — one content token of the answer as it streams (the GUI's
           // typewriter bubble). The POST response stays authoritative: the

@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { dashboardAPI } from '../api';
+import { formatElapsed } from '../format';
 import { useAuthVersion } from '../useAuthVersion';
 import type { TaskRecord, TaskStatus } from '../types';
 
@@ -23,6 +24,9 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   cancelled: '⏹ cancelled',
   timeout: '⏰ timed out',
   error: '💥 error',
+  // Stopped by the liveness watchdog: the command was producing neither output
+  // nor CPU, i.e. it was stuck — not a verdict on the code it was checking.
+  hung: '🚫 stopped (hung)',
 };
 
 export interface TaskPreset {
@@ -37,7 +41,10 @@ interface Props {
   presets: TaskPreset[];
   /** Placeholder for the custom-command input. */
   customPlaceholder: string;
-  /** Timeout for started tasks (ms). */
+  /**
+   * Timeout for started tasks (ms). `0` = run until it finishes or the user
+   * cancels. See the default below for why that is the default here.
+   */
   timeoutMs?: number;
   /**
    * Optional hint shown under the buttons. Rich text: both callers explain what
@@ -46,7 +53,25 @@ interface Props {
   hint?: ReactNode;
 }
 
-export default function TaskConsole({ presets, customPlaceholder, timeoutMs = 300_000, hint }: Props) {
+/**
+ * NO TIMEOUT BY DEFAULT (0 = run until finished or cancelled).
+ *
+ * The 5-minute default SIGTERMed real work. A command started from the GUI is the
+ * same command the user would run in their own terminal, and the ones worth
+ * reaching for here are the LONG ones — `npm test` on a real repo (measured on
+ * this project: the full root suite is ~3 minutes, and it is not the slow one), a
+ * release build, an eval matrix. Killing those at 5:00 while the log pane still
+ * looked live is the worst version of that failure: the page reports a failure
+ * about work that was merely unfinished. The runner already supports 0 (its own gateway
+ * preset used it, precisely because the timeout was SIGTERMing a server process),
+ * the console STREAMS the output live and offers an explicit ⏹ Cancel, so a
+ * command that needs an hour is allowed to take one. A bounded timeout stays
+ * available to callers that want one — pass `timeoutMs` (EvalsPage passes 15
+ * minutes), or a per-preset override.
+ */
+const DEFAULT_CONSOLE_TIMEOUT_MS = 0;
+
+export default function TaskConsole({ presets, customPlaceholder, timeoutMs = DEFAULT_CONSOLE_TIMEOUT_MS, hint }: Props) {
   const [auth, setAuth] = useState<{ authenticated: boolean; role: string | null } | null>(null);
   const authVersion = useAuthVersion();
   const [running, setRunning] = useState(false);
@@ -54,8 +79,19 @@ export default function TaskConsole({ presets, customPlaceholder, timeoutMs = 30
   const [custom, setCustom] = useState('');
   const [active, setActive] = useState<TaskRecord | null>(null);
   const [logs, setLogs] = useState<Array<{ stream: string; text: string }>>([]);
+  /**
+   * How long the active command has been running, ticked while it runs.
+   *
+   * With no timeout, the wait can now legitimately be an hour, and a log pane that
+   * has gone quiet is indistinguishable from a wedged one — so the console counts
+   * the time, the same way the chat's long-turn notice does. A finished task shows
+   * the duration it actually took.
+   */
+  const [elapsedMs, setElapsedMs] = useState(0);
   const logEndRef = useRef<HTMLDivElement | null>(null);
   const subRef = useRef<(() => void) | null>(null);
+  /** When the active command started (the elapsed clock's origin). */
+  const startedAtRef = useRef(Date.now());
 
   useEffect(() => {
     void dashboardAPI.fetchAdminAuthStatus().then((s) => {
@@ -85,6 +121,8 @@ export default function TaskConsole({ presets, customPlaceholder, timeoutMs = 30
       setRunning(true);
       setError('');
       setLogs([]);
+      startedAtRef.current = Date.now();
+      setElapsedMs(0);
       const r = await dashboardAPI.startTask(args, presetTimeoutMs ?? timeoutMs);
       if (!r.ok || !r.task) {
         setError(r.error || 'Could not start the command.');
@@ -113,6 +151,13 @@ export default function TaskConsole({ presets, customPlaceholder, timeoutMs = 30
     if (!active) return;
     await dashboardAPI.cancelTask(active.id);
   }, [active]);
+
+  // Tick the elapsed clock while the command runs (and stop when it ends).
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => setElapsedMs(Date.now() - startedAtRef.current), 1000);
+    return () => clearInterval(timer);
+  }, [running]);
 
   return (
     <div className="ops-console">
@@ -158,6 +203,12 @@ export default function TaskConsole({ presets, customPlaceholder, timeoutMs = 30
           <div className="ops-console-head">
             <span>
               {active.command} · <span className={active.status === 'running' ? 'task-status-running' : ''}>{STATUS_LABEL[active.status]}</span>
+              {' · '}
+              <span className="task-elapsed">
+                {active.status === 'running'
+                  ? formatElapsed(elapsedMs)
+                  : formatElapsed(active.durationMs ?? elapsedMs)}
+              </span>
             </span>
             {active.status === 'running' ? (
               <button className="admin-refresh-btn" type="button" onClick={() => void cancel()}>

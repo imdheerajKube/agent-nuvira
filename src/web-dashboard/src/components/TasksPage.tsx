@@ -31,6 +31,9 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   cancelled: '⏹ cancelled',
   timeout: '⏰ timed out',
   error: '💥 error',
+  // Stopped by the liveness watchdog (no output AND no CPU) — the command was
+  // stuck waiting for something that never came, not failing on the code.
+  hung: '🚫 stopped (hung)',
 };
 
 function statusClass(status: TaskStatus): string {
@@ -40,6 +43,7 @@ function statusClass(status: TaskStatus): string {
     case 'failed': return 'task-status-failed';
     case 'cancelled': return 'task-status-cancelled';
     case 'timeout': return 'task-status-timeout';
+    case 'hung': return 'task-status-timeout';
     default: return 'task-status-error';
   }
 }
@@ -86,7 +90,14 @@ export default function TasksPage() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const authVersion = useAuthVersion();
   const [command, setCommand] = useState('');
-  const [timeoutSec, setTimeoutSec] = useState(300);
+  /**
+   * 0 = until finished (no cutoff) — the DEFAULT, because the commands worth
+   * running here are the long ones (`npm test`, a build, an eval matrix) and the
+   * old 5-minute default SIGTERMed them mid-run: the page reported a failure
+   * about work that was merely unfinished. A bounded run stays one click away for
+   * anything that must not be left going.
+   */
+  const [timeoutSec, setTimeoutSec] = useState(0);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
 
@@ -250,10 +261,11 @@ export default function TasksPage() {
         />
         <select
           className="admin-input task-timeout-select"
-          title="Task timeout"
+          title="Task timeout — 'until finished' runs with no cutoff"
           value={timeoutSec}
           onChange={(e) => setTimeoutSec(Number(e.target.value))}
         >
+          <option value={0}>until finished</option>
           <option value={60}>1 min</option>
           <option value={300}>5 min</option>
           <option value={600}>10 min</option>
@@ -265,7 +277,8 @@ export default function TasksPage() {
       </form>
       {error && <div className="admin-error">{error}</div>}
       <p className="task-hint">
-        Long-running commands stream their output live. Runs are capped at the chosen timeout and can be cancelled.
+        Long-running commands stream their output live, and run <strong>until they finish</strong> unless you pick a cutoff —
+        the elapsed time is shown beside the status, and Cancel stops one.
       </p>
 
       {/* Sits directly under the box it fills in, because that is the whole

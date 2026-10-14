@@ -381,7 +381,35 @@ export type ChatConsoleEvent =
       kind: 'finding';
       finding: import('../findings/verdicts.js').WireFinding;
     }
-  | { kind: 'status'; status: 'working' | 'done' | 'error' }
+  | {
+      kind: 'status';
+      status: 'working' | 'done' | 'error';
+      /**
+       * The completed turn's answer, carried on the terminal `done` status.
+       *
+       * WHY IT IS HERE. The answer used to travel on exactly ONE channel: the
+       * body of the `POST /api/chat` that started the turn. A client that
+       * stopped waiting for that POST therefore lost the answer even though the
+       * server finished the turn normally and PERSISTED it — measured: the
+       * dashboard caps the POST at 5 minutes (`AbortSignal.timeout(300_000)`)
+       * and a real turn ran 300.9s, so the user was told the turn was "STILL
+       * RUNNING" with no way to collect it except reloading the page. The
+       * stream already carries every other part of the turn (tokens, tools,
+       * plans, diffs, findings), so it now carries the finish too.
+       *
+       * The POST response stays authoritative for a client still waiting on it
+       * (the engine may pick an earlier, longer answer than the streamed text);
+       * this is a second, independent delivery path, not a replacement.
+       */
+      answer?: {
+        content: string;
+        followups: FollowupSuggestion[];
+        generationFailed: boolean;
+        bounded: boolean;
+        provider: string | null;
+        model: string | null;
+      };
+    }
   | {
       /**
        * P4 — one content token of the answer as it streams (the typewriter).
@@ -931,7 +959,6 @@ export class ChatConsole {
         });
         this.persist();
       }
-      this.emit(sessionId, { kind: 'status', status: 'done' });
       this.notifyTurnCompleted({
         sessionId,
         ok: true,
@@ -989,6 +1016,22 @@ export class ChatConsole {
           '\n\n⚠️ Heads-up: a build command failed here and no later build succeeded, so I could not ' +
           'confirm the build actually worked — please treat it as unverified and ask me to try again.';
       }
+      // The stream's copy of the finish, carrying the answer itself (see the
+      // `answer` field on the status event). Emitted last, after every honesty
+      // guard has been applied, so a client that recovers from the stream shows
+      // the same bubble a waiting client gets.
+      this.emit(sessionId, {
+        kind: 'status',
+        status: 'done',
+        answer: {
+          content: honestContent,
+          followups: nextFollowups,
+          generationFailed: answer.generationFailed === true,
+          bounded: answer.bounded === true,
+          provider: answer.provider ?? null,
+          model: answer.model ?? null,
+        },
+      });
       return {
         ok: true,
         content: honestContent,

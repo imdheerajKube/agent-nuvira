@@ -618,6 +618,62 @@ describe('/api/chat', () => {
     expect(received).toEqual(['→ calling tool: read_file', '→ tool result received']);
   });
 
+  /**
+   * The finish must ride the LIVE channel, carrying the answer.
+   *
+   * The dashboard caps its chat POST at 5 minutes (`AbortSignal.timeout(300_000)`
+   * in src/web-dashboard/src/api.ts) and a real turn ran 300.9s: the client
+   * stopped listening, the server finished normally and persisted the answer,
+   * and the only route back to it was a page reload. The terminal `status: done`
+   * event carries the answer itself, so a client that outlived its own wait can
+   * still finish the turn from the stream.
+   */
+  it('carries the finished answer on the terminal SSE status event', async () => {
+    engine.answerContent = 'the build is green after 34 model calls';
+    const sessionId = 'done-answer-session-1';
+    const res = await fetch(`${baseUrl}/api/chat/${sessionId}/events?token=${encodeURIComponent(token)}`, { method: 'GET' });
+    expect(res.status).toBe(200);
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let answer: { content?: string; generationFailed?: boolean } | null = null;
+    const postPromise = authedFetch('/api/chat', 'POST', { sessionId, message: 'a long job' });
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline && !answer) {
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true }>((resolve) => setTimeout(() => resolve({ done: true }), 250)),
+      ]);
+      if (result.done) break;
+      buffer += decoder.decode(result.value, { stream: true });
+      // Parse complete `event: status` frames out of the buffer.
+      let idx: number;
+      while ((idx = buffer.indexOf('event: status')) !== -1) {
+        buffer = buffer.slice(idx);
+        const lineIdx = buffer.indexOf('data: ');
+        const frameEnd = buffer.indexOf('\n\n');
+        if (lineIdx === -1 || frameEnd === -1) break;
+        const data = buffer.slice(lineIdx + 6, frameEnd);
+        try {
+          const payload = JSON.parse(data) as {
+            status?: string;
+            answer?: { content?: string; generationFailed?: boolean };
+          };
+          if (payload.status === 'done' && payload.answer) answer = payload.answer;
+        } catch { /* partial frame */ }
+        buffer = buffer.slice(frameEnd + 2);
+      }
+    }
+    await reader.cancel();
+    const post = await postPromise;
+    engine.answerContent = null;
+    expect(post.status).toBe(200);
+    // The answer matches what the POST returned — the stream is a SECOND
+    // delivery path, not a different result.
+    expect(answer?.content).toBe('the build is green after 34 model calls');
+    expect(answer?.generationFailed).toBe(false);
+  });
+
   it('P0.6 — streams tool-call lifecycle events over SSE (id, phase, args, ok, duration)', async () => {
     engine.toolCalls = [
       { phase: 'started', tool: 'read_file', args: { path: 'src/foo.ts' } },

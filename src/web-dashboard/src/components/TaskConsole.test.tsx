@@ -85,7 +85,9 @@ describe('TaskConsole', () => {
     const input = screen.getByPlaceholderText('run something');
     fireEvent.change(input, { target: { value: 'admin cron run nightly' } });
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
-    await waitFor(() => expect(start).toHaveBeenCalledWith(['admin', 'cron', 'run', 'nightly'], 300_000));
+    // No timeout by default (0 = run until finished or cancelled): a command
+    // started here is real work, and the 5-minute default SIGTERMed it mid-run.
+    await waitFor(() => expect(start).toHaveBeenCalledWith(['admin', 'cron', 'run', 'nightly'], 0));
   });
 
   it('streams the live console, offers cancel, and stops on completion', async () => {

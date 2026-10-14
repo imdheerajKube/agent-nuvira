@@ -25,6 +25,27 @@
 // not blocked by a stale client constant before the file is ever sent. A server
 // too old to answer leaves this default in place rather than accepting anything.
 const DEFAULT_MAX_ATTACHMENT_BYTES = 300_000; // ~300 KB per attachment, 10 max
+
+/**
+ * How often the ceiling recovery re-reads the session for its answer.
+ *
+ * There is deliberately NO overall deadline. The server has none either — a turn
+ * runs to completion, however long that takes, and this is a tool meant for work
+ * measured in hours (the longest turn on this machine ran 2571s / ~43 minutes). A
+ * client-side deadline would reintroduce exactly the breaking behaviour the
+ * recovery exists to remove, one arbitrary number later. So recovery waits for as
+ * long as the server reports the turn running, and it is the TURN that ends the
+ * wait, not a clock.
+ */
+const CEILING_RECOVERY_POLL_MS = 3000;
+/**
+ * Consecutive FAILED reads before recovery stops and says what happened. Bounded
+ * so an unreachable server cannot leave a page polling forever — this is the only
+ * stop condition besides the turn finishing.
+ */
+const CEILING_RECOVERY_MAX_MISSES = 10;
+/** How often the "still running" notice refreshes its elapsed time. */
+const STILL_RUNNING_TICK_MS = 5000;
 const PASTE_ATTACH_THRESHOLD = 2_000; // chars — larger pastes are offered as a chip
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -35,7 +56,7 @@ import Markdown from './Markdown';
 // test/build output, deploy URLs) rendered as cards, not raw markdown.
 import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
 import type { ResumeOutcome, TraceFinding, TurnReport, WorktreeOutcome } from '../types';
-import { formatCount } from '../format';
+import { formatCount, formatElapsed } from '../format';
 import PageHeader from './PageHeader';
 
 interface AuthState {
@@ -1071,7 +1092,18 @@ function groupSessions(
   return groups;
 }
 
-export default function ChatPage() {
+export interface ChatPageProps {
+  /**
+   * Test seam, in the spirit of TaskRunner's injectable spawn target: how long
+   * the ceiling recovery waits between re-reads of the session. Nothing in the
+   * app passes this — the constants above are the real values, and a test would
+   * otherwise have to wait three real seconds for the first poll of a case it
+   * is asserting about.
+   */
+  ceilingRecovery?: { pollMs?: number; maxMisses?: number };
+}
+
+export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const authVersion = useAuthVersion();
   /** The effective attachment cap, read from the server; the built-in default until it answers. */
@@ -1200,6 +1232,18 @@ export default function ChatPage() {
   // P4 — the last message whose turn FAILED, for the Retry affordance (null
   // when nothing to retry).
   const [retryAsk, setRetryAsk] = useState<string | null>(null);
+  /**
+   * The turn outlived the dashboard's own POST wait (5 minutes) and is still
+   * running on the server. Shown so the composer being busy is explained, and
+   * so the user never mistakes a live turn for a failed one.
+   */
+  const [stillRunning, setStillRunning] = useState(false);
+  /** True while a ceiling recovery owns the thread (gate for the stream's `done`). */
+  const recoveryRef = useRef(false);
+  /** One commit per turn, whichever path delivers the answer first. */
+  const recoveredRef = useRef(false);
+  /** How long the current wait has run, refreshed while it is on screen. */
+  const [waitElapsedMs, setWaitElapsedMs] = useState(0);
   /** A sentence the server sent about the PIN not holding (see `routingNotice`). */
   const [routingNotice, setRoutingNotice] = useState<string | null>(null);
   /**
@@ -1515,6 +1559,9 @@ export default function ChatPage() {
         );
       }
       setBusy(rec.busy === true);
+      // A session resumed mid-turn shows the SAME wait state as one this page
+      // started: the server is working, the answer is coming, nothing failed.
+      setStillRunning(rec.busy === true);
       if (rec.busy) timer = setTimeout(() => void tick(), 2500);
     };
     void tick();
@@ -1523,6 +1570,24 @@ export default function ChatPage() {
       if (timer) clearTimeout(timer);
     };
   }, [canChat]);
+
+  /**
+   * Keep a long wait VISIBLY alive.
+   *
+   * A turn may legitimately run for hours, and a still screen is indistinguishable
+   * from a broken one — so while the server is working, the notice counts up. That
+   * is this surface's equivalent of the heartbeat a long CLI command prints: proof
+   * the wait is progressing rather than a page that gave up.
+   */
+  useEffect(() => {
+    if (!stillRunning) {
+      setWaitElapsedMs(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = setInterval(() => setWaitElapsedMs(Date.now() - startedAt), STILL_RUNNING_TICK_MS);
+    return () => clearInterval(timer);
+  }, [stillRunning]);
 
   // P4 — load the session sidebar once authenticated (admin/operator only).
   useEffect(() => {
@@ -1671,6 +1736,117 @@ export default function ChatPage() {
     void openBrowse();
   }, [openBrowse, attachProject]);
 
+  /**
+   * Commit an answer that arrived OUTSIDE the POST.
+   *
+   * A turn that outlived the dashboard's own 5-minute wait is NOT a failed turn:
+   * the server runs it to completion and PERSISTS it (a client disconnect stopped
+   * cancelling turns — see the server's `/api/chat` handler). What was missing was
+   * a way back to the page: the POST is gone, the stream's terminal status event
+   * carried no content, and the only reader of the persisted transcript was the
+   * resume-on-mount effect — i.e. a reload. Meanwhile the failure path offered a
+   * Retry the server could only refuse ("A message is already being answered in
+   * this session"), which is the dead end the user reported.
+   *
+   * So the answer is collected from whichever path arrives first — the live
+   * `done` event or a poll of the transcript — and committed exactly ONCE (the
+   * message bubble the POST path would have produced).
+   */
+  const commitRecoveredAnswer = useCallback(
+    (answer: {
+      content: string;
+      followups?: Array<{ prompt: string; label?: string }>;
+      generationFailed?: boolean;
+    }) => {
+      if (recoveredRef.current) return;
+      recoveredRef.current = true;
+      recoveryRef.current = false; // this turn is collected; the loop can end
+      const content = answer.content || '(the agent produced no text — try rephrasing)';
+      setMessages((m) => [
+        ...m,
+        {
+          role: 'assistant',
+          content,
+          error: answer.generationFailed === true,
+          followups: answer.followups ?? [],
+          // The live cards of the turn that just finished — the same snapshot the
+          // POST path takes.
+          steps: liveStepsRef.current,
+          tools: liveToolsRef.current,
+          plan: livePlanRef.current,
+          diff: liveDiffRef.current,
+          draft: liveDraftRef.current,
+          findings: liveFindingsRef.current,
+          artifacts: extractArtifacts(content),
+        },
+      ]);
+      streamingRef.current = '';
+      setStreamingText('');
+      // The answer landed, so the "still running" notice and any Retry offer are
+      // both wrong now.
+      setError('');
+      setRetryAsk(null);
+      setStillRunning(false);
+      setBusy(false);
+      // P8 — the turn resolved: bring the history rail back.
+      setRailOpen(true);
+    },
+    [],
+  );
+
+  /**
+   * Collect the answer of a turn this client stopped waiting for: poll the
+   * session until the server reports it is no longer busy, then commit the
+   * assistant turn that was persisted. The live `done` event usually wins the
+   * race (it is checked before each poll), which makes this the safety net.
+   *
+   * The only stop condition is the TURN finishing (or the page going away, or the
+   * server becoming unreachable for `maxMisses` reads in a row). No deadline: the
+   * work is allowed to take as long as it takes, and the notice on screen keeps
+   * counting so the wait is visible instead of looking dead.
+   */
+  const recoverFromCeiling = useCallback(
+    async (sessionId: string, message: string) => {
+      const pollMs = ceilingRecovery?.pollMs ?? CEILING_RECOVERY_POLL_MS;
+      const maxMisses = ceilingRecovery?.maxMisses ?? CEILING_RECOVERY_MAX_MISSES;
+      let missed = 0;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, pollMs));
+        // Another path already delivered it, or the page is gone / a new turn has
+        // taken over the session — either way this loop is no longer the owner.
+        if (recoveredRef.current || !recoveryRef.current) return;
+        const rec = await dashboardAPI.getChatSession(sessionId);
+        if (!rec) {
+          if (++missed >= maxMisses) {
+            recoveryRef.current = false;
+            setStillRunning(false);
+            setBusy(false);
+            setError(
+              'Lost contact with the server while this turn was running. The turn itself was not cancelled — its answer is in this conversation (reopen it) or in Traces.',
+            );
+            return;
+          }
+          continue;
+        }
+        missed = 0;
+        if (rec.busy === true) continue; // still running: nothing to collect yet
+        const last = [...rec.turns].reverse().find((t) => t.role === 'assistant');
+        if (last) {
+          commitRecoveredAnswer({ content: last.content, followups: [] });
+        } else {
+          // The turn ended WITHOUT an answer (a refusal, a server-side failure):
+          // that is a real failed turn, so it gets the real Retry.
+          recoveryRef.current = false;
+          setStillRunning(false);
+          setBusy(false);
+          setRetryAsk(message);
+        }
+        return;
+      }
+    },
+    [commitRecoveredAnswer, ceilingRecovery?.pollMs, ceilingRecovery?.maxMisses],
+  );
+
   const send = useCallback(
     async (text: string, withAttachments?: AttachmentChip[]) => {
       const clean = text.trim();
@@ -1725,6 +1901,12 @@ export default function ChatPage() {
       const controller = new AbortController();
       abortRef.current = controller;
       setRetryAsk(null);
+      // A new turn owns the recovery flags: the previous turn's recovery has
+      // either committed its answer or reported honestly, and must not swallow
+      // this turn's.
+      recoveryRef.current = false;
+      recoveredRef.current = false;
+      setStillRunning(false);
       // Subscribe to LIVE progress BEFORE the turn starts so no step is missed
       // (EventSource auto-reconnects; the final answer arrives via the POST).
       subRef.current?.();
@@ -1798,6 +1980,14 @@ export default function ChatPage() {
         // Execution result from skill execution engine.
         onExecutionResult: (d) => {
           setExecutionResults((prev) => [...prev, d]);
+        },
+        // The turn FINISHED and the stream carried the answer. Acted on ONLY
+        // when this client already gave up waiting on the POST: otherwise the
+        // POST response is authoritative, and appending here as well would
+        // duplicate the bubble.
+        onTurnDone: (a) => {
+          if (!recoveryRef.current) return;
+          commitRecoveredAnswer(a);
         },
       });
       const r = await dashboardAPI.chatSend(
@@ -1907,6 +2097,17 @@ export default function ChatPage() {
           // server-side (the console discards cancelled turns).
           setError('');
           setRetryAsk(null);
+        } else if (r.turnStillRunning) {
+          // A CEILING IS NOT A FAILURE. The server is still running this turn,
+          // so: no failure banner, no Retry (re-sending is refused while the
+          // turn runs — the dead end this replaces), `busy` stays true, and the
+          // answer is collected from the stream or the transcript.
+          setError('');
+          setRetryAsk(null);
+          setStillRunning(true);
+          recoveryRef.current = true;
+          recoveredRef.current = false;
+          void recoverFromCeiling(sessionId, clean);
         } else if (r.unauthorized) {
           setAuth((a) => (a ? { ...a, authenticated: false } : a));
           setError('Session expired — log in again to chat.');
@@ -1917,11 +2118,17 @@ export default function ChatPage() {
           setRetryAsk(clean);
         }
       }
-      setBusy(false);
-      // P8 — the turn resolved: bring the history rail back.
-      setRailOpen(true);
+      // A turn that outlived the client ceiling is STILL RUNNING server-side, so
+      // its recovery owns the release (it clears `busy` when the answer lands).
+      // Releasing it here is what produced the dead end: a Retry offered on a
+      // turn the server would refuse because the first one was still running.
+      if (!(r.ok === false && r.turnStillRunning)) {
+        setBusy(false);
+        // P8 — the turn resolved: bring the history rail back.
+        setRailOpen(true);
+      }
     },
-    [busy, attachedProject, attachments, isolate, keepWorktree, resume, resumeId, pinnedModel],
+    [busy, attachedProject, attachments, isolate, keepWorktree, resume, resumeId, pinnedModel, commitRecoveredAnswer, recoverFromCeiling],
   );
 
   /** P4 — cancel the in-flight turn (aborts the POST; the server cancels it). */
@@ -2588,6 +2795,13 @@ export default function ChatPage() {
           </div>
 
           {error ? <div className="admin-row-msg admin-row-msg-err">{error}</div> : null}
+
+          {stillRunning ? (
+            <div className="admin-row-msg chat-routing-notice">
+              ⏳ Still working on the server — {formatElapsed(waitElapsedMs)} elapsed. This is a long-running turn, not a
+              failure: the answer will appear here by itself when it lands, and you can close this page and come back.
+            </div>
+          ) : null}
 
           {routingNotice ? (
             <div className="admin-row-msg chat-routing-notice">
