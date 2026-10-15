@@ -415,17 +415,60 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
 ];
 
 /**
+ * The retry schedule this run drives with when the operator has not dialed one.
+ *
+ * WHY THE HARNESS DIALS IT. How long a surface waits on a flapping provider is
+ * CONFIGURATION (`NUVIRA_TRANSIENT_RETRY_DELAYS_MS` — see `transientRetryDelaysMs`),
+ * not behaviour, and the fault rows this run drives are rows where EVERY retry fails
+ * ON PURPOSE: a provider that failed once is one a surface may legitimately recover
+ * from, so `times: all` is what makes the row about failure REPORTING.
+ *
+ * With the shipped schedule the run therefore spends the schedule — twice over — on
+ * rows that are about what a failure is REPORTED as. MEASURED 2026-10-15: on the
+ * `fault-provider-error` row every surface sat through the pinned pair's 95s grace
+ * window and then held the five-minute answer window for a question a headless run
+ * cannot answer — ~6.5 minutes per surface, ~33 minutes for the row, against
+ * milliseconds when dialed, with the SAME verdict. `nuvira parity run` is a
+ * diagnostic that a person and a CI step both expect to finish; the test files that
+ * drive this same harness dial it for exactly this reason (`tests/cli/parity.test.ts`,
+ * `tests/parity/fault-injection.test.ts`), and so does the command.
+ */
+const HARNESS_RETRY_DIAL_MS = '1';
+
+/**
+ * The dial this run will use: the operator's, or {@link HARNESS_RETRY_DIAL_MS}.
+ *
+ * Split out so the CHOICE is testable without driving the whole harness — the run
+ * itself is a minute of real turns, and a rule about which value is in force should
+ * not need one to be observed.
+ */
+export function harnessRetryDialMs(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS;
+  return raw === undefined || raw.trim() === '' ? HARNESS_RETRY_DIAL_MS : raw;
+}
+
+/**
  * Drive the real harness: every surface, every scenario, one verdict each.
  *
  * The drivers run the REAL surfaces against a loopback stub provider (transport
  * depth — see `src/parity/drivers.ts`), in an isolated config/memory profile, so
  * this is a real comparison and not a smoke test. `verdict === 'divergent'` or a
  * refusal both fail the check; the differences are printed by name.
+ *
+ * The retry waits are dialed for the duration when nobody has dialed them (see
+ * `HARNESS_RETRY_DIAL_MS`) and restored afterwards, so a caller that set its own
+ * schedule keeps it and a caller that did not is not left with this one.
  */
 export async function harnessRunCheck(): Promise<ParityCheck> {
   const { createParityHarness } = await import('../parity/drivers.js');
+  const previousDial = process.env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS;
+  const dialed = harnessRetryDialMs();
+  process.env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS = dialed;
   const harness = await createParityHarness();
-  const lines: string[] = ['Driving every surface (transport depth — real provider, stub server):'];
+  const lines: string[] = [
+    'Driving every surface (transport depth — real provider, stub server):',
+    `  (retry waits dialed to ${dialed}ms — this run compares behaviour, not backoff)`,
+  ];
   let ok = true;
   try {
     for (const scenario of PARITY_SCENARIOS) {
@@ -447,6 +490,8 @@ export async function harnessRunCheck(): Promise<ParityCheck> {
     }
   } finally {
     await harness.dispose();
+    if (previousDial === undefined) delete process.env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS;
+    else process.env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS = previousDial;
   }
   lines.push('', ok ? '✓ every surface is at par.' : '✗ cross-surface parity failed.');
   return { ok, lines };

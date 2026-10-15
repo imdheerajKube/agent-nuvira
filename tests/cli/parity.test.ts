@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   ParityCommand,
   capabilityMatrixCheck,
+  harnessRetryDialMs,
   surfaceDebtCheck,
   surfaceReachCheck,
 } from '../../src/cli/parity.js';
@@ -96,6 +97,14 @@ describe('nuvira parity', () => {
     expect(text).toContain('at-par');
     expect(text).toContain('✓ every surface is at par.');
     expect(process.exitCode).not.toBe(1);
+    // The run SAYS which retry schedule it drove with: the fault rows fail every
+    // retry on purpose, so an undialed run spends the shipped schedule on rows
+    // about what a failure is reported AS (see `harnessRetryDialMs`), and a reader
+    // of the output has to be able to see that this is what happened.
+    expect(text).toContain('(retry waits dialed to 1ms');
+    // …and the dial is the CALLER's: the value this file set in `beforeEach` is
+    // still in force afterwards, not replaced by the harness's own.
+    expect(process.env.NUVIRA_TRANSIENT_RETRY_DELAYS_MS).toBe('1');
     // BUDGET, MEASURED. This drives every declared scenario on all five surfaces
     // (including a real forked child), and three of them are WS6 fault rows whose
     // `times: all` deliberately makes EVERY retry fail — a provider that fails on
@@ -107,6 +116,19 @@ describe('nuvira parity', () => {
     // pass, and this file passes solo). The budget is headroom for contention, not
     // a longer leash on a wrong verdict.
   }, 240_000);
+
+  it('dials the retry schedule itself when the operator has not', () => {
+    // The `fault-provider-error` row makes EVERY retry fail on purpose, so with the
+    // shipped schedule each surface sat through the pinned pair's 95s grace window
+    // and then the five-minute answer window of a question a headless run cannot
+    // answer (measured ~6.5 min per surface — how a diagnostic becomes half an
+    // hour). The harness therefore dials it, while a value the operator set stands.
+    expect(harnessRetryDialMs({} as NodeJS.ProcessEnv)).toBe('1');
+    expect(harnessRetryDialMs({ NUVIRA_TRANSIENT_RETRY_DELAYS_MS: '   ' } as NodeJS.ProcessEnv)).toBe('1');
+    expect(
+      harnessRetryDialMs({ NUVIRA_TRANSIENT_RETRY_DELAYS_MS: '250,500' } as NodeJS.ProcessEnv),
+    ).toBe('250,500');
+  });
 
   it('fails honestly when the repository sources are absent', async () => {
     // The graph checks read `src/` directly. Run against a directory that is not

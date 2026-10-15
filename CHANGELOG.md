@@ -121,6 +121,13 @@ never wait longer than it asked for; unset, the shipped two-minute grace
 (`PINNED_ANSWER_TIMEOUT_MS`) are unchanged. The pinned empty-response patience and
 the "keep trying" loop read the same value, so no path can stall a dialed run.
 
+The same dial now bounds `nuvira parity run` itself, which was measured at ~6.5
+minutes per SURFACE on the `fault-provider-error` row — 95s of pinned grace and
+then a five-minute answer window for a question a headless run cannot answer, on a
+row where every retry fails ON PURPOSE. The harness dials the schedule when the
+operator has not and says which value it drove with, so the verdict is unchanged
+and the command finishes in ~1 minute instead of half an hour.
+
 ## v3.5.6 — the next steps a weak model writes as prose are clickable, a plain turn is quiet, the work is visible while it happens, a profile under the new config name is finally read, and the cost ledger stops claiming a bill it cannot see
 
 Seven things a person running `nuvira chat` / `nuvira execute` meets directly: the
