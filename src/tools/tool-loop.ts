@@ -74,7 +74,7 @@ import {
   RunTrace,
   type RunTraceSnapshot,
 } from '../learning/run-trace.js';
-import { wantsAuthoredArtifact } from '../learning/deliverable-class.js';
+import { asksForAuthoredFile, isAuthoredGoal, wantsAuthoredArtifact } from '../learning/deliverable-class.js';
 import { isAuthoredReadBack } from '../learning/turn-report.js';
 import { parseLongFormTarget, countWords } from '../learning/long-form.js';
 import { normalizeFollowups, type FollowupSuggestion } from './followup-utils.js';
@@ -2403,6 +2403,11 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       if (
         permissionNudges < 1 &&
         authorization.authorized &&
+        // …for FILE work. A short authored deliverable ("write a poem", "write an
+        // essay") is prose whose TEXT is the answer: it authorizes no file, so
+        // there is no file work to permit and nothing to nudge (see
+        // `isInlineAuthoredDeliverable`).
+        !isInlineAuthoredDeliverable(requestText) &&
         schemas.length > 0 &&
         detectPermissionSeeking(
           response.content.length >= lastContent.length ? response.content : lastContent,
@@ -2416,20 +2421,23 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           gate: 'permission',
           summary: `the turn asked permission for authorized work (${authorization.reason}) — one bounded nudge to proceed`,
         });
-        // The question must not become the delivered answer. When nothing was
-        // done this turn the whole step is the question, so drop it. When real
-        // work WAS done, keep the work and cut only the trailing question —
-        // otherwise a longer "…Do you want me to…?" outranks a short, real
-        // follow-up answer under the longest-substantive rule below.
-        if (progress.successfulToolCalls.length === 0) {
-          lastContent = '';
-        } else {
-          rememberContent(
-            stripTrailingPermissionSeek(
-              response.content.length >= lastContent.length ? response.content : lastContent,
-            ),
-          );
-        }
+        // The question must not become the delivered answer — but neither may the
+        // work be deleted along with it. `stripTrailingPermissionSeek` removes
+        // ONLY the trailing permission sentences, which is exactly the line:
+        //   - a step that IS the question ("Do you want me to create the files?")
+        //     strips to '' and stays a non-answer, as before;
+        //   - a step that DELIVERED something (a poem, a plan, a report, a design)
+        //     keeps every byte of it and loses only the offer that followed.
+        // The older rule cleared the WHOLE step whenever no tool had succeeded,
+        // which threw away a finished answer the user had already been charged
+        // for: a WhatsApp poem request (trace-1792061511046-jdhgyy) returned the
+        // complete poem and closed with "Want me to make it shorter…?", the gate
+        // read the step as "the permission question", and the sender received a
+        // dangling fragment and no poem at all.
+        const judged = response.content.length >= lastContent.length ? response.content : lastContent;
+        const kept = stripTrailingPermissionSeek(judged);
+        if (kept) rememberContent(kept);
+        else lastContent = '';
         thread.push({ role: 'assistant', content: response.content });
         harness.push(thread, 'permission', AUTHORIZED_WORK_NUDGE);
         continue;
@@ -4243,7 +4251,10 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
       !replyAsksTheReader(result.content) &&
       // A request that forbade writes cannot have "failed to deliver" a file.
       !requestForbidsWrites(lastUserText(opts.messages)) &&
-      wantsAuthoredArtifact(lastUserText(opts.messages))
+      // The same predicate the gate above demands the file with, so "an artifact
+      // was asked for" cannot mean two different things in two places: a short
+      // poem answered in chat is not a turn that failed to deliver a file.
+      asksForAuthoredFile(lastUserText(opts.messages))
     ) {
       result.undeliveredArtifact = true;
     }
@@ -4308,13 +4319,40 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
 }
 
 /**
+ * Is this ask a SHORT authored deliverable — prose whose TEXT is the answer?
+ *
+ * WHY THIS EXISTS. G13's precondition is `requestAuthorizesWrites`, which reads a
+ * creation verb applied to a file-shaped noun — precisely the shape of "write a
+ * poem". So a WhatsApp turn asking for a Hindi poem was judged to have authorized
+ * FILE work, and when the poem closed with "Want me to make it shorter…?" the gate
+ * treated the step as the permission question and discarded it
+ * (trace-1792061511046-jdhgyy: the sender got "Or perhaps help you draft a message
+ * to send to her?" and no poem).
+ *
+ * The distinction is already in the codebase, and it is not a per-content-type
+ * list: `isAuthoredGoal` says the deliverable is authored prose, and
+ * `asksForAuthoredFile` says the user asked for the ARTIFACT (a magnitude needing
+ * several units, or a named destination) rather than for the text. Only the second
+ * is file work — for every authored class, poem through report, with no rule that
+ * names a poem or an essay.
+ */
+function isInlineAuthoredDeliverable(requestText: string): boolean {
+  const text = (requestText || '').trim();
+  if (!text) return false;
+  return isAuthoredGoal(text) && !asksForAuthoredFile(text);
+}
+
+/**
  * Does the DELIVERABLE gate apply to this turn (G13b)?
  *
  * The conjunction is the whole point, and every term is an independent fact:
  *
- *   - the request asks for an AUTHORED deliverable to be PRODUCED
- *     (`wantsAuthoredArtifact` — the same predicate the engine router uses, so
- *     "what the user asked for" is defined once);
+ *   - the request asks for an AUTHORED deliverable to be PRODUCED as a FILE
+ *     (`asksForAuthoredFile` — a size needing more than one unit, or a named
+ *     destination). The broader `wantsAuthoredArtifact` is deliberately NOT
+ *     used here: it is true for "write a poem", where the text IS the answer,
+ *     and demanding an artifact for it is how a chat poem turned into a nudge
+ *     for a file nobody asked for;
  *   - the turn wrote NOTHING (`mutatedPaths` is the loop's own evidence that a
  *     write landed, so a turn that used a heredoc through `run_terminal` is not
  *     nudged for a file it already wrote);
@@ -4347,7 +4385,14 @@ function deliverableGateApplies(
   // without this the gate read it as an authored-artifact ask and wrote a file
   // against the user's explicit instruction.
   if (requestForbidsWrites(requestText)) return false;
-  return wantsAuthoredArtifact(requestText);
+  // The NARROW half of the authored-artifact rule: a size that needs more than
+  // one unit ("a 12 page story", "a 20 chapter book") or a named destination.
+  // `wantsAuthoredArtifact` — the broad half — is true for "write a poem" too,
+  // and demanding a FILE for that is the defect: a short authored ask is answered
+  // in chat, where the text IS the deliverable (see `asksForAuthoredFile`'s own
+  // doc and its pinned tests). The two gates therefore speak one vocabulary: chat
+  // prose is asked for no artifact, large or placed prose still is.
+  return asksForAuthoredFile(requestText);
 }
 
 /**

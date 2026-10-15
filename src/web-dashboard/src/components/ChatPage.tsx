@@ -1266,6 +1266,17 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
    * Shown so a file landing somewhere unexpected is explained, not discovered.
    */
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null);
+  /**
+   * The TEMPORARY workspace a produce turn ran in (Cluster G → scratch rung).
+   *
+   * Held apart from `workspaceNotice` because it is the one resolved workspace the
+   * client must NOT adopt silently: attaching it would make a throwaway folder
+   * look like the user's project on every later turn. It gets its own banner with
+   * the two real answers — keep it, or attach a folder of your own.
+   */
+  const [scratchWorkspace, setScratchWorkspace] = useState<string | null>(null);
+  /** The composer's path box, so the scratch banner can point at it. */
+  const projectPathInputRef = useRef<HTMLInputElement | null>(null);
   // Resume the session open before a reload when one was stored; otherwise a
   // brand-new id.
   const sessionIdRef = useRef<string>(readPersistedSessionId() ?? newSessionId());
@@ -1387,6 +1398,14 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
         ? { provider: rec.pinnedProvider, model: rec.pinnedModel }
         : null,
     );
+    // P8b — and the STRICT half of that choice, which used to be dropped here.
+    // The lock is not a preference about the picker; it is what makes the pin
+    // binding, so restoring the pair without it left a conversation that looked
+    // pinned and behaved auto — the engine then handed the work to another model
+    // while the user believed the pin was in force. `undefined` (a record from
+    // before this field, or a lock turned off) reads as off, which is the
+    // documented default.
+    setStrictPin(rec.pinnedStrict === true);
     // P4b — auto-restore the attached project from the session's stored path.
     const storedPath = rec.projectPath;
     if (storedPath) {
@@ -2085,7 +2104,13 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
         // attachment recovered from the session). ATTACH it, so the chip
         // highlights the folder the turn actually ran in and the next turn
         // carries it without asking again.
-        if (r.workspacePath && r.workspacePath !== attachedProject?.path) {
+        //
+        // …EXCEPT the scratch workspace: it is temporary, so adopting it silently
+        // would scope every later turn of this chat to a throwaway folder. It is
+        // surfaced as an offer instead (the banner below).
+        const scratch = r.workspaceSource === 'scratch' ? (r.workspacePath ?? null) : null;
+        setScratchWorkspace(scratch);
+        if (!scratch && r.workspacePath && r.workspacePath !== attachedProject?.path) {
           void attachProjectRef.current?.(r.workspacePath);
         }
         // P4 — a failed generation (no usable answer) offers Retry too — but NOT
@@ -2462,6 +2487,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
                 ) : null}
                 <input
                   className="chat-project-input"
+                  ref={projectPathInputRef}
                   value={projectPathInput}
                   onChange={(e) => setProjectPathInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void attachProject(projectPathInput); } }}
@@ -2886,6 +2912,53 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
                 type="button"
                 aria-label="Dismiss workspace notice"
                 onClick={() => setWorkspaceNotice(null)}
+              >
+                ✕
+              </button>
+            </div>
+          ) : null}
+
+          {/*
+           * The TEMPORARY workspace, with the two ways out (see
+           * `scratchWorkspace`). A file that landed in a throwaway folder is only
+           * acceptable if the user is TOLD and can keep it in one click, and the
+           * offer is made here rather than left to the reply's prose because the
+           * path is a fact the client already has.
+           */}
+          {scratchWorkspace ? (
+            <div className="admin-row-msg chat-scratch-notice" data-testid="chat-scratch-notice">
+              <span>
+                🗂️ No folder was attached, so this turn used a temporary workspace:{" "}
+                <code className="chat-scratch-path">{scratchWorkspace}</code>
+              </span>{' '}
+              <button
+                type="button"
+                className="admin-mini-btn"
+                title="Attach this folder to the chat and keep working in it"
+                onClick={() => {
+                  const path = scratchWorkspace;
+                  setScratchWorkspace(null);
+                  void attachProjectRef.current?.(path);
+                }}
+              >
+                ✓ Use as my project path
+              </button>{' '}
+              <button
+                type="button"
+                className="admin-mini-btn"
+                title="Attach a folder of your own — the next turn runs inside it"
+                onClick={() => {
+                  setScratchWorkspace(null);
+                  projectPathInputRef.current?.focus();
+                }}
+              >
+                📁 Attach my own folder
+              </button>{' '}
+              <button
+                type="button"
+                className="chat-routing-notice-dismiss"
+                aria-label="Dismiss temporary workspace notice"
+                onClick={() => setScratchWorkspace(null)}
               >
                 ✕
               </button>

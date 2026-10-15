@@ -1897,14 +1897,14 @@ export class DashboardAPI {
   /**
    * P4 — load one past session's full transcript (resume in the thread).
    */
-  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; busy?: boolean; /** Epoch-ms when the running turn started — the honest origin for a wait. */ busySince?: number; pendingQuestion?: PendingQuestion } | null> {
+  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; /** P8b — the strict half of the pin ("this model only"), persisted with it. */ pinnedStrict?: boolean; busy?: boolean; /** Epoch-ms when the running turn started — the honest origin for a wait. */ busySince?: number; pendingQuestion?: PendingQuestion } | null> {
     const token = getAdminToken();
     try {
       const res = await fetch(`${this.baseUrl}/api/sessions/${encodeURIComponent(id)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: AbortSignal.timeout(10_000),
       });
-      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; busy?: boolean; busySince?: number; pendingQuestion?: PendingQuestion } };
+      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; pinnedStrict?: boolean; busy?: boolean; busySince?: number; pendingQuestion?: PendingQuestion } };
       if (res.status === 200 && d.ok && d.session) return d.session;
       return null;
     } catch {

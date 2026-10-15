@@ -104,7 +104,7 @@ export interface FormatProjectTextOptions {
    * `attached` needs no explanation; every other source does, so the model can
    * tell "the user pointed me here" apart from "I am in an operator's default".
    */
-  source?: 'attached' | 'session' | 'message' | 'default';
+  source?: 'attached' | 'session' | 'message' | 'default' | 'scratch';
   /** The one-line account of the workspace (from `resolveTurnWorkspace`). */
   notice?: string;
 }
@@ -134,8 +134,14 @@ export function formatProjectText(
     source === 'attached'
       ? `Workspace: ATTACHED — ${bundle.path} is this chat's project. Create and edit files INSIDE it.`
       : `Workspace: ${source.toUpperCase()} — ${bundle.path}${opts.notice ? `\n${opts.notice}` : ''}`;
+  // The empty-folder reassurance is TRUE for a folder the user pointed at, and
+  // FALSE for a scratch folder — which is empty because it has just been made,
+  // and is NOT a project. Applying it there would tell the model "a folder is
+  // already attached, do not ask for one" while the scratch notice says the
+  // opposite, so the model would answer as if it were inside the user's project.
+  const userPickedFolder = source === 'attached' || source === 'session' || source === 'message';
   const emptyLine =
-    bundle.fileCount === 0
+    bundle.fileCount === 0 && userPickedFolder
       ? [
           '',
           '⚠️ This folder is ATTACHED and EMPTY. Empty is the normal starting state of a new',

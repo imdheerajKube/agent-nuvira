@@ -69,6 +69,7 @@ import {
 } from '../learning/exhaustion-report.js';
 import { estimateTokens } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
+import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { costSince } from '../learning/cost-tracker.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
 import { startWarmupDaemon } from '../learning/model-warmup.js';
@@ -640,6 +641,53 @@ export const PINNED_SAME_PAIR_GRACE_MS = 120_000;
 export const PINNED_GRACE_BACKOFF_MS = [5_000, 15_000, 30_000, 45_000] as const;
 
 /**
+ * The whole pinned-escalation budget, read as CONFIGURATION rather than a build
+ * property — the same rule {@link transientRetryDelaysMs} follows, and for the
+ * same reason.
+ *
+ * `NUVIRA_TRANSIENT_RETRY_DELAYS_MS` is the dial every headless surface already
+ * sets (the gateway's lifecycle contracts, the parity driver, CI): it says "a
+ * flapping provider costs milliseconds here, not minutes". The pinned window is
+ * the SAME KIND of wait — a bounded retry of one pair, followed by a question no
+ * unattended surface can answer — so it has to honour that dial. Measured
+ * 2026-10-15: the dial was in force and four suites still timed out, because the
+ * pinned window ignored it — a gateway inbound message sat 95s on a dead pin and
+ * then held the turn open for the five-minute answer window.
+ *
+ * Set (and not nonsense) → the dial IS the pinned schedule: the window is the sum
+ * of the waits it declares, and the answer window collapses to the same budget,
+ * so a dialed run can never wait longer than it asked for. Unset → the shipped
+ * two-minute window and the five-minute answer window stand unchanged (see
+ * {@link PINNED_SAME_PAIR_GRACE_MS} / {@link PINNED_ANSWER_TIMEOUT_MS}).
+ */
+export function pinnedGraceWindow(env: NodeJS.ProcessEnv = process.env): {
+  /** Total time the SAME pinned pair is retried before anyone is asked. */
+  graceMs: number;
+  /** The waits spent inside `graceMs`, in order. */
+  backoffMs: readonly number[];
+  /** How long the pinned-failure question may stay open. */
+  answerTimeoutMs: number;
+} {
+  if (!transientRetryScheduleOverridden(env)) {
+    return {
+      graceMs: PINNED_SAME_PAIR_GRACE_MS,
+      backoffMs: PINNED_GRACE_BACKOFF_MS,
+      answerTimeoutMs: PINNED_ANSWER_TIMEOUT_MS,
+    };
+  }
+  const dialed = transientRetryDelaysMs(env);
+  // Floored at 1ms so a `0` dial still buys one retry rather than an empty window
+  // (the same attempt the undialed path always makes first).
+  const graceMs = Math.max(1, dialed.reduce((sum, ms) => sum + ms, 0));
+  return { graceMs, backoffMs: dialed, answerTimeoutMs: graceMs };
+}
+
+/** A wait as a human reads it — seconds below a minute, minutes above. */
+function describeWait(ms: number): string {
+  return ms >= 60_000 ? `${Math.round(ms / 60_000)} minutes` : `${Math.round(ms / 1000)}s`;
+}
+
+/**
  * Failure kinds a WAIT can plausibly fix.
  *
  * A rejected credential, a model the provider does not serve, an over-long prompt
@@ -664,6 +712,24 @@ const PINNED_WAITABLE_KINDS = new Set(['server', 'network', 'timeout', 'rate-lim
  * stopping with the pin's own error is the honest outcome once nobody answers.
  */
 export const PINNED_ANSWER_TIMEOUT_MS = 300_000;
+
+/**
+ * What `pinnedEscalation` decided for a pinned turn whose pair did not answer.
+ *
+ * A three-way answer rather than a nullable response, because the two "no answer"
+ * cases demand OPPOSITE behaviour from the caller and conflating them is how a
+ * headless run gets dead-ended by a question it cannot answer:
+ *   - `served`     — the user's choice answered; this is the turn's response.
+ *   - `stop`       — nobody substituted and the pin's own error is the outcome
+ *                    (strict, a definitive failure, an unanswered question, or a
+ *                    user who chose to stay).
+ *   - `unattended` — a NON-strict pin with no one to ask: the caller keeps its
+ *                    documented fallback walk, exactly as before this rule.
+ */
+export type PinEscalationOutcome =
+  | { kind: 'served'; response: StepResponse }
+  | { kind: 'stop' }
+  | { kind: 'unattended' };
 
 /**
  * Message shapes that name a DEFINITIVE model problem — the pair does not exist,
@@ -3386,47 +3452,32 @@ export class ChatCommand extends BaseCommand {
         return false;
       }
 
-      // A pinned turn: never substitute a model the user explicitly forbade.
-      if (strictModelMode()) return false;
-      try {
-        const chain = getProviderFallback(this.configManager, this.configManager.getAll().fallback)
-          .getFallbackChain(session.type);
-        /**
-         * PINNED + AUTO-FALLBACK stays in the PIN'S CAPABILITY CLASS.
-         *
-         * A user who pins a strong model and leaves auto-fallback on has said
-         * "keep me in this class" — they have not agreed to a small/fast model
-         * because it happens to have the best health score. `sameClassFallback`
-         * chooses within the class first and reports when it must step down, so
-         * the handoff can SAY so instead of arriving as a silent downgrade.
-         */
-        const pinModel = session.model;
-        for (const fbType of chain) {
-          if (fbType === session.type) continue;
-          if (!hasCredentials(this.configManager, fbType)) continue;
-          if (!governanceVerdict(this.configManager, fbType, { taskText: message }).allowed) continue;
-          try {
-            const resolved = resolveProvider(this.configManager, fbType);
-            const base = getAutoRouter().resolveModel(fbType, 'chat', this.configManager);
-            const pick = sameClassFallback(pinModel, [
-              ...(base ? [base] : []),
-              ...preferredModelsFor(resolved.type),
-            ]);
-            const model = pick?.model ?? base;
-            if (pick?.crossClass) {
-              logger.warn(
-                `   ⚠️ ${pinModel ?? 'the pinned model'} is not available anywhere; handing over to ` +
-                  `${resolved.type}/${model} (${capabilityClassOf(model)} class — no same-class model was available).`,
-              );
-            }
-            if (install({ type: resolved.type, provider: resolved.provider, model })) return true;
-          } catch {
-            // Next fallback candidate.
-          }
-        }
-      } catch {
-        // Fall through to `false` — the loop's bounded path still applies.
-      }
+      /**
+       * ── A PINNED TURN DOES NOT SUBSTITUTE ON AN UNUSABLE RESPONSE ────────
+       *
+       * This used to walk the configured fallback chain for every non-strict pin
+       * (and refuse only under strict), so the pair the user pinned could be
+       * replaced mid-turn by whatever the health ranking liked. Measured live
+       * (trace-1792068695325-42wb1j): `deepseek/deepseek-v4-pro` returned an empty
+       * response twice, and the turn was answered by `local/deepseek-coder:latest`
+       * — a weaker model the user never named, on a conversation that was pinned
+       * with its "this model only" lock on but unpersisted (see
+       * `ChatConsole`'s `pinnedStrict`). The switch also arrived as a handoff note
+       * the model wrote to ITSELF; the user's only clue was the answer's wording.
+       *
+       * The pinned rule is now the same one {@link pinnedEscalation} implements for
+       * a thrown failure: nothing is substituted without the user choosing it. An
+       * EMPTY response cannot ask from here — the loop calls this hook but owns the
+       * thread, so this function has no call to retry with — which is why the
+       * caller's `emptyResponsePatienceMs` gives the pinned pair its full grace
+       * window FIRST (the loop re-asks the SAME pair, nothing routed elsewhere), and
+       * what is left when that window is spent is an honest stop, reported by the
+       * surface with its retry offer. Routing a pinned turn to another model behind
+       * the user's back is the defect, not the remedy.
+       *
+       * AUTO turns are untouched above: they are the case where substituting IS the
+       * user's instruction (and the case the walk exists for).
+       */
       return false;
     };
     try {
@@ -3487,6 +3538,33 @@ export class ChatCommand extends BaseCommand {
                 provider: session.type,
                 model: this.lastAttempt?.model ?? session.model ?? 'default',
               };
+              const failedEarlierStep = this.turnAttempts.some(
+                (a) => a.provider === pair.provider && a.model === pair.model,
+              );
+              /**
+               * ── A PINNED PAIR GETS THE PIN'S OWN GRACE WINDOW ─────────────
+               *
+               * An empty 200 is a PROVIDER failure, and for a PIN it is the one
+               * failure the user already told us how to handle: wait on the model
+               * they named. The blip policy's [2s, 5s] is the wrong instrument for
+               * that contract — it is sized for "is this provider having a
+               * moment", not for "you asked for THIS model".
+               *
+               * Measured (trace-1792068695325-42wb1j): `deepseek/deepseek-v4-pro`
+               * returned nothing, was re-asked after 2s and after 5s, and the turn
+               * was then handed to `groq/openai/gpt-oss-120b` and finally answered
+               * by `local/deepseek-coder:latest` — seven seconds of patience and a
+               * model the user never picked. The strict path had a two-minute
+               * window for this; an empty response could never reach it (the loop
+               * never throws on one), so the pin got the blip schedule instead.
+               *
+               * So the pinned schedule is the SAME one {@link pinnedEscalation}
+               * uses for a thrown failure — nothing is routed anywhere inside it —
+               * and only for the FIRST streak on the pair: once the pair has
+               * already failed a step, waiting again is a pattern, not a blip, and
+               * the loop's own bounded stop follows.
+               */
+              if (!mode.auto && !failedEarlierStep) return [...pinnedGraceWindow().backoffMs];
               return planBlipPatience({
                 current: pair,
                 alternatives: failoverAlternatives(this.configManager, pair.provider),
@@ -3494,9 +3572,7 @@ export class ChatCommand extends BaseCommand {
                 // An entry here means an EARLIER step of this turn already failed
                 // on this pair — the same pair failing twice is a pattern, not a
                 // blip, and patience collapses there.
-                failedEarlierStep: this.turnAttempts.some(
-                  (a) => a.provider === pair.provider && a.model === pair.model,
-                ),
+                failedEarlierStep,
                 deliveredWorkThisTurn,
               }).emptyResponseDelaysMs;
             } catch {
@@ -4178,49 +4254,86 @@ export class ChatCommand extends BaseCommand {
   }
 
   /**
-   * PINNED + STRICT and the pin did not answer: wait on the SAME model, then let
-   * the USER decide — never a silent substitution.
+   * A PINNED turn whose pair did not answer: wait on the SAME model, then let the
+   * USER decide — never a silent substitution.
    *
-   * WHY THIS EXISTS. The user pinned a model AND turned strict mode on. That is a
-   * quality contract, and the old behaviour broke it in the one direction they
-   * explicitly forbade: rather than wait, or say what was happening, a failed pin
-   * either dead-ended in "the language model was unavailable" or (non-strict) was
-   * handed to whatever the health ranking liked — including `local/qwen2.5:0.5b`, a
-   * model that cannot call tools at all, so its "answer" was fabricated rather
-   * than merely weaker. Sending that work to a weak model is not a degraded answer;
-   * for an agentic turn it is a wrong one.
+   * WHY THIS EXISTS. Pinning a model is a quality contract, and the old behaviour
+   * broke it in the one direction the user explicitly forbade: rather than wait, or
+   * say what was happening, a failed pin either dead-ended in "the language model
+   * was unavailable" or was handed to whatever the health ranking liked — including
+   * `local/qwen2.5:0.5b`, a model that cannot call tools at all, so its "answer" was
+   * fabricated rather than merely weaker. Sending that work to a weak model is not a
+   * degraded answer; for an agentic turn it is a wrong one.
+   *
+   * WHO IT COVERS. Every pin, not only a strict one. It used to be gated on
+   * `strictModelMode()` alone, which left the default state — the chat's picker pin
+   * with its lock OFF, which is what the client sends for `pinnedModel && !strictPin`
+   * — on the silent path: measured live (trace-1792068695325-42wb1j) `deepseek/
+   * deepseek-v4-pro` returned nothing twice, was handed to `groq/openai/gpt-oss-120b`
+   * and from there to `local/deepseek-coder:latest`, and the turn was answered by a
+   * model the user never named. So the wait-then-ask rule is now the PIN's, and the
+   * STRICT flag only decides what happens when nobody can be asked.
    *
    * So: the SAME pair is retried inside {@link PINNED_SAME_PAIR_GRACE_MS} first
    * (nothing is routed anywhere in that window), and if it still does not answer
    * the user is asked — keep trying, switch to the closest SAME-CLASS model the
-   * agent can find and name, type another model/provider, or release the pin to
-   * auto. The question says outright that nothing has been routed elsewhere.
+   * agent can find and name, or type another model/provider. The question says
+   * outright that nothing has been routed elsewhere.
    *
-   * Returns a served response when the user's choice works; `null` when the turn
-   * must fail honestly — headless (no one to ask: the strict refusal stands, as
-   * it must, because silently choosing FOR the user is the original defect), or
-   * when the chosen pair could not serve.
+   * Outcomes (see {@link PinEscalationOutcome}): a served response when the user's
+   * choice works; `stop` when the pin's own error is the honest outcome; and
+   * `unattended` when NOBODY could be asked on a non-strict pin — the caller then
+   * keeps its documented fallback walk, so a pipeline or worker that cannot answer
+   * a question is not dead-ended by one.
    */
-  private async pinnedStrictEscalation(input: {
+  private async pinnedEscalation(input: {
     session: { type: string; provider: InferenceProvider; model: string | undefined };
     /** The failed attempt — classified to decide whether a wait can help at all. */
     err: unknown;
     tryGenerate: (prov: InferenceProvider, typ: string, mdl: string | undefined) => Promise<StepResponse>;
     askUser?: ToolContext['askUser'];
     signal?: AbortSignal;
-  }): Promise<StepResponse | null> {
+  }): Promise<PinEscalationOutcome> {
     const { session } = input;
     const pin = `${session.type}/${session.model ?? 'default'}`;
     const kind = classifyFallbackError(input.err);
+    // How long this deployment is willing to wait on a pin — the two-minute
+    // default, or the `NUVIRA_TRANSIENT_RETRY_DELAYS_MS` dial when it is set
+    // (see `pinnedGraceWindow`).
+    const { graceMs, backoffMs, answerTimeoutMs } = pinnedGraceWindow();
+    /**
+     * This path cannot serve the pin. STRICT stops on the pin's own error; a
+     * non-strict pin falls through to the caller's fallback walk, which is the
+     * behaviour it had before this rule existed. Consulted only for the cases
+     * where NOBODY has been asked anything — a definitive failure, or a surface
+     * with no one to ask. Once a question has actually been put to the user, the
+     * answer (or their silence) is binding for both modes: substituting after
+     * they chose to stay would be the same silent switch in a new disguise.
+     */
+    const cannotServe = (): PinEscalationOutcome =>
+      strictModelMode() ? { kind: 'stop' } : { kind: 'unattended' };
+    /**
+     * NOBODY CAN BE ASKED, and the pin is not strict: hand the turn straight back
+     * to the caller's documented fallback walk.
+     *
+     * The grace window below exists to bridge the wait to a QUESTION — "your pin has
+     * not answered, would you rather switch?". With no surface to put that question
+     * to, the window buys nothing but delay: a cron job or queue worker that pinned
+     * a model would stall two minutes on every provider blip and then take the same
+     * walk it could have taken immediately. STRICT is the other case and keeps its
+     * window: "this model or nothing" has no earlier alternative, so waiting on the
+     * named pair is the only thing that contract can do.
+     */
+    if (!input.askUser && !process.stdin.isTTY && !strictModelMode()) return { kind: 'unattended' };
     // A DEFINITIVE failure is not a delay (see PINNED_WAITABLE_KINDS) — and a model
     // the provider does not serve, or a request-shape fault, is definitive even
     // though the classifier can only call it `unknown` (measured: a pin to a
     // nonexistent id spent the whole 2-minute grace window on a 400 that could
     // never change).
-    if (!PINNED_WAITABLE_KINDS.has(kind)) return null;
+    if (!PINNED_WAITABLE_KINDS.has(kind)) return cannotServe();
     if (kind === 'unknown') {
       const message = input.err instanceof Error ? input.err.message : String(input.err);
-      if (isHarnessFault(input.err) || PINNED_DEFINITIVE_ERROR_RE.test(message)) return null;
+      if (isHarnessFault(input.err) || PINNED_DEFINITIVE_ERROR_RE.test(message)) return cannotServe();
     }
 
     const attemptPin = async (): Promise<StepResponse | null> => {
@@ -4240,29 +4353,31 @@ export class ChatCommand extends BaseCommand {
 
     // ── 1. The SAME pair gets its grace window. Nothing is routed anywhere. ──
     let served = await attemptPin();
-    if (served) return served;
+    if (served) return { kind: 'served', response: served };
     const startedAt = Date.now();
-    for (const backoff of PINNED_GRACE_BACKOFF_MS) {
-      if (input.signal?.aborted) return null;
-      if (Date.now() - startedAt + backoff > PINNED_SAME_PAIR_GRACE_MS) break;
+    for (const backoff of backoffMs) {
+      if (input.signal?.aborted) return { kind: 'stop' };
+      if (Date.now() - startedAt + backoff > graceMs) break;
       // Visible on BOTH surfaces: the CLI reads it on the console, the dashboard
       // renders the same line as a progress step.
       logger.warn(
         `   ⏳ your pinned ${pin} has not answered (${describeFailureKind(kind)}) — retrying it in ` +
           `${Math.round(backoff / 1000)}s (${Math.round((Date.now() - startedAt) / 1000)}s of ` +
-          `${Math.round(PINNED_SAME_PAIR_GRACE_MS / 1000)}s). Nothing has been sent to another model.`,
+          `${Math.round(graceMs / 1000)}s). Nothing has been sent to another model.`,
       );
       await new Promise((resolve) => setTimeout(resolve, backoff));
       served = await attemptPin();
-      if (served) return served;
+      if (served) return { kind: 'served', response: served };
     }
 
     // ── 2. ASK. The pin is the user's contract; only they may release it. ────
     const alternatives = this.pinAlternatives(session.model, session.type);
     const switchTarget = alternatives.sameClass[0];
-    // Headless (a pipeline, a cron, a queue worker) has no one to ask: the strict
-    // refusal stands. Choosing silently FOR the user is the defect this fixes.
-    if (!input.askUser && !process.stdin.isTTY) return null;
+    // Headless (a pipeline, a cron, a queue worker) has no one to ask. Choosing
+    // silently FOR the user is the defect this fixes, so the pin is never
+    // released here: a strict pin stops on its own error, and a non-strict pin
+    // hands back to the caller's fallback walk — see `cannotServe`.
+    if (!input.askUser && !process.stdin.isTTY) return cannotServe();
     const ask = input.askUser ?? (await import('../tools/ask-user.js')).renderAskUser;
 
     const choices: Array<{ label: string; description: string }> = [
@@ -4286,13 +4401,13 @@ export class ChatCommand extends BaseCommand {
     const otherIdx = switchTarget ? 2 : 1;
     // NOTE — there is deliberately NO "go to auto" option. It was considered and
     // removed: it is the one choice that serves a model the user never named, and
-    // a strict pin exists precisely to rule that out. A user who wants routing to
-    // decide turns strict mode off, which is a decision they own and can see.
-    // Nothing in this method can therefore serve a pair the user did not pick.
+    // a pin exists precisely to rule that out. A user who wants routing to decide
+    // clears the pin, which is a decision they own and can see. Nothing in this
+    // method can therefore serve a pair the user did not pick.
 
     const question =
-      `I have NOT sent this to another model — you pinned ${pin} and strict mode is on, so that choice is yours.\n` +
-      `${pin} did not answer within ${Math.round(PINNED_SAME_PAIR_GRACE_MS / 1000)}s (${describeFailureKind(kind)}).\n` +
+      `I have NOT sent this to another model — you pinned ${pin}, so that choice is yours.\n` +
+      `${pin} did not answer within ${Math.round(graceMs / 1000)}s (${describeFailureKind(kind)}).\n` +
       (switchTarget
         ? `If you would rather switch, ${switchTarget.provider}/${switchTarget.model} is the closest same-class model available.`
         : 'No same-class model is available to switch to right now.');
@@ -4307,7 +4422,7 @@ export class ChatCommand extends BaseCommand {
       const raced = await Promise.race([
         ask(question, choices as never, false).then((a) => ({ answered: true as const, a })),
         new Promise<{ answered: false }>((resolve) => {
-          answerTimer = setTimeout(() => resolve({ answered: false }), PINNED_ANSWER_TIMEOUT_MS);
+          answerTimer = setTimeout(() => resolve({ answered: false }), answerTimeoutMs);
           // Never hold the process open for an answer that already arrived: an
           // un-unref'd 5-minute timer kept the CLI alive long after the turn was
           // finished (the `chat` command would appear to hang on exit).
@@ -4317,14 +4432,14 @@ export class ChatCommand extends BaseCommand {
       if (answerTimer) clearTimeout(answerTimer);
       if (!raced.answered) {
         logger.warn(
-          `   ⌛ no answer to the pinned-model question after ${Math.round(PINNED_ANSWER_TIMEOUT_MS / 60_000)} minutes — ` +
+          `   ⌛ no answer to the pinned-model question after ${describeWait(answerTimeoutMs)} — ` +
             `stopping on ${pin} rather than choosing for you.`,
         );
-        return null;
+        return { kind: 'stop' };
       }
       answer = raced.a as { index?: number | number[]; custom?: string };
     } catch {
-      return null;
+      return { kind: 'stop' };
     }
     const chosen = typeof answer.index === 'number' ? answer.index : -1;
 
@@ -4334,17 +4449,21 @@ export class ChatCommand extends BaseCommand {
       // interrupt — they can ask again, and the dashboard's retry offer queues it.
       const retryStart = Date.now();
       for (;;) {
-        if (input.signal?.aborted) return null;
+        if (input.signal?.aborted) return { kind: 'stop' };
         const again = await attemptPin();
-        if (again) return again;
-        if (Date.now() - retryStart >= PINNED_SAME_PAIR_GRACE_MS) break;
-        await new Promise((resolve) => setTimeout(resolve, 15_000));
+        if (again) return { kind: 'served', response: again };
+        if (Date.now() - retryStart >= graceMs) break;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(15_000, graceMs)));
       }
-      return null;
+      // The user chose to stay on the pin and it still did not answer: the pin's
+      // own failure is the outcome. Substituting now would be the very switch
+      // they just declined.
+      return { kind: 'stop' };
     }
 
     if (switchIdx >= 0 && chosen === switchIdx && switchTarget) {
-      return await this.serveChosenPair(input, switchTarget.provider, switchTarget.model);
+      const switched = await this.serveChosenPair(input, switchTarget.provider, switchTarget.model);
+      return switched ? { kind: 'served', response: switched } : { kind: 'stop' };
     }
 
     if (chosen === otherIdx) {
@@ -4353,14 +4472,14 @@ export class ChatCommand extends BaseCommand {
         const pair = this.parsePinChoice(custom, session.type);
         if (pair) {
           const servedCustom = await this.serveChosenPair(input, pair.provider, pair.model);
-          if (servedCustom) return servedCustom;
+          if (servedCustom) return { kind: 'served', response: servedCustom };
         }
         logger.warn(
           `   ⚠️ could not use "${custom}" — check that the model is served by that provider.`,
         );
       }
     }
-    return null;
+    return { kind: 'stop' };
   }
 
   /**
@@ -4750,6 +4869,31 @@ export class ChatCommand extends BaseCommand {
         } catch {
           // Best-effort — bookkeeping must never break the turn.
         }
+        // ══ A PINNED TURN ASKS BEFORE IT LEAVES THE PIN ════════════════════
+        //
+        // The rule is the user's, not the mode's: a pin is a quality contract, so
+        // the turn WAITS on the pair it was given and then puts the choice to the
+        // user (keep trying / switch to a named same-class model / type another /
+        // stop). It never slides onto a model they did not name — which is what
+        // the non-strict pin used to do the moment the pair returned an error.
+        //
+        // STRICT keeps its extra meaning: when nobody can be asked (a pipeline, a
+        // worker with no interactive surface) the refusal stands and the pin's own
+        // error is the outcome, rather than a silent substitution. A NON-strict
+        // pin in that position keeps the documented fallback walk below, so an
+        // unattended run cannot be dead-ended by a question it cannot answer.
+        if (!mode.auto) {
+          const decision = await this.pinnedEscalation({
+            session,
+            err,
+            tryGenerate,
+            ...(askUser ? { askUser } : {}),
+            signal: abort,
+          });
+          if (decision.kind === 'served') return decision.response;
+          if (decision.kind === 'stop') throw err;
+          // 'unattended' → fall through to the non-auto walk below.
+        }
         // Auto mode: fail over across the ranked candidates (never stuck).
         if (mode.auto) {
           const firstType = session.type;
@@ -4787,13 +4931,48 @@ export class ChatCommand extends BaseCommand {
           const firstPair = `${this.lastAttempt?.provider ?? session.type}|${this.lastAttempt?.model ?? session.model ?? 'default'}`;
           const failedPairs = new Set<string>([firstPair]);
           const failedProviders = new Set<string>();
+          /**
+           * ── A PROVIDER-WIDE PARK IS EVIDENCE, NOT A HINT ─────────────────
+           *
+           * RULE: every provider the shared bookkeeping has escalated OUT is
+           * left behind by this walk, whether the escalation lives in the
+           * session's own map (this turn's failures) or in the quota ledger
+           * (`parkProvider` — several of the provider's models rate-limited, so
+           * the limit is shared; see `PROVIDER_RATE_LIMIT_ESCALATION_MODELS`).
+           *
+           * THE DEFECT THIS CLOSES (measured, trace-1792068452654-3e1w8d). The
+           * walk read ONLY the session map, so gemini's ledger park — scope
+           * `'provider'`, written at 12:48:23 and good until 16:48 — was
+           * invisible to it. The walk then spent its whole attempt budget
+           * descending gemini's OWN ladder (10 distinct gemini models, all of
+           * them 429ing) and landed on its weakest rung, `gemma-4-26b-a4b-it`,
+           * while `deepseek/deepseek-v4-pro` and `deepseek-flash` sat verified
+           * and unused. One provider's exhaustion must not consume the walk.
+           *
+           * The walk's own rule is unchanged: a PAIR failure keeps the provider
+           * routable (its siblings have their own limits). This only adds the
+           * provider-wide verdict the router's own quota feed already uses, so
+           * "the provider is out" is read from ONE source of truth instead of
+           * two.
+           */
+          const providerIsOut = (providerType: string): boolean => {
+            try {
+              if ((this.sessionFailedProviders.get(providerType) ?? 0) > Date.now()) return true;
+            } catch {
+              // Unknown session state → fall through to the ledger verdict.
+            }
+            try {
+              return getQuotaLedger().isProviderParked(providerType);
+            } catch {
+              // No ledger → no provider-wide verdict (pair-scoped walking stays).
+              return false;
+            }
+          };
           try {
             // The bookkeeping already ran for the failure above: a provider still
             // carrying an ACTIVE provider-scoped exclusion is out for this walk,
             // whatever kind the failure was classified as.
-            if ((this.sessionFailedProviders.get(session.type) ?? 0) > Date.now()) {
-              failedProviders.add(session.type);
-            }
+            if (providerIsOut(session.type)) failedProviders.add(session.type);
           } catch {
             // Best-effort — evidence must never break the walk.
           }
@@ -4892,13 +5071,7 @@ export class ChatCommand extends BaseCommand {
               // Is the PROVIDER out, or only this PAIR? The bookkeeping just
               // wrote the answer; read it rather than re-deriving the rule, so
               // the walk and the exclusion filter can never disagree.
-              let providerOut = false;
-              try {
-                providerOut = (this.sessionFailedProviders.get(next.type) ?? 0) > Date.now();
-              } catch {
-                // Unknown scope → treat it as pair-scoped (the conservative
-                // direction for staying routable).
-              }
+              const providerOut = providerIsOut(next.type);
               if (providerOut) failedProviders.add(next.type);
               logger.debug(
                 `   ⚠️ ${next.type}/${next.model ?? 'default'} failed (${describeFailureKind(nextKind)}) — ` +
@@ -5121,20 +5294,11 @@ export class ChatCommand extends BaseCommand {
                 .join('; ')}`,
             );
           }
-        } else if (strictModelMode()) {
-          /**
-           * PINNED + STRICT — wait on the SAME model, then ASK. Never substitute:
-           * that is the whole meaning of the pin. See `pinnedStrictEscalation`.
-           */
-          const decided = await this.pinnedStrictEscalation({
-            session,
-            err,
-            tryGenerate,
-            ...(askUser ? { askUser } : {}),
-            signal: abort,
-          });
-          if (decided) return decided;
         }
+        // NOTE: the pinned case is handled by `pinnedEscalation` ABOVE, before
+        // this if/else — a strict pin therefore never reaches the non-auto walk
+        // (it throws its own error), which is the behaviour that branch used to
+        // implement on its own.
         // Answer-quality resilience: every candidate failed (or none was
         // tried) and the error carries the model's raw confused reply —
         // deliver THAT instead of failing the whole turn. A confusing answer

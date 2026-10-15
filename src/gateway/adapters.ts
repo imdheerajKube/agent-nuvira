@@ -84,6 +84,18 @@ export interface ChannelAdapter {
   readonly configured: boolean;
   /** Human description for `nuvira gateway status`. */
   describe(): string;
+  /**
+   * Longest message this transport accepts, in characters.
+   *
+   * WHY IT IS ON THE ADAPTER. Every transport truncates somewhere — WhatsApp
+   * near 4096, SMS at 1600 — and the side that KNOWS the number is the one that
+   * sends. The registry reads it so a long answer can be saved to the turn's
+   * workspace and delivered as a head plus the path, instead of being sliced by
+   * `sanitizeOutbound` with the tail silently lost. Optional: absent means "no
+   * limit I know of", and the registry then applies its own conservative
+   * default rather than assuming an unlimited channel.
+   */
+  readonly maxMessageChars?: number;
   /** Start receiving inbound messages (long-poll or webhook server). */
   start(onMessage: MessageHandler): Promise<void>;
   /** Stop receiving (idempotent). */
@@ -134,6 +146,15 @@ export function sanitizeOutbound(text: string, max = 3500): string {
   // eslint-disable-next-line no-control-regex
   return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, max);
 }
+
+/**
+ * What a channel may carry when the adapter does not declare a cap.
+ *
+ * 4096 is the widest of the messaging platforms this gateway serves (WhatsApp),
+ * so the reply-saving rule fires at the point where ANY configured transport
+ * would start losing text — never later.
+ */
+export const DEFAULT_MAX_MESSAGE_CHARS = 4096;
 
 /** Default upload filename per media type (when the caller omits one). */
 export function defaultMediaFilename(type: MediaPayload['type']): string {
@@ -591,6 +612,9 @@ export class WhatsAppCloudAdapter extends WebhookChannelAdapter {
  * inbound messages. The bridge is injectable so tests never touch baileys.
  */
 export class WhatsAppBridgeAdapter implements ChannelAdapter {
+  /** WhatsApp truncates a text message near 4 KB. */
+  readonly maxMessageChars = 4096;
+
   readonly platform = 'whatsapp' as const;
   private handler: MessageHandler | null = null;
 
@@ -1332,6 +1356,8 @@ export class SignalAdapter implements ChannelAdapter {
  */
 export class SmsAdapter implements ChannelAdapter {
   readonly platform = 'sms' as const;
+  /** Twilio's per-message cap (~10 SMS segments) — see `send` below. */
+  readonly maxMessageChars = 1600;
   readonly configured: boolean;
   private accountSid = '';
   private authToken = '';

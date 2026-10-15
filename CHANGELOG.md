@@ -2,6 +2,125 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.5.7 — an answer that was already delivered is not deleted by a gate, a produce ask with no folder gets a temporary workspace, a reply the channel cannot carry becomes a file, a parked provider stops being resolved model by model, and the pinned wait is the retry dial
+
+Five defects, all of them in the path between "the model produced it" and "the person
+has it", each measured in a live session (traces named below) rather than reasoned
+about: a WhatsApp turn asked for a poem, the model delivered it in full, and a gate
+deleted the whole step because the poem closed with an offer of more work; a
+dashboard or messaging ask that CREATES something had no folder to write into, so it
+was refused, or wrote into whatever directory the gateway process happened to start
+in; a reply longer than the channel accepts was cut, with the tail lost and nobody
+told; a provider with an ACTIVE provider-wide park in the ledger was still resolved
+model by model by the failover walk; and the pinned wait — the two minutes a pinned
+pair is retried before the person is asked — ignored the retry dial every headless
+surface uses, which cost a gateway message 95 s on a dead pin. The first entry below
+ends with one thing found in the same session and deliberately NOT fixed, named so
+it is not lost.
+
+### A short poem is not a file, and a produce ask with no folder is not a dead end
+
+From one WhatsApp session (2026-10-15), where three separate defects met in a row:
+a "Hi" that claimed to remember work it had never seen, a poem request that took 117 s
+and then lost its own answer, and a long answer that would have been sliced in silence.
+The memory claim is NOT fixed here — see the note at the end of this entry.
+
+- **A gate may not delete a delivered answer.** The trace (`trace-1792061511046-jdhgyy`)
+is exact: the turn was asked for a Hindi poem, the model delivered it in full and
+closed with *"Want me to make it shorter, more romantic, or in a different style
+(shayari, gazal, free verse)?"* — an OFFER of optional follow-ups. `requestAuthorizesWrites`
+read "write a poem" as authorization for FILE work (a creation verb on a file-shaped
+noun) and `detectPermissionSeeking` matched the closing offer, so G13 fired and **cleared
+the step because no tool had succeeded yet** — the deliverable went with the question.
+The nudge then spent a second model call whose reply was a dangling fragment (*"Or perhaps
+help you draft a message to send to her?"*), and that fragment is what reached the phone
+(`send.ok … chars=218` in the gateway log). The poem never left the server. Two rules now
+hold: G13 uses `stripTrailingPermissionSeek`, so a step that IS the question still becomes
+a non-answer while a step that DELIVERED keeps every byte and loses only the trailing
+offer; and a SHORT AUTHORED deliverable is not file work at all — `isAuthoredGoal` plus
+`asksForAuthoredFile` (prose whose text IS the answer, no magnitude and no named
+destination) exempts it from G13, and the DELIVERABLE gate and the `undeliveredArtifact`
+flag use the same narrow predicate, so one vocabulary decides "an artifact was asked for"
+for every gate. **No per-content-type rule was added** — the same two predicates serve a
+poem, a song, an essay and a report.
+
+- **A produce ask with no project folder gets a TEMPORARY workspace, not a refusal.**
+The dashboard refused to run (*"attach a folder"*) and a messaging turn wrote into whatever
+directory the gateway process was started from — a tree belonging to nobody asking the
+question. The folder ladder now has a last rung: attached → this chat's earlier attachment →
+a folder named in the message → the operator's `dashboard.cwd` → **a scratch workspace**
+(`config/scratch-workspace.ts`, `<nuvira home>/workspace/<key>` with `os.tmpdir()` as the
+fallback for an unwritable home, pruned after 30 days on boot). It is offered for PRODUCE
+asks only, decided by `workspaceNeedForMissingFolder` — a READ ask ("assess this project",
+"fix the bug in src/app.ts") keeps the folder prompt, because an empty folder cannot hold
+the work it is about, and that distinction is what `utils/workspace-need.ts` now owns for
+every surface (the rule moved out of the dashboard so the gateway can use it without
+importing a dashboard module). The user is always TOLD: the notice names the path and is
+both the turn's project context and the response caption, the dashboard shows it with
+**✓ Use as my project path** and **📁 Attach my own folder** and deliberately does NOT
+auto-attach it (a throwaway folder must not become the chat's project), the messaging
+surfaces add "created in a temporary workspace: <path>" from the TOOL lifecycle when a
+file was actually written, and the prompt tells the model to name the path and offer the
+two ways to keep the work. **The rung is refused for an ISOLATED turn**, and the decision
+lives once in `scratchWorkspaceForTurn` rather than at each call site: isolation's subject is a
+throwaway copy of a REAL project plus the diff against its base commit, and a scratch folder is
+neither a project nor a repository — it has no commit to start from. Substituting one turned the
+deployment's own request (`NUVIRA_ISOLATE=1`) into a REFUSAL: the gateway went to
+`generation_failed` with no model call on the cross-surface worktree case while the CLI and the
+dashboard stayed green, because their ladders had a real directory above that rung. Now an
+isolated turn keeps the directory its deployment was given, and a dashboard turn with no folder at
+all asks for the one isolation needs instead of isolating a directory the user never chose.
+
+- **Still open, and named so it is not lost: the model INVENTS continuity it does not
+have.** The same session's first turn was a bare "Hi" — `history+ask 303` chars, no stored
+messages for that contact, and the string `motion` appearing **zero times** in the 11,081
+character prompt — and the reply was *"I see we've been working on `motion_commercial_prompt.md`
+in this project. Want to pick that back up…?"*. Nothing leaked and nothing was mis-keyed:
+the model fabricated a shared history to sound helpful. A fix belongs in the identity prompt
+(a turn has no record of earlier channel chats unless it is in the prompt, and must not claim
+otherwise), and it is deliberately NOT made here because the assembled system prompt's size
+and its contract clauses are pinned by the release gate (`tests/release/agent-contracts.test.ts`)
+and that change deserves its own review.
+
+- **A reply the channel cannot carry becomes a file, not a truncation.** `sanitizeOutbound`
+is a plain `.slice(0, max)`, so the tail of a long answer was destroyed with no notice to
+anyone. The cap is now the transport's own (`ChannelAdapter.maxMessageChars`: WhatsApp
+4096, SMS 1600), and a reply over it is written in full into the turn's workspace and
+delivered as a head plus the path (`gateway/oversized-reply.ts`) — with the channel policy
+telling the model the budget up front so it can do it deliberately.
+
+### A parked provider is no longer resolved model by model by the failover walk
+
+MEASURED (`trace-1792068452654-3e1w8d`): the ledger held an ACTIVE provider-wide park
+for gemini (`scope: "provider"`, `cooldownUntil` 16:48) while the chat failover walk
+went on resolving gemini's models one after another — because the walk only ever
+consulted the session's own exclusion map, never the ledger the escalation writes.
+The ladder ended at gemini's weakest rung with healthy `deepseek` pairs sitting
+unused. `QuotaLedger.isProviderParked` now answers the question the walk actually
+asks — "has the whole PROVIDER been escalated out?" — which is a different question
+from `isExhausted(provider)` ("is `provider/default` cooling down", correctly no
+while a single model rests), and it applies the same rule the router's own quota feed
+uses, so the walk and the dashboard cannot disagree about what "parked" means.
+Read-only and best-effort: a state read never throws into a turn.
+
+### The pinned wait is the retry dial, so a headless run cannot sit on a dead pair
+
+Pinning a model is a quality contract: a pinned pair that does not answer is retried
+on the SAME pair and then the person is asked — never quietly swapped for a model
+they did not name. The window governing that wait was a build property, while
+`NUVIRA_TRANSIENT_RETRY_DELAYS_MS` is the dial every headless surface already uses to
+say "a flapping provider costs milliseconds here, not minutes". Measured 2026-10-15:
+the dial was in force and a gateway inbound message still sat 95 s on a dead pin
+(`nonexistent-fast-fail`, `unreachable (network)`) before holding a five-minute
+answer window with nobody to answer it, and four suites that dial the schedule timed
+out where they used to fail fast. One resolver (`pinnedGraceWindow`) is now the
+single source for the whole pinned budget: with the dial set it IS the pinned
+schedule and the answer window collapses to the same budget, so a dialed run can
+never wait longer than it asked for; unset, the shipped two-minute grace
+(`PINNED_SAME_PAIR_GRACE_MS`) and five-minute answer window
+(`PINNED_ANSWER_TIMEOUT_MS`) are unchanged. The pinned empty-response patience and
+the "keep trying" loop read the same value, so no path can stall a dialed run.
+
 ## v3.5.6 — the next steps a weak model writes as prose are clickable, a plain turn is quiet, the work is visible while it happens, a profile under the new config name is finally read, and the cost ledger stops claiming a bill it cannot see
 
 Seven things a person running `nuvira chat` / `nuvira execute` meets directly: the

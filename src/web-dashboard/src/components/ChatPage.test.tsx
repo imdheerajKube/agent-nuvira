@@ -1789,3 +1789,71 @@ describe('ChatPage — background retries', () => {
     expect(screen.queryByText(/Not mine\./)).toBeNull();
   });
 });
+
+describe('Cluster G — the temporary (scratch) workspace', () => {
+  /**
+   * A turn that PRODUCED something with no project folder attached runs in a
+   * temporary folder. The client must not adopt it silently — that would scope
+   * every later turn of this chat to a throwaway directory — so the response is
+   * surfaced as an OFFER with the two real answers ("keep this" / "attach my own").
+   */
+  it('offers the temporary workspace instead of attaching it, and adopts it only when asked', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const attach = vi.spyOn(dashboardAPI, 'attachProject').mockResolvedValue({
+      ok: true,
+      project: { path: '/tmp/nuvira-scratch/chat-1', name: 'chat-1', fileCount: 0, symbolCount: 0 },
+    } as Awaited<ReturnType<typeof dashboardAPI.attachProject>>);
+    const send = mockChatSend({
+      ...OK_RESPONSE,
+      workspaceNotice: 'No project folder is attached, so this turn used a TEMPORARY workspace (/tmp/nuvira-scratch/chat-1).',
+      workspacePath: '/tmp/nuvira-scratch/chat-1',
+      workspaceSource: 'scratch',
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), {
+      target: { value: 'create a react app' },
+    });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    // The banner names the real path, and nothing was adopted behind the user's back.
+    await waitFor(() => expect(screen.getByTestId('chat-scratch-notice')).toBeTruthy());
+    expect(screen.getByText('/tmp/nuvira-scratch/chat-1')).toBeTruthy();
+    expect(attach).not.toHaveBeenCalled();
+
+    // One click keeps it: the folder is attached to this chat.
+    fireEvent.click(screen.getByText(/Use as my project path/));
+    await waitFor(() => expect(attach).toHaveBeenCalledWith('/tmp/nuvira-scratch/chat-1'));
+    await waitFor(() => expect(screen.queryByTestId('chat-scratch-notice')).toBeNull());
+  });
+
+  it('leave-a-folder-request turns a NON-scratch resolved workspace into an attach, as before', async () => {
+    // The previous behaviour must survive: a folder the user NAMED in the message
+    // is one they want to keep working in, so it is attached without asking.
+    mockAuthed('admin');
+    mockChatStream();
+    const attach = vi.spyOn(dashboardAPI, 'attachProject').mockResolvedValue({
+      ok: true,
+      project: { path: '/tmp/named-app', name: 'named-app', fileCount: 3, symbolCount: 9 },
+    } as Awaited<ReturnType<typeof dashboardAPI.attachProject>>);
+    mockChatSend({
+      ...OK_RESPONSE,
+      workspacePath: '/tmp/named-app',
+      workspaceSource: 'message',
+      workspaceNotice: 'Workspace: /tmp/named-app — taken from the folder the user named in their message.',
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), {
+      target: { value: `create the app in /tmp/named-app` },
+    });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    await waitFor(() => expect(attach).toHaveBeenCalledWith('/tmp/named-app'));
+    expect(screen.queryByTestId('chat-scratch-notice')).toBeNull();
+  });
+});

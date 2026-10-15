@@ -528,6 +528,43 @@ export class QuotaLedger {
   }
 
   /**
+   * Is this provider parked PROVIDER-WIDE right now — the shared-quota verdict
+   * rather than one model's own limit?
+   *
+   * WHY A READER, given `isExhausted()` already exists. `isExhausted(provider)`
+   * answers "is `provider/default` cooling down", which is a DIFFERENT question:
+   * a per-model park (`parkModel`, scope `'model'`) leaves the `default` entry
+   * alone, so `isExhausted` correctly says "no" while one model rests — and says
+   * "yes" only for a provider-level entry. This asks the question the failover
+   * walk needs: has the whole provider been escalated out? Same rule
+   * `getRouterQuotaStatus()` uses for its provider-level feed (`scope`
+   * `'provider'`, legacy entries counted as provider-scoped because before
+   * per-model parks only `parkProvider` ever wrote a cooldown), so the walk and
+   * the router's own quota feed can never disagree about what "parked" means.
+   *
+   * That disagreement was measured (trace-1792068452654-3e1w8d): gemini had an
+   * ACTIVE provider-wide park in this ledger (`scope: "provider"`, `cooldownUntil`
+   * 16:48) while the chat failover walk kept resolving gemini's models one after
+   * another — because the walk only consulted the session's own exclusion map,
+   * never the ledger the escalation writes. The ladder only ended at
+   * `gemma-4-26b-a4b-it` (its weakest rung) with healthy `deepseek` pairs sitting
+   * unused. Read-only and best-effort: a state read must never throw into a turn.
+   */
+  isProviderParked(provider: string): boolean {
+    try {
+      const now = Date.now();
+      for (const entry of Object.values(this.state.entries)) {
+        if (entry.provider !== provider) continue;
+        if (entry.cooldownUntil <= now) continue;
+        if ((entry.scope ?? 'provider') === 'provider') return true;
+      }
+    } catch {
+      // Unknown state reads as "not parked" — the walk's own evidence governs.
+    }
+    return false;
+  }
+
+  /**
    * Effective quota limits for a provider from config (`routing.quota`).
    */
   private limitsFor(configManager: ConfigManager | undefined, provider: string): QuotaLimit | undefined {

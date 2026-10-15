@@ -67,6 +67,7 @@ import { resolveProvider } from '../../src/cli/router.js';
 // already resets both for the same reason.
 import { resetModelRegistry } from '../../src/learning/model-registry.js';
 import { resetProviderFallback } from '../../src/learning/provider-fallback.js';
+import { getQuotaLedger, resetQuotaLedger } from '../../src/learning/quota-ledger.js';
 import { isAgenticCapableModel } from '../../src/learning/model-harness.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -90,6 +91,10 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
     process.env.BUFF_MEMORY_DIR = memoryDir;
     resetModelRegistry();
     resetProviderFallback();
+    // The quota ledger persists to the same throwaway memory dir, and the tests
+    // below park providers in it: reload it per test so one test's park cannot
+    // decide the next one's walk.
+    resetQuotaLedger();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'success').mockImplementation(() => {});
@@ -103,6 +108,22 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
     // so simulate an interactive terminal by default.
     Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
   });
+
+  /**
+   * Run this test as a surface with NOBODY to ask: no stdin TTY, no injected
+   * `askUser`.
+   *
+   * The pinned rule is "wait on the pin, then let the USER decide", so on an
+   * interactive surface a pinned turn asks rather than following the fallback
+   * walk. The tests below are about the WALK — its model selection, its session
+   * bookkeeping, its credential skipping — so they pin their surface to the one
+   * where the walk still governs: nobody to ask. That is also the documented
+   * contract for such a surface (see `pinnedEscalation`'s `unattended` outcome),
+   * so this is the case an unattended deployment actually runs.
+   */
+  function unattended(): void {
+    Object.defineProperty(process.stdin, 'isTTY', { value: undefined, configurable: true });
+  }
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -262,6 +283,13 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
   it('S3: does NOT salvage a rejected REAL tool call (only suggest_followups)', async () => {
     // A 400 whose intended call is a real pipeline tool (build) must surface
     // the error — the prose around it is "I'll build…", not the deliverable.
+    //
+    // UNATTENDED on purpose: a PINNED turn with someone to ask now waits on its
+    // pair and puts the choice to the user first (see `pinnedEscalation` and the
+    // "a pinned turn asks" suite below). These five walk tests are about what the
+    // WALK does once it runs, so they run on the path where it still governs — no
+    // surface to ask. NOTHING about their assertions changed.
+    unattended();
     const errorBody =
       `{"error":{"code":"tool_use_failed","failed_generation":"I will implement the login form. <function=build [{\\"goal\\": \\"login\\"}]</function>"}}`;
     const generateTools = vi.fn().mockRejectedValue(new Error(`Tool-calling API error (400): ${errorBody}`));
@@ -329,6 +357,7 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
    * dead.
    */
   it('non-auto fallback calls the fallback provider with ITS OWN model, not the primary id', async () => {
+    unattended();
     const attempts: Array<{ name: string; model?: string }> = [];
     const generate = vi.fn().mockImplementation(function (
       this: { name: string },
@@ -388,6 +417,7 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
    * the model of the next request.
    */
   it('a FAILED fallback candidate does not overwrite the session model (poisoned next step)', async () => {
+    unattended();
     const attempts: Array<{ name: string; model?: string }> = [];
     const generate = vi.fn().mockImplementation(function (
       this: { name: string },
@@ -437,6 +467,7 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
   });
 
   it('does not waste the walk on a fallback provider the user has no credential for', async () => {
+    unattended();
     const attempts: string[] = [];
     const generate = vi.fn().mockImplementation(function (this: { name: string }) {
       attempts.push(this.name);
@@ -519,6 +550,7 @@ describe('tool-loop auto failover — promptOnFailover confirmation', () => {
   });
 
   it('still fails over on a TRANSIENT error (transport switch is only for tool-incapability)', async () => {
+    unattended();
     const generateTools = vi.fn().mockRejectedValue(new Error('429 rate limit exceeded'));
     const generate = vi.fn().mockResolvedValue('should not be reached on the same candidate');
     const cmd = new ChatCommand() as any;
@@ -817,6 +849,117 @@ describe('pinned + strict — waiting is bounded', () => {
 // PAIR-scoped (the ledger parks the MODEL; only
 // `PROVIDER_RATE_LIMIT_ESCALATION_MODELS` distinct models 429ing escalates to a
 // provider) — the walk was the one place contradicting it.
+// ─── The pin rule is the PIN's, not strict mode's ──────────────────────────
+//
+// Measured (trace-1792068695325-42wb1j): the chat pinned `deepseek/deepseek-v4-pro`
+// with its "this model only" lock on, but the lock was not persisted with the pin,
+// so the turn ran as a NON-strict pin — and the non-strict path substituted with no
+// question asked. The pair returned nothing twice, the turn moved to
+// `groq/openai/gpt-oss-120b`, and from there to `local/deepseek-coder:latest`, which
+// answered it. The user's own instruction was never in force. So waiting and asking
+// is the PIN's behaviour; strict mode only decides what happens where NOBODY can be
+// asked, and an unattended non-strict pin keeps the documented fallback walk.
+describe('a pinned turn asks before leaving the pin — strict or not', () => {
+  it('a NON-strict pin waits on its own pair and asks, instead of substituting', async () => {
+    const { cmd, session, pinnedGenerate } = setupPinned();
+    const switchGenerate = vi.fn().mockResolvedValue('answer from the switched model');
+    vi.mocked(resolveProvider).mockImplementation(
+      (_cm: any, type: string) =>
+        ({
+          type,
+          provider: {
+            name: type === 'groq' ? 'Groq' : 'Gemini',
+            generate: switchGenerate,
+            isAvailable: vi.fn().mockResolvedValue(true),
+          },
+        }) as never,
+    );
+    (cmd as any).pinAlternatives = () => ({
+      sameClass: [{ provider: 'gemini', model: 'gemini-2.0-flash' }],
+      crossClass: [],
+    });
+
+    const askUser = vi.fn().mockResolvedValue({ index: 1, answer: 1 });
+    const callModel = (cmd as any).buildToolCallModel(
+      'explain this',
+      session,
+      {},
+      { auto: false },
+      undefined,
+      undefined,
+      undefined,
+      askUser,
+    );
+
+    vi.useFakeTimers();
+    try {
+      // NO `withStrictModel` wrapper on purpose: the lock is OFF, which is the
+      // exact state that produced the silent substitution.
+      const pending = callModel([{ role: 'user', content: 'explain this' }], []);
+      await vi.advanceTimersByTimeAsync(600_000);
+      const result = await pending;
+
+      // The pin was retried on its OWN pair before anyone was asked…
+      expect(pinnedGenerate.mock.calls.length).toBeGreaterThanOrEqual(2);
+      // …the choice was put to the user, naming the pin…
+      expect(askUser).toHaveBeenCalledTimes(1);
+      const [question] = askUser.mock.calls[0] as [string];
+      expect(question).toMatch(/NOT sent this to another model/);
+      expect(question).toContain('groq/llama-3.3-70b-versatile');
+      // …and only their answer served the turn.
+      expect(result.content).toBe('answer from the switched model');
+      expect(session.type).toBe('gemini');
+      expect(session.model).toBe('gemini-2.0-flash');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a NON-strict pin with nobody to ask keeps the documented walk, and never waits', async () => {
+    const { cmd, session, pinnedGenerate } = setupPinned();
+    // A rate-limit is the kind the walk treats as retryable while the transient
+    // retry deliberately does NOT re-ask it, so the pin is asked exactly once
+    // before the walk takes over (the point of the assertion below).
+    pinnedGenerate.mockRejectedValue(new Error('429: rate limit exceeded'));
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const fallbackGenerate = vi.fn().mockResolvedValue('answered by the fallback provider');
+    vi.mocked(resolveProvider).mockImplementation(
+      (_cm: any, type: string) =>
+        ({
+          type,
+          provider: {
+            name: type === 'groq' ? 'Groq' : 'Gemini',
+            generate: type === 'groq' ? pinnedGenerate : fallbackGenerate,
+            isAvailable: vi.fn().mockResolvedValue(true),
+          },
+        }) as never,
+    );
+    cmd.configManager = {
+      getAll: () => ({
+        fallback: { enabled: true, providers: ['gemini'], maxAttempts: 3, retryDelayMs: 0 },
+        providers: { gemini: { model: 'gemini-2.0-flash' } },
+      }),
+      hasRequiredCredentials: (p: string) => p === 'gemini',
+      getProviderConfig: (p: string) => ({ type: p, config: {} }),
+    };
+
+    // Nobody to ask: no injected askUser, no TTY.
+    Object.defineProperty(process.stdin, 'isTTY', { value: undefined, configurable: true });
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: false });
+    const result = await callModel([{ role: 'user', content: 'explain this' }], []);
+
+    // The walk ran and answered…
+    expect(result.content).toBe('answered by the fallback provider');
+    // …immediately: the pin was asked ONCE, and the grace window was never entered.
+    // That window exists to bridge the wait to a QUESTION; with no surface to put
+    // one to, sitting through it would delay a worker two minutes to reach the very
+    // same walk (`pinnedEscalation`'s `unattended` outcome).
+    expect(pinnedGenerate).toHaveBeenCalledTimes(1);
+    const printed = warn.mock.calls.map((c) => String(c[0] ?? '')).join('\n');
+    expect(printed).not.toMatch(/Nothing has been sent to another model/);
+  });
+});
+
 describe('tool-loop auto failover — pair-scoped walking', () => {
   /** A route whose provider can generate, so the attempt either answers or throws. */
   function route(type: string, name: string, model: string, generate: ReturnType<typeof vi.fn>) {
@@ -861,6 +1004,42 @@ describe('tool-loop auto failover — pair-scoped walking', () => {
     expect(session.model).toBe('openai/gpt-oss-120b');
     expect(cmd.routeMessageAuto).toHaveBeenCalledTimes(1);
     expect(generateMock).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * The QUOTA LEDGER's provider-wide park is evidence the walk must honour.
+   *
+   * Measured (trace-1792068452654-3e1w8d). Several of gemini's models rate-limited,
+   * so the shared bookkeeping escalated to `parkProvider` — the ledger carried
+   * gemini with `scope: 'provider'` from 12:48:23 until 16:48 — and the walk, which
+   * read only the SESSION map, kept resolving gemini's models anyway. It spent its
+   * whole attempt budget descending gemini's own ladder, ended on its weakest rung
+   * (`gemma-4-26b-a4b-it`, 4B active) and failed there, while verified
+   * `deepseek/deepseek-v4-pro` and `deepseek-flash` sat unused. The provider-wide
+   * verdict and the router's own quota feed are the same fact; they must be read
+   * from one place.
+   */
+  it('leaves a provider the quota ledger has parked PROVIDER-WIDE, instead of walking its ladder', async () => {
+    const generateMock = vi.fn().mockRejectedValue(new Error('429: rate limit exceeded'));
+    const cmd = new ChatCommand() as any;
+    // The walk's next pick would still be gemini — the ledger is what forbids it.
+    cmd.routeMessageAuto = vi.fn().mockResolvedValue(route('gemini', 'Gemini', 'gemini-2.5-flash', generateMock));
+    const session = {
+      type: 'gemini',
+      provider: { name: 'Gemini', generate: generateMock, isAvailable: vi.fn().mockResolvedValue(true) },
+      model: 'gemini-3.1-flash-lite',
+    };
+
+    // Gemini's SHARED quota is out: several of its models rate-limited, so the
+    // escalation parks the provider (not just the model that 429ed).
+    getQuotaLedger().parkProvider('gemini', Date.now() + 60_000, 'rate-limit (shared across models)');
+
+    const callModel = (cmd as any).buildToolCallModel('explain this', session, {}, { auto: true });
+    await expect(callModel([{ role: 'user', content: 'explain this' }], [])).rejects.toThrow();
+
+    // The already-parked provider is excluded from the walk's FIRST routable call,
+    // so its siblings are never offered again.
+    expect(cmd.routeMessageAuto.mock.calls[0][1]).toContain('gemini');
   });
 
   it('leaves the PROVIDER behind when the failure is provider-scoped (a dead key)', async () => {

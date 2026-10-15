@@ -32,6 +32,7 @@ import {
   type PlanStoreLike,
 } from '../tools/plan-store.js';
 import { getSessionGrant, clearSessionGrant } from '../learning/session-grant.js';
+import { withStrictModel } from '../inference/route-resolver.js';
 
 /** One stored turn in a chat session. */
 export interface ChatTurn {
@@ -269,6 +270,49 @@ export interface ChatSessionRecord {
    */
   pinnedProvider?: string;
   pinnedModel?: string;
+  /**
+   * P8b — the STRICT half of that pin: "this model or nothing".
+   *
+   * The pin and the strict flag are ONE decision — the client sends them
+   * together and the engine reads them together (a strict turn refuses to
+   * substitute; a mere pin still allows auto-routing to take over). Persisting
+   * only the pin was measured live (trace-1792068695325-42wb1j): the chat came
+   * back pinned to `deepseek/deepseek-v4-pro` with strict silently OFF, so the
+   * engine handed the turn to `local/deepseek-coder:latest` and the user's own
+   * "this model only" instruction was never in force. Stored beside the pin,
+   * cleared with it when Auto is chosen (`undefined` = off, never `false`, so a
+   * record written before this field existed reads as off).
+   */
+  pinnedStrict?: boolean;
+}
+
+/**
+ * The PIN a request carries, in record shape — `undefined` when the client sent
+ * no model (an Auto turn, which clears any stored pin).
+ *
+ * P8b — provider, model and the strict half are read as ONE value because they
+ * are one decision: the chat's picker sets the pair, its lock sets `strict`, and
+ * the engine consumes them together (a strict turn refuses to substitute; a
+ * bare pin still lets auto-routing take over). Writing them through separate
+ * code paths is exactly how the pair survived a reload while the lock did not
+ * (trace-1792068695325-42wb1j: pinned to `deepseek/deepseek-v4-pro`, strict
+ * silently off, turn handed to `local/deepseek-coder:latest`).
+ *
+ * `pinnedStrict: false` is never stored — the absence of the field IS "off", so
+ * a record written before the field existed reads the same as one where the
+ * user turned the lock off.
+ */
+function pinOf(opts: {
+  provider?: string;
+  model?: string;
+  strict?: boolean;
+}): { pinnedProvider: string; pinnedModel: string; pinnedStrict?: boolean } | undefined {
+  if (!opts.provider || !opts.model) return undefined;
+  return {
+    pinnedProvider: opts.provider,
+    pinnedModel: opts.model,
+    ...(opts.strict === true ? { pinnedStrict: true } : {}),
+  };
 }
 
 /** P4 — the sidebar summary shape for `GET /api/sessions`. */
@@ -526,7 +570,7 @@ export class ChatConsole {
         const data = JSON.parse(raw) as { sessions?: Record<string, ChatSessionRecord> };
         for (const [id, rec] of Object.entries(data?.sessions ?? {})) {
           if (typeof id !== 'string' || !id || !rec || !Array.isArray(rec.turns)) continue;
-          this.sessions.set(id, { turns: rec.turns, title: String(rec.title ?? ''), createdAt: Number(rec.createdAt) || 0, updatedAt: Number(rec.updatedAt) || 0, ...(typeof rec.projectPath === 'string' && rec.projectPath ? { projectPath: rec.projectPath } : {}), ...(Array.isArray(rec.followups) && rec.followups.length > 0 ? { followups: normalizeFollowups(rec.followups) } : {}), ...(typeof rec.pinnedProvider === 'string' && rec.pinnedProvider && typeof rec.pinnedModel === 'string' && rec.pinnedModel ? { pinnedProvider: rec.pinnedProvider, pinnedModel: rec.pinnedModel } : {}) });
+          this.sessions.set(id, { turns: rec.turns, title: String(rec.title ?? ''), createdAt: Number(rec.createdAt) || 0, updatedAt: Number(rec.updatedAt) || 0, ...(typeof rec.projectPath === 'string' && rec.projectPath ? { projectPath: rec.projectPath } : {}), ...(Array.isArray(rec.followups) && rec.followups.length > 0 ? { followups: normalizeFollowups(rec.followups) } : {}),        ...(typeof rec.pinnedProvider === 'string' && rec.pinnedProvider && typeof rec.pinnedModel === 'string' && rec.pinnedModel ? { pinnedProvider: rec.pinnedProvider, pinnedModel: rec.pinnedModel } : {}), ...(rec.pinnedStrict === true ? { pinnedStrict: true } : {}) });
         }
       } catch {
         /* unreadable store — start empty rather than crash the dashboard */
@@ -696,6 +740,7 @@ export class ChatConsole {
         ...(existing?.projectPath ? { projectPath: existing.projectPath } : {}),
         ...(existing?.followups && existing.followups.length > 0 ? { followups: existing.followups } : {}),
         ...(existing?.pinnedProvider && existing.pinnedModel ? { pinnedProvider: existing.pinnedProvider, pinnedModel: existing.pinnedModel } : {}),
+        ...(existing?.pinnedStrict === true ? { pinnedStrict: true } : {}),
       });
       this.persist();
     } catch {
@@ -761,6 +806,14 @@ export class ChatConsole {
       worktree?: boolean;
       keepWorktree?: boolean;
       resume?: string | boolean;
+      /**
+       * P8b — the STRICT half of a pin (the chat's "pin this model only"
+       * switch). Scoped to the turn by the server's `withStrictModel`; carried
+       * here as well so the CONVERSATION can remember the choice and so a turn
+       * this console starts on its own (the deferred retry) honours the pin the
+       * user set rather than re-deriving it. Absent = off.
+       */
+      strict?: boolean;
     } = {},
   ): Promise<ChatAnswerResult> {
     const clean = (message || '').trim();
@@ -793,10 +846,10 @@ export class ChatConsole {
       // only includes them when a model is pinned (Auto sends neither), so
       // their absence on a recorded turn means "Auto" and CLEARS any pin. A
       // non-recorded turn (the deferred-retry broker) never touches the pin.
-      const pinnedPatch =
-        opts.provider && opts.model
-          ? { pinnedProvider: opts.provider, pinnedModel: opts.model }
-          : {};
+      // P8b — the strict flag rides WITH the pin: both are set together and
+      // both are dropped together, so "off" is the absence of the field rather
+      // than a stored `false` that could outlive the pin it belongs to.
+      const pinnedPatch = pinOf(opts) ?? {};
       this.sessions.set(sessionId, {
         turns: history,
         title: existing?.title ?? '',
@@ -807,6 +860,22 @@ export class ChatConsole {
         ...pinnedPatch,
       });
     }
+    // ══ P8b — WHICH PIN THIS TURN ACTUALLY OBEYS ═══════════════════════════
+    // The request's pin wins. A turn with NO pin in the request is Auto for a
+    // recorded turn (and clears the stored pin), but a turn this console starts
+    // itself — the deferred-retry broker, `recordTurn: false` — carries no pin
+    // of its own and must therefore inherit the one the conversation is already
+    // pinned to. Otherwise a retry of a strictly-pinned turn silently ran
+    // AUTO-routed, which is the same defect class as the strict flag itself
+    // being forgotten (trace-1792068695325-42wb1j).
+    const requestedPin = pinOf(opts);
+    const activePin = requestedPin
+      ? { provider: requestedPin.pinnedProvider, model: requestedPin.pinnedModel, strict: requestedPin.pinnedStrict === true }
+      : recordTurn
+        ? undefined
+        : existing?.pinnedProvider && existing.pinnedModel
+          ? { provider: existing.pinnedProvider, model: existing.pinnedModel, strict: existing.pinnedStrict === true }
+          : undefined;
     this.busy.add(sessionId);
     // The turn's own start, so a client that gave up waiting can say how old the
     // wait actually is (see `turnStartedAt`).
@@ -829,8 +898,10 @@ export class ChatConsole {
       this.turnTelemetry?.beginLoopTurn(
         `${sessionId}-${now}`,
         clean,
-        opts.provider,
-        opts.model,
+        // The pin the turn actually obeys (a deferred retry inherits the stored
+        // one), so the telemetry names the pair the engine was handed.
+        activePin?.provider ?? opts.provider,
+        activePin?.model ?? opts.model,
       );
     } catch {
       /* telemetry must never break the turn */
@@ -840,7 +911,13 @@ export class ChatConsole {
       // WS1 — the findings this turn records, collected from the engine's
       // `onFinding` seam (the same event the CLI and the gateway hear).
       const findings: import('../findings/verdicts.js').WireFinding[] = [];
-      const answer = await engine.answerOnce(clean, {
+      // P8b — the pin's STRICT half is enforced around the engine call itself,
+      // not only by the server's route handler: a turn this console starts on its
+      // own (the deferred retry) never passes through that handler, so without
+      // this wrap a strictly-pinned conversation could still be substituted on a
+      // background retry. Nesting inside the server's own `withStrictModel` is
+      // harmless — the inner scope wins and carries the same value.
+      const answer = await withStrictModel(activePin?.strict === true, () => engine.answerOnce(clean, {
         // P4 — the cancel signal rides into the turn.
         signal: controller.signal,
         // WS1 — a recorded finding, forwarded live and kept for the result.
@@ -863,8 +940,8 @@ export class ChatConsole {
         worktree: opts.worktree,
         keepWorktree: opts.keepWorktree,
         resume: opts.resume,
-        ...(opts.provider ? { provider: opts.provider } : {}),
-        ...(opts.model ? { model: opts.model } : {}),
+        ...(activePin ? { provider: activePin.provider } : {}),
+        ...(activePin ? { model: activePin.model } : {}),
         // P5 — a followup chip continues the previous execution.
         ...(continuation ? { continuation: true } : {}),
         // P3 — project context rides into the turn (the engine injects it as
@@ -965,7 +1042,7 @@ export class ChatConsole {
           });
         },
         planStore: this.planStoreFor(sessionId),
-      });
+      }));
       // P4 — a cancelled turn is DISCARDED entirely: no session write, no
       // persist, no status:done, no events (the client already walked away
       // and may have started a new turn). abort() released busy immediately.
@@ -1000,8 +1077,9 @@ export class ChatConsole {
           ...(opts.projectPath ? { projectPath: opts.projectPath } : (existing?.projectPath ? { projectPath: existing.projectPath } : {})),
           ...(nextFollowups.length > 0 ? { followups: nextFollowups } : {}),
           // P8 — the completed turn keeps the pin (and an Auto turn clears it),
-          // the same rule the pre-turn record write applies.
-          ...(opts.provider && opts.model ? { pinnedProvider: opts.provider, pinnedModel: opts.model } : {}),
+          // the same rule the pre-turn record write applies. P8b — strict rides
+          // with it.
+          ...(pinOf(opts) ?? {}),
         });
         this.persist();
       }

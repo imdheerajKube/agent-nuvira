@@ -159,3 +159,52 @@ describe('resolveTurnWorkspace — the priority order', () => {
     expect(none.unscoped).toBe(true);
   });
 });
+
+/**
+ * The SCRATCH rung — the last one before "no workspace".
+ *
+ * Added for the reported dead end: a user asked for a file and no project folder
+ * was attached, and the turn refused with a folder request. A produce ask can be
+ * served by a temporary folder; a READ ask cannot (an empty folder holds none of
+ * the work it is about), which is why the rung is opt-in — the caller passes the
+ * path only for `workspaceNeedForMissingFolder(...) === 'produce'` — and why the
+ * notice it carries is the loudest of the four.
+ */
+describe('the scratch rung', () => {
+  let scratch: string;
+
+  beforeAll(() => {
+    scratch = join(root, 'scratch-app');
+    mkdirSync(scratch, { recursive: true });
+  });
+
+  it('is used when nothing better exists, and reads as TEMPORARY', () => {
+    const r = resolveTurnWorkspace({ scratchPath: scratch, message: 'create a react app' });
+    expect(r).toMatchObject({ path: scratch, source: 'scratch', unscoped: false });
+    expect(r.notice).toMatch(/TEMPORARY workspace/);
+    expect(r.notice).toContain(scratch);
+    // The caption the surface shows carries the same fact.
+    expect(formatWorkspaceNoticeText(r)).toBe(r.notice);
+  });
+
+  it('is never preferred over a folder the user chose or named', () => {
+    expect(resolveTurnWorkspace({ attachedPath: attached, scratchPath: scratch }).source).toBe('attached');
+    expect(resolveTurnWorkspace({ sessionPath: sessionDir, scratchPath: scratch }).source).toBe('session');
+    expect(resolveTurnWorkspace({ message: `build it in ${named}`, scratchPath: scratch }).source).toBe(
+      'message',
+    );
+    expect(resolveTurnWorkspace({ configuredCwd: root, scratchPath: scratch }).source).toBe('default');
+  });
+
+  it('is skipped when the caller does not offer it — the READ ask keeps the folder prompt', () => {
+    const r = resolveTurnWorkspace({ message: 'assess this project' });
+    expect(r).toMatchObject({ source: 'none', unscoped: true });
+    expect(formatWorkspaceNoticeText(r)).toMatch(/UNSCOPED/);
+  });
+
+  it('a scratch path that no longer exists degrades to UNSCOPED rather than to a broken path', () => {
+    const r = resolveTurnWorkspace({ scratchPath: join(root, 'gone-scratch') });
+    expect(r.source).toBe('none');
+    expect(r.unscoped).toBe(true);
+  });
+});

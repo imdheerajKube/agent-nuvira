@@ -8237,6 +8237,24 @@ details[open] > summary .chat-card-caret {
   gap: 10px;
 }
 
+/*
+ * The TEMPORARY-workspace banner (Cluster G → the scratch rung). Deliberately
+ * louder than a routing notice and laid out to wrap: it carries two real actions
+ * (keep this folder, or attach one of your own), and an action the user cannot
+ * read is an action they will not take.
+ */
+.chat-scratch-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chat-scratch-path {
+  font-size: 0.9em;
+  word-break: break-all;
+}
+
 .chat-routing-notice-dismiss {
   background: transparent;
   border: none;

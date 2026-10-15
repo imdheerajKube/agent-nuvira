@@ -3684,3 +3684,109 @@ describe('tool loop — empty-response blip patience', () => {
     expect(emptyResponsePatienceMs).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * The WhatsApp poem (trace-1792061511046-jdhgyy, 2026-10-15) — the defect these
+ * tests pin, and the two rules that close it.
+ *
+ * A WhatsApp turn asked for a Hindi poem. The model delivered it, complete, and
+ * closed with "Want me to make it shorter, more romantic, or in a different style
+ * (shayari, gazal, free verse)?" — an OFFER of optional follow-ups. Two facts then
+ * lined up wrongly: `requestAuthorizesWrites` read "write a poem" as authorization
+ * for FILE work (a creation verb on a file-shaped noun), and
+ * `detectPermissionSeeking` matched the closing offer. G13 therefore fired and
+ * cleared the step because no tool had succeeded yet — deleting the deliverable
+ * with the question. The nudge spent a second model call, whose reply was a
+ * dangling fragment ("Or perhaps help you draft a message to send to her?"), and
+ * THAT is what the sender received. The poem never left the server.
+ *
+ * The two rules: a short authored deliverable is not file work (it is prose whose
+ * text IS the answer), and a gate may never delete an answer it judged.
+ */
+describe('a delivered answer is never deleted, and a short poem is not file work', () => {
+  /** The ask, verbatim from the trace. */
+  const POEM_ASK =
+    'I just said Hi , Can you write a poem on following subject \n' +
+    'Me( Dheeraj - Dev Putra ) writing a love poem while missing her as she is in another room ' +
+    'and i am working , describing her beautiful and me missing her in hindi ?';
+  /** The delivered step, verbatim from the trace (abridged body, real closing). */
+  const POEM =
+    "Here's a poem for you, Dheeraj (Dev Putra) — written from your desk, while she's just a room away.\n\n" +
+    '**बस एक कमरे की दूरी**\n\n' +
+    'दीवार के उस पार तुम हो,\nऔर मैं यहाँ काम में डूबा,\nपर हर शब्द जो लिखता हूँ,\nबस तेरे ही नाम में डूबा।\n\n' +
+    '— देव पुत्र (तेरे प्यार में)\n\n' +
+    'Want me to make it shorter, more romantic, or in a different style (shayari, gazal, free verse)?';
+
+  it('leaves the poem ask alone — no permission nudge, no step lost, the poem delivered verbatim', async () => {
+    const deps = mockDeps([{ content: POEM, toolCalls: [] }]);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: POEM_ASK }],
+      context: ctx,
+      deps,
+      onTraceEvent: () => {},
+    });
+
+    // ONE model call: the nudge that spent the second one must not fire.
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+    // The poem is the answer — including its closing offer, which is part of what
+    // the user reads, not a stall to be scrubbed.
+    expect(result.content).toBe(POEM);
+    expect(result.content).toContain('बस एक कमरे की दूरी');
+    expect(result.content).toContain('Want me to make it shorter');
+    expect(result.steps).toBe(1);
+  });
+
+  it('records the permission gate for real file work but KEEPS the work it judged', async () => {
+    // The same shape of step for an ask that genuinely authorized file work: a
+    // plan, then the question. The gate fires (this is the case it exists for),
+    // and the plan must survive it — only the trailing question is cut.
+    const plan = 'Plan: 1. package.json 2. src/server.ts 3. src/app.tsx — a booking app skeleton.';
+    const deps = mockDeps([
+      { content: `${plan}\n\nDo you want me to create the full project structure?`, toolCalls: [] },
+      { content: 'Or perhaps you want something else?', toolCalls: [] },
+    ]);
+    const events: LoopTraceEvent[] = [];
+    const sink = (e: LoopTraceEvent): void => {
+      events.push(e);
+    };
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'create the project files for a booking app' }],
+      context: ctx,
+      deps,
+      requireDeliverable: false,
+      // The ZERO-ACTION gate owns its own question ("the request directed work and
+      // none was done") and deliberately refuses to deliver a promise as the
+      // answer; this test is about G13's judgement, so it is switched off here
+      // rather than made to share the turn.
+      requireAction: false,
+      onTraceEvent: sink,
+    });
+
+    const gate = events.find((e) => e.kind === 'gate' && e.gate === 'permission');
+    expect(gate).toBeTruthy();
+    expect(deps.callModel).toHaveBeenCalledTimes(2);
+    // The DELIVERABLE is what the user gets, not the dangling follow-up fragment:
+    // the plan survives, and only the trailing question is cut from it.
+    expect(result.content).toContain('booking app skeleton');
+    expect(result.content).not.toContain('Do you want me to create the full project structure?');
+  });
+
+  it('does not flag a chat poem as an undelivered artifact', async () => {
+    // The narrow half of the authored-artifact rule: "write a poem" asks for the
+    // TEXT, so a turn that wrote no file has not failed to deliver anything.
+    const shortPoem = 'Rain on the tin roof,\na kettle answers it.\n— two lines, and done.';
+    const deps = mockDeps([{ content: shortPoem, toolCalls: [] }]);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'write a poem about rain' }],
+      context: ctx,
+      deps,
+    });
+
+    expect(deps.callModel).toHaveBeenCalledTimes(1);
+    expect(result.content).toBe(shortPoem);
+    expect(result.undeliveredArtifact).toBeFalsy();
+  });
+});

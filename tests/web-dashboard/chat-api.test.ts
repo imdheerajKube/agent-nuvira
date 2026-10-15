@@ -1286,13 +1286,73 @@ describe('/api/projects — P3 project attach', () => {
     expect((call?.opts as { projectPath?: string } | undefined)?.projectPath).toBe(fixture);
   });
 
+  it('a PRODUCE ask with no folder gets a TEMPORARY workspace, not a refusal and not an unscoped cwd', async () => {
+    // This test used to assert the opposite — `unscopedWorkspace: true` plus an
+    // UNSCOPED notice for "create a react app" — because a produce ask with no
+    // project had nowhere to put its file and the only protection available was
+    // refusing at the WRITE. That refusal was the reported misery ("agent keep
+    // going mad and confused when project folder not attached"): the user asked
+    // for a file, the agent asked for a folder. The scratch rung answers it
+    // instead — a real, temporary folder, named to the user, with the offer to
+    // keep it — so the turn is scoped and no write is refused.
+    const res = await authedFetch('/api/chat', 'POST', {
+      sessionId: 'scratch-turn',
+      message: 'create a react app',
+      projectPath: null,
+    });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as {
+      needsProject?: boolean;
+      workspaceNotice?: string;
+      workspacePath?: string;
+      workspaceSource?: string;
+    };
+    expect(d.needsProject).toBeUndefined();
+    expect(d.workspaceSource).toBe('scratch');
+    expect(d.workspaceNotice).toMatch(/TEMPORARY workspace/i);
+    // A REAL folder on disk, not a label: the turn must be able to write there.
+    expect(d.workspacePath && existsSync(d.workspacePath)).toBe(true);
+
+    const call = engine.calls.find((c) => c.message === 'create a react app');
+    const opts = call?.opts as { projectPath?: string; unscopedWorkspace?: boolean } | undefined;
+    expect(opts?.projectPath).toBe(d.workspacePath);
+    expect(opts?.unscopedWorkspace).toBeUndefined();
+  });
+
+  it('an ISOLATED produce ask with no folder asks for a folder instead of a scratch one', async () => {
+    // Isolation's subject is a REAL project: the turn runs in a throwaway copy
+    // and reports the diff against the commit it started from, so a scratch
+    // folder — which is not a repository and has no commit — cannot serve it.
+    // The turn therefore does not get one, and since there is no folder at all
+    // the user is asked for the folder that isolation actually needs (rather than
+    // the server isolating a directory of its own).
+    const res = await authedFetch('/api/chat', 'POST', {
+      sessionId: 'isolated-scratch-turn',
+      message: 'create a vue app',
+      projectPath: null,
+      worktree: true,
+    });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as {
+      needsProject?: boolean;
+      workspaceSource?: string;
+      workspacePath?: string;
+    };
+    expect(d.needsProject).toBe(true);
+    expect(d.workspaceSource).toBeUndefined();
+    expect(d.workspacePath).toBeUndefined();
+    // No model turn: a request for a folder is not an answer about a wrong tree.
+    expect(engine.calls.some((c) => c.message === 'create a vue app')).toBe(false);
+  });
+
   it('marks a turn with NO workspace unscoped, so a write asks instead of guessing', async () => {
-    // An ask with no project noun and no file noun slips past the guard (it must —
-    // gating prose was the earlier bug), so the protection has to be at the WRITE.
-    // The flag is what carries "this cwd is nobody's" into the tool context.
+    // The unscoped case still exists, and still has to be marked: an ask that
+    // needs no folder at all (here, an ordinary question) keeps the old behaviour
+    // — no folder is claimed, and a write made anyway asks where to put the file
+    // rather than landing in the dashboard process's own cwd.
     const res = await authedFetch('/api/chat', 'POST', {
       sessionId: 'unscoped-turn',
-      message: 'create a react app',
+      message: 'summarise what a repository is, in two lines',
       projectPath: null,
     });
     expect(res.status).toBe(200);
@@ -1300,7 +1360,7 @@ describe('/api/projects — P3 project attach', () => {
     expect(d.needsProject).toBeUndefined();
     expect(d.workspaceNotice).toMatch(/UNSCOPED/);
 
-    const call = engine.calls.find((c) => c.message === 'create a react app');
+    const call = engine.calls.find((c) => c.message === 'summarise what a repository is, in two lines');
     expect((call?.opts as { unscopedWorkspace?: boolean } | undefined)?.unscopedWorkspace).toBe(true);
   });
 

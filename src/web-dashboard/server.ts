@@ -137,6 +137,7 @@ import {
   type ServiceDefinition,
 } from '../config/service-catalog.js';
 import { probeService } from '../config/service-probe.js';
+import { pruneScratchWorkspaces } from '../config/scratch-workspace.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -8412,19 +8413,57 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
        */
       const configuredCwd = resolveDashboardCwd();
       const { resolveTurnWorkspace, formatWorkspaceNoticeText } = await import('./workspace-resolution.js');
+      const { workspaceNeedForMissingFolder } = await import('./workspace-guard.js');
       const sessionProjectPath = chatConsole.get(sessionId)?.projectPath;
-      const workspace = resolveTurnWorkspace({
-        ...(attachedPath ? { attachedPath } : {}),
-        ...(sessionProjectPath ? { sessionPath: sessionProjectPath } : {}),
-        ...(configuredCwd ? { configuredCwd } : {}),
-        message,
-      });
+      /**
+       * The same ladder, asked twice when the last rung is needed.
+       *
+       * WHY TWO PASSES. The scratch folder is a real directory on disk, so it is
+       * only created when the ladder has actually RUN OUT (nothing attached,
+       * nothing named in the message, no configured default) AND the ask needs
+       * somewhere to PUT new work. Creating it eagerly would leave an empty
+       * temporary folder behind on every turn that already had a folder, and
+       * handing it to a READ ask would be the kuttaaddon defect again — an empty
+       * folder cannot answer "assess this project".
+       */
+      const resolveWorkspaceNow = (scratchPath?: string) =>
+        resolveTurnWorkspace({
+          ...(attachedPath ? { attachedPath } : {}),
+          ...(sessionProjectPath ? { sessionPath: sessionProjectPath } : {}),
+          ...(configuredCwd ? { configuredCwd } : {}),
+          message,
+          ...(scratchPath ? { scratchPath } : {}),
+        });
+      let workspace = resolveWorkspaceNow();
+      /**
+       * What this ask needs a folder FOR — `'produce'` is the case a temporary
+       * folder can serve, `'read'` is the case it cannot (and keeps the folder
+       * prompt), `null` is plain chat, which needs none.
+       */
+      const missingWorkspaceNeed = workspace.path ? null : workspaceNeedForMissingFolder(message);
+      if (missingWorkspaceNeed === 'produce') {
+        // The scratch folder is offered through the SAME rule the gateway uses
+        // (`scratchWorkspaceForTurn`), so the two surfaces cannot disagree about
+        // when a temporary folder is the right answer — in particular about an
+        // ISOLATED turn, which a scratch folder can never serve: it has no base
+        // commit to diff against. There, this turn has no folder at all, so it
+        // falls through to the folder request below rather than isolating a
+        // directory the user never chose.
+        const { scratchWorkspaceForTurn } = await import('../config/scratch-workspace.js');
+        const { resolveIsolationRequest } = await import('../tools/worktree.js');
+        const scratch = scratchWorkspaceForTurn({
+          key: sessionId,
+          need: missingWorkspaceNeed,
+          isolationAsked: resolveIsolationRequest({ worktree }).asked,
+        });
+        if (scratch) workspace = resolveWorkspaceNow(scratch);
+      }
       if (workspace.path) {
         projectPath = workspace.path;
         const bundle = getProjectBundle(workspace.path);
         if (bundle) {
           projectContext = formatProjectText(bundle, {
-            source: workspace.source as 'attached' | 'session' | 'message' | 'default',
+            source: workspace.source as 'attached' | 'session' | 'message' | 'default' | 'scratch',
             ...(workspace.notice ? { notice: workspace.notice } : {}),
           });
         }
@@ -8436,25 +8475,23 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
        * needs no caption.
        */
       const workspaceNotice = formatWorkspaceNoticeText(workspace);
-      // No workspace and no configured default: an ask that names a project, or
-      // that produces/consumes files, gets a folder request instead of an answer
-      // about the wrong tree. General chat is unaffected.
-      if (!workspace.path) {
-        const { needsProjectAttachment, projectAttachmentPrompt, projectAttachmentFollowups } =
-          await import('./workspace-guard.js');
-        if (needsProjectAttachment(message)) {
-          writeJson(res, 200, {
-            ok: true,
-            sessionId,
-            content: projectAttachmentPrompt(),
-            followups: projectAttachmentFollowups(),
-            provider: null,
-            model: null,
-            generationFailed: false,
-            needsProject: true,
-          });
-          return;
-        }
+      // Still no workspace: either the ask must READ or CHANGE work that already
+      // exists (a temporary folder holds none of it), or the scratch folder could
+      // not be created. Both are the case for a folder request rather than an
+      // answer about the wrong tree. General chat — `null` — is unaffected.
+      if (!workspace.path && missingWorkspaceNeed !== null) {
+        const { projectAttachmentPrompt, projectAttachmentFollowups } = await import('./workspace-guard.js');
+        writeJson(res, 200, {
+          ok: true,
+          sessionId,
+          content: projectAttachmentPrompt(),
+          followups: projectAttachmentFollowups(),
+          provider: null,
+          model: null,
+          generationFailed: false,
+          needsProject: true,
+        });
+        return;
       }
       // P4 (revised) — a client DISCONNECT no longer cancels the turn. It used
       // to: the server treated `res` close as an abort, which meant a page
@@ -8493,6 +8530,14 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         chatConsole.answer(sessionId, message, {
           provider,
           model,
+          // P8b — the STRICT half of the pin rides into the console so the
+          // CONVERSATION can remember it. `withStrictModel` above scopes it to
+          // this turn, but a conversation whose lock is forgotten between turns
+          // is a pin the user cannot actually rely on: measured live
+          // (trace-1792068695325-42wb1j) the pin survived a reload and the lock
+          // did not, so the engine handed the turn to another model with the
+          // user's "this model only" instruction never in force.
+          strict,
           projectContext,
           projectPath,
           // Cluster G — carry the "no folder attached" state into the turn so a
@@ -8559,7 +8604,12 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         } else if (substituted) {
           routingNotice = `Auto routing took over: this turn ran on ${served} because your pinned ${requested} was not available. To work with ${requested} only, enable strict model mode.`;
         } else if (result.generationFailed === true) {
-          routingNotice = `Your pinned ${requested} could not complete this turn, so auto routing may hand the work to another model. To stay on this model only, enable strict model mode.`;
+          // The turn ran on the pair the user pinned and stopped there. Saying
+          // "auto routing may hand the work to another model" described the old
+          // behaviour (a pinned turn followed the health ranking the moment its
+          // pair returned an error) and would now be a lie: a pin waits on itself
+          // and then asks. See `pinnedEscalation`.
+          routingNotice = `Your pinned ${requested} did not answer, and nothing was sent to another model — the turn stopped instead of substituting. Retry it, or switch models.`;
         }
       }
       // Did the offer we are about to send get a mechanism behind it? The client
@@ -9187,6 +9237,17 @@ export function createDashboardServer(
     } catch {
       handle.ipv6Twin = undefined;
     }
+  }
+
+  // Scratch workspaces are temporary BY DEFINITION, so the ones nobody came back
+  // to are cleaned on boot rather than accumulating in the user's home for the
+  // life of the install (see `pruneScratchWorkspaces`). Best-effort: a failed
+  // prune must never stop the server from coming up.
+  try {
+    const removed = pruneScratchWorkspaces();
+    if (removed > 0) console.log(`  🧹 Removed ${removed} expired scratch workspace(s)`);
+  } catch {
+    /* best-effort */
   }
 
   server.listen(bindPort, bindHost, () => {

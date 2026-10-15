@@ -612,6 +612,52 @@ directory plus every path already attached to the session, with a folder browser
 Choose a project there and the conversation, the file tools, the diff view and the run all operate
 on that directory — the same as starting `nuvira chat` inside it.
 
+### When no folder is attached — what happens, and where a file goes
+
+The console resolves a directory for every turn, in this order, and the response always says which
+one it used when it was not your own attachment:
+
+1. the folder you attached to this chat;
+2. the folder this conversation attached earlier (restored from the session, so a reload does not
+   lose it);
+3. a folder you named in the message — `/Users/you/code/my-app create the app here` is adopted, and
+   attached to the chat for the next turn;
+4. the operator's default (`dashboard.cwd`, set on **Admin → Workspace**), with a visible warning;
+5. **a TEMPORARY workspace**, for an ask that produces something. See below.
+
+Rung 5 exists because a request to CREATE something with nothing attached used to be refused with a
+folder prompt — which, for a poem or a script, is a dead end the user did not ask for. A produce ask
+therefore runs in a real, temporary folder and is told so plainly:
+
+```
+🗂️ No folder was attached, so this turn used a temporary workspace: ~/.nuvira/workspace/chat-1a2b
+   [✓ Use as my project path]  [📁 Attach my own folder]  [✕]
+```
+
+- **It is never adopted behind your back.** Nothing is attached silently: `✓ Use as my project path`
+  attaches that folder to the chat (every later turn runs there), and `📁 Attach my own folder` puts
+  the cursor in the composer's path box. The message channels get the same choice as text — reply
+  with the folder path you want the files moved to.
+- **It is temporary, and cleaned up on its own.** The folder lives under `~/.nuvira/workspace/<chat>`
+  (or `$NUVIRA_SCRATCH_DIR`; `os.tmpdir()/nuvira-scratch` if that root is not writable), and folders
+  untouched for 30 days are removed when the dashboard or the gateway starts. Move anything you want
+  to keep — one click, or a folder path in the reply.
+- **A READ ask still asks.** "Assess this project", "review the backend code", "fix the bug in
+  `src/app.ts`" keep the folder prompt, because an empty folder cannot hold the work they are about —
+  and answering about the wrong tree is the failure this whole ladder exists to prevent. Only asks
+  that CREATE something are served by a temporary folder.
+- **An isolated turn never uses one.** With `--worktree` on the CLI, or `NUVIRA_ISOLATE=1` for a
+  deployment (an API caller can also ask per turn with `worktree: true`), the turn runs in a throwaway
+  copy of a real project and reports the diff against the commit it started from — so its subject has
+  to be a repository. A temporary folder is not one, so rung 5 is skipped: the turn keeps the
+  directory the deployment was given, and if there is none, you are asked for the folder that
+  isolation needs rather than being handed a copy of a directory you never chose.
+- **On the messaging channels**, a turn that wrote a file with no project attached appends
+  `📁 … created it in a temporary workspace: <path>` to its reply, read from the tool calls rather
+  than from the model's own claim. A reply too long for the channel (WhatsApp ~4096 characters, SMS
+  1600) is written into that same workspace in full and delivered as a head plus the path, instead of
+  being cut off — so a long answer is never silently truncated.
+
 ### Run it at login (optional)
 
 `nuvira dashboard` is a foreground process, and nothing in the CLI installs a boot service. If you

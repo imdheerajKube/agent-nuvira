@@ -25,13 +25,19 @@
  *    were inside a project the user had pointed at. See {@link WorkspaceSource}.
  *
  * The order is deliberate and safe-by-default: the folder the USER attached
- * wins, then the one this conversation already attached, then one the user
- * named in their own message, and only then the operator's default — and the
- * default is the one case that carries a warning, because it is the one case
- * the user did not choose.
+ * wins, then the one this conversation already attached, then one the user named
+ * in their own message, then the operator's default — and then, LAST, a
+ * TEMPORARY folder for an ask that must PRODUCE something (the caller passes it
+ * as `scratchPath`, and omits it for an ask that must read or change existing
+ * work). Every rung past `attached` carries a warning, because it is a folder
+ * the user did not choose THIS turn; the scratch rung carries the loudest one,
+ * because it is not a project at all (`scratchWorkspaceNotice`).
  */
 
 import { directoryFromMessage, isUsableDirectory } from '../utils/workspace-path.js';
+// The scratch notice lives with the scratch folder itself, so the messaging
+// gateway can use it without importing a dashboard module.
+import { scratchWorkspaceNotice } from '../config/scratch-workspace.js';
 
 /**
  * Re-exported so a caller of this module needs one import, not two. The rules
@@ -44,8 +50,13 @@ export { directoryFromMessage, isUsableDirectory, normalizeWorkspacePath } from 
 /**
  * Where this turn's folder came from. `none` means the turn has NO workspace —
  * the case every write must refuse to guess about.
+ *
+ * `scratch` is the last rung before `none`: a temporary folder created for a
+ * turn that must PRODUCE a file and has no project to put it in. It is never
+ * the user's project, so it always carries a notice naming the path and the ways
+ * out of it (see {@link scratchWorkspaceNotice}).
  */
-export type WorkspaceSource = 'attached' | 'session' | 'message' | 'default' | 'none';
+export type WorkspaceSource = 'attached' | 'session' | 'message' | 'default' | 'scratch' | 'none';
 
 export interface ResolvedWorkspace {
   /** The absolute directory, when there is one. */
@@ -102,6 +113,16 @@ export interface TurnWorkspaceInput {
   configuredCwd?: string;
   /** This turn's user message — the last place a folder can come from. */
   message?: string;
+  /**
+   * The TEMPORARY folder to fall back to — created and passed by the caller
+   * (`src/config/scratch-workspace.ts`) and only offered for an ask that must
+   * PRODUCE something. OMITTED for an ask that must READ or CHANGE existing work
+   * (`workspace-guard.workspaceNeedForMissingFolder` returns `'read'` there): a
+   * scratch folder is empty, so it can neither answer "assess this project" nor
+   * hold "fix the bug in src/app.ts", and using it would be the silent-wrong-tree
+   * defect this module exists to prevent.
+   */
+  scratchPath?: string;
 }
 
 /**
@@ -140,6 +161,18 @@ export function resolveTurnWorkspace(input: TurnWorkspaceInput): ResolvedWorkspa
       source: 'default',
       unscoped: false,
       notice: defaultWorkspaceNotice(input.configuredCwd),
+    };
+  }
+  // The last rung: a real folder for a produce ask that has no project. Only
+  // matched when it exists (the caller creates it), so a failed scratch setup
+  // degrades to `none` and the old ask-for-a-folder behaviour rather than to a
+  // path nothing can be written into.
+  if (isUsableDirectory(input.scratchPath)) {
+    return {
+      path: input.scratchPath,
+      source: 'scratch',
+      unscoped: false,
+      notice: scratchWorkspaceNotice(input.scratchPath),
     };
   }
   return { source: 'none', unscoped: true };

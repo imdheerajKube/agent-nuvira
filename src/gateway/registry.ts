@@ -21,6 +21,20 @@ import { runPipelineTool } from '../tools/pipeline-tool.js';
 // (110 registrations + their modules) in just to clean up followups.
 import { isSuggestedFollowup, normalizeFollowups } from '../tools/followup-utils.js';
 import { envBuff } from '../config/paths';
+// The workspace rules and the scratch folder, both surface-agnostic — see
+// `utils/workspace-need.ts` (why the rule moved out of the dashboard) and
+// `config/scratch-workspace.ts` (where a turn writes when there is no project).
+import { directoryFromMessage, isUsableDirectory } from '../utils/workspace-path.js';
+import { workspaceNeedForMissingFolder } from '../utils/workspace-need.js';
+// Whether the ask wants PROSE in the reply or an ARTIFACT on disk — the same pair
+// of predicates the loop's gates use, so "a short authored deliverable" cannot
+// mean two different things on two surfaces.
+import { asksForAuthoredFile, isAuthoredGoal } from '../learning/deliverable-class.js';
+import { scratchWorkspaceForTurn, scratchWorkspaceNotice } from '../config/scratch-workspace.js';
+// Whether this deployment asks every turn to run ISOLATED (`NUVIRA_ISOLATE`) — a
+// messaging turn carries no flags, so the environment is where the ask comes
+// from, and it decides whether a scratch folder may be used at all.
+import { resolveIsolationRequest } from '../tools/worktree.js';
 import { parseRequestSync } from '../nlu/parser.js';
 import { getEventBus, EventNames } from '../observability/event-bus.js';
 import { ConfigManager } from '../config/manager.js';
@@ -34,6 +48,9 @@ import {
   type PolicyMap,
 } from './channel-directory.js';
 import type { ChannelAdapter, InboundMessage, MediaPayload } from './adapters.js';
+// A VALUE import of one constant (the type-only import above stays type-only).
+import { DEFAULT_MAX_MESSAGE_CHARS } from './adapters.js';
+import { saveOversizedReply } from './oversized-reply.js';
 import { DeliveryLedger, type DeliveryEntry } from './delivery.js';
 import { InboxLedger, type InboundDisposition } from './inbox.js';
 import { inboundAttachmentPolicy } from './inbound-media.js';
@@ -324,6 +341,23 @@ export function eventToStatusLine(event: string, data: any): string | null {
  * ids, slack ids, email addresses) pass through untouched — an email
  * address must NOT have its @domain stripped.
  */
+/**
+ * Did this turn CREATE or CHANGE a file?
+ *
+ * The evidence is the tool lifecycle (the same seam every other surface reads),
+ * never the reply's own text: a model that says "I saved it to /tmp/x" has
+ * proved nothing, while a `write_file` reported `ok` has. Used to add the
+ * "this went to a temporary workspace" note to a reply whose file would
+ * otherwise be a path the sender never sees — the gateway's own guarantee, for
+ * the case where the model forgot to name it (it is told to, see
+ * `scratchWorkspaceNotice`).
+ */
+function createdFiles(toolCalls: Array<{ tool: string; ok?: boolean }>): boolean {
+  return toolCalls.some(
+    (c) => c.ok === true && /^(?:write_file|edit_file|apply_patch|create_file|move_file|copy_file|mkdir)$/i.test(c.tool),
+  );
+}
+
 export function normalizeSenderId(id: string | undefined): string {
   if (!id) return '';
   const t = id.trim();
@@ -1749,6 +1783,74 @@ export class GatewayRegistry {
       const historyKey = `${msg.platform}:${msg.channelId}`;
       const priorWindow = this.chatStore.getFullHistory(historyKey);
       const history = priorWindow.slice(0, Math.max(0, priorWindow.length - 1)).slice(-12);
+      /**
+       * ── WHERE this turn works ───────────────────────────────────────────────
+       * A messaging turn has no project folder, and it used to have no workspace
+       * at all: `ctx.cwd` was whatever directory the gateway process was started
+       * from, so a "create a script" ask either failed confusedly or wrote into a
+       * tree that belongs to nobody. The folder ladder is the dashboard's
+       * (`workspace-resolution.ts`), applied to what a message can carry:
+       *
+       *   1. a folder the user NAMED in the message — the same adoption rule the
+       *      dashboard uses, and what makes "send me the path" a real answer;
+       *   2. otherwise a TEMPORARY scratch workspace for this contact, so writes
+       *      land somewhere findable and the sender can be TOLD where;
+       *   3. and the CONTEXT depends on what the ask needs
+       *      (`workspaceNeedForMissingFolder`): a produce ask is told the scratch
+       *      path and to name it, a read ask is told to ask for the real folder
+       *      rather than invent one, and plain chat is told nothing at all — the
+       *      scratch folder simply makes an unexpected write harmless.
+       */
+      const namedDir = (() => {
+        const named = directoryFromMessage(msg.text);
+        return named && isUsableDirectory(named) ? named : undefined;
+      })();
+      const workspaceNeed = namedDir ? null : workspaceNeedForMissingFolder(msg.text);
+      /**
+       * The scratch folder is created ONLY for a turn that needs a folder.
+       *
+       * A plain chat turn needs none — and giving it one would change what the
+       * turn IS: `projectPath` also drives per-project recall, the resume/checkpoint
+       * fingerprint and git worktree isolation, so a scratch folder (which is not a
+       * repository) would put a chat turn on a path those features were never
+       * designed for. Measured: doing it for every turn made the cross-surface
+       * parity suite diverge (a resumed gateway turn stopped replaying its unchanged
+       * steps, and the worktree scenario stopped matching the CLI).
+       *
+       * A READ ask needs a folder it does not have, but a TEMPORARY one is not it:
+       * the turn is marked unscoped, so a write asks where to go, and the model is
+       * told to ask for the real folder (see `workspaceContext` below).
+       *
+       * And an ISOLATED turn must not be given one either — the rule, with its own
+       * measurement, lives in `scratchWorkspaceForTurn` so both surfaces share it.
+       */
+      const scratchDir = namedDir
+        ? undefined
+        : scratchWorkspaceForTurn({
+            key: historyKey,
+            need: workspaceNeed,
+            isolationAsked: resolveIsolationRequest({}).asked,
+          });
+      const workspaceDir = namedDir ?? scratchDir;
+      /**
+       * Does this ask plausibly PRODUCE a file?
+       *
+       * The complement of "a short authored deliverable", which is prose the user
+       * wants IN THE REPLY: a poem or an essay answered inline needs no scratch
+       * narration, and telling the model about a temporary workspace for one is how
+       * a poem comes back with a paragraph about file paths. Anything else — a
+       * script, an app, a long or destination-placed work — may genuinely write, so
+       * it is told where and what to say about it.
+       */
+      const fileWorkExpected = (text: string): boolean =>
+        !isAuthoredGoal(text) || asksForAuthoredFile(text);
+      const workspaceContext = namedDir
+        ? `Workspace: ${namedDir} — taken from the folder the user named in their message. Treat it as their project.`
+        : workspaceNeed === 'read'
+          ? 'No project folder is attached to this chat, and this request needs one that ALREADY EXISTS. Ask the user for its path (or to attach it) instead of guessing a directory — a temporary folder holds none of the work this ask is about.'
+          : scratchDir && fileWorkExpected(msg.text)
+            ? scratchWorkspaceNotice(scratchDir)
+            : '';
       // P5 — is this message a REPLY to a followup we just sent? (No chips on
       // WhatsApp/Telegram — the sender re-types the line.) If so it continues
       // the previous execution instead of starting a fresh request.
@@ -1770,6 +1872,15 @@ export class GatewayRegistry {
         '- Deliver your answer DIRECTLY. No preamble, no "I would be happy to...", no restating the request.',
         '- Do NOT include planning, constraints, self-evaluation, or tool deliberation in your visible response. Put ALL reasoning in  thinking tags.',
         '- For creative tasks (poems, stories, messages): just write the content. No meta-commentary about how you wrote it.',
+        // The SIZE half of the same rule. A messaging reply is capped by the
+        // transport (WhatsApp ~4096, SMS 1600), and the gateway used to resolve
+        // that by silently truncating — the tail of a long answer simply did not
+        // arrive. So the model is told the budget up front and what to do with a
+        // long deliverable: write the whole thing into the workspace, reply with
+        // a short summary plus the path. The gateway also enforces it
+        // deterministically (`saveOversizedReply`), because a model that ignores
+        // this line must not cost the sender the end of their answer.
+        '- LONG content (roughly over 3000 characters): write the FULL text into the workspace with write_file, then reply with a short summary and the file path — never a wall of text that the channel will cut off.',
         '- End with suggest_followups (3 suggestions) — but NEVER include the suggest_followups JSON in your response text; use the tool call.',
       ].join('\n');
       // The open user turn now carries ONLY what genuinely varies per message:
@@ -1821,6 +1932,14 @@ export class GatewayRegistry {
         provider: useAuto ? 'auto' : providerType,
         model: useAuto ? 'auto' : providerConfig.model,
         history,
+        // The turn's working directory (see the ladder above) — a folder the user
+        // named, else this contact's scratch workspace.
+        ...(workspaceDir ? { projectPath: workspaceDir } : {}),
+        ...(workspaceContext ? { projectContext: workspaceContext } : {}),
+        // A READ ask with no folder: the turn has no workspace of the user's, and
+        // the tool context must say so rather than let a write land in whatever
+        // directory the gateway process was started from.
+        ...(!workspaceDir && workspaceNeed === 'read' ? { unscopedWorkspace: true } : {}),
         // WS5 (#27) — isolation and resume are asked through the environment
         // (`NUVIRA_ISOLATE` / `NUVIRA_RESUME`), which is how a messaging gateway
         // is configured: an inbound WhatsApp message has no flags to carry, and
@@ -1974,6 +2093,38 @@ export class GatewayRegistry {
           content = '🤖 Sorry — none of my language models could handle that request just now. Please try again in a moment, or rephrase it — you can also run `nuvira models` to check your model setup.';
         }
       }
+      /**
+       * ── A reply the channel cannot carry becomes a FILE, not a truncation ────
+       * The cap is the TRANSPORT's own (`ChannelAdapter.maxMessageChars`, e.g.
+       * WhatsApp 4096, SMS 1600), so this fires exactly where text would start
+       * being lost. The full reply is written into the turn's workspace — the
+       * project folder it ran in, or the scratch folder the notice already names
+       * — and the channel carries a head plus the path. If the write fails, the
+       * reply is left alone: a pointer to a file that does not exist is worse
+       * than a short message.
+       */
+      const channelCap = this.adapters.get(msg.platform)?.maxMessageChars ?? DEFAULT_MAX_MESSAGE_CHARS;
+      if (content.length > channelCap && workspaceDir) {
+        const saved = saveOversizedReply(workspaceDir, content, channelCap);
+        if (saved) {
+          logger.info(
+            `gateway: reply exceeded ${channelCap} chars — full text saved to ${saved.path}`,
+          );
+          content = saved.head;
+        }
+      }
+      /**
+       * Where a CREATED FILE went, when there was no project to put it in.
+       *
+       * The model was told to name the path (see `scratchWorkspaceNotice`), and
+       * this is the surface's own guarantee for the case where it does not: the
+       * work is real, the sender paid for it, and a file they cannot find is the
+       * failure the whole ladder exists to remove. Evidence is the tool
+       * lifecycle, never the reply's text.
+       */
+      if (!namedDir && scratchDir && createdFiles(toolCalls)) {
+        content += `\n\n📁 No project folder is attached to this chat, so I created it in a temporary workspace:\n${scratchDir}\nSend me the folder path you want it in and I will move the files there.`;
+      }
       // P5 — remember what we offered (for the next inbound), and render the
       // "Try next" list CLEAN + STRUCTURED through the shared normalizer.
       const normalized = normalizeFollowups(answer.followups);
@@ -1981,10 +2132,9 @@ export class GatewayRegistry {
       const fups = normalized.map((f) => f.prompt);
       if (fups.length > 0) {
         const suffix = `\n\nTry next:\n${fups.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
-        // WhatsApp truncates ~4096 chars — the ANSWER is the deliverable, so
-        // drop the followups (never the answer) when the message would exceed
-        // the cap.
-        if (content.length + suffix.length <= 4000) content += suffix;
+        // The transport truncates at its cap — the ANSWER is the deliverable, so
+        // drop the followups (never the answer) when the message would exceed it.
+        if (content.length + suffix.length <= channelCap) content += suffix;
       }
       // Store the assistant reply in the per-contact history so follow-up
       // questions have context (the user message was already recorded in
