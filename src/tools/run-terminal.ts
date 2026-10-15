@@ -46,12 +46,14 @@ import {
   classifyLiveness,
   formatSpan,
   killProcessTree,
+  lastProbeBlockedWindow,
   livenessThresholds,
   processAlive,
   processTableSnapshot,
   sampleProcessTree,
   tableAlive,
   lookupProcess,
+  unobservedPartOf,
   type Liveness,
   type ProcessTable,
 } from './process-liveness.js';
@@ -290,6 +292,12 @@ interface DetachedRun {
   cpuMs?: number | null;
   /** When that sample was taken. */
   sampledAt?: number;
+  /**
+   * Bytes on the clock at that same sample — the baseline for "did it produce
+   * anything SINCE then". A byte is stamped when the monitor reads it, so this
+   * count, unlike a timestamp, cannot be fooled by the watchdog being busy.
+   */
+  sampledBytes?: number;
   /** The watchdog's last verdict for this run, and the evidence behind it. */
   verdict?: Liveness;
   verdictWhy?: string;
@@ -397,6 +405,15 @@ export function sampleMonitoredRuns(now = Date.now()): void {
   const reapAfter = hangReapMs();
   const sampleWindowMs = lastSampleAt > 0 ? now - lastSampleAt : hangPollMs();
   lastSampleAt = now;
+  // Read BEFORE the probe: this is the window the PREVIOUS probe held the event
+  // loop in, and output that arrived during it was timestamped only once the loop
+  // was free again — so that part of a run's "silence" was really the watchdog
+  // not looking, and it must not be held against the run (see
+  // `unobservedPartOf`). The probe below replaces the recorded window for the next
+  // tick. This is the complement of the byte-count rule in `classifyLiveness`;
+  // together they are the fix for the false HUNG measured on the windows release
+  // runners, where a PowerShell probe outran a 1s silence window.
+  const probeBlindWindow = lastProbeBlockedWindow();
   // ONE read per tick, shared by every run, by the reconciliation below and by any
   // signalling: on Windows each read is a PowerShell start, and a tick must not
   // cost one per run. The registry is read at most once too, and only when there
@@ -419,11 +436,18 @@ export function sampleMonitoredRuns(now = Date.now()): void {
     const alive = run.reattached
       ? tableAlive(table, run.pid ?? -1) !== false
       : run.child !== undefined && run.child.exitCode === null && run.child.signalCode === null;
+    // Did it produce anything since the previous sample? The count is read at the
+    // same time as the CPU baseline, so the two pieces of evidence cover the same
+    // window — and this one cannot be fooled by the watchdog's own blindness.
+    // No baseline yet (the first sample) means no evidence either way.
+    const bytesSinceLastSample = Math.max(0, run.bytes - (run.sampledBytes ?? run.bytes));
     const verdict = classifyLiveness(
       {
         alive,
         bytes: run.bytes,
         quietMs: now - run.lastOutputAt,
+        unobservedMs: unobservedPartOf(run.lastOutputAt, now, probeBlindWindow),
+        bytesSinceLastSample,
         ageMs: now - run.startedAt,
         cpuMs: sample.cpuMs,
         prevCpuMs: run.cpuMs ?? null,
@@ -433,6 +457,7 @@ export function sampleMonitoredRuns(now = Date.now()): void {
     );
     run.cpuMs = sample.cpuMs;
     run.sampledAt = now;
+    run.sampledBytes = run.bytes;
     run.verdict = verdict.verdict;
     run.verdictWhy = verdict.why;
 

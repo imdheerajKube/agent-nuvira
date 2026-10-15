@@ -53,12 +53,14 @@ import {
   classifyLiveness,
   formatSpan,
   killProcessTree,
+  lastProbeBlockedWindow,
   livenessThresholds,
   lookupProcess,
   processTableSnapshot,
   processTreeOf,
   sampleProcessTree,
   tableAlive,
+  unobservedPartOf,
   type Liveness,
   type ProcessTreeSample,
 } from '../tools/process-liveness.js';
@@ -227,8 +229,24 @@ export class TaskRunner {
   private timedOut = new Set<string>();
   /** Tasks the liveness watchdog stopped (distinct from a user's cancel). */
   private hung = new Set<string>();
-  /** The last CPU sample per task — the delta is what proves a hang. */
-  private cpuSamples = new Map<string, { cpuMs: number | null; at: number }>();
+  /**
+   * The last CPU sample per task — the delta is what proves a hang — plus the
+   * line count at that same moment, because a log line is stamped when this
+   * process READS it: while a sample holds the event loop, a task's output queues
+   * up unread, so "no lines for a while" can be this runner's blindness rather
+   * than the task's silence. Lines that arrived since the previous sample are
+   * production itself (see `bytesSinceLastSample` in process-liveness).
+   */
+  private cpuSamples = new Map<string, { cpuMs: number | null; at: number; bytes: number }>();
+  /**
+   * How many lines the TASK ITSELF has produced (never the runner's own notes).
+   *
+   * Monotonic on purpose, unlike `record.logs.length`: that array also holds the
+   * runner's notes, and it is TRIMMED at `MAX_LOG_LINES` — so its length moves for
+   * reasons that are not the task, and stops moving for one that is still talking.
+   * This is the count the liveness check compares between samples.
+   */
+  private outputLines = new Map<string, number>();
   private watchers = new Map<string, ReturnType<typeof setInterval>>();
   private listeners = new Set<(id: string, payload: TaskEventPayload) => void>();
   /** The bounded on-disk log window per task (what a restart reads back). */
@@ -455,6 +473,7 @@ export class TaskRunner {
     if (!record || record.status !== 'running') return;
     this.stopWatching(id);
     this.cpuSamples.delete(id);
+    this.outputLines.delete(id);
     this.recoveredRuns.delete(id);
     record.status = status;
     record.exitCode = null;
@@ -520,7 +539,15 @@ export class TaskRunner {
     // measured: the verdict oscillated hung → working → stalled → hung forever,
     // the log filled with the same warning, and the hang was never reaped.
     if (stream !== 'system') record.lastOutputAt = Date.now();
-    for (const raw of clean.split('\n')) {
+    const lines = clean.split('\n');
+    // Same rule as `lastOutputAt` above, for the same reason: only the child's own
+    // output counts as the task speaking. The watchdog's "looks HUNG" note goes
+    // through this function too, and counting it as production would clear the
+    // very hang it is reporting.
+    if (stream !== 'system') {
+      this.outputLines.set(record.id, (this.outputLines.get(record.id) ?? 0) + lines.length);
+    }
+    for (const raw of lines) {
       const line = raw.length > MAX_LINE_LENGTH ? `${raw.slice(0, MAX_LINE_LENGTH)}…` : raw;
       record.logs.push({ stream, text: line, at: Date.now() });
     }
@@ -590,6 +617,7 @@ export class TaskRunner {
         this.timedOut.delete(old);
         this.hung.delete(old);
         this.cpuSamples.delete(old);
+        this.outputLines.delete(old);
         this.recoveredRuns.delete(old);
         this.identities.delete(old);
         this.stopWatching(old);
@@ -638,6 +666,7 @@ export class TaskRunner {
       if (killGrace) clearTimeout(killGrace);
       this.stopWatching(id);
       this.cpuSamples.delete(id);
+      this.outputLines.delete(id);
       record.status = status;
       record.exitCode = exitCode;
       record.finishedAt = Date.now();
@@ -735,6 +764,12 @@ export class TaskRunner {
     if (pid === null) return;
     const now = Date.now();
     const previous = this.cpuSamples.get(id) ?? null;
+    // Read BEFORE the probe below: the window the PREVIOUS probe held the event
+    // loop in, during which this process could not have noticed output the task
+    // was producing. That part of a quiet window is the monitor's blindness, not
+    // the task's silence, so it is not counted against the task (`unobservedMs`).
+    const probeBlindWindow = lastProbeBlockedWindow();
+    const producedLines = this.outputLines.get(id) ?? 0;
 
     let alive: boolean;
     let sample: ProcessTreeSample;
@@ -771,6 +806,9 @@ export class TaskRunner {
         // classifier needs from this (recency comes from `quietMs`).
         bytes: record.logs.length,
         quietMs: now - record.lastOutputAt,
+        unobservedMs: unobservedPartOf(record.lastOutputAt, now, probeBlindWindow),
+        // No previous sample means no baseline, so no evidence either way.
+        bytesSinceLastSample: previous ? Math.max(0, producedLines - previous.bytes) : 0,
         ageMs: now - record.startedAt,
         cpuMs: sample.cpuMs,
         prevCpuMs: previous ? previous.cpuMs : null,
@@ -778,7 +816,7 @@ export class TaskRunner {
       },
       livenessThresholds(),
     );
-    this.cpuSamples.set(id, { cpuMs: sample.cpuMs, at: now });
+    this.cpuSamples.set(id, { cpuMs: sample.cpuMs, at: now, bytes: producedLines });
     const changed = record.liveness?.verdict !== verdict.verdict;
     record.liveness = { verdict: verdict.verdict, why: verdict.why, at: now };
 

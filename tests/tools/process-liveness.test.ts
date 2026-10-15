@@ -19,14 +19,17 @@ import {
   classifyLiveness,
   formatSpan,
   killProcessTree,
+  lastProbeBlockedWindow,
   livenessThresholds,
   lookupProcess,
   parseCpuTime,
   parsePosixProcessTable,
   parseWindowsProcessTable,
   parseWmicProcessTable,
+  processTableSnapshot,
   processTreeOf,
   sampleProcessTree,
+  unobservedPartOf,
   type LivenessInput,
 } from '../../src/tools/process-liveness.js';
 
@@ -151,6 +154,171 @@ describe('classifyLiveness — innocent until proven hung', () => {
     );
     expect(busy.verdict).toBe('working');
     expect(idle.verdict).toBe('hung');
+  });
+});
+
+/**
+ * The false HUNG that reached the release runners.
+ *
+ * The process-table probe is SYNCHRONOUS, so while it runs the child's stdout
+ * events sit in the queue unread and `lastOutputAt` stays frozen at the previous
+ * drain. On POSIX `ps` costs ~10-30ms, but on the windows runners the PowerShell
+ * probe was MEASURED at roughly the whole sample interval — longer than the
+ * silence a watchdog is willing to call a hang. A command printing a line every
+ * 80ms was therefore reported, in CI, as:
+ *
+ *     Liveness: HUNG — no output for 1s and no CPU in that time (0ms over the
+ *     last 2s)
+ *
+ * where the entire second of "silence" was the watchdog's own blindness, and the
+ * 0ms CPU delta was real but meaningless: a light ticker never moves the counter
+ * past the floor. So a verdict cannot be made from the clock alone, and these
+ * tests drive the two rules that follow from it:
+ *
+ *   1. bytes that ARRIVED since the previous sample ⇒ working. This is the
+ *      load-bearing one: a byte is stamped when the monitor reads it, so the
+ *      count moves for a producing command no matter how slow the reader, and
+ *      stays put for a stuck one.
+ *   2. the part of a quiet window the monitor could not observe ⇒ not silence.
+ *      The complement, for a sample that never got to read anything.
+ *
+ * The thresholds below are the aggressive ones that failing test used.
+ */
+describe("the monitor's own slowness is not the command's silence", () => {
+  const aggressive: typeof DEFAULT_LIVENESS_THRESHOLDS = {
+    ...DEFAULT_LIVENESS_THRESHOLDS,
+    stallQuietMs: 200,
+    hangQuietMs: 400,
+    hangCpuFloorMs: 500,
+  };
+
+  /**
+   * The CI inputs verbatim: 340 bytes produced, 1s of "silence", a CPU delta of
+   * 0ms over 2s. The command was printing every 80ms the whole time.
+   */
+  const ciEvidence: Partial<LivenessInput> = {
+    bytes: 340,
+    quietMs: 1_000,
+    cpuMs: 1_000,
+    prevCpuMs: 1_000,
+    sampleWindowMs: 2_000,
+  };
+
+  it('the CI failure, exactly: bytes arrived since the last sample, so it is WORKING', () => {
+    const verdict = classifyLiveness(
+      input({ ...ciEvidence, bytesSinceLastSample: 170 }),
+      aggressive,
+    );
+    expect(verdict.verdict).toBe('working');
+    expect(verdict.why).toContain('arrived since the last sample');
+    expect(verdict.why).not.toContain('no CPU');
+  });
+
+  it('and the same evidence WITHOUT the byte count is the bug — it reads as hung', () => {
+    // Pins what was actually wrong: not the thresholds, the evidence. A clock
+    // that measures when the reader looked cannot see a command it was too busy
+    // to listen to.
+    const verdict = classifyLiveness(input(ciEvidence), aggressive);
+    expect(verdict.verdict).toBe('hung');
+  });
+
+  it('growth is the evidence a hang does NOT have — the fix cannot hide a stuck command', () => {
+    // 10 minutes silent and idle, and nothing arrived since the last sample:
+    // still hung, with the attested silence in the reason.
+    const verdict = classifyLiveness(
+      input({
+        bytes: 12,
+        bytesSinceLastSample: 0,
+        quietMs: 600_000,
+        unobservedMs: 1_000,
+        ageMs: 600_000,
+        cpuMs: 3,
+        prevCpuMs: 3,
+      }),
+    );
+    expect(verdict.verdict).toBe('hung');
+    expect(verdict.why).toContain('no output for 9m 59s');
+  });
+
+  it('no baseline yet (the first sample) is not evidence either way', () => {
+    // The first sample has nothing to compare against, so it must fall through to
+    // the CPU and silence rules rather than claiming progress it never measured.
+    const verdict = classifyLiveness(input({ ...ciEvidence, bytesSinceLastSample: 0 }), aggressive);
+    expect(verdict.verdict).toBe('hung');
+  });
+
+  it('a whole second of "silence" the probe spent holding the loop is not counted', () => {
+    const verdict = classifyLiveness(
+      input({ ...ciEvidence, unobservedMs: 1_000 }),
+      aggressive,
+    );
+    expect(verdict.verdict).toBe('working');
+    expect(verdict.why).not.toContain('no output for');
+  });
+
+  it('a PARTLY blind window is judged on the silence that was actually watched', () => {
+    // 1s of quiet, 700ms of it while the loop was blocked → 300ms attested: past
+    // "just quiet" but short of the 400ms hang. Without the subtraction this same
+    // input is HUNG, which is precisely the bug.
+    const partlyBlind = classifyLiveness(
+      input({ bytes: 90, quietMs: 1_000, unobservedMs: 700, cpuMs: 5, prevCpuMs: 5 }),
+      aggressive,
+    );
+    expect(partlyBlind.verdict).toBe('stalled');
+    expect(partlyBlind.why).not.toContain('no CPU');
+  });
+
+  it('blindness never rescues a REAL hang — the watchdog must stay able to act', () => {
+    // 10 minutes with no output and no CPU, of which 1s was a slow probe: the
+    // attested silence is still a hang, so subtracting the blind window cannot be
+    // used by a stuck command to hide forever.
+    const verdict = classifyLiveness(
+      input({
+        bytes: 0,
+        bytesSinceLastSample: 0,
+        quietMs: 601_000,
+        unobservedMs: 1_000,
+        ageMs: 601_000,
+        cpuMs: 3,
+        prevCpuMs: 3,
+      }),
+    );
+    expect(verdict.verdict).toBe('hung');
+    // The reason reports the ATTESTED silence (601s of quiet minus the 1s the
+    // loop was blocked), not the raw stopwatch reading.
+    expect(verdict.why).toContain('no output for 10m 00s');
+  });
+
+  it('unobservedPartOf takes only the overlap — and nothing at all from a disjoint window', () => {
+    const blocked = { from: 1_000, until: 2_000 };
+    // The quiet window sits entirely inside the blind one.
+    expect(unobservedPartOf(1_100, 1_900, blocked)).toBe(800);
+    // …mostly inside (clipped at both ends).
+    expect(unobservedPartOf(500, 1_500, blocked)).toBe(500);
+    expect(unobservedPartOf(1_500, 9_000, blocked)).toBe(500);
+    // A window that STILL contains the blind one.
+    expect(unobservedPartOf(0, 60_000, blocked)).toBe(1_000);
+    // Disjoint either side: nothing was hidden.
+    expect(unobservedPartOf(0, 1_000, blocked)).toBe(0);
+    expect(unobservedPartOf(2_000, 60_000, blocked)).toBe(0);
+    // A degenerate/decreasing window is not a window (and must not subtract the
+    // whole quiet span through a negative overlap).
+    expect(unobservedPartOf(0, 60_000, { from: 5_000, until: 5_000 })).toBe(0);
+    expect(unobservedPartOf(0, 60_000, { from: 5_000, until: 4_000 })).toBe(0);
+  });
+
+  it('a real probe RECORDS the window it held the loop in', () => {
+    // The wiring the callers depend on: whatever the probe costs (a `ps` here, a
+    // PowerShell start on Windows), the window it blocked for is available to be
+    // subtracted rather than charged to the run as silence. Recorded even when
+    // the probe cannot read a table at all — a failed read hides output just as
+    // well as a slow one.
+    const before = Date.now();
+    processTableSnapshot();
+    const window = lastProbeBlockedWindow();
+    expect(window.from).toBeGreaterThanOrEqual(before);
+    expect(window.from).toBeLessThanOrEqual(window.until);
+    expect(window.until).toBeLessThanOrEqual(Date.now());
   });
 });
 

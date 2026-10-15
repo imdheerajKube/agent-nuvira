@@ -9,7 +9,9 @@ model's own suggestions were unreachable, a one-line question printed a screen o
 harness diagnostics before its answer, a terminal that does not report its width
 got a squashed answer, the run was silent while it worked and then spoke, a
 `nuviraconfig.json` profile was silently ignored by the runtime, and an
-intermittent resume failure could not be diagnosed from a log at all.
+intermittent resume failure could not be diagnosed from a log at all. It also carries one
+FIX — a liveness verdict that could be made out of the observer's own blindness —
+described at the end of this entry.
 
 - **The model's suggested next steps are PICKABLE on the CLI** — `nuvira execute`
 offered only its generic menu, because neither engine arm carried the turn's
@@ -262,6 +264,34 @@ picked by auto routing, or where the gateway's own failures are recorded. Both d
 - **Nothing in the runtime changed.** This is documentation: the claims are the behaviour already in
   the tree, and every command documented was run against the installed gateway before it was
   written down.
+
+### The liveness watchdog no longer charges its own blindness to the command
+
+An output byte is stamped when the *monitor* reads it, and the process-table probe a liveness sample
+needs is **synchronous** — ~10-30ms of `ps` on POSIX, but a PowerShell start MEASURED at about a
+second on the release runners. While that probe holds the event loop, everything the command prints
+queues up unread, so a second of the observer's own blindness read as a second of the command's
+silence. What that produced, verbatim from CI:
+
+```
+Liveness: HUNG — no output for 1s and no CPU in that time (0ms over the last 2s)
+```
+
+…about a command that was printing a line every 80ms the whole time. Not a cosmetic error: with the
+default grace the watchdog would eventually stop working work, and the model would be told a command
+was stuck that never was. Two rules now stand between the clock and a verdict:
+
+- **Bytes that arrived since the previous sample ⇒ WORKING.** The count cannot be fooled by a busy
+  reader: it moves for a command that is producing however slow the reader is, and stays put for one
+  that is genuinely stuck — which is exactly the distinction the verdict is making.
+- **Silence the monitor was blind for is not silence.** A sample subtracts the window its own probe
+  could not observe, so the "no output for X" a person (or the model) reads is the silence that was
+  actually watched. Both rules only ever make a verdict more conservative — the hang thresholds,
+  the grace and `NUVIRA_HANG_*` are untouched, and a real hang is still identified and stopped.
+- **The dashboard's task watchdog gets both rules too**, and now counts the TASK's own output lines
+  rather than `record.logs.length`: that array also holds the runner's own notes (including the
+  "looks HUNG" notice it writes through the same function) and is trimmed at its cap, so its length
+  was never a measure of the task.
 
 ## v3.5.5 — the v3.5.2 features, checked on the platforms they actually run on
 

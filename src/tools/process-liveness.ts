@@ -303,9 +303,52 @@ function readPosixProcessTable(): ProcessTable | null {
   return null;
 }
 
+/**
+ * The last window in which the process-table probe held the event loop — the
+ * time during which this process could not have NOTICED the output a monitored
+ * command was producing.
+ *
+ * It is not bookkeeping for its own sake. The probe is SYNCHRONOUS
+ * (`execFileSync`/`execSync`), so while it runs the child's stdout events sit in
+ * the queue unread and `lastOutputAt` stays frozen at the last drain. On POSIX
+ * `ps` costs ~10-30ms and that is invisible, but on Windows it is a PowerShell
+ * start — MEASURED at ~1s on the release runners — which is longer than the
+ * silence a watchdog is willing to call a hang. The consequence was REAL and
+ * reproduced in CI: a command printing a line every 80ms was reported "HUNG — no
+ * output for 1s and no CPU in that time", because the only second of silence in
+ * the picture was the watchdog's own blindness. Callers subtract this window from
+ * the silence they are willing to hold against a run (see
+ * `LivenessInput.unobservedMs`), which is the difference between "it said
+ * nothing" and "I was not looking".
+ *
+ * It is the COMPLEMENT of the byte count (`LivenessInput.bytesSinceLastSample`),
+ * which is the primary rule: a run whose output WAS read between two samples is
+ * plainly working, and that covers a monitor slow enough to batch its reads. This
+ * window covers the other half — a sample that read nothing at all, because its
+ * own probe held the loop for the span being judged.
+ *
+ * The MOST RECENT read only, and that is the one that matters: a tick reads this
+ * BEFORE running its own probe, so what it gets is the PREVIOUS probe's block —
+ * precisely the block that can have frozen the quiet window it is judging.
+ */
+let lastProbeBlockedFrom = 0;
+let lastProbeBlockedUntil = 0;
+
+export function lastProbeBlockedWindow(): { from: number; until: number } {
+  return { from: lastProbeBlockedFrom, until: lastProbeBlockedUntil };
+}
+
 /** One process table read: pid → { parent, cpu, command }. NEVER cached. */
 function readProcessTable(): ProcessTable | null {
-  return process.platform === 'win32' ? readWindowsProcessTable() : readPosixProcessTable();
+  const from = Date.now();
+  try {
+    return process.platform === 'win32' ? readWindowsProcessTable() : readPosixProcessTable();
+  } finally {
+    // Recorded in `finally` so a probe that THREW still reports the time it held
+    // the loop — a failed read hides output exactly as well as a slow one.
+    lastProbeBlockedFrom = from;
+    lastProbeBlockedUntil = Date.now();
+  }
 }
 
 /**
@@ -427,6 +470,26 @@ export function lookupProcess(
     : { found: false, command: null, startedAtText: null };
 }
 
+/**
+ * How much of a quiet window `[quietFrom, quietUntil]` fell inside a window in
+ * which the monitor could not observe output at all.
+ *
+ * That part of the silence is not evidence: an output byte produced while the
+ * observer's event loop was blocked is timestamped only once the loop is free
+ * again, so it shows up as silence that never happened. Pure, so the overlap can
+ * be asserted directly (see `lastProbeBlockedWindow` for where the blocked
+ * window comes from).
+ */
+export function unobservedPartOf(
+  quietFrom: number,
+  quietUntil: number,
+  blocked: { from: number; until: number },
+): number {
+  if (blocked.until <= blocked.from) return 0;
+  const overlap = Math.min(blocked.until, quietUntil) - Math.max(blocked.from, quietFrom);
+  return Math.max(0, overlap);
+}
+
 export interface LivenessInput {
   /** The run still exists (the registry has not seen it exit). */
   alive: boolean;
@@ -434,6 +497,34 @@ export interface LivenessInput {
   bytes: number;
   /** ms since the last output byte (or since the start when nothing came). */
   quietMs: number;
+  /**
+   * How much of `quietMs` the monitor itself could not have observed — time its
+   * own synchronous probe held the event loop (see `lastProbeBlockedWindow`, and
+   * `unobservedPartOf` for computing it). SUBTRACTED before any verdict is made:
+   * silence we were blind for is not the command's silence. Optional, and 0 by
+   * default, because a caller that knows it was watching the whole time has
+   * nothing to subtract.
+   */
+  unobservedMs?: number;
+  /**
+   * Output bytes that arrived SINCE THE PREVIOUS SAMPLE.
+   *
+   * This is the load-bearing signal, and it exists because a byte's timestamp is
+   * the moment the monitor READ it, not the moment the command wrote it: while a
+   * sample holds the event loop (the process-table probe is synchronous — ~10-30ms
+   * of `ps`, but ~1s of PowerShell on the windows release runners), everything the
+   * command prints queues up unread and is stamped all at once when the loop is
+   * free. So measured silence can be an artefact of the observer, and a command
+   * printing a line every 80ms was reported in CI as "HUNG — no output for 1s and
+   * no CPU in that time". Bytes moved, though. They always move when a command is
+   * producing, whatever the clock of the reader says, and they do NOT move when it
+   * is genuinely stuck — which is exactly the distinction being made.
+   *
+   * 0/undefined (nothing arrived, or this is the first sample and there is no
+   * baseline) is NOT evidence of anything, so it leaves the CPU and silence rules
+   * to decide.
+   */
+  bytesSinceLastSample?: number;
   /** ms since the run started. */
   ageMs: number;
   /** CPU ms now, and at the previous sample (null = unmeasurable). */
@@ -467,6 +558,10 @@ export function formatSpan(ms: number): string {
  * output recently → working; CPU advancing → working; only then, silence PLUS a
  * measurable absence of CPU → hung. Anything we cannot prove lands in `stalled`,
  * which is reported but never reaped.
+ *
+ * The silence is the ATTESTED silence: `quietMs` minus the part of it the monitor
+ * could not have observed (`unobservedMs`). Silence nobody was watching for is
+ * not something to accuse a command of.
  */
 export function classifyLiveness(
   input: LivenessInput,
@@ -476,10 +571,23 @@ export function classifyLiveness(
   // A command seconds old has simply not said anything yet.
   if (input.ageMs < 3_000) return { verdict: 'starting', why: 'just started' };
 
-  if (input.quietMs < thresholds.stallQuietMs) {
+  // It produced something since we last looked — that is production itself, and
+  // it outranks the clock (see `bytesSinceLastSample`: the clock measures when we
+  // READ, so it under-reports a command we were too busy to listen to).
+  const arrived = input.bytesSinceLastSample ?? 0;
+  if (arrived > 0) {
     return {
       verdict: 'working',
-      why: input.bytes > 0 ? `produced output ${formatSpan(input.quietMs)} ago` : 'producing output',
+      why: `${arrived} bytes of output arrived since the last sample — still producing`,
+    };
+  }
+
+  const quietMs = Math.max(0, input.quietMs - Math.max(0, input.unobservedMs ?? 0));
+
+  if (quietMs < thresholds.stallQuietMs) {
+    return {
+      verdict: 'working',
+      why: input.bytes > 0 ? `produced output ${formatSpan(quietMs)} ago` : 'producing output',
     };
   }
 
@@ -492,17 +600,17 @@ export function classifyLiveness(
     return {
       verdict: 'working',
       why:
-        `silent for ${formatSpan(input.quietMs)} but still computing — ` +
+        `silent for ${formatSpan(quietMs)} but still computing — ` +
         `${cpuDelta}ms of CPU in the last ${windowLabel}`,
     };
   }
 
-  if (input.quietMs >= thresholds.hangQuietMs) {
+  if (quietMs >= thresholds.hangQuietMs) {
     if (cpuDelta !== null) {
       return {
         verdict: 'hung',
         why:
-          `no output for ${formatSpan(input.quietMs)} and no CPU in that time ` +
+          `no output for ${formatSpan(quietMs)} and no CPU in that time ` +
           `(${cpuDelta}ms over the last ${windowLabel}) — it is waiting for something ` +
           `that is not coming (a prompt with no stdin, a lock, or a socket that never answers)`,
       };
@@ -510,7 +618,7 @@ export function classifyLiveness(
     return {
       verdict: 'stalled',
       why:
-        `no output for ${formatSpan(input.quietMs)}; CPU is not measurable on this platform, so this is ` +
+        `no output for ${formatSpan(quietMs)}; CPU is not measurable on this platform, so this is ` +
         `reported rather than treated as a confirmed hang`,
     };
   }
@@ -518,9 +626,9 @@ export function classifyLiveness(
   return {
     verdict: 'stalled',
     why: measurable
-      ? `quiet for ${formatSpan(input.quietMs)} with only ${cpuDelta}ms of CPU in the last ` +
+      ? `quiet for ${formatSpan(quietMs)} with only ${cpuDelta}ms of CPU in the last ` +
         `${windowLabel} — slowing rather than stopped`
-      : `quiet for ${formatSpan(input.quietMs)}`,
+      : `quiet for ${formatSpan(quietMs)}`,
   };
 }
 
