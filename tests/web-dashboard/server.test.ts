@@ -14,6 +14,8 @@ import { request as httpRequest, createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { resetWorkspaceStore } from '../../src/config/workspace.js';
+
 // ─── Test directory (avoid node:os.tmpdir since it gets mocked below) ──────
 
 const TMP_BASE = process.env.TMPDIR || process.env.TMP || '/tmp';
@@ -312,6 +314,17 @@ afterAll(() => {
   // different families — leaving one open leaks the handle into later suites).
   server.server.close();
   if (server.ipv6Twin) server.ipv6Twin.close();
+  // Close the SQLite handle the turns opened BEFORE removing the directory.
+  //
+  // A chat turn reaches the workspace store (the auto-recall in `chat.ts` opens
+  // it), and the store is a process-lifetime singleton per config dir — so the
+  // handle is still open when this teardown deletes `testDir`, which on Windows
+  // is not a delete but `EBUSY: resource busy or locked, unlink '…\workspaces.db'`
+  // and takes the whole file down. MEASURED on windows-latest (Node 22 and 23) on
+  // 2026-10-15: this was the ONLY failing file of the release suite, in every
+  // attempt. The store's own module documents the remedy (`resetWorkspaceStore`),
+  // which is why the other suites that touch it call it here.
+  resetWorkspaceStore();
   // Remove the temp test directory
   rmSync(testDir, { recursive: true, force: true });
 });
