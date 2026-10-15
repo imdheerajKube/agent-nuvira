@@ -184,6 +184,7 @@ const PUBLISHED_FILES = new Set([
   'docs/demos/nuvira-cli-tour.cast',
   'docs/agent-sdk.md',
   'docs/vscode-extension.md',
+  'docs/dependencies.md',
 ]);
 
 /** A private path → its published equivalent. */
@@ -198,6 +199,7 @@ const LINK_REWRITES = [
   ['PRODUCT_STRATEGY.md', 'docs/product-strategy.md'],
   ['docs/AGENT_SDK.md', 'docs/agent-sdk.md'],
   ['docs/VSCODE_EXTENSION.md', 'docs/vscode-extension.md'],
+  ['docs/DEPENDENCIES.md', 'docs/dependencies.md'],
 ];
 
 /** Links that are relative to the containing docs/ directory. */
@@ -207,6 +209,7 @@ const DOCS_LINK_REWRITES = [
   ['USER_MANUAL.md', 'user-manual.md'],
   ['AGENT_SDK.md', 'agent-sdk.md'],
   ['VSCODE_EXTENSION.md', 'vscode-extension.md'],
+  ['DEPENDENCIES.md', 'dependencies.md'],
 ];
 
 /** The markdown link target pattern, shared by the fixer and the guard. */
@@ -808,6 +811,14 @@ const PUBLISH_SET = [
     from: 'docs/USER_MANUAL.md',
     to: 'docs/user-manual.md',
     transform: publicManual,
+  },
+  {
+    // What to install besides the package itself. The manual and the curated
+    // command reference both link to it, so it has to exist in the published
+    // tree or those links break in the one place users read them.
+    from: 'docs/DEPENDENCIES.md',
+    to: 'docs/dependencies.md',
+    transform: (s, base) => fixLinks(scrub(s), base),
   },
   {
     // The two guides for the SDK and the editor surface. They are the only pages

@@ -113,8 +113,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'media',
     label: 'Media & modality',
-    description: 'Image generation, speech synthesis, transcription, vision, video generation, voice mode, desktop automation, TTS streaming.',
-    tools: ['generate_image', 'speak', 'transcribe', 'describe_image', 'vision', 'video_generate', 'voice_mode', 'wake_word', 'neutts_synth', 'computer_use', 'tts_streaming', 'tts_text_normalize'],
+    description: 'Image generation, speech synthesis, transcription, vision, video generation, code-authored animation (motion), voice mode, desktop automation, TTS streaming.',
+    tools: ['generate_image', 'speak', 'transcribe', 'describe_image', 'vision', 'video_generate', 'motion_render', 'voice_mode', 'wake_word', 'neutts_synth', 'computer_use', 'tts_streaming', 'tts_text_normalize'],
   },
   {
     name: 'mcp-tools',

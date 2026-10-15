@@ -70,7 +70,10 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ```
 
 > The first run is also when `nuvira doctor` is most useful — it reports exactly
-> which providers are configured and which are missing a key.
+> which providers are configured and which are missing a key, and it lists the
+> optional system tools (FFmpeg, Chromium/Playwright, Ollama, a narrator, Poppler)
+> with the command that installs each one on your OS. `nuvira doctor --fix` offers
+> to install the missing ones. See [DEPENDENCIES.md](./DEPENDENCIES.md).
 
 ---
 
@@ -447,14 +450,23 @@ nuvira models excluded         # show what routing is skipping, and WHY
 
 ### 4.1 Doctor — diagnose your setup
 
-- **Objective:** Run diagnostic checks on all provider configs and system health.
+- **Objective:** Run diagnostic checks on all provider configs and system health — including the
+  runtime tools the agent uses but does not ship (FFmpeg, Chromium/Playwright, Ollama, a narrator,
+  Whisper, Poppler), each with the install command for this OS.
 - **Command:** `nuvira doctor [-p <provider>] [--enterprise] [--watch] [--verbose] [--fix]`
 - **Examples:**
   ```bash
   nuvira doctor                       # everything checked at once
-  nuvira doctor --fix                 # attempt auto-fixes for problems found
+  nuvira doctor --fix                 # auto-fix problems, and offer to INSTALL each missing tool
   nuvira doctor -p groq               # check one provider only
   ```
+- **Notes:** the runtime-tool rows are warnings, not failures — a missing one only means that one
+  capability is skipped, and every feature that needs it says so instead of returning nothing.
+  `--fix` asks before each install and then verifies the tool is detectable; an install that needs a
+  password it cannot supply (sudo, the `xcode-select` GUI) is printed for you to run, and piped/CI
+  output never installs anything. The full list, with what each tool unlocks and the caveats that
+  bite (macOS needs `ffmpeg-full`, not `ffmpeg`, or burned captions fall back to a `.srt`), is in
+  [DEPENDENCIES.md](./DEPENDENCIES.md).
 
 ### 4.2 Config get/set/list/init
 

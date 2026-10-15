@@ -40,6 +40,7 @@ vi.mock('node:os', () => ({
 
 // Import the server after env/os mocks are in place
 const { createDashboardServer, isQuotaWatcherArmed, setAlwaysWatchQuota, pushDAGUpdate, updateDAGNode, resetDAG, readPipelineRuns } = await import('../../src/web-dashboard/server.js');
+const { ArtifactStore } = await import('../../src/tools/artifact-store.js');
 
 // ─── Fixture data helpers ───────────────────────────────────────────────────
 
@@ -2314,5 +2315,78 @@ describe('Session 38 — Agent Hub channel send-test (/api/admin/hub/channels/se
     const viewerToken = login.data.token as string;
     const r = await jsonReq('/api/admin/hub/channels/send', 'POST', { target: 'webhook:any', text: 'hi' }, viewerToken);
     expect(r.status).toBe(403);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GET /api/artifact-file — an artifact's BYTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('artifact bytes', () => {
+  // A rendered motion video is a deliverable, so the Artifacts tab plays it
+  // instead of printing a filename. The path is resolved from the SERVER's own
+  // store by (session, artifact id) — never from the query string — which is the
+  // property these tests exist to hold.
+  const SESSION = 'session-motion';
+  const VIDEO_ID = 'art-video';
+  const SRT_ID = 'art-srt';
+  const videoFile = join(testDir, 'render.mp4');
+  const srtFile = join(testDir, 'render.srt');
+  // Not a real mp4: the endpoint serves bytes, so what matters is that every
+  // byte of the file arrives unchanged (a truncated stream is a broken video).
+  const videoBytes = Buffer.alloc(4096);
+  for (let i = 0; i < videoBytes.length; i++) videoBytes[i] = (i * 7) % 251;
+  const srtBytes = Buffer.from('1\n00:00:00,000 --> 00:00:02,000\nHello motion\n', 'utf-8');
+
+  beforeAll(() => {
+    writeFileSync(videoFile, videoBytes);
+    writeFileSync(srtFile, srtBytes);
+    const store = new ArtifactStore();
+    store.append(SESSION, { id: VIDEO_ID, kind: 'media', title: 'motion: bar-race', path: videoFile, mime: 'video/mp4', source: 'tool', createdAt: Date.now() });
+    // No recorded mime — the content type must come from the extension, or a
+    // <video> gets a blank frame instead of a scrubber.
+    store.append(SESSION, { id: SRT_ID, kind: 'file', title: 'captions (.srt)', path: srtFile, source: 'tool', createdAt: Date.now() });
+  });
+
+  const artifactUrl = (session: string, artifact: string): string =>
+    `${baseUrl}/api/artifact-file?session=${encodeURIComponent(session)}&artifact=${encodeURIComponent(artifact)}`;
+
+  it('serves the whole file with the recorded mime and byte ranges enabled', async () => {
+    const res = await fetch(artifactUrl(SESSION, VIDEO_ID));
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('video/mp4');
+    expect(res.headers.get('content-length')).toBe(String(videoBytes.length));
+    expect(res.headers.get('accept-ranges')).toBe('bytes');
+    expect(body.equals(videoBytes)).toBe(true);
+  });
+
+  it('derives the content type from the extension when none was recorded', async () => {
+    const res = await fetch(artifactUrl(SESSION, SRT_ID));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/x-subrip');
+    expect(res.headers.get('content-length')).toBe(String(srtBytes.length));
+  });
+
+  it('honours a byte range with 206 — a player that cannot seek cannot be reviewed', async () => {
+    const res = await fetch(artifactUrl(SESSION, VIDEO_ID), { headers: { Range: 'bytes=100-199' } });
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(res.status).toBe(206);
+    expect(res.headers.get('content-range')).toBe(`bytes 100-199/${videoBytes.length}`);
+    expect(res.headers.get('content-length')).toBe('100');
+    expect(body.equals(videoBytes.subarray(100, 200))).toBe(true);
+  });
+
+  it('answers a range past the end with 416 and the real size', async () => {
+    const res = await fetch(artifactUrl(SESSION, VIDEO_ID), { headers: { Range: 'bytes=99999999-' } });
+    expect(res.status).toBe(416);
+    expect(res.headers.get('content-range')).toBe(`bytes */${videoBytes.length}`);
+  });
+
+  it('refuses an unknown id, another session id, and a path-shaped id — the path is never taken from the caller', async () => {
+    expect((await fetch(artifactUrl(SESSION, 'no-such-artifact'))).status).toBe(404);
+    expect((await fetch(artifactUrl('some-other-session', VIDEO_ID))).status).toBe(404);
+    // A traversal attempt is looked up as an ID (and misses), never resolved.
+    expect((await fetch(artifactUrl(SESSION, '../../../etc/passwd'))).status).toBe(404);
   });
 });

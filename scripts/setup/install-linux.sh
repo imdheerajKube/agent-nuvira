@@ -11,6 +11,8 @@
 #    5. Offer optional performance upgrades:
 #         • Native FAISS  → faster semantic search / memory recall
 #         • Local embeddings → free, offline, private embeddings
+#         • Runtime tools  → ffmpeg, a chromium bundle, narration, PDF/OCR,
+#                            local models (what the AGENT uses but does not ship)
 #  Run it with:  bash <(curl -fsSL https://raw.githubusercontent.com/imdheerajKube/agent-nuvira/main/scripts/setup/install-linux.sh)
 #  or download it and run:  bash install-linux.sh
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -148,6 +150,65 @@ else
   warn "Skipping local embeddings — Agent-Nuvira will fall back to cloud/LLM embeddings."
 fi
 
+# ─── 5b. Optional tools for the agent's multimedia features ────────────────────
+# The binaries Nuvira USES but does not ship. Without them the motion renderer,
+# browser automation, narration and local models are SKIPPED (and reported as
+# skipped) — everything else works. `agent-nuvira doctor` lists what is still
+# missing at any time, and `agent-nuvira doctor --fix` installs the recommended
+# ones later, so nothing here is a one-shot decision.
+echo ""
+step "Optional tools for the agent's multimedia features"
+if confirm "Install them now? (ffmpeg, chromium, narration, PDF/OCR, local models)"; then
+  if command -v ffmpeg >/dev/null 2>&1; then
+    ok "ffmpeg already installed"
+  elif pm_install ffmpeg; then
+    ok "ffmpeg installed (video encode for the motion renderer)"
+  else
+    warn "ffmpeg skipped — install it with your package manager for video support"
+  fi
+
+  if npx --yes playwright install chromium >/dev/null 2>&1; then
+    ok "chromium bundle for playwright installed (browser tools + motion frames)"
+  else
+    warn "chromium skipped — run 'npx playwright install chromium' later"
+  fi
+
+  if command -v edge-tts >/dev/null 2>&1; then
+    ok "edge-tts already installed"
+  elif command -v pip3 >/dev/null 2>&1; then
+    if pip3 install --user edge-tts >/dev/null 2>&1; then
+      ok "edge-tts installed (free local narration, no API key)"
+    else
+      warn "edge-tts install failed — narration will be skipped"
+    fi
+  else
+    warn "Python 3 + pip not found — install them, then: pip3 install --user edge-tts"
+  fi
+
+  POPPLER=poppler-utils
+  [[ "$PM" == pacman ]] && POPPLER=poppler
+  [[ "$PM" == apk ]] && POPPLER=poppler-utils
+  if command -v pdftoppm >/dev/null 2>&1; then
+    ok "poppler already installed"
+  elif pm_install "$POPPLER" >/dev/null 2>&1; then
+    ok "poppler installed (reads scanned, image-only PDFs)"
+  else
+    warn "poppler skipped — scanned-PDF OCR is unavailable"
+  fi
+
+  if command -v ollama >/dev/null 2>&1; then
+    ok "ollama already installed"
+  elif confirm "   Also install Ollama for free local models? (offline, no API key; model downloads are multi-GB)"; then
+    if curl -fsSL https://ollama.com/install.sh | sh >/dev/null 2>&1; then
+      ok "ollama installed — start it with 'ollama serve'"
+    else
+      warn "ollama skipped — local models are unavailable"
+    fi
+  else
+    warn "ollama skipped"
+  fi
+fi
+
 # ─── 6. Verify ─────────────────────────────────────────────────────────────────
 step "Verifying installation…"
 VERSION=$(agent-nuvira --version 2>/dev/null | tail -1 || buff --version 2>/dev/null | tail -1 || true)
@@ -167,5 +228,8 @@ echo "        agent-nuvira config set provider.groq.apiKey YOUR_KEY"
 echo "        # or any provider from the config wizard:  agent-nuvira config"
 echo "     2. Try it:   agent-nuvira chat  \"build a hello-world CLI\""
 echo "     3. See all commands:   agent-nuvira --help"
+echo "     4. See what else is installed (and what is missing):"
+echo "        agent-nuvira doctor            # the full dependency list + install commands"
+echo "        agent-nuvira doctor --fix      # installs the missing recommended tools"
 echo ""
 echo "   To reconfigure later:  agent-nuvira config"

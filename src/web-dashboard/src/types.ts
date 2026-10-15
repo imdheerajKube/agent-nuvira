@@ -1772,7 +1772,9 @@ export interface HubArtifactSummary {
   sessionId: string;
   count: number;
   latestAt: number;
-  recent: Array<{ kind: string; title?: string; preview?: string }>;
+  /** `id` addresses the bytes through /api/artifact-file; `mime` says whether the
+   * panel can render it inline (a video deliverable, not just a filename). */
+  recent: Array<{ kind: string; title?: string; preview?: string; id?: string; mime?: string }>;
 }
 
 export interface HubSkill {

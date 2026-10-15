@@ -2795,7 +2795,11 @@ export class ChatCommand extends BaseCommand {
     let machineBlock = '';
     try {
       const { buildMachineFactsBlock } = await import('../learning/machine-facts.js');
-      machineBlock = buildMachineFactsBlock();
+      // …plus the optional tools this machine does NOT have, so a feature that
+      // needs one is named as skipped (with its install command) instead of
+      // being reported as done. Empty string when everything is installed.
+      const { buildRuntimeDependenciesBlock } = await import('../learning/runtime-dependencies.js');
+      machineBlock = buildMachineFactsBlock() + buildRuntimeDependenciesBlock();
     } catch {
       machineBlock = '';
     }

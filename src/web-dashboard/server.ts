@@ -105,6 +105,7 @@ import {
   startVerifyBacklogRun,
 } from '../learning/model-verify-job.js';
 import { setToolsetEnabled } from '../tools/toolsets.js';
+import { ArtifactStore } from '../tools/artifact-store.js';
 import { setSkillEnabled } from '../learning/hub-skill-catalog.js';
 // I11 — dashboard channel send-test: the same registry/adapters `nuvira gateway
 // send` uses, so a Channels-tab test message behaves identically to the CLI.
@@ -198,6 +199,40 @@ let alwaysWatchQuota = false;
  * loadApiKeysFromConfig uses). Best-effort — a missing/corrupt config just
  * keeps the default (false = arm-on-connect only).
  */
+/**
+ * The content type for an artifact file: the recorded mime when there is one,
+ * otherwise the extension. Video and image types are the ones the panel renders
+ * inline, so a wrong type is a blank frame rather than a failed download.
+ */
+function artifactFileMime(file: string, recorded?: string): string {
+  if (recorded && /^[a-z]+\/[a-z0-9.+-]+$/i.test(recorded)) return recorded;
+  const ext = (file.split('.').pop() ?? '').toLowerCase();
+  const byExt: Record<string, string> = {
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+    mov: 'video/quicktime',
+    mkv: 'video/x-matroska',
+    gif: 'image/gif',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
+    m4a: 'audio/mp4',
+    srt: 'application/x-subrip',
+    vtt: 'text/vtt',
+    json: 'application/json',
+    md: 'text/markdown',
+    txt: 'text/plain',
+    log: 'text/plain',
+    csv: 'text/csv',
+    pdf: 'application/pdf',
+  };
+  return byExt[ext] ?? 'application/octet-stream';
+}
+
 function loadAlwaysWatchQuotaFlag(): void {
   try {
     const configPath = resolveBuffConfigPath();
@@ -3957,6 +3992,53 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       }
       writeJson(res, 200, { ok: true, hooks: saved.declarations });
     })();
+    return;
+  }
+
+  // ── An artifact's BYTES — how the Artifacts tab shows a rendered video rather
+  // than a filename. The path is looked up in OUR OWN artifact store by (session,
+  // artifact id) and is never taken from the query string, so a caller cannot ask
+  // this endpoint for an arbitrary file; a bad pair is a 404, not a read.
+  if (pathname === '/api/artifact-file') {
+    const sessionId = url.searchParams.get('session') ?? '';
+    const artifactId = url.searchParams.get('artifact') ?? '';
+    const artifact = artifactId
+      ? new ArtifactStore().read(sessionId).find((a) => a.id === artifactId)
+      : undefined;
+    if (!artifact || !artifact.path || !existsSync(artifact.path) || !statSync(artifact.path).isFile()) {
+      writeJson(res, 404, { ok: false, error: 'No such artifact file.' });
+      return;
+    }
+    const size = statSync(artifact.path).size;
+    const type = artifactFileMime(artifact.path, artifact.mime);
+    // Range support, because a <video> that cannot seek cannot be reviewed: a
+    // player asks for byte ranges the moment the user drags the scrubber.
+    const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
+    if (range) {
+      const start = range[1] ? Number(range[1]) : 0;
+      const end = range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+      if (start >= size || end < start) {
+        res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+        res.end();
+        return;
+      }
+      res.writeHead(206, {
+        'Content-Type': type,
+        'Content-Length': String(end - start + 1),
+        'Content-Range': `bytes ${start}-${end}/${size}`,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-store',
+      });
+      createReadStream(artifact.path, { start, end }).pipe(res);
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': type,
+      'Content-Length': String(size),
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store',
+    });
+    createReadStream(artifact.path).pipe(res);
     return;
   }
 

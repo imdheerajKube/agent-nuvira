@@ -238,7 +238,23 @@ This table highlights core capabilities for quick machine parsing and comparison
 ### Prerequisites
 
 - **Node.js** 20+ and **npm**
+- **Git** — worktrees, diffs and every change-tracking mode
 - **TypeScript** knowledge for development; none required to use the CLI
+
+The agent also *uses* software npm cannot install — **FFmpeg** (video encode),
+**Chromium via Playwright** (browser automation and motion frames), **Ollama**
+(local models), a narrator for voice-over, **Poppler** for scanned PDFs. None of
+them is required to start: the feature that needs one reports itself as skipped,
+with the reason. The complete list, with the exact command for your OS and the
+caveats that bite (macOS needs `ffmpeg-full`, not `ffmpeg`, or burned captions
+fall back to a `.srt`), is in **[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)**.
+
+Check what you already have, and install the rest, at any time:
+
+```bash
+agent-nuvira doctor          # every tool, its status, and your OS's install command
+agent-nuvira doctor --fix    # offers each missing one, installs it, then verifies it
+```
 
 ### Install
 
@@ -275,7 +291,12 @@ What each script does:
 3. **Asks about optional upgrades** (recommended, each a yes/no):
    - **Native FAISS** → faster semantic search / memory recall
    - **Local embeddings** → free, offline, private embeddings (no cloud call)
-4. **Verifies** the install and prints next steps.
+   - **Runtime tools** → FFmpeg, a Chromium bundle for Playwright, a narrator
+     (edge-tts), Poppler for scanned PDFs, Ollama for local models. Each one is
+     asked for separately and skipped cleanly if you decline — see
+     [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) for what each unlocks.
+4. **Verifies** the install and prints next steps — including
+   `agent-nuvira doctor` for the full list of what is (and is not) installed.
 
 > The scripts are safe to re-run — they skip tools that are already present.
 > Manual install instructions for every step are below for those who prefer
@@ -764,6 +785,40 @@ A backend that is configured but fails at request time falls back to the free Po
 | Transcription | whisper.cpp / whisper-cli (local, free) | binary on `PATH` |
 | Vision (`describe_image`) | Ollama llava/llama3.2-vision, or Gemini | local Ollama, or `GEMINI_API_KEY` |
 | Video | FAL AI | `FAL_KEY` |
+
+#### Motion (animated video from code)
+
+`motion_render` renders an **animated** video — an explainer, an animated chart of your own
+numbers, a kinetic title, a code walkthrough — from code rather than from a video model, so the
+labels are spelled correctly, your data is your data, and the same source always renders the same
+file. It needs two binaries and no API key:
+
+| Requirement | Install |
+|---|---|
+| chromium (playwright) | `npx playwright install chromium` |
+| ffmpeg | `brew install ffmpeg` (macOS) / `sudo apt-get install -y ffmpeg` (Debian/Ubuntu) |
+| narration (optional) | `pip install edge-tts`, or Piper on `PATH` |
+| captions burned into the frames (optional) | an ffmpeg built with libass — macOS `brew install ffmpeg-full`. Without it the `.srt` is still written and the render says the burn was skipped |
+
+```bash
+# A ready-made scene animating your own data (JSON inline, or a CSV/JSON file)
+nuvira execute "animate quarterly-revenue.csv as a bar race, 12s, title 'Q3 revenue'"
+
+# Or a hand-written animation: a SEEKABLE page (window.__motion = { seek(tMs) })
+nuvira execute "turn README.md into a 20s motion explainer with captions, 9:16"
+```
+
+The animation must be **seekable** — `window.__motion = { seek(tMs) }`, or CSS/Web Animations, or a
+`requestAnimationFrame` loop, all stepped by the renderer — because frames are captured from the
+timeline instead of recorded in real time; that is what makes a re-edit (`revise` the stored render)
+reproducible. Presets: `title-card`, `bar-race`, `line-reveal`, `code-walkthrough`. Output goes to
+`.nuvira/artifacts/motion/` and appears in the dashboard's **Artifacts** tab, where it plays inline.
+A missing chromium or ffmpeg is reported by name with the command that installs it, and narration
+that could not be synthesized is reported as skipped rather than silently dropped.
+
+`nuvira doctor` lists every optional tool with its status and the command for your OS;
+`nuvira doctor --fix` installs the missing ones. The full list is in
+[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
 
 ---
 

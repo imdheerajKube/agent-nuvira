@@ -8,6 +8,8 @@
 #    4. Offer optional performance upgrades:
 #         • Native FAISS  → faster semantic search / memory recall
 #         • Local embeddings → free, offline, private embeddings
+#         • Runtime tools  → ffmpeg, a chromium bundle, narration, local models
+#                            (what the AGENT uses but does not ship)
 #
 #  Run it (from PowerShell):
 #    Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
@@ -114,6 +116,54 @@ if (Confirm-Yes "Enable local embeddings (free, offline, private)? (recommended)
   Warn "Skipping local embeddings — Agent-Nuvira will fall back to cloud/LLM embeddings."
 }
 
+# ─── 4b. Optional tools for the agent's multimedia features ────────────────────
+# The binaries Nuvira USES but does not ship. Without them the motion renderer,
+# browser automation, narration and local models are SKIPPED (and reported as
+# skipped) — everything else works. `agent-nuvira doctor` lists what is still
+# missing at any time, and `agent-nuvira doctor --fix` installs the recommended
+# ones later, so nothing here is a one-shot decision.
+Write-Host ""
+Step "Optional tools for the agent's multimedia features"
+if (Confirm-Yes "Install them now? (ffmpeg, chromium, narration, local models)") {
+  if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+    Ok "ffmpeg already installed"
+  } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+    winget install Gyan.FFmpeg --silent --accept-package-agreements --accept-source-agreements | Out-Null
+    Ok "ffmpeg installed (video encode for the motion renderer)"
+  } else {
+    Warn "ffmpeg skipped — install it later for video support"
+  }
+
+  npx --yes playwright install chromium 2>$null | Out-Null
+  if ($LASTEXITCODE -eq 0) {
+    Ok "chromium bundle for playwright installed (browser tools + motion frames)"
+  } else {
+    Warn "chromium skipped — run 'npx playwright install chromium' later"
+  }
+
+  if (Get-Command edge-tts -ErrorAction SilentlyContinue) {
+    Ok "edge-tts already installed"
+  } elseif (Get-Command pip -ErrorAction SilentlyContinue) {
+    pip install edge-tts 2>$null | Out-Null
+    Ok "edge-tts installed (free local narration, no API key) — reopen your terminal for PATH"
+  } else {
+    Warn "Python + pip not found — install them, then: pip install edge-tts"
+  }
+
+  if (Confirm-Yes "   Also install Ollama for free local models? (offline, no API key; model downloads are multi-GB)") {
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+      winget install Ollama.Ollama --silent --accept-package-agreements --accept-source-agreements | Out-Null
+      Ok "ollama installed — start it once from the Start menu, then: ollama pull llama3.2"
+    } else {
+      Warn "ollama skipped — local models are unavailable"
+    }
+  } else {
+    Warn "ollama skipped"
+  }
+} else {
+  Warn "Skipped — 'agent-nuvira doctor --fix' can install any of them later."
+}
+
 # ─── 5. Verify ─────────────────────────────────────────────────────────────────
 Step "Verifying installation…"
 $Version = (agent-nuvira --version 2>$null | Select-Object -Last 1)
@@ -133,5 +183,8 @@ Write-Host "        agent-nuvira config set provider.groq.apiKey YOUR_KEY"
 Write-Host "        # or any provider from the config wizard:  agent-nuvira config"
 Write-Host "     2. Try it:   agent-nuvira chat  \"build a hello-world CLI\""
 Write-Host "     3. See all commands:   agent-nuvira --help"
+Write-Host "     4. See what else is installed (and what is missing):"
+Write-Host "        agent-nuvira doctor            # the full dependency list + install commands"
+Write-Host "        agent-nuvira doctor --fix      # installs the missing recommended tools"
 Write-Host ""
 Write-Host "   IMPORTANT: open a NEW terminal before using agent-nuvira (PATH changes need it)."

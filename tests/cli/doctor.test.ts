@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  dependencyCheckResults,
   probeNuviraSidecar,
   auditJsonlIntegrity,
   checkSecretsBackend,
@@ -29,6 +30,7 @@ import {
 import { beginTrace, clearTraces, recordTraceVerdict, recordTurnReport } from '../../src/learning/reasoning-trace.js';
 import type { BuffConfig } from '../../src/config/types.js';
 import { getMetrics, resetMetrics } from '../../src/enterprise/metrics.js';
+import { probeRuntimeDependencies } from '../../src/learning/runtime-dependencies.js';
 
 // ─── Hermetic env for runAllChecks ──────────────────────────────────────────
 // runAllChecks() (and ConfigManager default resolution) must never touch the
@@ -617,6 +619,45 @@ describe('doctor — acceptance / quality-fit readiness (Bundle 35)', () => {
     expect(oneClass.status).toBe('warn');
     expect(oneClass.message).toMatch(/not ready/);
     clearTraces();
+  });
+});
+
+/**
+ * The runtime-dependency rows: the software Nuvira uses but does not ship.
+ *
+ * These are the rows both `nuvira doctor` and the dashboard's checks page show,
+ * so the two properties that matter are that presence is reported as a PASS, and
+ * that a MISSING tool is a WARN whose `fix` is the exact command for the machine
+ * — never a FAIL (nothing is broken; a capability is unavailable).
+ */
+describe('doctor — runtime dependency rows', () => {
+  it('reports an installed tool as pass, with what it is for', () => {
+    const statuses = probeRuntimeDependencies({ binary: () => true, playwrightBrowser: () => true });
+    for (const check of dependencyCheckResults(statuses)) {
+      expect(check.status).toBe('pass');
+      expect(check.name).toMatch(/^Runtime: /);
+      expect(check.detail).toMatch(/Needed by: /);
+      expect(check.fix).toBeUndefined();
+    }
+  });
+
+  it('makes a missing tool a WARN carrying the install command, never a FAIL', () => {
+    const statuses = probeRuntimeDependencies(
+      { binary: () => false, playwrightBrowser: () => false },
+      'darwin',
+      () => true,
+    );
+    const checks = dependencyCheckResults(statuses);
+    expect(checks.length).toBeGreaterThan(3);
+    for (const check of checks) {
+      expect(check.status).toBe('warn');
+      expect(check.message).toMatch(/not installed/);
+      expect(check.fix, check.name).toBeTruthy();
+    }
+    const ffmpeg = checks.find((c) => c.name === 'Runtime: FFmpeg')!;
+    expect(ffmpeg.fix).toContain('brew install ffmpeg-full');
+    // The optional ones say so, so "not installed" is not read as a defect.
+    expect(checks.find((c) => c.name === 'Runtime: edge-tts')!.message).toMatch(/optional/);
   });
 });
 

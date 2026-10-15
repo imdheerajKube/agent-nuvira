@@ -6,7 +6,8 @@
  *   nuvira doctor --provider groq           — Check only a specific provider
  *   nuvira doctor --watch                   — Continuous monitoring mode (refreshes every 30s)
  *   nuvira doctor --verbose                 — Show detailed diagnostic info
- *   nuvira doctor --fix                     — Attempt auto-fix for common issues (create ~/.nuvira dirs, etc.)
+ *   nuvira doctor --fix                     — Attempt auto-fix for common issues (create ~/.nuvira dirs,
+ *                                             offer to install missing runtime tools)
  *
  * The health check runs all provider tests in parallel with timeouts:
  *   1. API Key presence check
@@ -26,6 +27,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveNuviraHome } from '../config/paths.js';
+import { resetBinaryProbeCache } from '../utils/binary-probe.js';
 
 import { BaseCommand, getCliName } from './commands.js';
 import { ProviderFactory } from '../inference/factory.js';
@@ -42,6 +44,13 @@ import { resolve } from 'node:path';
 import { readLockfile, buildSbom, verifySbom, parseSbom } from '../enterprise/sbom.js';
 import { VAULT_AUDIT_FILENAME } from '../enterprise/vault-audit.js';
 import { getMetrics } from '../enterprise/metrics.js';
+import {
+  dependencySummary,
+  installPlan,
+  missingDependencies,
+  probeRuntimeDependencies,
+  type DependencyStatus,
+} from '../learning/runtime-dependencies.js';
 
 /**
  * Build the P6 M6.6 SBOM posture for doctor. When a stored `sbom.json` exists
@@ -727,7 +736,48 @@ function checkRuntimeMetrics(): CheckResult {
 
 // ── System Checks ─────────────────────────────────────────────────────────
 
-export async function runSystemChecks(configManager: ConfigManager): Promise<CheckResult[]> {
+/**
+ * The runtime-dependency rows as CheckResults.
+ *
+ * ONE list, TWO surfaces: `nuvira doctor` renders these in the CLI and the
+ * dashboard's checks page (`/api/admin/checks` → `runAllChecks`) renders the
+ * same rows, because both call this. A dependency the machine does not have is a
+ * WARN, never a FAIL — Nuvira degrades and says so, so a missing optional tool
+ * is a choice to make, not a broken install. The `fix` carries the exact command
+ * for THIS machine.
+ */
+export function dependencyCheckResults(statuses: DependencyStatus[]): CheckResult[] {
+  return statuses.map(({ dependency: d, present, installCommand }) => {
+    if (present) {
+      return {
+        name: `Runtime: ${d.label}`,
+        status: 'pass' as HealthStatus,
+        message: 'installed',
+        detail: `${d.enables} Needed by: ${d.neededBy.join(', ')}.`,
+      };
+    }
+    const fix = installCommand
+      ? installCommand + (d.note ? `\n         ${d.note}` : '')
+      : 'No one-line installer on this OS — see docs/DEPENDENCIES.md for the manual route.';
+    return {
+      name: `Runtime: ${d.label}`,
+      status: 'warn' as HealthStatus,
+      message: d.need === 'recommended' ? 'not installed' : 'not installed (optional)',
+      detail: `Without it: ${d.enables} Install with: ${installCommand ?? 'see docs/DEPENDENCIES.md'}`,
+      fix,
+    };
+  });
+}
+
+/**
+ * System checks. `deps` is injected so the caller can probe ONCE and share the
+ * result with the renderer and `--fix` (the probes are memoized, but the plan
+ * must be the same list the user just read).
+ */
+export async function runSystemChecks(
+  configManager: ConfigManager,
+  deps: DependencyStatus[] = probeRuntimeDependencies(),
+): Promise<CheckResult[]> {
   const checks: CheckResult[] = [];
 
   // 1. Config directory
@@ -973,6 +1023,12 @@ export async function runSystemChecks(configManager: ConfigManager): Promise<Che
   // whether the read-only acceptance fit has a corpus to train on, and nothing more.
   checks.push(checkAcceptanceReadiness());
 
+  // 8. Runtime dependencies (the software Nuvira uses but does not ship):
+  // ffmpeg, a chromium bundle, ollama, edge-tts, piper, whisper, poppler. Each
+  // row names what it enables and the exact install command for this machine;
+  // `--fix` installs the missing ones after asking.
+  checks.push(...dependencyCheckResults(deps));
+
   return checks;
 }
 
@@ -1208,7 +1264,7 @@ export class DoctorCommand extends BaseCommand {
       .option('--enterprise', 'P7 M7.1: enterprise self-check (gateway health, secrets backend, audit integrity, RBAC policy)', false)
       .option('--watch', 'Continuous monitoring mode (refreshes every 30s)', false)
       .option('--verbose', 'Show detailed diagnostic information', false)
-      .option('--fix', 'Attempt to auto-fix common issues', false)
+      .option('--fix', 'Attempt to auto-fix common issues and offer to install missing runtime tools (ffmpeg, chromium, narrators)', false)
       .action(async (options?: {
         provider?: string;
         nuvira?: boolean;
@@ -1245,7 +1301,10 @@ export class DoctorCommand extends BaseCommand {
     console.log('');
 
     // ── System-level checks ─────────────────────────────────────────────
-    const sysChecks = await runSystemChecks(this.configManager);
+    // The runtime-dependency probe happens ONCE: the same statuses drive the
+    // report rows, the install list the user reads, and `--fix`.
+    const depStatuses = probeRuntimeDependencies();
+    const sysChecks = await runSystemChecks(this.configManager, depStatuses);
 
     // ── Enterprise self-check (P7 M7.1) ────────────────────────────────
     // `${getCliName()} doctor --enterprise` runs the P7 self-check: gateway health,
@@ -1258,6 +1317,7 @@ export class DoctorCommand extends BaseCommand {
       const enterpriseChecks = await runEnterpriseChecks(this.configManager);
       console.log('');
       this.renderEnterpriseSection(enterpriseChecks);
+      this.renderDependencySection(depStatuses);
       console.log('');
       this.renderSummary(sysChecks, []);
       console.log('');
@@ -1329,6 +1389,7 @@ export class DoctorCommand extends BaseCommand {
     // ── Render Report ───────────────────────────────────────────────────
     console.log('');
     this.renderSystemSection(sysChecks);
+    this.renderDependencySection(depStatuses);
     console.log('');
     this.renderProviderSection(providerResults, options.verbose);
     console.log('');
@@ -1339,7 +1400,7 @@ export class DoctorCommand extends BaseCommand {
 
     // ── Fix mode ────────────────────────────────────────────────────────
     if (options.fix) {
-      await this.autoFix(sysChecks, providerResults);
+      await this.autoFix(sysChecks, providerResults, depStatuses);
     }
 
     logger.highlight('═'.repeat(62));
@@ -1580,6 +1641,33 @@ export class DoctorCommand extends BaseCommand {
     }
   }
 
+  /**
+   * The "here is what to install" half of the feature.
+   *
+   * A missing runtime dependency is a WARN, and `renderSystemSection` prints a
+   * fix only for FAILs — so the ONE place a user actually reads an install
+   * command is here: every missing tool, what it buys, its exact command for this
+   * machine, and the caveat that bites (ffmpeg-full for burned captions, a first
+   * `ollama pull`, `PLAYWRIGHT_BROWSERS_PATH=0`). Printed only when something is
+   * missing, so a fully equipped machine sees no extra block.
+   */
+  private renderDependencySection(statuses: DependencyStatus[]): void {
+    const missing = missingDependencies(statuses);
+    if (missing.length === 0) return;
+    const recommended = missing.filter((m) => m.dependency.need === 'recommended').length;
+    console.log('');
+    logger.highlight('  ── Software you can add (optional) ──');
+    console.log(`  ${dependencySummary(statuses)} — ${missing.length} missing${recommended > 0 ? ` (${recommended} recommended)` : ''}`);
+    for (const { dependency: d, installCommand } of missing) {
+      console.log(`  ⚠️  ${d.label} [${d.need}] — ${d.enables}`);
+      console.log(`     Install: ${installCommand ?? 'no one-line installer on this OS — see docs/DEPENDENCIES.md'}`);
+      if (d.note) console.log(`     ℹ️  ${d.note}`);
+      console.log(`     Needed by: ${d.neededBy.join(', ')}`);
+    }
+    console.log(`  💡 Install them now (asks per tool): \`${getCliName()} doctor --fix\``);
+    console.log(`     Full list and manual steps: docs/DEPENDENCIES.md`);
+  }
+
   private renderEnterpriseSection(checks: CheckResult[]): void {
     logger.highlight('  ── Enterprise Self-Check (P7) ──');
     for (const check of checks) {
@@ -1668,6 +1756,7 @@ export class DoctorCommand extends BaseCommand {
   private async autoFix(
     sysChecks: CheckResult[],
     providerResults: ProviderHealth[],
+    depStatuses: DependencyStatus[] = probeRuntimeDependencies(),
   ): Promise<void> {
     logger.highlight('\n  ── Auto-Fix Mode ──');
     let fixesApplied = 0;
@@ -1704,8 +1793,67 @@ export class DoctorCommand extends BaseCommand {
       }
     }
 
+    // 3. Missing runtime dependencies — the software Nuvira uses but does not
+    // ship (ffmpeg, a chromium bundle, ollama, edge-tts, piper, whisper,
+    // poppler). ASK FIRST: this installs packages on the user's machine, so
+    // consent is not optional. Non-interactive input is never blocked on — the
+    // commands are printed instead, and the task is left to the user.
+    const plan = installPlan(depStatuses);
+    if (plan.length > 0) {
+      console.log('');
+      logger.highlight('  ── Missing tools ──');
+      const interactive = Boolean(process.stdin.isTTY);
+      if (!interactive) {
+        // Non-interactive input is never blocked on and nothing is installed
+        // behind the user's back: the list is printed and the step is theirs,
+        // exactly like the agent hands off a step it cannot complete alone.
+        logger.info('Not a terminal — nothing was installed. Run the ones you want:');
+        for (const step of plan) console.log(`    ${step.dependency.label}: ${step.command}`);
+      } else {
+        const { promptToolInstall, humanInterventionNote } = await import('./tool-install-prompt.js');
+        for (const step of plan) {
+          // A `sudo`/GUI installer cannot be driven unattended — hand off ONE
+          // step (the policy `tool-install-prompt` already enforces for the
+          // agent, so both paths treat a password prompt the same way).
+          if (step.needsHumanInput) {
+            console.log('');
+            logger.warn(humanInterventionNote(step.dependency.id, step.command, step.dependency.enables));
+            continue;
+          }
+          const choice = await promptToolInstall(step.dependency.label, step.command);
+          if (choice !== 'install') {
+            // 'manual' and 'skip' both land here: the command was already
+            // printed above the prompt, so there is nothing more to say.
+            continue;
+          }
+          try {
+            execSync(step.command, { stdio: 'inherit' });
+          } catch (err) {
+            logger.error(`${step.dependency.label}: the install command failed — ${err instanceof Error ? err.message : String(err)}`);
+            continue;
+          }
+          // VERIFY, do not assume: the probe memoizes, so clear it and re-check.
+          resetBinaryProbeCache();
+          const after = probeRuntimeDependencies().find((s) => s.dependency.id === step.dependency.id);
+          if (after?.present) {
+            logger.success(`${step.dependency.label} installed and found on PATH`);
+            fixesApplied++;
+          } else {
+            logger.warn(
+              `${step.dependency.label}: the command finished but it is still not detected — ` +
+                `check that its bin directory is on PATH (a new shell may be needed).`,
+            );
+          }
+        }
+      }
+    }
+
     if (fixesApplied === 0) {
-      logger.info('No auto-fixable issues found.');
+      logger.info(
+        plan.length > 0
+          ? `No automatic fixes applied — ${plan.length} tool(s) still to install (commands above).`
+          : 'No auto-fixable issues found.',
+      );
     } else {
       console.log('');
       logger.success(`Applied ${fixesApplied} fix(es). Run '${getCliName()} doctor' again to verify.`);

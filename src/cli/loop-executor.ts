@@ -853,7 +853,10 @@ export async function runLoopExecutor(
   let machineBlock = '';
   try {
     const { buildMachineFactsBlock } = await import('../learning/machine-facts.js');
-    machineBlock = buildMachineFactsBlock();
+    // …plus the optional tools this machine does NOT have (see chat.ts): the
+    // model must name a skipped feature and its install command, not claim it.
+    const { buildRuntimeDependenciesBlock } = await import('../learning/runtime-dependencies.js');
+    machineBlock = buildMachineFactsBlock() + buildRuntimeDependenciesBlock();
   } catch {
     machineBlock = '';
   }

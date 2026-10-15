@@ -77,12 +77,13 @@ for (const key of ['NUVIRA_MCP_DIR', 'BUFF_MCP_DIR']) {
   if (!process.env[key]) process.env[key] = mcpDir;
 }
 
-// The skills store seeds all 152 bundled skills from its constructor and keeps an
-// index beside them, so a test that merely does `new SkillStore()` wrote the
-// developer's real `~/.nuvira/skills` — measured on this repo, 152 files plus
-// `index.json`, on every run. It is also shared state: two files running at once
-// raced on it (a re-seed reporting 140 where the test expected 0, a fresh store
-// seeing 67 of 152 skills).
+// The skills store seeds the whole bundled set (152 at the time of the
+// measurement, 153 now) from its constructor and keeps an index beside them, so a
+// test that merely does `new SkillStore()` wrote the developer's real
+// `~/.nuvira/skills` — measured on this repo, 152 files plus `index.json`, on
+// every run. It is also shared state: two files running at once raced on it (a
+// re-seed reporting 140 where the test expected 0, a fresh store seeing 67 of the
+// 152).
 const skillsDir = join(runDir, 'skills');
 for (const key of ['NUVIRA_SKILLS_DIR', 'BUFF_SKILLS_DIR']) {
   if (!process.env[key]) process.env[key] = skillsDir;

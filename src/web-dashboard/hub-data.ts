@@ -129,8 +129,14 @@ export interface HubArtifactSummary {
   sessionId: string;
   count: number;
   latestAt: number;
-  /** Most recent artifacts in the session (title/kind/preview only — small). */
-  recent: Array<{ kind: string; title?: string; preview?: string }>;
+  /**
+   * Most recent artifacts in the session. Small on purpose (title/kind/preview),
+   * plus the two fields the panel needs to SHOW one: `id`, which addresses the
+   * bytes through /api/artifact-file (never a path from the client), and `mime`,
+   * which says whether it is something renderable — a video preview is the
+   * difference between a deliverable and a filename.
+   */
+  recent: Array<{ kind: string; title?: string; preview?: string; id?: string; mime?: string }>;
 }
 
 export interface HubSkill {
@@ -620,6 +626,8 @@ function readArtifactsData(): HubData['artifacts'] {
         kind: a.kind,
         title: a.title,
         preview: a.preview ? a.preview.slice(0, 160) : undefined,
+        id: a.id,
+        mime: a.mime,
       })),
   }));
   return {

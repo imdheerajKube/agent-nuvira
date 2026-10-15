@@ -265,6 +265,119 @@ picked by auto routing, or where the gateway's own failures are recorded. Both d
   the tree, and every command documented was run against the installed gateway before it was
   written down.
 
+### Motion — an animated video is CODE, rendered frame-accurately
+
+`motion_render` turns a self-contained HTML/CSS/SVG animation — or one of four ready-made scenes
+(`title-card`, `bar-race`, `line-reveal`, `code-walkthrough`) — into an mp4, webm or gif. It exists
+for the request the video models cannot answer: an animated chart of the user's OWN numbers, a
+kinetic title, a short explainer. A diffusion model cannot spell a product name or label a chart
+correctly and gives a different take every run; code can, and the only missing half was turning that
+code into a file.
+
+- **The contract is `seek(t)`, and everything else rests on it.** Frames are captured over the
+  animation's TIMELINE, not wall-clock time, so the same source renders the same file and "scene 3
+  again, with the new number" is meaningful. `window.__motion = { seek(tMs) }` is the exact hook; CSS
+  animations/transitions and Web Animations are paused and moved to `currentTime`, and a
+  `requestAnimationFrame` loop is stepped by the injected runner. Motion never comes from `Date.now()`
+  or a counter. Every render REPORTS the mechanism it found, including `STATIC (not seekable)` — which
+  means the video is a still sequence, a bug to fix rather than a result to deliver.
+- **`action:'revise'` re-renders the STORED source** (`source_id`, from a previous render or
+  `action:'list'`), so a fix to one scene cannot silently change the others. `action:'presets'` and
+  `action:'list'` report what is renderable and what has been rendered in this workspace.
+- **Honest about a missing piece rather than quiet about it**: chromium (playwright) and `ffmpeg` are
+  named WITH the command that installs them instead of leaving a half-written file; narration needs
+  edge-tts or Piper and says it was **skipped** when neither is present; captions are written as an
+  `.srt` beside the video. A data-driven preset with nothing parseable is refused with the shapes that
+  WOULD work, instead of rendering an empty chart.
+- **Recorded and playable where the other deliverables are**: a render is registered as an artifact,
+  the dashboard's Artifacts tab PLAYS it (byte-range served from `/api/artifact-file`, addressed by
+  session + artifact id so the panel can never ask the server for an arbitrary path — unknown session,
+  unknown id and a path-shaped id are all 404), and the capability sits in the `media` toolset with
+  generate_image/speak/video_generate (a toolset-coverage test would have failed otherwise — it did).
+- **A bundled `motion` skill** carries the judgement the tool cannot: preset before hand-written code,
+  scene budgets, on-screen text quoted verbatim, and the rule that a render is verified from the FILE
+  (duration, frame count, the seek line) rather than from the storyboard's intent. It matches motion
+  goals ("make an animated explainer of our quarterly numbers") and leaves a non-motion goal to the
+  skill that owns it.
+- **Measured on this machine (2026-10-15)**: `bar-race` with four labelled values at 24fps → 48
+  frames, 2.00s, 1280x720, 40KB h264; `ffprobe` reports the asked-for codec/size/duration and
+  `signalstats` shows the mean luma climbing frame by frame (an animating chart, not a still), first
+  and last frames hash differently, and two renders of one source are byte-identical.
+- **FIX — a narrate-and-burn render was SILENT, and said nothing about it.** Burning captions
+  re-encodes the video from the captured frames, and that pass ran AFTER the narration had been
+  muxed onto the earlier encode, so the audio was thrown away with it: the file came back with no
+  audio track and a result line that reported no warning at all. The burn now runs first and the
+  narration is muxed onto the FINAL file (a test asserts the burn's ffmpeg pass is immediately
+  followed by the mux, and that the mux reads the artifact path). Found by rendering this
+  repository's own numbers — 535 test files across 35 areas, 813 commits — as a narrated,
+  captioned deliverable, which is also what proved the fix: both videos carry an aac track, and the
+  caption band's pixels differ from an un-captioned control render by exactly the cue windows
+  (identical outside them, byte-equal frames elsewhere in the picture).
+- **FIX — a GIF that burned captions lost its palette.** ffmpeg honours only the LAST `-vf` it is
+  given, so the palette chain and the subtitle burn written as two flags meant the palette was
+  silently dropped; both now ride in one filter chain.
+
+### The software the agent uses but does not ship is now ONE list, and `doctor --fix` installs it
+
+`npm install -g agent-nuvira` installs the agent; it cannot install the OS packages the agent uses
+— **FFmpeg** to encode the motion renderer's frames, a **chromium** bundle for browser automation
+and frame capture, **Ollama** for local models, **edge-tts**/**Piper** for narration, **Whisper**
+to transcribe, **Poppler** to read a scanned PDF. Each tool explained its own prerequisite in its
+own words, `nuvira doctor` only checked `node`/`npm`/`git`/`python3`, and a first-time user had no
+way to see the whole list, let alone install it. Now one declaration drives all of it.
+
+- **One declaration, four surfaces.** `src/learning/runtime-dependencies.ts` declares each
+dependency (id, label, recommended vs optional, how presence is decided, what it enables, which
+tools need it, the install command per OS, and the caveat that bites). The doctor rows, the
+`--fix` installer, the agent's prompt and [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) are all
+DERIVED from it, so the list cannot say one thing and the installer do another.
+- **`nuvira doctor` prints it, with the command for YOUR machine.** Measured on the reference
+machine (2026-10-16): seven rows, `5 of 7 optional tools installed — 2 missing`, then the two
+missing ones with `pip3 install --user piper-tts` and `brew install poppler`. A missing tool is a
+**warn**, never a fail — nothing is broken, one capability is unavailable — and the same rows
+appear on the dashboard's System page, because the CLI and the dashboard render the same checks.
+- **`nuvira doctor --fix` installs them — after asking, one at a time, then VERIFIES.** The probe
+memoizes, so the binary-probe cache is cleared and the tool re-probed: it reports *installed and
+found on PATH*, or says the command finished and it is still not detected (a `PATH` that needs a
+new shell is named rather than swallowed). Piped/CI output never blocks and installs nothing —
+the commands are printed. An install that needs a password the agent cannot supply (`sudo`, the
+`xcode-select` GUI) is handed off as ONE step, the policy `tool-install-prompt` already enforces
+for the agent's own missing tools.
+- **The macOS libass trap is written where it is read.** The plain Homebrew `ffmpeg` formula is a
+lean bottle with no `subtitles` filter, so a render with burned-in captions silently falls back
+to a sidecar `.srt` (found while verifying the motion renderer). The recommended recipe is
+`brew install ffmpeg-full`, with the keg-only `PATH` line beside it, and the Linux distro package
+needs none of that because it ships libass.
+- **The agent is told what this machine does NOT have.** The machine-facts block in `chat` and
+`execute` now names the missing optional tools and their install commands, with one rule attached:
+a feature whose prerequisite is missing was **SKIPPED**, so it is reported as skipped — never as
+done. The block is empty (and costs no tokens) when everything is installed.
+- **A new user gets them from the setup script.** All three one-command installers
+(`scripts/setup/install-{macos,linux,windows}`) gained a step that offers ffmpeg, the playwright
+chromium bundle, a narrator, Poppler and Ollama — each asked for separately, each skipped cleanly
+if declined — and their footer now points at `doctor` / `doctor --fix`.
+- **Fixed while unifying the table:** the Linux install commands came from a shared
+`"<prefix> install -y <pkg>"` template, which produced `sudo apk add install -y ffmpeg` — not a
+command apk accepts. The table now carries a per-manager builder (apt `update && install -y`, apk
+`add --no-cache`), shared by the doctor and the mid-task tool installer so both can only ever
+emit the same, correct command.
+- **A test that measured the developer's laptop now measures the product.** Three voice tests
+  asserted "no transcription/TTS backend" after clearing the probe cache — i.e. they asserted that
+  THIS machine has no narrator, and failed on a machine set up the way `nuvira doctor` recommends
+  (edge-tts + whisper present). They force the module's own override instead, so the state under
+  test is the state asserted, and a new test pins the distinction that matters: the availability
+  probe keeps reporting the HOST even while a test forces the tools' decision.
+- **Verified:** `nuvira doctor` and `nuvira doctor --fix` were run against this real machine (the
+list above, and the non-TTY path installing nothing); `tsc --noEmit` clean;
+`tests/learning/runtime-dependencies.test.ts` (21) pins the recipes, the plans, the probes and the
+docs page against the declaration, and the doctor rows in `tests/cli/doctor.test.ts` (34), the
+shared-table behaviour in `tests/cli/tool-install-prompt.test.ts` (31) and
+`tests/learning/machine-facts.test.ts` (10) all stay green. Nothing in the docs is a hand-copy:
+`docs/DEPENDENCIES.md` fails its test if it stops matching the source. The bundled `motion` skill
+is registered in `.agents/skills` (index entry + SKILL.md) so the hub-drift guards are green again,
+and the manual's skill counts (156 on disk / 153 compiled) were re-read from the commands that
+print them.
+
 ### The liveness watchdog no longer charges its own blindness to the command
 
 An output byte is stamped when the *monitor* reads it, and the process-table probe a liveness sample

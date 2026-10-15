@@ -437,6 +437,51 @@ describe('AgentHub', () => {
     expect(screen.getAllByText('demo-fix')).toHaveLength(2);
   });
 
+  it('Artifacts: renders a video deliverable from the server, addressed by id — never by path', async () => {
+    // A rendered motion video is the deliverable; a filename is not. The panel
+    // may only ever ask for it by (session, artifact id), because the server
+    // resolves the path from its own store — so the assertion on the exact URL
+    // IS the security property, not just a display detail.
+    mockReads({
+      ...HUB,
+      artifacts: {
+        totalSessions: 1,
+        totalArtifacts: 3,
+        sessions: [
+          {
+            sessionId: 's1',
+            count: 3,
+            latestAt: Date.now(),
+            recent: [
+              { kind: 'media', title: 'motion: bar-race (48 frames)', id: 'art-1', mime: 'video/mp4' },
+              { kind: 'media', title: 'chart.png', id: 'art-2', mime: 'image/png' },
+              // A link's 'path' is a URL and a text artifact has real text: both
+              // stay previews, and neither may become a media element.
+              { kind: 'link', title: 'deploy run', id: 'art-3', preview: 'https://ci.example.com/42' },
+            ],
+          },
+        ],
+      },
+    });
+    render(<AgentHub />);
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Artifacts/ })).toBeTruthy());
+    fireEvent.click(screen.getByRole('tab', { name: /Artifacts/ }));
+
+    const video = await screen.findByTestId('artifact-video');
+    expect(video.getAttribute('src')).toBe('/api/artifact-file?session=s1&artifact=art-1');
+    // A player asks for byte ranges the moment the user scrubs, so the element
+    // must not preload the whole file to be usable.
+    expect(video.getAttribute('preload')).toBe('metadata');
+
+    const image = screen.getByTestId('artifact-image');
+    expect(image.getAttribute('src')).toBe('/api/artifact-file?session=s1&artifact=art-2');
+
+    // The link keeps its preview and never turns into a media element.
+    expect(screen.getByText('https://ci.example.com/42')).toBeTruthy();
+    expect(screen.getAllByTestId('artifact-video')).toHaveLength(1);
+    expect(screen.getAllByTestId('artifact-image')).toHaveLength(1);
+  });
+
   it('Subagents: shows the provider, transport and refusal code each child reported', async () => {
     // P4.1 — a finished run is only explainable if the panel reports WHO served
     // it and HOW tool calls travelled; a refusal must show its typed code.

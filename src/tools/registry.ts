@@ -596,6 +596,46 @@ const imageGenSchema = z.object({
     .describe('Optional backend override: gemini (Imagen/Nano Banana), openai (DALL-E/gpt-image), stability, comfyui (local), or pollinations (free). Defaults to the first backend whose API key is configured.'),
 });
 
+/**
+ * Motion tool args — code-authored animation rendered to a video file.
+ *
+ * Kept deliberately narrow: the SOURCE (html / html_path / preset+data) and the
+ * handful of settings that change the output, because a long schema is prompt
+ * budget spent on every turn whether or not motion is being rendered.
+ */
+const motionRenderSchema = z.object({
+  action: z
+    .enum(['render', 'revise', 'list', 'presets'])
+    .optional()
+    .describe("Default 'render'. 'revise' re-renders a previous render (source_id) with edits — deterministic because the stored source is re-rendered, not re-invented; 'list' shows this workspace's renders; 'presets' lists the ready-made scenes."),
+  html: z.string().optional().describe('A self-contained HTML animation (no network: inline CSS/JS/SVG). Must be seekable — see the motion skill.'),
+  html_path: z.string().optional().describe('Path to an HTML animation file instead of inline html'),
+  preset: z
+    .enum(['title-card', 'bar-race', 'line-reveal', 'code-walkthrough'])
+    .optional()
+    .describe('Use a ready-made scene instead of hand-written html: title-card, bar-race, line-reveal (charts from your data), code-walkthrough'),
+  params: z.record(z.string(), z.unknown()).optional().describe('Preset parameters: title, subtitle, kicker, accent, background, foreground, unit, decimals'),
+  data: z.unknown().optional().describe('Data to animate: JSON (array of numbers, [{label,value}], {series:[…]}) or CSV text'),
+  data_path: z.string().optional().describe('Path to a CSV/JSON file to animate (bar-race, line-reveal, code-walkthrough)'),
+  source_id: z.string().optional().describe("Render id to revise (from a previous motion_render or action:'list')"),
+  title: z.string().optional().describe('Convenience title (merged into preset params)'),
+  fps: z.number().int().min(1).max(60).optional().describe('Frames per second (default 30)'),
+  duration_ms: z.number().int().min(200).max(600000).optional().describe('Length in ms (default 8000)'),
+  width: z.number().int().min(64).max(3840).optional().describe('Frame width (default 1280)'),
+  height: z.number().int().min(64).max(2160).optional().describe('Frame height (default 720)'),
+  aspect_ratio: z.string().optional().describe("Shape instead of a size, e.g. '16:9', '9:16', '1:1' (720p/1080p by default)"),
+  format: z.enum(['mp4', 'gif', 'webm']).optional().describe('Container (default mp4; gif carries no audio)'),
+  crf: z.number().int().min(0).max(51).optional().describe('Quality: lower is better (default 20)'),
+  narration: z.string().optional().describe('Narration text, synthesized locally (edge-tts/Piper) and muxed onto the video'),
+  voice: z.string().optional().describe('TTS voice id for narration'),
+  captions: z
+    .array(z.object({ from_ms: z.number(), to_ms: z.number(), text: z.string() }))
+    .optional()
+    .describe('Caption cues, written as a .srt next to the video'),
+  burn_captions: z.boolean().optional().describe('Burn the captions into the frames (needs an ffmpeg with libass)'),
+  out_name: z.string().optional().describe('Filename prefix for the artifact (defaults to the preset name)'),
+});
+
 /** I4 — voice tools: TTS + transcription (optional installs). */
 const speakSchema = z.object({
   text: z.string().min(1).describe('The text to speak'),
@@ -3313,6 +3353,44 @@ registerTool({
       default: return 'Unknown action';
     }
   }),
+});
+
+// Motion — animation authored as code, rendered to a real video file.
+registerTool({
+  name: 'motion_render',
+  capability: { effectClass: 'local-write', reversible: true },
+  description:
+    'Render an ANIMATED video from code: a self-contained HTML/CSS/SVG animation (html or html_path) or a ready-made scene (preset + data). Use for animated explainers, animated charts of the user\'s own data, kinetic titles and code walkthroughs — the output is deterministic (frames are captured from the animation timeline, not recorded), so a revise re-renders the stored source. Needs chromium (playwright) and ffmpeg; a missing one is named with its install command. Optional narration is synthesized locally and muxed in; captions are written as .srt. The video is saved to the sandbox motion/ dir and, in a gateway context, sent back to the originating channel.',
+  category: 'workflow',
+  inputSchema: motionRenderSchema,
+  endsAgentStep: false,
+  run: async (args, ctx) => {
+    const parsed = motionRenderSchema.parse(args);
+    const { runMotionTool } = await import('./modality/motion-tool.js');
+    const result = await runMotionTool(parsed as never, ctx);
+    if (result.media) {
+      // Same artifact path as generate_image/speak: a render is a deliverable, so
+      // the dashboard's Artifacts tab can show (and re-open) it.
+      recordArtifact(ctx?.artifacts, {
+        kind: 'media',
+        title: result.media.title,
+        path: result.media.path,
+        mime: result.media.mime,
+      });
+      if (result.sidecar) {
+        recordArtifact(ctx?.artifacts, {
+          kind: 'file',
+          title: result.sidecar.title,
+          path: result.sidecar.path,
+          mime: result.sidecar.mime,
+        });
+      }
+      const caption = parsed.title ?? parsed.narration ?? undefined;
+      const delivered = await tryAutoDeliver(result.media.path, caption, ctx, 'video');
+      return `${result.text}${delivered}`;
+    }
+    return result.text;
+  },
 });
 
 // Voice mode tool

@@ -2365,6 +2365,22 @@
       ],
       "source": "agent-nuvira/bundled",
       "updatedAt": "2026-08-27T12:51:59.023Z"
+    },
+    {
+      "name": "motion",
+      "description": "Create an animated video — explainer, animated chart of real data, kinetic title, or code walkthrough — with the motion_render tool. Use when the goal is animation, motion graphics, an animated explainer, or turning data or a document into a video. The animation is code, rendered frame-accurately, so the same source always renders the same file and a revision re-renders the stored source.",
+      "version": "1.0.0",
+      "author": "agent-nuvira",
+      "tags": [
+        "video",
+        "motion",
+        "animation",
+        "explainer",
+        "data-visualization",
+        "rendering"
+      ],
+      "source": "agent-nuvira/bundled",
+      "updatedAt": "2026-10-15T10:24:38.382Z"
     }
   ]
 }

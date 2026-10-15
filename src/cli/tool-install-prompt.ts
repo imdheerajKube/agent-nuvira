@@ -26,6 +26,14 @@ import inquirer from 'inquirer';
 import { existsSync } from 'node:fs';
 import { join, delimiter } from 'node:path';
 import { logger } from '../utils/logger.js';
+// The Linux package-manager table and the "needs a human" test live with the
+// runtime-dependency list (`learning/runtime-dependencies.ts`) so a command the
+// DOCTOR recommends and a command this module installs can never disagree.
+import { installNeedsHumanInput, linuxInstallCommand } from '../learning/runtime-dependencies.js';
+
+// Re-exported: this module was the only home of this predicate, and callers
+// (and its own tests) import it from here.
+export { installNeedsHumanInput };
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -307,14 +315,6 @@ const TOOL_INSTALL_OPTIONS: Record<string, ToolInstallOptions> = {
   },
 };
 
-/** Linux package-manager prefixes, tried in order of preference. */
-const LINUX_PKG_MANAGERS: Array<{ detect: string; prefix: string }> = [
-  { detect: 'apt-get', prefix: 'sudo apt-get update && sudo apt-get' },
-  { detect: 'dnf', prefix: 'sudo dnf' },
-  { detect: 'yum', prefix: 'sudo yum' },
-  { detect: 'apk', prefix: 'sudo apk add' },
-];
-
 /** Whether we have an install recipe for this tool on any OS. */
 export function isKnownSystemTool(tool: string): boolean {
   return tool in TOOL_INSTALL_OPTIONS;
@@ -460,21 +460,6 @@ export function toolTakeoverInstruction(
 }
 
 /**
- * True when an install command cannot run unattended — it will block on human
- * input we must not fabricate (a `sudo`/administrator password, the macOS
- * `xcode-select --install` GUI, an explicit `--interactive` installer). Used to
- * decide between "install it yourself" and the honest handoff note.
- */
-export function installNeedsHumanInput(installCommand: string): boolean {
-  const c = String(installCommand ?? '');
-  return (
-    /(?:^|[\s;&|])sudo\b/.test(c) ||
-    /xcode-select\s+--install/.test(c) ||
-    /--interactive\b/.test(c)
-  );
-}
-
-/**
  * The single, deterministic handoff note for a prerequisite the agent TRIED to
  * install but that needs a human step it cannot supply. Names what was tried,
  * WHY the tool is needed, and the exact command — so the user can finish one
@@ -519,15 +504,10 @@ export function toolInstallCommand(
 
   if (platform === 'linux') {
     if (!opts.linux) return null;
-    for (const pm of LINUX_PKG_MANAGERS) {
-      if (hasPkgMgr(pm.detect)) {
-        // opts.linux is "install -y <pkg>" — prefix the detected manager.
-        return `${pm.prefix} ${opts.linux}`.replace(/\s+/g, ' ');
-      }
-    }
-    // Fall back to apt-get (most common) — the runner's install will surface
-    // a clear error if sudo/apt is unavailable, and the user gets manual steps.
-    return `sudo apt-get update && sudo apt-get ${opts.linux}`.replace(/\s+/g, ' ');
+    // opts.linux is "install -y <pkg>" — strip the manager prefix and let the
+    // shared helper pick the package manager this machine actually has (and
+    // fall back to apt-get, whose error the runner surfaces as manual steps).
+    return linuxInstallCommand(opts.linux.replace(/^install -y\s*/, ''), hasPkgMgr);
   }
 
   if (platform === 'win32') {

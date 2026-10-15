@@ -27,6 +27,20 @@ import { PlatformConfigSection } from './PlatformConfigSection';
 import { maskSenderId } from '../mask';
 import PageHeader from './PageHeader';
 
+/**
+ * Artifact bytes, when the panel has enough to ask for them: the store id (never
+ * a path — the server resolves the path from its own store) and a mime.
+ */
+const artifactId = (a: { id?: string; kind?: string }): string | undefined =>
+  a.id && a.kind !== 'link' ? a.id : undefined;
+
+const isVideoMime = (mime?: string): boolean => Boolean(mime && mime.startsWith('video/'));
+const isImageMime = (mime?: string): boolean => Boolean(mime && mime.startsWith('image/'));
+
+/** The URL the browser fetches an artifact's bytes from. */
+const artifactFileUrl = (sessionId: string, artifactId: string): string =>
+  `/api/artifact-file?session=${encodeURIComponent(sessionId)}&artifact=${encodeURIComponent(artifactId)}`;
+
 type HubTab = 'tools' | 'channels' | 'artifacts' | 'skills' | 'conversations' | 'subagents';
 
 const TABS: Array<{ id: HubTab; label: string; icon: string }> = [
@@ -1986,7 +2000,28 @@ export default function AgentHub() {
                         <li key={i}>
                           <span className="hub-chip">{a.kind}</span>
                           <span className="hub-artifact-title">{a.title || '(untitled)'}</span>
-                          {a.preview ? <div className="hub-artifact-preview">{a.preview}</div> : null}
+                          {/* The BYTES, when the browser can show them: a rendered
+                              video or a generated image is the deliverable, and a
+                              filename is not. Addressed by artifact id so the panel
+                              never asks the server for an arbitrary path. */}
+                          {artifactId(a) && isVideoMime(a.mime) ? (
+                            <video
+                              className="hub-artifact-media"
+                              controls
+                              preload="metadata"
+                              data-testid="artifact-video"
+                              src={artifactFileUrl(s.sessionId, artifactId(a)!)}
+                            />
+                          ) : artifactId(a) && isImageMime(a.mime) ? (
+                            <img
+                              className="hub-artifact-media"
+                              data-testid="artifact-image"
+                              alt={a.title || 'artifact'}
+                              src={artifactFileUrl(s.sessionId, artifactId(a)!)}
+                            />
+                          ) : a.preview ? (
+                            <div className="hub-artifact-preview">{a.preview}</div>
+                          ) : null}
                         </li>
                       ))}
                     </ul>

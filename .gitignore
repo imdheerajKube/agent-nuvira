@@ -93,6 +93,11 @@ tracked, it is the document each completion change is checked against.
 # publish that only breaks in CI.
 !docs/PUBLIC_README.md
 !docs/USER_MANUAL.md
+# The install list a first-time user is pointed at from README.md, the manual and
+# the doctor's own output ("see docs/DEPENDENCIES.md"). It MUST be tracked: the
+# source that cites it is checked into git, so an ignored copy would leave a
+# fresh clone following a path that is not there.
+!docs/DEPENDENCIES.md
 # The CLI demo cast (docs/demos/nuvira-cli-tour.cast) is a reproducible build
 # artifact linked from README.md, and its README documents how to play and
 # regenerate it — both must be tracked or the README link 404s.

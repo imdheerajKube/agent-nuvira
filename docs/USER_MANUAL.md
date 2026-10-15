@@ -46,7 +46,7 @@ At a glance — every number below was produced by a command in this manual:
 | Agent tools | **110** | `nuvira tools list` |
 | Inference providers | **22** | `nuvira provider list` |
 | Messaging platforms | **22** | `nuvira gateway status` |
-| Skills on disk | **155** (152 compiled) | `nuvira skills list` / `nuvira skill list` |
+| Skills on disk | **156** (153 compiled) | `nuvira skills list` / `nuvira skill list` |
 | Built-in workflow templates | **10** | `nuvira workflow list` |
 | Dashboard pages | **22** | see [§5](#5-the-dashboard) |
 | Vetted MCP servers | **6** | `nuvira mcp catalog` |
@@ -57,7 +57,8 @@ The three binaries `agent-nuvira`, `buff` and `nuvira` are the same program.
 
 ## 2. Install and first run
 
-**Requirement:** Node **>= 18.18.0** (`engines` in `package.json`).
+**Requirement:** Node **>= 18.18.0** (`engines` in `package.json`), plus **Git** for the
+change-tracking modes (worktrees, diffs).
 
 ```bash
 npm install -g agent-nuvira
@@ -80,11 +81,67 @@ nuvira chat "explain what this project does"
 ```
 
 `nuvira doctor` prints a full health report: config directory, secret vault tier, memory
-store, SQLite workspace registry, plugin directories, CLI tool versions, and a per-provider
-probe. On the reference machine it reported `✅ Secret Vault: OS keychain active (Tier 1)`
-and `✅ Workspace DB: SQLite project registry — 59 project(s) tracked`.
+store, SQLite workspace registry, plugin directories, CLI tool versions, one row per runtime
+tool (see below), and a per-provider probe. On the reference machine it reported
+`✅ Secret Vault: OS keychain active (Tier 1)` and
+`✅ Workspace DB: SQLite project registry — 59 project(s) tracked`.
 
 **Expect the first run to be slow.** Model discovery walks every provider you have a key for.
+
+### What else to install — the tools the agent uses
+
+`npm install -g agent-nuvira` installs the agent. It cannot install the **other** software the
+agent uses, because those are operating-system packages: video encoding, a browser for
+automation and motion frames, a narrator, local models, a PDF rasteriser. Each one is optional
+— the feature that needs it reports itself as **skipped**, with the reason, instead of
+returning an empty result — but a machine with them does more.
+
+`nuvira doctor` lists all seven with their status and the exact command for **your** OS, and
+`nuvira doctor --fix` offers each missing one (installing only what you agree to, then
+*verifying* it is detectable rather than assuming). The same rows appear on the dashboard's
+**System** page. This is what it looks like on a machine that has some of them:
+
+```text
+  ✅ Runtime: FFmpeg: installed
+  ✅ Runtime: Chromium (Playwright): installed
+  ✅ Runtime: Ollama: installed
+  ✅ Runtime: edge-tts: installed
+  ⚠️ Runtime: Piper: not installed (optional)
+  ✅ Runtime: Whisper (speech-to-text): installed
+  ⚠️ Runtime: Poppler (PDF rasteriser): not installed (optional)
+
+  ── Software you can add (optional) ──
+  5 of 7 optional tools installed — 2 missing
+  ⚠️  Poppler (PDF rasteriser) [optional] — Read a scanned, image-only PDF: its pages are rasterised
+      and then transcribed by the vision model, which is the only route for a PDF with no text layer.
+      Install: brew install poppler
+     Needed by: knowledge ingest (scanned PDFs), read_extract (OCR fallback)
+  💡 Install them now (asks per tool): `nuvira doctor --fix`
+     Full list and manual steps: docs/DEPENDENCIES.md
+```
+
+| Tool | What it unlocks | macOS | Linux (apt) |
+|---|---|---|---|
+| **FFmpeg** | Encode the motion renderer's frames; video/audio trim, merge, transcode | `brew install ffmpeg-full` | `sudo apt-get update && sudo apt-get install -y ffmpeg` |
+| **Chromium (Playwright)** | `browser_*` tools and the motion renderer's frame capture | `npx playwright install chromium` | `npx playwright install chromium` |
+| **Ollama** | Local models — no key, no cost, works offline | `brew install ollama` | `curl -fsSL https://ollama.com/install.sh \| sh` |
+| **edge-tts** | Narration for `speak` and a render's voice-over | `pip3 install --user edge-tts` | `pip3 install --user edge-tts` |
+| **Piper** | A fully offline voice (fallback for edge-tts) | `pip3 install --user piper-tts` | `pip3 install --user piper-tts` |
+| **Whisper** | Local transcription of audio / voice notes | `pip3 install --user openai-whisper` | `pip3 install --user openai-whisper` |
+| **Poppler** | Read a scanned, image-only PDF (rasterise → vision model) | `brew install poppler` | `sudo apt-get update && sudo apt-get install -y poppler-utils` |
+
+The two caveats that bite in practice, both stated by the doctor itself:
+
+- **macOS: `ffmpeg-full`, not `ffmpeg`.** The plain Homebrew bottle is built without **libass**,
+  so a render with burned-in captions falls back to a separate `.srt` beside the video. The render
+  says it did, rather than pretending. `ffmpeg-full` is keg-only — add
+  `/opt/homebrew/opt/ffmpeg-full/bin` to your `PATH`.
+- **A `sudo` install is handed to you, not run behind your back.** `--fix` will not drive a
+  password prompt: it prints the one command and stops. Piped/CI output never blocks at all.
+
+Windows uses `winget` (`Gyan.FFmpeg`, `Ollama.Ollama`), `pip`, and a manual Poppler build — the
+full per-OS list, including what `PLAYWRIGHT_BROWSERS_PATH=0` changes, is
+[docs/DEPENDENCIES.md](DEPENDENCIES.md).
 
 ---
 
@@ -479,6 +536,14 @@ CLI uses: **System** (runtime, filesystem, configuration, local models) and **En
 (governance, audit, RBAC, cost cap — `nuvira doctor --enterprise`). The rollup states failures
 first, so a mostly-green summary cannot bury one.
 
+One group is worth knowing about before you need it: the **runtime tools** the agent uses but
+does not ship (`Runtime: FFmpeg`, `Runtime: Chromium (Playwright)`, `Runtime: Ollama`, …). They
+are one row each — *installed* is a pass, *not installed* is a **warn**, never a failure, because
+nothing is broken: one capability is unavailable. Each row's fix is the exact install command
+for the machine the dashboard is running on, so the page is also the install list. See
+[§2](#what-else-to-install--the-tools-the-agent-uses) and
+[DEPENDENCIES.md](DEPENDENCIES.md).
+
 Two things it deliberately does *not* claim:
 
 - **The stream state is real.** The page used to print a hardcoded `● Connected`, which could never
@@ -745,7 +810,8 @@ platform — pick one owner.
 ## 7. Skills
 
 A skill is a **reusable execution plan** — a named, parameterised sequence of specialised
-agent steps. This build ships **155 skills on disk and 152 compiled**.
+agent steps. This build ships **156 skills on disk and 153 compiled** — the newest is
+**`motion`**, which storyboards and renders an animated video with `motion_render` (§9).
 
 ```bash
 nuvira skills list                     # what is installed
@@ -828,7 +894,7 @@ nuvira workflow publish                # share your own
 
 ## 9. Beyond code: the tool surface
 
-The agent has **110 tools**. This is the honest list of what it can do that is not "write a
+The agent has **115 tools**. This is the honest list of what it can do that is not "write a
 file". Categories below are descriptive; run `nuvira tools list` for the live registry.
 
 **Filesystem & code** — `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`,
@@ -842,8 +908,23 @@ file". Categories below are descriptive; run `nuvira tools list` for the live re
 `browser_supervisor`, `browser_dialog`, `camofox`, `url_safety`, `computer_use`
 (desktop control without stealing focus).
 
-**Multimodal** — `generate_image`, `video_generate`, `describe_image`, `vision`,
+**Multimodal** — `generate_image`, `video_generate`, `motion_render`, `describe_image`, `vision`,
 `speak`, `transcribe`, `tts_streaming`, `neutts_synth`, `wake_word`, `voice_mode`.
+
+**`motion_render` — an animated video from CODE.** Use it where the video models cannot
+reach: an animated chart of YOUR numbers, a kinetic title, a short explainer. It needs
+chromium (playwright) and ffmpeg and no API key, and it must be **seekable** —
+`window.__motion = { seek(tMs) }`, or CSS/Web Animations, or a `requestAnimationFrame`
+loop (both are stepped for you) — because frames are captured from the animation's timeline
+instead of recorded in real time: that is why the same source renders the same file, and
+why `revise` (`source_id`) re-renders the STORED source rather than re-inventing it. Presets:
+`title-card`, `bar-race`, `line-reveal` (charts from `data`/`data_path`), `code-walkthrough`.
+The render lands in `.nuvira/artifacts/motion/`, is recorded as an artifact, and plays in the
+dashboard's Artifacts tab. `burn_captions` needs an ffmpeg built with libass (macOS:
+`brew install ffmpeg-full`); without one the `.srt` is still written and the render says the
+burn was skipped rather than pretending. The result reports frames, duration, size, the seek mechanism it
+found and every warning — `STATIC (not seekable)` means the video is a still sequence (a bug
+to fix, not a result), and narration that could not be synthesized says it was skipped.
 
 **Messaging & integrations** — `gateway_send` (deliver a result to someone else),
 `messaging`, `discord`, `microsoft_graph` (mail/calendar/OneDrive),
@@ -1826,19 +1907,25 @@ What makes a replay safe, and what it reports:
 
 Every claim in this manual was checked against build **3.3.0** on 2026-09-23. Commands were
 run with `NUVIRA_SKIP_DISCOVERY=1 NUVIRA_NO_DASHBOARD=1` so documentation runs start no
-servers or discovery loops.
+servers or discovery loops. Two claims are the exception, because both are live contracts
+that must not drift: the tool count is re-checked against the live registry on every run of
+`tests/docs/tool-surface.test.ts`, and the runtime-tool list and its per-OS commands are
+re-checked against `src/learning/runtime-dependencies.ts` on every run of
+`tests/learning/runtime-dependencies.test.ts` (the doctor rows, the `--fix` installer and
+[DEPENDENCIES.md](DEPENDENCIES.md) are all built from that one declaration).
 
 | Claim | How it was verified | Result |
 |---|---|---|
 | Command surface = 289 / 48 groups | `node scripts/generate-commands-surface.mjs --check` | ✓ in sync |
 | Version 3.3.0 | `nuvira --version` | ✓ |
 | Node >= 18.18.0 | `package.json` `engines` | ✓ |
-| 110 tools | `nuvira tools list` | ✓ |
+| 115 tools | `nuvira tools list` | ✓ (re-checked 2026-10-15) |
+| 7 runtime tools, each with an install command | `nuvira doctor` | ✓ (re-checked 2026-10-16) |
 | 22 providers, 4 live here | `nuvira provider list` | ✓ |
 | 520 models | `nuvira models` | ✓ |
 | 515 fresh / 0 stale | `nuvira models staleness` | ✓ |
-| 155 skills on disk | `nuvira skills list` | ✓ |
-| 152 compiled skills | `nuvira skill list` | ✓ |
+| 156 skills on disk | `nuvira skills list` | ✓ (re-checked 2026-10-16) |
+| 153 compiled skills | `nuvira skill list` | ✓ (re-checked 2026-10-16) |
 | 10 workflow templates | `nuvira workflow list` | ✓ |
 | 6 vetted MCP servers; 3 connected, 96 tools | `nuvira mcp catalog`; `workflow run` banner | ✓ |
 | 22 gateway platforms, 4 configured | `nuvira gateway status` | ✓ |

@@ -414,17 +414,43 @@ import {
   isTranscribeAvailable,
   setVoiceBackendOverride,
 } from '../../src/tools/modality/voice.js';
-import { resetProbeCache } from '../../src/tools/modality/shared.js';
+import { binaryOnPath, resetProbeCache } from '../../src/tools/modality/shared.js';
 
 describe('I4 voice', () => {
-  it('reports TTS unavailable when no backend binary is on PATH', () => {
+  /**
+   * THE OVERRIDE DECIDES AVAILABILITY — the host PATH does not.
+   *
+   * This test used to assert `isTtsAvailable() === false` after clearing the
+   * probe cache, i.e. it asserted that THIS MACHINE has no narrator. On a machine
+   * set up the way `nuvira doctor` recommends (edge-tts for narration, whisper
+   * for transcription) the probe finds both and the test fails while the product
+   * is working perfectly — a test that measures the developer's laptop. The
+   * override is the module's own hook for exactly this, so the state under test
+   * is forced and the assertion is about behaviour.
+   */
+  it('reports TTS unavailable when no backend is available', async () => {
     resetProbeCache();
-    expect(isTtsAvailable()).toBe(false);
-    expect(isTranscribeAvailable()).toBe(false);
+    setVoiceBackendOverride(false, false);
+    const spoke = await speak('hello');
+    expect(spoke.ok).toBe(false);
+    expect(spoke.error).toContain('no TTS backend');
+    setVoiceBackendOverride(null, null);
+  });
+
+  it('the availability probe reports the HOST, never the override', () => {
+    resetProbeCache();
+    setVoiceBackendOverride(false, false);
+    // The probe is what `nuvira doctor`/the setup script reason about ("is a
+    // narrator installed?") and it must keep answering about the machine even
+    // while a test has forced the tools' decision, or the two questions blur.
+    expect(isTtsAvailable()).toBe(binaryOnPath('edge-tts') || binaryOnPath('piper'));
+    expect(isTranscribeAvailable()).toBe(binaryOnPath('whisper') || binaryOnPath('whisper-cli'));
+    setVoiceBackendOverride(null, null);
   });
 
   it('speak degrades gracefully without a backend', async () => {
     resetProbeCache();
+    setVoiceBackendOverride(false, false);
     const result = await speak('hello');
     expect(result.ok).toBe(false);
     expect(result.error).toContain('no TTS backend');
@@ -457,6 +483,7 @@ describe('I4 voice', () => {
 
   it('transcribe degrades gracefully without whisper', async () => {
     resetProbeCache();
+    setVoiceBackendOverride(false, false);
     const audio = join(artDir, 'clip.wav');
     writeFileSync(audio, Buffer.from('WAV'));
     const result = await transcribe(audio);

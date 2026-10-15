@@ -32,11 +32,12 @@ import { logger } from '../utils/logger.js';
  * helper exists to prevent: it ignores the isolation override, so an isolated
  * process read and SEEDED the developer's real profile.
  *
- * Measured, not assumed: the test suite wrote all 152 bundled skills plus
- * `index.json` into the real `~/.nuvira/skills` on every run, and the moment two
- * test files ran at once they raced on that directory — `seedBundledSkills()`
- * returned 140 where the test expected 0, and a store the test had just created
- * saw 67 of 152 skills, because the other worker was mid-write. A store this
+ * Measured, not assumed: the test suite wrote the whole bundled set (152 at the
+ * time, 153 now) plus `index.json` into the real `~/.nuvira/skills` on every run,
+ * and the moment two test files ran at once they raced on that directory —
+ * `seedBundledSkills()` returned 140 where the test expected 0, and a store the
+ * test had just created saw 67 of the 152, because the other worker was
+ * mid-write. A store this
  * chatty is shared state, and shared state has to sit behind the override.
  */
 function skillsDir(): string {
