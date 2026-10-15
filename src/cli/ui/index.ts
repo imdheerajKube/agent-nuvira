@@ -33,9 +33,17 @@ export type { LiveAnswerProps } from './answer-view.js';
 export {
   AnswerStream,
   createCardSink,
+  createRunStream,
   presentAnswer,
   presentCard,
   renderAnswer,
   shouldUseRichUi,
+  THINKING_NOTE,
 } from './presenter.js';
-export type { CardSinkOverrides, PresenterOptions, StreamMeta } from './presenter.js';
+export type {
+  CardSinkOverrides,
+  PresenterOptions,
+  RunStream,
+  RunStreamOverrides,
+  StreamMeta,
+} from './presenter.js';

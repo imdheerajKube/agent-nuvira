@@ -30,6 +30,14 @@ import { capabilityReasoningEffort, isMaxCapability } from '../config/capability
 import { resolveProvider } from './router.js';
 import { resolveRoute, servedRouteFrom, strictModelMode, type ServedRoute } from '../inference/route-resolver.js';
 import { debugLogNotice, sessionDebugLog } from '../observability/debug-log.js';
+// E3b — what the model SUGGESTED (its `suggest_followups` call, or the same list
+// written as prose when a weak model did not call the tool). A leaf module: no
+// registry import.
+import {
+  followupsFromAnswerList,
+  normalizeFollowups,
+  type FollowupSuggestion,
+} from '../tools/followup-utils.js';
 // WS3 (#25) — the turn as a span, when an operator has asked for OTLP export.
 import { flushSpans, otelNoticeOnce, startTurnSpan } from '../observability/otel.js';
 // WS5 (#27) — isolation (a git worktree around the whole run) and resume
@@ -244,6 +252,17 @@ export interface LoopExecutorResult {
    * surface that cannot report them.
    */
   findings?: import('../findings/verdicts.js').WireFinding[];
+  /**
+   * E3b — the next steps the MODEL suggested for this turn (its
+   * `suggest_followups` call, or the same list recovered from its prose — see
+   * `followupsFromAnswerList`). Absent when it suggested none.
+   *
+   * Carried because the surface is where a suggestion becomes ACTIONABLE: the
+   * loop collected these into its own sink and the result stopped there, so
+   * `nuvira execute` offered only its generic menu and the model's suggestions
+   * were unreachable — the one job a followup has.
+   */
+  followups?: FollowupSuggestion[];
 }
 
 /** Options for runLoopExecutor — mirrors the pipeline arm's surface. */
@@ -266,6 +285,16 @@ export interface LoopExecutorOptions {
   ) => void;
   /** Live `git diff` payload — parity with the chat surfaces' `onGitDiff`. */
   onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
+  /**
+   * P7 — live progress line for a MOUNTED live view (the step the run is on).
+   *
+   * The same lines the logger carries when there is no view. They are given to
+   * the surface when it has a frame up because a line printed to stdout lands
+   * UNDER an Ink frame and is repainted over — i.e. a progress line written the
+   * old way is invisible exactly when the live view is on. Absent ⇒ the log, so a
+   * piped/CI run keeps its exact bytes.
+   */
+  onProgress?: (line: string) => void;
   /** External cancellation (execute's Ctrl+C). */
   signal?: AbortSignal;
   /** Skip the ambient [Project context] injection (tests). */
@@ -418,10 +447,14 @@ export async function runLoopExecutor(
   const resume: OpenResume | null = openRequest
     ? openResume({ goal, cwd: turnCwd, resume: openRequest, replay: resumeRequest !== undefined })
     : null;
+  // Isolation is OPT-IN (`--worktree` / config), and this notice carries the
+  // directory the run is working in — the path the user needs to find its
+  // changes. It stays on the user-facing channel; the default-on checkpoint
+  // noise does not (see the resume notices below).
   if (worktree && !opts.quiet) logger.info(worktreeNotice(worktree));
   // WS5 — what the RECORD holds, said before the run. The outcome is reported by
   // `finishResult` below, where the counts are real (see `StepReplay.openNotice`).
-  if (resume && !opts.quiet) logger.info(resume.ledger.openNotice());
+  if (resume && !opts.quiet) logger.debug(resume.ledger.openNotice());
   // Phase 4b/4c — the session store. DEFAULT ON (like checkpointing): a run
   // snapshots its live thread at each step boundary so a process that dies
   // mid-turn leaves a conversation the next one can pick up. A user turns it off
@@ -445,13 +478,20 @@ export async function runLoopExecutor(
     if (worktree) {
       const outcome = endIsolation(worktree, { keep: isolationRequest.keep });
       extra.worktree = outcome;
+      // Also user-facing, and for a stronger reason than the notice above: this
+      // line says whether the worktree was KEPT and where (`kept: <dir>`), or
+      // that it could not be removed — the one fact that tells the user where
+      // their work is (see `endIsolation`).
       if (!opts.quiet) logger.info(outcome.notice);
     }
     if (resume) {
       const outcome = closeResume(resume, { goal, cwd: turnCwd });
       extra.resume = outcome;
       extra.replayedSteps = outcome.replayed;
-      if (!opts.quiet) logger.info(outcome.notice);
+      // The counts ("replayed 0, made 1 model call(s)", plus why) are diagnosis:
+      // `--debug` only (`-d`). `outcome.resume` still rides the result, so a surface that
+      // wants to SHOW them (the dashboard, `--json-events`) keeps them.
+      if (!opts.quiet) logger.debug(outcome.notice);
     }
     return { ...result, ...extra };
   };
@@ -834,12 +874,26 @@ export async function runLoopExecutor(
   // is replaced by this run's FRESH head — the contract is current, the history
   // is intact. Only OPEN sessions qualify (a finished transcript is history).
   // Best-effort: a corrupt/missing snapshot is a cold start, exactly as before.
-  if (sessionStoreOn) {
+  //
+  // NOT WHEN THE LEDGER CAN SERVE. These are two mechanisms for one intent and
+  // only one can win: the ledger's record IS this ask's transcript of model calls,
+  // hashed step by step, and prepending the session tail gives every step an input
+  // the recorded digest never covered — so every step MISSES and the run re-pays
+  // for calls it already made, while reporting `--resume` as if it had done its
+  // job. The ledger therefore wins when it CAN (`StepReplay.willServe` — replay
+  // enabled and the record holds a step), and the session transcript — which
+  // carries work the ledger never recorded — stays the fallback when it cannot: a
+  // fresh ask with no record, or a checkpoint-only run that writes forward instead
+  // of resuming. Both halves are pinned in
+  // `tests/cli/resume-session-interaction.test.ts`, and the empty-record half in
+  // `tests/cli/loop-executor.test.ts`.
+  if (sessionStoreOn && !resume?.ledger.willServe()) {
     try {
       const prior = findResumableSessionFor(goal, turnCwd);
       if (prior) {
         thread = rehydrateThread(head, prior);
-        if (!opts.quiet) logger.info(formatSessionResume(prior));
+        // `--debug` only: a resumed thread is diagnosis, and the answer follows anyway.
+        if (!opts.quiet) logger.debug(formatSessionResume(prior));
       }
     } catch {
       // Best-effort — a rehydration failure must never break the turn.
@@ -1007,7 +1061,7 @@ export async function runLoopExecutor(
               ok: false,
             });
             if (!opts.quiet) {
-              logger.warn(
+              logger.debug(
                 `   ⚠️  ${cand.provider}/${cand.model} unreachable on a reachability probe (not a failed call) — trying the fallback chain`,
               );
             }
@@ -1017,7 +1071,7 @@ export async function runLoopExecutor(
             continue;
           }
           if (!opts.quiet) {
-            logger.warn(
+            logger.debug(
               `   ⚠️  fallback candidate ${cand.provider} looked unreachable on the first probe — it answered on the second, so it stays in the walk`,
             );
           }
@@ -1180,7 +1234,7 @@ export async function runLoopExecutor(
           // Best-effort — a hand-off write must never mask the generation error.
         }
         if (!opts.quiet) {
-          logger.warn(
+          logger.debug(
             qualityKind
               ? `   \u26A0\uFE0F ${cand.provider} answered with ${
                   qualityKind === 'reasoning' ? 'its own reasoning' : 'tool-contract confusion'
@@ -1357,7 +1411,13 @@ export async function runLoopExecutor(
           }
           return out;
         },
-        onEvent: opts.quiet ? undefined : (line) => logger.info(line),
+        // P7 — a mounted live view takes the progress line INTO its frame; the
+        // log gets it otherwise (unchanged bytes for pipes, CI and `--json-events`).
+        onEvent: opts.quiet
+          ? undefined
+          : opts.onProgress
+            ? (line) => opts.onProgress?.(line)
+            : (line) => logger.info(line),
       },
       // G18 — the loop's tool calls, gate decisions and refusals all reach the
       // trace store through this one sink (an OPTION, not a dep: the loop
@@ -1455,7 +1515,8 @@ export async function runLoopExecutor(
       // inside it is a corrupt event. The file is still written.
       const path = debugLog.write();
       const notice = opts.quiet ? null : debugLogNotice('cli-execute', path);
-      if (notice) logger.info(notice);
+      // `--debug` only: the log path is evidence for a bug report, not the answer.
+      if (notice) logger.debug(notice);
     }
 
     // WS3 (#25) — close the turn span and ship it. The status is the turn's own
@@ -1478,12 +1539,21 @@ export async function runLoopExecutor(
       // its stdout is the machine-readable event stream, and a notice inside it
       // is a corrupt event. The span is still exported.
       const otelLine = opts.quiet ? null : otelNoticeOnce('cli-execute');
-      if (otelLine) logger.info(otelLine);
+      if (otelLine) logger.debug(otelLine);
       await flushSpans();
     }
 
+    // E3b — the turn's own next-step suggestions, structurally when the model
+    // called `suggest_followups` and recovered from its prose list when it did
+    // not. Read from the loop's OWN sink rather than re-derived by the command,
+    // so the menu a user picks from is the menu the model offered.
+    const followups: FollowupSuggestion[] = result.followups && result.followups.length > 0
+      ? normalizeFollowups(result.followups)
+      : followupsFromAnswerList(result.content);
+
     return finishResult({
       content: result.content,
+      ...(followups.length > 0 ? { followups } : {}),
       generationFailed: result.generationFailed ?? false,
       bounded: result.bounded,
       toolCalls: result.toolCalls,
@@ -1511,7 +1581,7 @@ export async function runLoopExecutor(
     if (otelSpan) {
       otelSpan.end({ ok: false, message: err instanceof Error ? err.message : String(err) });
       const otelLine = opts.quiet ? null : otelNoticeOnce('cli-execute');
-      if (otelLine) logger.info(otelLine);
+      if (otelLine) logger.debug(otelLine);
       await flushSpans();
     }
     // WS2 — a run that THREW still writes its log: a crash is the single most
@@ -1521,7 +1591,7 @@ export async function runLoopExecutor(
       debugLog.event('turn.error', { error: err instanceof Error ? err.message : String(err) });
       const path = debugLog.write();
       const notice = opts.quiet ? null : debugLogNotice('cli-execute', path);
-      if (notice) logger.info(notice);
+      if (notice) logger.debug(notice);
     }
     return finishResult(
       failureResult(

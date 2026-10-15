@@ -242,7 +242,7 @@
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           </div>
           <h3>Learning Router That Gets Better</h3>
-          <p>A Thompson-sampling bandit learns per provider × complexity bucket from <em>real</em> outcomes (cost-adjusted rewards), with hard constraints, regex routing rules, uncertainty escalation on cold starts, and promotion gates that only keep router changes that measurably improve quality. A Model Availability Registry learns from <strong>real usage</strong> too — every chat/execute/plan/edit call writes which provider × model it verified or killed, so dead providers are skipped predictively (never a wasted first call) and a recovered provider is re-admitted automatically — with <code>buff models unblock &lt;provider&gt;</code> as a manual escape hatch that demotes the block, clears quota parks, and re-probes the live API to re-learn the truth. Inspect it with <code>buff models status --verbose</code> or the dashboard's per-action timeline — scrub across days (drag, click, range slider, or ▶ play) to replay what each action verified or killed on any given day. The VS Code extension attributes its own usage (<code>ide-chat</code> / <code>ide-inline</code> / <code>ide-execute</code>) so IDE-driven calls feed the same registry.</p>
+          <p>A Thompson-sampling bandit learns per provider × complexity bucket from <em>real</em> outcomes (cost-adjusted rewards), with hard constraints, regex routing rules, uncertainty escalation on cold starts, and promotion gates that only keep router changes that measurably improve quality. A Model Availability Registry learns from <strong>real usage</strong> too — every chat/execute/plan/edit call writes which provider × model it verified or killed, so dead providers are skipped predictively (never a wasted first call) and a recovered provider is re-admitted automatically — with <code>nuvira models unblock &lt;provider&gt;</code> as a manual escape hatch that demotes the block, clears quota parks, and re-probes the live API to re-learn the truth. Inspect it with <code>nuvira models status --verbose</code> or the dashboard's per-action timeline — scrub across days (drag, click, range slider, or ▶ play) to replay what each action verified or killed on any given day. The VS Code extension attributes its own usage (<code>ide-chat</code> / <code>ide-inline</code> / <code>ide-execute</code>) so IDE-driven calls feed the same registry.</p>
         </div>
         <div class="feature-card" data-delay="300">
           <div class="feature-icon offline">
@@ -270,7 +270,7 @@
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
           </div>
           <h3>Quota Ledger + Self-Healing Failover</h3>
-          <p>A central quota ledger tracks tokens per provider × model with calendar-aware resets, parks exhausted providers until free tier returns, and auto-fails-over mid-session when a key expires or rate-limit hits — never a stuck session, never a quota error thrown at you. <strong>Parks are per MODEL, not per provider</strong> (v2.7.3): a 429 rests that one model while its siblings keep serving, escalating to a provider-wide park only when several distinct models of the same provider are rate-limited — the honest signal for a genuinely shared limit. A model that once hiccuped is no longer penalized forever either: every success heals its error rate and a lapsed park re-admits it automatically. <strong>Rate-limit recovery is fully automatic</strong>: a transient blip is silently waited out and retried, while an exhausted or storming provider (2+ hits in a row) silently hands the task to the router's next healthy provider mid-build — no prompts, no grinding the same quota, no build interrupted. <strong>Key hygiene keeps the config honest</strong>: a provider with 3 consecutive 401/403 auth failures has its dead key auto-cleared from your config (or you're told exactly which env var to fix) with a clear error, and stale local models that were deleted (<code>ollama rm</code>) are pruned on the next <code>buff models refresh</code> — so the router never wastes a call on credentials or models that no longer exist.</p>
+          <p>A central quota ledger tracks tokens per provider × model with calendar-aware resets, parks exhausted providers until free tier returns, and auto-fails-over mid-session when a key expires or rate-limit hits — never a stuck session, never a quota error thrown at you. <strong>Parks are per MODEL, not per provider</strong> (v2.7.3): a 429 rests that one model while its siblings keep serving, escalating to a provider-wide park only when several distinct models of the same provider are rate-limited — the honest signal for a genuinely shared limit. A model that once hiccuped is no longer penalized forever either: every success heals its error rate and a lapsed park re-admits it automatically. <strong>Rate-limit recovery is fully automatic</strong>: a transient blip is silently waited out and retried, while an exhausted or storming provider (2+ hits in a row) silently hands the task to the router's next healthy provider mid-build — no prompts, no grinding the same quota, no build interrupted. <strong>Key hygiene keeps the config honest</strong>: a provider with 3 consecutive 401/403 auth failures has its dead key auto-cleared from your config (or you're told exactly which env var to fix) with a clear error, and stale local models that were deleted (<code>ollama rm</code>) are pruned on the next <code>nuvira models refresh</code> — so the router never wastes a call on credentials or models that no longer exist.</p>
         </div>
         <div class="feature-card" data-delay="700">
           <div class="feature-icon privacy">
@@ -341,28 +341,28 @@
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5M21 3l-7 7M8 21H3v-5M3 21l7-7"/></svg>
           </div>
           <h3>Multi-Account Key Rotation (🔑 key#N)</h3>
-          <p>One provider, many keys. A provider can carry <strong>multiple API keys</strong> (<code>apiKeys[]</code>), and failover rotates through every non-parked key <em>before</em> switching providers — a quota-exhausted secondary account is parked (FNV fingerprint, raw keys never persisted) and the next key is tried. Parked accounts are skipped predictively on the next run and cleared by <code>releaseAccount</code> / <code>buff models unblock</code>. Rotation is logged (<code>🔑 key#N …</code>) and proven by a hermetic E2E test driving real adapters against a mock gateway.</p>
+          <p>One provider, many keys. A provider can carry <strong>multiple API keys</strong> (<code>apiKeys[]</code>), and failover rotates through every non-parked key <em>before</em> switching providers — a quota-exhausted secondary account is parked (FNV fingerprint, raw keys never persisted) and the next key is tried. Parked accounts are skipped predictively on the next run and cleared by <code>releaseAccount</code> / <code>nuvira models unblock</code>. Rotation is logged (<code>🔑 key#N …</code>) and proven by a hermetic E2E test driving real adapters against a mock gateway.</p>
         </div>
         <div class="feature-card" data-delay="1700">
           <div class="feature-icon privacy">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><path d="M12 14v3"/></svg>
           </div>
           <h3>Role-Based Access Control (RBAC)</h3>
-          <p>Enterprise-grade authorization over the admin surface: <code>buff admin role add/remove/list</code> + <code>buff admin whoami</code> assign <strong>admin / operator / viewer</strong> roles with a scoped permission matrix (policy writes, role management, unblock). Legacy single-user mode stays fully permissive until roles are assigned, a misconfigured <code>rbac.json</code> logs a warning instead of silently downgrading, and an OIDC adapter interface is the token-identity seam for SSO. The dashboard mirrors it in a 🔐 RBAC Identity card.</p>
+          <p>Enterprise-grade authorization over the admin surface: <code>nuvira admin role add/remove/list</code> + <code>nuvira admin whoami</code> assign <strong>admin / operator / viewer</strong> roles with a scoped permission matrix (policy writes, role management, unblock). Legacy single-user mode stays fully permissive until roles are assigned, a misconfigured <code>rbac.json</code> logs a warning instead of silently downgrading, and an OIDC adapter interface is the token-identity seam for SSO. The dashboard mirrors it in a 🔐 RBAC Identity card.</p>
         </div>
         <div class="feature-card" data-delay="1800">
           <div class="feature-icon learning">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 12h-4l3-3 3 3z"/></svg>
           </div>
           <h3>Tamper-Evident Audit Chain</h3>
-          <p>Every action lands in a <strong>SHA-256 hash-chained audit log</strong> (<code>buff audit verify/export</code>) — each record's hash includes the previous one, so a single edited line breaks the chain and <code>doctor --enterprise</code> flags the exact tamper point. CEF/SIEM export feeds your security pipeline, and a secret-redaction scrubber wired into every logger + audit writer guarantees nothing sensitive is ever persisted.</p>
+          <p>Every action lands in a <strong>SHA-256 hash-chained audit log</strong> (<code>nuvira audit verify/export</code>) — each record's hash includes the previous one, so a single edited line breaks the chain and <code>doctor --enterprise</code> flags the exact tamper point. CEF/SIEM export feeds your security pipeline, and a secret-redaction scrubber wired into every logger + audit writer guarantees nothing sensitive is ever persisted.</p>
         </div>
         <div class="feature-card" data-delay="1900">
           <div class="feature-icon providers">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
           </div>
           <h3>OIDC-Verified Nuvira Gateway</h3>
-          <p>Turn your federation server into a <strong>token-verified gateway</strong>: <code>buff federation start --auth oidc --oidc-public-key &lt;pem&gt;</code> makes the handshake an RS256-JWT bearer check (sub/exp/issuer/audience enforced by a dependency-free adapter), with the PEM path persisted for daemon restart. Secret-mode interop is unchanged, and <code>buff nuvira serve</code> exposes the same decision layer as a headless OpenAI-compatible endpoint — RBAC, audit, and governance all gate what the gateway will do.</p>
+          <p>Turn your federation server into a <strong>token-verified gateway</strong>: <code>nuvira federation start --auth oidc --oidc-public-key &lt;pem&gt;</code> makes the handshake an RS256-JWT bearer check (sub/exp/issuer/audience enforced by a dependency-free adapter), with the PEM path persisted for daemon restart. Secret-mode interop is unchanged, and <code>buff nuvira serve</code> exposes the same decision layer as a headless OpenAI-compatible endpoint — RBAC, audit, and governance all gate what the gateway will do.</p>
         </div>
       </div>
     </div>
@@ -494,7 +494,7 @@
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           </div>
           <h3>FAISS-Backed Vector Store</h3>
-          <p>Similarity search runs on a pluggable backend: real FAISS native bindings when built, a pure-JS IVF ANN otherwise, with an exact-cosine fallback that always works. Auto-selected per machine — <code>buff memory backend --check</code> shows which tier you're on. Same JSON format, zero data migration.</p>
+          <p>Similarity search runs on a pluggable backend: real FAISS native bindings when built, a pure-JS IVF ANN otherwise, with an exact-cosine fallback that always works. Auto-selected per machine — <code>nuvira memory backend --check</code> shows which tier you're on. Same JSON format, zero data migration.</p>
         </div>
         <div class="feature-card" data-delay="1300">
           <div class="feature-icon privacy">
@@ -516,15 +516,15 @@
           <div class="feature-icon agents">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
           </div>
-          <h3><code>buff code-map</code> — Project Symbol Map</h3>
-          <p>One command maps your whole project: <code>buff code-map</code> lists every function, class, and method with its 1-based source line — <code>--json</code> for machine output, multi-language via the AST engine. No native parser dependencies, works offline — and the engine fix behind it recovered top-level functions that were silently dropped from the structure map (which also sharpened the edit pipeline).</p>
+          <h3><code>nuvira code-map</code> — Project Symbol Map</h3>
+          <p>One command maps your whole project: <code>nuvira code-map</code> lists every function, class, and method with its 1-based source line — <code>--json</code> for machine output, multi-language via the AST engine. No native parser dependencies, works offline — and the engine fix behind it recovered top-level functions that were silently dropped from the structure map (which also sharpened the edit pipeline).</p>
         </div>
         <div class="feature-card" data-delay="1600">
           <div class="feature-icon plugin">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           </div>
-          <h3>Scheduled Jobs (<code>buff admin cron</code>)</h3>
-          <p>Run any pipeline tool on a schedule: <code>buff admin cron add "0 9 * * *" build --args '...'</code> validates the 5-field cron expression and the tool's argument schema <em>at add time</em> — a typo surfaces immediately, not at 3am. Jobs persist to disk, are RBAC-gated (<code>cron.manage</code>), support <code>--dry-run</code> (validate + next run without executing), and can deliver results to a gateway channel.</p>
+          <h3>Scheduled Jobs (<code>nuvira admin cron</code>)</h3>
+          <p>Run any pipeline tool on a schedule: <code>nuvira admin cron add "0 9 * * *" build --args '...'</code> validates the 5-field cron expression and the tool's argument schema <em>at add time</em> — a typo surfaces immediately, not at 3am. Jobs persist to disk, are RBAC-gated (<code>cron.manage</code>), support <code>--dry-run</code> (validate + next run without executing), and can deliver results to a gateway channel.</p>
         </div>
         <div class="feature-card" data-delay="1700">
           <div class="feature-icon learning">
@@ -927,7 +927,7 @@
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><path d="M22 12h-4l3-3 3 3z"/></svg>
           </div>
           <h3>Tamper-Evident Audit Chain</h3>
-          <p>SHA-256 hash-chained audit log — every record's hash includes the previous one. CEF/SIEM export, secret-redaction scrubber, and <code>buff audit verify</code> detects any tampering.</p>
+          <p>SHA-256 hash-chained audit log — every record's hash includes the previous one. CEF/SIEM export, secret-redaction scrubber, and <code>nuvira audit verify</code> detects any tampering.</p>
         </div>
         <div class="feature-card" data-delay="200">
           <div class="feature-icon privacy">

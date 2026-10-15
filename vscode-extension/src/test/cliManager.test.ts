@@ -181,9 +181,9 @@ describe('CLIManager', () => {
     });
   });
 
-  // ── BUFF_TELEMETRY_ACTION env (registry write-through attribution) ─────
+  // ── NUVIRA_TELEMETRY_ACTION env (registry write-through attribution) ─────
 
-  describe('BUFF_TELEMETRY_ACTION env override', () => {
+  describe('NUVIRA_TELEMETRY_ACTION env override', () => {
     it('passes ide-<command> to spawn env for IDE-driven CLI calls', async () => {
       const { spawn } = await import('node:child_process');
       const m = new CLIManager(defaultConfig);
@@ -196,7 +196,7 @@ describe('CLIManager', () => {
       const [cmd, args, opts] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
       expect(cmd).toBe('buff');
       expect(args).toEqual(['execute', 'fix the bug']);
-      expect(opts.env).toMatchObject({ BUFF_TELEMETRY_ACTION: 'ide-execute' });
+      expect(opts.env).toMatchObject({ NUVIRA_TELEMETRY_ACTION: 'ide-execute' });
     });
 
     it('tags chat commands as ide-chat', async () => {
@@ -206,7 +206,7 @@ describe('CLIManager', () => {
         .runCommand(['chat', 'hello', '--stream'], 500);
 
       const [, , opts] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
-      expect(opts.env).toMatchObject({ BUFF_TELEMETRY_ACTION: 'ide-chat' });
+      expect(opts.env).toMatchObject({ NUVIRA_TELEMETRY_ACTION: 'ide-chat' });
     });
 
     it('does not clobber the parent environment (FORCE_COLOR + spread preserved)', async () => {
@@ -216,7 +216,7 @@ describe('CLIManager', () => {
         .runCommand(['edit', 'src/a.ts', '--quick'], 500);
 
       const [, , opts] = (spawn as ReturnType<typeof vi.fn>).mock.calls[0];
-      expect(opts.env).toMatchObject({ FORCE_COLOR: '0', BUFF_TELEMETRY_ACTION: 'ide-edit' });
+      expect(opts.env).toMatchObject({ FORCE_COLOR: '0', NUVIRA_TELEMETRY_ACTION: 'ide-edit' });
       // The full parent env is still spread in (never replaced wholesale).
       expect(opts.env).toHaveProperty('PATH');
     });

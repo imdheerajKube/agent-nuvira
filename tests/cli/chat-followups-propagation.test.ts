@@ -154,4 +154,87 @@ describe('answerOnce — suggest_followups reach the caller', () => {
     expect(out.content).toContain('Here is the answer.');
     expect(out.followups.map((f: { prompt: string }) => f.prompt)).toEqual(['Go deeper on A', 'Do B next']);
   });
+
+  /**
+   * The reported case (2026-10-14): `nuvira execute "hi"` on a weak local model
+   * reported 0 tool calls, wrote its three options as PROSE, and offered the user
+   * only the generic menu. Every surface's followups come from this one boundary,
+   * so recovering them here is what makes the CLI menu, the dashboard chips and
+   * the gateway's list agree instead of each recovering its own.
+   */
+  it('recovers the options a weak model wrote as a PROSE list', async () => {
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn(async () => ({
+        content: [
+          "It seems like you've shared a lot of information here, but it's not clear what you're asking.",
+          '',
+          'Would you like me to:',
+          '  1. Fix the factorial performance issue by adding a limit?',
+          '  2. Replace the new Function evaluation with a safer alternative?',
+          '  3. Run the existing test suite to see if these bugs are triggering failures?',
+        ].join('\n'),
+        toolCalls: [],
+      })),
+      generate: vi.fn().mockResolvedValue('unused'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+
+    vi.spyOn(ChatCommand.prototype as unknown as Proto, 'getProvider').mockResolvedValue({ type: 'local', provider });
+    vi.spyOn(ChatCommand.prototype as unknown as Proto, 'routeMessageAuto').mockResolvedValue({
+      type: 'local',
+      provider,
+      model: 'deepseek-coder:latest',
+    });
+
+    const out = await (new ChatCommand() as unknown as { answerOnce: Function }).answerOnce('hi', {});
+
+    expect(out.followups.map((f: { prompt: string }) => f.prompt)).toEqual([
+      'Fix the factorial performance issue by adding a limit?',
+      'Replace the new Function evaluation with a safer alternative?',
+      'Run the existing test suite to see if these bugs are triggering failures?',
+    ]);
+    // The answer itself is untouched — the list is recovered, not rewritten.
+    expect(out.content).toContain('Would you like me to:');
+  });
+
+  /**
+   * The other half of the reported experience: for a plain turn the console was
+   * preceded by a warmup announcement, a checkpoint line, a resume-probe line with
+   * its why-not detail and the debug-log path. Those are diagnostics — they now
+   * travel on the DEBUG channel, so the answer is the output and `--debug` is the
+   * diagnosis.
+   */
+  it('keeps checkpoint/resume diagnostics off the console for a plain turn', async () => {
+    const { logger } = await import('../../src/utils/logger.js');
+    const infoSpy = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const debugSpy = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+
+    const provider = {
+      name: 'Mock',
+      generateTools: vi.fn(async () => ({ content: 'A plain answer.', toolCalls: [] })),
+      generate: vi.fn().mockResolvedValue('A plain answer.'),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      getInfo: () => 'Mock',
+      listModels: vi.fn().mockResolvedValue([]),
+    } as unknown as InferenceProvider;
+
+    vi.spyOn(ChatCommand.prototype as unknown as Proto, 'getProvider').mockResolvedValue({ type: 'groq', provider });
+    vi.spyOn(ChatCommand.prototype as unknown as Proto, 'routeMessageAuto').mockResolvedValue({
+      type: 'gemini',
+      provider,
+      model: 'mock-model',
+    });
+
+    // `resume` is what opens the record (and produces the notice).
+    await (new ChatCommand() as unknown as { answerOnce: Function }).answerOnce('hi', { resume: true });
+
+    const infoLines = infoSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    const debugLines = debugSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    const diagnostic = /no record for this ask|resume probe|checkpointing this run|debug log written/;
+    expect(infoLines.some((l) => diagnostic.test(l))).toBe(false);
+    expect(debugLines.some((l) => diagnostic.test(l))).toBe(true);
+  });
 });

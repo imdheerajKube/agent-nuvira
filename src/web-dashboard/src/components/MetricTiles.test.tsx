@@ -75,6 +75,18 @@ describe('buildMetricTiles', () => {
     expect(tiles.find((t) => t.key === 'conversations')?.value).toBe('2.4K');
     expect(tiles.find((t) => t.key === 'cost')?.value).toBe('$0.000043');
   });
+
+  it('shows the BILLED figure, labelled as such, when the server sends the split', () => {
+    // The tile must not present the recorded ledger total as money spent: the two
+    // differ by exactly the rows the retired price table priced (and by the value a
+    // free tier absorbed).
+    const payload = {
+      cost: { totalCost: 7.20831, billedUsd: 5.94349 },
+    } as unknown as DashboardData;
+    const cost = buildMetricTiles(payload, hub()).find((t) => t.key === 'cost');
+    expect(cost?.value).toBe('$5.9435');
+    expect(cost?.label).toBe('Billed');
+  });
 });
 
 describe('MetricTiles', () => {

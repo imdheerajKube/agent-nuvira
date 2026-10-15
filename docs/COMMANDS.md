@@ -1311,11 +1311,44 @@ nuvira models excluded         # show what routing is skipping, and WHY
 ### 12.1 Stats & cost
 
 - **Objective:** Usage statistics and API cost tracking.
-- **Command:** `nuvira stats cost [--clear]` · `nuvira stats history`
+- **Command:** `nuvira stats cost [--clear]` · `nuvira stats cost reconcile` · `nuvira stats cost reprice` · `nuvira stats history`
 - **Examples:**
   ```bash
   nuvira stats cost
   nuvira stats history
+  ```
+- **What the cost summary means.** It reports what the ledger can EVIDENCE, in four
+separate buckets, because a single number cannot express all of them: **billed**
+(the provider's own figure for a call, plus list-priced calls on an account you
+declared `providers.<id>.billingTier paid`), **value** (the list price of calls a
+free/subscription tier absorbed — never spend), **unverified** (list-priced calls
+whose tier is undeclared — shown, not claimed), and **unpriced** (no price evidence
+at all: an unknown provider, or a keyless pass-through gateway whose upstream bill
+this machine cannot see). There is no "total spent" line, because the ledger cannot
+see a provider's invoice.
+- **`stats cost reconcile`** compares that ledger to **the provider's own charge**
+for a stated window — the only figure here that is actual. A window is mandatory
+(default: the current calendar month; `--days`/`--since`/`--until` otherwise), the
+provider id is validated, and the report gives the delta, a verdict (`match` /
+`under-evidenced` / `over-recorded`) and what the gap most likely consists of. Each
+check is recorded, so the Cost page can say it was checked against an invoice.
+`--declare-tier` records the billing fact the invoice **proves**; the command
+REFUSES a tier the invoice contradicts (declaring `free` while holding a $18.40
+invoice) and will not guess one the invoice cannot settle.
+  ```bash
+  nuvira stats cost reconcile --provider deepseek --amount 12.34 --days 30
+  nuvira stats cost reconcile -p openrouter -a 0 --since 2026-10-01 --declare-tier
+  ```
+- **`stats cost reprice`** repairs the rows already on disk: legacy rows priced by
+the retired hardcoded table are re-priced from the one price source, and test-origin
+rows (tagged `origin: test`, or carrying a fixture model id) are dropped. It is a
+**dry run by default** — `--apply` writes once and keeps a `.bak` beside the ledger.
+Rows that already carry a classification are never rewritten.
+  ```bash
+  nuvira stats cost reprice                     # show what would change
+  nuvira stats cost reprice --apply             # write (a .bak is kept)
+  nuvira stats cost reprice --keep-test-rows    # re-price only
+  node scripts/prune-cost-ledger-rows.mjs       # the same pass, as a script
   ```
 
 ### 12.2 Conversation history

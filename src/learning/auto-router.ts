@@ -948,38 +948,49 @@ export function applyCapabilityFit(score: number, fit: number): number {
  */
 export const DEFAULT_AUTO_PROVIDERS = [...CATALOG_PROVIDER_IDS];
 
-// ─── Real Provider Pricing ──────────────────────────────────────────────────
+// ─── Real Provider Pricing (ONE source: the provider catalog) ───────────────
 //
-// Actual per-1K-token list pricing (USD, input/output) used to derive the cost
-// dimension score instead of static profiles. Sources: provider pricing pages
-// (approximate; free tiers count as $0). Costs are configurable by overriding
-// the pricing table below.
+// Routing needs a cost number per provider to score the cost dimension, and that
+// number must come from the SAME place accounting uses. It does now: this table
+// is DERIVED from `inference/provider-catalog.ts` (the one price source of truth
+// — see `learning/model-pricing.ts`), not hand-written beside it.
+//
+// The hand-written version of this table is why the ledger and the router could
+// disagree about what a call cost: six providers were enumerated here in prose
+// and every other provider was filled in from the catalog, so a copy existed with
+// no owner and the two could drift without anything failing. MEASURED before
+// deleting it: all 23 entries were byte-identical to the catalog's, so deriving
+// them changes no score — it just removes the copy.
 
-/** Real per-1K-token pricing (USD) — input/output per 1K tokens. */
-export const PROVIDER_PRICING_PER_1K: Record<string, { inputPer1K: number; outputPer1K: number }> = {
-  groq: { inputPer1K: 0.00059, outputPer1K: 0.00079 },   // Llama-3.3-70B-class
-  nim: { inputPer1K: 0.00010, outputPer1K: 0.00050 },     // varies by model
-  gemini: { inputPer1K: 0, outputPer1K: 0 },              // free tier default
-  openrouter: { inputPer1K: 0.00250, outputPer1K: 0.01000 }, // GPT-4o-class pass-through
-  local: { inputPer1K: 0, outputPer1K: 0 },               // free (local compute)
-  // P5 M5.3: a local sidecar gateway is pass-through — its spend depends on
-  // the upstream model, which only real usage can know. Default 0 (local-first
-  // sidecar convention); M2.2 MEASURED wire-token cost replaces this the moment
-  // the gateway reports usage, so the free-first gate judges by truth.
-  nuvira: { inputPer1K: 0, outputPer1K: 0 },
-};
-
-// Issue 001: seed the pricing table from the provider catalog so the EXTENDED
-// providers (openai, anthropic, mistral, cohere, together, deepinfra, ...)
-// get real list pricing for cost scoring without per-provider hardcoding. The
-// built-in entries above already mirror the catalog; catalog values fill the
-// rest, so estimateCallCostUsd / computeCostScore work for every catalog id.
+/** Per-1K-token list pricing (USD), DERIVED from the provider catalog. */
+export const PROVIDER_PRICING_PER_1K: Record<string, { inputPer1K: number; outputPer1K: number }> = {};
 for (const id of CATALOG_PROVIDER_IDS) {
-  const catalog = getCatalogProvider(id);
-  if (catalog && PROVIDER_PRICING_PER_1K[id] === undefined) {
-    PROVIDER_PRICING_PER_1K[id] = { ...catalog.pricing };
-  }
+  const pricing = getCatalogProvider(id)?.pricing;
+  if (pricing) PROVIDER_PRICING_PER_1K[id] = { ...pricing };
 }
+
+/**
+ * What routing assumes about a provider the catalog does NOT describe.
+ *
+ * Deliberately NOT zero and NOT a market rate:
+ *   - zero would be a lie of the second kind (an unpriced provider is not free),
+ *     and it has teeth — the `routing.allowPaid: false` gate keeps only candidates
+ *     whose estimated cost is `=== 0`, so an invented zero would hand an unpriced
+ *     provider the free slot.
+ *   - a plausible-looking rate (the old `$0.00010/1K`) is the exact fabrication
+ *     the ledger removed: it invented $0.40 of spend on a free local gateway.
+ * So it is one named, conservative placeholder used ONLY for routing gates, never
+ * for accounting (the ledger has `unpriced` for real). `computeCostScore` treats
+ * the same situation as NO INFORMATION rather than as cheap.
+ */
+export const UNPRICED_PROVIDER_FALLBACK = { inputPer1K: 0.00010, outputPer1K: 0.00010 } as const;
+
+/**
+ * The cost score for a provider with no price evidence — the middle of the range.
+ * Neither 1.0 ("free, prefer me") nor 0 ("expensive, avoid me") is knowable, so
+ * the score stops pretending to know.
+ */
+export const NO_PRICING_EVIDENCE_COST_SCORE = 0.5;
 
 /** Reference cost per call (USD) used to normalize the 0–1 cost score. */
 const COST_REFERENCE_USD = 0.01;
@@ -1038,7 +1049,10 @@ export function estimateCallCostUsd(
   pricing?: { inputPer1K: number; outputPer1K: number },
   measured?: MeasuredCost,
 ): number {
-  const p = pricing || PROVIDER_PRICING_PER_1K[provider] || { inputPer1K: 0.00010, outputPer1K: 0.00010 };
+  // The caller's override, else the catalog's list price, else the documented
+  // routing placeholder (see UNPRICED_PROVIDER_FALLBACK — NOT zero, so an
+  // unpriced provider is never mistaken for a free one by the cost gate).
+  const p = pricing || PROVIDER_PRICING_PER_1K[provider] || UNPRICED_PROVIDER_FALLBACK;
   const inputTokens = measured ? measured.inputTokens : TYPICAL_INPUT_TOKENS;
   const outputTokens = measured ? measured.outputTokens : TYPICAL_OUTPUT_TOKENS;
   const inputCost = (inputTokens / 1000) * p.inputPer1K;
@@ -1056,6 +1070,12 @@ export function computeCostScore(
   pricing?: { inputPer1K: number; outputPer1K: number },
   measured?: MeasuredCost,
 ): number {
+  // No price evidence at all: score NEUTRAL. The old table answered this with an
+  // invented `$0.00010/1K`, which scored an unknown provider as nearly-cheapest —
+  // ranking it ahead of real providers on a number nobody quoted.
+  if (pricing === undefined && PROVIDER_PRICING_PER_1K[provider] === undefined) {
+    return NO_PRICING_EVIDENCE_COST_SCORE;
+  }
   const costUsd = estimateCallCostUsd(provider, pricing, measured);
   const score = 1 - costUsd / COST_REFERENCE_USD;
   return Math.max(0, Math.min(1, score));
@@ -3085,23 +3105,18 @@ export class AutoModelRouter {
   }
 
   /**
-   * Resolve the effective per-1K-token pricing for a provider.
-   * Config overrides (`nuvira config set pricing.<provider>...`) win over the
-   * built-in pricing table; unknown providers fall back to a cheap default.
+   * Resolve the effective per-1K-token pricing for a provider: the user's own
+   * `pricing.<provider>` override first, then the ONE price source (the provider
+   * catalog's derived table). A provider the catalog does not describe gets the
+   * named routing placeholder — never a hand-written market rate, and never zero
+   * (zero would read as "free" to the cost gate; see UNPRICED_PROVIDER_FALLBACK).
    */
   getProviderPricing(
     provider: string,
     configManager?: ConfigManager,
   ): { inputPer1K: number; outputPer1K: number } {
     const override: ProviderPricing | undefined = configManager?.getAll().pricing?.[provider];
-    // Issue 001: fall back through the pricing table, then the provider
-    // catalog's list pricing, then a cheap default — extended catalog
-    // providers cost-score with real numbers, never a neutral guess.
-    const catalog = getCatalogProvider(provider);
-    const builtin =
-      PROVIDER_PRICING_PER_1K[provider] ||
-      (catalog ? catalog.pricing : undefined) ||
-      { inputPer1K: 0.00010, outputPer1K: 0.00010 };
+    const builtin = PROVIDER_PRICING_PER_1K[provider] ?? getCatalogProvider(provider)?.pricing ?? UNPRICED_PROVIDER_FALLBACK;
     return {
       inputPer1K: override?.inputPer1K ?? builtin.inputPer1K,
       outputPer1K: override?.outputPer1K ?? builtin.outputPer1K,

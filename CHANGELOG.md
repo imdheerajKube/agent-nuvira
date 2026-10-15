@@ -2,6 +2,267 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.5.6 — the next steps a weak model writes as prose are clickable, a plain turn is quiet, the work is visible while it happens, a profile under the new config name is finally read, and the cost ledger stops claiming a bill it cannot see
+
+Seven things a person running `nuvira chat` / `nuvira execute` meets directly: the
+model's own suggestions were unreachable, a one-line question printed a screen of
+harness diagnostics before its answer, a terminal that does not report its width
+got a squashed answer, the run was silent while it worked and then spoke, a
+`nuviraconfig.json` profile was silently ignored by the runtime, and an
+intermittent resume failure could not be diagnosed from a log at all.
+
+- **The model's suggested next steps are PICKABLE on the CLI** — `nuvira execute`
+offered only its generic menu, because neither engine arm carried the turn's
+`suggest_followups` to it (`SingleGoalResult` had no followup field at all): the loop
+collected them in its own sink and the result stopped there. Both arms carry them
+now, and the post-run menu renders them as `💡 …` entries that run the picked one as
+the next goal. A run that already suggested its next steps no longer spends a SECOND
+model call inventing different ones.
+- **…including the options a weak model wrote as PROSE** — measured live
+(2026-10-14, `local/deepseek-coder`, `transport: json`, `toolCalls: 0`): the model
+printed three options under "Would you like me to:" and the user had nothing to
+pick, because choices are read from the tool call. `followupsFromAnswerList`
+recovers a trailing numbered/bulleted list behind a `:`/`?` lead-in — at least two
+items, capped at three, markers stripped, scaffolding dropped, and a list with no
+lead-in left alone (a procedure is the answer, not a menu). Applied at the ONE
+boundary every surface reads (chat, dashboard, gateway, both execute arms), so the
+CLI menu, the dashboard chips and the gateway's "Try next" list cannot drift apart.
+- **A plain turn is quiet; `--debug` is where the diagnosis lives** — the warmup
+announcement, the checkpoint notice, the resume-probe line with its why-not detail,
+the debug-log path, the span notice, the session-rehydrate line and the whole
+failover walk (including each retry and each rejected candidate) move to the debug
+channel, and a provider's own error body is quoted as ONE capped line instead of a
+503 JSON dump. Measured: a plain `nuvira execute` question was preceded by a
+checkpoint line, a resume-probe line and a debug-log path, and a first "hi" by a
+warmup announcement as well. **Isolation notices deliberately stay on the console** —
+they are opt-in and carry the worktree's path, which is where a kept run's changes
+are. A refusal, an error or a fallback that ends the turn is unchanged.
+- **A live view while the turn runs, on both commands** — a `thinking…` frame mounts
+BEFORE the first token (a local model sat silent for ten seconds before its first
+token), the step the run is on replaces the note (`⚙ edit_file({path})`, or the
+executor's own progress line), the answer streams as it is written, completed tool
+calls are archived as cards, and `commit()` unmounts the frame and writes the
+authoritative answer once — exactly once, even when the engine discarded the
+preview. Inert off a real terminal, so a piped/CI run keeps its bytes; forced inert
+under `--json-events`, whose stdout is a machine-readable event stream.
+- **A progress line reaches the frame, not the log** — a line printed to stdout lands
+UNDER a mounted Ink frame and is repainted over, so a run's own narration was
+invisible exactly when the live view was on. With a view attached the line goes into
+it; without one it is logged exactly as before.
+- **The terminal width fallback is 80, not 20** — a terminal that does not know its
+size reports `columns` as 0 (`stream.columns`), and `?? 80` only caught the
+`undefined` half, so `0` flowed into the renderer and its own floor became the width:
+on a PTY with no window size a code box came out 14 columns wide with lines cut
+mid-token. A width that cannot be read is 80 (`tests/cli/ui/presenter.test.ts`).
+- **The JSON transport says what "end with `suggest_followups`" means** — its contract
+required the final block and then left the payload shape and the prose case
+unspecified, which is why a weak model wrote the options as prose. It now shows the
+exact block and states that options in the prose are not a tool call.
+- **A resume miss says HOW the input changed** — "its input changed" named neither
+what changed nor by how much, which is why an intermittent parity failure could not
+be chased any further than re-running it. A miss now carries the sizes on each side
+(`was 4 msgs/980 chars/12 tools, now 5 msgs/1234 chars/12 tools`). Diagnostics
+only — the digest is still the verdict, and a shape that differs while the digest
+matches still replays (`tests/learning/step-checkpoint.test.ts`).
+- **The config file has ONE name per install, read by every reader** — `paths.ts`
+documents itself as the single source of truth for "where does `nuviraconfig.json`
+live?" and resolves the new name first, while `ConfigManager` built
+`join(configDir, 'buffconfig.json')` itself and `mcp/settings.ts` read that same
+hardcoded name. A profile written under the new name was therefore valid,
+resolvable, reported by `resolveNuviraConfigPath()` — and **silently ignored by
+every runtime reader** (the CLI, the router, chat/execute, the MCP layer). Both
+names are read now, lowest precedence first, so the new name wins key by key and
+neither file is discarded; a write goes to the one that exists, and a fresh
+install keeps the legacy name rather than splitting in two.
+- **Reading two config files exposed a per-server merge bug** — the `mcp` merge
+spread the incoming override over the stored one, so a file carrying
+`runtime.args` REPLACED the `runtime.command` an earlier file had stored and the
+server ran without its interpreter, silently. It goes through `mergeMcpSetting`
+now, the same merge `nuvira config set mcp.*` uses.
+- **A resumed run's recorded steps are no longer defeated by the session store** —
+the two mechanisms that both answer "continue where the last run stopped" fought,
+and the weaker one won. A session snapshot is written OPEN at every step boundary
+and closed only at a clean end, so a turn whose teardown raced that close left an
+open transcript behind; the next resumed turn rehydrated it, hashed a thread the
+recorded steps never covered, missed **every** step and re-paid for model calls it
+had already made — while reporting `--resume` as if it had worked. MEASURED, on
+the pre-fix code: `replayed 2, made 0 model calls` became `replayed 0, made 2` the
+moment such a snapshot was present (`tests/cli/resume-session-interaction.test.ts`).
+The ledger now wins when it CAN serve a step, and the session transcript — which
+carries work the ledger never recorded — stays the fallback when it cannot.
+- **…and that was the parity row's documented, unreproducible flake.** The
+`partial-resume` row's verdict depended on state outside its scenario (whether a
+leftover OPEN snapshot existed), which is why twelve runs under contention could
+not reproduce it. Two more inputs are closed: the parity harness declares the
+session store off like it already did checkpointing, and the test suite no longer
+lets the operator's profile `.env` decide a test's policy at all.
+- **The product says ONE name: `buff` is gone from everything a user reads** — an audit of the
+shipped surfaces found the dashboard still telling people to run `buff chat`, `buff dashboard`,
+`buff gateway start`, `buff benchmark` and to look in `~/.buff/` (62 strings across 16 components,
+including the chat console's own "same engine as `buff chat \"<prompt>\"`" hint). All of it is
+`nuvira` / `~/.nuvira/` now, along with the CLI gateway's env-var help (it now names the
+`NUVIRA_*` variables — the exact names the authoritative platform catalog and `envBuff` already use),
+the adapter's "not configured — set …" messages, the dashboard's service catalog, the tool errors
+that named an env var, the VS Code extension's panel text and the marketing site. The **legacy
+spellings keep working**: `buffconfig.json` / `~/.buff` fallbacks, the `BUFF_*` env aliases, and
+`envBuff`'s precedence are untouched, so an existing profile needs no migration. One real bug fell
+out of the audit: the VS Code extension read its active-model and memory paths from `~/.buff/`
+unconditionally, so on a `nuvira` profile it watched a directory that does not exist — it now
+follows `NUVIRA_*` → legacy `BUFF_*` → `~/.nuvira/`.
+- **9,450 tests across 529 files** in the root suite (20 skipped), **1,311 dashboard tests** and
+**244 VS Code extension tests**.
+
+### Session 53 — what a measured run exposed, and the flake that finally reproduced
+
+#### The refusal that was not the user's business
+
+The console's problem was not one noisy line but a channel with no distinction in
+it: `logger.info` carried both "here is your answer" and "here is what the harness
+is doing". The four measured on a plain turn — the warmup daemon starting on EVERY
+run, the default-on checkpoint notice, the resume probe with its why-not detail, and
+the debug log's path — are all the second kind. They moved to `logger.debug`, which
+`-d` raises, and the failover walks moved with them: a walk whose every candidate
+succeeded still narrated each failure.
+
+The one exception is deliberate and is the reason this was not a blanket sweep. An
+isolation notice names the directory the run is working in, and for a kept worktree
+that path is the only place the turn's changes exist — "kept: `<dir>` — nothing was
+removed" and "the worktree could NOT be removed" stay on the console, because they
+are answers to a request (`--worktree`) rather than reports of housekeeping.
+
+#### The operator's `~/.nuvira/.env` deciding what every test measured
+
+`loadEnv()` merges the profile's `.env` and **copies the values back into
+`process.env`** so consumers that read it directly (the dashboard) pick them up.
+That is deliberate — and it made the first `new ConfigManager()` in a test process
+import the developer's policy switches. On this machine `~/.nuvira/.env` carries
+`NUVIRA_RESUME=1` and `NUVIRA_SESSION_STORE=1`, so every later read in the process
+saw an **explicit resume no test had asked for**; the parity row's verdict
+depended on whether the profile had been merged yet. MEASURED: `envResume="1"`
+inside a test that never set it, and `undefined` once the suite pinned
+`NUVIRA_ENV_FILE` at a path that does not exist. The pin closes the whole class —
+policy switches today, whatever a profile grows tomorrow — instead of a per-key
+list that can never be proven complete, which is the same reasoning
+`live-credentials.ts` already applies to keys.
+
+> If you did not mean to set `NUVIRA_RESUME=1` / `NUVIRA_SESSION_STORE=1` in your
+> own profile, remove them: an env-declared resume makes every run open a ledger,
+> and the ledger then wins over session continuity by design.
+
+#### The flake that would not reproduce — until it was made to
+
+The parity harness's intermittent resume miss (a step that should replay and does
+not) was reproduced **zero times in twenty-four runs** — twelve isolated and twelve
+under a concurrent full-suite load. Running it harder was not going to converge, so
+the mechanism was found by reading instead, and then made to happen on purpose: two
+turns of the same ask, and an OPEN session snapshot for that ask left behind. Pre-fix
+that pair reported `replayed 0, made 2 model call(s)`; post-fix, `replayed 2, made 0`.
+The row's verdict had been a function of state no scenario declared — whether a
+transcript from an earlier turn was still open, and whether the operator's profile
+`.env` had been merged into the process yet.
+
+The instrument stays, because the NEXT miss must not need this search again:
+`stepShape` records the input's SIZES beside the recorded step (message count, content
+characters, tool count) and a miss prints both sides, so an occurrence says whether
+the thread grew (a tool result this run has and that one did not) or the toolset
+differed. It is never compared — the digest decides — and a test pins that a shape
+that differs while the digest matches still replays.
+
+#### What the cost ledger bills, on whose evidence — and the invoice it cannot see
+
+The Cost page printed **"Total Spent $7.21"**. Measured on this machine's real
+ledger (9,414 rows), that number was a sum of a column the ledger had priced from
+its OWN hardcoded table — five providers plus a `$0.00010/1K` fallback for every
+other provider — while the ROUTER priced the same calls from
+`inference/provider-catalog.ts` (21 providers). The two tables disagreed 25×–100×
+in both directions and every disagreement was invisible: the one provider this
+user actually pays for was the one most mis-priced, `$0.40` of spend was invented
+for a localhost gateway the catalog itself declares free, and a 7B toy and a
+prompt-guard classifier were billed at the provider's 70B-class rate.
+
+- **One price source of truth.** `learning/model-pricing.ts` owns the question
+"what does this call cost", reads the provider catalog, and is the only place the
+ledger, the CLI summary, the dashboard and the reconciliation check get a price.
+The duplicate table and the generic fallback are gone: an unknown provider is
+**`unpriced`** — a first-class answer, and the reason no invented spend can appear
+again. The router still gets a number for RANKING (`estimatedListCostUsd`), which
+is a different question from "what did it cost ME".
+- **…and the ROUTER's copy of the price list is gone too.** `auto-router.ts`
+enumerated six providers by hand, filled the other seventeen from the catalog, and
+answered "no price" with an invented `$0.00010/1K` — a second copy of the price
+list with no owner, which is how the ledger and the router could disagree at all.
+MEASURED before deleting it: all 23 entries were byte-identical to the catalog's,
+so the table is now DERIVED from it and no score changes. The one thing that had
+to change is the unknown case: `computeCostScore` scores a provider with no price
+evidence NEUTRAL (0.5) instead of ~0.97 — the old invented rate ranked an unknown
+provider ahead of every real one on a number nobody quoted — and the cost gate
+still sees a non-zero placeholder, because `routing.allowPaid: false` selects on
+`cost === 0` and an unpriced provider must not take the free slot on no evidence.
+- **Per model, before per vendor.** Declared per-model prices and a per-model
+catalogue row (OpenRouter's own rows, when a host wires the feed) precede the
+provider default, and a figure that IS a provider average says so in the basis
+string printed beside it.
+- **A key's billing fact, as a fact.** `providers.<id>.billingTier`
+(`paid`/`free`/`subscription`/`unknown`, set with `nuvira config set … billingTier free`)
+says what the ACCOUNT is charged — the fact the old ledger had nowhere to put, so a
+free Groq tier was charged a stranger's list rate. Undeclared is NOT assumed paid:
+list-priced calls sit in a separate `unverified` bucket that is never presented as
+spend.
+- **Two true numbers, never one.** `billedUsd` (provider-reported exact + list-priced
+on an account declared paid) and the list-price VALUE a free tier absorbed are
+reported apart, in the CLI summary and on the Cost page. The words "Total Spent"
+are gone.
+- **Test rows are tagged and can be pruned.** Every new row carries
+`origin: live|test` (the model registry's own rule) and display surfaces exclude
+test-origin rows — MEASURED: **748 fixture rows** sat in the real ledger (747 of
+`groq/wire-stub-model`, an id from `src/parity/wire-fixtures.ts`) and were counted
+as usage. Rows written before the tag have no origin, so
+`scripts/prune-cost-ledger-rows.mjs` (dry run by default, `.bak` on `--apply`)
+removes them by the one sound piece of evidence left — a fixture model id, the SAME
+predicate the router uses (`isFixtureModelId`) — and re-prices the legacy rows:
+MEASURED on a copy of the real profile, `$7.208370` recorded became
+`$0.000000` billed / **$18.887410 list-priced but unclaimed** / `$0.594740` free-tier
+value, which is the honest picture of an undeclared account.
+- **The invoice is the only "actual" figure.** `nuvira stats cost reconcile
+--provider <id> --amount <usd> [--days N]` compares the provider's OWN charge for a
+window against what the ledger can evidence, reports the verdict and what the gap
+most likely consists of, and records the check (`cost-reconciliations.json`) so the
+Cost page shows "checked against the invoice" instead of implying its estimate is a
+bill. It REFUSES to record a tier the invoice contradicts — declaring `free` while
+holding an invoice that charged $18.40 is exactly the fabrication this change
+removes — and it will not guess a tier the invoice does not prove. `--declare-tier`
+without a value records the tier the invoice EVIDENCED.
+- **`nuvira stats cost reprice`** is the explicit repair of the rows already on disk
+(dry run by default; `--apply` writes once, after a backup), because a read must
+never rewrite a user's billing history. A row that already carries its
+classification is left exactly as written, and a legacy row's stored figure is
+never fed back in as though the provider had reported it.
+- **A one-millisecond window bug, found by writing the test.** The default end of a
+reconciliation window was `now`, and the filter is half-open — so a call recorded in
+the same millisecond as the check was silently excluded and the report read "no
+ledger rows in this window". The default end is now `now + 1`; an explicit `--until`
+keeps the half-open meaning so consecutive periods cannot count a boundary row twice.
+
+### Documentation — the OmniRoute gateway is now documented where a user looks for it
+
+The external OmniRoute gateway (`nuvira omniroute start|stop|status`) had a User Manual section and
+**no README entry at all**, and that section stopped at "how to start it": nothing said how to
+verify an install, that an auth-gated `401` counts as UP, why a *running* gateway is still never
+picked by auto routing, or where the gateway's own failures are recorded. Both docs now carry it:
+
+- **README → Provider Details → OmniRoute** — setup (install, upstream keys, lifecycle, the On/Off
+  switch), the pin recipes (`--provider omniroute --model auto`, `auto/coding|fast|cheap|offline`),
+  a verification table, and the two limits.
+- **User Manual → §5 → OmniRoute** — the four integration layers in the order they matter (keyless
+  catalog entry / lifecycle control / routing rules / `passthrough` accounting), a four-command
+  verification block in which each line's failure mode is stated, and a troubleshooting table
+  (not reachable → start it; dies seconds later → `~/.omniroute/server/crash.log`; pinning works but
+  auto never picks it → the keyless-provider pool rule; `-m auto` with a concrete provider → the
+  gateway's combo, not ours).
+- **Nothing in the runtime changed.** This is documentation: the claims are the behaviour already in
+  the tree, and every command documented was run against the installed gateway before it was
+  written down.
+
 ## v3.5.5 — the v3.5.2 features, checked on the platforms they actually run on
 
 > **v3.5.3 and v3.5.4 were never published to npm.** 3.5.3's gate caught a stale

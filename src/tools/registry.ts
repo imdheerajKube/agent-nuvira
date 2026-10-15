@@ -801,7 +801,12 @@ export const TOOL_CONTRACT_JSON = `${TOOL_CONTRACT}
 TOOL CALL FORMAT (JSON fallback transport):
 When calling a tool, emit its JSON AFTER your response text, in this exact shape:
 {"tool":"<name>","arguments":{...}}
-One tool call per block. The final block may be a suggest_followups call.`;
+One tool call per block. The final block may be a suggest_followups call.
+
+FINAL STEP — how a turn ends on this transport:
+End your LAST line with that block for suggest_followups, with the suggestions INSIDE it:
+{"tool":"suggest_followups","arguments":{"followups":[{"prompt":"...","label":"..."},{"prompt":"..."},{"prompt":"..."}]}}
+Options written as prose are NOT a tool call — "Would you like me to: 1. ... 2. ..." leaves the user with nothing to pick, because the choices are read from the block only. Write the answer first, then the block.`;
 
 // ─── Built-in registration (module load) ────────────────────────────────────
 
@@ -1038,6 +1043,26 @@ registerTool({
           `In your written answer, tell the user the question you would have asked and the assumption ` +
             `you made (e.g. "I assumed ${picked} — tell me if you would prefer something else"), then continue with it.`) +
         ' Do not record it as a user decision or re-ask the same question.'
+      );
+    }
+    // A SHOWN question the user did NOT answer is not an answer.
+    //
+    // The GUI's skip button and the Cancel/abort path both resolve a pending
+    // question with `index: -1` and nothing chosen, and this tool used to fall
+    // through to `User answered: ` with an empty tail — telling the model it had
+    // the user's word when it had nothing at all. MEASURED (trace
+    // `trace-1791996357488-wpm352`, 2026-10-14): a dashboard turn waited 5m02s on
+    // an `ask_user`, the user cancelled, and the recorded tool result was
+    // `User answered:` — the model was then free to treat an unanswered fork as
+    // decided. Nothing is recorded as their decision here, and the model is told
+    // what to do instead: state an assumption, or stop.
+    if (!picked && !answer.custom) {
+      ctx.runTrace?.recordAsk(question, true, '');
+      return (
+        'The question was shown and the user did NOT answer it (they skipped it, or the turn was cancelled ' +
+        'while it waited). Do not record it as their decision, and do not re-ask the same question. Either pick ' +
+        'the option you can defend, say plainly in your answer which one you assumed and why (e.g. "I assumed ' +
+        'X — tell me if you want otherwise"), and continue, or stop and name exactly what you need to go on.'
       );
     }
     // ── Grant it, if the user picked the session choice ──────────────────────
@@ -1405,7 +1430,7 @@ registerTool({
 registerTool({
   name: 'generate_image',
   capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
-  description: 'Generate an image from a text prompt using a bring-your-own-key backend: Google Gemini/Imagen (GEMINI_API_KEY), OpenAI DALL-E/gpt-image (OPENAI_API_KEY), Stability AI (STABILITY_API_KEY), a local ComfyUI/Stable Diffusion (BUFF_IMAGE_API_URL), or the free keyless Pollinations.ai fallback. The first backend whose key is configured wins (override with `modality.image.provider`), and a failing backend falls back to Pollinations. The image is saved to the sandbox images/ dir and the path is returned. When running in a gateway context (WhatsApp/Telegram/etc.), the image is automatically sent back to the originating channel.',
+  description: 'Generate an image from a text prompt using a bring-your-own-key backend: Google Gemini/Imagen (GEMINI_API_KEY), OpenAI DALL-E/gpt-image (OPENAI_API_KEY), Stability AI (STABILITY_API_KEY), a local ComfyUI/Stable Diffusion (NUVIRA_IMAGE_API_URL), or the free keyless Pollinations.ai fallback. The first backend whose key is configured wins (override with `modality.image.provider`), and a failing backend falls back to Pollinations. The image is saved to the sandbox images/ dir and the path is returned. When running in a gateway context (WhatsApp/Telegram/etc.), the image is automatically sent back to the originating channel.',
   category: 'workflow',
   inputSchema: imageGenSchema,
   endsAgentStep: false,
@@ -1480,7 +1505,7 @@ registerTool({
 registerTool({
   name: 'describe_image',
   capability: { effectClass: 'external', reversible: false, grantCategory: 'external' },
-  description: 'Describe an image (local Ollama llava/llama3.2-vision, or free Gemini vision when BUFF_GEMINI_API_KEY is set). Use for screenshots, diagrams, or any image the user references.',
+  description: 'Describe an image (local Ollama llava/llama3.2-vision, or free Gemini vision when NUVIRA_GEMINI_API_KEY is set). Use for screenshots, diagrams, or any image the user references.',
   category: 'workflow',
   inputSchema: describeImageSchema,
   endsAgentStep: false,
@@ -1488,7 +1513,7 @@ registerTool({
     const parsed = describeImageSchema.parse(args);
     const { describeImage, isVisionAvailable } = await import('./modality/vision.js');
     if (!(await isVisionAvailable())) {
-      return 'describe_image: unavailable — start Ollama with a vision model (llava) or set BUFF_GEMINI_API_KEY.';
+      return 'describe_image: unavailable — start Ollama with a vision model (llava) or set NUVIRA_GEMINI_API_KEY.';
     }
     const result = await describeImage(parsed.path, parsed.prompt);
     return result.ok ? `describe_image: ${result.description}` : `describe_image: failed — ${result.error}`;

@@ -1,7 +1,7 @@
 /**
  * P2 — EvalsPage tests (eval runner in the GUI).
  *
- * The page mounts the shared TaskConsole with the `buff eval run` presets and
+ * The page mounts the shared TaskConsole with the `nuvira eval run` presets and
  * renders past runs from the dashboard data feed. Page-specific behavior is
  * covered here; the console's run/stream/cancel mechanics live in
  * TaskConsole.test.tsx.

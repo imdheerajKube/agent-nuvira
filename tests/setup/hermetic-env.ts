@@ -95,6 +95,25 @@ for (const key of ['NUVIRA_SKILLS_DIR', 'BUFF_SKILLS_DIR']) {
 // only removes the inference, it is not the guard.
 process.env.NUVIRA_TELEMETRY_ORIGIN = 'test';
 
+// The operator's profile `.env` must not decide a test's POLICY either, and it
+// did. `loadEnv()` merges `<config dir>/.env` and COPIES the values back into
+// `process.env` (so consumers that read `process.env` directly see them), which
+// means the first `new ConfigManager()` in a test process imports the developer's
+// profile switches. MEASURED (2026-10-14): this machine's `~/.nuvira/.env` carries
+// `NUVIRA_RESUME=1` and `NUVIRA_SESSION_STORE=1`, so every later read in the
+// process saw an EXPLICIT RESUME no test had asked for — and the parity
+// `partial-resume` row's verdict then depended on state outside its own scenario
+// (whether the profile had been merged yet, and whether the run it produced left
+// an open session snapshot behind), which is how a documented, load-sensitive
+// flake is born.
+//
+// Pinning the env FILE closes the whole class — today's policy switches and
+// whatever is added to a profile tomorrow — rather than a per-key list that can
+// never be proven complete. `resolveNuviraEnvFile` honours `NUVIRA_ENV_FILE`
+// first, and a path that does not exist merges nothing. A test that wants real
+// profile values sets this to its own file.
+if (!process.env.NUVIRA_ENV_FILE) process.env.NUVIRA_ENV_FILE = join(runDir, 'no-profile.env');
+
 // No live provider or messaging credential survives into a test. Without this a
 // test that checks for a key — the right way to write it — reaches a real API
 // and the suite becomes a function of the operator's shell.

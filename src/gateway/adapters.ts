@@ -203,7 +203,7 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   async start(onMessage: MessageHandler): Promise<void> {
-    if (!this.configured) throw new Error('Telegram adapter not configured (BUFF_TELEGRAM_TOKEN)');
+    if (!this.configured) throw new Error('Telegram adapter not configured (NUVIRA_TELEGRAM_TOKEN)');
     this.handler = onMessage;
     this.running = true;
     const loop = async (): Promise<void> => {
@@ -430,7 +430,7 @@ export class DiscordAdapter extends WebhookChannelAdapter {
       // answers outbound but never receives is otherwise indistinguishable from
       // one whose inbound is broken. Names the key and what still works.
       logger.info(
-        'Discord: real-time Gateway inbound skipped — no bot token (BUFF_DISCORD_BOT_TOKEN). ' +
+        'Discord: real-time Gateway inbound skipped — no bot token (NUVIRA_DISCORD_BOT_TOKEN). ' +
           'Webhook inbound (public URL required) and outbound both still work.',
       );
       return;
@@ -515,7 +515,7 @@ export class SlackAdapter extends WebhookChannelAdapter {
     const appToken = envBuff('SLACK_APP_TOKEN') ?? '';
     if (!appToken) {
       logger.info(
-        'Slack: real-time Socket Mode inbound skipped — no app-level token (BUFF_SLACK_APP_TOKEN). ' +
+        'Slack: real-time Socket Mode inbound skipped — no app-level token (NUVIRA_SLACK_APP_TOKEN). ' +
           'The Events API path (public Request URL) and outbound both still work.',
       );
       return;
@@ -833,7 +833,7 @@ export class MatrixAdapter extends WebhookChannelAdapter {
    * own sends. A `since` token is kept in memory per gateway run.
    */
   async start(onMessage: MessageHandler): Promise<void> {
-    if (!this.configured) throw new Error('Matrix adapter not configured (BUFF_MATRIX_HOMESERVER + BUFF_MATRIX_ACCESS_TOKEN)');
+    if (!this.configured) throw new Error('Matrix adapter not configured (NUVIRA_MATRIX_HOMESERVER + NUVIRA_MATRIX_ACCESS_TOKEN)');
     if (this.running) return;
     this.handler = onMessage;
     this.running = true;
@@ -966,7 +966,7 @@ export class NtfyAdapter extends WebhookChannelAdapter {
   }
 
   describe(): string {
-    return this.configured ? `ntfy (${this.baseUrl}/${this.topic})` : 'ntfy (not configured — set BUFF_NTFY_TOPIC)';
+    return this.configured ? `ntfy (${this.baseUrl}/${this.topic})` : 'ntfy (not configured — set NUVIRA_NTFY_TOPIC)';
   }
 
   protected sendUrl(_channelId: string): string {
@@ -1052,7 +1052,7 @@ export class WeixinAdapter extends WebhookChannelAdapter {
   }
 
   describe(): string {
-    return this.configured ? 'Weixin (iLink bot API, send)' : 'Weixin (not configured — set BUFF_WEIXIN_TOKEN)';
+    return this.configured ? 'Weixin (iLink bot API, send)' : 'Weixin (not configured — set NUVIRA_WEIXIN_TOKEN)';
   }
 
   protected sendUrl(_channelId: string): string {
@@ -1259,7 +1259,7 @@ export class EmailAdapter implements ChannelAdapter {
   describe(): string {
     return this.configured
       ? `Email (SMTP ${this.opts.host}:${this.opts.port}${this.opts.user ? ` as ${this.opts.user}` : ''})`
-      : 'Email (not configured — set BUFF_SMTP_HOST + BUFF_SMTP_USER)';
+      : 'Email (not configured — set NUVIRA_SMTP_HOST + NUVIRA_SMTP_USER)';
   }
 
   async start(_onMessage: MessageHandler): Promise<void> {
@@ -1300,7 +1300,7 @@ export class SignalAdapter implements ChannelAdapter {
   describe(): string {
     return this.configured
       ? `Signal (rest-api ${this.baseUrl}, account ${this.account})`
-      : 'Signal (not configured — set BUFF_SIGNAL_ACCOUNT)';
+      : 'Signal (not configured — set NUVIRA_SIGNAL_ACCOUNT)';
   }
 
   async start(_onMessage: MessageHandler): Promise<void> {

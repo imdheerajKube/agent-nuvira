@@ -29,6 +29,13 @@ import type { ProviderConfig } from '../config/types.js';
 import type { WireFinding } from '../findings/verdicts.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import {
+  classifyEntries,
+  type ClassifiableEntry,
+} from '../learning/cost-classification.js';
+// Type-only: the payload SHAPE of an invoice check. A value import would pull the
+// pricing/config graph into the dashboard server for a read of one JSON file.
+import type { StoredReconciliation } from '../learning/cost-reconcile.js';
+import {
   acceptanceSummary,
   collectLabelledTurns,
   serializeLabelledTurns,
@@ -1913,10 +1920,55 @@ function readCostData(): Record<string, unknown> {
   if (!data?.entries) {
     // The empty state deliberately omits `recent` entirely (the dashboard reads
     // a missing list as "nothing recorded"), matching the other zero counters.
-    return { totalRequests: 0, totalCost: 0, byProvider: {}, byModel: {} };
+    return {
+      totalRequests: 0,
+      totalCost: 0,
+      byProvider: {},
+      byModel: {},
+      billedUsd: 0,
+      billedReportedUsd: 0,
+      billedListedUsd: 0,
+      unverifiedListedUsd: 0,
+      notBilledValueUsd: 0,
+      unpricedCalls: 0,
+      unpricedTokens: 0,
+      recomputedCalls: 0,
+      testOriginCalls: 0,
+      // No invoice has been checked yet — stated, not implied.
+      reconciliations: [],
+    };
   }
 
   const entries = data.entries;
+
+  // ── The classified view (ONE judgement for every surface) ────────────────
+  // The Cost page's headline used to be `totalCost` — the sum of a column the
+  // ledger had priced from its own hardcoded table — printed under the words
+  // "Total Spent". It is now split by EVIDENCE: what was billed (provider-reported
+  // exact + list-priced with a declared paid account), the value a free tier
+  // absorbed, the list-priced rows whose tier is undeclared, and the calls with no
+  // price at all. Test-origin rows are excluded here: a row written by a test run
+  // is not the user's usage (the model registry takes the same posture).
+  const classified = classifyEntries(entries as unknown as ClassifiableEntry[], {
+    excludeTestOrigin: true,
+  });
+  const byProviderBilled: Record<string, number> = {};
+  const byProviderUnverified: Record<string, number> = {};
+  const byProviderValue: Record<string, number> = {};
+  const byProviderUnpricedCalls: Record<string, number> = {};
+  const byModelBilled: Record<string, number> = {};
+  const byModelValue: Record<string, number> = {};
+  for (const [provider, t] of Object.entries(classified.byProvider)) {
+    byProviderBilled[provider] = t.billedUsd;
+    byProviderUnverified[provider] = t.unverifiedListedUsd;
+    byProviderValue[provider] = t.notBilledValueUsd;
+    byProviderUnpricedCalls[provider] = t.unpricedCalls;
+  }
+  for (const [model, t] of Object.entries(classified.byModel)) {
+    byModelBilled[model] = t.billedUsd;
+    byModelValue[model] = t.notBilledValueUsd;
+  }
+
   const totalCost = entries.reduce((s, e) => s + (typeof e.costUsd === 'number' ? e.costUsd : 0), 0);
   const totalTokens = entries.reduce((s, e) => s + (typeof e.totalTokens === 'number' ? e.totalTokens : 0), 0);
 
@@ -1966,9 +2018,58 @@ function readCostData(): Record<string, unknown> {
     reported: e.costReported === true,
   }));
 
+  // ── Invoice checks: the only EXTERNAL figures on this page ───────────────
+  // Written by `nuvira stats cost reconcile` when the operator enters the
+  // provider's own charge for a window. Everything else here is an estimate of
+  // money owed; this is the one place the page can be compared against what was
+  // ACTUALLY charged. Read straight from the file (no module import) so the
+  // dashboard keeps resolving its own memory dir, and capped like `recent`.
+  const reconciliationFile = readJSON<{ reconciliations?: StoredReconciliation[] }>(
+    join(MEMORY_DIR, 'cost-reconciliations.json'),
+  );
+  const reconciliations = (
+    Array.isArray(reconciliationFile?.reconciliations) ? reconciliationFile.reconciliations : []
+  )
+    .filter((r) => r && typeof r.provider === 'string' && typeof r.invoiceUsd === 'number')
+    .slice(0, 20)
+    .map((r) => ({
+      provider: r.provider,
+      invoiceUsd: r.invoiceUsd,
+      billedUsd: r.billedUsd,
+      deltaUsd: r.deltaUsd,
+      verdict: r.verdict,
+      since: r.since,
+      until: r.until,
+      recordedAt: r.recordedAt,
+      ...(r.note ? { note: r.note } : {}),
+      ...(r.tierEvidence ? { tier: r.tierEvidence.tier } : {}),
+    }));
+
   return {
     totalRequests: entries.length,
     totalCost: Math.round(totalCost * 100000) / 100000,
+    // The evidence-backed figures. `totalCost` above is kept for compatibility
+    // (it is the ledger total as recorded, including rows priced by the retired
+    // hardcoded table); these are what the page headlines.
+    billedUsd: classified.billedUsd,
+    billedReportedUsd: classified.billedReportedUsd,
+    billedListedUsd: classified.billedListedUsd,
+    billedReportedCalls: classified.billedReportedCalls,
+    billedListedCalls: classified.billedListedCalls,
+    unverifiedListedUsd: classified.unverifiedListedUsd,
+    unverifiedListedCalls: classified.unverifiedListedCalls,
+    notBilledValueUsd: classified.notBilledValueUsd,
+    notBilledValueCalls: classified.notBilledValueCalls,
+    unpricedCalls: classified.unpricedCalls,
+    unpricedTokens: classified.unpricedTokens,
+    recomputedCalls: classified.recomputedCalls,
+    testOriginCalls: classified.testOriginCalls,
+    byProviderBilled,
+    byProviderUnverified,
+    byProviderValue,
+    byProviderUnpricedCalls,
+    byModelBilled,
+    byModelValue,
     totalTokens,
     byProvider,
     byModel,
@@ -1980,6 +2081,7 @@ function readCostData(): Record<string, unknown> {
     estimatedCost: Math.round(estimatedCost * 100000) / 100000,
     reportedCalls,
     reportedCost: Math.round(reportedCost * 100000) / 100000,
+    reconciliations,
     recent,
   };
 }
@@ -7865,7 +7967,27 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     // `busy` lets a client that reloaded mid-turn know the answer is still being
     // produced, so it can keep the bubble alive and poll instead of showing a
     // finished-looking thread.
-    writeJson(res, 200, { ok: true, session: { id, ...rec, busy: chatConsole.isBusy(id) } });
+    // `pendingQuestion` rides with the transcript because a reload has to be
+    // able to SEE an open question, not just guess at it from `busy`. The turn
+    // holding for an answer reports `busy: true` exactly like one that is
+    // working, so without this the resumed page showed "⏳ Still working on the
+    // server" for a turn that was waiting on the user (measured 2026-10-14:
+    // trace-1791996357488-wpm352 sat in `ask_user` for 5m02s and was cancelled
+    // with the question never on screen).
+    // `busySince` is when the RUNNING turn started, so a client that gave up on
+    // its own POST (a 5-minute ceiling) or reloaded mid-turn reports how long
+    // the wait really is rather than counting from whenever it attached
+    // (measured 2026-10-14: a 664s turn shown as "1m 25s elapsed").
+    writeJson(res, 200, {
+      ok: true,
+      session: {
+        id,
+        ...rec,
+        busy: chatConsole.isBusy(id),
+        ...(chatConsole.busySince(id) !== null ? { busySince: chatConsole.busySince(id) } : {}),
+        ...(chatConsole.pendingQuestionFor(id) ? { pendingQuestion: chatConsole.pendingQuestionFor(id) } : {}),
+      },
+    });
     return;
   }
 
@@ -8603,6 +8725,17 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       'X-Accel-Buffering': 'no',
     });
     res.write(`event: init\ndata: ${JSON.stringify({ sessionId })}\n\n`);
+    // A question asked BEFORE this client attached is still waiting for an
+    // answer, and the turn will hold until one arrives. Replaying it here is
+    // what makes a reload (or a second tab) able to ANSWER it: without this the
+    // new page shows a "still working" notice and no choice card at all, while
+    // the turn waits on a reply the page has no way to send — the exact
+    // "the model asked something but nothing appeared on screen" report
+    // (2026-10-14, trace-1791996357488-wpm352, 5m02s in `ask_user`).
+    const pendingQuestion = chatConsole.pendingQuestionFor(sessionId);
+    if (pendingQuestion) {
+      res.write(`event: question\ndata: ${JSON.stringify(pendingQuestion)}\n\n`);
+    }
     const heartbeat = setInterval(() => {
       try { res.write(': heartbeat\n\n'); } catch { clearInterval(heartbeat); }
     }, 30000);

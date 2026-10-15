@@ -90,7 +90,11 @@ import { FAULT_ENV, faultMessage, formatFaultPlan, resetFaultInjector } from '..
 // the harness silently declaring nothing (which would read as "no surface
 // isolated its turn", the failure this row is meant to catch).
 import { WORKTREE_ENABLE_ENV } from '../tools/worktree.js';
+// The config FILE the harness writes must be the one the runtime reads — see
+// `CONFIG_FILE_NAMES` in `paths.ts` for the bug that made two answers possible.
+import { resolveNuviraConfigPath } from '../config/paths.js';
 import { RESUME_ENABLE_ENV } from '../learning/step-checkpoint.js';
+import { SESSION_STORE_ENABLE_ENV } from '../learning/session-store.js';
 import type { ParityDriver, ParityScenario, StubDepth } from './scenarios.js';
 import type { SurfaceId } from './surfaces.js';
 
@@ -785,11 +789,14 @@ function createWorkspace(): ParityWorkspace {
     memoryDir,
     hookScript,
     useStub(baseUrl: string): void {
-      // `buffconfig.json` is the file `ConfigManager` reads (`config/manager.ts`
-      // -> `config/paths.ts`). The provider object the surfaces build from it is
-      // the REAL Groq adapter; `baseUrl` is the override it honours.
+      // The config file is resolved, never spelled: `ConfigManager` reads it
+      // through `config/paths.ts`, and writing a second name here would leave
+      // the harness's profile unread the moment the resolved file changes (which
+      // is the bug the resolver exists to prevent — see `CONFIG_FILE_NAMES`).
+      // The provider object the surfaces build from it is the REAL Groq adapter;
+      // `baseUrl` is the override it honours.
       writeFileSync(
-        join(configDir, 'buffconfig.json'),
+        resolveNuviraConfigPath(configDir),
         JSON.stringify(
           {
             defaultProvider: PARITY_PROVIDER_TYPE,
@@ -1329,8 +1336,10 @@ async function runViaSubagent(ws: ParityWorkspace, scenario: ParityScenario): Pr
   const childRoot = join(ws.root, `subagent-${scenario.id}`);
   const childConfig = join(childRoot, 'config');
   mkdirSync(childConfig, { recursive: true });
+  // Resolved, not spelled — same reason as the workspace profile above: the
+  // child must read the file the harness wrote.
   writeFileSync(
-    join(childConfig, 'buffconfig.json'),
+    resolveNuviraConfigPath(childConfig),
     JSON.stringify({
       defaultProvider: PARITY_PROVIDER_TYPE,
       providers: {
@@ -1559,6 +1568,15 @@ export async function createParityHarness(): Promise<ParityHarness> {
     // CHECKPOINT_ENABLE_ENV). A value inherited from the shell must not decide
     // whether every row compares a command default or a capability.
     checkpoint: process.env[CHECKPOINT_ENABLE_ENV],
+    // …and same rule for the SESSION STORE, which is what the `partial-resume`
+    // row depended on by accident. A session snapshot is written OPEN at every
+    // step boundary and closed at a clean end, so a turn whose teardown races
+    // that close leaves an open transcript behind — and a LATER turn for the same
+    // ask then rehydrates it, hashes a thread the recorded steps never covered,
+    // and misses every one of them (`replayed 0` where the ledger had replayed
+    // both). No row here claims session continuity, so the switch that produces
+    // that state is declared off instead of inherited.
+    sessionStore: process.env[SESSION_STORE_ENABLE_ENV],
   };
   process.env.NUVIRA_CONFIG_DIR = workspace.configDir;
   process.env.NUVIRA_MEMORY_DIR = workspace.memoryDir;
@@ -1582,6 +1600,10 @@ export async function createParityHarness(): Promise<ParityHarness> {
   // saved resume point that no other surface has, and every row reads as a
   // divergence about policy rather than about the behaviour under test.
   process.env[CHECKPOINT_ENABLE_ENV] = 'off';
+  // Same reasoning for the session store (see the `previous.sessionStore` note):
+  // a development profile that declares it on — `~/.nuvira/.env` is merged into
+  // `process.env` by `loadEnv()` — must not decide this row's verdict.
+  process.env[SESSION_STORE_ENABLE_ENV] = 'off';
   // The legacy aliases would otherwise win on the modules that check them, and
   // point half the run back at the developer's real profile.
   delete process.env.BUFF_CONFIG_DIR;
@@ -1651,6 +1673,8 @@ export async function createParityHarness(): Promise<ParityHarness> {
       else process.env[FAULT_ENV] = previous.fault;
       if (previous.checkpoint === undefined) delete process.env[CHECKPOINT_ENABLE_ENV];
       else process.env[CHECKPOINT_ENABLE_ENV] = previous.checkpoint;
+      if (previous.sessionStore === undefined) delete process.env[SESSION_STORE_ENABLE_ENV];
+      else process.env[SESSION_STORE_ENABLE_ENV] = previous.sessionStore;
       resetFaultInjector();
       // Tear the LAST surface's provider down too: a test file that runs several
       // parity runs in a row would otherwise inherit the first one's provider,

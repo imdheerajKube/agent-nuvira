@@ -465,6 +465,16 @@ View usage statistics and cost tracking
 Show API cost tracking details
 
    - flags: `--clear`
+### `nuvira stats cost reconcile`
+
+Compare this ledger to a provider's OWN invoice for a window (the only 'actual' figure)
+
+   - flags: `--amount <amount>, --days <days>, --declare-tier [declare_tier], --json, --note <note>, --provider <provider>, --since <since>, --until <until>`
+### `nuvira stats cost reprice`
+
+Re-price legacy ledger rows with the ONE price source; drop test rows (dry run by default)
+
+   - flags: `--apply, --file <file>, --json, --keep-test-rows`
 ### `nuvira stats history`
 
 Show conversation history statistics
@@ -1585,4 +1595,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*355 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*357 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

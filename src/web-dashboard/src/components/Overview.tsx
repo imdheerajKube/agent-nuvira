@@ -110,7 +110,14 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
   const { cost, history, benchmarks, memory, health } = data;
 
   const stats = [
-    { icon: '💰', value: formatCost(cost.totalCost), label: 'Total Cost' },
+    // `billedUsd` is the evidence-backed figure; `totalCost` is the ledger as
+    // recorded and is only the fallback for an older server. The label follows the
+    // number so neither is mis-described.
+    {
+      icon: '💰',
+      value: formatCost(cost.billedUsd ?? cost.totalCost),
+      label: cost.billedUsd !== undefined ? 'Billed' : 'Total Cost',
+    },
     { icon: '📞', value: formatNumber(cost.totalRequests), label: 'API Requests' },
     { icon: '🧠', value: formatNumber(memory.total), label: 'Trajectories' },
     { icon: '📝', value: formatNumber(history.total), label: 'Chat Sessions' },

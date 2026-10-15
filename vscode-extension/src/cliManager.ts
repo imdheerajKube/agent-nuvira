@@ -88,7 +88,7 @@ export class CLIManager {
 
   /**
    * Execute a general goal via the multi-agent pipeline.
-   * Corresponds to: buff execute <goal>
+   * Corresponds to: nuvira execute <goal>
    */
   async executeGoal(goal: string): Promise<CLIResult> {
     const args = this.buildArgs(['execute', goal]);
@@ -99,7 +99,7 @@ export class CLIManager {
 
   /**
    * Quick fix for the current file.
-   * Corresponds to: buff edit <file>
+   * Corresponds to: nuvira edit <file>
    */
   async quickFix(filePath: string): Promise<CLIResult> {
     const relativePath = this.relativePath(filePath);
@@ -111,7 +111,7 @@ export class CLIManager {
 
   /**
    * Review a file for bugs and improvements.
-   * Corresponds to: buff execute "review <file>"
+   * Corresponds to: nuvira execute "review <file>"
    */
   async reviewFile(filePath: string): Promise<CLIResult> {
     const relativePath = this.relativePath(filePath);
@@ -136,7 +136,7 @@ export class CLIManager {
 
   /**
    * Generate tests for a file.
-   * Corresponds to: buff execute "generate tests for <file>"
+   * Corresponds to: nuvira execute "generate tests for <file>"
    */
   async generateTests(filePath: string): Promise<CLIResult> {
     const relativePath = this.relativePath(filePath);
@@ -149,7 +149,7 @@ export class CLIManager {
 
   /**
    * Run a workflow template.
-   * Corresponds to: buff workflow run <template> <goal>
+   * Corresponds to: nuvira workflow run <template> <goal>
    */
   async runWorkflow(template: string, goal: string): Promise<CLIResult> {
     const args = this.buildArgs(['workflow', 'run', template, goal]);
@@ -162,7 +162,7 @@ export class CLIManager {
 
   /**
    * List all providers with their availability status.
-   * Corresponds to: buff model list --all --json
+   * Corresponds to: nuvira model list --all --json
    */
   async listModels(): Promise<ProviderInfo[]> {
     const args = ['model', 'list', '--all', '--json'];
@@ -183,7 +183,7 @@ export class CLIManager {
 
   /**
    * List the actual models available from a specific provider.
-   * Corresponds to: buff models -p <provider> --json
+   * Corresponds to: nuvira models -p <provider> --json
    */
   async listProviderModels(provider: string): Promise<ProviderModelInfo[]> {
     const args = ['models', '-p', provider, '--json'];
@@ -194,7 +194,7 @@ export class CLIManager {
 
     if (!result.success || !result.stdout) return [];
 
-    // Only pass provider types seen in `buff model list` — unknown types make
+    // Only pass provider types seen in `nuvira model list` — unknown types make
     // the CLI warn to stdout, which would corrupt the JSON and fall back to [].
 
     try {
@@ -208,7 +208,7 @@ export class CLIManager {
   /**
    * Switch the active provider/model.
    * Pass 'auto' as provider to enable Auto model routing.
-   * Corresponds to: buff model switch <provider>[/<model>] or buff model switch auto
+   * Corresponds to: nuvira model switch <provider>[/<model>] or nuvira model switch auto
    */
   async switchModel(provider: string, model?: string): Promise<CLIResult> {
     const spec = provider === 'auto' ? 'auto' : model ? `${provider}/${model}` : provider;
@@ -219,12 +219,14 @@ export class CLIManager {
   }
 
   /**
-   * Read the active model state from ~/.buff/active-model.json.
+   * Read the active model state from ~/.nuvira/active-model.json.
    * Returns null if no active model has been set yet.
    */
   async getActiveModel(): Promise<ActiveModelInfo | null> {
-    const overridePath = process.env.BUFF_ACTIVE_MODEL_PATH;
-    const statePath = overridePath || join(homedir(), '.buff', 'active-model.json');
+    // NUVIRA_ first, then the legacy BUFF_ alias — same precedence the CLI's own
+    // readers use (`envBuff`).
+    const overridePath = process.env.NUVIRA_ACTIVE_MODEL_PATH || process.env.BUFF_ACTIVE_MODEL_PATH;
+    const statePath = overridePath || join(homedir(), '.nuvira', 'active-model.json');
 
     try {
       if (!existsSync(statePath)) return null;
@@ -236,7 +238,7 @@ export class CLIManager {
 
   /**
    * Run a health check for the active (or specified) provider.
-   * Corresponds to: buff model health [-p <provider>]
+   * Corresponds to: nuvira model health [-p <provider>]
    */
   async checkModelHealth(provider?: string): Promise<CLIResult> {
     const args = provider && provider !== 'auto'
@@ -249,18 +251,18 @@ export class CLIManager {
   }
 
   /**
-   * Resolve the CLI's memory dir (`BUFF_MEMORY_DIR` override, else
-   * `~/.buff/memory`). Public so the quota panel can watch the same directory
+   * Resolve the CLI's memory dir (`NUVIRA_MEMORY_DIR` override, else
+   * `~/.nuvira/memory`). Public so the quota panel can watch the same directory
    * the reader uses for live updates.
    */
   getMemoryDir(): string {
-    return process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+    return process.env.NUVIRA_MEMORY_DIR || process.env.BUFF_MEMORY_DIR || join(homedir(), '.nuvira', 'memory');
   }
 
   /**
    * Read the central quota ledger + failover timeline directly from the CLI's
-   * memory dir (`~/.buff/memory/quota-ledger.json` + `quota-events.jsonl`,
-   * honoring BUFF_MEMORY_DIR like the dashboard does).
+   * memory dir (`~/.nuvira/memory/quota-ledger.json` + `quota-events.jsonl`,
+   * honoring NUVIRA_MEMORY_DIR like the dashboard does).
    *
    * Returns a fully-shaped (possibly empty) QuotaStatusInfo — never throws, so
    * the extension's quota view always has data to render even on a fresh
@@ -434,7 +436,7 @@ export class CLIManager {
 
       // Spawn process
       this.abortController = new AbortController();
-      // BUFF_TELEMETRY_ACTION: the CLI writes every real LLM call through to
+      // NUVIRA_TELEMETRY_ACTION: the CLI writes every real LLM call through to
       // the Model Availability Registry's "learned from real usage" log with
       // this tag, so IDE-driven usage (execute / edit / chat / workflow)
       // shows up as `ide-<command>` in the dashboard instead of blending into
@@ -445,7 +447,7 @@ export class CLIManager {
         cwd: this.workspaceRoot,
         stdio: ['pipe', 'pipe', 'pipe'],
         signal: this.abortController.signal,
-        env: { ...process.env, FORCE_COLOR: '0', BUFF_TELEMETRY_ACTION: telemetryAction }, // Disable color for parsing
+        env: { ...process.env, FORCE_COLOR: '0', NUVIRA_TELEMETRY_ACTION: telemetryAction }, // Disable color for parsing
       });
 
       // Handle stdout

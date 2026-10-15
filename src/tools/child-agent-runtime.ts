@@ -69,6 +69,7 @@ import {
   openResume,
   resolveResumeRequest,
   stepDigest,
+  stepShape,
   type OpenResume,
   type ResumeOutcome,
   type StepReplay,
@@ -458,7 +459,10 @@ export async function runSubagent(
       otel: otelSpan,
       resume: resume?.ledger ?? null,
       session,
-      sessionResume: sessionStoreOn,
+      // Rehydrate unless the child's own ledger can serve a step: the record is
+      // the transcript then, and a session tail on top of it makes every recorded
+      // step miss (see `LoopHooks.sessionResume`).
+      sessionResume: sessionStoreOn && !(resume?.ledger.willServe() ?? false),
     }).catch(failWithEvidence);
     finishDebugLog({
       llmCalls: out.llmCalls,
@@ -612,7 +616,19 @@ interface LoopHooks {
    * leaves a resumable conversation (see `learning/session-store.ts`).
    */
   session?: SessionStore | null;
-  /** Phase 4c — whether an explicit resume was requested (rehydration gate). */
+  /**
+   * Phase 4c — whether to REHYDRATE the dead child's transcript (rehydration
+   * gate).
+   *
+   * Not "whether a resume was requested" (the doc used to say that, and the call
+   * site passed the session store's own on/off switch): this mechanism and the
+   * resume ledger both answer "continue where the last run stopped", and only one
+   * can win. When the ledger can SERVE a step, its record already is the
+   * transcript, and prepending the session tail makes every recorded step's input
+   * differ from the digest — so the replay misses everywhere and the child re-pays
+   * for work it already did. The gate is therefore `sessionStore && !ledger
+   * .willServe()` (see the call site).
+   */
   sessionResume?: boolean;
 }
 
@@ -641,9 +657,10 @@ async function runToolLoop(
   ];
   let messages: ToolMessage[] = [...head, { role: 'user', content: config.goal }];
 
-  // Phase 4c — rehydrate a conversation a DEAD child left OPEN (only on an
-  // explicit resume, and only for the same task). The fresh head replaces the
-  // stored one; the child's prior work stays in the thread, so it is not re-run.
+  // Phase 4c — rehydrate a conversation a DEAD child left OPEN (same task, open
+  // snapshot, and no replay of this child's own ledger — see the gate). The fresh
+  // head replaces the stored one; the child's prior work stays in the thread, so
+  // it is not re-run.
   if (loop.sessionResume) {
     try {
       const prior = findResumableSessionFor(config.goal, config.cwd ?? process.cwd());
@@ -738,7 +755,9 @@ async function runToolLoop(
     // the same step number.
     const stepKey = `model:${iteration + 1}`;
     const stepHash = loop.resume ? stepDigest(messages, schemas) : '';
-    const replayed = loop.resume?.replay(stepKey, stepHash) ?? null;
+    // Diagnostics for a miss: the input's sizes, never its digest (see `stepShape`).
+    const stepShapeOf = loop.resume ? stepShape(messages, schemas) : undefined;
+    const replayed = loop.resume?.replay(stepKey, stepHash, stepShapeOf) ?? null;
     let response: ToolCallResponse;
     if (replayed) {
       response = replayed;
@@ -759,7 +778,7 @@ async function runToolLoop(
       llmCalls += 1;
       loop.send({ type: 'progress', phase: 'thinking', iteration: iteration + 1, llmCalls, toolCalls });
       response = await callModel(provider, transport, messages, schemas, model);
-      loop.resume?.record(stepKey, stepHash, response);
+      loop.resume?.record(stepKey, stepHash, response, stepShapeOf);
     }
 
     if (response.toolCalls.length === 0) {

@@ -224,9 +224,9 @@ function EmptyNote() {
       background: 'var(--bg-primary)', border: '1px dashed var(--border)', borderRadius: 10,
       padding: '18px 20px', color: 'var(--text-secondary)', fontSize: 13, textAlign: 'center',
     }}>
-      🔍 No reasoning traces yet — every LLM call in a <code style={{ color: 'var(--accent-blue)' }}>buff execute</code> pipeline
+      🔍 No reasoning traces yet — every LLM call in a <code style={{ color: 'var(--accent-blue)' }}>nuvira execute</code> pipeline
       is recorded to <code style={{ color: 'var(--accent-blue)' }}>reasoning-traces.json</code>. Run a pipeline, then replay
-      it here or with <code style={{ color: 'var(--accent-blue)' }}>buff trace replay &lt;id&gt;</code>.
+      it here or with <code style={{ color: 'var(--accent-blue)' }}>nuvira trace replay &lt;id&gt;</code>.
     </div>
   );
 }
@@ -839,7 +839,7 @@ export default function TracePanel() {
         <SectionCard icon="⚠️" title="Could not reach the dashboard server">
           <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
             The traces endpoint is unavailable right now — retrying automatically. Run{' '}
-            <code style={{ color: 'var(--accent-blue)' }}>buff trace list</code> in the terminal to inspect traces directly.
+            <code style={{ color: 'var(--accent-blue)' }}>nuvira trace list</code> in the terminal to inspect traces directly.
           </div>
         </SectionCard>
       )}

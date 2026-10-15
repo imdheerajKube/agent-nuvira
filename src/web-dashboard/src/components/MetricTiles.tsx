@@ -77,11 +77,18 @@ export function buildMetricTiles(
   }
 
   if (data) {
+    // The tile shows the BILLED figure when the server sends the classified
+    // split, and says so. `totalCost` (the ledger as recorded, including rows the
+    // retired price table priced) stays the fallback for an older server — and the
+    // label changes with the number, so the tile never claims a recorded total is
+    // money spent.
+    const cost = data.cost;
+    const classified = cost.billedUsd !== undefined;
     tiles.push({
       key: 'cost',
       icon: '💰',
-      value: formatCost(data.cost.totalCost),
-      label: 'Total Cost',
+      value: formatCost(classified ? cost.billedUsd! : cost.totalCost),
+      label: classified ? 'Billed' : 'Total Cost',
       tone: 'danger',
     });
   }

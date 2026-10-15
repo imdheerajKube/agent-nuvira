@@ -1,7 +1,7 @@
 /**
  * P2/P3 — GatewayPage tests (gateway ops in the GUI).
  *
- * The page mounts the shared TaskConsole with `buff gateway` presets. Its own
+ * The page mounts the shared TaskConsole with `nuvira gateway` presets. Its own
  * surface is thin (page title + presets); the console mechanics live in
  * TaskConsole.test.tsx.
  */

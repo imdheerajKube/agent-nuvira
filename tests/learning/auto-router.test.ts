@@ -28,6 +28,7 @@ import {
   scoreProvider,
   computeCostScore,
   estimateCallCostUsd,
+  NO_PRICING_EVIDENCE_COST_SCORE,
   analyzeTaskProfile,
   capabilityFitScore,
   applyCapabilityFit,
@@ -42,6 +43,7 @@ import {
   type ScoredProvider,
   type RoutingDimension,
 } from '../../src/learning/auto-router.js';
+import { getCatalogProvider } from '../../src/inference/provider-catalog.js';
 import { resetRouterBandit, getRouterBandit, DEFAULT_MIN_SAMPLES } from '../../src/learning/router-bandit.js';
 import { resetRouterPromotion, getRouterPromotion } from '../../src/learning/router-promotion.js';
 import { resetMlRouter, getMlRouter } from '../../src/learning/ml-router.js';
@@ -912,6 +914,34 @@ describe('real provider pricing', () => {
     for (const p of DEFAULT_AUTO_PROVIDERS) {
       expect(PROVIDER_PRICING_PER_1K[p]).toBeDefined();
     }
+  });
+
+  // ── ONE price source (2026-10-15) ────────────────────────────────────────
+  // The table used to be hand-written for six providers and filled from the
+  // catalog for the rest, so a second copy of the price list existed with no
+  // owner — exactly the shape that let the cost ledger and the router disagree
+  // about what a call cost. These pin that it is DERIVED, and that a provider
+  // with no price is treated as unknown rather than as cheap.
+  it('derives every price from the provider catalog — no hand-written copy', () => {
+    for (const p of DEFAULT_AUTO_PROVIDERS) {
+      expect(PROVIDER_PRICING_PER_1K[p]).toEqual(getCatalogProvider(p)!.pricing);
+    }
+  });
+
+  it('scores an unpriced provider NEUTRAL, never as the cheapest', () => {
+    // The old table answered this with an invented $0.00010/1K, which scored an
+    // unknown provider at ~0.97 — ahead of every real provider, on a number
+    // nobody quoted. There is no evidence either way, so the score says so.
+    expect(PROVIDER_PRICING_PER_1K['mystery-provider']).toBeUndefined();
+    expect(computeCostScore('mystery-provider')).toBe(NO_PRICING_EVIDENCE_COST_SCORE);
+    expect(computeCostScore('mystery-provider')).toBeLessThan(computeCostScore('local'));
+  });
+
+  it('does not let an unpriced provider pass the free-only cost gate', () => {
+    // `allowPaid: false` keeps candidates whose estimated cost is 0, so the
+    // placeholder must not be zero — otherwise an unpriced provider would take
+    // the free slot on no evidence at all.
+    expect(estimateCallCostUsd('mystery-provider')).toBeGreaterThan(0);
   });
 
   it('keeps static cost profiles when useRealPricing is false', () => {

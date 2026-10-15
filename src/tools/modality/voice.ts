@@ -109,10 +109,10 @@ export async function speak(
     }
     // Piper fallback — piper reads the text on STDIN.
     if (!usePiper()) {
-      return { ok: false, error: 'voice: piper needs BUFF_PIPER_MODEL (path to a .onnx voice)' };
+      return { ok: false, error: 'voice: piper needs NUVIRA_PIPER_MODEL (path to a .onnx voice)' };
     }
     const model = opts.piperModel || envBuff('PIPER_MODEL');
-    if (!model) return { ok: false, error: 'voice: piper needs BUFF_PIPER_MODEL (path to a .onnx voice)' };
+    if (!model) return { ok: false, error: 'voice: piper needs NUVIRA_PIPER_MODEL (path to a .onnx voice)' };
     const out = join(process.env.TMPDIR || '/tmp', `${safeArtifactName('tts', '.wav')}`);
     exec('piper', ['-m', model, '--output_file', out], { timeout: 60000, input: text });
     const file = writeArtifact('audio', safeArtifactName('speech', '.wav'), readFileSync(out), opts.cwd);

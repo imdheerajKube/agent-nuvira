@@ -41,9 +41,9 @@ const HUB: HubData = {
     aliases: [{ alias: 'ops', platform: 'slack', channelId: 'C1', addedAt: Date.now() }],
     reachable: [],
     platforms: [
-      { platform: 'email', label: 'Email (SMTP)', configured: false, envVars: ['BUFF_SMTP_HOST', 'BUFF_SMTP_USER'] },
-      { platform: 'signal', label: 'Signal (signal-cli-rest-api)', configured: true, envVars: ['BUFF_SIGNAL_ACCOUNT'] },
-      { platform: 'whatsapp', label: 'WhatsApp (Baileys bridge)', configured: true, envVars: ['BUFF_WHATSAPP_SESSION_DIR'] },
+      { platform: 'email', label: 'Email (SMTP)', configured: false, envVars: ['NUVIRA_SMTP_HOST', 'NUVIRA_SMTP_USER'] },
+      { platform: 'signal', label: 'Signal (signal-cli-rest-api)', configured: true, envVars: ['NUVIRA_SIGNAL_ACCOUNT'] },
+      { platform: 'whatsapp', label: 'WhatsApp (Baileys bridge)', configured: true, envVars: ['NUVIRA_WHATSAPP_SESSION_DIR'] },
     ],
     policies: {
       whatsapp: { allowedUsers: ['+919876543210', '919999999999'], silentDrop: true },

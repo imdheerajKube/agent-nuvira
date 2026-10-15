@@ -19,8 +19,20 @@ const LEGACY_HOME = '.buff';
 const NUVRIRA_HOME = '.nuvira';
 
 /** Config file name — nuviraconfig.json for new installs, buffconfig.json for legacy. */
-const LEGACY_CONFIG_FILE = 'buffconfig.json';
-const NUVRIRA_CONFIG_FILE = 'nuviraconfig.json';
+export const LEGACY_CONFIG_FILE = 'buffconfig.json';
+export const NUVRIRA_CONFIG_FILE = 'nuviraconfig.json';
+
+/**
+ * The config file names, in READ precedence order: the new name wins.
+ *
+ * ONE list, because the bug this closes was two of them: `ConfigManager`
+ * hardcoded `buffconfig.json` while this module resolved `nuviraconfig.json`
+ * first, so a profile written under the NEW name was read by
+ * `resolveNuviraConfigPath()` and ignored by every runtime reader that went
+ * through the manager (the CLI, the router, chat/execute) — silently, and with
+ * no error, because both files are valid and only one was ever opened.
+ */
+export const CONFIG_FILE_NAMES = [NUVRIRA_CONFIG_FILE, LEGACY_CONFIG_FILE] as const;
 
 export function resolveNuviraConfigDir(explicitDir?: string): string {
   if (explicitDir) return explicitDir;
@@ -34,14 +46,55 @@ export function resolveNuviraConfigDir(explicitDir?: string): string {
 /** Resolve the config dir. Named `resolveBuffConfigDir` for backward compat. */
 export const resolveBuffConfigDir = resolveNuviraConfigDir;
 
-/** Resolve the config file path — checks nuviraconfig.json first, then buffconfig.json. */
+/**
+ * The config file a WRITE goes to — the authoritative one.
+ *
+ * Precedence: `nuviraconfig.json` if it exists, else `buffconfig.json`, else the
+ * legacy name when neither exists.
+ *
+ * WHY THE LEGACY NAME IS STILL THE WRITE TARGET FOR A FRESH INSTALL. Writing the
+ * new name into an empty config dir would SPLIT an install in two the moment any
+ * other tool — a rollback, an older CLI, a script that names the file — reads
+ * `buffconfig.json`: the values would be in the file and still read back as
+ * absent. Flipping the default is a migration with a version, not a side effect
+ * of reading the new name, which is what this function exists to fix.
+ * Callers that WRITE (and the mtime they poll) use this; callers that only read
+ * should take {@link resolveNuviraConfigReadPaths} so no existing file is skipped.
+ */
 export function resolveNuviraConfigPath(explicitDir?: string): string {
   const dir = resolveNuviraConfigDir(explicitDir);
-  const nuviraPath = join(dir, NUVRIRA_CONFIG_FILE);
-  const buffPath = join(dir, LEGACY_CONFIG_FILE);
-  // Return whichever exists; if neither, return the new name for future writes
-  if (existsSync(nuviraPath)) return nuviraPath;
-  return buffPath;
+  for (const name of CONFIG_FILE_NAMES) {
+    const path = join(dir, name);
+    if (existsSync(path)) return path;
+  }
+  return join(dir, LEGACY_CONFIG_FILE);
+}
+
+/**
+ * Every config file that EXISTS in the config dir, highest precedence first.
+ *
+ * Read BOTH names, in this order, and let each later file override the earlier
+ * one: that is what makes "prefer the new name" true without making the other
+ * file disappear. Reads are lowest-precedence-first in practice, so a caller
+ * applies `[...readPaths].reverse()` — the mirror image of the order here, and
+ * the reason this returns precedence rather than application order.
+ *
+ * An empty array means there is no config file at all, which is a valid state
+ * (defaults + environment variables), not an error.
+ */
+export function resolveNuviraConfigReadPaths(explicitDir?: string): string[] {
+  const dir = resolveNuviraConfigDir(explicitDir);
+  return CONFIG_FILE_NAMES.map((name) => join(dir, name)).filter((path) => existsSync(path));
+}
+
+/**
+ * The paths a read MUST watch for a live re-read (Session 36 "update as and
+ * when"): both names, whether or not they exist yet, so a file created by
+ * another process is noticed instead of being invisible until a restart.
+ */
+export function resolveNuviraConfigCandidatePaths(explicitDir?: string): string[] {
+  const dir = resolveNuviraConfigDir(explicitDir);
+  return CONFIG_FILE_NAMES.map((name) => join(dir, name));
 }
 
 /** Backward compat alias. */

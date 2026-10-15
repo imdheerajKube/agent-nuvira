@@ -54,7 +54,7 @@ describe('isQuotaWatchFile', () => {
   });
 
   it('normalizes full paths (macOS FSEvents reports absolute paths)', () => {
-    expect(isQuotaWatchFile('/Users/me/.buff/memory/quota-ledger.json')).toBe(true);
+    expect(isQuotaWatchFile('/Users/me/.nuvira/memory/quota-ledger.json')).toBe(true);
     expect(isQuotaWatchFile('/tmp/whatever/quota-events.jsonl')).toBe(true);
   });
 
@@ -229,7 +229,7 @@ describe('QuotaPanel', () => {
     handler({ type: 'refresh' });
     await vi.waitFor(() => expect(loader).toHaveBeenCalledTimes(1));
 
-    // Simulate a failover being written by the CLI (shares BUFF_MEMORY_DIR)
+    // Simulate a failover being written by the CLI (shares NUVIRA_MEMORY_DIR)
     writeFileSync(join(tempDir, 'quota-events.jsonl'), JSON.stringify({
       type: 'failover',
       provider: 'gemini',

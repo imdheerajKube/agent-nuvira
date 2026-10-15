@@ -3,6 +3,11 @@
 // schema that `nuvira config set`, the dashboard and the load/merge path share.
 // Type-only, so the config layer gains no runtime dependency on the MCP layer.
 import type { MCPConfigSection } from '../mcp/settings.js';
+// Type-only: the billing tiers live with the pricing rules that enforce them
+// (`src/learning/model-pricing.ts`), so the config schema and the ledger cannot
+// drift apart about what a tier means. Erased at runtime — no config→learning
+// runtime dependency is created.
+import type { BillingTier } from '../learning/model-pricing.js';
 
 /**
  * Supported built-in inference providers.
@@ -54,6 +59,27 @@ export interface ProviderConfig {
   headers?: Record<string, unknown>;
   /** Request timeout in ms (default 30_000 for the nuvira adapter). */
   timeoutMs?: number;
+  /**
+   * What THIS ACCOUNT (key) is billed by this provider — the fact the cost ledger
+   * needs so free usage stops being priced at a stranger's list rate, and paid
+   * usage stops hiding in a single unlabelled total.
+   *
+   * Declared by the user because only the user knows: a free tier, free credits
+   * and a flat-rate plan are properties of the KEY, not of the model — the same
+   * doctrine `src/inference/model-entitlement.ts` states (it may label cost, it
+   * must never bill).
+   *
+   *   paid          calls bill at list price; list-priced calls count as an
+   *                 estimated bill (only a provider-reported figure is exact)
+   *   free          a free tier / free credits absorb the cost — $0 billed by
+   *                 evidence, and the list price is reported as VALUE saved
+   *   subscription  a flat-rate plan covers the calls (same accounting as free)
+   *   unknown       (default) nothing declared: those calls are shown as
+   *                 "list-priced, unverified" and never counted as spend
+   *
+   * Set with `nuvira config set providers.<id>.billingTier free`.
+   */
+  billingTier?: BillingTier;
 }
 
 /**

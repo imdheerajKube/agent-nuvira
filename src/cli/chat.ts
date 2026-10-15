@@ -23,6 +23,7 @@ import {
   gitDiffCard,
   presentAnswer,
   shouldUseRichUi,
+  THINKING_NOTE,
   toolCallCard,
   type PresenterOptions,
 } from './ui/index.js';
@@ -139,6 +140,7 @@ import type { WireFinding } from '../findings/verdicts.js';
 import { debugLogNotice, sessionDebugLog } from '../observability/debug-log.js';
 import {
   buildFollowupContinuationPrompt,
+  followupsFromAnswerList,
   isSuggestedFollowup,
   withContinuationFollowups,
   type FollowupSuggestion,
@@ -1807,12 +1809,30 @@ export class ChatCommand extends BaseCommand {
       onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
     };
     stop: () => void;
+    /**
+     * Mount the live view NOW, with a note — so the wait for the first token is
+     * visible rather than looking like a hang (a plain question on a local model
+     * sat silent for ten seconds before its first token). Calling it is optional;
+     * the first token mounts the view anyway.
+     */
+    start: (note?: string) => void;
     /** The live stream, or null when rich output is unavailable. */
     stream: AnswerStream | null;
   } {
-    if (!shouldUseRichUi(opts)) return { overrides: {}, stop: () => {}, stream: null };
+    if (!shouldUseRichUi(opts)) {
+      return { overrides: {}, stop: () => {}, start: () => {}, stream: null };
+    }
     const stream = new AnswerStream({ header, headerColor: 'assistant' }, opts);
     let begun = false;
+    /** Show a note, mounting the frame if this is the first sign of life. */
+    const show = (note: string | undefined): void => {
+      if (!begun) {
+        begun = true;
+        stream.begin(note === undefined ? {} : { note });
+        return;
+      }
+      if (note !== undefined) stream.setNote(note);
+    };
     // Shell commands are emitted on the process-wide bus (utils/shell.ts owns
     // them), so the turn subscribes for its own duration and detaches on stop().
     const detachShell = attachShellCards((card) => stream.card(card));
@@ -1820,24 +1840,28 @@ export class ChatCommand extends BaseCommand {
       stream,
       overrides: {
         onToken: (token) => {
-          if (!begun) {
-            begun = true;
-            stream.begin();
-          }
+          show(undefined);
+          // The text is the signal now — a stale `thinking…` beside streaming
+          // prose reads as a hang that is not happening.
+          stream.setNote(undefined);
           stream.append(token);
         },
         onToolCall: (phase, info) => {
           if (phase === 'started') {
             // The step's preamble is not the answer: clear it so the preview
-            // shows the step that is actually producing the reply.
+            // shows the step that is actually producing the reply — and name the
+            // call that is running, so the EXECUTION half is visible too.
             if (begun) stream.reset();
+            show(`⚙ ${info.tool} …`);
             return;
           }
+          if (begun) stream.setNote(undefined);
           // Completed call → an archived card (this is what the turn DID).
           stream.card(toolCallCard({ tool: info.tool, ok: info.ok, error: info.error, result: info.result, durationMs: info.durationMs, args: info.args }));
         },
         onGitDiff: (payload) => stream.card(gitDiffCard(payload)),
       },
+      start: (note?: string) => show(note ?? THINKING_NOTE),
       stop: () => {
         detachShell();
         stream.finish({ archive: false });
@@ -1985,6 +2009,9 @@ export class ChatCommand extends BaseCommand {
       // elsewhere). `stop()` unmounts the preview once the turn returns; the
       // final frame is printed by the answer path below.
       const live = this.liveAnswer(`nuvira · ${provider.name}${model ? ` / ${model}` : ''}`);
+      // Mount before the turn: the first token can be seconds away on a local or
+      // cold provider, and a silent console is indistinguishable from a hang.
+      live.start();
       const answer = await this.runChatAnswer(
         prompt,
         [],
@@ -2053,6 +2080,7 @@ export class ChatCommand extends BaseCommand {
         const picked = await this.renderFollowups(singleAnswer.followups ?? [], true);
         if (!picked) break;
         const liveNext = this.liveAnswer(`nuvira · ${provider.name}${model ? ` / ${model}` : ''}`);
+        liveNext.start();
         const next = await this.runChatAnswer(
           picked,
           history,
@@ -2167,6 +2195,7 @@ export class ChatCommand extends BaseCommand {
       const session = { type, provider, model: effectiveModel };
       // P7 — live preview for this turn (see `liveAnswer`).
       const live = this.liveAnswer(`nuvira · ${provider.name}${effectiveModel ? ` / ${effectiveModel}` : ''}`);
+      live.start();
       const answer = await withLogCorrelation({ sessionId: chatSessionId }, () =>
         recordMetricTime('llm.answer.ms', () =>
           this.runChatAnswer(
@@ -2593,7 +2622,9 @@ export class ChatCommand extends BaseCommand {
           // is the one fact needed to tell a replay from a real turn.
           debugLog?.event('cache.hit', { chars: cached.response.length, scope: turnScope });
           const cacheNotice = debugLogNotice(ctxOverrides?.debugSurface ?? 'cli-chat', debugLog?.write() ?? null);
-          if (cacheNotice) logger.info(cacheNotice);
+          // Diagnostic (where a bug report's evidence lives), not part of the
+          // answer: `--debug` only. A normal turn prints the answer and nothing else.
+          if (cacheNotice) logger.debug(cacheNotice);
           return {
             content: cached.response,
             ...(cached.toolCalls ? { toolCalls: cached.toolCalls } : {}),
@@ -2629,6 +2660,20 @@ export class ChatCommand extends BaseCommand {
      */
     const report =
       ctxOverrides?.onProgress ?? ((line: string): void => void logger.info(line));
+    /**
+     * Where a DIAGNOSTIC notice goes (checkpoint/resume counts — printed on EVERY
+     * `execute` run, since checkpointing is default-on).
+     *
+     * A surface with its own progress channel still gets them — the dashboard
+     * renders the resume notice, and the gateway logs it — but this process's
+     * console only shows them under `--debug` (`-d`, the switch that raises the
+     * logger to the debug channel). Measured: a plain `nuvira execute` question
+     * printed a checkpoint line and a resume-probe line with its why-not detail
+     * before the answer, on EVERY turn. A refusal or an error still goes through
+     * `report` above; those are the user's business.
+     */
+    const reportDiagnostic =
+      ctxOverrides?.onProgress ?? ((line: string): void => void logger.debug(line));
     // Same directory the cache key above is scoped to (see `turnScope`) — one
     // resolution per turn, so the cached answer and the work cannot disagree
     // about which project the turn belongs to.
@@ -2683,7 +2728,7 @@ export class ChatCommand extends BaseCommand {
     // replayed, what it cost) is reported in `finish` below, where it is knowable —
     // this line used to state the outcome here, which meant every resumed turn
     // announced "nothing to replay" before it had tried anything.
-    if (resume) report(resume.ledger.openNotice());
+    if (resume) reportDiagnostic(resume.ledger.openNotice());
     /**
      * Attach this turn's isolation and resume outcomes to whatever it returns.
      *
@@ -2698,6 +2743,9 @@ export class ChatCommand extends BaseCommand {
       if (worktree) {
         const outcome = endIsolation(worktree, { keep: isolationRequest.keep });
         extra.worktree = outcome;
+        // The isolation notice is USER-facing even though the checkpoint one
+        // beside it is not: it carries the worktree's path, and for a kept
+        // worktree that path is where the turn's changes are.
         report(outcome.notice);
       }
       if (resume) {
@@ -2705,7 +2753,7 @@ export class ChatCommand extends BaseCommand {
         extra.resume = outcome;
         // The wording lives in `ResumeOutcome.notice` — one sentence, every
         // surface, including the reason when nothing replayed.
-        report(outcome.notice);
+        reportDiagnostic(outcome.notice);
       }
       return { ...result, ...extra };
     };
@@ -3921,7 +3969,9 @@ export class ChatCommand extends BaseCommand {
         ...(served === requested ? {} : { requested }),
       });
       const notice = debugLogNotice(ctxOverrides?.debugSurface ?? 'cli-chat', debugLog.write());
-      if (notice) logger.info(notice);
+      // `--debug` only — see `reportDiagnostic`: the log path is evidence for a bug
+      // report, not part of the answer.
+      if (notice) logger.debug(notice);
     }
 
     // WS3 (#25) — close the turn span and ship it. The status is the turn's own
@@ -3938,7 +3988,7 @@ export class ChatCommand extends BaseCommand {
             : {}),
       });
       const otelLine = otelNoticeOnce(ctxOverrides?.debugSurface ?? 'cli-chat');
-      if (otelLine) logger.info(otelLine);
+      if (otelLine) logger.debug(otelLine);
       await flushSpans();
     }
 
@@ -3961,7 +4011,15 @@ export class ChatCommand extends BaseCommand {
       undeliveredChange: result.undeliveredChange,
       unbackedHealthClaim: result.unbackedHealthClaim,
     });
-    const chatFollowups = withContinuationFollowups(result.followups, {
+    // E3b — what the model SUGGESTED, structurally when it called the tool and
+    // recovered from its own prose list when it did not (see
+    // `followupsFromAnswerList`). Applied HERE, at the one boundary every
+    // surface's followups come from, so the CLI menu, the dashboard chips and
+    // the gateway's "Try next" list agree instead of each recovering its own.
+    const engineFollowups = result.followups && result.followups.length > 0
+      ? result.followups
+      : followupsFromAnswerList(result.content);
+    const chatFollowups = withContinuationFollowups(engineFollowups, {
       unfinished: !traceOutcomeSucceeded(chatOutcomeForFollowups),
       hadTools: (result.successfulToolCalls ?? result.toolCalls ?? []).length > 0,
     });
@@ -4632,9 +4690,12 @@ export class ChatCommand extends BaseCommand {
           () => tryGenerate(session.provider, session.type, session.model),
           abort,
           (attempt, err) =>
-            logger.warn(
+            // `--debug` only: a retry the user did not have to act on is diagnosis,
+            // not news — and the provider's own error body (a 503 JSON dump) is
+            // quoted as ONE capped line so it can never spray the console.
+            logger.debug(
               `   ⏳ ${session.provider.name} transient failure (attempt ${attempt}) — retrying shortly: ${
-                err instanceof Error ? err.message.split('\n')[0] : String(err)
+                err instanceof Error ? err.message.split('\n')[0].slice(0, 160) : String(err)
               }`,
             ),
           // Empty-response patience from the plan: granted for a proven pair
@@ -4692,7 +4753,7 @@ export class ChatCommand extends BaseCommand {
           // (the E2E repair-failover contract): one warn per walk, one
           // success log per landed candidate — and now the failure KIND in the
           // line, so the console says what went wrong instead of only that it did.
-          logger.warn(
+          logger.debug(
             `   ⚠️ ${session.provider.name} failed (${describeFailureKind(primaryKind)}) — trying the next auto candidate...`,
           );
           /**
@@ -4799,7 +4860,7 @@ export class ChatCommand extends BaseCommand {
               // undefined ("provider default"), and assigning it here used to
               // erase the resolved id that tryGenerate just recorded.
               if (next.model && next.model !== 'default') session.model = next.model;
-              logger.success(`✅ Auto failover: answered from ${next.provider.name} (${next.model}) after ${firstType} failed`);
+              logger.debug(`✅ Auto failover: answered from ${next.provider.name} (${next.model}) after ${firstType} failed`);
               return resp;
             } catch (nextErr) {
               // P4 — record THIS candidate's failure too, so the report lists
@@ -4835,7 +4896,7 @@ export class ChatCommand extends BaseCommand {
                 // direction for staying routable).
               }
               if (providerOut) failedProviders.add(next.type);
-              logger.warn(
+              logger.debug(
                 `   ⚠️ ${next.type}/${next.model ?? 'default'} failed (${describeFailureKind(nextKind)}) — ` +
                   (providerOut
                     ? 'that provider is out; trying the next auto candidate...'

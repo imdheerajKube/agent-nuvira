@@ -644,7 +644,7 @@ describe('real-time inbound announces a skipped transport', () => {
     const lines = info.mock.calls.map((c) => String(c[0])).join('\n');
     expect(lines).toContain('Discord');
     expect(lines).toContain('skipped');
-    expect(lines).toContain('BUFF_DISCORD_BOT_TOKEN');
+    expect(lines).toContain('NUVIRA_DISCORD_BOT_TOKEN');
     // Says the alternative, so the operator is not left guessing.
     expect(lines).toContain('outbound');
   });
@@ -656,7 +656,7 @@ describe('real-time inbound announces a skipped transport', () => {
     const lines = info.mock.calls.map((c) => String(c[0])).join('\n');
     expect(lines).toContain('Slack');
     expect(lines).toContain('skipped');
-    expect(lines).toContain('BUFF_SLACK_APP_TOKEN');
+    expect(lines).toContain('NUVIRA_SLACK_APP_TOKEN');
     expect(lines).toContain('outbound');
   });
 

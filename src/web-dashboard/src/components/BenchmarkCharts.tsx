@@ -87,7 +87,7 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
             </div>
           </>
         ) : (
-          <div className="empty-state">No benchmark runs yet. Run <code>buff benchmark</code> to start.</div>
+          <div className="empty-state">No benchmark runs yet. Run <code>nuvira benchmark</code> to start.</div>
         )}
       </div>
 
@@ -190,7 +190,7 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
             </div>
           </>
         ) : (
-          <div className="empty-state">No eval runs yet. Run <code>buff eval run</code> to measure the agent end-to-end.</div>
+          <div className="empty-state">No eval runs yet. Run <code>nuvira eval run</code> to measure the agent end-to-end.</div>
         )}
       </div>
 
@@ -245,7 +245,7 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
       <h2 className="section-subtitle">Eval Run History</h2>
       <div className="benchmark-list">
         {evalRuns.length === 0 ? (
-          <div className="empty-state">No eval runs yet. Run <code>buff eval run</code> to start.</div>
+          <div className="empty-state">No eval runs yet. Run <code>nuvira eval run</code> to start.</div>
         ) : (
           evalRuns.map((run) => {
             const score = Math.round(run.summary.avgCompositeScore * 100);
@@ -267,7 +267,7 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
       <h2 className="section-subtitle">Run History</h2>
       <div className="benchmark-list">
         {runs.length === 0 ? (
-          <div className="empty-state">No benchmark runs yet. Run <code>buff benchmark</code> to start.</div>
+          <div className="empty-state">No benchmark runs yet. Run <code>nuvira benchmark</code> to start.</div>
         ) : (
           runs.map((run) => {
             const passRate = run.summary.totalTasks > 0

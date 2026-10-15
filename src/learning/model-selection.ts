@@ -134,6 +134,25 @@ function definitivelyMissing(entry: ModelRegistryEntry | undefined): boolean {
 }
 
 /**
+ * Could this model id ONLY have come from a test harness?
+ *
+ * The one definition of that question, because two callers need it and they
+ * must not drift: the router uses it to keep stub ids out of the routable pool
+ * (`isPairPlausible`, below), and `learning/cost-ledger-maintenance.ts` uses it
+ * to find the ledger rows a test run wrote into a real profile — MEASURED: 747
+ * rows of `local/wire-stub-model` sit in `~/.nuvira/memory/cost-tracker.json`
+ * from the provider-WIRE harness, and they were counted as real usage.
+ *
+ * Deliberately narrow, and a NAME SHAPE rather than a substring: `…-latest`
+ * aliases (`gemini-flash-latest`, `deepseek-coder:latest`) are real provider
+ * models, and a looser rule once flagged 25 real OpenRouter ids.
+ */
+export function isFixtureModelId(model: string): boolean {
+  const id = (model ?? '').trim().toLowerCase();
+  return /^(wire-|test-|fixture-|stub-)/.test(id) || /-stub(-|$)|\.stub\./.test(id);
+}
+
+/**
  * POOL HYGIENE: could this provider really serve this model id?
  *
  * MOVED HERE (from `model-first-router.ts`) because this module is the one that
@@ -162,8 +181,10 @@ function definitivelyMissing(entry: ModelRegistryEntry | undefined): boolean {
 export function isPairPlausible(provider: string, model: string): boolean {
   const id = (model ?? '').trim().toLowerCase();
   if (!id) return false;
-  // 1. Fixture/stub ids.
-  if (/^(wire-|test-|fixture-|stub-)/.test(id) || /-stub(-|$)|\.stub\./.test(id)) return false;
+  // 1. Fixture/stub ids — the SAME predicate the cost-ledger pruner uses, so
+  //    "this id came from a test harness" has one definition (see
+  //    `isFixtureModelId`).
+  if (isFixtureModelId(id)) return false;
   // 2. Ollama-style tags only on a local runner.
   if (id.includes(':')) {
     const localRunner = KEYLESS_PROVIDERS.includes(provider) || provider === 'ollama';

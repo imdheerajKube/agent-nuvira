@@ -251,6 +251,20 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
   const repairWarnings = (): string[] =>
     (logger.warn as any).mock.calls.map((c: unknown[]) => String(c[0])).filter((w) => w.includes('is not available on'));
 
+  /**
+   * The failover walk's own report, on the DEBUG channel.
+   *
+   * Deliberately not `success`/`warn` any more: a walk the user does not have to
+   * act on is diagnosis, so a normal turn prints the answer and nothing else, and
+   * `-v` prints the walk. Asserted as a CHANNEL (find it on debug, prove it is
+   * absent from the default console) so the fact is still reported — just not
+   * shouted at every run.
+   */
+  const debugLines = (needle: string): string[] =>
+    (logger.debug as any).mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .filter((l) => l.includes(needle));
+
   it('repairs the stale gemini pin, fails over to local on gemini failure, and lands on the repaired local model', async () => {
     const result = await runAutoChatMessage('explain how auto routing picks a provider');
 
@@ -269,9 +283,11 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     // …and local answered with ITS repaired model.
     expect((localGenerate.mock.calls[0][1] as { model?: string })?.model).toBe('gemma4:e4b');
 
-    // The failover was explicit and telemetry-correct.
+    // The failover was explicit and telemetry-correct — reported on the debug
+    // channel, and NOT on the default console.
+    expect(debugLines('Auto failover: answered from Fake Local')).toHaveLength(1);
     const successLogs = (logger.success as any).mock.calls.map((c: unknown[]) => String(c[0]));
-    expect(successLogs.some((s) => s.includes('Auto failover: answered from Fake Local'))).toBe(true);
+    expect(successLogs.some((s) => s.includes('Auto failover: answered from'))).toBe(false);
 
     // Repair warnings: exactly ONE per stale pin (the learning event) — the
     // header route, the prompt route, and the failover route re-picked the
@@ -322,10 +338,14 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     const attemptsPerMessage = DIALED_RETRY_DELAYS_MS.length + 1;
     expect(geminiGenerate).toHaveBeenCalledTimes(attemptsPerMessage * 2);
     expect(localGenerate).toHaveBeenCalledTimes(2);
-    const failoverWarnings = (logger.warn as any).mock.calls
-      .map((c: unknown[]) => String(c[0]))
-      .filter((w) => w.includes('trying the next auto candidate'));
-    expect(failoverWarnings).toHaveLength(2);
+    // One per message, on the debug channel — the walk still reports every
+    // failure, the default console just no longer narrates it.
+    expect(debugLines('trying the next auto candidate')).toHaveLength(2);
+    expect(
+      (logger.warn as any).mock.calls
+        .map((c: unknown[]) => String(c[0]))
+        .filter((w: string) => w.includes('trying the next auto candidate')),
+    ).toHaveLength(0);
 
     // The silent repair in message 2 still used the verified models.
     // Message 2's FIRST gemini attempt is the call right after message 1's

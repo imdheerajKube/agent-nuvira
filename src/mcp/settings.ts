@@ -31,10 +31,9 @@
  * config object (the dashboard, the CLI) resolves the exact same values.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 
-import { resolveNuviraConfigDir } from '../config/paths.js';
+import { resolveNuviraConfigDir, resolveNuviraConfigReadPaths } from '../config/paths.js';
 import { logger } from '../utils/logger.js';
 import type { MCPServerConfig } from './types.js';
 
@@ -387,21 +386,36 @@ export function parseMcpSetting(key: string, value: string): McpSettingParse {
 }
 
 /**
- * Read `mcp` from the resolved config dir (`buffconfig.json`). Never throws: an
- * absent or malformed file yields the defaults, because MCP configuration must
- * not be able to break a chat turn.
+ * Read `mcp` from the resolved config dir — EVERY config file that exists,
+ * lowest precedence first, so the new name wins key by key.
+ *
+ * WHY THIS READS BOTH NAMES. It used to open `buffconfig.json` alone, which made
+ * it a second source of truth beside `ConfigManager`: `mcp.*` written into a
+ * `nuviraconfig.json` profile (the name `resolveNuviraConfigPath()` resolves and
+ * `nuvira config get mcp.…` reports) was silently ignored HERE, so the value was
+ * in the file, readable, and not applied — the class of bug this module's own
+ * header warns about. The two sections are combined with
+ * {@link mergeMcpSetting}, the same merge `nuvira config set mcp.*` uses, so a
+ * server whose `runtime.command` lives in one file and whose `args` live in the
+ * other is still one server.
+ *
+ * Never throws: an absent or malformed file yields the defaults, because MCP
+ * configuration must not be able to break a chat turn.
  */
 export function loadMcpSettings(configDir?: string): ResolvedMCPSettings {
   const dir = configDir ?? resolveNuviraConfigDir();
-  const file = join(dir, 'buffconfig.json');
-  try {
-    if (!existsSync(file)) return resolveMcpSettings(null);
-    const parsed = JSON.parse(readFileSync(file, 'utf-8')) as { mcp?: MCPConfigSection };
-    return resolveMcpSettings(parsed.mcp ?? null);
-  } catch (err) {
-    logger.debug(`MCP: could not read settings from ${file}: ${err}`);
-    return resolveMcpSettings(null);
+  const files = resolveNuviraConfigReadPaths(dir).reverse();
+  if (files.length === 0) return resolveMcpSettings(null);
+  let section: MCPConfigSection | null = null;
+  for (const file of files) {
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf-8')) as { mcp?: MCPConfigSection };
+      if (parsed.mcp) section = mergeMcpSetting(section, parsed.mcp);
+    } catch (err) {
+      logger.debug(`MCP: could not read settings from ${file}: ${err}`);
+    }
   }
+  return resolveMcpSettings(section);
 }
 
 /**

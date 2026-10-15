@@ -119,12 +119,22 @@ describe('loop engine — a DEV ask is never answered with the model\'s thinking
     // — spying on the statically imported one would capture nothing.
     const { logger: loopLogger } = await import('../../src/utils/logger.js');
     const warnSpy = vi.spyOn(loopLogger, 'warn').mockImplementation(() => {});
+    // The failover walk reports on the DEBUG channel: a candidate the walk
+    // rejected is diagnosis, and a normal run must show only the answer (see
+    // `loop-executor` — `logger.debug` for the per-candidate lines). Spied
+    // separately so a case can assert BOTH where the line went and that it did
+    // not reach the default console.
+    const debugSpy = vi.spyOn(loopLogger, 'debug').mockImplementation(() => {});
     const result = await runLoopExecutor(goal, new ConfigManager(), {
       provider: 'scripted',
       skipProjectContext: true,
       quiet,
     });
-    return { result, warned: warnSpy.mock.calls.map((c) => String(c[0])).join('\n') };
+    return {
+      result,
+      warned: warnSpy.mock.calls.map((c) => String(c[0])).join('\n'),
+      debugged: debugSpy.mock.calls.map((c) => String(c[0])).join('\n'),
+    };
   }
 
   it('rejects a reasoning reply and reports an honest failure (never the trace)', async () => {
@@ -152,14 +162,17 @@ describe('loop engine — a DEV ask is never answered with the model\'s thinking
       native: true,
       responses: [{ content: REASONING_REPLY, toolCalls: [] }],
     });
-    const { warned } = await run(
+    const { warned, debugged } = await run(
       'Develop the calculator as per the plan created by agent-nuvira',
       provider,
       false,
     );
 
-    expect(warned).toMatch(/its own reasoning instead of the task/);
-    expect(warned).toMatch(/trying the next loop candidate/);
+    expect(debugged).toMatch(/its own reasoning instead of the task/);
+    expect(debugged).toMatch(/trying the next loop candidate/);
+    // …and it is NOT on the default console: a walk the user does not have to
+    // act on is diagnosis, so a plain run prints the answer and nothing else.
+    expect(warned).not.toMatch(/trying the next loop candidate/);
   });
 
   it('rejects contract meta-talk on this surface too', async () => {

@@ -1202,6 +1202,22 @@ body {
   margin-bottom: 20px;
 }
 
+/* The evidence note under the billed/value split: what "billed" means, how to
+   declare an account tier, and which rows were re-derived or excluded. */
+.cost-note {
+  margin: -8px 0 20px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--p-ink-3);
+}
+
+.cost-note code {
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--p-sunken);
+}
+
 .cost-summary-sub .cost-total {
   padding: 10px 16px;
   background: transparent;

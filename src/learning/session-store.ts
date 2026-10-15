@@ -77,11 +77,21 @@ export interface StoreConfigSource {
  * explicit FLAG wins, then the environment, then config, then the default (ON).
  * One place decides, so the CLI, the loop and the dashboard cannot disagree.
  */
+/**
+ * The env key the session store is turned off with — DERIVED from the suffix
+ * `envBuff` reads, so the name a harness sets and the name this module reads
+ * cannot drift apart (a harness that pinned a key nobody reads would believe it
+ * had declared something, which is the failure mode `RESUME_ENABLE_ENV` and
+ * `WORKTREE_ENABLE_ENV` exist to prevent).
+ */
+const SESSION_STORE_ENV_SUFFIX = 'SESSION_STORE';
+export const SESSION_STORE_ENABLE_ENV = `NUVIRA_${SESSION_STORE_ENV_SUFFIX}`;
+
 export function resolveSessionStore(
   input: { flag?: boolean; configManager?: StoreConfigSource | null } = {},
 ): boolean {
   if (input.flag !== undefined) return input.flag;
-  const viaEnv = envBuff('SESSION_STORE');
+  const viaEnv = envBuff(SESSION_STORE_ENV_SUFFIX);
   if (typeof viaEnv === 'string') return !OFF_WORDS.has(viaEnv.trim().toLowerCase());
   return input.configManager?.getAll().memory?.sessionStore !== false;
 }

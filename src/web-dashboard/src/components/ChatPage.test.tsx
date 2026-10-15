@@ -78,6 +78,103 @@ describe('capabilityModeFromValue — the toggle mirrors the server parse', () =
 });
 
 /**
+ * A question the page never HEARD still has to reach it.
+ *
+ * The `question` event fires once — when the turn asks — so a page that
+ * reloaded (or a second tab) never receives it. MEASURED (2026-10-14,
+ * trace-1791996357488-wpm352): a turn sat in `ask_user` for 5m02s and was
+ * cancelled in the end, while the reloaded page showed "⏳ Still working on the
+ * server … the answer will appear here by itself" — a sentence that is false
+ * twice over, because the answer was waiting for a click the page never offered.
+ * The server now carries the open question with the session snapshot, and this
+ * is the surface that has to act on it.
+ */
+describe('ChatPage — a question that outlived the page that heard it', () => {
+  it('shows the open question from the session snapshot, not "still working"', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'getChatSession').mockResolvedValue({
+      title: 'wallpaper',
+      updatedAt: 5,
+      busy: true,
+      turns: [{ role: 'user' as const, content: 'add real photos to the wallpaper' }],
+      pendingQuestion: {
+        questionId: 'q-1',
+        question: 'Which source should I use for the photos?',
+        choices: [{ label: 'Download into assets/' }, { label: 'Remote URLs' }],
+        multiSelect: false,
+      },
+    });
+    render(<ChatPage />);
+
+    // The turn is holding for THIS user, and the notice says so…
+    //
+    // Matched on a fragment that lives in ONE text node: the sentence emphasises
+    // the word "your" (`Waiting for <strong>your</strong> answer`), and the default
+    // `getByText` matcher only reads an element's DIRECT text nodes, so a regex
+    // spanning the emphasis can never match — that is a fact about the matcher,
+    // not about the notice.
+    await waitFor(() =>
+      expect(screen.getByText(/choose one of the options above/)).toBeTruthy(),
+    );
+    expect(screen.getByText('your').tagName).toBe('STRONG');
+    // …the choice card is back, so the turn can actually be continued…
+    expect(screen.getByText(/Which source should I use for the photos\?/)).toBeTruthy();
+    expect(screen.getByText('Remote URLs')).toBeTruthy();
+    // …and the false sentence is not on screen at the same time.
+    expect(screen.queryByText(/Still working on the server/)).toBeNull();
+  });
+
+  it('does not invent a question when the resumed turn is simply working', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'getChatSession').mockResolvedValue({
+      title: 'wallpaper',
+      updatedAt: 5,
+      busy: true,
+      turns: [{ role: 'user' as const, content: 'add real photos to the wallpaper' }],
+    });
+    render(<ChatPage />);
+
+    await waitFor(() => expect(screen.getByText(/Still working on the server/)).toBeTruthy());
+    expect(screen.queryByText(/Waiting for your answer/)).toBeNull();
+    expect(screen.queryByPlaceholderText(/Or type your own answer/)).toBeNull();
+  });
+
+  /**
+   * The wait has to name its own age, and the TURN's start is the age.
+   *
+   * MEASURED (2026-10-14, trace-1791996974262-zdraep): a turn ran 664s while the
+   * dashboard abandoned its own POST at the 5-minute ceiling and then counted the
+   * wait from THAT instant — so the notice read "1m 25s elapsed" for a turn that
+   * had already been running six and a half minutes, and the user reasonably read
+   * it as a lie beside the 12-second trace of the turn before it. The server now
+   * dates the running turn (`busySince`), so the notice can say how old the wait
+   * really is — including one this page attached to long after it began.
+   */
+  it('dates a resumed wait from the TURN start, not from the moment this page attached', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    vi.spyOn(dashboardAPI, 'getChatSession').mockResolvedValue({
+      title: 'wallpaper',
+      updatedAt: 5,
+      busy: true,
+      // The turn began 6m30s ago on the server — past the dashboard's own
+      // 5-minute POST ceiling, and long before this page was rendered.
+      busySince: Date.now() - 390_000,
+      turns: [{ role: 'user' as const, content: 'add real photos to the wallpaper' }],
+    });
+    render(<ChatPage />);
+
+    // "6m 30s" and not "0s": the age of the TURN, not of this visit. (The
+    // negative is anchored on the notice's own phrasing — a bare /0s elapsed/,
+    // would also match "3**0s elapsed**", i.e. the very number being asserted.)
+    await waitFor(() => expect(screen.getByText(/6m 3\ds elapsed/)).toBeTruthy());
+    expect(screen.queryByText(/server — 0s elapsed/)).toBeNull();
+  });
+});
+
+/**
  * A turn can outlive the dashboard's own wait for it.
  *
  * The chat POST is capped at 5 minutes client-side (`chatSend`), and a real

@@ -1118,7 +1118,7 @@ export class GatewayRegistry {
       return refuse('You are not authorized to trigger the agent.');
     }
     if (!this.isAllowed(ref)) {
-      return refuse('This channel is not authorized to trigger the agent. Add it to BUFF_GATEWAY_ALLOW_IDS (platform:channelId).');
+      return refuse('This channel is not authorized to trigger the agent. Add it to NUVIRA_GATEWAY_ALLOW_IDS (platform:channelId).');
     }
 
     // ── INBOUND DOCUMENT HYDRATION ── A document/image arrives as BYTES, not

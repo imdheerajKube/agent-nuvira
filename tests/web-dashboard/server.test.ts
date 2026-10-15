@@ -428,6 +428,9 @@ describe('Dashboard Server', () => {
       expect(body.byProvider).toEqual({});
       expect(body.byModel).toEqual({});
       expect(body.recent).toBeUndefined(); // empty state doesn't include 'recent'
+      // No invoice has been checked yet — stated as an empty list, so the Cost
+      // page can say so instead of letting an estimate pass as a bill.
+      expect(body.reconciliations).toEqual([]);
     });
 
     it('GET /api/history returns zero sessions when no history exists', async () => {
@@ -640,6 +643,43 @@ describe('Dashboard Server', () => {
       // Remove all fixture files
       for (const name of ['cost-tracker', 'history', 'benchmarks', 'trajectories', 'patterns', 'feedback', 'vectors', 'agent-stats', 'routing-history']) {
         removeFixture(name);
+      }
+    });
+
+    it('GET /api/cost exposes invoice checks — the only external figures', async () => {
+      writeFixture('cost-reconciliations', {
+        version: 1,
+        reconciliations: [
+          {
+            provider: 'deepseek',
+            invoiceUsd: 17.42,
+            billedUsd: 17.39,
+            deltaUsd: 0.03,
+            verdict: 'under-evidenced',
+            since: Date.now() - 30 * 86400000,
+            until: Date.now(),
+            recordedAt: Date.now() - 1000,
+            note: 'dashboard, Oct 2026',
+            tierEvidence: { tier: 'paid', basis: 'the invoice matches the per-call costs' },
+          },
+        ],
+      });
+      try {
+        const res = await httpGet(`${baseUrl}/api/cost`);
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.body);
+        expect(body.reconciliations).toHaveLength(1);
+        expect(body.reconciliations[0]).toMatchObject({
+          provider: 'deepseek',
+          invoiceUsd: 17.42,
+          billedUsd: 17.39,
+          deltaUsd: 0.03,
+          verdict: 'under-evidenced',
+          note: 'dashboard, Oct 2026',
+          tier: 'paid', // flattened from tierEvidence for the UI
+        });
+      } finally {
+        removeFixture('cost-reconciliations');
       }
     });
 

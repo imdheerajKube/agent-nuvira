@@ -312,8 +312,8 @@ export class CommandRegistrar {
    * Switch the active provider/model — or enable Auto model routing.
    *
    * Two-step flow:
-   * 1. Lists providers from `buff model list` and lets the user pick one
-   * 2. For a non-auto provider, lists its actual models via `buff models`
+   * 1. Lists providers from `nuvira model list` and lets the user pick one
+   * 2. For a non-auto provider, lists its actual models via `nuvira models`
    *    and lets the user pick a specific one (or keep the provider default)
    */
   private async switchModel(): Promise<void> {
@@ -396,7 +396,7 @@ export class CommandRegistrar {
   }
 
   /**
-   * Fetch a provider's actual models (`buff models`) and let the user pick one.
+   * Fetch a provider's actual models (`nuvira models`) and let the user pick one.
    * The first option keeps the provider's configured default model.
    *
    * Returns the chosen model id, or undefined to keep the provider default.

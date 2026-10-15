@@ -460,6 +460,10 @@ OpenRouter gives you access to 200+ models from OpenAI, Anthropic, Google, Meta,
 export OPENROUTER_API_KEY="sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
+> **Not every provider needs a key from you.** A local runner (Ollama) and an optional local gateway
+> (**OmniRoute**, which holds the *upstream* keys itself) are configured without an API key on this
+> side — see [Provider Details → OmniRoute](#-omniroute-ai-gateway--no-key-needed).
+
 ## MCP (Model Context Protocol) Configuration
 
 MCP servers extend your agent's capabilities by connecting to external tools and data sources — databases, APIs, file systems, search engines, code repositories, and more. Agent-Nuvira supports the MCP standard for discovering and invoking tools from connected servers.
@@ -1905,6 +1909,68 @@ agent-nuvira models --provider openrouter
 agent-nuvira chat --provider openrouter --model openai/gpt-4o
 agent-nuvira chat --provider openrouter --model anthropic/claude-3-haiku
 ```
+
+### 🔀 OmniRoute (AI gateway — no key needed)
+
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) is a local, MIT-licensed gateway that
+multiplexes many upstream providers behind **one** OpenAI-compatible endpoint. It is an
+**aggregation gateway, not a second router**: agent-nuvira still picks the provider × model for each
+step, and OmniRoute only decides which upstream serves a request that has *already been addressed to
+it*. Unlike the providers above it needs **no key from you** — the gateway holds the upstream keys.
+
+```bash
+# 1. Install and start the gateway (its dashboard + /v1 API land on http://127.0.0.1:20128)
+npm install -g omniroute
+omniroute
+
+# 2. Give it upstream keys, so its combos have something to route to (repeat per provider)
+omniroute providers add deepseek --credential-stdin
+
+# 3. Start / stop / inspect it from here — no need to hunt for the background process
+agent-nuvira omniroute status
+agent-nuvira omniroute start
+agent-nuvira omniroute stop
+
+# 4. Let the router consider it (Dashboard → Admin → Provider Configuration → 🔀 row has the same switch)
+agent-nuvira config set providers.omniroute.enabled true
+```
+
+**Use it** — pin the gateway's own combos, or leave the switch On and let auto routing pick it:
+
+```bash
+agent-nuvira execute "fix the failing test" --provider omniroute --model auto
+agent-nuvira execute "..." --provider omniroute --model auto/coding   # or auto/fast, auto/cheap, auto/offline
+NUVIRA_STRICT_MODEL=1 agent-nuvira execute "..." --provider omniroute --model auto
+```
+
+With a concrete `--provider`, `-m auto` means **OmniRoute's own combo**, not agent-nuvira's
+auto-route; `-m auto` on its own (or `-p auto`) is still agent-nuvira's routing.
+
+**Verify your own install** — each line is a real check, and each has an honest failure mode:
+
+| Check | What it tells you |
+|---|---|
+| `agent-nuvira omniroute status` | Reachable, or "auth-gated (HTTP 401)" — a `401` still counts as **up**. "Not reachable" = nothing is listening. |
+| `agent-nuvira config get providers.omniroute.enabled` | `true` when the automatic pool may pick it. |
+| `omniroute providers list` | One row per upstream connection (deepseek, groq, gemini, …). |
+
+The gateway's own state lives in `~/.omniroute/`: `storage.sqlite` (connections, usage),
+`logs/application/app.log` (startup + per-request combo traces), `server/crash.log` (restart lines
+such as `Server crashed 2 times in <30s>`) and `supervisor/.pid`.
+
+**Two limits worth knowing**
+
+- **Attribution.** It is an aggregation gateway, so a quality number measured on `omniroute/auto`
+  describes the gateway *plus its own internal failover across the upstreams it holds*, not one model.
+  (Measured on the seeded-bug suite in `NUVIRA_STRICT_MODEL=1`: both `omniroute/auto` and
+  `omniroute/auto/smart` landed at 94% composite, found 6/7, fixed 7/7, false-success 0/7, and the
+  repeat reproduced the same single miss.)
+- **Accounting.** nuvira cannot see what the upstream charged, because the gateway — not nuvira —
+  holds the credentials. Spend through OmniRoute is recorded as **passthrough**: zero attributable
+  dollars, explicitly claimed as neither spend nor saving (`agent-nuvira stats cost`).
+
+> Need the routing rules, the failure modes and the deeper recipes? See the
+> [User Manual → OmniRoute](docs/USER_MANUAL.md#omniroute--one-endpoint-in-front-of-many-providers).
 
 ---
 

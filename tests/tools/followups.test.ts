@@ -17,6 +17,7 @@ import {
   MAX_FOLLOWUPS,
   type FollowupSuggestion,
 } from '../../src/tools/registry.js';
+import { followupsFromAnswerList } from '../../src/tools/followup-utils.js';
 
 describe('normalizeFollowups — clean + structured output', () => {
   it('caps the list at the contract maximum', () => {
@@ -93,6 +94,109 @@ describe('normalizeFollowups — clean + structured output', () => {
     expect(normalizeFollowups([])).toEqual([]);
     expect(normalizeFollowups(undefined)).toEqual([]);
     expect(normalizeFollowups(null)).toEqual([]);
+  });
+});
+
+/**
+ * The LIVE case (2026-10-14): `nuvira execute "hi"` on `local/deepseek-coder`
+ * reported 0 tool calls, wrote its three options as PROSE, and the user had
+ * nothing to click — the model's suggestions were unreachable, which is the one
+ * job a followup has.
+ */
+describe('followupsFromAnswerList — a model that wrote its options instead of calling the tool', () => {
+  it('recovers the real measured answer (numbered options under a lead-in)', () => {
+    const answer = [
+      "It seems like you've shared a lot of information here, but it's not clear what you're asking.",
+      '',
+      'Would you like me to:',
+      '  1. Fix the factorial performance issue by adding a limit or an iterative check?',
+      '  2. Replace the new Function evaluation with a safer alternative?',
+      '  3. Run the existing test suite to see if these bugs are currently triggering any test failures?',
+    ].join('\n');
+
+    expect(followupsFromAnswerList(answer)).toEqual([
+      { prompt: 'Fix the factorial performance issue by adding a limit or an iterative check?' },
+      { prompt: 'Replace the new Function evaluation with a safer alternative?' },
+      { prompt: 'Run the existing test suite to see if these bugs are currently triggering any test failures?' },
+    ]);
+  });
+
+  it('recovers a bulleted list behind a question lead-in', () => {
+    const answer = [
+      'The refactor is done.',
+      '',
+      'Which of these should I start with?',
+      '- Add tests for the new parser',
+      '- Update the README examples',
+    ].join('\n');
+    const out = followupsFromAnswerList(answer);
+    expect(out.map((f) => f.prompt)).toEqual([
+      'Add tests for the new parser',
+      'Update the README examples',
+    ]);
+  });
+
+  it('ignores a numbered list with NO lead-in (a procedure is the answer, not a menu)', () => {
+    const answer = [
+      'Here is how the retry works.',
+      '1. The request fails.',
+      '2. The router records the failure.',
+      '3. The next candidate is tried.',
+    ].join('\n');
+    expect(followupsFromAnswerList(answer)).toEqual([]);
+  });
+
+  it('ignores a list that is not the END of the answer', () => {
+    const answer = [
+      'Next steps:',
+      '1. Add tests',
+      '2. Update docs',
+      '',
+      'Both are optional for now, and nothing here is on fire.',
+    ].join('\n');
+    expect(followupsFromAnswerList(answer)).toEqual([]);
+  });
+
+  it('needs at least two items — one numbered line is not a menu', () => {
+    expect(followupsFromAnswerList('Shall I:\n1. Ship it?')).toEqual([]);
+  });
+
+  it('caps the recovered list at the contract maximum', () => {
+    const answer = [
+      'Options:',
+      '1. One',
+      '2. Two',
+      '3. Three',
+      '4. Four',
+      '5. Five',
+    ].join('\n');
+    const out = followupsFromAnswerList(answer);
+    expect(out).toHaveLength(MAX_FOLLOWUPS);
+    expect(out.map((f) => f.prompt)).toEqual(['One', 'Two', 'Three']);
+  });
+
+  it('strips the list markers so the prompt is the request, not "2. …"', () => {
+    const out = followupsFromAnswerList('Want me to:\n1) Run the suite\n2) Fix the flake');
+    expect(out.map((f) => f.prompt)).toEqual(['Run the suite', 'Fix the flake']);
+  });
+
+  it('drops leaked tool scaffolding instead of offering raw JSON', () => {
+    const answer = [
+      'Done.',
+      'Next steps:',
+      '- {"tool":"suggest_followups","arguments":{}}',
+      '- Review the diff',
+    ].join('\n');
+    const out = followupsFromAnswerList(answer);
+    expect(out.map((f) => f.prompt)).toEqual(['Review the diff']);
+    expect(JSON.stringify(out)).not.toContain('"tool"');
+  });
+
+  it('returns [] for empty/absent input', () => {
+    expect(followupsFromAnswerList('')).toEqual([]);
+    expect(followupsFromAnswerList('   \n  ')).toEqual([]);
+    expect(followupsFromAnswerList(undefined)).toEqual([]);
+    expect(followupsFromAnswerList(null)).toEqual([]);
   });
 });
 

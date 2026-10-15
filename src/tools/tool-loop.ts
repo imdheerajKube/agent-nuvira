@@ -35,7 +35,7 @@ import {
 // WS5 (#27) — the resume ledger. A `StepReplay` is threaded through the turn
 // when the run is a resume; `stepDigest` is over the whole input, so a step whose
 // thread or tool schema changed MISSES and is paid for again (see the module).
-import { stepDigest, type StepReplay } from '../learning/step-checkpoint.js';
+import { stepDigest, stepShape, type StepReplay } from '../learning/step-checkpoint.js';
 // P2 (fix_model_routing) — the shared definition of "this response carries
 // nothing usable". The loop does not re-invent the rule; it asks the same module
 // the failover walk validates with, so "empty" means one thing in this repo.
@@ -1887,7 +1887,9 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // every step whose thread and schema are byte-identical.
       const resumeKey = `model:${steps}`;
       const resumeDigest = opts.resume ? stepDigest(thread, schemas) : '';
-      const replayed = opts.resume?.replay(resumeKey, resumeDigest) ?? null;
+      // Diagnostics for a miss: sizes, not the digest (see `stepShape`).
+      const resumeShape = opts.resume ? stepShape(thread, schemas) : undefined;
+      const replayed = opts.resume?.replay(resumeKey, resumeDigest, resumeShape) ?? null;
       if (replayed) {
         response = replayed;
         replayedSteps += 1;
@@ -1897,7 +1899,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // Recorded AFTER the call, and only what the model actually returned: a
         // failed call records nothing, so a resume cannot inherit a failure as an
         // answer.
-        if (opts.resume) opts.resume.record(resumeKey, resumeDigest, response);
+        if (opts.resume) opts.resume.record(resumeKey, resumeDigest, response, resumeShape);
       }
       // A provider/adapter that resolves with nothing usable (undefined, a
       // missing content field) must not crash the turn — treat it as this

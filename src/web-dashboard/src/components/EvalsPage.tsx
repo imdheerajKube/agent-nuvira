@@ -1,7 +1,7 @@
 /**
- * EvalsPage — P2 eval runner in the GUI (GUI parity with `buff eval run`).
+ * EvalsPage — P2 eval runner in the GUI (GUI parity with `nuvira eval run`).
  *
- * Runs the REAL `buff eval run` through the task runner (shared TaskConsole),
+ * Runs the REAL `nuvira eval run` through the task runner (shared TaskConsole),
  * with live output and cancel. Past runs come from the dashboard data feed
  * (evals.json, auto-refreshed every 10s), so results appear in the table as
  * soon as a run finishes.
@@ -33,7 +33,7 @@ export default function EvalsPage({ data }: { data: DashboardData | null }) {
 
   return (
     <div className="panel">
-      <PageHeader icon="🏆" title="Evals — run buff eval from the GUI" />
+      <PageHeader icon="🏆" title="Evals — run nuvira eval from the GUI" />
 
       <TaskConsole
         presets={PRESETS}
@@ -41,7 +41,7 @@ export default function EvalsPage({ data }: { data: DashboardData | null }) {
         timeoutMs={900_000}
         hint={
           <>
-            Runs the real <code>buff eval run</code> as an isolated process — same engine, same ledger, same results
+            Runs the real <code>nuvira eval run</code> as an isolated process — same engine, same ledger, same results
             as the CLI. Long suites can take minutes; you can cancel mid-run.
           </>
         }
@@ -80,7 +80,7 @@ export default function EvalsPage({ data }: { data: DashboardData | null }) {
           </table>
         </div>
       ) : (
-        <div className="empty-state">No eval runs yet — start one above (or `buff eval run` from the CLI).</div>
+        <div className="empty-state">No eval runs yet — start one above (or `nuvira eval run` from the CLI).</div>
       )}
     </div>
   );

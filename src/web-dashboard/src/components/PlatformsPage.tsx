@@ -7,7 +7,7 @@ const GUIDES: Record<string, { icon: string; category: string; steps: string[]; 
   telegram: { icon: '✈️', category: 'Chat', steps: ['Open Telegram and search for @BotFather', 'Send /newbot and follow the prompts', 'Give your bot a name (e.g. "My Agent Bot")', 'Give your bot a username ending in "bot"', 'BotFather gives you a token — paste it in Step 2', 'Open your bot in Telegram and send /start'], testTarget: 'telegram:' },
   discord: { icon: '🎮', category: 'Chat', steps: ['Go to discord.com/developers/applications', 'Click "New Application" and give it a name', 'Go to Bot tab and click "Add Bot"', 'Copy the bot token', 'Enable "Message Content Intent"', 'Invite bot to your server (OAuth2 URL generator)'], testTarget: 'discord:' },
   slack: { icon: '💬', category: 'Chat', steps: ['Go to api.slack.com/apps', 'Create New App from scratch', 'Add Bot Token Scopes: chat:write, im:read, im:write', 'Install to workspace', 'Copy the Bot User OAuth Token (xoxb-...)'], testTarget: 'slack:' },
-  whatsapp: { icon: '📱', category: 'Chat', steps: ['Run: buff whatsapp pair (or from Gateway tab)', 'Scan the QR code with WhatsApp', 'Pairing completes automatically'], testTarget: '' },
+  whatsapp: { icon: '📱', category: 'Chat', steps: ['Run: nuvira whatsapp pair (or from Gateway tab)', 'Scan the QR code with WhatsApp', 'Pairing completes automatically'], testTarget: '' },
   whatsapp_cloud: { icon: '☁️', category: 'Chat', steps: ['Go to developers.facebook.com', 'Set up WhatsApp Cloud API', 'Copy token + Phone ID'], testTarget: 'whatsapp_cloud:' },
   email: { icon: '📧', category: 'Chat', steps: ['Get SMTP credentials (Gmail, SendGrid, etc.)', 'For Gmail: use App Password at smtp.gmail.com:587', 'Paste SMTP host + user below'], testTarget: '' },
   signal: { icon: '🔒', category: 'Chat', steps: ['Run signal-cli-rest-api Docker container', 'Register a Signal account', 'Paste account number below'], testTarget: '' },
@@ -187,7 +187,7 @@ export default function PlatformsPage() {
 
       <div className="platforms-cli-hint">
         <span className="admin-hint">Prefer the terminal? </span>
-        <code>buff gateway setup telegram</code>
+        <code>nuvira gateway setup telegram</code>
         <span className="admin-hint"> — same wizard from your CLI</span>
       </div>
 

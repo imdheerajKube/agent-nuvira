@@ -473,7 +473,7 @@ function updateStatusBar(text: string): void {
 
 /**
  * Refresh the model/provider status bar indicator from the CLI's
- * active-model state (e.g. after a `buff model switch`).
+ * active-model state (e.g. after a `nuvira model switch`).
  *
  * Exported for unit testing.
  */

@@ -108,7 +108,7 @@ export interface ExtensionConfig {
 
 // ─── Model & Provider Management ───────────────────────────────────────────
 
-/** A single provider entry from `buff model list --json` */
+/** A single provider entry from `nuvira model list --json` */
 export interface ProviderInfo {
   type: string;
   label: string;
@@ -120,21 +120,21 @@ export interface ProviderInfo {
   isPlugin: boolean;
 }
 
-/** A single model entry from `buff models --json` */
+/** A single model entry from `nuvira models --json` */
 export interface ProviderModelInfo {
   /** Provider display name (e.g. 'Groq') */
   provider: string;
-  /** Provider type used in `buff model switch` (e.g. 'groq') */
+  /** Provider type used in `nuvira model switch` (e.g. 'groq') */
   providerType: string;
   /** Human-friendly model name */
   name: string;
-  /** Model id used in `buff model switch <provider>/<id>` */
+  /** Model id used in `nuvira model switch <provider>/<id>` */
   id: string;
   owner?: string;
   description?: string;
 }
 
-/** The active model state read from `~/.buff/active-model.json` */
+/** The active model state read from `~/.nuvira/active-model.json` */
 export interface ActiveModelInfo {
   provider: string;
   model: string;
@@ -167,7 +167,7 @@ export interface QuotaEventInfo {
 
 /**
  * The quota ledger + failover timeline read from the CLI's memory dir
- * (`~/.buff/memory/quota-ledger.json` + `quota-events.jsonl`). Mirrors the
+ * (`~/.nuvira/memory/quota-ledger.json` + `quota-events.jsonl`). Mirrors the
  * shape the dashboard Quota card renders, so the extension view matches it.
  */
 export interface QuotaStatusInfo {

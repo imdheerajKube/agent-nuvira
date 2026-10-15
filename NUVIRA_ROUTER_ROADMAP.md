@@ -81,6 +81,14 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 - The transport layer grows one more adapter — that's the entire "unified endpoint" story; no existing adapter is rewritten.
 - P6's `nuvira nuvira serve` reverses the adapter: our routing becomes an OpenAI-compatible endpoint other tools can consume.
 
+> **Why the decision layer is the spine, and not the external design record.** The
+> routing design at `~/Documents/Design Doc/Final_Router_Design.md` was assessed
+> requirement-by-requirement against the decision layer above on 2026-10-15; the verdict,
+> the adopt/decline split, and the measurements that would overturn it are in
+> [`docs/ASSESSMENT_2026-10-15_ROUTER_VS_FINAL_DESIGN.md`](docs/ASSESSMENT_2026-10-15_ROUTER_VS_FINAL_DESIGN.md).
+> The boundary condition is this roadmap's own FW-2: if multi-host shared state lands,
+> the service-grade profile becomes the right spine and the assessment must be revisited.
+
 ---
 
 ## 4. Phasewise Plan
@@ -353,6 +361,7 @@ Verified as of 2026-08-05 (v1.57.0, 3,032 root tests + 42 dashboard component te
 |---|---|---|
 | 2026-08-05 | Feature named **Nuvira-Router**; external project referenced only in §11 | Product branding; no third-party name in agent-nuvira |
 | 2026-08-05 | Gateway adopted as **adapter + optional sidecar**, never a hard dependency | Zero-regression + footprint discipline |
+| 2026-10-15 | Router spine **reaffirmed** against the external design record (keep `auto-router → registry → ledger → fallback`; adopt only the effective-price/prompt-cache, reserve→commit, decision-provenance, propensity-lite, live-menu, `recheck_at` and batch-rung subset) | The record's Must-level requirements presume a state store plus a worker fleet (its own §4.1/§26 non-goals for an embedded single-node agent), while its insights already exist here in local form — see [`docs/ASSESSMENT_2026-10-15_ROUTER_VS_FINAL_DESIGN.md`](docs/ASSESSMENT_2026-10-15_ROUTER_VS_FINAL_DESIGN.md) |
 
 ---
 

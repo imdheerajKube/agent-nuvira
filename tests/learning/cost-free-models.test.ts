@@ -22,7 +22,26 @@ import {
   calculateCost,
   isFreeModel,
   recordCallWithUsage,
+  setPricingContext,
+  resetPricingContextCache,
 } from '../../src/learning/cost-tracker.js';
+import type { PricingContext } from '../../src/learning/cost-classification.js';
+
+/** A context that declares ONE provider `paid` — no config file needed. */
+function paidContext(provider: string): PricingContext {
+  return {
+    billingTierFor: (p) => (p === provider ? 'paid' : 'unknown'),
+    configPricingFor: () => undefined,
+  };
+}
+
+/** A context that declares ONE provider a free tier. */
+function unbilledContext(provider: string): PricingContext {
+  return {
+    billingTierFor: (p) => (p === provider ? 'free' : 'unknown'),
+    configPricingFor: () => undefined,
+  };
+}
 
 let memDir: string;
 let prevMemDir: string | undefined;
@@ -109,10 +128,69 @@ describe('CostTracker.recordCall — reported cost is stored and flagged', () =>
     expect(entry.measured).toBe(true);
   });
 
-  it('omits the flag when no cost was reported', () => {
+  it('omits the reported flag when no cost was reported', () => {
     const entry = new CostTracker().recordCall('groq', 'llama-3.3-70b-versatile', 100, 50);
     expect(entry.costReported).toBeUndefined();
-    expect(entry.costUsd).toBeGreaterThan(0);
+    // The list price is still recorded — as `listPriceUsd` — but with the account
+    // tier UNDECLARED it is not counted as billed. Charging it as `costUsd` here
+    // is exactly the fabrication this change removes (a free Groq tier was billed
+    // a 70B-class list rate on a real profile).
+    expect(entry.listPriceUsd).toBeGreaterThan(0);
+    expect(entry.costUsd).toBe(0);
+    expect(entry.costSource).toBe('catalog');
+    expect(entry.billingTier).toBe('unknown');
+    expect(entry.pricingBasis).toContain('undeclared');
+  });
+
+  it('counts a list-priced call as billed once the account is declared paid', () => {
+    setPricingContext(paidContext('groq'));
+    try {
+      const entry = new CostTracker().recordCall('groq', 'llama-3.3-70b-versatile', 1000, 1000);
+      expect(entry.billingTier).toBe('paid');
+      expect(entry.costSource).toBe('catalog');
+      // 1000/1000 × ($0.00059 + $0.00079 per 1K) — the catalog's own Groq price.
+      expect(entry.costUsd).toBeCloseTo(0.00138, 6);
+      expect(entry.pricingBasis).toContain('estimated bill');
+    } finally {
+      resetPricingContextCache();
+    }
+  });
+
+  it('bills a declared free tier $0 and reports the list price as value', () => {
+    setPricingContext(unbilledContext('groq'));
+    try {
+      const entry = new CostTracker().recordCall('groq', 'llama-3.3-70b-versatile', 1000, 1000);
+      expect(entry.costUsd).toBe(0);
+      expect(entry.costSource).toBe('free');
+      expect(entry.billingTier).toBe('free');
+      expect(entry.listPriceUsd).toBeCloseTo(0.00138, 6);
+      expect(entry.pricingBasis).toContain('free tier');
+    } finally {
+      resetPricingContextCache();
+    }
+  });
+
+  it('records NO price (unpriced) for a provider the catalog does not describe', () => {
+    const entry = new CostTracker().recordCall('some-unknown-provider', 'mystery-model', 1000, 1000);
+    expect(entry.costUsd).toBe(0);
+    expect(entry.costSource).toBe('unknown');
+    expect(entry.listPriceUsd).toBeUndefined();
+    expect(entry.pricingBasis).toContain('no price evidence');
+  });
+
+  it('treats a keyless pass-through gateway as unpriced, never as $0 spend', () => {
+    // omniroute runs on localhost and forwards elsewhere: the catalog declares its
+    // own price as 0, and that zero means "not priced here", not "free here".
+    const entry = new CostTracker().recordCall('omniroute', 'auto', 1000, 1000);
+    expect(entry.costUsd).toBe(0);
+    expect(entry.costSource).toBe('passthrough');
+    expect(entry.listPriceUsd).toBeUndefined();
+  });
+
+  it('tags the row with its origin, so a test run can be told from real usage', () => {
+    const entry = new CostTracker().recordCall('groq', 'llama-3.3-70b-versatile', 10, 10);
+    // This file runs under vitest → the registry's own origin rule says `test`.
+    expect(entry.origin).toBe('test');
   });
 });
 

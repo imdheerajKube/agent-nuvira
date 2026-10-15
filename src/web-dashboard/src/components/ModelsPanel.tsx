@@ -631,7 +631,7 @@ export function keyHygieneWarning(hygiene?: { threshold: number; consecutive: Re
         </div>
         <div style={{ marginTop: 4, color: 'var(--accent-yellow)' }}>
           After {hygiene.threshold} consecutive 401/403s the invalid key is removed from config; run{' '}
-          <code style={{ color: 'var(--accent-blue)' }}>buff config set providers.&lt;provider&gt;.apiKey &lt;real-key&gt;</code> to re-enable.
+          <code style={{ color: 'var(--accent-blue)' }}>nuvira config set providers.&lt;provider&gt;.apiKey &lt;real-key&gt;</code> to re-enable.
         </div>
       </div>
     </div>
@@ -650,7 +650,7 @@ function ModelRegistrySection({ data }: { data: ModelRegistryInsights }) {
           Model Availability Registry
         </div>
         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-          No registry data yet — run <code style={{ color: 'var(--accent-blue)' }}>buff models refresh</code> or use Auto routing;
+          No registry data yet — run <code style={{ color: 'var(--accent-blue)' }}>nuvira models refresh</code> or use Auto routing;
           the registry learns from real usage and probes.
         </div>
       </div>

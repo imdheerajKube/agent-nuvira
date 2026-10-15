@@ -318,7 +318,7 @@ export default function HealthPanel({ data, connected, lastUpdated }: HealthPane
           <span className="health-icon">💾</span>
           <div className="health-body">
             <div className="health-title">Memory Directory</div>
-            <div className="health-path">{health?.memoryDir || '~/.buff/memory/'}</div>
+            <div className="health-path">{health?.memoryDir || '~/.nuvira/memory/'}</div>
           </div>
         </div>
         <div className="health-card">
@@ -368,7 +368,7 @@ export default function HealthPanel({ data, connected, lastUpdated }: HealthPane
         </div>
         <div className="info-row">
           <span className="info-label">Data Directory</span>
-          <span className="info-value">{health?.memoryDir || '~/.buff/memory/'}</span>
+          <span className="info-value">{health?.memoryDir || '~/.nuvira/memory/'}</span>
         </div>
       </div>
     </>

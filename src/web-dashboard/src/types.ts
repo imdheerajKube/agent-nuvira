@@ -260,10 +260,46 @@ export interface ActionTelemetryInsights {
 
 export interface CostData {
   totalRequests: number;
+  /**
+   * The ledger total AS RECORDED — kept for compatibility. It is NOT the headline:
+   * it includes rows the retired hardcoded price table priced, so the page shows
+   * the evidence-backed `billedUsd` instead and offers this as a footnote.
+   */
   totalCost: number;
   totalTokens: number;
   byProvider: Record<string, number>;
   byModel: Record<string, number>;
+  /**
+   * Evidence-backed bill: provider-reported cost + list-priced calls whose
+   * account is declared `paid`. Optional so a dashboard served by an older
+   * nuvira build still renders (the page falls back to `totalCost`).
+   */
+  billedUsd?: number;
+  /** The exact, provider-stated part of `billedUsd`. */
+  billedReportedUsd?: number;
+  billedReportedCalls?: number;
+  /** The list-priced part of `billedUsd` — an ESTIMATE of money owed. */
+  billedListedUsd?: number;
+  billedListedCalls?: number;
+  /** List-priced with the billing tier undeclared: shown, never as spend. */
+  unverifiedListedUsd?: number;
+  unverifiedListedCalls?: number;
+  /** Value a free/subscription tier absorbed — never spend. */
+  notBilledValueUsd?: number;
+  notBilledValueCalls?: number;
+  /** Calls with no dollars at all (unknown price, or a pass-through gateway). */
+  unpricedCalls?: number;
+  unpricedTokens?: number;
+  /** Rows re-derived at read time because they predate cost classification. */
+  recomputedCalls?: number;
+  /** Rows tagged test-origin, excluded from every figure above. */
+  testOriginCalls?: number;
+  byProviderBilled?: Record<string, number>;
+  byProviderUnverified?: Record<string, number>;
+  byProviderValue?: Record<string, number>;
+  byProviderUnpricedCalls?: Record<string, number>;
+  byModelBilled?: Record<string, number>;
+  byModelValue?: Record<string, number>;
   /** M2.2: spend per provider from MEASURED (provider-reported) usage only. */
   byProviderMeasured: Record<string, number>;
   /** M2.2: calls + spend with exact wire tokens vs length-based estimates. */
@@ -280,6 +316,33 @@ export interface CostData {
   reportedCost: number;
   /** Provider-reported spend per provider. */
   byProviderReported: Record<string, number>;
+  /**
+   * Invoice checks the operator has run (`nuvira stats cost reconcile`).
+   *
+   * This is the ONLY data on this page that comes from outside this machine: the
+   * provider's own charge for a stated window. Everything else is an estimate of
+   * money owed, which is why a figure here is the only one allowed to be called
+   * actual. Absent when none has been run — the page says so rather than implying
+   * its estimate is a bill.
+   */
+  reconciliations?: Array<{
+    provider: string;
+    /** The provider's own figure — the external number. */
+    invoiceUsd: number;
+    /** What this ledger could evidence for the same window. */
+    billedUsd: number;
+    /** invoice − evidence. Positive = the provider charged more than we can prove. */
+    deltaUsd: number;
+    verdict: 'match' | 'under-evidenced' | 'over-recorded';
+    since: number;
+    until: number;
+    /** When the operator entered the figure (epoch ms). */
+    recordedAt: number;
+    /** Where they read it (free text). */
+    note?: string;
+    /** The tier the invoice PROVED, when it proved one. */
+    tier?: 'paid' | 'free' | 'subscription' | 'unknown';
+  }>;
   recent: Array<{
     provider: string;
     model: string;

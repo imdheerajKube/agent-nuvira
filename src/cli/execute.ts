@@ -44,6 +44,9 @@ import { isConversationalQuestion } from '../nlu/conversation-gate.js';
 import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
 import { maybeAutoRecall, recallCard, recallContextBlock, recallPolicy } from '../context/session-recall.js';
 import { toFollowupSuggestions } from '../tools/registry.js';
+// E3b — the shared followup shape (the menu below renders the run's own
+// suggestions; a leaf module, no registry import).
+import type { FollowupSuggestion } from '../tools/followup-utils.js';
 import { stripToolCallArtifacts, stripReasoningLeak, ANSWER_QUALITY_FAILURE_LINE } from '../inference/tool-call-utils.js';
 import { maybeRunBackgroundDuties } from './duties.js';
 import { recordActionFailure, type FailureSessionState } from '../learning/failure-bookkeeping.js';
@@ -52,7 +55,7 @@ import { getTrajectoryStore } from '../memory/trajectory-store.js';
 import { listCheckpoints } from '../agents/checkpoint-store.js';
 import { logger, setSilent } from '../utils/logger.js';
 import { PipelineBoard, PipelineEventStream } from './pipeline-board.js';
-import { createCardSink, presentAnswer } from './ui/index.js';
+import { createRunStream } from './ui/index.js';
 import {
   formatBatchReport,
   getUnattendedJob,
@@ -223,6 +226,14 @@ interface SingleGoalResult {
   provider?: string;
   model?: string;
   transport?: 'native' | 'json' | 'none';
+  /**
+   * E3b — the next steps this turn SUGGESTED (the model's `suggest_followups`
+   * call, or the same list recovered from its prose). The post-run menu renders
+   * them as selectable entries, which is what makes a suggestion usable: before
+   * this, both engine arms dropped them here and the user got the generic menu
+   * only — the model's own suggestions were unreachable.
+   */
+  followups?: FollowupSuggestion[];
   /** Tool names the run executed, in order — the run's own report of what it did. */
   toolCalls?: string[];
   /**
@@ -1316,29 +1327,36 @@ export class ExecuteCommand extends BaseCommand {
   ): Promise<Array<{ name: string; value: string }>> {
     const actions: Array<{ name: string; value: string }> = [];
 
-    if (result.success && result.orchestrationResult) {
+    if (result.success) {
       // ── Success: Show follow-up suggestions ─────────────────────────
-      const followups = await this.generateFollowUpSuggestions(
-        result.orchestrationResult,
-        activeProvider,
-        activeModel,
-      );
+      //
+      // E3b — the RUN's own suggestions come first, and they are the ones to
+      // prefer: the model already offered them for THIS answer, so spending a
+      // second model call to invent different ones would be both slower and less
+      // relevant. The generator stays for the pipeline arm, which reports no
+      // followups of its own.
+      const suggested: Array<{ label: string; goal: string }> =
+        result.followups && result.followups.length > 0
+          ? result.followups.slice(0, 3).map((f) => ({
+              label: f.label || f.prompt,
+              goal: f.prompt,
+            }))
+          : result.orchestrationResult
+            ? await this.generateFollowUpSuggestions(
+                result.orchestrationResult,
+                activeProvider,
+                activeModel,
+              )
+            : [];
 
-      if (followups.length > 0) {
-        // Show top 3 follow-up suggestions
-        const shown = followups.slice(0, 3);
-        for (const f of shown) {
-          const label = `💡  ${f.label}`;
-          actions.push({ name: label, value: `followup:${f.goal}` });
+      if (suggested.length > 0) {
+        // Show top 3 follow-up suggestions — picking one runs it as the next goal.
+        for (const f of suggested) {
+          actions.push({ name: `💡  ${f.label}`, value: `followup:${f.goal}` });
         }
         actions.push({ name: '───────────', value: 'separator' });
       }
 
-      actions.push({ name: '💬  Enter another goal', value: 'continue' });
-    } else if (result.success) {
-      // P0.5 — direct-answer success (a question was answered; no pipeline
-      // ran, so there are no pipeline followups to generate). Just the
-      // standard next-step actions.
       actions.push({ name: '💬  Enter another goal', value: 'continue' });
     } else {
       // ── Failure: Show analysis + recovery options ───────────────────
@@ -1769,6 +1787,19 @@ export class ExecuteCommand extends BaseCommand {
     model: string | undefined,
     options: ExecuteOptions,
   ): Promise<SingleGoalResult> {
+    // P7 — the LIVE view for a direct answer: mount first, stream the answer as
+    // it is written, archive a card per tool call, then unmount and print the
+    // authoritative text. `start()` before the call is what makes the wait
+    // visible (`thinking…`) instead of looking like a hang — measured: a plain
+    // question on a local model sat silent for ten seconds before its first
+    // token. Inert off a real terminal, and forced inert under `--json-events`
+    // (stdout is a machine-readable stream there, so a mounted frame would be a
+    // corrupt event).
+    const live = createRunStream(
+      { header: `nuvira · ${provider ?? 'auto'}${model ? ` / ${model}` : ''}`, headerColor: 'assistant' },
+      options.jsonEvents ? { tty: false } : {},
+    );
+    live.start();
     try {
       // Lazy import breaks the static execute↔chat cycle (chat.ts imports
       // printOrchestrationResult from execute.ts); the chat engine IS the
@@ -1787,11 +1818,18 @@ export class ExecuteCommand extends BaseCommand {
       const answer = await new ChatCommand().answerOnce(goal, {
         ...(provider ? { provider } : {}),
         ...(model ? { model } : {}),
+        // The live view first (it wants `started` too — that is when the running
+        // call is shown), then this arm's own bookkeeping, which counts a call
+        // once it is DONE.
         onToolCall: (phase, info) => {
+          live.overrides.onToolCall?.(phase, info);
           if (phase !== 'called') return;
           toolCalls.push(info.tool);
           toolOutcomes.push({ tool: info.tool, ...(typeof info.ok === 'boolean' ? { ok: info.ok } : {}) });
         },
+        // Live token stream for the same preview the chat surfaces show.
+        ...(live.overrides.onToken ? { onToken: live.overrides.onToken } : {}),
+        ...(live.overrides.onGitDiff ? { onGitDiff: live.overrides.onGitDiff } : {}),
         onFinding: (finding) => {
           findings.push(finding);
         },
@@ -1841,7 +1879,9 @@ export class ExecuteCommand extends BaseCommand {
         }) + '\n');
       } else if (content) {
         console.log('');
-        presentAnswer(content);
+        // The live frame is unmounted here (it is a preview, and the engine's
+        // sanitized text is authoritative) — never printing twice.
+        live.commit(content);
         // E — the honest plan → track → verify close-out. Rendered only when the
         // report has something to say (a plan, changes, or a non-trivial
         // verdict), so an ordinary answer stays clean.
@@ -1858,6 +1898,10 @@ export class ExecuteCommand extends BaseCommand {
       return {
         success: !generationFailed,
         ...(typeof answer.content === 'string' ? { content: answer.content } : {}),
+        // E3b — the same suggestions the chat surfaces render as chips, so the
+        // menu below can offer them. The engine already recovered them from the
+        // answer's own list when the model did not call the tool.
+        ...(answer.followups && answer.followups.length > 0 ? { followups: answer.followups } : {}),
         ...(answer.provider ? { provider: answer.provider } : {}),
         ...(answer.model ? { model: answer.model } : {}),
         ...(answer.transport ? { transport: answer.transport } : {}),
@@ -1870,8 +1914,13 @@ export class ExecuteCommand extends BaseCommand {
         ...(answer.resume ? { resume: answer.resume } : {}),
       };
     } catch (err) {
+      // Unmount BEFORE printing: Ink owns the frame, so an error written while it
+      // is mounted collides with the next repaint.
+      live.stop();
       logger.error(err instanceof Error ? err.message : String(err));
       return { success: false };
+    } finally {
+      live.stop();
     }
   }
 
@@ -1900,13 +1949,21 @@ export class ExecuteCommand extends BaseCommand {
     }
     try {
       // P8 — render tool / shell / git-diff events as cards while the loop runs.
-      // The sink is inert off a real terminal, so a piped or CI run keeps its
-      // exact bytes (see `createCardSink`).
-      const cards = createCardSink();
+      // P7 — the LIVE view for the loop arm: the same one the direct arm and
+      // the chat surfaces use. It replaces the card-only sink this arm had, so
+      // the run now shows a `thinking…` frame, the streamed answer, the step it
+      // is on, and a card per completed tool call — then commits the
+      // authoritative text once. Inert off a real terminal (a piped or CI run
+      // keeps its exact bytes) and forced inert under `--json-events`.
+      const live = createRunStream(
+        { header: 'nuvira · execute', headerColor: 'assistant' },
+        options.jsonEvents ? { tty: false } : {},
+      );
+      live.start();
       const result = await runLoopExecutor(goal, this.configManager, {
         provider,
         model,
-        ...cards.overrides,
+        ...live.overrides,
         // WS5 (#27) — the command's own flags. `--resume` means the SAME run
         // here as it does on the pipeline arm: the last run of this ask in this
         // directory (both ids come from `checkpointIdFor`), so one flag resumes
@@ -1933,7 +1990,7 @@ export class ExecuteCommand extends BaseCommand {
         // it, "the gate applied the edit autonomously" and "the model passed
         // confirm:true" were indistinguishable from the console.
         verbose: options.verbose,
-      }).finally(() => cards.stop());
+      }).finally(() => live.stop());
       // The loop engine's answer is rendered by THIS command while the gateway
       // and dashboard console both sanitize it before showing it. Without this
       // the execute CLI printed a `**suggest_followups**` caption plus its raw
@@ -1979,7 +2036,7 @@ export class ExecuteCommand extends BaseCommand {
         }) + '\n');
       } else {
         console.log('');
-        if (content) presentAnswer(content);
+        if (content) live.commit(content);
         if (!success) {
           logger.error(content || 'The loop engine could not complete this goal.');
         }
@@ -1997,6 +2054,8 @@ export class ExecuteCommand extends BaseCommand {
       return {
         success,
         ...(result.content ? { content: result.content } : {}),
+        // E3b — the loop's own suggest_followups (or its recovered prose list).
+        ...(result.followups && result.followups.length > 0 ? { followups: result.followups } : {}),
         ...(result.provider ? { provider: result.provider } : {}),
         ...(result.model ? { model: result.model } : {}),
         ...(result.transport ? { transport: result.transport } : {}),

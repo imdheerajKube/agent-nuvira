@@ -4,7 +4,7 @@
  * `describe_image(path, prompt?)` describes an image using:
  *   1. Local **llava / llama3.2-vision** via Ollama (the existing local
  *      adapter's HTTP API — `/api/generate` with base64 images), or
- *   2. The free **Gemini vision** tier when BUFF_GEMINI_API_KEY is set.
+ *   2. The free **Gemini vision** tier when NUVIRA_GEMINI_API_KEY is set.
  *
  * Availability: true when Ollama answers the `/api/tags` probe OR a Gemini key
  * is present. The Ollama probe is injectable so tests run without a server.

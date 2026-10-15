@@ -1,5 +1,5 @@
 /**
- * ChatPage — P3 dashboard chat console (GUI parity with `buff chat "<prompt>"`).
+ * ChatPage — P3 dashboard chat console (GUI parity with `nuvira chat "<prompt>"`).
  *
  * Each message runs ONE tool-loop turn through the real agent engine in the
  * dashboard process (ChatCommand.answerOnce — the exact engine behind the
@@ -49,7 +49,7 @@ const STILL_RUNNING_TICK_MS = 5000;
 const PASTE_ATTACH_THRESHOLD = 2_000; // chars — larger pastes are offered as a chip
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { dashboardAPI } from '../api';
+import { dashboardAPI, type PendingQuestion } from '../api';
 import { useAuthVersion } from '../useAuthVersion';
 import Markdown from './Markdown';
 // P2 — structured artifacts extracted from the answer TEXT (```diff blocks,
@@ -573,7 +573,7 @@ function ArtifactNav({ children }: { children: React.ReactNode }) {
               disabled={!allSet}
               onClick={() => { onSave(values); setSaved(true); }}
             >
-              💾 Save to ~/.buff/.env
+              💾 Save to ~/.nuvira/.env
             </button>
           </div>
         ) : saved ? (
@@ -1244,6 +1244,19 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const recoveredRef = useRef(false);
   /** How long the current wait has run, refreshed while it is on screen. */
   const [waitElapsedMs, setWaitElapsedMs] = useState(0);
+  /**
+   * When the turn being waited on STARTED (epoch-ms), so the notice can name the
+   * wait's real age.
+   *
+   * MEASURED (2026-10-14, trace-1791996974262-zdraep): a turn ran 664s. The page
+   * gave up on its own POST at the 5-minute ceiling and then counted the wait
+   * from THAT instant, so it read "1m 25s elapsed" while the user had already
+   * waited six and a half minutes — and read as nonsense beside the 12-second
+   * trace of the turn before it. The origin is the turn's start, either this
+   * client's own `send` (kept even when the POST is abandoned) or the server's
+   * `busySince` when the page attached mid-turn.
+   */
+  const waitStartedAtRef = useRef<number | null>(null);
   /** A sentence the server sent about the PIN not holding (see `routingNotice`). */
   const [routingNotice, setRoutingNotice] = useState<string | null>(null);
   /**
@@ -1296,12 +1309,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   // P4b — ref to break the circular dependency between resumeSession and attachProject.
   const attachProjectRef = useRef<((path: string) => Promise<void>) | null>(null);
   // P0.1 — a pending ask_user question from the agent (choice card).
-  const [pendingQuestion, setPendingQuestion] = useState<{
-    questionId: string;
-    question: string;
-    choices: Array<{ label: string; description?: string }>;
-    multiSelect: boolean;
-  } | null>(null);
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
   const [questionSel, setQuestionSel] = useState<Set<number>>(new Set());
   // C1 — the "type my own answer" field. The agent offers 2–4 choices, but the
   // user's real answer is sometimes none of them; the `custom` value is already
@@ -1560,8 +1568,27 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       }
       setBusy(rec.busy === true);
       // A session resumed mid-turn shows the SAME wait state as one this page
-      // started: the server is working, the answer is coming, nothing failed.
+      // started: the server is working, the answer is coming, nothing failed —
+      // and the wait's age comes from the SERVER's turn start, not from this
+      // page's arrival (a reload 10 minutes into a turn must not read "0s").
+      if (rec.busy === true) waitStartedAtRef.current = rec.busySince ?? Date.now();
       setStillRunning(rec.busy === true);
+      // A question the RESUME missed is restored from the snapshot.
+      //
+      // The `question` event fires once, when the turn asks, and a page that
+      // reloaded afterwards never hears it — so the reloaded page showed the
+      // "still working … the answer will appear here by itself" notice for a turn
+      // that was waiting on the USER. The server now carries the open question
+      // with the session, and this is where it is picked up: the choice card
+      // reappears and the turn can actually be continued. MEASURED (2026-10-14,
+      // trace-1791996357488-wpm352): 5m02s in `ask_user`, cancelled at the end,
+      // with the question never shown.
+      if (rec.pendingQuestion) {
+        setPendingQuestion(rec.pendingQuestion);
+      } else if (!rec.busy) {
+        // The turn is over (or never asked): no question is open any more.
+        setPendingQuestion(null);
+      }
       if (rec.busy) timer = setTimeout(() => void tick(), 2500);
     };
     void tick();
@@ -1582,10 +1609,12 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   useEffect(() => {
     if (!stillRunning) {
       setWaitElapsedMs(0);
+      waitStartedAtRef.current = null;
       return;
     }
-    const startedAt = Date.now();
-    const timer = setInterval(() => setWaitElapsedMs(Date.now() - startedAt), STILL_RUNNING_TICK_MS);
+    const since = () => Date.now() - (waitStartedAtRef.current ?? Date.now());
+    setWaitElapsedMs(since());
+    const timer = setInterval(() => setWaitElapsedMs(since()), STILL_RUNNING_TICK_MS);
     return () => clearInterval(timer);
   }, [stillRunning]);
 
@@ -1829,7 +1858,16 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
           continue;
         }
         missed = 0;
-        if (rec.busy === true) continue; // still running: nothing to collect yet
+        if (rec.busy === true) {
+          // Still running — and it may be running BECAUSE it is holding for an
+          // answer. The snapshot says which, so the notice can stop telling the
+          // user to wait for something only they can produce.
+          if (rec.pendingQuestion) setPendingQuestion(rec.pendingQuestion);
+          // The SERVER's turn start wins when it is known: this client's own
+          // clock would date the wait from the ceiling, not from the turn.
+          if (typeof rec.busySince === 'number') waitStartedAtRef.current = rec.busySince;
+          continue;
+        }
         const last = [...rec.turns].reverse().find((t) => t.role === 'assistant');
         if (last) {
           commitRecoveredAnswer({ content: last.content, followups: [] });
@@ -1871,6 +1909,10 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       setAttachments([]);
       setPasteOffer(null);
       lastSentRef.current = clean || `[${chipList.length} attachment(s)]`;
+      // The turn's own start: the origin the wait notice counts from, so a turn
+      // this page abandons at the 5-minute ceiling is not reported as if it had
+      // just begun (see `waitStartedAtRef`).
+      waitStartedAtRef.current = Date.now();
       setBusy(true);
       // P8 — smart rail: while the agent works, the results own the window.
       setRailOpen(false);
@@ -2369,7 +2411,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
           <p>Log in (admin or operator) to chat with the agent. Configure the dashboard admin credential first if this is a fresh setup.</p>
           {auth?.configured === false ? (
             <p className="admin-hint">
-              Run <code>buff dashboard</code> once, or set <code>BUFF_DASHBOARD_ADMIN_USER</code> / <code>BUFF_DASHBOARD_ADMIN_PASSWORD</code>.
+              Run <code>nuvira dashboard</code> once, or set <code>NUVIRA_DASHBOARD_ADMIN_USER</code> / <code>NUVIRA_DASHBOARD_ADMIN_PASSWORD</code>.
             </p>
           ) : null}
         </div>
@@ -2796,10 +2838,29 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
 
           {error ? <div className="admin-row-msg admin-row-msg-err">{error}</div> : null}
 
-          {stillRunning ? (
+          {/*
+            * A turn HOLDING FOR AN ANSWER is not a turn that is working.
+            *
+            * MEASURED (2026-10-14, traces `…-wpm352` / `…-n1v1ue`): the agent asked a
+            * clarifying question, the turn sat in `ask_user` waiting for the reply —
+            * 5m02s in the first, cancelled at the end — and this notice told the user
+            * "this is a long-running turn … the answer will appear here by itself",
+            * i.e. to keep waiting for something that was waiting for THEM. The same
+            * sentence appeared for a turn that had already finished in 12s. The two
+            * states need two sentences: one that says the server is busy, and one
+            * that says nothing is happening until a choice is made.
+            */}
+          {stillRunning && pendingQuestion ? (
             <div className="admin-row-msg chat-routing-notice">
-              ⏳ Still working on the server — {formatElapsed(waitElapsedMs)} elapsed. This is a long-running turn, not a
-              failure: the answer will appear here by itself when it lands, and you can close this page and come back.
+              ❓ Waiting for <strong>your</strong> answer — choose one of the options above and the turn continues
+              where it stopped. Nothing is stuck: the server is holding this turn open for you, and the agent has
+              not been told anything yet (its own words: it asked instead of guessing).
+            </div>
+          ) : stillRunning ? (
+            <div className="admin-row-msg chat-routing-notice">
+              ⏳ Still working on the server — {formatElapsed(waitElapsedMs)} elapsed on this turn, counted from when it
+              started (not from when this page stopped waiting for the reply). This is a long-running turn, not a failure:
+              the answer will appear here by itself when it lands, and you can close this page and come back.
             </div>
           ) : null}
 
@@ -3170,7 +3231,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
           </form>
           <p className="admin-hint">
             Each message runs the full agent loop in the dashboard process (same engine as{' '}
-            <code>buff chat "&lt;prompt&gt;"</code>) — the provider API keys must be configured in the dashboard
+            <code>nuvira chat "&lt;prompt&gt;"</code>) — the provider API keys must be configured in the dashboard
             process. Clarifications (<code>ask_user</code>) appear as a question card here — choose an answer or
             skip (best judgment).
           </p>

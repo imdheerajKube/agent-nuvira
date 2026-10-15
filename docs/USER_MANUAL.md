@@ -364,6 +364,30 @@ multiplexes hundreds of upstream providers behind one OpenAI-compatible endpoint
 each step, and OmniRoute only decides which upstream serves a request that has *already been
 addressed to it*. Adding it does not turn off agent-nuvira's routing.
 
+**How the two fit together — four layers, in the order they matter**
+
+1. **One provider in the catalog.** `omniroute` is a keyless, OpenAI-compatible entry with
+   `baseUrl http://127.0.0.1:20128/v1` (override with `providers.omniroute.baseUrl`) and
+   `defaultModel: 'auto'`, plus the gateway's own combos `auto/coding`, `auto/fast`, `auto/cheap` and
+   `auto/offline`. Agent-nuvira holds **no** upstream key — the gateway does.
+2. **Lifecycle control**, because installing it otherwise leaves you with a foreground process and
+   `Ctrl+C`. `src/cli/omniroute-control.ts` is the single implementation behind `nuvira omniroute …`
+   and the Admin page, so "is it up?" has one answer everywhere. Reachability is a real HTTP probe of
+   the gateway's `/v1/models`, and a **401/403 counts as UP** — an auth-gated gateway is running, not
+   down. `start` spawns it detached and waits for it to answer; `stop` kills the process holding the
+   port first, then a command-line match (a gateway on a custom port).
+3. **Routing rules.** The On/Off switch (`providers.omniroute.enabled`) decides whether the
+   *automatic* pool may pick it; an explicit `--provider` pin reaches it either way, because a pin is
+   a user decision rather than routing. A keyless provider other than `local` only joins the auto
+   pool when it is explicitly configured or the registry has already verified a pair for it — a
+   gateway that is not running must never out-rank a working local model. And `-p omniroute -m auto`
+   is resolved as **the gateway's own combo** (`isProviderOwnAuto`), not agent-nuvira's auto-route;
+   that collision is why a pinned run used to be re-routed and never reach the provider that was
+   named.
+4. **Accounting, honestly.** The gateway holds the credentials, so nuvira cannot see what the
+   upstream charged. Spend through OmniRoute is recorded as **passthrough**: zero attributable
+   dollars, claimed as neither spend nor saving (§5, Cost).
+
 **Set it up**
 
 1. Install and start it: `npm install -g omniroute`, then `omniroute` — it serves a dashboard and the
@@ -396,6 +420,41 @@ addressed to it*. Adding it does not turn off agent-nuvira's routing.
   **OmniRoute's own auto**, not agent-nuvira's auto-route — the two used to collide.
 - Turn it On in the dashboard and it can also be chosen by agent-nuvira's router like any provider.
 - Add `NUVIRA_STRICT_MODEL=1` to guarantee the run stays on the pinned pair.
+
+**Verify your own install.** Every line below is a real check with a real failure mode — run them in
+order and you know exactly which layer is wrong:
+
+```bash
+nuvira omniroute status                          # reachable? who holds the port?
+nuvira config get providers.omniroute.enabled    # true = the automatic pool may pick it
+omniroute providers list                         # one row per upstream connection
+omniroute providers test-all                     # do those upstreams actually answer?
+```
+
+- `nuvira omniroute status` → **“Running — the endpoint is auth-gated (HTTP 401)” is UP.** Only a
+  connection failure or a timeout means down, and the line below it names the PID holding the port.
+- The gateway's own state lives in `~/.omniroute/`: `storage.sqlite` (connections and usage),
+  `logs/application/app.log` (startup sequence plus per-request combo traces),
+  `server/crash.log` (restart lines such as `Server crashed 2 times in <30s>`) and
+  `supervisor/.pid`. When nuvira says "started but it did not answer", that is where the reason is.
+
+**Troubleshooting**
+
+| Symptom | What it means, and the fix |
+|---|---|
+| `status` says *Not reachable* | Nothing is listening on 20128. `nuvira omniroute start`, or install it (`npm install -g omniroute`). |
+| `status` is fine, a pinned run still fails | The gateway is up but its combos have nothing to route to: `omniroute providers list` is empty or a connection is not `active`. Add one with `omniroute providers add <provider> --credential-stdin`. |
+| It starts and dies seconds later | Read `~/.omniroute/server/crash.log` and the tail of `~/.omniroute/logs/application/app.log` — the gateway supervises itself and records the restart count. nuvira does not manage its internals. |
+| Pinning works, auto routing never picks it | By design, until both hold: the switch is on (`providers.omniroute.enabled`), **and** either the provider is configured or a pair of it has been verified — a keyless gateway is not trusted just for being keyless. |
+| `-m auto` did not pin the gateway | With a concrete `--provider`, `-m auto` is the *gateway's* combo; use it together with `--provider omniroute`, or turn `NUVIRA_STRICT_MODEL=1` on. |
+
+**What it cannot tell you.** Two honest limits, both measured: (1) it is an aggregation gateway, so a
+quality number on `omniroute/auto` describes the gateway *plus its own internal failover across the
+upstreams it holds*, not one model — the seeded-bug suite landed both `omniroute/auto` and
+`omniroute/auto/smart` at 94% composite (found 6/7, fixed 7/7, false-success 0/7) and reproduced the
+same single miss on a repeat; and (2) spend through it is `passthrough`, so it appears in no billed
+and no saving figure. nuvira starts, stops and probes the gateway; installing it, upgrading it and
+adding its upstream accounts stay the gateway's own job.
 
 ### When a build fails for a known toolchain reason
 

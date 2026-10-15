@@ -95,7 +95,7 @@ export async function probeService(
           await request('https://api.stability.ai/v1/user/account', { headers: { Authorization: `Bearer ${values.STABILITY_API_KEY ?? ''}` } }, fetchFn),
         );
       case 'image-comfyui':
-        return classifyReachable(await request(values.BUFF_IMAGE_API_URL ?? '', { method: 'GET' }, fetchFn));
+        return classifyReachable(await request(values.NUVIRA_IMAGE_API_URL ?? '', { method: 'GET' }, fetchFn));
 
       // ── Video ────────────────────────────────────────────────────────────
       case 'video-fal':

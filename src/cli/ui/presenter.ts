@@ -57,7 +57,13 @@ function resolve(opts: PresenterOptions): Resolved {
   const env = opts.env ?? process.env;
   const stream = opts.stream ?? process.stdout;
   const { name, theme } = resolveTheme(env);
-  const width = opts.width ?? stream.columns ?? 80;
+  // A terminal that does not KNOW its size reports `columns` as 0 (or undefined),
+  // and `?? 80` only catches the undefined half: a 0 flowed all the way into the
+  // renderer, where `Painter` floors the width at 20 — measured on a PTY with no
+  // window size, a code box came out 14 columns wide with its lines cut mid-token
+  // ("const cap = 20 / 0;"). A width that cannot be read is 80, not 20.
+  const columns = opts.width ?? stream.columns;
+  const width = typeof columns === 'number' && columns > 0 ? columns : 80;
   const rich = shouldUseRichUi(opts);
   const color = opts.color ?? (name !== 'none' && !('NO_COLOR' in env));
   return { rich, theme: opts.theme ?? theme, themeName: name, width, color, stream };
@@ -145,6 +151,133 @@ export interface StreamMeta {
   header?: string;
   headerColor?: ThemeRole;
   note?: string;
+}
+
+/** The live seams a RUNNING turn exposes to a view (all optional). */
+export interface RunStreamOverrides extends CardSinkOverrides {
+  /** Verbatim model tokens: the answer as it is written. */
+  onToken?: (token: string) => void;
+  /** The step the run is on — the executor's own progress line. */
+  onProgress?: (line: string) => void;
+}
+
+/**
+ * The live EXECUTION view — what the turn is doing, while it does it.
+ *
+ * Wraps {@link AnswerStream} with the seams a whole turn has (not just the final
+ * answer):
+ *
+ *   - `start()` mounts the frame IMMEDIATELY with a `thinking…` note, so the
+ *     seconds spent waiting for the first token are visible instead of looking
+ *     like a hang;
+ *   - `onToken` streams the answer text as it is written (`begin()` on the first
+ *     token, exactly like the chat surfaces' live preview);
+ *   - `onToolCall` / `onGitDiff` / the shell bus archive a CARD per completed
+ *     call, and put the RUNNING call in the note (`⚙ edit_file …`) so the
+ *     execution half is visible too, not only the prose;
+ *   - `onProgress` shows the executor's own progress line in the same note slot;
+ *   - `commit(content)` unmounts the transient frame and prints the FINAL answer
+ *     once. The live frame is a preview of a stream that may be discarded by the
+ *     engine (a rejected step, a repair); the authoritative text is what the
+ *     caller passes here, so it can never be printed twice.
+ *
+ * Off a real terminal (`pipes`, CI, `--json-events`, `NUVIRA_UI=plain`) this is
+ * INERT: no overrides, no frame, and `commit` falls through to `presentAnswer` —
+ * the exact bytes those consumers saw before this existed.
+ */
+export interface RunStream {
+  overrides: RunStreamOverrides;
+  /** Mount the live view now, with a note (rich output only). */
+  start: (note?: string) => void;
+  /** Unmount the live view and print the FINAL answer exactly once. */
+  commit: (content: string) => void;
+  /** Detach the shell subscription and leave the terminal clean. */
+  stop: () => void;
+}
+
+/** The note shown while the model is working and nothing has arrived yet. */
+export const THINKING_NOTE = 'thinking…';
+
+export function createRunStream(meta: StreamMeta = {}, opts: PresenterOptions = {}): RunStream {
+  if (!shouldUseRichUi(opts)) {
+    return {
+      overrides: {},
+      start: () => {},
+      // Byte-identical to the pre-layer path: the plain answer, written the way
+      // this CLI has always written it.
+      commit: (content) => {
+        presentAnswer(content, opts);
+      },
+      stop: () => {},
+    };
+  }
+
+  const stream = new AnswerStream(meta, opts);
+  let started = false;
+  let stopped = false;
+  const detachShell = attachShellCards((card) => stream.card(card));
+
+  /** Show a note without losing the frame (mounting it if it is not up yet). */
+  const noteFor = (note: string | undefined): void => {
+    if (!started) {
+      started = true;
+      stream.begin({ ...meta, ...(note === undefined ? {} : { note }) });
+      return;
+    }
+    stream.setNote(note);
+  };
+
+  return {
+    overrides: {
+      onToken: (token) => {
+        if (!started) {
+          started = true;
+          stream.begin(meta);
+        }
+        // The text is the signal now — a stale `thinking…` beside streaming
+        // prose reads as a hang that is not happening.
+        stream.setNote(undefined);
+        stream.append(token);
+      },
+      onProgress: (line) => noteFor(line),
+      onToolCall: (phase, info) => {
+        if (phase === 'started') {
+          // The step's preamble is not the answer: clear it so the preview shows
+          // the call that is actually running (same rule as the chat REPL).
+          if (started) stream.reset();
+          noteFor(`⚙ ${info.tool} …`);
+          return;
+        }
+        if (started) stream.setNote(undefined);
+        stream.card(
+          toolCallCard({
+            tool: info.tool,
+            ok: info.ok,
+            error: info.error,
+            result: info.result,
+            durationMs: info.durationMs,
+            args: info.args,
+          }),
+        );
+      },
+      onGitDiff: (payload) => stream.card(gitDiffCard(payload)),
+    },
+    start: (note?: string) => noteFor(note ?? THINKING_NOTE),
+    commit: (content) => {
+      // Unmount WITHOUT archiving: the preview is not authoritative, and the
+      // caller's sanitized answer is written right below.
+      stream.finish({ archive: false });
+      presentAnswer(content, opts);
+    },
+    stop: () => {
+      // Idempotent on purpose: a caller stops on the failure path AND in a
+      // `finally`, and detaching the shell bus twice must not be a problem.
+      if (stopped) return;
+      stopped = true;
+      detachShell();
+      stream.finish({ archive: false });
+    },
+  };
 }
 
 /**

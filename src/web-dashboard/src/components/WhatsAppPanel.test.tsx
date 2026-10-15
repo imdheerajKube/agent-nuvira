@@ -122,7 +122,7 @@ describe('WhatsAppPanel', () => {
     // The clarity note — send-by-name ≠ trigger access.
     expect(screen.getByText(/let these numbers trigger the agent/)).toBeTruthy();
     expect(screen.getByText(/verified list/)).toBeTruthy();
-    expect(screen.getByText(/buff config gateway allow whatsapp user/)).toBeTruthy();
+    expect(screen.getByText(/nuvira config gateway allow whatsapp user/)).toBeTruthy();
   });
 
   it('shows an empty state when no contacts are mapped', async () => {

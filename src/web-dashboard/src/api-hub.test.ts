@@ -39,8 +39,8 @@ const HUB_PAYLOAD: HubData = {
     aliases: [],
     reachable: [],
     platforms: [
-      { platform: 'email', label: 'Email (SMTP)', configured: false, envVars: ['BUFF_SMTP_HOST', 'BUFF_SMTP_USER'] },
-      { platform: 'signal', label: 'Signal (signal-cli-rest-api)', configured: true, envVars: ['BUFF_SIGNAL_ACCOUNT'] },
+      { platform: 'email', label: 'Email (SMTP)', configured: false, envVars: ['NUVIRA_SMTP_HOST', 'NUVIRA_SMTP_USER'] },
+      { platform: 'signal', label: 'Signal (signal-cli-rest-api)', configured: true, envVars: ['NUVIRA_SIGNAL_ACCOUNT'] },
     ],
     policies: {},
     contacts: [],

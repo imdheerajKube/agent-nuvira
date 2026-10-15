@@ -2,7 +2,7 @@
  * Unit tests for CLIManager.getQuotaStatus().
  *
  * Fixture-driven: writes real quota-ledger.json / quota-events.jsonl files
- * into a temp dir and points BUFF_MEMORY_DIR at it, then asserts the reader
+ * into a temp dir and points NUVIRA_MEMORY_DIR at it, then asserts the reader
  * parses them into the QuotaStatusInfo shape the QuotaPanel renders.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -35,11 +35,11 @@ describe('CLIManager.getQuotaStatus', () => {
     fixtureDir = mkdtempSync(join(tmpdir(), 'buff-quota-test-'));
     memoryDir = join(fixtureDir, 'memory');
     mkdirSync(memoryDir, { recursive: true });
-    process.env.BUFF_MEMORY_DIR = memoryDir;
+    process.env.NUVIRA_MEMORY_DIR = memoryDir;
   });
 
   afterEach(() => {
-    delete process.env.BUFF_MEMORY_DIR;
+    delete process.env.NUVIRA_MEMORY_DIR;
     rmSync(fixtureDir, { recursive: true, force: true });
   });
 

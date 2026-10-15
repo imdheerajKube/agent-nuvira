@@ -90,8 +90,8 @@ function EmptyNote() {
       background: 'var(--bg-primary)', border: '1px dashed var(--border)', borderRadius: 10,
       padding: '18px 20px', color: 'var(--text-secondary)', fontSize: 13, textAlign: 'center',
     }}>
-      📊 No routing data yet — run <code style={{ color: 'var(--accent-blue)' }}>buff benchmark</code> to populate
-      provider quality scores, or use Auto routing (<code style={{ color: 'var(--accent-blue)' }}>buff model switch auto</code>)
+      📊 No routing data yet — run <code style={{ color: 'var(--accent-blue)' }}>nuvira benchmark</code> to populate
+      provider quality scores, or use Auto routing (<code style={{ color: 'var(--accent-blue)' }}>nuvira model switch auto</code>)
       to build per-agent best-model stats over time.
     </div>
   );
@@ -367,7 +367,7 @@ function ProviderQualitySection({ routing }: { routing: RoutingInsights }) {
     <SectionCard
       icon="📈"
       title="Provider Benchmark Quality"
-      subtitle="Measured from your own `buff benchmark` runs — blended into Auto routing decisions"
+      subtitle="Measured from your own `nuvira benchmark` runs — blended into Auto routing decisions"
     >
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -499,7 +499,7 @@ function BanditSection({ bandit }: { bandit: BanditInsights }) {
 
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12 }}>
         Cold-start Beta(1,1) behaves like the heuristic router until outcomes accumulate.
-        Enable learning with <code style={{ color: 'var(--accent-blue)' }}>buff config set routing.bandit true</code>.
+        Enable learning with <code style={{ color: 'var(--accent-blue)' }}>nuvira config set routing.bandit true</code>.
       </div>
     </SectionCard>
   );
@@ -682,7 +682,7 @@ function MlSection({ ml }: { ml: MlInsights }) {
       </div>
 
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12 }}>
-        Enabled with <code style={{ color: 'var(--accent-blue)' }}>buff config set routing.mlRouter true</code> — the factor only
+        Enabled with <code style={{ color: 'var(--accent-blue)' }}>nuvira config set routing.mlRouter true</code> — the factor only
         adjusts scores when the provider has ≥ 5 similar-task wins (cold start is neutral).
       </div>
     </SectionCard>
@@ -747,7 +747,7 @@ function BestModelsSection({ routing }: { routing: RoutingInsights }) {
 
 function RetrievalSection({ retrieval }: { retrieval: RetrievalInsights }) {
   // Render when there's any retrieval activity OR a non-empty repo index — the
-  // index may exist even before the first call (user ran `buff retrieval index`).
+  // index may exist even before the first call (user ran `nuvira retrieval index`).
   if (!retrieval.enabled && retrieval.repoChunks === 0) return null;
 
   const saved = retrieval.totalSavedTokens ?? 0;
@@ -807,9 +807,9 @@ function RetrievalSection({ retrieval }: { retrieval: RetrievalInsights }) {
       )}
 
       <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-        Pre-index your repo with <code style={{ color: 'var(--accent-blue)' }}>buff retrieval index &lt;dir&gt;</code>, query it with{' '}
-        <code style={{ color: 'var(--accent-blue)' }}>buff retrieval query "&lt;question&gt;"</code>, and see the same stats with{' '}
-        <code style={{ color: 'var(--accent-blue)' }}>buff retrieval stats</code>.
+        Pre-index your repo with <code style={{ color: 'var(--accent-blue)' }}>nuvira retrieval index &lt;dir&gt;</code>, query it with{' '}
+        <code style={{ color: 'var(--accent-blue)' }}>nuvira retrieval query "&lt;question&gt;"</code>, and see the same stats with{' '}
+        <code style={{ color: 'var(--accent-blue)' }}>nuvira retrieval stats</code>.
       </div>
     </SectionCard>
   );
@@ -933,7 +933,7 @@ function QuotaSection({ quota }: { quota: QuotaInsights }) {
       </div>
 
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12 }}>
-        Configure limits with <code style={{ color: 'var(--accent-blue)' }}>buff config set routing.quota.gemini.requestsPerWindow 1500</code>;
+        Configure limits with <code style={{ color: 'var(--accent-blue)' }}>nuvira config set routing.quota.gemini.requestsPerWindow 1500</code>;
         the ledger always tracks usage but only parks when limits are set.
       </div>
 
@@ -1009,7 +1009,7 @@ function QuotaSection({ quota }: { quota: QuotaInsights }) {
 
 // ─── Admin Governance Policy (P6 M6.5) ─────────────────────────────────────
 // The allow/deny + cap rules the Auto router enforces as HARD constraints on
-// every pick — mirrored from `buff admin policy` so policy is visible exactly
+// every pick — mirrored from `nuvira admin policy` so policy is visible exactly
 // where routing decisions are made (violating providers are eliminated, never
 // just scored lower).
 
@@ -1039,9 +1039,9 @@ export function GovernanceSection({ governance }: { governance: GovernanceInsigh
         <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
           <span style={{ color: 'var(--accent-green)' }}>Fully permissive</span> — no governance rules active; any provider × model is eligible.
           <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}>
-            Add rules with <code style={{ color: 'var(--accent-blue)' }}>buff admin allow &lt;provider&gt;</code> ·{' '}
-            <code style={{ color: 'var(--accent-blue)' }}>buff admin deny &lt;provider&gt;</code> ·{' '}
-            <code style={{ color: 'var(--accent-blue)' }}>buff admin max-cost &lt;usd&gt;</code>
+            Add rules with <code style={{ color: 'var(--accent-blue)' }}>nuvira admin allow &lt;provider&gt;</code> ·{' '}
+            <code style={{ color: 'var(--accent-blue)' }}>nuvira admin deny &lt;provider&gt;</code> ·{' '}
+            <code style={{ color: 'var(--accent-blue)' }}>nuvira admin max-cost &lt;usd&gt;</code>
           </div>
         </div>
       </SectionCard>
@@ -1079,7 +1079,7 @@ export function GovernanceSection({ governance }: { governance: GovernanceInsigh
         )}
       </div>
       <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-        Managed via <code style={{ color: 'var(--accent-blue)' }}>buff admin</code> — the same policy the CLI&rsquo;s{' '}
+        Managed via <code style={{ color: 'var(--accent-blue)' }}>nuvira admin</code> — the same policy the CLI&rsquo;s{' '}
         <code>model explain</code> surfaces as governance-blocked.
       </div>
     </SectionCard>
@@ -1088,8 +1088,8 @@ export function GovernanceSection({ governance }: { governance: GovernanceInsigh
 
 /**
  * P6 M6.1 RBAC identity card — who is viewing, what role they hold, and the
- * full user→role map from ~/.buff/rbac.json (mirrors `buff admin whoami` /
- * `buff admin role list`). Legacy single-user mode (no roles assigned) shows
+ * full user→role map from ~/.nuvira/rbac.json (mirrors `nuvira admin whoami` /
+ * `nuvira admin role list`). Legacy single-user mode (no roles assigned) shows
  * the permissive notice; once roles exist, policy writes require admin.
  */
 export function RbacSection({ rbac }: { rbac: RbacInsights }) {
@@ -1099,7 +1099,7 @@ export function RbacSection({ rbac }: { rbac: RbacInsights }) {
     <SectionCard
       icon="🔐"
       title="RBAC Identity"
-      subtitle="Who may write policy — role file ~/.buff/rbac.json"
+      subtitle="Who may write policy — role file ~/.nuvira/rbac.json"
     >
       <div style={{ fontSize: 13, marginBottom: 10 }}>
         <span style={{ color: 'var(--text-secondary)' }}>You are </span>
@@ -1115,7 +1115,7 @@ export function RbacSection({ rbac }: { rbac: RbacInsights }) {
         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
           <span style={{ color: 'var(--accent-green)' }}>Legacy single-user mode</span> — no roles assigned; policy writes are
           open to every user. Assign roles with{' '}
-          <code style={{ color: 'var(--accent-blue)' }}>buff admin role add &lt;you&gt; admin</code>.
+          <code style={{ color: 'var(--accent-blue)' }}>nuvira admin role add &lt;you&gt; admin</code>.
         </div>
       ) : (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -1157,7 +1157,7 @@ export default function RoutingInsightsPanel({ data }: { data: DashboardData | n
       <p className="section-description">
         Which providers and models the Auto router prefers — from real pricing, benchmark
         quality, per-agent success stats, and the Thompson-sampling bandit. Run{' '}
-        <code>buff benchmark</code> and use Auto routing to build this up over time.
+        <code>nuvira benchmark</code> and use Auto routing to build this up over time.
       </p>
 
       {!hasAny && !hasUsage && !hasHistory && !hasBandit && !hasPromotion && !hasMl && !hasQuota && !hasRetrieval && !hasGovernance && !hasRbac ? (

@@ -13,7 +13,7 @@
  * returned it as a successful synthesis with duration/voice/text metadata. Anything
  * downstream — a gateway that sends the file, an agent that reports "the audio is
  * ready" — then acted on silence that looked like speech. Silence is now an
- * explicit opt-in (BUFF_NEUTTS_ALLOW_SILENT) and never the default.
+ * explicit opt-in (NUVIRA_NEUTTS_ALLOW_SILENT) and never the default.
  *
  * See TOOL_TRUTHFULNESS_TRACKER.md finding #5.
  */
@@ -28,7 +28,7 @@ import { refusalFields, type ToolRefusal } from './tool-refusal.js';
 
 /**
  * Whether a silent placeholder WAV may stand in for speech. Opt-in only
- * (`BUFF_NEUTTS_ALLOW_SILENT=1`) — the point of the refusal is that silence must
+ * (`NUVIRA_NEUTTS_ALLOW_SILENT=1`) — the point of the refusal is that silence must
  * never be mistaken for synthesis. Exported for tests.
  */
 export function allowSilentFallback(): boolean {
@@ -56,7 +56,7 @@ export interface SynthesisResult {
   ok: boolean;
   /**
    * True when the audio is a silent placeholder rather than synthesised speech.
-   * Only ever set behind the BUFF_NEUTTS_ALLOW_SILENT opt-in.
+   * Only ever set behind the NUVIRA_NEUTTS_ALLOW_SILENT opt-in.
    */
   silent?: boolean;
   code?: ToolRefusal['code'];
@@ -105,7 +105,7 @@ export class NeuTTSSynthesizer {
     //    it — a silent WAV reported as a successful synthesis is a lie the caller
     //    cannot detect, so it is never the default.
     if (allowSilentFallback()) {
-      logger.warn(`[neutts] writing SILENT placeholder audio (BUFF_NEUTTS_ALLOW_SILENT is set) — ${failureReason}`);
+      logger.warn(`[neutts] writing SILENT placeholder audio (NUVIRA_NEUTTS_ALLOW_SILENT is set) — ${failureReason}`);
       return this.synthesizeLocal(text, voice, audioPath, options);
     }
 

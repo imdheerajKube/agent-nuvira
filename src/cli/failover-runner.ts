@@ -140,7 +140,7 @@ export async function runSingleShotAuto(opts: SingleShotAutoOptions): Promise<st
     try {
       const resolved = resolveProvider(opts.configManager, candidateType);
       if (!(await resolved.provider.isAvailable())) {
-        logger.warn(`   ⚠️ ${candidateType} is not available — trying the next auto candidate...`);
+        logger.debug(`   ⚠️ ${candidateType} is not available — trying the next auto candidate...`);
         continue;
       }
       resolvedProviderName = resolved.provider.name;
@@ -162,7 +162,7 @@ export async function runSingleShotAuto(opts: SingleShotAutoOptions): Promise<st
       lastError = err;
       opts.recordFailure(candidateType, candidateModel, err);
       const msg = err instanceof Error ? err.message : String(err);
-      logger.warn(`   ⚠️ ${candidateType} failed to initialize (${msg.slice(0, 120)}) — trying the next auto candidate...`);
+      logger.debug(`   ⚠️ ${candidateType} failed to initialize (${msg.slice(0, 120)}) — trying the next auto candidate...`);
       continue;
     }
 
@@ -190,7 +190,7 @@ export async function runSingleShotAuto(opts: SingleShotAutoOptions): Promise<st
         // DIFFERENT model instead of handing the user nothing.
         assertUsableModelResponse(result);
         if (candidateType !== first.type) {
-          logger.success(`✅ Auto failover: answered from ${resolvedProviderName} (${candidateModel}) after ${first.type} failed`);
+          logger.debug(`✅ Auto failover: answered from ${resolvedProviderName} (${candidateModel}) after ${first.type} failed`);
           // Keep the audit trail accurate: the initial route was recorded by
           // the caller's route(), but the actual answer came from this
           // candidate.
@@ -274,7 +274,7 @@ export async function runSingleShotAuto(opts: SingleShotAutoOptions): Promise<st
       const choice = await promptFailoverChoice(candidateType, nextProviderName, nextModel);
       if (choice === 'manual') throw lastError;
     }
-    logger.warn(`   ⚠️ ${candidateType} failed (${msg.slice(0, 160)}) — trying the next auto candidate...`);
+    logger.debug(`   ⚠️ ${candidateType} failed (${msg.slice(0, 160)}) — trying the next auto candidate...`);
   }
 
   throw lastError;

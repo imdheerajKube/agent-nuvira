@@ -105,6 +105,22 @@ export function stepDigest(thread: readonly unknown[], schemas: readonly unknown
   return createHash('sha256').update(stableJson({ thread, schemas })).digest('hex');
 }
 
+/**
+ * A one-line SIZE summary of the same input `stepDigest` hashes.
+ *
+ * Diagnostics only — it is stored beside a recorded step and printed when a step
+ * misses because its digest changed, so "its input changed" arrives as
+ * "its input changed (was 4 msgs/980 chars/12 tools, now 5 msgs/1234 chars/12
+ * tools)". Never compared: the digest decides.
+ */
+export function stepShape(thread: readonly unknown[], schemas: readonly unknown[]): string {
+  const chars = thread.reduce<number>((total, message) => {
+    const content = (message as { content?: unknown } | null)?.content;
+    return total + (typeof content === 'string' ? content.length : 0);
+  }, 0);
+  return `${thread.length} msgs/${chars} chars/${schemas.length} tools`;
+}
+
 /** JSON with object keys sorted, so two equal values always encode identically. */
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
@@ -123,6 +139,8 @@ interface StepEntry {
   key: string;
   digest: string;
   response: ToolCallResponse;
+  /** Diagnostics only: the size of the input at record time (see `stepShape`). */
+  shape?: string;
 }
 
 /** A record on disk: the steps of one ask, in this directory. */
@@ -230,12 +248,32 @@ export function resolveRecordIdFor(goal: string, cwd: string): string {
  * numbers are reported is `closeResume`'s job.
  */
 export interface StepReplay {
-  /** The recorded answer for this exact input, or null (with a reason recorded). */
-  replay(key: string, digest: string): ToolCallResponse | null;
+  /**
+   * The recorded answer for this exact input, or null (with a reason recorded).
+   *
+   * `shape` is the optional {@link stepShape} of the input, carried ONLY so a
+   * mismatch can say HOW the input changed. It never takes part in the
+   * comparison: the digest is the verdict, and a shape that differs while the
+   * digest matches is not a miss.
+   */
+  replay(key: string, digest: string, shape?: string): ToolCallResponse | null;
   /** File an answer this run paid for, so the next one can replay it. */
-  record(key: string, digest: string, response: ToolCallResponse): void;
+  record(key: string, digest: string, response: ToolCallResponse, shape?: string): void;
   /** What the RECORD held, said before any step was attempted. */
   openNotice(): string;
+  /**
+   * Will this ledger SERVE a step — replay enabled AND the record holds one?
+   *
+   * The caller's answer to "which continuity mechanism applies" (WS5's session
+   * store rehydrates a transcript for the same ask — see
+   * `learning/session-store.ts`). Both mechanisms resume the same thing and only
+   * one can win: this ledger replays EXACT recorded inputs, for free, when its
+   * record covers the thread; the session transcript carries work this ledger
+   * never recorded. So the ledger wins when it CAN (this returns true), and the
+   * transcript is the fallback when it cannot — a fresh ask with no record, or a
+   * checkpoint-only run that is writing forward, not resuming.
+   */
+  willServe(): boolean;
 }
 
 interface LedgerState {
@@ -248,6 +286,19 @@ interface LedgerState {
   modelCalls: number;
   /** Why a step missed, counted by reason, in the order they were first seen. */
   misses: Map<string, number>;
+  /**
+   * The inputs that ALMOST matched: key → the recorded/current {@link stepShape},
+   * for a miss whose reason was a changed digest.
+   *
+   * Intermittent resume failures used to be undebuggable from a log: "its input
+   * changed" names neither what changed nor by how much, so a flake that appears
+   * under load in CI and never locally (measured 2026-10-14: twelve consecutive
+   * green runs, six of them under a full-suite load) could only be chased by
+   * re-running it. The shapes are the thread/schema sizes on each side, which is
+   * enough to tell a grown thread (a tool result this run has and that one did
+   * not) from a different toolset.
+   */
+  shapeMisses: Map<string, string>;
   /**
    * WHICH step missed, and why — key to reason, in the order they were seen.
    *
@@ -321,6 +372,7 @@ export function openResume(input: {
     modelCalls: 0,
     misses: new Map(),
     missed: new Map(),
+    shapeMisses: new Map(),
     replayEnabled,
     // Checkpoint-only: seed the staged map with what the record already holds so
     // `closeResume` MERGES this run's steps into it instead of replacing a
@@ -330,7 +382,7 @@ export function openResume(input: {
   const byKey = new Map(prior.map((entry) => [entry.key, entry]));
 
   const ledger: StepReplay = {
-    replay(key, digest) {
+    replay(key, digest, shape) {
       if (!state.replayEnabled) {
         // Checkpoint-only: nothing is reused this run (see `replayEnabled`).
         countMiss(state, NOT_REQUESTED_REASON, key);
@@ -343,6 +395,13 @@ export function openResume(input: {
       }
       if (entry.digest !== digest) {
         countMiss(state, CHANGED_REASON, key);
+        // WHY the input changed, in sizes: the digest is the verdict, this is the
+        // evidence a reader needs to act on it (see `shapeMisses`). Omitted when
+        // either side has no shape to report rather than printed as "was
+        // undefined", which reads like a fact about the input.
+        if (shape !== undefined && entry.shape !== undefined) {
+          state.shapeMisses.set(key, `was ${entry.shape}, now ${shape}`);
+        }
         return null;
       }
       if (isEmptyResponse(entry.response)) {
@@ -355,9 +414,12 @@ export function openResume(input: {
       state.staged.set(key, entry);
       return entry.response;
     },
-    record(key, digest, response) {
+    record(key, digest, response, shape) {
       state.modelCalls += 1;
-      state.staged.set(key, { key, digest, response });
+      state.staged.set(key, { key, digest, response, ...(shape === undefined ? {} : { shape }) });
+    },
+    willServe() {
+      return state.replayEnabled && state.loaded > 0;
     },
     openNotice() {
       if (!state.replayEnabled) {
@@ -448,7 +510,10 @@ export function closeResume(resume: OpenResume, input: { goal: string; cwd: stri
     // And WHICH step, because "1 step missed" does not say which, and the step is
     // what points at the change (a step whose thread carried a tool result is a
     // different investigation from one that never existed).
-    const steps = [...state.missed.entries()].map(([key, reason]) => `${key} (${reason})`);
+    const steps = [...state.missed.entries()].map(([key, reason]) => {
+      const shape = state.shapeMisses.get(key);
+      return `${key} (${reason}${shape ? `: ${shape}` : ''})`;
+    });
     lines.push(`     missed: ${steps.join(', ')}`);
   }
   if (!saved) {

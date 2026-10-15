@@ -17,7 +17,7 @@ import type { AdminChecksData, AdminServiceRow } from '../types';
 
 const VALID_PAYLOAD: AdminChecksData = {
   system: [
-    { name: 'Config Directory', status: 'pass', message: '~/.buff/ exists', detail: '/Users/tester/.buff', fix: undefined },
+    { name: 'Config Directory', status: 'pass', message: '~/.nuvira/ exists', detail: '/Users/tester/.buff', fix: undefined },
     { name: 'Connectivity', status: 'warn', message: 'Slow probe', detail: '312ms to groq', fix: 'Check network' },
     { name: 'Docker', status: 'fail', message: 'not running', detail: undefined, fix: 'Start Docker Desktop' },
   ],

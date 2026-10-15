@@ -43,7 +43,7 @@ describe('probeService', () => {
 
   it('treats a local endpoint 4xx as reachable (it answered)', async () => {
     const fetchFn = (async () => res(405)) as unknown as typeof fetch;
-    const out = await probeService(comfyui, { BUFF_IMAGE_API_URL: 'http://127.0.0.1:8188' }, fetchFn);
+    const out = await probeService(comfyui, { NUVIRA_IMAGE_API_URL: 'http://127.0.0.1:8188' }, fetchFn);
     expect(out.ok).toBe(true);
   });
 

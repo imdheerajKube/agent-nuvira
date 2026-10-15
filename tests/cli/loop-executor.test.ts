@@ -134,6 +134,197 @@ describe('loop executor — happy path (native transport)', () => {
     expect(called).toBeDefined();
     expect(called?.ok).toBe(true);
   });
+
+  /**
+   * E3b — the next steps the model offered must reach the SURFACE. The loop
+   * collected `suggest_followups` into its own sink and the result stopped there,
+   * so `nuvira execute` offered only its generic menu and the model's suggestions
+   * were unreachable.
+   */
+  it('carries the model\'s suggest_followups back to the caller', async () => {
+    const provider = scriptedProvider({
+      native: true,
+      responses: [
+        {
+          content: 'The limiter is fixed.',
+          toolCalls: [
+            {
+              id: 'c1',
+              name: 'suggest_followups',
+              arguments: {
+                followups: [
+                  { prompt: 'Add a test for the limiter', label: 'Add a test' },
+                  { prompt: 'Explain the backpressure trade-off' },
+                ],
+              },
+            },
+          ],
+        },
+        { content: 'The limiter is fixed.', toolCalls: [] },
+      ],
+    });
+    vi.doMock('../../src/cli/router.js', () => ({
+      resolveProvider: () => ({ type: 'scripted', provider }),
+    }));
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    // A DISTINCT goal per case on purpose: the engine answers from its response
+    // cache keyed on the ask, so two cases sharing a goal would serve the first
+    // case's turn to the second and assert on the wrong turn.
+    const result = await runLoopExecutor('confine the write limiter', new ConfigManager(), {
+      provider: 'scripted',
+      skipProjectContext: true,
+      quiet: true,
+    });
+
+    expect(result.followups?.map((f) => f.prompt)).toEqual([
+      'Add a test for the limiter',
+      'Explain the backpressure trade-off',
+    ]);
+  });
+
+  it('recovers the suggestions when the model wrote them as a prose list', async () => {
+    const provider = scriptedProvider({
+      native: true,
+      responses: [
+        {
+          content: [
+            'The limiter is fixed.',
+            '',
+            'Would you like me to:',
+            '1. Add a test for the limiter?',
+            '2. Explain the backpressure trade-off?',
+          ].join('\n'),
+          toolCalls: [],
+        },
+      ],
+    });
+    vi.doMock('../../src/cli/router.js', () => ({
+      resolveProvider: () => ({ type: 'scripted', provider }),
+    }));
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const result = await runLoopExecutor('document the backpressure rules', new ConfigManager(), {
+      provider: 'scripted',
+      skipProjectContext: true,
+      quiet: true,
+    });
+
+    expect(result.followups?.map((f) => f.prompt)).toEqual([
+      'Add a test for the limiter?',
+      'Explain the backpressure trade-off?',
+    ]);
+    // The recovered list is not invented into the answer text.
+    expect(result.content).toContain('Would you like me to:');
+  });
+
+  /**
+   * P7 — while a live frame is mounted, a progress line written to the log lands
+   * UNDER the frame and is repainted over: the run's own narration is invisible
+   * exactly when the live view is on. With a view attached the lines go to the
+   * view instead.
+   */
+  it('routes progress lines into the live view instead of the log', async () => {
+    // A native step whose tool call was written as TEXT: the loop recovers it and
+    // says so on the progress channel.
+    const provider = scriptedProvider({
+      native: true,
+      responses: [
+        { content: 'I will check.\n{"tool":"list_dir","arguments":{"path":"."}}', toolCalls: [] },
+        { content: 'Found src/ and tests/.', toolCalls: [] },
+      ],
+    });
+    vi.doMock('../../src/cli/router.js', () => ({
+      resolveProvider: () => ({ type: 'scripted', provider }),
+    }));
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const { logger } = await import('../../src/utils/logger.js');
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const lines: string[] = [];
+    try {
+      await runLoopExecutor('inventory the repo layout', new ConfigManager(), {
+        provider: 'scripted',
+        skipProjectContext: true,
+        quiet: false,
+        onProgress: (line) => lines.push(line),
+      });
+    } finally {
+      info.mockRestore();
+    }
+
+    expect(lines.some((l) => /recovered tool call/.test(l))).toBe(true);
+    // …and NOT to the log, where the frame would paint over it.
+    const infoLines = info.mock.calls.map((c) => String(c[0]));
+    expect(infoLines.some((l) => /recovered tool call/.test(l))).toBe(false);
+  });
+
+  it('keeps sending those lines to the log when no live view is attached', async () => {
+    // Byte-compatibility: without a view (a pipe, CI, `--json-events`) the lines
+    // are logged exactly as before this seam existed.
+    const provider = scriptedProvider({
+      native: true,
+      responses: [
+        { content: 'I will check.\n{"tool":"list_dir","arguments":{"path":"."}}', toolCalls: [] },
+        { content: 'Found src/ and tests/.', toolCalls: [] },
+      ],
+    });
+    vi.doMock('../../src/cli/router.js', () => ({
+      resolveProvider: () => ({ type: 'scripted', provider }),
+    }));
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const { logger } = await import('../../src/utils/logger.js');
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    let infoLines: string[] = [];
+    try {
+      await runLoopExecutor('audit the repo layout', new ConfigManager(), {
+        provider: 'scripted',
+        skipProjectContext: true,
+        quiet: false,
+      });
+      // Captured BEFORE the restore: `mockRestore()` also clears a spy's call
+      // history, so reading `mock.calls` afterwards reports nothing and the test
+      // would fail while the behaviour under test is correct.
+      infoLines = info.mock.calls.map((c) => String(c[0]));
+    } finally {
+      info.mockRestore();
+    }
+
+    expect(infoLines.some((l) => /recovered tool call/.test(l))).toBe(true);
+  });
+
+  /**
+   * The reported experience: a plain `nuvira execute` question printed a warmup
+   * announcement, a checkpoint line, a resume-probe line with its why-not detail,
+   * a debug-log path and four failover warnings before the answer.
+   *
+   * The per-turn diagnostics now travel on the DEBUG channel, so a normal run
+   * shows the answer and `--debug` (`-d`) shows the diagnosis. Asserted on the channel, not on
+   * the log level: a call that reaches `logger.debug` is invisible by default
+   * (`shouldLog`), which is exactly the property being pinned.
+   */
+  it('sends checkpoint/resume diagnostics to the debug channel, not the console', async () => {
+    const provider = scriptedProvider({ native: true, responses: [{ content: 'Done.', toolCalls: [] }] });
+    vi.doMock('../../src/cli/router.js', () => ({
+      resolveProvider: () => ({ type: 'scripted', provider }),
+    }));
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const { logger } = await import('../../src/utils/logger.js');
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const debug = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    try {
+      await runLoopExecutor('reword the limiter notice', new ConfigManager(), {
+        provider: 'scripted',
+        skipProjectContext: true,
+        checkpoint: true,
+      });
+
+      const infoLines = info.mock.calls.map((c) => String(c[0]));
+      const debugLines = debug.mock.calls.map((c) => String(c[0]));
+      expect(infoLines.some((l) => /checkpointing this run|resume probe|debug log written/.test(l))).toBe(false);
+      expect(debugLines.some((l) => /checkpointing this run|resume probe/.test(l))).toBe(true);
+    } finally {
+      info.mockRestore();
+      debug.mockRestore();
+    }
+  });
 });
 
 describe('loop executor — JSON fallback transport', () => {

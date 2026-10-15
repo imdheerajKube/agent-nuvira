@@ -187,6 +187,46 @@ describe('ChatConsole', () => {
     expect(r.ok).toBe(true);
   });
 
+  /**
+   * The question must OUTLIVE the connection that first heard it.
+   *
+   * A page that reloads while the agent waits never receives the `question`
+   * event (it was emitted before the new EventSource existed), so without this
+   * accessor the reloaded page had no question to show and no way to answer:
+   * the turn held on `ask_user` while the GUI reported it as "still working"
+   * and promised an answer that only the user could unblock. MEASURED
+   * (2026-10-14, trace-1791996357488-wpm352): 5m02s in `ask_user`,
+   * cancelled at the end, question never on screen.
+   */
+  it('P0.1 — reports the OPEN question for a session, and drops it once answered', async () => {
+    engine.delayResolve = true;
+    const answerPromise = console_.answer('s1', 'hi');
+    await waitForEngineCall();
+    const askUser = engine.calls[0].opts?.askUser;
+
+    // Nothing is open before the turn asks, and another session owns nothing.
+    expect(console_.pendingQuestionFor('s1')).toBeNull();
+
+    const questionPromise = askUser!('Which source should I use?', [{ label: 'assets' }, { label: 'remote' }], false);
+    const pending = console_.pendingQuestionFor('s1');
+    expect(pending).toMatchObject({
+      question: 'Which source should I use?',
+      choices: [{ label: 'assets' }, { label: 'remote' }],
+      multiSelect: false,
+    });
+    // The id is the one respond() demands — a replay is answerable, not just visible.
+    expect(pending!.questionId).toBeTruthy();
+    expect(console_.pendingQuestionFor('someone-else')).toBeNull();
+
+    expect(console_.respond('s1', pending!.questionId, { index: 1 })).toBe(true);
+    await questionPromise;
+    // Answered: the question is no longer open, so a page attaching now is not
+    // shown a card for a question that has already been dealt with.
+    expect(console_.pendingQuestionFor('s1')).toBeNull();
+    engine.finish();
+    await answerPromise;
+  });
+
   it('P0.1 — multiSelect questions pass arrays through', async () => {
     const events: Array<{ event: unknown }> = [];
     console_.onEvent((_sid, event) => events.push({ event }));
@@ -235,6 +275,39 @@ describe('ChatConsole', () => {
     engine.finish();
     const done = await first;
     expect(done.ok).toBe(true);
+  });
+
+  /**
+   * A wait that can name its own age.
+   *
+   * MEASURED (2026-10-14, trace-1791996974262-zdraep): a turn ran 664s. The
+   * dashboard abandoned its own POST at the 5-minute ceiling and dated the wait
+   * from that instant, so it told the user "1m 25s elapsed" for a turn that had
+   * already been running for six and a half minutes — a number the user checked
+   * against their trace list and reasonably read as a lie. The turn's own start
+   * is the only honest origin, so the console keeps it and serves it while the
+   * turn runs.
+   */
+  it('reports when the in-flight turn started, and forgets it once the turn settles', async () => {
+    expect(console_.busySince('s1')).toBeNull();
+    engine.delayResolve = true;
+    const before = Date.now();
+    const turn = console_.answer('s1', 'a long one');
+    const startedAt = console_.busySince('s1');
+    expect(typeof startedAt).toBe('number');
+    expect(startedAt!).toBeGreaterThanOrEqual(before);
+    expect(startedAt!).toBeLessThanOrEqual(Date.now());
+    // Another session's wait is not this session's origin.
+    expect(console_.busySince('other')).toBeNull();
+
+    // The turn is still in flight here, so let the fake engine reach its
+    // deferred resolver before ending it (calling finish() synchronously would
+    // land before the resolver exists, and the turn would never settle).
+    await waitForEngineCall();
+    engine.finish();
+    await turn;
+    // Settled: nothing is running, so there is no wait to date.
+    expect(console_.busySince('s1')).toBeNull();
   });
 
   it('reset forgets the session history', async () => {

@@ -2,12 +2,12 @@
  * Integration tests for CLIManager lifecycle methods.
  *
  * Tests the methods that spawn child processes:
- * - executeGoal() — 'buff execute <goal>'
- * - quickFix() — 'buff edit <file> --quick'
- * - reviewFile() — 'buff execute "review <file>"'
- * - explainCode() — 'buff chat <prompt> --stream'
- * - generateTests() — 'buff execute "generate tests for <file>"'
- * - runWorkflow() — 'buff workflow run <template> <goal>'
+ * - executeGoal() — 'nuvira execute <goal>'
+ * - quickFix() — 'nuvira edit <file> --quick'
+ * - reviewFile() — 'nuvira execute "review <file>"'
+ * - explainCode() — 'nuvira chat <prompt> --stream'
+ * - generateTests() — 'nuvira execute "generate tests for <file>"'
+ * - runWorkflow() — 'nuvira workflow run <template> <goal>'
  *
  * Uses a controllable mock process to simulate CLI output,
  * exit codes, timeouts, and cancellation.
@@ -440,8 +440,8 @@ describe('CLIManager Integration', () => {
         providerLabel: 'Groq',
       }), 'utf-8');
 
-      const prev = process.env.BUFF_ACTIVE_MODEL_PATH;
-      process.env.BUFF_ACTIVE_MODEL_PATH = statePath;
+      const prev = process.env.NUVIRA_ACTIVE_MODEL_PATH;
+      process.env.NUVIRA_ACTIVE_MODEL_PATH = statePath;
       try {
         const active = await manager.getActiveModel();
         expect(active).not.toBeNull();
@@ -449,8 +449,8 @@ describe('CLIManager Integration', () => {
         expect(active?.model).toBe('llama-3.3-70b-versatile');
         expect(active?.explicit).toBe(true);
       } finally {
-        if (prev === undefined) delete process.env.BUFF_ACTIVE_MODEL_PATH;
-        else process.env.BUFF_ACTIVE_MODEL_PATH = prev;
+        if (prev === undefined) delete process.env.NUVIRA_ACTIVE_MODEL_PATH;
+        else process.env.NUVIRA_ACTIVE_MODEL_PATH = prev;
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
@@ -461,14 +461,14 @@ describe('CLIManager Integration', () => {
       const statePath = join(tmpDir, 'active-model.json');
       writeFileSync(statePath, 'not json', 'utf-8');
 
-      const prev = process.env.BUFF_ACTIVE_MODEL_PATH;
-      process.env.BUFF_ACTIVE_MODEL_PATH = statePath;
+      const prev = process.env.NUVIRA_ACTIVE_MODEL_PATH;
+      process.env.NUVIRA_ACTIVE_MODEL_PATH = statePath;
       try {
         const active = await manager.getActiveModel();
         expect(active).toBeNull();
       } finally {
-        if (prev === undefined) delete process.env.BUFF_ACTIVE_MODEL_PATH;
-        else process.env.BUFF_ACTIVE_MODEL_PATH = prev;
+        if (prev === undefined) delete process.env.NUVIRA_ACTIVE_MODEL_PATH;
+        else process.env.NUVIRA_ACTIVE_MODEL_PATH = prev;
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
@@ -477,14 +477,14 @@ describe('CLIManager Integration', () => {
       const tmpDir = join(tmpdir(), `buff-test-${Date.now()}`);
       const statePath = join(tmpDir, 'missing.json');
 
-      const prev = process.env.BUFF_ACTIVE_MODEL_PATH;
-      process.env.BUFF_ACTIVE_MODEL_PATH = statePath;
+      const prev = process.env.NUVIRA_ACTIVE_MODEL_PATH;
+      process.env.NUVIRA_ACTIVE_MODEL_PATH = statePath;
       try {
         const active = await manager.getActiveModel();
         expect(active).toBeNull();
       } finally {
-        if (prev === undefined) delete process.env.BUFF_ACTIVE_MODEL_PATH;
-        else process.env.BUFF_ACTIVE_MODEL_PATH = prev;
+        if (prev === undefined) delete process.env.NUVIRA_ACTIVE_MODEL_PATH;
+        else process.env.NUVIRA_ACTIVE_MODEL_PATH = prev;
       }
     });
   });

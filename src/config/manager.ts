@@ -1,14 +1,23 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { BuffConfig, ProviderType, ProviderConfig } from './types.js';
-import { resolveBuffConfigDir } from './paths.js';
+// ONE source of truth for the config FILE, not just the directory: the manager
+// used to build `join(configDir, 'buffconfig.json')` itself while
+// `resolveNuviraConfigPath()` resolved the new name first, so the two disagreed
+// about which file the runtime reads (see `paths.ts` — `CONFIG_FILE_NAMES`).
+import {
+  resolveBuffConfigDir,
+  resolveNuviraConfigCandidatePaths,
+  resolveNuviraConfigPath,
+  resolveNuviraConfigReadPaths,
+} from './paths.js';
 import { loadEnv } from '../utils/env.js';
 import { logger } from '../utils/logger.js';
 import { resolveDefaultProvider } from '../learning/model-selection.js';
 import { CATALOG_ENV_VARS, isCatalogKeyless } from '../inference/provider-catalog.js';
 import { Vault, isVaultRef, VAULT_REF_PREFIX } from '../enterprise/vault.js';
 import { WorkspaceStore, getWorkspaceStore } from './workspace.js';
-import { resolveMcpSettings, type ResolvedMCPSettings } from '../mcp/settings.js';
+import { mergeMcpSetting, resolveMcpSettings, type ResolvedMCPSettings } from '../mcp/settings.js';
 
 // NO hardcoded provider/model defaults: the default provider is the routing
 // directive 'auto' (the best AVAILABLE provider is resolved at runtime from
@@ -116,7 +125,15 @@ export class ConfigManager {
   private configDir: string;
   /** mtime of the config file when `this.config` was last loaded (live re-read). */
   private configMtimeMs = 0;
+  /** The file a WRITE goes to — see `resolveNuviraConfigPath` (nuviraconfig.json wins). */
   private configPath: string;
+  /**
+   * Both config file names, whether or not they exist yet — what the live
+   * re-read stats. Watching only the write target would miss a file another
+   * process CREATES under the other name, which is the exact case a user hits
+   * when they hand-write `nuviraconfig.json` next to a legacy profile.
+   */
+  private readonly configCandidatePaths: string[];
   /**
    * Phase A1 secret vault. When attached, provider key reads/writes route
    * through the vault (`buffconfig.json` holds `vault:` refs instead of
@@ -133,7 +150,8 @@ export class ConfigManager {
     // already honor it, so the config manager must too: a hermetic run pointed
     // at NUVIRA_CONFIG_DIR must never read/write the real ~/.nuvira config.
     this.configDir = resolveBuffConfigDir(configDir);
-    this.configPath = join(this.configDir, 'buffconfig.json');
+    this.configPath = resolveNuviraConfigPath(this.configDir);
+    this.configCandidatePaths = resolveNuviraConfigCandidatePaths(this.configDir);
     // Phase A1: auto-open the secret vault so refs resolve at READ time. Every
     // runtime command (BaseCommand, Orchestrator) constructs its OWN fresh
     // ConfigManager — boot-time hydration in index.ts only touches a throwaway
@@ -150,13 +168,21 @@ export class ConfigManager {
     this.configMtimeMs = this.statMtime();
   }
 
-  /** Best-effort current mtime of the config file (0 when absent). */
+  /**
+   * Best-effort newest mtime across BOTH config file names (0 when neither
+   * exists) — see {@link configCandidatePaths} for why it is not just the write
+   * target.
+   */
   private statMtime(): number {
-    try {
-      return statSync(this.configPath).mtimeMs;
-    } catch {
-      return 0;
+    let newest = 0;
+    for (const path of this.configCandidatePaths) {
+      try {
+        newest = Math.max(newest, statSync(path).mtimeMs);
+      } catch {
+        // Absent is the normal case for at least one of the two names.
+      }
     }
+    return newest;
   }
 
   /**
@@ -243,155 +269,15 @@ export class ConfigManager {
       servers: { ...(DEFAULT_CONFIG.mcp?.servers || {}) },
     };
 
-    if (existsSync(this.configPath)) {
+    // BOTH config file names are read, LOWEST precedence first, so the new
+    // name wins key by key and neither file is silently discarded. The manager
+    // used to open `buffconfig.json` alone while `resolveNuviraConfigPath()`
+    // resolved `nuviraconfig.json` first: a profile under the NEW name was
+    // valid, resolved by one reader and ignored by every runtime reader here —
+    // silently, because the file it opened was a valid one either way.
+    for (const path of [...resolveNuviraConfigReadPaths(this.configDir)].reverse()) {
       try {
-        const raw = readFileSync(this.configPath, 'utf-8');
-        const userConfig = JSON.parse(raw) as Partial<BuffConfig>;
-
-        if (userConfig.defaultProvider) {
-          config.defaultProvider = userConfig.defaultProvider;
-        }
-
-        if (userConfig.providers) {
-          for (const [key, value] of Object.entries(userConfig.providers)) {
-            const provider = key as ProviderType;
-            if (config.providers[provider]) {
-              config.providers[provider] = { ...config.providers[provider], ...value };
-            } else {
-              config.providers[provider] = value as ProviderConfig;
-            }
-          }
-        }
-
-        // Merge history config
-        if (userConfig.history) {
-          config.history = { ...config.history, ...userConfig.history };
-        }
-
-        // Merge fallback config
-        if (userConfig.fallback) {
-          config.fallback = { ...config.fallback, ...userConfig.fallback };
-        }
-
-        // Merge pricing overrides (deep — per provider)
-        if (userConfig.pricing) {
-          config.pricing = { ...config.pricing };
-          for (const [provider, pricing] of Object.entries(userConfig.pricing)) {
-            config.pricing[provider] = { ...(config.pricing[provider] || {}), ...pricing };
-          }
-        }
-
-        // Merge routing config (learning router). FIX: this was previously
-        // dropped entirely on load, so `nuvira config set routing.*` (bandit,
-        // quota, governance, contextWindows, nuviraSidecar) never survived a
-        // restart. Nested maps are deep-merged so separate sets preserve each
-        // other (governance.allowProviders + governance.maxCostUsd coexist).
-        if (userConfig.routing) {
-          const loadedRouting = userConfig.routing;
-          config.routing = {
-            ...(config.routing || {}),
-            ...loadedRouting,
-            quota: { ...(config.routing?.quota || {}), ...(loadedRouting.quota || {}) },
-            governance: { ...(config.routing?.governance || {}), ...(loadedRouting.governance || {}) },
-            contextWindows: { ...(config.routing?.contextWindows || {}), ...(loadedRouting.contextWindows || {}) },
-            nuviraSidecar: { ...(config.routing?.nuviraSidecar || {}), ...(loadedRouting.nuviraSidecar || {}) },
-          };
-        }
-
-        // Merge toolsets config (deep per toolset — separate toggles preserve
-        // each other; a missing entry means enabled).
-        if (userConfig.tools) {
-          config.tools = {
-            ...(config.tools || {}),
-            ...userConfig.tools,
-            toolsets: { ...(config.tools?.toolsets || {}), ...(userConfig.tools.toolsets || {}) },
-          };
-        }
-
-        // Merge MCP config. Deep per-key merge so separate `config set`
-        // commands preserve each other (maxToolsTotal + subagent.inherit +
-        // servers.<name>.runtime), and per-server so one server's override
-        // never drops another's.
-        if (userConfig.mcp) {
-          const loadedMcp = userConfig.mcp;
-          config.mcp = {
-            ...(config.mcp || {}),
-            ...loadedMcp,
-            subagent: { ...(config.mcp?.subagent || {}), ...(loadedMcp.subagent || {}) },
-            servers: {
-              ...(config.mcp?.servers || {}),
-              ...Object.fromEntries(
-                Object.entries(loadedMcp.servers ?? {}).map(([name, override]) => [
-                  name,
-                  { ...(config.mcp?.servers?.[name] || {}), ...(override || {}) },
-                ]),
-              ),
-            },
-          };
-        }
-
-        // Merge I7 skills config (disabled[] + registries[]) — whole-array
-        // semantics: an empty array is meaningful ("nothing disabled") and
-        // must survive a load.
-        if (userConfig.skills) {
-          config.skills = {
-            ...(config.skills || {}),
-            ...(userConfig.skills.disabled !== undefined ? { disabled: userConfig.skills.disabled } : {}),
-            ...(userConfig.skills.registries !== undefined ? { registries: userConfig.skills.registries } : {}),
-          };
-        }
-
-        // Modality backend selection (`modality.image.*`). Merged per-subkey so
-        // `nuvira config set modality.image.provider` — or the dashboard's
-        // workspace/providers UI — is READ BACK. Without this block the setting
-        // saved to the file and was silently dropped on load: the CLI printed a
-        // success line and the agent kept auto-selecting. Same whitelisting
-        // class as the gateway block below.
-        if (userConfig.modality) {
-          config.modality = {
-            ...(config.modality || {}),
-            ...userConfig.modality,
-            image: { ...(config.modality?.image || {}), ...(userConfig.modality.image || {}) },
-          };
-        }
-
-        // Dashboard runtime settings — the directory an unattached chat turn
-        // runs in (`dashboard.cwd`). Persisted and loaded like every other
-        // top-level key; a dropped value here would put the accidental-cwd
-        // fallback back without anyone noticing.
-        if (userConfig.dashboard) {
-          config.dashboard = { ...(config.dashboard || {}), ...userConfig.dashboard };
-        }
-
-        // Merge gateway config. The gate is `userConfig.gateway` (any key), not
-        // `policies || statusRecipients`: a file carrying ONLY another gateway
-        // setting (askUserWait, askUserTimeoutMs) must still load.
-        //
-        // `...userConfig.gateway` carries EVERY other key through. This block
-        // used to rebuild the object from policies + statusRecipients alone, so
-        // any other gateway setting was silently DROPPED on load — the value
-        // was in the file and still read back as absent. (Same class as the
-        // whitelisting bug in save(): a new setting appears to save and appear
-        // to load while doing neither.)
-        if (userConfig.gateway) {
-          config.gateway = {
-            ...(config.gateway || {}),
-            ...userConfig.gateway,
-            policies: {
-              ...(config.gateway?.policies || {}),
-              ...Object.fromEntries(
-                Object.entries(userConfig.gateway?.policies ?? {}).map(([platform, pol]) => [
-                  platform,
-                  { ...(config.gateway?.policies?.[platform] || {}), ...(pol || {}) },
-                ]),
-              ),
-            },
-            // Whole-array semantics: an empty list is meaningful ("nobody").
-            ...(userConfig.gateway?.statusRecipients !== undefined
-              ? { statusRecipients: userConfig.gateway.statusRecipients }
-              : {}),
-          };
-        }
+        this.applyUserConfig(config, JSON.parse(readFileSync(path, 'utf-8')) as Partial<BuffConfig>);
       } catch {
         // If config is corrupted, fall back to defaults
       }
@@ -401,6 +287,160 @@ export class ConfigManager {
     this.overrideFromEnv(config);
 
     return config;
+  }
+
+  /**
+   * Apply ONE config file's user values over `config` (defaults + the lower
+   * precedence file already applied).
+   *
+   * Section by section rather than a blanket spread, because each section's
+   * semantics differ: maps merge per key so two separate `config set` calls
+   * preserve each other, while `skills.disabled` and
+   * `gateway.statusRecipients` are WHOLE ARRAYS, where an empty list is a
+   * meaningful value ("nothing disabled", "nobody") that a merge would lose.
+   *
+   * Extracted from `loadConfig` when the config file went from one name to two:
+   * the same rules must apply to both files, and a second copy of them would
+   * drift (the original single-file merge already had two bugs of that class —
+   * `routing.*` and the extra `gateway.*` keys were dropped on load).
+   */
+  private applyUserConfig(config: BuffConfig, userConfig: Partial<BuffConfig>): void {
+    if (userConfig.defaultProvider) {
+      config.defaultProvider = userConfig.defaultProvider;
+    }
+
+    if (userConfig.providers) {
+      for (const [key, value] of Object.entries(userConfig.providers)) {
+        const provider = key as ProviderType;
+        if (config.providers[provider]) {
+          config.providers[provider] = { ...config.providers[provider], ...value };
+        } else {
+          config.providers[provider] = value as ProviderConfig;
+        }
+      }
+    }
+
+    // Merge history config
+    if (userConfig.history) {
+      config.history = { ...config.history, ...userConfig.history };
+    }
+
+    // Merge fallback config
+    if (userConfig.fallback) {
+      config.fallback = { ...config.fallback, ...userConfig.fallback };
+    }
+
+    // Merge pricing overrides (deep — per provider)
+    if (userConfig.pricing) {
+      config.pricing = { ...config.pricing };
+      for (const [provider, pricing] of Object.entries(userConfig.pricing)) {
+        config.pricing[provider] = { ...(config.pricing[provider] || {}), ...pricing };
+      }
+    }
+
+    // Merge routing config (learning router). FIX: this was previously
+    // dropped entirely on load, so `nuvira config set routing.*` (bandit,
+    // quota, governance, contextWindows, nuviraSidecar) never survived a
+    // restart. Nested maps are deep-merged so separate sets preserve each
+    // other (governance.allowProviders + governance.maxCostUsd coexist).
+    if (userConfig.routing) {
+      const loadedRouting = userConfig.routing;
+      config.routing = {
+        ...(config.routing || {}),
+        ...loadedRouting,
+        quota: { ...(config.routing?.quota || {}), ...(loadedRouting.quota || {}) },
+        governance: { ...(config.routing?.governance || {}), ...(loadedRouting.governance || {}) },
+        contextWindows: { ...(config.routing?.contextWindows || {}), ...(loadedRouting.contextWindows || {}) },
+        nuviraSidecar: { ...(config.routing?.nuviraSidecar || {}), ...(loadedRouting.nuviraSidecar || {}) },
+      };
+    }
+
+    // Merge toolsets config (deep per toolset — separate toggles preserve
+    // each other; a missing entry means enabled).
+    if (userConfig.tools) {
+      config.tools = {
+        ...(config.tools || {}),
+        ...userConfig.tools,
+        toolsets: { ...(config.tools?.toolsets || {}), ...(userConfig.tools.toolsets || {}) },
+      };
+    }
+
+    // Merge MCP config through the ONE merge the `mcp.*` setter uses, instead of
+    // a local spread. WHY: `runtime` is a nested object set in two commands
+    // (`runtime.command` for the interpreter, `runtime.args` for the script), and
+    // this block spread the incoming override over the stored one, so a file
+    // carrying `runtime.args` REPLACED the `runtime.command` an earlier file (or
+    // an earlier `config set`) had stored — the server then ran without the
+    // interpreter that was configured for it, and nothing said so.
+    // `mergeMcpSetting` keeps the field a patch does not mention, which is also
+    // what makes reading TWO config files behave like reading one.
+    if (userConfig.mcp) {
+      config.mcp = mergeMcpSetting(config.mcp, userConfig.mcp);
+    }
+
+    // Merge I7 skills config (disabled[] + registries[]) — whole-array
+    // semantics: an empty array is meaningful ("nothing disabled") and
+    // must survive a load.
+    if (userConfig.skills) {
+      config.skills = {
+        ...(config.skills || {}),
+        ...(userConfig.skills.disabled !== undefined ? { disabled: userConfig.skills.disabled } : {}),
+        ...(userConfig.skills.registries !== undefined ? { registries: userConfig.skills.registries } : {}),
+      };
+    }
+
+    // Modality backend selection (`modality.image.*`). Merged per-subkey so
+    // `nuvira config set modality.image.provider` — or the dashboard's
+    // workspace/providers UI — is READ BACK. Without this block the setting
+    // saved to the file and was silently dropped on load: the CLI printed a
+    // success line and the agent kept auto-selecting. Same whitelisting
+    // class as the gateway block below.
+    if (userConfig.modality) {
+      config.modality = {
+        ...(config.modality || {}),
+        ...userConfig.modality,
+        image: { ...(config.modality?.image || {}), ...(userConfig.modality.image || {}) },
+      };
+    }
+
+    // Dashboard runtime settings — the directory an unattached chat turn
+    // runs in (`dashboard.cwd`). Persisted and loaded like every other
+    // top-level key; a dropped value here would put the accidental-cwd
+    // fallback back without anyone noticing.
+    if (userConfig.dashboard) {
+      config.dashboard = { ...(config.dashboard || {}), ...userConfig.dashboard };
+    }
+
+    // Merge gateway config. The gate is `userConfig.gateway` (any key), not
+    // `policies || statusRecipients`: a file carrying ONLY another gateway
+    // setting (askUserWait, askUserTimeoutMs) must still load.
+    //
+    // `...userConfig.gateway` carries EVERY other key through. This block
+    // used to rebuild the object from policies + statusRecipients alone, so
+    // any other gateway setting was silently DROPPED on load — the value
+    // was in the file and still read back as absent. (Same class as the
+    // whitelisting bug in save(): a new setting appears to save and appear
+    // to load while doing neither.)
+    if (userConfig.gateway) {
+      config.gateway = {
+        ...(config.gateway || {}),
+        ...userConfig.gateway,
+        policies: {
+          ...(config.gateway?.policies || {}),
+          ...Object.fromEntries(
+            Object.entries(userConfig.gateway?.policies ?? {}).map(([platform, pol]) => [
+              platform,
+              { ...(config.gateway?.policies?.[platform] || {}), ...(pol || {}) },
+            ]),
+          ),
+        },
+        // Whole-array semantics: an empty list is meaningful ("nobody").
+        ...(userConfig.gateway?.statusRecipients !== undefined
+          ? { statusRecipients: userConfig.gateway.statusRecipients }
+          : {}),
+      };
+    }
+
   }
 
   /**

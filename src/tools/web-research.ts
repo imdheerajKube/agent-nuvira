@@ -530,9 +530,9 @@ export async function readWebPage(url: string, options: ReadPageOptions = {}): P
   const timeoutMs = options.timeoutMs ?? 20_000;
 
   // SSRF guard (reviewer catch): only http/https, and no private/link-local
-  // hosts unless the user explicitly opts out with BUFF_WEB_ALLOW_PRIVATE=1.
+  // hosts unless the user explicitly opts out with NUVIRA_WEB_ALLOW_PRIVATE=1.
   if (!isAllowedReadUrl(url)) {
-    return 'Blocked by read_page safety guard: only public http(s) URLs are readable (set BUFF_WEB_ALLOW_PRIVATE=1 to allow private/link-local hosts).';
+    return 'Blocked by read_page safety guard: only public http(s) URLs are readable (set NUVIRA_WEB_ALLOW_PRIVATE=1 to allow private/link-local hosts).';
   }
 
   const cache = getCache();
@@ -587,7 +587,7 @@ function decodeDdgTargetUrl(rawUrl: string): string {
 
 /**
  * SSRF guard for read_page: only http/https, and (unless
- * BUFF_WEB_ALLOW_PRIVATE=1) no loopback / link-local / private-range hosts —
+ * NUVIRA_WEB_ALLOW_PRIVATE=1) no loopback / link-local / private-range hosts —
  * cloud metadata (169.254.169.254) and internal services are unreachable.
  */
 export function isAllowedReadUrl(url: string): boolean {

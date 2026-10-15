@@ -20,7 +20,7 @@ const envFile = join(testDir, 'env', 'test.env');
 
 // Service keys that might leak in from the outer environment — cleared so the
 // assertions are deterministic (the env file is the only source we write).
-for (const k of ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'BRAVE_SEARCH_API_KEY', 'SERPER_API_KEY', 'TAVILY_API_KEY', 'GOOGLE_CSE_API_KEY', 'GOOGLE_CSE_ID', 'STABILITY_API_KEY', 'FAL_KEY', 'ELEVENLABS_API_KEY', 'OPENAI_API_KEY', 'BUFF_IMAGE_API_URL', 'SEARXNG_URL', 'JINA_API_KEY']) {
+for (const k of ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'BRAVE_SEARCH_API_KEY', 'SERPER_API_KEY', 'TAVILY_API_KEY', 'GOOGLE_CSE_API_KEY', 'GOOGLE_CSE_ID', 'STABILITY_API_KEY', 'FAL_KEY', 'ELEVENLABS_API_KEY', 'OPENAI_API_KEY', 'NUVIRA_IMAGE_API_URL', 'SEARXNG_URL', 'JINA_API_KEY']) {
   delete process.env[k];
 }
 

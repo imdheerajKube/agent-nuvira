@@ -109,6 +109,78 @@ export function normalizeFollowups(
 }
 
 /**
+ * A numbered/bulleted line, with its item text captured ("1. do x", "- do x").
+ * The prefix is stripped because a followup PROMPT is sent as the next user
+ * message — "2. Run the tests" typed verbatim would ask the model about an item
+ * of a list it never saw.
+ */
+const LIST_ITEM_LINE = /^\s*(?:[-*\u2022]|\d+[.)])\s+(\S.*)$/;
+
+/**
+ * Recover the next steps a model wrote as a PROSE list instead of calling
+ * `suggest_followups`.
+ *
+ * WHY THIS EXISTS (measured live, 2026-10-14): the contract asks every turn to
+ * end with a `suggest_followups` tool call, and a weak model on the JSON
+ * transport often writes the same thing as text instead —
+ *
+ *     Would you like me to:
+ *       1. Fix the factorial performance issue by adding a limit?
+ *       2. Replace the new Function evaluation with a safer alternative?
+ *       3. Run the existing test suite to see if these bugs are triggering failures?
+ *
+ * `nuvira execute` on `local/deepseek-coder` reported 0 tool calls, printed
+ * those three options, and offered the user only the generic menu — the model's
+ * own suggestions were unreachable, which is the one thing a followup is for.
+ * Nothing about that list is ambiguous to a READER, so it should not be
+ * ambiguous to the surface either.
+ *
+ * Deliberately narrow, and deterministic — no LLM:
+ *  - only the answer's TRAILING list counts. A list in the middle of an
+ *    explanation is part of the explanation, not a menu;
+ *  - at least TWO items, each a single line that starts with a number or a
+ *    bullet on its own line;
+ *  - the item must follow a LEAD-IN that ends in `:` or `?` ("Would you like me
+ *    to:", "Which of these should I start with?") — the signal that the list is
+ *    offered TO the reader. A bare numbered procedure with no lead-in is
+ *    usually the answer itself and is left alone;
+ *  - at most MAX_FOLLOWUPS items, cleaned and capped by `normalizeFollowups`,
+ *    so a recovered list is indistinguishable from a structured one downstream.
+ *
+ * Returns [] when the pattern does not hold (callers keep their own defaults).
+ */
+export function followupsFromAnswerList(
+  text: string | null | undefined,
+  opts?: { limit?: number },
+): FollowupSuggestion[] {
+  const raw = (text ?? '').toString();
+  if (!raw.trim()) return [];
+  const lines = raw.split(/\r?\n/);
+
+  // Walk back over trailing blank lines, then over the contiguous run of list
+  // items. Anything else stops the scan — the run has to be the answer's END.
+  let i = lines.length - 1;
+  while (i >= 0 && !lines[i].trim()) i -= 1;
+  const items: string[] = [];
+  let lead = '';
+  for (; i >= 0; i -= 1) {
+    const match = LIST_ITEM_LINE.exec(lines[i]);
+    if (!match) {
+      lead = lines[i].trim();
+      break;
+    }
+    items.unshift(match[1]);
+  }
+  if (items.length < 2) return [];
+  if (!/[?:]\s*$/.test(lead)) return [];
+
+  return normalizeFollowups(
+    items.map((prompt) => ({ prompt })),
+    { limit: Math.min(opts?.limit ?? MAX_FOLLOWUPS, MAX_FOLLOWUPS) },
+  );
+}
+
+/**
  * A4 — the CONTINUATION affordance.
  *
  * WHY THIS EXISTS: A1/A3 make a run RECORD honestly that it did not conclude

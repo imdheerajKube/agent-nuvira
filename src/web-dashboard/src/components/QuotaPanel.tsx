@@ -4,7 +4,7 @@
  * The provider's TPD (tokens-per-day) allowance is invisible to us — only the
  * user knows their plan. This panel lets them declare it (tokens / requests
  * per reset window + the admin cost cap) in the SAME config the CLI writes
- * (`buff model quota set` → `routing.quota.*` + `routing.governance.maxCostUsd`),
+ * (`nuvira model quota set` → `routing.quota.*` + `routing.governance.maxCostUsd`),
  * so the quota ledger + auto-router pace around it BEFORE requests go out.
  *
  * Semantics (Design Decision 21): advisory + pacing, never a product hard cap.
@@ -126,7 +126,7 @@ export default function QuotaPanel({ authed, role }: { authed: boolean; role: st
         Free-tier providers enforce tokens-per-day caps the API doesn't advertise — only you
         know your plan's allowance. Declare it here and the agent paces around it (parks the provider
         at the cap, auto-resumes at window rollover) instead of exhausting your budget mid-task.
-        Unset = current behavior. Same config as <code>buff model quota set</code>.
+        Unset = current behavior. Same config as <code>nuvira model quota set</code>.
       </p>
       {error ? <div className="admin-error">{error}</div> : null}
       {data ? (

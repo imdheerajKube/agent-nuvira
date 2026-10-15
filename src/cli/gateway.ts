@@ -234,12 +234,12 @@ export class GatewayCommand {
     console.log('');
     if (configured.length === 0) {
       console.log('No adapters configured. Set one of:');
-      console.log('  BUFF_TELEGRAM_TOKEN · BUFF_DISCORD_BOT_TOKEN · BUFF_DISCORD_WEBHOOK_URL');
-      console.log('  BUFF_SLACK_BOT_TOKEN · BUFF_SLACK_WEBHOOK_URL · NUVIRA_WHATSAPP_SESSION_DIR (bridge) · BUFF_WHATSAPP_TOKEN + PHONE_ID (cloud)');
-      console.log('  BUFF_SMTP_HOST + BUFF_SMTP_USER (email) · BUFF_SIGNAL_ACCOUNT (signal)');
-      console.log('  I9 webhooks: BUFF_DINGTALK_WEBHOOK_URL · BUFF_FEISHU_WEBHOOK_URL · BUFF_WECOM_WEBHOOK_URL · BUFF_MATTERMOST_WEBHOOK_URL');
-      console.log('  BUFF_MATRIX_HOMESERVER + BUFF_MATRIX_ACCESS_TOKEN · BUFF_WEBHOOK_URL · BUFF_BLUEBUBBLES_URL + BUFF_BLUEBUBBLES_PASSWORD');
-      console.log('  I10 send: BUFF_NTFY_TOPIC (+BUFF_NTFY_URL/BUFF_NTFY_TOKEN) · BUFF_TEAMS_WEBHOOK_URL · BUFF_GOOGLE_CHAT_WEBHOOK_URL · BUFF_WEIXIN_TOKEN');
+      console.log('  NUVIRA_TELEGRAM_TOKEN · NUVIRA_DISCORD_BOT_TOKEN · NUVIRA_DISCORD_WEBHOOK_URL');
+      console.log('  NUVIRA_SLACK_BOT_TOKEN · NUVIRA_SLACK_WEBHOOK_URL · NUVIRA_WHATSAPP_SESSION_DIR (bridge) · NUVIRA_WHATSAPP_TOKEN + PHONE_ID (cloud)');
+      console.log('  NUVIRA_SMTP_HOST + NUVIRA_SMTP_USER (email) · NUVIRA_SIGNAL_ACCOUNT (signal)');
+      console.log('  I9 webhooks: NUVIRA_DINGTALK_WEBHOOK_URL · NUVIRA_FEISHU_WEBHOOK_URL · NUVIRA_WECOM_WEBHOOK_URL · NUVIRA_MATTERMOST_WEBHOOK_URL');
+      console.log('  NUVIRA_MATRIX_HOMESERVER + NUVIRA_MATRIX_ACCESS_TOKEN · NUVIRA_WEBHOOK_URL · NUVIRA_BLUEBUBBLES_URL + NUVIRA_BLUEBUBBLES_PASSWORD');
+      console.log('  I10 send: NUVIRA_NTFY_TOPIC (+NUVIRA_NTFY_URL/NUVIRA_NTFY_TOKEN) · NUVIRA_TEAMS_WEBHOOK_URL · NUVIRA_GOOGLE_CHAT_WEBHOOK_URL · NUVIRA_WEIXIN_TOKEN');
       console.log('  I12 sms: TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_PHONE_NUMBER');
       console.log('  I13 irc: IRC_SERVER (+IRC_PORT/IRC_NICKNAME/IRC_CHANNEL/IRC_USE_TLS/IRC_NICKSERV_PASSWORD)');
       console.log('  I14 simplex: SIMPLEX_WS_URL (local simplex-chat daemon, ws://127.0.0.1:5225)');
@@ -917,12 +917,12 @@ export class GatewayCommand {
     if (!registry.hasConfiguredAdapter()) {
       logger.warn('No adapters configured — set one or more platform tokens:');
       console.log('');
-      console.log('  Telegram:   BUFF_TELEGRAM_TOKEN=your-token   (get from @BotFather on Telegram)');
-      console.log('  Discord:    BUFF_DISCORD_BOT_TOKEN=your-token  (from Discord Developer Portal)');
-      console.log('  Slack:      BUFF_SLACK_BOT_TOKEN=your-token    (from Slack API → Your Apps)');
+      console.log('  Telegram:   NUVIRA_TELEGRAM_TOKEN=your-token   (get from @BotFather on Telegram)');
+      console.log('  Discord:    NUVIRA_DISCORD_BOT_TOKEN=your-token  (from Discord Developer Portal)');
+      console.log('  Slack:      NUVIRA_SLACK_BOT_TOKEN=your-token    (from Slack API → Your Apps)');
       console.log('  WhatsApp:   nuvira whatsapp pair                  (scan QR code)');
-      console.log('  Email:      BUFF_SMTP_HOST + BUFF_SMTP_USER     (any SMTP relay)');
-      console.log('  Signal:     BUFF_SIGNAL_ACCOUNT=your-number     (via signal-cli-rest-api)');
+      console.log('  Email:      NUVIRA_SMTP_HOST + NUVIRA_SMTP_USER     (any SMTP relay)');
+      console.log('  Signal:     NUVIRA_SIGNAL_ACCOUNT=your-number     (via signal-cli-rest-api)');
       console.log('');
       console.log('  Tokens are saved to ~/.nuvira/.env — use the dashboard Channels tab or:');
       console.log('    nuvira config gateway <platform>                  (interactive wizard)');
@@ -945,8 +945,8 @@ export class GatewayCommand {
 
     if (receiverOk) {
       logger.info(`Webhook receiver listening on ${host}:${port} (POST /discord /slack /whatsapp)`);
-      logger.info('  ⚠ Public exposure requires platform signature secrets (BUFF_SLACK_SIGNING_SECRET / BUFF_WHATSAPP_APP_SECRET)');
-      logger.info('  ⚠ Pipeline triggers are allow-listed via BUFF_GATEWAY_ALLOW_IDS (platform:channelId, comma-separated)');
+      logger.info('  ⚠ Public exposure requires platform signature secrets (NUVIRA_SLACK_SIGNING_SECRET / NUVIRA_WHATSAPP_APP_SECRET)');
+      logger.info('  ⚠ Pipeline triggers are allow-listed via NUVIRA_GATEWAY_ALLOW_IDS (platform:channelId, comma-separated)');
     }
 
     console.log('');

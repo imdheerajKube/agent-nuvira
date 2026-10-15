@@ -396,7 +396,7 @@ describe('CommandRegistrar', () => {
       expect(mockCliManager.switchModel).toHaveBeenCalledWith('auto');
     });
 
-    // ── Per-provider model drill-down (buff models) ───────────────────────
+    // ── Per-provider model drill-down (nuvira models) ───────────────────────
 
     it('drills into the provider models and switches to a specific model', async () => {
       registrar.registerAll();

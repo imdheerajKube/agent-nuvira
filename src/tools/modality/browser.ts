@@ -110,10 +110,10 @@ export async function executeBrowserAction(
     case 'open': {
       if (!args.url) return { text: 'browser_open: url is required' };
       // SSRF guard — reuse the read_page policy: block loopback/private/link-local/
-      // metadata hosts unless BUFF_WEB_ALLOW_PRIVATE=1 (same guard, one policy).
+      // metadata hosts unless NUVIRA_WEB_ALLOW_PRIVATE=1 (same guard, one policy).
       const { isAllowedReadUrl } = await import('../web-research.js');
       if (!isAllowedReadUrl(args.url)) {
-        return { text: `browser_open: blocked private/loopback/metadata URL ${args.url} (set BUFF_WEB_ALLOW_PRIVATE=1 to allow)` };
+        return { text: `browser_open: blocked private/loopback/metadata URL ${args.url} (set NUVIRA_WEB_ALLOW_PRIVATE=1 to allow)` };
       }
       await page.goto(args.url, { timeout });
       const title = await page.title().catch(() => '');

@@ -123,7 +123,7 @@ export const SERVICE_CATALOG: readonly ServiceDefinition[] = [
     capability: 'image',
     icon: '🖥️',
     description: 'A local ComfyUI/A1111 endpoint (POST {prompt,width,height} → image bytes).',
-    envVars: [{ varName: 'BUFF_IMAGE_API_URL', prompt: 'Local endpoint URL (e.g. http://127.0.0.1:8188/generate)', secret: false }],
+    envVars: [{ varName: 'NUVIRA_IMAGE_API_URL', prompt: 'Local endpoint URL (e.g. http://127.0.0.1:8188/generate)', secret: false }],
     requiresAllVars: true,
     keyless: true,
     free: true,

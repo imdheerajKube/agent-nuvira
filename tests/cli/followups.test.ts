@@ -236,4 +236,86 @@ describe('ExecuteCommand single-shot — followup runs as next goal', () => {
     expect(handlePostExecution).toHaveBeenCalledTimes(2);
     expect(logger.success).toHaveBeenCalledWith(expect.stringContaining('Done. Happy coding'));
   });
+
+  /**
+   * The reported defect: `nuvira execute` offered only its generic menu while the
+   * model's own suggestions were dropped at the result boundary, so the ONE thing
+   * a followup is for — clicking it — never happened.
+   */
+  it('puts the turn\'s OWN suggestions in the post-run menu, without a second model call', async () => {
+    const generate = vi.spyOn(cmd as any, 'generateFollowUpSuggestions');
+
+    const actions = await (cmd as any).generatePostExecutionActions(
+      {
+        success: true,
+        content: 'Done.',
+        followups: [
+          { prompt: 'Add a test for the limiter', label: 'Add a test' },
+          { prompt: 'Explain the backpressure trade-off' },
+        ],
+      },
+      undefined,
+      undefined,
+      {},
+    );
+
+    const values = actions.map((a: { value: string }) => a.value);
+    expect(values).toContain('followup:Add a test for the limiter');
+    expect(values).toContain('followup:Explain the backpressure trade-off');
+    expect(actions.map((a: { name: string }) => a.name)).toContain('💡  Add a test');
+    // The model already suggested these — inventing others would cost a model
+    // call AND be less relevant than what it just offered.
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The user-visible half: the arrow-key menu is what a person actually picks
+   * from, so the suggestions have to arrive as CHOICES there (`followup:<prompt>
+   * ` values), not merely exist on an action list.
+   */
+  it('offers them as pickable menu choices, and a picked one becomes the next goal', async () => {
+    setTTY(true);
+    const promptSpy = vi.spyOn(inquirer, 'prompt').mockResolvedValue({ action: 'exit' } as any);
+    const actions = await (cmd as any).generatePostExecutionActions(
+      {
+        success: true,
+        content: 'Done.',
+        followups: [{ prompt: 'Run the existing test suite', label: 'Run the tests' }],
+      },
+      undefined,
+      undefined,
+      {},
+    );
+    // Wrapped in the same list prompt the interactive loop shows.
+    const answer = await inquirer.prompt<{ action: string }>([
+      { type: 'list', name: 'action', message: 'What next?', prefix: '🚀', choices: actions },
+    ]);
+    const choices = (promptSpy.mock.calls[0][0] as Array<{ choices: Array<{ name: string; value: string }> }>)[0].choices;
+    const suggested = choices.find((c) => c.value === 'followup:Run the existing test suite');
+    expect(suggested).toBeDefined();
+    expect(suggested?.name).toBe('💡  Run the tests');
+    // And the generic entry is still there, so nothing is taken away.
+    expect(choices.some((c) => c.value === 'continue')).toBe(true);
+    expect(answer.action).toBe('exit');
+    promptSpy.mockRestore();
+  });
+
+  it('falls back to the generator when the run reported no suggestions', async () => {
+    const generate = vi
+      .spyOn(cmd as any, 'generateFollowUpSuggestions')
+      .mockResolvedValue([{ label: 'Run the tests', description: '', goal: 'Run the test suite' }]);
+
+    const actions = await (cmd as any).generatePostExecutionActions(
+      {
+        success: true,
+        orchestrationResult: { goal: 'g', success: true, summary: 's', agentResults: [] },
+      },
+      undefined,
+      undefined,
+      {},
+    );
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(actions.map((a: { value: string }) => a.value)).toContain('followup:Run the test suite');
+  });
 });

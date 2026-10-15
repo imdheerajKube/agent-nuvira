@@ -57,7 +57,7 @@ describe('service catalog', () => {
       }
     }
     // The local endpoint the ComfyUI backend reads.
-    expect(catalogVars.has('BUFF_IMAGE_API_URL')).toBe(true);
+    expect(catalogVars.has('NUVIRA_IMAGE_API_URL')).toBe(true);
   });
 
   it('offers every search backend env var the search tool reads', () => {

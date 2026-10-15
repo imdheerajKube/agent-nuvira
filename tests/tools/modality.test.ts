@@ -255,7 +255,7 @@ describe('I3 image generation', () => {
     expect(url).toContain('width=512');
   });
 
-  it('uses a local backend when BUFF_IMAGE_API_URL is passed', async () => {
+  it('uses a local backend when NUVIRA_IMAGE_API_URL is passed', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: true, headers: { get: () => 'image/png' }, arrayBuffer: async () => Buffer.from('LOCAL') } as unknown as Response)),

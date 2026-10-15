@@ -202,7 +202,7 @@ export default function AgentHub() {
   const [toggling, setToggling] = useState<string | null>(null);
   const [rowMsg, setRowMsg] = useState<Record<string, string>>({});
 
-  // I11 — Channels-tab test send (mirrors `buff gateway send <target> <text>`).
+  // I11 — Channels-tab test send (mirrors `nuvira gateway send <target> <text>`).
   const [sendTarget, setSendTarget] = useState('');
   const [sendText, setSendText] = useState('');
   const [sending, setSending] = useState(false);
@@ -512,7 +512,7 @@ export default function AgentHub() {
     setData(d);
     if (d?.channels?.statusRecipients) setStatusRecipients(d.channels.statusRecipients);
     if (d?.channels?.contacts) setContacts(d.channels.contacts);
-    if (!d) setError('Could not reach the dashboard server, or the server is older than this panel. Run `buff dashboard` to start it.');
+    if (!d) setError('Could not reach the dashboard server, or the server is older than this panel. Run `nuvira dashboard` to start it.');
     setLoading(false);
   }, []);
 
@@ -1017,7 +1017,7 @@ export default function AgentHub() {
             {!authStatus?.configured ? (
               <p className="admin-hint">
                 The first user is always an admin. Automation alternative: set{' '}
-                <code>BUFF_DASHBOARD_ADMIN_USER</code> / <code>BUFF_DASHBOARD_ADMIN_PASSWORD</code>.
+                <code>NUVIRA_DASHBOARD_ADMIN_USER</code> / <code>NUVIRA_DASHBOARD_ADMIN_PASSWORD</code>.
               </p>
             ) : null}
           </form>
@@ -1224,7 +1224,7 @@ export default function AgentHub() {
           <h2 className="section-subtitle">🔌 Platform transports</h2>
           <PlatformConfigSection canWrite={canWrite} sessionExpired={sessionExpired} mode="table" />
 
-          <h2 className="section-subtitle">🔗 Channel aliases (buff gateway status)</h2>
+          <h2 className="section-subtitle">🔗 Channel aliases (nuvira gateway status)</h2>
           {data.channels.aliases.length > 0 ? (
             <div className="hub-alias-list">
               {data.channels.aliases.map((a) => (
@@ -1236,7 +1236,7 @@ export default function AgentHub() {
             </div>
           ) : (
             <div className="empty-state">
-              No aliases yet — register one with <code>buff gateway alias &lt;name&gt; &lt;platform&gt; &lt;channelId&gt;</code>.
+              No aliases yet — register one with <code>nuvira gateway alias &lt;name&gt; &lt;platform&gt; &lt;channelId&gt;</code>.
             </div>
           )}
 
@@ -1266,9 +1266,9 @@ export default function AgentHub() {
           {permissionsExpanded ? (<>
           <div className="admin-hint" style={{ marginBottom: 10 }}>
             ⚠ <strong>Not the same as send-by-name contacts:</strong> a WhatsApp contact name (from{' '}
-            <code>buff whatsapp contact add</code>, shown in the WhatsApp bridge panel below) only lets{' '}
+            <code>nuvira whatsapp contact add</code>, shown in the WhatsApp bridge panel below) only lets{' '}
             <em>you</em> send <em>to</em> it by name — it does <strong>not</strong> let that number trigger
-            the agent. Add the number here (or <code>buff config gateway allow &lt;platform&gt; user
+            the agent. Add the number here (or <code>nuvira config gateway allow &lt;platform&gt; user
             &lt;id&gt;</code>) to grant inbound access.
           </div>
           <div className="hub-permissions">
@@ -1503,7 +1503,7 @@ export default function AgentHub() {
             <div className={`admin-row-msg${policyMsg.kind === 'err' ? ' admin-row-msg-err' : ''}`}>{policyMsg.text}</div>
           ) : null}
 
-          <h2 className="section-subtitle">📤 Test a channel (buff gateway send)</h2>
+          <h2 className="section-subtitle">📤 Test a channel (nuvira gateway send)</h2>
           <form className="hub-send-form" onSubmit={(e) => void handleSendMessage(e)}>
             <label className="hub-send-target">
               <span className="admin-hint">Target — an alias or platform:channelId</span>
@@ -1536,10 +1536,10 @@ export default function AgentHub() {
           ) : null}
           <p className="admin-hint">
             Sends through the same gateway the CLI uses — the dashboard process must have the
-            platform's env token set (e.g. <code>BUFF_SMTP_HOST</code>). Requires admin or operator.
+            platform's env token set (e.g. <code>NUVIRA_SMTP_HOST</code>). Requires admin or operator.
           </p>
 
-          <h2 className="section-subtitle">🟢 WhatsApp bridge (buff whatsapp pair)</h2>
+          <h2 className="section-subtitle">🟢 WhatsApp bridge (nuvira whatsapp pair)</h2>
           <WhatsAppPanel authed={authed} canWrite={canWrite} sessionExpired={sessionExpired} reveal={revealIds} />
         </div>
       ) : null}
@@ -2105,7 +2105,7 @@ export default function AgentHub() {
             </div>
           ) : (
             <div className="empty-state">
-              No hub skills installed — search the marketplace below or run <code>buff skills install &lt;name&gt;</code>.
+              No hub skills installed — search the marketplace below or run <code>nuvira skills install &lt;name&gt;</code>.
             </div>
           )}
 

@@ -1,5 +1,5 @@
 /**
- * GatewayPage — gateway ops in the GUI (GUI parity with `buff gateway`).
+ * GatewayPage — gateway ops in the GUI (GUI parity with `nuvira gateway`).
  *
  * Status, delivery ledger, foreground start, and cron management run the REAL
  * CLI commands through the shared TaskConsole (isolated child process + live
@@ -25,7 +25,7 @@ const PRESETS = [
 export default function GatewayPage() {
   return (
     <div className="panel">
-      <PageHeader icon="🌐" title="Gateway ops — run buff gateway from the GUI" />
+      <PageHeader icon="🌐" title="Gateway ops — run nuvira gateway from the GUI" />
 
       <TaskConsole
         presets={PRESETS}

@@ -221,9 +221,16 @@ describe('OpenRouterAdapter', () => {
       expect(entry.measured).toBe(true);
       expect(entry.inputTokens).toBe(1000);
       expect(entry.outputTokens).toBe(1000);
-      // No reported cost → priced from the local table, and NOT flagged reported.
-      expect(entry.costUsd).toBeGreaterThan(0);
       expect(entry.costReported).toBeUndefined();
+      // No reported cost → priced from the ONE price source, and NOT flagged
+      // reported. `costUsd` is 0 here on purpose: with the account's billing tier
+      // UNDECLARED, a list price is shown as `listPriceUsd` and is never counted as
+      // spend (charging it is how a free Groq tier got billed a 70B-class rate on
+      // a real profile). Declaring the tier is what turns it into money owed.
+      expect(entry.costSource).toBe('catalog');
+      expect(entry.billingTier).toBe('unknown');
+      expect(entry.costUsd).toBe(0);
+      expect(entry.listPriceUsd).toBeGreaterThan(0);
     });
 
     it('bills a :free model $0 even when usage carries no cost', async () => {

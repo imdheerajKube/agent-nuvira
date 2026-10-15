@@ -431,6 +431,23 @@ export type ChatConsoleEvent =
       multiSelect: boolean;
     };
 
+/**
+ * A question that is WAITING for the user, in the shape the GUI renders and the
+ * SSE route writes as `event: question`.
+ *
+ * Kept as a type of its own because it is now DELIVERED TWICE: live, when the
+ * turn asks (`askQuestion`), and again to every client that attaches to the
+ * session afterwards (`pendingQuestionFor`) — a reload mid-question used to
+ * land on a page that showed "still working" and no way to answer, while the
+ * turn waited for a reply nobody could give.
+ */
+export interface PendingQuestionPayload {
+  questionId: string;
+  question: string;
+  choices: Array<{ label: string; description?: string }>;
+  multiSelect: boolean;
+}
+
 /** The selection shape the GUI sends back to answer a pending question. */
 export interface QuestionAnswer {
   /** Selected option index (or indices for multiSelect). -1 / [] = skip (decline). */
@@ -449,12 +466,27 @@ interface AskUserResult {
 export class ChatConsole {
   private sessions = new Map<string, ChatSessionRecord>();
   private busy = new Set<string>();
+  /**
+   * When the in-flight turn of each session STARTED, for a wait that can name
+   * its own age.
+   *
+   * WHY. The dashboard gives up on its own POST after 5 minutes and then shows
+   * "⏳ Still working on the server — <n> elapsed", where `<n>` was measured from
+   * the moment IT gave up, not from the moment the TURN began. MEASURED
+   * (2026-10-14, trace-1791996974262-zdraep, dashboard-chat debug log): a turn
+   * ran 664s, the page flipped to the notice at the 5-minute ceiling and read
+   * "1m 25s elapsed" — a number that under-reported the user's actual wait by
+   * five minutes, and read as nonsense next to the 12-second trace of the turn
+   * before it. The turn's own start is the honest origin, so it is kept here
+   * where the server knows it and served with the session snapshot.
+   */
+  private turnStartedAt = new Map<string, number>();
   private engine: ChatEngine | null;
   private listeners = new Set<(sessionId: string, event: ChatConsoleEvent) => void>();
   /** Pending ask_user questions per session — resolved by the GUI's respond(). */
   private pendingQuestions = new Map<
     string,
-    { sessionId: string; resolve: (r: AskUserResult) => void }
+    { sessionId: string; resolve: (r: AskUserResult) => void; payload: PendingQuestionPayload }
   >();
   /** P0.7 — per-session plan stores (plans never leak across conversations). */
   private planStores = new Map<string, PlanStore>();
@@ -624,6 +656,17 @@ export class ChatConsole {
   }
 
   /**
+   * The epoch-ms at which this session's in-flight turn started, or null when
+   * nothing is running. Served with the session snapshot so a page that reloaded
+   * mid-turn (or gave up on its own POST) can say how long the wait really is
+   * instead of counting from whenever it happened to attach.
+   */
+  busySince(sessionId: string): number | null {
+    const startedAt = this.turnStartedAt.get(sessionId);
+    return this.busy.has(sessionId) && typeof startedAt === 'number' ? startedAt : null;
+  }
+
+  /**
    * Append one exchange to a session WITHOUT running a turn.
    *
    * The deferred retry loop needs this: an ask can be re-run minutes or hours
@@ -765,6 +808,9 @@ export class ChatConsole {
       });
     }
     this.busy.add(sessionId);
+    // The turn's own start, so a client that gave up waiting can say how old the
+    // wait actually is (see `turnStartedAt`).
+    this.turnStartedAt.set(sessionId, now);
     // P4 — one AbortController per turn: abort(sessionId) fires it, the
     // engine stops at the next loop boundary (and aborts the in-flight
     // provider request), and the turn is DISCARDED (no persist, no events).
@@ -1071,6 +1117,7 @@ export class ChatConsole {
     } finally {
       this.busy.delete(sessionId);
       this.activeAborts.delete(sessionId);
+      this.turnStartedAt.delete(sessionId);
     }
   }
 
@@ -1116,6 +1163,7 @@ export class ChatConsole {
     }
     controller.abort();
     this.busy.delete(sessionId);
+    this.turnStartedAt.delete(sessionId);
     return true;
   }
 
@@ -1136,8 +1184,33 @@ export class ChatConsole {
       // skip button resolves it, and reset() sweeps leftovers. The promise
       // itself never rejects — worst case the model proceeds on best
       // judgment (the pre-P0.1 behavior).
-      this.pendingQuestions.set(questionId, { sessionId, resolve });
+      this.pendingQuestions.set(questionId, {
+        sessionId,
+        resolve,
+        payload: { questionId, ...payload },
+      });
     });
+  }
+
+  /**
+   * The question a session is HOLDING for the user right now, or null.
+   *
+   * WHY THIS EXISTS. The `question` event is emitted once, at the moment the
+   * turn asks; a client that attaches afterwards (a page reload, a second tab,
+   * a client whose EventSource reconnected) never sees it. MEASURED (2026-10-14,
+   * traces `…-wpm352` / `…-n1v1ue`, in a conversation whose own subject was
+   * "the model said it needs to ask something but I didn't see anything on
+   * screen"): the turn sat in `ask_user` for 5m02s, and the reloaded page showed
+   * only "⏳ Still working on the server … the answer will appear here by itself"
+   * — a sentence that was false twice over, because the answer was waiting for a
+   * click the page never offered. The SSE route replays this to every new
+   * subscriber, so the question outlives the connection that first heard it.
+   */
+  pendingQuestionFor(sessionId: string): PendingQuestionPayload | null {
+    for (const pending of this.pendingQuestions.values()) {
+      if (pending.sessionId === sessionId) return pending.payload;
+    }
+    return null;
   }
 
   /**
@@ -1227,6 +1300,7 @@ export class ChatConsole {
     }
     this.sessions.delete(sessionId);
     this.busy.delete(sessionId);
+    this.turnStartedAt.delete(sessionId);
     this.clearPlan(sessionId);
     this.persist();
   }

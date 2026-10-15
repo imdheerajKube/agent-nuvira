@@ -112,7 +112,7 @@ export default function AdminPanel() {
     setError(null);
     const result = await dashboardAPI.fetchAdminChecks();
     setData(result);
-    if (!result) setError('Could not reach the dashboard server, or the server is older than this panel. Run `buff dashboard` to start it.');
+    if (!result) setError('Could not reach the dashboard server, or the server is older than this panel. Run `nuvira dashboard` to start it.');
     setLoading(false);
   }, []);
 
@@ -197,7 +197,7 @@ export default function AdminPanel() {
     dashboardAPI.fetchAdminAuthStatus().then((s) => {
       if (!alive) return;
       if (!s) {
-        setError('Could not reach the dashboard server, or the server is older than this panel. Run `buff dashboard` to start it.');
+        setError('Could not reach the dashboard server, or the server is older than this panel. Run `nuvira dashboard` to start it.');
         setLoading(false);
         return;
       }
@@ -302,9 +302,9 @@ export default function AdminPanel() {
     setUsers([]);
   };
 
-  /** Shut down the gateway (any terminal can restart it with `buff gateway start`). */
+  /** Shut down the gateway (any terminal can restart it with `nuvira gateway start`). */
   const stopGateway = async () => {
-    if (!window.confirm('Stop the running gateway? Channels will stop responding until you restart it with `buff gateway start`.')) return;
+    if (!window.confirm('Stop the running gateway? Channels will stop responding until you restart it with `nuvira gateway start`.')) return;
     setShutdownBusy('gateway');
     setShutdownMsg(null);
     const r = await dashboardAPI.shutdown('gateway');
@@ -340,13 +340,13 @@ export default function AdminPanel() {
 
   /** Shut down this dashboard server — the page will disconnect. */
   const stopDashboard = async () => {
-    if (!window.confirm('Shut down the dashboard? This page will disconnect and the server will exit. Restart with `buff dashboard`.')) return;
+    if (!window.confirm('Shut down the dashboard? This page will disconnect and the server will exit. Restart with `nuvira dashboard`.')) return;
     setShutdownBusy('dashboard');
     setShutdownMsg('🛑 Shutting down the dashboard — this page will disconnect…');
     await dashboardAPI.shutdown('dashboard');
     // The server exits on its own; if the request failed the page stays up.
     setShutdownBusy(null);
-    setShutdownMsg('ℹ️ The dashboard server did not stop (see the server terminal). You can also stop it with `buff dashboard stop`.');
+    setShutdownMsg('ℹ️ The dashboard server did not stop (see the server terminal). You can also stop it with `nuvira dashboard stop`.');
   };
 
   const addUser = async (e: React.FormEvent) => {
@@ -712,7 +712,7 @@ export default function AdminPanel() {
               className="admin-logout-btn"
               onClick={() => void stopGateway()}
               disabled={shutdownBusy !== null}
-              title="Stop the running gateway (buff gateway stop)"
+              title="Stop the running gateway (nuvira gateway stop)"
             >
               {shutdownBusy === 'gateway' ? '⏳ Stopping…' : '⏻ Stop gateway'}
             </button>
@@ -722,7 +722,7 @@ export default function AdminPanel() {
               className="admin-logout-btn"
               onClick={() => void stopDashboard()}
               disabled={shutdownBusy !== null}
-              title="Shut down this dashboard server (buff dashboard stop)"
+              title="Shut down this dashboard server (nuvira dashboard stop)"
             >
               {shutdownBusy === 'dashboard' ? '⏳ Stopping…' : '🛑 Stop dashboard'}
             </button>
@@ -1137,7 +1137,7 @@ export default function AdminPanel() {
 
           <QuotaPanel authed={authed} role={role || 'viewer'} />
 
-          <h2 className="section-subtitle">⚙️ System Checks (buff doctor)</h2>
+          <h2 className="section-subtitle">⚙️ System Checks (nuvira doctor)</h2>
           <div className="admin-check-list">
             {data.system.map((c) => <CheckRow key={c.name} check={c} />)}
           </div>

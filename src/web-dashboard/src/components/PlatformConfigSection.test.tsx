@@ -1,6 +1,6 @@
 /**
  * PlatformConfigSection tests — the Channels-tab transport config forms
- * (GUI parity with `buff config gateway`). Mocks the API, drives the expand →
+ * (GUI parity with `nuvira config gateway`). Mocks the API, drives the expand →
  * edit → save → refresh flow, the remove flow, and the viewer gate.
  */
 
@@ -15,15 +15,15 @@ const FIXTURES: PlatformConfigEntry[] = [
     platform: 'telegram',
     label: 'Telegram',
     configured: true,
-    envVars: [{ varName: 'BUFF_TELEGRAM_TOKEN', set: true, value: '123:ABC', prompt: 'Telegram bot token', secret: true }],
+    envVars: [{ varName: 'NUVIRA_TELEGRAM_TOKEN', set: true, value: '123:ABC', prompt: 'Telegram bot token', secret: true }],
   },
   {
     platform: 'matrix',
     label: 'Matrix (homeserver API)',
     configured: false,
     envVars: [
-      { varName: 'BUFF_MATRIX_HOMESERVER', set: false, value: '', prompt: 'Matrix homeserver base URL', secret: false },
-      { varName: 'BUFF_MATRIX_ACCESS_TOKEN', set: false, value: '', prompt: 'Matrix access token', secret: true },
+      { varName: 'NUVIRA_MATRIX_HOMESERVER', set: false, value: '', prompt: 'Matrix homeserver base URL', secret: false },
+      { varName: 'NUVIRA_MATRIX_ACCESS_TOKEN', set: false, value: '', prompt: 'Matrix access token', secret: true },
     ],
   },
 ];
@@ -46,7 +46,7 @@ describe('PlatformConfigSection', () => {
     render(<PlatformConfigSection canWrite sessionExpired={() => {}} />);
     expect(await screen.findByText('Telegram')).toBeTruthy();
     expect(await screen.findByText('Matrix (homeserver API)')).toBeTruthy();
-    expect(await screen.findByText('BUFF_TELEGRAM_TOKEN')).toBeTruthy();
+    expect(await screen.findByText('NUVIRA_TELEGRAM_TOKEN')).toBeTruthy();
   });
 
   it('expands a platform, saves edited values, and refreshes', async () => {
@@ -61,8 +61,8 @@ describe('PlatformConfigSection', () => {
 
     await waitFor(() => {
       expect(dashboardAPI.setPlatformConfig).toHaveBeenCalledWith('matrix', {
-        BUFF_MATRIX_HOMESERVER: 'https://matrix.org',
-        BUFF_MATRIX_ACCESS_TOKEN: '',
+        NUVIRA_MATRIX_HOMESERVER: 'https://matrix.org',
+        NUVIRA_MATRIX_ACCESS_TOKEN: '',
       });
     });
     expect(dashboardAPI.getPlatformConfigs).toHaveBeenCalledTimes(2); // initial + after save

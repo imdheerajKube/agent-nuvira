@@ -10,10 +10,10 @@ interface Props {
 }
 
 /**
- * Platform transport configuration — GUI parity with `buff config gateway`.
+ * Platform transport configuration — GUI parity with `nuvira config gateway`.
  * Lists every env-configurable platform with an expandable form per platform
  * (fields prefilled from the current values; secrets are password inputs).
- * Save/Remove write ~/.buff/.env through the same module the CLI uses, and
+ * Save/Remove write ~/.nuvira/.env through the same module the CLI uses, and
  * the server applies the values to its own process.env so the send-test picks
  * them up immediately.
  */
@@ -64,7 +64,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
   };
 
   const remove = async (platform: string): Promise<void> => {
-    if (!window.confirm(`Remove ${platform} transport config? Tokens will be deleted from ~/.buff/.env.`)) return;
+    if (!window.confirm(`Remove ${platform} transport config? Tokens will be deleted from ~/.nuvira/.env.`)) return;
     setBusy(platform);
     setMsg(null);
     const result = await dashboardAPI.removePlatformConfig(platform);
@@ -90,7 +90,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
         'Open your bot in Telegram and send it a message (e.g. /start)',
       ],
       postSetup: [
-        'Start the gateway: buff gateway start (or from the Gateway tab)',
+        'Start the gateway: nuvira gateway start (or from the Gateway tab)',
         'Open your bot in Telegram and send a message — the agent replies!',
       ],
     },
@@ -104,7 +104,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
         'Invite the bot to your server with the OAuth2 URL generator',
       ],
       postSetup: [
-        'Start the gateway: buff gateway start',
+        'Start the gateway: nuvira gateway start',
         'Mention the bot in a Discord channel or send it a DM',
         'The agent will reply automatically!',
       ],
@@ -118,7 +118,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
         'Copy the Bot User OAuth Token (starts with xoxb-)',
       ],
       postSetup: [
-        'Start the gateway: buff gateway start',
+        'Start the gateway: nuvira gateway start',
         'DM the bot or mention it in a channel',
         'The agent will reply automatically!',
       ],
@@ -130,7 +130,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
         'For SendGrid/Mailgun: get SMTP credentials from their dashboard',
       ],
       postSetup: [
-        'Start the gateway: buff gateway start',
+        'Start the gateway: nuvira gateway start',
         'Send an email to the configured address',
         'The agent will reply via email!',
       ],
@@ -257,7 +257,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
                     ) : null}
                   </td>
                   <td className="platform-config-cli">
-                    <code>buff gateway setup {p.platform}</code>
+                    <code>nuvira gateway setup {p.platform}</code>
                   </td>
                 </tr>
                 {expanded === p.platform ? (
@@ -270,7 +270,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
                             <input type={v.secret ? 'password' : 'text'} value={v.value} readOnly className="platform-config-readonly" placeholder={v.secret ? '••••••••' : 'value'} />
                           </label>
                         ))}
-                        <p className="admin-hint">Tokens are in <code>~/.buff/.env</code> — edit there or use the wizard above.</p>
+                        <p className="admin-hint">Tokens are in <code>~/.nuvira/.env</code> — edit there or use the wizard above.</p>
                       </div>
                     </td>
                   </tr>
@@ -354,7 +354,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
       </div>
     ) : null}
     <div className="platform-config">
-      <h2 className="section-subtitle">⚙️ Platform transports (buff config gateway)</h2>
+      <h2 className="section-subtitle">⚙️ Platform transports (nuvira config gateway)</h2>
       {msg ? (
         <div className={`admin-row-msg${msg.kind === 'ok' ? '' : ' admin-row-msg-err'}`}>{msg.text}</div>
       ) : null}
@@ -374,7 +374,7 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
         ))}
       </div>
       <p className="admin-hint">
-        Tokens are written to <code>~/.buff/.env</code> (loaded by both the CLI and this dashboard at
+        Tokens are written to <code>~/.nuvira/.env</code> (loaded by both the CLI and this dashboard at
         startup) — no env vars to hand-export. The WhatsApp personal bridge is configured separately
         above via QR/code pairing.
       </p>

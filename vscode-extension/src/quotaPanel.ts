@@ -1,6 +1,6 @@
 /**
  * Quota Panel — A VS Code WebView panel that visualizes the central quota
- * ledger (`~/.buff/memory/quota-ledger.json` + `quota-events.jsonl`).
+ * ledger (`~/.nuvira/memory/quota-ledger.json` + `quota-events.jsonl`).
  *
  * Mirrors the dashboard's Quota card so the extension view matches the CLI
  * transparency story:
@@ -55,7 +55,7 @@ export class QuotaPanel {
   private panel: vscode.WebviewPanel | null = null;
   private disposables: vscode.Disposable[] = [];
   private loadStatus: () => Promise<QuotaStatusInfo>;
-  /** Memory dir watched for live quota updates (BUFF_MEMORY_DIR-aware). */
+  /** Memory dir watched for live quota updates (NUVIRA_MEMORY_DIR-aware). */
   private watchDir: string;
   private watcher: ReturnType<typeof watch> | null = null;
   private watchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -64,13 +64,17 @@ export class QuotaPanel {
 
   constructor(options: {
     loadStatus: () => Promise<QuotaStatusInfo>;
-    /** Override the watched memory dir (defaults to BUFF_MEMORY_DIR || ~/.buff/memory). */
+    /** Override the watched memory dir (defaults to NUVIRA_MEMORY_DIR || ~/.nuvira/memory). */
     watchDir?: string;
     /** Override the poll-fallback interval (ms). Default 60000. Tests inject a tiny value. */
     pollMs?: number;
   }) {
     this.loadStatus = options.loadStatus;
-    this.watchDir = options.watchDir || process.env.BUFF_MEMORY_DIR || join(homedir(), '.buff', 'memory');
+    this.watchDir =
+      options.watchDir ||
+      process.env.NUVIRA_MEMORY_DIR ||
+      process.env.BUFF_MEMORY_DIR ||
+      join(homedir(), '.nuvira', 'memory');
     this.pollMs = options.pollMs ?? WATCH_POLL_MS;
   }
 
@@ -171,7 +175,7 @@ export class QuotaPanel {
 
   /**
    * Watch the memory dir and auto-refresh when quota files change, so a
-   * failover/park/window-reset written by ANY process sharing BUFF_MEMORY_DIR
+   * failover/park/window-reset written by ANY process sharing NUVIRA_MEMORY_DIR
    * (CLI, chat, dashboard) shows up instantly without clicking Refresh.
    * Best-effort — a failed watcher must never break the panel.
    */
@@ -443,9 +447,9 @@ export class QuotaPanel {
     <div id="emptyState" class="empty-state">
       <div class="icon">🧾</div>
       <p>No quota activity yet.<br><br>
-      Run <code>buff execute</code> or <code>buff chat</code> with Auto routing
+      Run <code>nuvira execute</code> or <code>nuvira chat</code> with Auto routing
       enabled and quota-based failover to populate the ledger. The ledger lives
-      at <code>~/.buff/memory/quota-ledger.json</code>.</p>
+      at <code>~/.nuvira/memory/quota-ledger.json</code>.</p>
     </div>
   </div>
 
@@ -469,9 +473,9 @@ export class QuotaPanel {
           contentEl.innerHTML = '<div id="emptyState" class="empty-state">' +
             '<div class="icon">🧾</div>' +
             '<p>No quota activity yet.<br><br>' +
-            'Run <code>buff execute</code> or <code>buff chat</code> with Auto routing ' +
+            'Run <code>nuvira execute</code> or <code>nuvira chat</code> with Auto routing ' +
             'enabled and quota-based failover to populate the ledger. The ledger lives ' +
-            'at <code>~/.buff/memory/quota-ledger.json</code>.</p></div>';
+            'at <code>~/.nuvira/memory/quota-ledger.json</code>.</p></div>';
           return;
         }
 

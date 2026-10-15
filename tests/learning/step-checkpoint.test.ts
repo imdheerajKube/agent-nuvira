@@ -22,6 +22,7 @@ import {
   openResume,
   resolveResumeRequest,
   stepDigest,
+  stepShape,
   type ResumeRequest,
 } from '../../src/learning/step-checkpoint.js';
 
@@ -184,6 +185,47 @@ describe('WS5 resume — the ledger', () => {
     // The reason AND the step, so a partial replay is actionable.
     expect(outcome.notice).toContain('why not: its input changed (1)');
     expect(outcome.notice).toContain('missed: model:1 (its input changed)');
+  });
+
+  /**
+   * The intermittent resume failure that could not be chased (measured
+   * 2026-10-14: twelve consecutive green runs, six under a full-suite load) used
+   * to report only "its input changed" — which names neither what changed nor by
+   * how much, so the next occurrence in CI would be just as opaque. The sizes are
+   * reported beside the reason, and they never take part in the verdict.
+   */
+  it('reports HOW the input changed (sizes) beside the reason, never as the verdict', () => {
+    const before = [{ role: 'user', content: 'hi' }];
+    const after = [{ role: 'user', content: 'hi' }, { role: 'tool', content: 'a tool result the first run did not have' }];
+    const first = openResume({ ...ask, resume: { id: 'shape' } });
+    first.ledger.record('model:1', stepDigest(before, []), answer('ANSWER-1'), stepShape(before, []));
+    closeResume(first, ask);
+
+    const second = openResume({ ...ask, resume: { id: 'shape' } });
+    expect(second.ledger.replay('model:1', stepDigest(after, []), stepShape(after, []))).toBeNull();
+    const notice = closeResume(second, ask).notice;
+
+    expect(notice).toContain('its input changed');
+    // The evidence: the recorded shape, and the current one.
+    expect(notice).toContain('1 msgs/2 chars/0 tools');
+    expect(notice).toContain(`2 msgs/${'hi'.length + 'a tool result the first run did not have'.length} chars/0 tools`);
+  });
+
+  it('a shape that differs while the DIGEST matches is still a replay', () => {
+    // The digest is the verdict. The shape is diagnostics, and a diagnostic that
+    // could turn a match into a miss would be a correctness bug of its own.
+    const thread = [{ role: 'user', content: 'hi' }];
+    const digest = stepDigest(thread, []);
+    const first = openResume({ ...ask, resume: { id: 'shape-irrelevant' } });
+    first.ledger.record('model:1', digest, answer('ANSWER-1'), '1 msgs/2 chars/0 tools');
+    closeResume(first, ask);
+
+    const second = openResume({ ...ask, resume: { id: 'shape-irrelevant' } });
+    // A DIFFERENT shape string for the same digest: the step replays.
+    expect(second.ledger.replay('model:1', digest, '2 msgs/9 chars/0 tools')).toEqual(answer('ANSWER-1'));
+    const outcome = closeResume(second, ask);
+    expect(outcome.replayed).toBe(1);
+    expect(outcome.notice).not.toContain('its input changed');
   });
 
   it('NEVER replays a recorded provider failure', () => {

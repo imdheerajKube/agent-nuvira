@@ -248,7 +248,10 @@ export function startWarmupDaemon(configManager: ConfigManager, deps: WarmupDeps
   if (warmupTimer) return; // Already running
 
   const intervalMs = warmupConfig().intervalMs;
-  logger.info(`[warmup] Starting model warmup daemon (every ${intervalMs}ms)`);
+  // `debug`, not `info`: the daemon is harness upkeep, not something the user
+  // asked about, and it starts on EVERY run — so at info level a first "hi"
+  // was preceded by a warmup announcement. Visible under `--debug` (`-d`).
+  logger.debug(`[warmup] Starting model warmup daemon (every ${intervalMs}ms)`);
   warmupTimer = setInterval(() => {
     if (!isRunning) {
       isRunning = true;

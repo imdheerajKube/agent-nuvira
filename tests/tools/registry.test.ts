@@ -34,6 +34,8 @@ import {
   toolJsonSchemas,
   toFollowupSuggestions,
   suggestFollowupsSchema,
+  TOOL_CONTRACT,
+  TOOL_CONTRACT_JSON,
   type ToolContext,
 } from '../../src/tools/registry.js';
 import { toolsetForTool } from '../../src/tools/toolsets.js';
@@ -260,6 +262,24 @@ describe('registry — suggest_followups contract', () => {
   it('rejects invalid output (no array / empty prompts) with []', () => {
     expect(toFollowupSuggestions('no json here')).toEqual([]);
     expect(toFollowupSuggestions('[{"prompt":""}]')).toEqual([]);
+  });
+
+  /**
+   * The measured weak-model failure (2026-10-14): `nuvira execute "hi"` on
+   * `local/deepseek-coder` reported 0 tool calls and wrote its three options as
+   * PROSE ("Would you like me to: 1. … 2. … 3. …"), so nothing was clickable.
+   * The transport that made it possible is the JSON fallback, and its contract
+   * has to say what "end with suggest_followups" MEANS when there is no native
+   * tool call: the block, not a list in the prose.
+   */
+  it('tells the JSON-fallback transport that prose options are not a tool call', () => {
+    expect(TOOL_CONTRACT_JSON).toContain('FINAL STEP');
+    expect(TOOL_CONTRACT_JSON).toContain('{"tool":"suggest_followups","arguments":{"followups"');
+    expect(TOOL_CONTRACT_JSON).toMatch(/prose are NOT a tool call/i);
+    // The native rule is unchanged and still present in both.
+    for (const contract of [TOOL_CONTRACT, TOOL_CONTRACT_JSON]) {
+      expect(contract).toContain('END EVERY RESPONSE by calling `suggest_followups`');
+    }
   });
 
   it('parses 4+ followups (~3 is prose guidance, not a schema cap)', () => {

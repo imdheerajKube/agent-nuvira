@@ -6,7 +6,7 @@
  *   - **Google Gemini / Imagen ("Nano Banana")** — `GEMINI_API_KEY` / `GOOGLE_API_KEY`
  *   - **OpenAI DALL·E / gpt-image** — `OPENAI_API_KEY`
  *   - **Stability AI** — `STABILITY_API_KEY`
- *   - **Local ComfyUI / Stable Diffusion** — `BUFF_IMAGE_API_URL`
+ *   - **Local ComfyUI / Stable Diffusion** — `NUVIRA_IMAGE_API_URL`
  *   - **Pollinations.ai** — free, keyless default + fallback.
  *
  * Priority: an explicit provider (`opts.provider` or `modality.image.provider`)

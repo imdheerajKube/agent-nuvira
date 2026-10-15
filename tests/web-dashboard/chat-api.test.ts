@@ -95,6 +95,12 @@ class FakeEngine implements ChatEngine {
    * first says "failed", the second says "do not retry this".
    */
   refusedAnswer: string | null = null;
+  /**
+   * When set, the turn ASKS this question through the engine's `askUser` seam
+   * and does not go on until it is answered — the shape of a turn that HOLDS for
+   * the user (which the API has to keep answerable after a reload).
+   */
+  askQuestion: { question: string; choices: Array<{ label: string }>; multiSelect?: boolean } | null = null;
   async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string; generationFailed?: boolean; turnReport?: import('../../src/learning/turn-report.js').TurnReport }> {
     this.calls.push({ message, opts });
     const o = opts as { onProgress?: (line: string) => void; onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void; onPlanChange?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void; onGitDiff?: (d: { files: Array<{ path: string; body: string }>; summary: string }) => void };
@@ -104,6 +110,13 @@ class FakeEngine implements ChatEngine {
     }
     for (const p of this.planChanges) o.onPlanChange?.(p);
     for (const d of this.gitDiffs) o.onGitDiff?.(d);
+    if (this.askQuestion) {
+      const ask = (opts as {
+        askUser?: (q: string, c: Array<{ label: string }>, m: boolean) => Promise<unknown>;
+      }).askUser;
+      const answer = await ask!(this.askQuestion.question, this.askQuestion.choices, this.askQuestion.multiSelect ?? false);
+      return { content: `answered: ${JSON.stringify(answer)}`, followups: [] };
+    }
     // P4 — a turn that honors the cancel signal stays in flight until the
     // server's abort (client disconnect) fires the injected signal.
     if (this.honorSignal) {
@@ -540,11 +553,23 @@ describe('/api/chat', () => {
       await until(() => console_.isBusy('busy-session'));
       const detail = await authedFetch('/api/sessions/busy-session');
       expect(detail.status).toBe(200);
-      const body = (await detail.json()) as { ok: boolean; session: { busy?: boolean } };
+      const body = (await detail.json()) as { ok: boolean; session: { busy?: boolean; busySince?: number } };
       expect(body.session.busy).toBe(true);
+      // …and the snapshot DATES the run: a client that gave up on its own POST
+      // (5-minute ceiling) or reloaded mid-turn reports the turn's age, not the
+      // age of its own arrival (measured 2026-10-14: a 664s turn displayed as
+      // "1m 25s elapsed").
+      expect(typeof body.session.busySince).toBe('number');
+      expect(body.session.busySince!).toBeLessThanOrEqual(Date.now());
       // Clean up: cancel so the turn does not leak into a later test.
       await authedFetch('/api/chat/cancel', 'POST', { sessionId: 'busy-session' });
       await until(() => !console_.isBusy('busy-session'));
+      // Settled: nothing is running, so no wait is dateable. Without this the
+      // stale start would keep describing a turn that is over.
+      const after = await authedFetch('/api/sessions/busy-session');
+      const afterBody = (await after.json()) as { session?: { busy?: boolean; busySince?: number } };
+      expect(afterBody.session?.busy).toBe(false);
+      expect(afterBody.session?.busySince).toBeUndefined();
     } finally {
       engine.honorSignal = false;
     }
@@ -562,6 +587,83 @@ describe('/api/chat', () => {
       { role: 'user', content: 'first' },
       { role: 'assistant', content: 'echo: first' },
     ]);
+  });
+
+  /**
+   * An OPEN question has to survive the page that first heard it.
+   *
+   * The `question` event is emitted once, when the turn asks — a page that
+   * reloads afterwards never receives it, and the turn then waits on a reply the
+   * page cannot send. MEASURED (2026-10-14, trace-1791996357488-wpm352): a turn
+   * sat in `ask_user` for 5m02s and was cancelled with the question never on
+   * screen, in a conversation whose own subject was "the model said it needs to
+   * ask something but I didn't see anything on screen". So the question is
+   * delivered twice: live, and again to any client that attaches later — and the
+   * session snapshot carries it for the page that only polls.
+   */
+  it('keeps an open question answerable: it rides the session AND is replayed to a later subscriber', async () => {
+    const sessionId = 'question-replay-session-1';
+    engine.askQuestion = {
+      question: 'Which source should I use for the photos?',
+      choices: [{ label: 'Download into assets/' }, { label: 'Remote URLs' }],
+    };
+    // The turn asks and HOLDS. No stream is attached yet — this is the reload.
+    const postPromise = authedFetch('/api/chat', 'POST', { sessionId, message: 'add photos to the wallpaper' });
+
+    // The poll the resumed page makes must SEE it (busy alone cannot tell a
+    // working turn from one that is waiting for the user).
+    let pending: { questionId?: string; question?: string; choices?: Array<{ label: string }> } | null = null;
+    // The POST is in flight, not finished: the first poll can land before the
+    // route has registered the session, so the loop WAITS for both facts rather
+    // than asserting them on its first pass (that race made this test fail with
+    // `busy: undefined` — an assertion about the test's own timing, not the
+    // behaviour being pinned here).
+    let sawBusy = false;
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && !pending) {
+      const snap = await authedFetch(`/api/sessions/${sessionId}`, 'GET');
+      const body = (await snap.json()) as { session?: { busy?: boolean; pendingQuestion?: typeof pending } };
+      if (body.session?.busy === true) sawBusy = true;
+      pending = body.session?.pendingQuestion ?? null;
+      if (!pending) await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(sawBusy, 'a turn holding for an answer never reported itself in flight').toBe(true);
+    expect(pending?.question).toBe('Which source should I use for the photos?');
+    expect(pending?.choices).toEqual([{ label: 'Download into assets/' }, { label: 'Remote URLs' }]);
+    // The id the page answers with, so a replay is answerable and not just visible.
+    expect(pending?.questionId).toBeTruthy();
+
+    // A subscriber attaching NOW gets the question replayed on connect.
+    const sse = await openSSE(`${baseUrl}/api/chat/${sessionId}/events?token=${encodeURIComponent(token)}`);
+    const qDeadline = Date.now() + 4000;
+    while (Date.now() < qDeadline && !sse.events.some((e) => e.event === 'question')) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const frame = sse.events.find((e) => e.event === 'question');
+    expect(frame, 'the open question was never replayed to the new subscriber').toBeTruthy();
+    const replayed = JSON.parse(frame!.data) as { questionId: string; question: string; multiSelect: boolean };
+    expect(replayed.question).toBe('Which source should I use for the photos?');
+    expect(replayed.questionId).toBe(pending!.questionId);
+    expect(replayed.multiSelect).toBe(false);
+
+    // Answering THAT id continues the turn — replay without this would be a card
+    // that cannot do anything.
+    const respond = await authedFetch(`/api/chat/${sessionId}/respond`, 'POST', {
+      questionId: replayed.questionId,
+      index: 1,
+    });
+    expect(respond.status).toBe(200);
+    const post = await postPromise;
+    expect(post.status).toBe(200);
+    const body = (await post.json()) as { content?: string };
+    expect(body.content).toContain('"index":1');
+    // Answered → nothing is open any more.
+    const after = await authedFetch(`/api/sessions/${sessionId}`, 'GET');
+    const afterBody = (await after.json()) as { session?: { busy?: boolean; pendingQuestion?: unknown } };
+    expect(afterBody.session?.pendingQuestion).toBeUndefined();
+    expect(afterBody.session?.busy).toBe(false);
+    sse.close();
+    engine.askQuestion = null;
   });
 
   it('reset clears the session history', async () => {

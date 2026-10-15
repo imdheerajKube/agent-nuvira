@@ -13,7 +13,27 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { CostTracker, costSince } from '../../src/learning/cost-tracker.js';
+import {
+  CostTracker,
+  costSince,
+  costSinceSplit,
+  setPricingContext,
+  resetPricingContextCache,
+} from '../../src/learning/cost-tracker.js';
+
+/**
+ * A window's cost is the sum of its rows' `costUsd` — which is money we have
+ * EVIDENCE was charged. A list price only becomes `costUsd` when the account is
+ * declared `paid` (otherwise it is a labelled "unverified" figure), so these
+ * fixtures declare the tier the way a user would:
+ * `nuvira config set providers.groq.billingTier paid`.
+ */
+function paidGroq() {
+  setPricingContext({
+    billingTierFor: (p) => (p === 'groq' ? 'paid' : 'unknown'),
+    configPricingFor: () => undefined,
+  });
+}
 
 let memDir: string;
 let prevMemDir: string | undefined;
@@ -27,6 +47,7 @@ beforeEach(() => {
   // must be set before the first write — and it isolates the real profile.
   process.env.NUVIRA_MEMORY_DIR = memDir;
   process.env.NUVIRA_CONFIG_DIR = join(memDir, 'cfg');
+  paidGroq();
 });
 
 afterEach(() => {
@@ -34,6 +55,7 @@ afterEach(() => {
   else process.env.NUVIRA_MEMORY_DIR = prevMemDir;
   if (prevCfgDir === undefined) delete process.env.NUVIRA_CONFIG_DIR;
   else process.env.NUVIRA_CONFIG_DIR = prevCfgDir;
+  resetPricingContextCache();
   rmSync(memDir, { recursive: true, force: true });
 });
 
@@ -83,5 +105,22 @@ describe('costSince — measured, per-batch, process-independent', () => {
     const batchTwo = costSince(batch2Start);
     expect(batchTwo.requests).toBe(1);
     expect(batchTwo.tokens).toBe(1000);
+  });
+
+  it('does NOT report a list price as cost while the billing tier is undeclared', () => {
+    // The mirror of the rule above: with nothing declared, the window's cost is a
+    // true 0 and the list-priced figure is offered separately, clearly labelled —
+    // the ledger cannot know whether this key is a free tier or a paid one.
+    resetPricingContextCache();
+    const tracker = new CostTracker();
+    const entry = tracker.recordCall('groq', 'llama-3.3-70b', 1000, 1000);
+    expect(entry.costUsd).toBe(0);
+    expect(entry.listPriceUsd).toBeGreaterThan(0);
+
+    const split = costSinceSplit(0);
+    expect(split.billedUsd).toBe(0);
+    expect(split.unverifiedListedUsd).toBeGreaterThan(0);
+    // …and the token accounting is unaffected either way.
+    expect(split.attributed.tokens).toBe(2000);
   });
 });

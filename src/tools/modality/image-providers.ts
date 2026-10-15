@@ -177,7 +177,7 @@ async function stabilityGenerate(req: ImageGenerationRequest): Promise<ImageGene
 /** Local Stable Diffusion / ComfyUI — POST {prompt,width,height} → bytes. */
 async function comfyuiGenerate(req: ImageGenerationRequest): Promise<ImageGenerationResult> {
   const url = req.endpoint ?? localImageEndpoint();
-  if (!url) throw new Error('local image endpoint (BUFF_IMAGE_API_URL) is not configured');
+  if (!url) throw new Error('local image endpoint (NUVIRA_IMAGE_API_URL) is not configured');
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

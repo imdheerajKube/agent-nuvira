@@ -149,6 +149,12 @@ docs/demos/nuvira-commands-all.cast
 !AGENT_NUVIRA_MAJOR_REVAMP_PLAN.md
 !ENTERPRISE_GRADE_TRACKER.md
 !NUVIRA_ROUTER_ROADMAP.md
+# The router-spine assessment the roadmap's Decisions Log is argued from: which of the
+# external design record's requirements this product keeps, which it declines, and the
+# measurements that would overturn the verdict. Untracked, the roadmap cites a document
+# that a fresh clone cannot open — the same failure the three entries above were
+# published to fix — and the adopt/decline split gets re-derived from scratch.
+!docs/ASSESSMENT_2026-10-15_ROUTER_VS_FINAL_DESIGN.md
 
 # Book (internal document — not published)
 book/

@@ -1,13 +1,13 @@
 /**
  * WhatsAppPanel — P2 in-page WhatsApp bridge pairing (GUI parity with
- * `buff whatsapp pair`).
+ * `nuvira whatsapp pair`).
  *
  * Lives in the Agent Hub → Channels tab. Shows the bridge pairing state,
  * starts a pairing session (QR mode or phone-number code mode), streams the
  * live QR into an <img> (the QR auto-refreshes as WhatsApp rotates it), shows
  * the 8-char code for phone mode, cancels, and un-pairs. Everything rides the
  * real BaileysBridge in the dashboard process via /api/whatsapp — the same
- * engine the CLI's `buff whatsapp pair` uses, so a QR scanned here is the
+ * engine the CLI's `nuvira whatsapp pair` uses, so a QR scanned here is the
  * same session the gateway uses.
  *
  * Pair/cancel/unpair are write actions → gated behind the admin session +
@@ -133,8 +133,8 @@ export default function WhatsAppPanel({ authed, canWrite, sessionExpired, reveal
       </div>
       <p className="admin-hint">
         The personal Baileys bridge (no Meta Business account) — pair once, and the gateway can send &amp; receive
-        WhatsApp. Session: <code>{status?.sessionDir ?? '~/.buff/whatsapp/session'}</code>. Same engine as{' '}
-        <code>buff whatsapp pair</code>.
+        WhatsApp. Session: <code>{status?.sessionDir ?? '~/.nuvira/whatsapp/session'}</code>. Same engine as{' '}
+        <code>nuvira whatsapp pair</code>.
       </p>
 
       {pairing ? (
@@ -237,9 +237,9 @@ export default function WhatsAppPanel({ authed, canWrite, sessionExpired, reveal
         </div>
       )}
 
-      {/* Send-by-name contacts — the mapping behind `buff whatsapp contact add`.
+      {/* Send-by-name contacts — the mapping behind `nuvira whatsapp contact add`.
           These are for SENDING by name only; they do NOT grant inbound access.
-          The verified list (Permissions tab / `buff config gateway allow`) is
+          The verified list (Permissions tab / `nuvira config gateway allow`) is
           what decides who may TRIGGER the agent. */}
       <div className="wa-contacts">
         <div className="wa-contacts-head">
@@ -248,12 +248,12 @@ export default function WhatsAppPanel({ authed, canWrite, sessionExpired, reveal
         </div>
         <p className="admin-hint">
           These names are for <strong>sending messages by name</strong> (e.g.{' '}
-          <code>buff gateway send whatsapp:Name "…"</code>) — they do{' '}
+          <code>nuvira gateway send whatsapp:Name "…"</code>) — they do{' '}
           <strong>NOT</strong> let these numbers trigger the agent.
         </p>
         <div className="hub-alias-list">
           {Object.keys(contacts).length === 0 ? (
-            <span className="admin-hint">(none — add one with <code>buff whatsapp contact add &lt;Name&gt; &lt;number&gt;</code>)</span>
+            <span className="admin-hint">(none — add one with <code>nuvira whatsapp contact add &lt;Name&gt; &lt;number&gt;</code>)</span>
           ) : (
             Object.entries(contacts).map(([name, number]) => (
               <div className="hub-alias-row" key={name}>
@@ -266,7 +266,7 @@ export default function WhatsAppPanel({ authed, canWrite, sessionExpired, reveal
         <p className="admin-hint" style={{ marginTop: 8 }}>
           To let a number <strong>trigger the agent</strong> (respond to its messages), add it to the{' '}
           <strong>verified list</strong> in the <strong>Permissions tab above</strong>, or run{' '}
-          <code>buff config gateway allow whatsapp user &lt;number&gt;</code>.
+          <code>nuvira config gateway allow whatsapp user &lt;number&gt;</code>.
         </p>
       </div>
     </div>

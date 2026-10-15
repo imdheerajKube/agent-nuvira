@@ -231,14 +231,14 @@ function makePreferenceData(
 }
 
 // ─── Governance card (P6 M6.5) ─────────────────────────────────────────────
-// The policy card mirrors `buff admin policy`: permissive empty state, rule
+// The policy card mirrors `nuvira admin policy`: permissive empty state, rule
 // chips for allow/deny lists + caps, and the hard-constraint enforcement note.
 
 describe('GovernanceSection (via RoutingInsightsPanel)', () => {
   it('shows the fully-permissive state when no policy is configured', () => {
     render(<RoutingInsightsPanel data={makeGovernanceData({ enabled: false, updatedAt: Date.now() })} />);
     expect(screen.getByText(/Fully permissive/)).toBeTruthy();
-    expect(screen.getByText(/buff admin allow/)).toBeTruthy();
+    expect(screen.getByText(/nuvira admin allow/)).toBeTruthy();
     expect(screen.getByText(/Admin Governance Policy/)).toBeTruthy();
   });
 

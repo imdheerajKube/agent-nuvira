@@ -6,6 +6,7 @@ import { BaseCommand, getCliName } from './commands.js';
 import { getPluginRegistry } from '../plugins/registry.js';
 import { logger } from '../utils/logger.js';
 import { ProviderType, BuffConfig } from '../config/types.js';
+import { BILLING_TIERS } from '../learning/model-pricing.js';
 import { clearModelListCache } from '../inference/model-validator.js';
 import { validateModelIdForProvider } from '../inference/model-id-validation.js';
 import { CATALOG_PROVIDER_IDS, getCatalogProvider, catalogEnvVar, isCatalogKeyless } from '../inference/provider-catalog.js';
@@ -336,7 +337,7 @@ export class ConfigCommand extends BaseCommand {
       if (key === 'defaultProvider') {
         this.configManager.save({ defaultProvider: value as ProviderType });
       } else {
-        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)\n  routing.contextWindows.<model> 16384  (M2.5 context preflight)\n  routing.nuviraSidecar.enabled  (P5 sidecar flag, default false)\n  routing.compression.enabled  (M4.4 conservative compression, default false)`);
+        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  providers.<name>.billingTier paid|free|subscription|unknown  (what this account is billed)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)\n  routing.contextWindows.<model> 16384  (M2.5 context preflight)\n  routing.nuviraSidecar.enabled  (P5 sidecar flag, default false)\n  routing.compression.enabled  (M4.4 conservative compression, default false)`);
         return;
       }
     } else if (parts.length === 2 && parts[0] === 'history') {
@@ -377,7 +378,21 @@ export class ConfigCommand extends BaseCommand {
 
       let typedValue: string | number | string[] = value;
 
-      if (field === 'apiKeys') {
+      if (field === 'billingTier') {
+        // The ACCOUNT-billing fact the cost ledger classifies with. Validated
+        // here so a typo cannot be written and then read back as `unknown` while
+        // the user believes they declared their provider — the ledger would go
+        // on showing "list-priced, unverified" with no hint why.
+        const tier = value.trim().toLowerCase();
+        if (!(BILLING_TIERS as readonly string[]).includes(tier)) {
+          logger.error(
+            `Invalid billingTier "${value}". Valid values: ${BILLING_TIERS.join(' | ')}.`,
+          );
+          logger.info('  Example: nuvira config set providers.groq.billingTier free');
+          return;
+        }
+        typedValue = tier;
+      } else if (field === 'apiKeys') {
         // M2.3 multi-account rotation: comma-separated list of ADDITIONAL keys
         // for the same provider (the primary stays in `apiKey`). E.g.
         //   nuvira config set providers.groq.apiKeys "k1,k2,k3"
@@ -765,7 +780,7 @@ export class ConfigCommand extends BaseCommand {
     } else if (key === 'dashboard.cwd.clear') {
       this.configManager.save({ dashboard: { cwd: undefined } } as Partial<BuffConfig>);
     } else {
-      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  modality.image.provider\n  modality.image.model\n  dashboard.cwd "<dir>"  (working dir for unattached dashboard chat turns)\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled\n  routing.compression.enabled  (M4.4, DEFAULT FALSE)\n  routing.gatewayTelemetry.enabled  (M7.4, DEFAULT FALSE)`);
+      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  providers.<name>.billingTier paid|free|subscription|unknown\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  modality.image.provider\n  modality.image.model\n  dashboard.cwd "<dir>"  (working dir for unattached dashboard chat turns)\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled\n  routing.compression.enabled  (M4.4, DEFAULT FALSE)\n  routing.gatewayTelemetry.enabled  (M7.4, DEFAULT FALSE)`);
       return;
     }
 
