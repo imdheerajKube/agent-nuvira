@@ -544,6 +544,13 @@ for the machine the dashboard is running on, so the page is also the install lis
 [§2](#what-else-to-install--the-tools-the-agent-uses) and
 [DEPENDENCIES.md](DEPENDENCIES.md).
 
+Below the check groups, **Runtime Tools** is the same seven tools as a panel you can act on:
+status, `recommended` / `optional`, what each one unlocks, and — for the ones this machine is
+missing — the install command with a **⧉ Copy** button. A tool that needs a password or a GUI
+installer says so and points at the one command to run yourself, and a tool with no one-line
+installer on this OS says *that* instead of inventing one. The panel is fed by the same
+declaration the CLI reads, so it can never recommend a command `nuvira doctor --fix` would not.
+
 Two things it deliberately does *not* claim:
 
 - **The stream state is real.** The page used to print a hardcoded `● Connected`, which could never

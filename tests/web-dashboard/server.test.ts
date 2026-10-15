@@ -2390,3 +2390,55 @@ describe('artifact bytes', () => {
     expect((await fetch(artifactUrl(SESSION, '../../../etc/passwd'))).status).toBe(404);
   });
 });
+
+/**
+ * The Runtime Tools panel's payload (/api/admin/checks → runtimeTools).
+ *
+ * The panel copies install commands out of this payload, so the contract is that
+ * it is the SAME list and the SAME machine-specific command the CLI prints:
+ * every tool the declaration knows, its status, and — only for a tool this
+ * machine does not have — the command for this OS.
+ */
+describe('Runtime Tools — the System panel payload', () => {
+  it('reports every declared tool with its status and this machine’s command', async () => {
+    const { RUNTIME_DEPENDENCIES, installCommandFor } = await import(
+      '../../src/learning/runtime-dependencies.js'
+    );
+    const res = await fetch(`${baseUrl}/api/admin/checks`);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      runtimeTools?: Array<{
+        id: string;
+        label: string;
+        need: string;
+        present: boolean;
+        enables: string;
+        neededBy: string[];
+        installCommand: string | null;
+      }>;
+      runtimeToolsSummary?: string;
+      system: Array<{ name: string }>;
+    };
+
+    expect(Array.isArray(data.runtimeTools)).toBe(true);
+    expect(data.runtimeTools!.map((t) => t.id)).toEqual(RUNTIME_DEPENDENCIES.map((d) => d.id));
+    expect(data.runtimeToolsSummary).toMatch(/^\d+ of \d+ optional tools installed$/);
+
+    for (const tool of data.runtimeTools!) {
+      expect(tool.label.length, tool.id).toBeGreaterThan(1);
+      expect(tool.enables.length, tool.id).toBeGreaterThan(40);
+      expect(tool.neededBy.length, tool.id).toBeGreaterThan(0);
+      if (tool.present) {
+        // Nothing to install — and the panel must show no command for it.
+        expect(tool.installCommand, `${tool.id} is installed but still offers a command`).toBeNull();
+      } else {
+        expect(tool.installCommand).toBe(installCommandFor(RUNTIME_DEPENDENCIES.find((d) => d.id === tool.id)!));
+      }
+    }
+
+    // The same tools are also rows in the check list — one payload, two views.
+    for (const tool of data.runtimeTools!) {
+      expect(data.system.some((c) => c.name === `Runtime: ${tool.label}`)).toBe(true);
+    }
+  }, 120_000);
+});

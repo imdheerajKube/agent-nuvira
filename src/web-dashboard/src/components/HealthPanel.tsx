@@ -33,6 +33,7 @@ import { CheckRow, countByStatus, summarise } from './CheckRow';
 import { formatCount } from '../format';
 import MetricTiles, { type MetricTile } from './MetricTiles';
 import PageHeader from './PageHeader';
+import RuntimeToolsPanel from './RuntimeToolsPanel';
 
 interface HealthPanelProps {
   data: DashboardData | null;
@@ -249,6 +250,11 @@ export default function HealthPanel({ data, connected, lastUpdated }: HealthPane
             checks={checks.enterprise}
             testId="checks-enterprise"
           />
+          {/* The actionable half of the runtime rows: the check group above
+              says installed/not-installed; this panel carries the command to
+              copy, the recommended/optional split and the caveat. Same payload,
+              so the two cannot disagree. */}
+          <RuntimeToolsPanel tools={checks.runtimeTools} summary={checks.runtimeToolsSummary} />
         </>
       ) : null}
 

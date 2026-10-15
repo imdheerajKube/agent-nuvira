@@ -378,6 +378,37 @@ is registered in `.agents/skills` (index entry + SKILL.md) so the hub-drift guar
 and the manual's skill counts (156 on disk / 153 compiled) were re-read from the commands that
 print them.
 
+### The runtime tools get a dashboard panel with the command to COPY
+
+The System page showed the runtime tools as check rows, which answers "is it installed?" and
+nothing else — a user who needs FFmpeg wants the command, for their machine, in their clipboard.
+The panel below the check groups is that: one row per tool with its status, whether it is
+**recommended** or merely **optional**, what it unlocks, and — only for what this machine is
+missing — the install command with a **⧉ Copy** button.
+
+- **Fed by the same declaration as the CLI.** The payload comes from
+  `learning/runtime-dependencies.ts`, so the panel cannot recommend a command `nuvira doctor --fix`
+  would not run; the server maps that declaration into a DTO (mirrored by `RuntimeTool` in the
+  dashboard's types) rather than shipping the whole object.
+- **An installed tool is sent with NO command.** The panel only renders one for a missing tool, and
+  the server does not send one for a tool it found — the difference between "here is how to get
+  this" and "reinstall something that works".
+- **Two refusals are rendered, not hidden.** A tool whose install needs a password or a GUI says so
+  and names the command for the user to run (rather than being offered as a button the server
+  cannot press), and a tool with no one-line installer on this OS says that instead of inventing
+  one. A server too old to report the list states it — an empty panel would read as "everything is
+  installed", the opposite of "we never asked".
+- **The copy button reports a copy only when a copy happened.** `navigator.clipboard?.writeText`
+  resolves to `undefined` where the API is absent (a non-secure context), which the older pattern
+  treated as success and labelled "Copied". Here the button stays on "Copy".
+
+Verified: typecheck clean; the rebuilt, committed dashboard bundle walked clean in a real browser
+(4 themes × 30 routes); the panel was loaded from the RUNNING dashboard and asserted in Chromium
+(7 rows, `5 of 7 optional tools installed`, 2 install rows, no page errors), and the copy button
+was clicked for real — `navigator.clipboard.readText()` returned exactly the command the row
+shows. Dashboard suite 1320 tests, the server's own suite 93 (including the payload contract),
+and `dashboard:bundle:check` passes again.
+
 ### The liveness watchdog no longer charges its own blindness to the command
 
 An output byte is stamped when the *monitor* reads it, and the process-table probe a liveness sample

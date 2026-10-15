@@ -25,6 +25,11 @@ import { loadEnv } from '../utils/env.js';
 import { ConfigManager } from '../config/manager.js';
 import { parseRuntimeSpec } from '../mcp/runtime.js';
 import { runAllChecks, type CheckResult, type HealthStatus } from '../cli/doctor.js';
+import {
+  dependencySummary,
+  probeRuntimeDependencies,
+  type DependencyStatus,
+} from '../learning/runtime-dependencies.js';
 import type { ProviderConfig } from '../config/types.js';
 import type { WireFinding } from '../findings/verdicts.js';
 import { getAutoRouter } from '../learning/auto-router.js';
@@ -3274,6 +3279,34 @@ interface AdminProviderSummary {
   enabled?: boolean;
 }
 
+/**
+ * One runtime tool the agent uses but does not ship, as the System page's panel
+ * needs it. Mirrored by `RuntimeTool` in the dashboard's `types.ts` — the same
+ * split `AdminProviderSummary` uses, so the wire shape is stated where it is
+ * produced and where it is rendered, not imported across the boundary.
+ *
+ * The server maps the DECLARATION into this DTO rather than shipping the whole
+ * dependency object: the panel renders, it does not decide, and the internal
+ * probe list has no business on the wire.
+ */
+interface RuntimeTool {
+  id: string;
+  label: string;
+  need: 'recommended' | 'optional';
+  /** Whether the server found it on THIS machine. */
+  present: boolean;
+  /** What installing it buys, one sentence. */
+  enables: string;
+  /** The tools that need it (cited under the row). */
+  neededBy: string[];
+  /** The command for this OS, or null when no one-liner applies here. */
+  installCommand: string | null;
+  /** The caveat that bites, shown with the command. */
+  note?: string;
+  /** True when running it needs a human (sudo, a GUI installer). */
+  needsHumanInput: boolean;
+}
+
 /** Mask a secret so the dashboard never exposes a raw key. */
 function maskKey(key: string | undefined): string | null {
   if (!key) return null;
@@ -3441,19 +3474,50 @@ function buildServiceRow(def: ServiceDefinition, canReadValues: boolean): AdminS
   };
 }
 
+/**
+ * One runtime tool as the panel's payload. Exported for the server test, which
+ * asserts the panel is fed the same list `nuvira doctor` prints.
+ */
+export function runtimeToolSummary(status: DependencyStatus): RuntimeTool {
+  return {
+    id: status.dependency.id,
+    label: status.dependency.label,
+    need: status.dependency.need,
+    present: status.present,
+    enables: status.dependency.enables,
+    neededBy: status.dependency.neededBy,
+    // A tool the machine ALREADY has gets no command on the wire, the same way
+    // `nuvira doctor` prints a fix only for what is missing: sending one anyway
+    // invites a user to reinstall something that is working.
+    installCommand: status.present ? null : status.installCommand,
+    note: status.dependency.note,
+    needsHumanInput: status.needsHumanInput,
+  };
+}
+
 /** Run ALL state checks — the dashboard command-runner payload. */
 async function runAdminChecks(): Promise<{
   system: CheckResult[];
   enterprise: CheckResult[];
   providers: AdminProviderSummary[];
+  runtimeTools: RuntimeTool[];
+  runtimeToolsSummary: string;
   serverTime: number;
 }> {
   const configManager = new ConfigManager();
   const { system, enterprise } = await runAllChecks(configManager);
+  // The SAME declaration the CLI's `nuvira doctor`, the `--fix` installer and the
+  // setup scripts read, probed once for this payload. The rows are also in
+  // `system` (one check each) because a pass/warn verdict is what a check list
+  // is for; this is the actionable half — the command to copy, the
+  // recommended/optional split, and the caveat.
+  const statuses = probeRuntimeDependencies();
   return {
     system,
     enterprise,
     providers: buildAdminProviderSummary(configManager),
+    runtimeTools: statuses.map(runtimeToolSummary),
+    runtimeToolsSummary: dependencySummary(statuses),
     serverTime: Date.now(),
   };
 }
@@ -4125,7 +4189,19 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       res.end(JSON.stringify(payload));
     }).catch((err) => {
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: String(err), system: [], enterprise: [], providers: [], serverTime: Date.now() }));
+      res.end(
+        JSON.stringify({
+          error: String(err),
+          system: [],
+          enterprise: [],
+          providers: [],
+          // An empty list, not a missing one: the panel must be able to say
+          // "nothing reported" on a failed run rather than crash on undefined.
+          runtimeTools: [],
+          runtimeToolsSummary: 'unavailable — the checks run failed',
+          serverTime: Date.now(),
+        }),
+      );
     });
     return;
   }

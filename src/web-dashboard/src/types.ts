@@ -1235,10 +1235,53 @@ export interface AdminProviderSummary {
   enabled?: boolean;
 }
 
+/**
+ * One runtime tool the agent USES but does not ship — FFmpeg, a chromium
+ * bundle, Ollama, a narrator, Whisper, Poppler.
+ *
+ * WHY IT IS NOT JUST A CHECK ROW. The same tools appear in `system` as
+ * `Runtime: FFmpeg` checks, which is the right shape for a pass/warn verdict.
+ * What a user needs in order to ACT is different: the install command for THEIR
+ * machine, whether it is recommended or merely optional, what it unlocks, and
+ * the caveat (macOS needs `ffmpeg-full`, not `ffmpeg`, or captions fall back to
+ * a .srt). That belongs in a panel with a copy button, not in a check message.
+ *
+ * Every field comes from the ONE declaration (`learning/runtime-dependencies.ts`)
+ * the CLI's `nuvira doctor` and the setup scripts read, so the page cannot
+ * recommend a command the CLI does not.
+ */
+export interface RuntimeTool {
+  /** Stable id from the declaration (`ffmpeg`, `chromium`, …). */
+  id: string;
+  /** Label to print as-is. */
+  label: string;
+  need: 'recommended' | 'optional';
+  /** Whether the server found it on THIS machine. */
+  present: boolean;
+  /** What installing it buys, one sentence. */
+  enables: string;
+  /** The tools that need it (cited under the row). */
+  neededBy: string[];
+  /** The command for this OS, or null when no one-liner applies here. */
+  installCommand: string | null;
+  /** The caveat that bites, shown with the command. */
+  note?: string;
+  /** True when running it needs a human (sudo, a GUI installer). */
+  needsHumanInput: boolean;
+}
+
 export interface AdminChecksData {
   system: AdminCheck[];
   enterprise: AdminCheck[];
   providers: AdminProviderSummary[];
+  /**
+   * The runtime tools, for the System page's panel. OPTIONAL on purpose: a
+   * dashboard served by an older process must render (with a "not reported"
+   * line) rather than throw on a shape it does not carry.
+   */
+  runtimeTools?: RuntimeTool[];
+  /** The one-line count, e.g. "5 of 7 optional tools installed". */
+  runtimeToolsSummary?: string;
   serverTime: number;
 }
 
