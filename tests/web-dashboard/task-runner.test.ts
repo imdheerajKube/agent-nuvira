@@ -70,6 +70,24 @@ function makeRunner(): TaskRunner {
   return new TaskRunner({ execPath: process.execPath, cliEntry: entry, cwd: dir });
 }
 
+/**
+ * Wait until nothing the runner still lists is running, or fail with a count.
+ *
+ * Used by the history-cap test below, which spawns 55 real children: it needs a
+ * "the batch is quiet" signal that cannot be satisfied by a record that merely
+ * vanished (see the test's comment on dropped history).
+ */
+async function waitForQuiet(runner: TaskRunner, label: string, deadlineMs = 60_000): Promise<void> {
+  const running = () => runner.list().filter((t) => t.status === 'running').length;
+  const deadline = Date.now() + deadlineMs;
+  let count = running();
+  while (count > 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+    count = running();
+  }
+  if (count > 0) throw new Error(`${label}: ${count} task(s) still running after ${deadlineMs}ms`);
+}
+
 /** Resolve the terminal status event for a task (subscribes first, then checks state). */
 function waitForStatus(
   runner: TaskRunner,
@@ -174,28 +192,44 @@ describe('TaskRunner', () => {
     expect(runner.start(['a'.repeat(513)]).ok).toBe(false);
   });
 
-  // Spawning 55 children SEQUENTIALLY (awaiting each) blew both vitest's
-  // default and the per-task 15s wait on loaded Windows runners — spawn them
-  // all (they're instant-exit 'ok' fixtures), then wait for the whole batch
-  // with one generous deadline (Windows-CI hardening).
+  // 55 real children are what the cap needs to be observable, and this test has
+  // now failed twice on the Windows full-suite job for two different reasons:
+  //
+  //   1. spawning all 55 AT ONCE and then polling `list()` does not fit the
+  //      deadline. Measured on Node 23 / windows-latest with 540 test files
+  //      running in parallel: 9581 tests pass, this one alone times out, the
+  //      children never all settle because a storm of 55 `node` starts on a
+  //      saturated 2-core box is minutes of spawn, not milliseconds.
+  //   2. THE POLL COULD PASS WHILE CHILDREN WERE STILL ALIVE. `start()` drops the
+  //      oldest records past MAX_TASKS (50) and a dropped record is DELETED from
+  //      `tasks`, so a running child stops appearing in `list()` entirely — "list
+  //      is quiet" and "the children exited" were not the same statement, and the
+  //      assertion below could be satisfied by history eviction.
+  //
+  // So spawn in bounded WAVES: never start the next 8 until the previous 8 have
+  // all settled. Every assertion is unchanged — 55 spawns, the same 50-record cap,
+  // the same newest-first order — but they are now about a batch that really is
+  // quiet, and a wave that will not settle fails with its own message instead of
+  // quietly eating the deadline.
   it('list() returns newest first and caps history at 50', async () => {
     process.env.NUVIRA_TASK_FIXTURE_MODE = 'ok';
     const runner = makeRunner();
     const ids: string[] = [];
+    const WAVE = 8;
     for (let i = 0; i < 55; i++) {
       const { task } = runner.start([`t${i}`], { timeoutMs: 30_000 });
       ids.push(task!.id);
+      // Wait at the end of each wave, while all 8 are still in `list()` — before
+      // any of them can be evicted out of this test's view.
+      if ((i + 1) % WAVE === 0) await waitForQuiet(runner, `wave ending at t${i}`);
     }
-    const deadline = Date.now() + 120_000;
-    while (Date.now() < deadline) {
-      if (runner.list().every((t) => t.status !== 'running')) break;
-      await new Promise((r) => setTimeout(r, 250));
-    }
+    await waitForQuiet(runner, 'final wave');
+
     const list = runner.list();
     expect(list.every((t) => t.status !== 'running')).toBe(true);
     expect(list.length).toBeLessThanOrEqual(50);
     expect(list[0].id).toBe(ids[ids.length - 1]); // newest first
-  }, 150_000);
+  }, 240_000);
 
   it('reports a missing CLI entry as a validation error', () => {
     const r = new TaskRunner({ execPath: process.execPath, cliEntry: join(dir, 'nope.cjs') });
