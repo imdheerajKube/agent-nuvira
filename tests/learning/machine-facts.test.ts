@@ -60,6 +60,18 @@ describe('detectMachineFacts', () => {
   it('reports the architecture', () => {
     expect(typeof detectMachineFacts({ platform: 'linux', binary: () => false, env: {} }).arch).toBe('string');
   });
+
+  it('probes the container stack separately from package managers', () => {
+    const facts = detectMachineFacts({
+      platform: 'darwin',
+      binary: (n) => n === 'brew' || n === 'docker' || n === 'colima',
+      env: {},
+    });
+    // Docker is not a package manager: it must not pollute the install-suggestion list…
+    expect(facts.packageManagers).toEqual(['brew']);
+    // …but its presence is a fact the model needs, in catalog order.
+    expect(facts.tools).toEqual(['docker', 'colima']);
+  });
 });
 
 describe('buildMachineFactsBlock', () => {
@@ -69,12 +81,30 @@ describe('buildMachineFactsBlock', () => {
     expect(block).toContain('## This machine');
     expect(block).toContain('brew');
     expect(block).toContain('bash');
-    expect(block).toContain('not installed');
+    expect(block).toContain('never hardcode the OS');
+  });
+
+  it('does NOT assert that an unprobed tool is missing (the false "Docker is not installed")', () => {
+    // Regression: the block used to say "a tool not listed is not installed"
+    // while probing package managers only, so a machine with Docker installed
+    // and running was reported as missing it.
+    const facts = detectMachineFacts({
+      platform: 'darwin',
+      binary: (n) => n === 'brew' || n === 'docker',
+      env: {},
+    });
+    const block = buildMachineFactsBlock(facts);
+    expect(block).toContain('Container / infra tooling present: docker');
+    expect(block).not.toMatch(/not listed is not installed/i);
+    expect(block).toMatch(/was not probed/);
   });
 
   it('says so honestly when nothing is detected', () => {
     const facts = detectMachineFacts({ platform: 'linux', binary: () => false, env: {} });
-    expect(buildMachineFactsBlock(facts)).toContain('(none detected)');
+    const block = buildMachineFactsBlock(facts);
+    expect(block).toContain('(none detected)');
+    // Both lists, so an empty machine does not read as "package managers exist".
+    expect(block.match(/\(none detected\)/g)).toHaveLength(2);
   });
 });
 
@@ -88,6 +118,15 @@ describe('machineFactsCapability', () => {
     expect(cap.grantCategory).toBeUndefined();
     expect(cap.tags).toContain('apt');
     expect(cap.tags).toContain('linux');
+  });
+
+  it('tags present tooling so a search for docker finds the facts', () => {
+    const facts = detectMachineFacts({
+      platform: 'darwin',
+      binary: (n) => n === 'brew' || n === 'docker',
+      env: {},
+    });
+    expect(machineFactsCapability(facts).tags).toContain('docker');
   });
 
   it('is included in the capability index the model searches', async () => {

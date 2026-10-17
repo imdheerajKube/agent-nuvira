@@ -912,6 +912,18 @@ model is the general intelligence; the harness supplies facts.
 are right (`apt` vs `apt-get`, `-y` vs `--yes`). Presence is the fact the harness
 can establish; choosing and adapting the command stays the model's.
 
+**Correction (2026-10-17) — the block claimed more than it probed.** The line
+ended "A tool not listed is not installed", but the list held package managers
+toolchains only. On a machine with Docker Desktop installed and its daemon
+serving v29.5.2, `docker` was therefore absent from the list, and a run told the
+user "Docker is not installed" while `nuvira sandbox status` answered "Docker:
+Available" from the same machine in the same minute. The block now probes a
+small `RUNTIME_TOOLS` catalog (`docker`, `podman`, `colima`, `kubectl`) in its own
+line, and the claim is scoped to what was actually checked: a tool named above
+is present, a tool NOT named above **was not probed** and must be verified with a
+real command before it is reported missing. Absence may never be inferred from a
+bounded probe — that inference, not the missing probe, was the bug.
+
 Pinned by `tests/learning/machine-facts.test.ts` (10).
 
 ## Bundle 49 — the Capabilities page, or what the agent can do here (2026-10-08)

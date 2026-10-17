@@ -53,6 +53,13 @@ export interface MachineFacts {
   shellName: string | null;
   /** Package managers/toolchain binaries actually present, in preference order. */
   packageManagers: string[];
+  /**
+   * Runtime tooling present that is NOT a package manager — container runtimes
+   * above all. Kept separate from `packageManagers` because these install
+   * nothing; they decide whether a command the model would otherwise GUESS
+   * about can run here.
+   */
+  tools: string[];
 }
 
 /**
@@ -75,6 +82,22 @@ const ECOSYSTEM_MANAGERS = [
   // Build / language
   'cargo', 'go', 'gem', 'composer', 'dotnet',
 ];
+
+/**
+ * Runtime tooling outside the package-manager list, probed for the same reason:
+ * presence is a fact only where it is checked.
+ *
+ * WHY THIS EXISTS (live, 2026-10-17). The block this module builds used to claim
+ * "a tool not listed is not installed" while the list held package managers
+ * only — so `docker`, installed and serving v29.5.2 on that machine, was
+ * invisible to the model, and a run told the user "Docker is not installed"
+ * while `nuvira sandbox status` answered "Docker: Available" from the same
+ * machine in the same minute. The container stack is the tooling the agent is
+ * most often asked to drive and least able to infer, so it is probed here;
+ * `colima` rides along because a mac with Docker's daemon down needs it started,
+ * not reinstalled.
+ */
+const RUNTIME_TOOLS = ['docker', 'podman', 'colima', 'kubectl'];
 
 /** Options for a deterministic test (the real call passes none). */
 export interface MachineFactsProbe {
@@ -151,6 +174,15 @@ export function detectMachineFacts(probe: MachineFactsProbe = {}): MachineFacts 
     }
   }
 
+  const tools: string[] = [];
+  for (const name of RUNTIME_TOOLS) {
+    try {
+      if (isBinary(name)) tools.push(name);
+    } catch {
+      // Same rule as above: a probe failure is unknown, not present.
+    }
+  }
+
   const facts: MachineFacts = {
     detectedAt: Date.now(),
     platform,
@@ -161,6 +193,7 @@ export function detectMachineFacts(probe: MachineFactsProbe = {}): MachineFacts 
     shell,
     shellName,
     packageManagers,
+    tools,
   };
   if (!probe.platform && !probe.binary && !probe.env) cached = facts;
   return facts;
@@ -169,12 +202,18 @@ export function detectMachineFacts(probe: MachineFactsProbe = {}): MachineFacts 
 /** One bounded line the model reads — the machine, stated, not assumed. */
 export function buildMachineFactsBlock(facts: MachineFacts = detectMachineFacts()): string {
   const present = facts.packageManagers.length > 0 ? facts.packageManagers.join(', ') : '(none detected)';
+  const tools = facts.tools.length > 0 ? facts.tools.join(', ') : '(none detected)';
   return [
     '',
     '## This machine',
     `OS: ${facts.osName} · arch ${facts.arch} · shell ${facts.shellName ?? 'unknown'}`,
     `Package managers / toolchains present: ${present}`,
-    'Choose commands for THIS machine from these facts. A tool not listed is not installed — do not assume one, and do not hardcode the OS it "usually" is.',
+    `Container / infra tooling present: ${tools}`,
+    // SCOPED ON PURPOSE. The list above is a probe of a SHORT catalog, so
+    // "absent from it" is not "absent from the machine" — the unbounded form of
+    // this sentence is what produced the false "Docker is not installed".
+    // Presence may be inferred from a line here; absence may not.
+    'Choose commands for THIS machine from these facts, and never hardcode the OS it "usually" is. A tool named above is present. A tool NOT named above was not probed — check it with a real command (e.g. `docker --version` or `command -v <tool>`) before telling the user it is missing.',
   ].join('\n');
 }
 
@@ -185,6 +224,7 @@ export function buildMachineFactsBlock(facts: MachineFacts = detectMachineFacts(
  */
 export function machineFactsCapability(facts: MachineFacts = detectMachineFacts()): Capability {
   const pms = facts.packageManagers;
+  const tools = facts.tools;
   return {
     id: 'action:machine-facts',
     kind: 'action',
@@ -194,6 +234,8 @@ export function machineFactsCapability(facts: MachineFacts = detectMachineFacts(
     effectClass: 'read',
     reversible: true,
     requires: {},
-    tags: ['machine', 'environment', 'os', 'platform', 'arch', facts.os, facts.arch, ...pms],
+    // Tooling is tagged too, so a capability search for `docker` finds the facts
+    // that answer it instead of leaving the model to assume.
+    tags: ['machine', 'environment', 'os', 'platform', 'arch', facts.os, facts.arch, ...pms, ...tools],
   };
 }

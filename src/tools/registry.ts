@@ -2938,6 +2938,7 @@ registerTool({
         arch: facts.arch,
         shell: facts.shellName,
         packageManagers: facts.packageManagers,
+        tools: facts.tools,
         ...(command ? { proposed: { command, binary: bin, present: binPresent } } : {}),
         ...(suggestedInstall
           ? {

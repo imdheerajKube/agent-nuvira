@@ -37,6 +37,10 @@ describe('tool_search — action "resolve"', () => {
     const res = await run({ action: 'resolve', command: 'definitely-not-a-real-binary-xyz --go' });
     expect(res.os).toBe(detectMachineFacts().os);
     expect(Array.isArray(res.packageManagers)).toBe(true);
+    // Tooling rides alongside the managers, so a resolve answer about `docker`
+    // is grounded in a probe instead of an assumption (machine-facts.ts).
+    expect(Array.isArray(res.tools)).toBe(true);
+    expect(res.tools).toEqual(detectMachineFacts().tools);
     expect(res.proposed.binary).toBe('definitely-not-a-real-binary-xyz');
     expect(res.proposed.present).toBe(false);
     expect(String(res.advice)).toContain('NOT on this machine');
