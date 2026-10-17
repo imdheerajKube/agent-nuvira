@@ -113,6 +113,12 @@ export async function runPublishTool(args: unknown, ctx: ToolContext): Promise<s
   // here than at a terminal. Non-interactive by construction — a definitive
   // blocker is reported back to the model, which can fix it or ask the user;
   // "unanswerable" (offline) warns and proceeds.
+  // A preflight that PASSES with warnings is not a green light to say nothing:
+  // an unverified token (offline) is the difference between "checked" and "could
+  // not check", and the model reading this result is the last place that
+  // distinction can still be stated. Kept with the run, shown in the result.
+  let preflightCaveat: string | null = null;
+
   if (!dry_run) {
     const { runReleasePreflight, formatPreflight } = await import('../agents/release-preflight.js');
     const { bumpVersionString, readVersion } = await import('../agents/release-runner.js');
@@ -127,6 +133,9 @@ export async function runPublishTool(args: unknown, ctx: ToolContext): Promise<s
         '❌ The release was NOT started: the checks above are definitive, so nothing was committed, tagged or published.',
         '   Fix the blocker (or bump to a free version) and call this tool again.',
       ].join('\n');
+    }
+    if (preflight.checks.some((c) => c.status === 'warn')) {
+      preflightCaveat = preflight.summary;
     }
   }
 
@@ -144,6 +153,7 @@ export async function runPublishTool(args: unknown, ctx: ToolContext): Promise<s
     // transcript) can see a release that is about to no-op for want of a token
     // BEFORE it reports itself complete.
     describeReleaseCredentials(credStore),
+    ...(preflightCaveat ? [preflightCaveat] : []),
   ];
   let hasFailure = false;
   // P5a — capture the PRE-publish version so a post-publish sync check can

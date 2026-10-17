@@ -102,7 +102,10 @@ export class CredentialsCommand extends BaseCommand {
     console.log('');
 
     if (status.git.canPush && status.npm.canPublish) {
-      logger.success('  ✅ A release can run: git push and npm publish are both credentialed.');
+      // Presence is NOT validity — a revoked token sits here looking exactly
+      // like a working one (v3.5.8). Say what was actually established.
+      logger.success('  ✅ Tokens present for git push and npm publish — presence is not validity.');
+      logger.info("     Run 'nuvira credentials verify' to check them against the live services before releasing.");
     } else {
       logger.warn('  ⚠️  A release would be incomplete:');
       if (!status.git.canPush) {

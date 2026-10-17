@@ -19,11 +19,26 @@ import { join } from 'node:path';
 import {
   type CommandRunner,
   checkGitState,
+  checkReleaseCredentials,
   checkVersionPublished,
   formatPreflight,
   readReleaseTarget,
   runReleasePreflight,
 } from '../../src/agents/release-preflight.js';
+import type { PublishVerification } from '../../src/agents/credential-store.js';
+
+/** Both tokens confirmed live. */
+const VERIFIED: PublishVerification = {
+  npm: { checked: true, ok: true, detail: 'authenticated as acme' },
+  git: { checked: true, ok: true, detail: 'authenticated as acme' },
+};
+
+/**
+ * The credential probe these tests inject. A preflight test must never reach the
+ * network (the real default asks npm and GitHub about whatever token the machine
+ * happens to hold).
+ */
+const verified = async (): Promise<PublishVerification> => VERIFIED;
 
 interface Stub {
   ok: boolean;
@@ -120,6 +135,58 @@ describe('release preflight — git state', () => {
   });
 });
 
+describe('release preflight — is the token still live?', () => {
+  it('BLOCKS on a token the service rejected — presence was never the question', () => {
+    const checks = checkReleaseCredentials({
+      npm: { checked: true, ok: false, detail: 'token rejected (401)' },
+      git: { checked: true, ok: true, detail: 'authenticated as acme' },
+    });
+    const npm = checks.find((c) => c.name === 'npm credential')!;
+    expect(npm.status).toBe('block');
+    expect(npm.definitive).toBe(true);
+    expect(npm.detail).toContain('token rejected (401)');
+    expect(npm.detail).toContain('npm publish');
+    expect(npm.detail).toContain('Refresh it');
+    // The git token is reported SEPARATELY, as its own measured pass — one
+    // verdict per credential, never a single merged "credentials ok".
+    expect(checks.find((c) => c.name === 'git credential')!.status).toBe('ok');
+  });
+
+  it('never puts the secret in the check — only the service wording', () => {
+    const [check] = checkReleaseCredentials({
+      npm: { checked: true, ok: false, detail: 'token rejected (401)' },
+      git: { checked: false, ok: false, detail: 'no git credentials' },
+    });
+    expect(check!.detail).not.toMatch(/npm_[A-Za-z0-9]{4,}/);
+    expect(check!.detail.length).toBeLessThan(300);
+  });
+
+  it('WARNS, never blocks, when the service could not be asked — unknown is not a verdict', () => {
+    const checks = checkReleaseCredentials({
+      npm: { checked: false, ok: false, detail: 'could not reach https://registry.npmjs.org: fetch failed' },
+      git: { checked: true, ok: true, detail: 'authenticated as acme' },
+    });
+    expect(checks[0]!.status).toBe('warn');
+    expect(checks[0]!.definitive).toBe(false);
+    expect(checks[0]!.detail).toContain('could not verify');
+  });
+
+  it('emits no check when nothing is configured — no phase, no risk to report', () => {
+    expect(
+      checkReleaseCredentials({
+        npm: { checked: false, ok: false, detail: 'no npm token' },
+        git: { checked: false, ok: false, detail: 'no git credentials' },
+      }),
+    ).toEqual([]);
+  });
+
+  it('reports a confirmed token as a measured pass', () => {
+    const checks = checkReleaseCredentials(VERIFIED);
+    expect(checks.map((c) => c.status)).toEqual(['ok', 'ok']);
+    expect(checks.every((c) => c.definitive)).toBe(true);
+  });
+});
+
 describe('release preflight — the whole run', () => {
   let dir: string;
   const writePkg = (pkg: Record<string, unknown>): void => {
@@ -144,7 +211,7 @@ describe('release preflight — the whole run', () => {
 
   it('blocks a private package — npm refuses to publish it', async () => {
     writePkg({ name: 'demo', version: '1.0.0', private: true });
-    const result = await runReleasePreflight({ cwd: dir, targetVersion: '1.0.1', runner });
+    const result = await runReleasePreflight({ cwd: dir, targetVersion: '1.0.1', runner, probeCredentials: verified });
     expect(result.blocked).toBe(true);
     expect(result.summary).toContain('private');
     rmSync(dir, { recursive: true, force: true });
@@ -152,7 +219,7 @@ describe('release preflight — the whole run', () => {
 
   it('blocks a missing manifest instead of guessing', async () => {
     const empty = mkdtempSync(join(tmpdir(), 'nuvira-preflight-empty-'));
-    const result = await runReleasePreflight({ cwd: empty, targetVersion: '1.0.1', runner });
+    const result = await runReleasePreflight({ cwd: empty, targetVersion: '1.0.1', runner, probeCredentials: verified });
     expect(result.blocked).toBe(true);
     rmSync(empty, { recursive: true, force: true });
   });
@@ -160,9 +227,10 @@ describe('release preflight — the whole run', () => {
   it('passes a clean, unpublished, tag-free release', async () => {
     writePkg({ name: 'demo', version: '1.0.0' });
     configureCleanRepo();
-    const result = await runReleasePreflight({ cwd: dir, targetVersion: '1.0.1', runner });
+    const result = await runReleasePreflight({ cwd: dir, targetVersion: '1.0.1', runner, probeCredentials: verified });
     expect(result.blocked).toBe(false);
     expect(result.summary).toContain('not published yet');
+    expect(result.summary).toContain('npm credential');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -171,7 +239,7 @@ describe('release preflight — the whole run', () => {
     configureCleanRepo();
 
     // No model phases: no route check at all — a decorative check is still a lie.
-    const withoutModel = await runReleasePreflight({ cwd: dir, targetVersion: '1.0.1', runner });
+    const withoutModel = await runReleasePreflight({ cwd: dir, targetVersion: '1.0.1', runner, probeCredentials: verified });
     expect(withoutModel.checks.some((c) => c.name === 'provider×model')).toBe(false);
 
     // A model phase: the probe result is reported as measured.
@@ -179,6 +247,7 @@ describe('release preflight — the whole run', () => {
       cwd: dir,
       targetVersion: '1.0.1',
       runner,
+      probeCredentials: verified,
       needsModel: true,
       probeModel: async () => ({ ok: false, checked: true, detail: 'groq/ghost-model does not exist on groq' }),
     });
@@ -190,6 +259,7 @@ describe('release preflight — the whole run', () => {
       cwd: dir,
       targetVersion: '1.0.1',
       runner,
+      probeCredentials: verified,
       needsModel: true,
       probeModel: async () => ({ ok: false, checked: false, detail: 'offline' }),
     });
@@ -197,11 +267,81 @@ describe('release preflight — the whole run', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  /**
+   * REGRESSION — the 3.5.8 release. A revoked npm token was present in three
+   * places, so "is a credential set?" said yes; the whole suite and build ran
+   * (about five minutes) and only `npm publish` itself returned `E401`. The
+   * store could already tell a DEAD token from a missing one — nothing on the
+   * release path ever asked it. This is that ask.
+   */
+  it('verifies the credential BEFORE phase 1, and stops on a rejected token', async () => {
+    writePkg({ name: 'demo', version: '1.0.0' });
+    configureCleanRepo();
+
+    let probes = 0;
+    const result = await runReleasePreflight({
+      cwd: dir,
+      targetVersion: '1.0.1',
+      runner,
+      probeCredentials: async () => {
+        probes++;
+        return {
+          npm: { checked: true, ok: false, detail: 'token rejected (401)' },
+          git: { checked: true, ok: true, detail: 'authenticated as acme' },
+        };
+      },
+    });
+
+    // Asked exactly once, and the answer decided the run.
+    expect(probes).toBe(1);
+    expect(result.blocked).toBe(true);
+    expect(result.summary).toContain('npm credential');
+    expect(result.summary).toContain('token rejected (401)');
+    expect(result.summary).toContain('stopped before anything irreversible');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('warns, and does not block, when the credential could not be checked', async () => {
+    writePkg({ name: 'demo', version: '1.0.0' });
+    configureCleanRepo();
+    const result = await runReleasePreflight({
+      cwd: dir,
+      targetVersion: '1.0.1',
+      runner,
+      probeCredentials: async () => ({
+        npm: { checked: false, ok: false, detail: 'could not reach the registry: fetch failed' },
+        git: { checked: false, ok: false, detail: 'no git credentials' },
+      }),
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.summary).toContain('could not verify the token');
+    expect(result.summary).toContain('not claims that it passed');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('treats a probe that THROWS as unanswerable, never as a rejection', async () => {
+    writePkg({ name: 'demo', version: '1.0.0' });
+    configureCleanRepo();
+    const result = await runReleasePreflight({
+      cwd: dir,
+      targetVersion: '1.0.1',
+      runner,
+      probeCredentials: async () => {
+        throw new Error('boom');
+      },
+    });
+    expect(result.blocked).toBe(false);
+    const credentials = result.checks.find((c) => c.name === 'release credentials')!;
+    expect(credentials.status).toBe('warn');
+    expect(credentials.detail).toContain('boom');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('says in the summary that warnings were NOT verified', async () => {
     writePkg({ name: 'demo', version: '1.0.0' });
     configureCleanRepo();
     stubs['npm view "demo@1.0.1" version'] = { ok: false, out: 'fetch failed' };
-    const result = await runReleasePreflight({ cwd: dir, targetVersion: '1.0.1', runner });
+    const result = await runReleasePreflight({ cwd: dir, targetVersion: '1.0.1', runner, probeCredentials: verified });
     expect(result.blocked).toBe(false);
     expect(result.summary).toContain('not claims that it passed');
     rmSync(dir, { recursive: true, force: true });

@@ -49,7 +49,10 @@ function statusText(): string {
   lines.push(`   📦 npm registry: ${status.npm.registry}`);
 
   if (status.git.canPush && status.npm.canPublish) {
-    lines.push('   ✅ A release can run (git push and npm publish are both credentialed).');
+    // Presence is NOT validity, and saying "can run" would make this line lie
+    // exactly when it matters: v3.5.8 had a token in three places, all revoked.
+    lines.push('   ✅ Tokens present for git push and npm publish — presence is not validity.');
+    lines.push('   Run action=verify to have them checked against the live services before releasing.');
   } else {
     lines.push('   ⚠️  A release would be incomplete:');
     if (!status.git.canPush) {

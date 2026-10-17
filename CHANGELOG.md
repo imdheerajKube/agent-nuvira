@@ -2,6 +2,38 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.5.9 — a credential that is PRESENT is not a credential that WORKS, and both publish paths now ask
+
+One failure, measured: the 3.5.8 release ran the full suite and the build (about five
+minutes) and only `npm publish` returned `E401`. The npm token was present in three
+places — `~/.npmrc`, the project `.npmrc`, `~/.npmrc.publish` — and **all three had
+been revoked**. Every check upstream passed, because to them "a token is set" and
+"the token works" were the same fact, and `npm view` for an unpublished version still
+answers while unauthenticated. `CredentialStore.verify()` could already tell the two
+apart (`GET /-/whoami` → 401 → `checked, not ok`); nothing on the release path ever
+called it.
+
+- **The release preflight verifies the token it will use.** `runReleasePreflight`
+  gained a credential probe whose DEFAULT is the real store — not an opt-in, because
+  a check a caller must remember is how this happened. `nuvira publish` and the
+  `publish` tool both reach it; `--force` still overrides.
+- **The package agent's own `npm publish` path is gated the same way.**
+  `fullPublish` verified only that `.npmrc` CONTAINED `_authToken`, then bumped and
+  built. It now asks the registry before the bump, and `publish()` re-checks as a last
+  line of defence for the paths that reach it directly.
+- **The asymmetry is the honesty.** A rejected token (401/403) is definitive and
+  blocks; an unanswerable one (offline, timeout) warns and continues; a probe that
+  throws is unanswerable, never a rejection; nothing configured emits no check at all,
+  because the phase builder omits that phase.
+- **`credentials status` stopped claiming a release can run.** It reported "✅ A
+  release can run" from presence alone. It now says the tokens are present, and names
+  `verify` for the question that was actually asked.
+
+On this machine, against the real revoked token: `❌ npm credential: token rejected
+(401)` in 3.1 s, before phase 1 — alongside `✅ git credential: authenticated as …`,
+so the report names WHICH credential is the problem instead of blaming the release.
+Pinned by 10 new tests in `release-preflight`, `package-agent` and `publish-tool`.
+
 ## v3.5.7 — an answer that was already delivered is not deleted by a gate, a produce ask with no folder gets a temporary workspace, a reply the channel cannot carry becomes a file, a parked provider stops being resolved model by model, and the pinned wait is the retry dial
 
 Five defects, all of them in the path between "the model produced it" and "the person

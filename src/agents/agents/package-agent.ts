@@ -51,6 +51,13 @@ export class PackageAgent extends Agent {
   readonly name = 'Package';
   readonly description = 'Manages package version, build, and npm publish';
 
+  /**
+   * Cache for {@link npmCredentialReadiness} — the check runs both BEFORE the
+   * bump and again inside `publish()`, and two registry round-trips for the same
+   * answer would be a pointless tax on a release.
+   */
+  private _npmVerdict?: { at: number; value: { blocked: boolean; detail: string } };
+
   async execute(context: AgentContext, callLLM: LLMCallFn): Promise<AgentResult> {
     try {
       const taskDesc = context.taskPlan.find(
@@ -163,6 +170,61 @@ export class PackageAgent extends Agent {
   }
 
   /**
+   * Is the npm credential LIVE — not merely present?
+   *
+   * `checkNpmAuth()` below answers "is a token configured?", which is the wrong
+   * question for a publish: the v3.5.8 release had a token in three places, all
+   * revoked, and spent five minutes of build before `npm publish` returned
+   * `E401`. This asks the registry whether the token it is about to use still
+   * identifies anybody.
+   *
+   * Same asymmetry as the release preflight (`release-preflight.ts`): only a
+   * REJECTION blocks. A check that could not be made (offline, timeout) returns
+   * `blocked: false` with the reason in `detail`, because refusing to release
+   * whenever the network is closed would be a worse failure than the one it
+   * prevents.
+   */
+  private async npmCredentialReadiness(): Promise<{ blocked: boolean; detail: string }> {
+    const now = Date.now();
+    if (this._npmVerdict && now - this._npmVerdict.at < 60_000) return this._npmVerdict.value;
+
+    let value: { blocked: boolean; detail: string };
+    try {
+      // Loaded lazily: this module is in the agent bundle, and the credential
+      // store pulls inquirer and the env-file writer with it.
+      const { CredentialStore } = await import('../credential-store.js');
+      const store = new CredentialStore();
+      store.initialize();
+      const { npm } = await store.verify();
+
+      if (npm.checked && !npm.ok) {
+        value = {
+          blocked: true,
+          detail:
+            `the npm token was ${npm.detail} — \`npm publish\` cannot succeed with it. ` +
+            'Refresh it (npm login, or `nuvira credentials store`), then retry.',
+        };
+      } else if (npm.checked) {
+        value = { blocked: false, detail: npm.detail };
+      } else {
+        value = {
+          blocked: false,
+          detail: `the npm token could not be verified (${npm.detail}) — proceeding, which is not a claim that it works`,
+        };
+      }
+    } catch (err) {
+      // A store that cannot even be loaded is unanswerable, never a rejection.
+      value = {
+        blocked: false,
+        detail: `the npm token could not be verified (${err instanceof Error ? err.message : String(err)})`,
+      };
+    }
+
+    this._npmVerdict = { at: now, value };
+    return value;
+  }
+
+  /**
    * Check if npm auth is configured before publishing.
    * Uses NPM_TOKEN env var, .npmrc, or sets up via CredentialStore.
    */
@@ -209,13 +271,23 @@ export class PackageAgent extends Agent {
     description: string,
     callLLM: LLMCallFn,
   ): Promise<AgentResult> {
-    // Step 1: Check auth via env var or .npmrc
-    const hasAuth = !!(process.env.NPM_TOKEN) || this.checkNpmAuth().ok;
-    if (!hasAuth) {
+    // Step 1: Check auth via env var or .npmrc — and then check that the token
+    // WORKS. Both belong here, before the bump and the build: this is the last
+    // cheap moment in the pipeline (see npmCredentialReadiness).
+    const auth = this.checkNpmAuth();
+    if (!auth.ok) {
       return {
         success: false,
         summary: 'npm publish not possible: authentication required',
-        error: 'Set NPM_TOKEN env var or configure .npmrc with auth token',
+        error: auth.message || 'Set NPM_TOKEN env var or configure .npmrc with auth token',
+      };
+    }
+    const readiness = await this.npmCredentialReadiness();
+    if (readiness.blocked) {
+      return {
+        success: false,
+        summary: 'npm publish not possible: the token was rejected',
+        error: readiness.detail,
       };
     }
 
@@ -253,6 +325,25 @@ export class PackageAgent extends Agent {
   }
 
   private async publish(): Promise<AgentResult> {
+    // The last line of defence for the paths that reach `publish()` directly
+    // (`execute()` on a "publish" task) instead of through `fullPublish()`.
+    const auth = this.checkNpmAuth();
+    if (!auth.ok) {
+      return {
+        success: false,
+        summary: 'npm publish not possible: authentication required',
+        error: auth.message || 'Set NPM_TOKEN env var or configure .npmrc with auth token',
+      };
+    }
+    const readiness = await this.npmCredentialReadiness();
+    if (readiness.blocked) {
+      return {
+        success: false,
+        summary: 'npm publish not possible: the token was rejected',
+        error: readiness.detail,
+      };
+    }
+
     try {
       const output = execSync('npm publish 2>&1', {
         cwd: process.cwd(),

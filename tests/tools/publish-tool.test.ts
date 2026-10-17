@@ -57,9 +57,16 @@ vi.mock('../../src/agents/release-runner.js', async (importOriginal) => {
 // (`npm view agent-nuvira@x.y.z`, `git ls-remote`), which would make these tests
 // depend on the network and on whatever version happens to be published. The
 // preflight has its own suite; here the subject is credential gating.
+/** Mutable so a test can make the preflight BLOCK (the path that must stop). */
+let mockPreflight: {
+  checks: Array<{ name: string; status: 'ok' | 'warn' | 'block'; detail: string; definitive: boolean }>;
+  blocked: boolean;
+  summary: string;
+} = { checks: [], blocked: false, summary: '📋 Release preflight (mocked)' };
+
 vi.mock('../../src/agents/release-preflight.js', () => ({
-  runReleasePreflight: async () => ({ checks: [], blocked: false, summary: '📋 Release preflight (mocked)' }),
-  formatPreflight: () => '📋 Release preflight (mocked)',
+  runReleasePreflight: async () => mockPreflight,
+  formatPreflight: () => mockPreflight.summary,
 }));
 
 // Mock the orchestrator so a successful publish never runs a real pipeline.
@@ -87,6 +94,7 @@ describe('publish tool — credential gating (never prompts)', () => {
       canPush: false,
       canPublish: false,
     };
+    mockPreflight = { checks: [], blocked: false, summary: '📋 Release preflight (mocked)' };
   });
 
   it('reports missing credentials so the model can ask_user for tokens', async () => {
@@ -128,5 +136,32 @@ describe('publish tool — credential gating (never prompts)', () => {
     expect(out).toContain('npm ✓');
     // The raw tokens must never reach the transcript.
     expect(out).not.toContain('secrettoken1234');
+  });
+
+  /**
+   * The v3.5.8 shape: the token is present, the preflight asked the registry and
+   * it said no. Nothing may run — not a phase, not a build, not a tag.
+   */
+  it('starts NO phase when the preflight blocks on a rejected credential', async () => {
+    mockStore.canPush = true;
+    mockStore.canPublish = true;
+    mockStore.git.token = 'ghp_secrettoken1234';
+    mockStore.npm.token = 'npm_secrettoken1234';
+    mockPreflight = {
+      blocked: true,
+      summary:
+        '📋 Release preflight\n  ❌ npm credential: token rejected (401) — `npm publish` cannot succeed with it.',
+      checks: [
+        { name: 'npm credential', status: 'block', detail: 'token rejected (401)', definitive: true },
+      ],
+    };
+
+    const out = await runPublishTool({ bump: 'patch' }, { configManager: {} });
+
+    expect(out).toContain('was NOT started');
+    expect(out).toContain('npm credential');
+    // No phase header, no completion line: the tool did not get that far.
+    expect(out).not.toContain('📦 1/');
+    expect(out).not.toContain('Publish "');
   });
 });

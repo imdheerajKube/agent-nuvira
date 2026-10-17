@@ -15,16 +15,27 @@
  *      second publish of 3.3.2 can only fail.)
  *   2. The working tree — is it a git repo, is there a remote, is the branch
  *      ahead/behind, does the target tag already exist locally or on the remote?
- *   3. The provider×model pair — ONLY when a phase will actually call a model.
+ *   3. The release credentials — is the token the publish will ACTUALLY use
+ *      still live? `CredentialStore.verify()` already asked the service; until
+ *      this check existed nothing on the release path ever called it.
+ *   4. The provider×model pair — ONLY when a phase will actually call a model.
  *      Since the release phases became deterministic that is normally zero
  *      phases, and claiming to have verified a route nothing will use would be
  *      exactly the kind of decorative check this repo keeps deleting.
  *
+ * WHY CHECK 3 EXISTS. The 3.5.8 release ran its full suite and build (about
+ * five minutes) and only then got `E401` from the registry: the npm token in
+ * `~/.npmrc` was revoked. Every earlier check passed, because "a token is set"
+ * and "the token works" were the same fact to them — and `npm view` for the
+ * version still answers while unauthenticated. The credential store could
+ * already tell the two apart; the preflight simply never asked it. Checking
+ * PRESENCE is worthless here: the dead token was present three times over.
+ *
  * A `definitive` failure (the registry answered, the version exists, the tag is
- * taken) blocks the run unless `--force`. An `unknown` (offline, no npm token,
- * no network) warns and continues — a closed network must not make releases
- * impossible, and pretending those checks passed would be worse than admitting
- * they did not run.
+ * taken, the token was REJECTED) blocks the run unless `--force`. An `unknown`
+ * (offline, no npm token, no network) warns and continues — a closed network
+ * must not make releases impossible, and pretending those checks passed would be
+ * worse than admitting they did not run.
  */
 
 import { execSync } from 'node:child_process';
@@ -34,6 +45,7 @@ import { join } from 'node:path';
 import { resolveProvider } from '../cli/router.js';
 import { resolveRoute } from '../inference/route-resolver.js';
 import type { ConfigManager } from '../config/manager.js';
+import type { CredentialProbe, PublishVerification } from './credential-store.js';
 import { logger } from '../utils/logger.js';
 
 export interface PreflightCheck {
@@ -93,6 +105,17 @@ export interface PreflightInput {
   probeModel?: () => Promise<{ ok: boolean; checked: boolean; detail: string }>;
   /** Injected so the command checks are testable without a network. */
   runner?: CommandRunner;
+  /**
+   * Injected so the credential check is testable without a network.
+   *
+   * The DEFAULT is the real thing — `CredentialStore.verify()`, which reads the
+   * same token the publish phase will use (`NPM_TOKEN`, the project `.npmrc`,
+   * `~/.npmrc`, or the stored credential, in that order) and asks the service
+   * whether it is live. It is a default rather than an opt-in on purpose: a
+   * check a caller has to REMEMBER to request is exactly how the 3.5.8 release
+   * spent five minutes proving a revoked token could not publish.
+   */
+  probeCredentials?: () => Promise<PublishVerification>;
 }
 
 /**
@@ -139,6 +162,80 @@ export function checkVersionPublished(
     detail: `could not check the registry (${result.output.split('\n')[0]?.slice(0, 120) || 'no output'})`,
     definitive: false,
   };
+}
+
+/**
+ * The credential checks a release must pass, mapped from the store's verdicts.
+ *
+ * The asymmetry is the honesty, same as every other probe in this repo:
+ *
+ *   - a REJECTED token (`checked && !ok` — the service answered 401/403) is
+ *     definitive and blocks. That is a measured fact about this token;
+ *   - an UNANSWERABLE one (`!checked` — offline, timeout) warns and continues;
+ *   - nothing configured emits no check at all, because `buildPublishPhases`
+ *     omits that phase, so there is no risk to report.
+ *
+ * The detail never carries the secret — only the service's own wording.
+ */
+export function checkReleaseCredentials(verification: PublishVerification): PreflightCheck[] {
+  const checks: PreflightCheck[] = [];
+
+  const map = (
+    name: string,
+    probe: CredentialProbe,
+    consequence: string,
+    remedy: string,
+  ): void => {
+    if (!probe.checked && /^no (npm token|git credentials)$/.test(probe.detail)) return;
+
+    if (probe.checked && probe.ok) {
+      checks.push({ name, status: 'ok', detail: probe.detail, definitive: true });
+      return;
+    }
+
+    if (probe.checked) {
+      checks.push({
+        name,
+        status: 'block',
+        detail: `${probe.detail} — ${consequence} ${remedy}`,
+        definitive: true,
+      });
+      return;
+    }
+
+    // Could not ask the service. Unanswerable is NOT a rejection.
+    checks.push({
+      name,
+      status: 'warn',
+      detail: `could not verify the token: ${probe.detail}`,
+      definitive: false,
+    });
+  };
+
+  map(
+    'npm credential',
+    verification.npm,
+    '`npm publish` cannot succeed with it.',
+    'Refresh it (npm login, or `nuvira credentials store` with a new token), then run the release again.',
+  );
+  map(
+    'git credential',
+    verification.git,
+    'the push and the GitHub release cannot succeed with it.',
+    'Refresh the GitHub token (or configure an SSH key the remote accepts), then run the release again.',
+  );
+
+  return checks;
+}
+
+/** The real credential probe — the store the publish phases themselves use. */
+async function defaultCredentialProbe(): Promise<PublishVerification> {
+  const { CredentialStore } = await import('./credential-store.js');
+  const store = new CredentialStore();
+  // Adopt what was detected (env, project `.npmrc`, `~/.npmrc`, stored) without
+  // ever prompting — a preflight may run inside an unattended tool call.
+  store.initialize();
+  return store.verify();
 }
 
 /** Repo/remote/tag state — the facts that make a push succeed or collide. */
@@ -224,6 +321,20 @@ export async function runReleasePreflight(input: PreflightInput): Promise<Prefli
   } else {
     checks.push(...checkGitState(input.targetVersion, cwd, input.runner));
     checks.push(checkVersionPublished(target.name, input.targetVersion, input.runner));
+
+    // The token, not just its presence. See the module docstring (check 3).
+    try {
+      const verification = await (input.probeCredentials ?? defaultCredentialProbe)();
+      checks.push(...checkReleaseCredentials(verification));
+    } catch (err) {
+      // A probe that throws is unanswerable, never a rejection.
+      checks.push({
+        name: 'release credentials',
+        status: 'warn',
+        detail: `could not verify the credentials: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200),
+        definitive: false,
+      });
+    }
   }
 
   // The model pair, ONLY when a phase will call a model. Reporting a verified

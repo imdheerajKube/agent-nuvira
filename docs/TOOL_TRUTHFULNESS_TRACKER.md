@@ -796,6 +796,60 @@ entry; the surrounding mechanism is unchanged.
 Pinned by `CapabilitiesPage.test.tsx` (8), `capabilities-api.test.ts` (3),
 `command-adaptation.test.ts`, and `machine-command.test.ts`.
 
+## Bundle 52 — a credential that is PRESENT is not a credential that WORKS (2026-10-17)
+
+**The incident (v3.5.8).** The release ran the full suite and the build — about
+five minutes — and only `npm publish` itself returned `E401`. The npm token was
+present in three places (`~/.npmrc`, the project `.npmrc`, and `~/.npmrc.publish`)
+and **all three had been revoked**. Every upstream check passed, because to them
+"a token is set" and "the token works" were the same fact, and `npm view` for an
+unpublished version still answers while unauthenticated.
+
+**Root cause, stated exactly.** `CredentialStore.verify()` could already tell a
+dead token from a missing one (`GET /-/whoami` → 401 → `checked: true, ok: false`).
+Nothing on either publish path ever called it:
+
+1. `agents/release-preflight.ts` — the preflight checked the version, tag, remote
+   and working tree, and stopped there, although its own docstring is about the
+   one cheap moment a release has.
+2. `agents/agents/package-agent.ts` — its own `npm publish` path gated on
+   `checkNpmAuth()`, i.e. on `.npmrc` **containing** `_authToken`, and its
+   `fullPublish` bumped and built on exactly that presence.
+
+This is the failure mode the tracker exists for: the answer was available and
+nothing asked the question.
+
+**The fix.** `runReleasePreflight` now takes a credential probe (default: the
+real store, not an opt-in, because a check a caller must remember is how this
+happened) and maps it with the same asymmetry as every other probe here — a
+**rejected** token is definitive and blocks; an **unanswerable** one (offline,
+timeout) warns and continues; nothing configured emits no check, because the
+phase builder omits that phase. `PackageAgent.fullPublish` verifies before the
+bump, and `PackageAgent.publish()` verifies as a last line of defence for the
+paths that reach it directly. `credentials status` no longer says *"a release can
+run"* on presence — it says the tokens are present and names `verify`.
+
+**Measured, not asserted.** Against this machine's real, revoked token, with the
+real `runReleasePreflight` and no injected probe:
+
+```
+✅ npm version available: agent-nuvira@3.5.9 is not published yet
+❌ npm credential: token rejected (401) — `npm publish` cannot succeed with it.
+   Refresh it (npm login, or `nuvira credentials store` with a new token) …
+✅ git credential: authenticated as imdheerajKube
+→ These are definitive: the release is stopped before anything irreversible happens.
+```
+
+3205 ms, at the cheap moment, instead of five minutes and two failed uploads.
+The git token was live — only npm was dead — so the report also says *which*
+credential is the problem.
+
+Pinned by `tests/agents/release-preflight.test.ts` (22, six of them new: rejected
+blocks, unanswerable warns, a throwing probe is never a rejection, one probe call
+per run, no secret in the wording) and `tests/agents/package-agent.test.ts` (7,
+four new: rejected refuses before any command, accepted publishes, unverifiable
+proceeds, `fullPublish` stops before the bump).
+
 ## Bundle 51 — the long tail: derive, verify, adapt, remember (2026-10-08)
 
 **The question.** "There could be other commands than the ones we identified —
