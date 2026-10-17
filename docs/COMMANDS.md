@@ -444,6 +444,36 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira run "npm test" -t 120
   ```
 
+### 3.6 Animated video — render, revise, inspect (no model in the loop)
+
+- **Objective:** Turn a preset plus your data — or a frame sequence your own renderer
+already wrote — into an MP4/WebM/GIF, then look at it and revise it. The animation is
+code, so the same input always renders the same file and no provider is involved.
+- **Command:** `nuvira motion [list] [-n <count>]` · `nuvira motion presets` · `nuvira motion doctor` ·
+  `nuvira motion render [--preset <name> --data <file> | --html <file> | --frames <dir> [--frames-pattern <glob>]] [-o <name>] [-f <format>] [--fps <n>] [--duration <ms>] [--aspect <ratio>] [--renderer <command>]` ·
+  `nuvira motion revise <id> [--fps <n>] [--duration <ms>] [--preview]` ·
+  `nuvira motion inspect [--html <file> | --frames <dir>]` · `nuvira motion open [id]`
+- **Examples:**
+  ```bash
+  nuvira motion                            # the renders in this workspace + the next step
+  nuvira motion list -n 5                  # the same list, bounded
+  nuvira motion presets                    # ready-made scenes and the data each needs
+  nuvira motion doctor                     # chromium for frames, ffmpeg to encode — named, not guessed
+  nuvira motion render --preset bar-chart --data q3.csv --out q3 --duration 6000
+  nuvira motion render --frames ./frames --frames-pattern 'f_*.png' \
+      --renderer "python render.py" --fps 12     # your PIL/Manim/Blender frames, encoded here
+  nuvira motion inspect --frames ./frames   # contact sheet of keyframes, before you deliver
+  nuvira motion revise q3 --fps 24 --preview  # show exactly what would run, change nothing
+  nuvira motion revise q3 --fps 24            # re-run it (a frame render re-runs its recorded renderer)
+  nuvira motion open q3                    # open the artifact (latest when no id is given)
+  ```
+- **Notes:** `render` records what produced the file, which is what makes it revisable —
+  pass `--renderer` with `--frames` or a revision can only re-encode, not regenerate.
+  `revise --preview` is the safe default when you want to see the command first; a
+  recorded renderer that changed since the render was made is refused unless
+  `--allow-renderer-change` is passed. `doctor` reports a missing prerequisite as a
+  fact (with the binary's path) instead of failing a render halfway.
+
 ---
 
 ## 4. Configuration & setup

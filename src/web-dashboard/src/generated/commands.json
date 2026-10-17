@@ -2,8 +2,8 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 298,
-  "groupCount": 58,
+  "commandCount": 305,
+  "groupCount": 59,
   "groups": [
     {
       "name": "admin",
@@ -961,6 +961,91 @@
         {
           "name": "omniroute stop",
           "description": "Stop the running OmniRoute gateway",
+          "flags": []
+        }
+      ]
+    },
+    {
+      "name": "motion",
+      "description": "Create and inspect animated videos — code-authored, rendered frame-accurately. No model is needed: a preset plus your data is a render.",
+      "commands": [
+        {
+          "name": "motion list",
+          "description": "Show the renders in this workspace (the default action)",
+          "flags": [
+            "--limit <limit>"
+          ]
+        },
+        {
+          "name": "motion presets",
+          "description": "List the ready-made scenes and what data each one needs",
+          "flags": []
+        },
+        {
+          "name": "motion doctor",
+          "description": "Check that this machine can render (chromium for frames, ffmpeg to encode)",
+          "flags": []
+        },
+        {
+          "name": "motion render",
+          "description": "Render a video now — from a preset, your own HTML animation, or your own renderer's frames",
+          "flags": [
+            "--accent <accent>",
+            "--aspect <aspect>",
+            "--audio <audio>",
+            "--data <data>",
+            "--duration <duration>",
+            "--format <format>",
+            "--fps <fps>",
+            "--frames <frames>",
+            "--frames-pattern <frames_pattern>",
+            "--height <height>",
+            "--html <html>",
+            "--kicker <kicker>",
+            "--narration <narration>",
+            "--out <out>",
+            "--preset <preset>",
+            "--renderer <renderer>",
+            "--renderer-cwd <renderer_cwd>",
+            "--subtitle <subtitle>",
+            "--title <title>",
+            "--unit <unit>",
+            "--voice <voice>",
+            "--width <width>"
+          ]
+        },
+        {
+          "name": "motion revise",
+          "description": "Re-render an existing render (re-runs the recorded renderer for a frame sequence)",
+          "flags": [
+            "--allow-renderer-change",
+            "--audio <audio>",
+            "--duration <duration>",
+            "--format <format>",
+            "--fps <fps>",
+            "--narration <narration>",
+            "--preview",
+            "--renderer <renderer>",
+            "--renderer-cwd <renderer_cwd>"
+          ]
+        },
+        {
+          "name": "motion inspect",
+          "description": "Render a contact sheet of keyframes — one image you can look at before delivering",
+          "flags": [
+            "--duration <duration>",
+            "--fps <fps>",
+            "--frames <frames>",
+            "--frames-pattern <frames_pattern>",
+            "--html <html>",
+            "--out <out>",
+            "--tile-width <tile_width>",
+            "--tiles <tiles>"
+          ]
+        },
+        {
+          "name": "motion open",
+          "description": "Open a render in the OS viewer (the latest one when no id is given)",
           "flags": []
         }
       ]

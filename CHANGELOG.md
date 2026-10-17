@@ -2,6 +2,54 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.5.10 — a tool that was never probed is not a tool that is missing
+
+One false claim, measured on a machine that had Docker Desktop installed and its daemon
+serving **v29.5.2**: a run reported "Docker is not installed", while `nuvira sandbox
+status` answered **Docker: Available** from the same machine in the same minute. Nothing
+was wrong with the probe — the prompt was wrong.
+
+The `## This machine` block injected into chat and execute ended with "A tool not listed
+is not installed", but the list under it held package managers and toolchains only. So
+`docker`, present and answering, was simply absent from a list the model had been told
+was exhaustive, and "absent from the list" became "missing from the machine". That is
+the exact class of claim this workstream exists to remove: a fact the harness never
+established, stated as fact.
+
+- **The block probes the container/infra stack into its own line.** `docker`, `podman`,
+  `colima`, `kubectl` are presence facts now, next to the managers, so the tooling an
+  agent is most often asked to drive is named instead of guessed. Another four memoized
+  `which`/`where` lookups per process, no per-call cost.
+- **The claim is scoped to what was checked.** A tool named above is present; a tool
+  **not** named above *was not probed* and must be verified with a real command
+  (`docker --version`, `command -v <tool>`) before it is reported missing. Absence may
+  never be inferred from a bounded probe.
+- **`tool_search` action "resolve" carries the same list**, so a resolve answer about
+  `docker` is grounded in the same probe as the prompt rather than in assumption, and
+  `action:machine-facts` is tagged with the tooling it found — a capability search for
+  `docker` now reaches the facts that answer it.
+
+Pinned by tests that fail on the old wording: the sentence itself is asserted absent, a
+machine with `docker` must show it on the tooling line, and an empty machine must say
+`(none detected)` for **both** lists rather than reading as "managers exist".
+
+Also in this release — the artifacts that had drifted from the tree, found by the release
+gate rather than by a user:
+
+- **The generated command surface is regenerated** (298 → 305 commands, 58 → 59 groups).
+  The `motion` family shipped in the 3.5.9 tree without regenerating
+  `docs/COMMANDS_SURFACE.md` or the dashboard's `commands.json`, so the drift guard failed
+  the gate — the Command Console picker would have offered a command list that did not
+  match the CLI.
+- **`motion` is documented in the curated `COMMANDS.md`** (§3.6: `list`, `presets`,
+  `doctor`, `render`, `revise`, `inspect`, `open`, with the `--frames`/`--renderer` rule
+  that makes a render revisable). The coverage guard — every command the CLI exposes must
+  be documented somewhere for a first-time user — was the check that caught the gap.
+- **The dashboard bundle is rebuilt from that source.** The committed bundle had drifted
+  from what it builds, which is invisible to the component suite because that suite runs
+  the source.
+- **The CLI demo cast is regenerated for 3.5.10**, since it records `nuvira --version`.
+
 ## v3.5.9 — a credential that is PRESENT is not a credential that WORKS, and both publish paths now ask
 
 One failure, measured: the 3.5.8 release ran the full suite and the build (about five

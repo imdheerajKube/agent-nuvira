@@ -706,6 +706,42 @@ Start the OmniRoute gateway in the background and wait for it to answer
 
 Stop the running OmniRoute gateway
 
+### `nuvira motion`
+
+Create and inspect animated videos — code-authored, rendered frame-accurately. No model is needed: a preset plus your data is a render.
+
+### `nuvira motion list`
+
+Show the renders in this workspace (the default action)
+
+   - flags: `--limit <limit>`
+### `nuvira motion presets`
+
+List the ready-made scenes and what data each one needs
+
+### `nuvira motion doctor`
+
+Check that this machine can render (chromium for frames, ffmpeg to encode)
+
+### `nuvira motion render`
+
+Render a video now — from a preset, your own HTML animation, or your own renderer's frames
+
+   - flags: `--accent <accent>, --aspect <aspect>, --audio <audio>, --data <data>, --duration <duration>, --format <format>, --fps <fps>, --frames <frames>, --frames-pattern <frames_pattern>, --height <height>, --html <html>, --kicker <kicker>, --narration <narration>, --out <out>, --preset <preset>, --renderer <renderer>, --renderer-cwd <renderer_cwd>, --subtitle <subtitle>, --title <title>, --unit <unit>, --voice <voice>, --width <width>`
+### `nuvira motion revise`
+
+Re-render an existing render (re-runs the recorded renderer for a frame sequence)
+
+   - flags: `--allow-renderer-change, --audio <audio>, --duration <duration>, --format <format>, --fps <fps>, --narration <narration>, --preview, --renderer <renderer>, --renderer-cwd <renderer_cwd>`
+### `nuvira motion inspect`
+
+Render a contact sheet of keyframes — one image you can look at before delivering
+
+   - flags: `--duration <duration>, --fps <fps>, --frames <frames>, --frames-pattern <frames_pattern>, --html <html>, --out <out>, --tile-width <tile_width>, --tiles <tiles>`
+### `nuvira motion open`
+
+Open a render in the OS viewer (the latest one when no id is given)
+
 ### `nuvira model`
 
 Manage inference providers and models — switch, list, inspect, and recommend
@@ -1595,4 +1631,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*357 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*365 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
