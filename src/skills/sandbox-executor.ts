@@ -16,11 +16,41 @@
  * 5. Capture output and cleanup
  */
 
-import { spawn } from 'node:child_process';
-import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { spawn, spawnSync } from 'node:child_process';
+import { writeFile, mkdir, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+
+/**
+ * Where the host script is written before it is mounted into the container.
+ *
+ * NOT the OS temp dir, which is what this used and why every sandboxed run failed
+ * on macOS: `os.tmpdir()` is under /var/folders (or /tmp, a symlink to /private/tmp),
+ * and neither is shared with the Docker VM by default — colima shares $HOME, Docker
+ * Desktop shares $HOME. A bind mount from an unshared host path does not error: the
+ * daemon silently creates an EMPTY DIRECTORY at the target, and the container then
+ * fails with `/tmp/skill.sh: Is a directory` (measured: Docker 29.7.2 on aarch64
+ * with colima). $HOME is the one location every macOS Docker backend shares.
+ *
+ * NUVIRA_SANDBOX_DIR overrides it for a machine with a different shared root.
+ */
+function sandboxHostDir(): string {
+  const override = process.env.NUVIRA_SANDBOX_DIR;
+  return override && override.trim() ? override.trim() : join(homedir(), '.nuvira', 'sandbox');
+}
+
+/**
+ * The path INSIDE the container the script is mounted at.
+ *
+ * Deliberately not under /tmp: the container mounts a tmpfs there, and a bind mount
+ * whose target lives inside another mount point is replaced by a directory — the same
+ * "Is a directory" failure from the other direction. `/` is the root filesystem, which
+ * every image has.
+ */
+function containerScriptPath(ext: string): string {
+  return `/skill${ext}`;
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -56,6 +86,24 @@ export interface SandboxExecutionResult {
 
 // ─── Default Configuration ───────────────────────────────────────────────
 
+/**
+ * The image a runtime needs, when the caller does not name one.
+ *
+ * The default image is `node:20-slim`, which has NO python3: a `.py` skill in the
+ * sandbox exited 127 with "python3: not found" whatever its code said, because the
+ * container was chosen for a runtime it does not contain. `getRuntimeCommand` runs
+ * python3 for a `.py` file, so the image has to follow the file.
+ */
+const RUNTIME_IMAGES: Record<string, string> = {
+  python: 'python:3.12-slim',
+  node: 'node:20-slim',
+  shell: 'node:20-slim',
+};
+
+function defaultImageFor(runtime: string): string {
+  return RUNTIME_IMAGES[runtime] ?? 'node:20-slim';
+}
+
 const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   image: 'node:20-slim',
   cpuLimit: 1,
@@ -87,26 +135,39 @@ export async function executeInSandbox(
   config?: Partial<SandboxConfig>
 ): Promise<SandboxExecutionResult> {
   const startTime = Date.now();
-  const cfg = { ...DEFAULT_SANDBOX_CONFIG, ...config };
+
+  // The extension decides the RUNTIME, and the runtime decides the image (unless the
+  // caller named one), because the default image cannot run every runtime.
+  const ext = getScriptExtension(scriptPath);
+  const runtime = getRuntimeFromPath(`skill${ext}`);
+  const containerScript = containerScriptPath(ext);
+  const cfg: SandboxConfig = {
+    ...DEFAULT_SANDBOX_CONFIG,
+    ...config,
+    image: config?.image ?? defaultImageFor(runtime),
+  };
 
   // Create temporary directory for the sandbox
-  const tmpDir = join(tmpdir(), 'sandbox-exec', randomBytes(8).toString('hex'));
+  const tmpDir = join(sandboxHostDir(), 'sandbox-exec', randomBytes(8).toString('hex'));
   await mkdir(tmpDir, { recursive: true });
+  // The REAL path, because a shared root may itself be a symlink (/tmp → /private/tmp)
+  // and the Docker VM resolves the path it is given, not the one this process used.
+  const sharedDir = await realpath(tmpDir).catch(() => tmpDir);
+  const hostScript = join(sharedDir, `skill${ext}`);
 
-  // Determine script extension and container script path
-  const ext = getScriptExtension(scriptPath);
-  const containerScript = `/tmp/skill${ext}`;
-  const hostScript = join(tmpDir, `skill${ext}`);
+  // Named so a timeout can kill the CONTAINER: the docker CLI is a separate process,
+  // and killing it leaves the script running inside the VM.
+  const containerName = `nuvira-sandbox-${randomBytes(6).toString('hex')}`;
 
   try {
     // Write script to temporary file
     await writeFile(hostScript, scriptContent, 'utf-8');
 
     // Build Docker command
-    const dockerArgs = buildDockerArgs(hostScript, containerScript, env, args, cfg);
+    const dockerArgs = buildDockerArgs(hostScript, containerScript, env, args, cfg, containerName);
 
     // Execute in Docker
-    const result = await spawnDocker(dockerArgs, cfg.timeoutMs!);
+    const result = await spawnDocker(dockerArgs, cfg.timeoutMs!, containerName);
 
     return {
       success: result.exitCode === 0,
@@ -133,23 +194,37 @@ function buildDockerArgs(
   containerScript: string,
   env?: Record<string, string>,
   args?: string[],
-  config?: Partial<SandboxConfig>
+  config?: Partial<SandboxConfig>,
+  name?: string
 ): string[] {
   const cfg = { ...DEFAULT_SANDBOX_CONFIG, ...config };
   const dockerArgs: string[] = [
     'run',
     '--rm',                          // Auto-remove container after execution
+    ...(name ? ['--name', name] : []), // So a timeout can kill THIS container
     '--interactive',                 // Keep stdin open
     `--memory=${cfg.memoryLimitMb}m`, // Memory limit
     `--cpus=${cfg.cpuLimit}`,        // CPU limit
     `--network=${cfg.networkMode}`,  // Network mode
     `--read-only`,                   // Read-only root filesystem
     `--tmpfs=/tmp:size=${cfg.diskLimitMb}m`, // Writable /tmp
-    `--cap-drop=${cfg.capDrop?.join(',')}`, // Drop capabilities
-    `--cap-add=${cfg.capAdd?.join(',')}`,   // Add capabilities
-    `--no-new-privileges`,           // Prevent privilege escalation
-    `--security-opt=no-new-privileges`, // Additional security
+    // `--no-new-privileges` is NOT a Docker flag: the only way to ask for it is
+    // through `--security-opt`, and a current CLI (29.x) refuses the bare flag with
+    // "unknown flag" and exit 125, which failed EVERY sandboxed execution — the
+    // stream test asked for this and got "unknown flag: --no-new-privileges" instead
+    // of its script's output. `sandbox/manager.ts` already used the correct form.
+    `--security-opt=no-new-privileges:true`, // Prevent privilege escalation
   ];
+
+  // ONE FLAG PER CAPABILITY. Docker's `--cap-add` takes a single capability, so a
+  // comma-joined list is read as one name and rejected: `--cap-add=SETUID,SETGID`
+  // comes back as `invalid CapAdd: unknown capability: "CAP_SETUID,SETGID"` and the
+  // container never starts (exit 125). The default config sets capAdd to
+  // ['SETUID','SETGID'], so this failed EVERY sandboxed execution — measured with
+  // Docker 29.7.2 on aarch64. Only non-empty lists are pushed, because `--cap-add=``
+  // is likewise an invalid capability named "CAP_".
+  for (const cap of cfg.capDrop ?? []) dockerArgs.push(`--cap-drop=${cap}`);
+  for (const cap of cfg.capAdd ?? []) dockerArgs.push(`--cap-add=${cap}`);
 
   // Mount the script into the container
   dockerArgs.push('-v', `${hostScript}:${containerScript}:ro`);
@@ -182,7 +257,8 @@ function buildDockerArgs(
  */
 async function spawnDocker(
   args: string[],
-  timeoutMs: number
+  timeoutMs: number,
+  containerName?: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
     const child = spawn('docker', args, {
@@ -192,6 +268,14 @@ async function spawnDocker(
     let stdout = '';
     let stderr = '';
     let killed = false;
+    let settled = false;
+
+    const finish = (payload: { stdout: string; stderr: string; exitCode: number }): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(payload);
+    };
 
     // Capture stdout
     child.stdout?.on('data', (data: Buffer) => {
@@ -206,35 +290,36 @@ async function spawnDocker(
     // Set timeout
     const timer = setTimeout(() => {
       killed = true;
-      child.kill('SIGTERM');
-      // Force kill after 5 seconds
-      setTimeout(() => {
-        if (!child.killed) {
-          child.kill('SIGKILL');
+      // Kill the CONTAINER first. SIGTERM to the docker CLI only asks it to stop the
+      // container, which it waits for: with `sleep 10` inside, 'close' arrived when
+      // the SCRIPT finished, so a 1s timeout took 10s and the caller's 10s budget
+      // expired — the timeout never actually timed anything out.
+      if (containerName) {
+        try {
+          spawnSync('docker', ['kill', '--signal=SIGKILL', containerName], { stdio: 'ignore' });
+        } catch {
+          /* best-effort: the container may have exited on its own */
         }
-      }, 5000);
+      }
+      child.kill('SIGKILL');
+      // 124 is the `timeout(1)` convention the caller expects, rather than the
+      // signal-derived code (137/143) the client happens to report.
+      finish({ stdout, stderr: stderr + '\n[Sandbox execution timed out]', exitCode: 124 });
     }, timeoutMs);
 
     // Handle completion
     child.on('close', (code) => {
-      clearTimeout(timer);
       if (killed) {
-        resolve({
-          stdout,
-          stderr: stderr + '\n[Sandbox execution timed out]',
-          exitCode: code ?? 124,
-        });
+        finish({ stdout, stderr: stderr + '\n[Sandbox execution timed out]', exitCode: 124 });
       } else {
-        resolve({
-          stdout,
-          stderr,
-          exitCode: code ?? 1,
-        });
+        finish({ stdout, stderr, exitCode: code ?? 1 });
       }
     });
 
     // Handle errors
     child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       reject(err);
     });
