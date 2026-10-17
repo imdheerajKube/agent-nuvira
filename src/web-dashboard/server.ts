@@ -111,6 +111,7 @@ import {
 } from '../learning/model-verify-job.js';
 import { setToolsetEnabled } from '../tools/toolsets.js';
 import { ArtifactStore } from '../tools/artifact-store.js';
+import { motionRenderFile, motionRenders } from './motion-data.js';
 import { setSkillEnabled } from '../learning/hub-skill-catalog.js';
 // I11 — dashboard channel send-test: the same registry/adapters `nuvira gateway
 // send` uses, so a Channels-tab test message behaves identically to the CLI.
@@ -237,6 +238,44 @@ function artifactFileMime(file: string, recorded?: string): string {
     pdf: 'application/pdf',
   };
   return byExt[ext] ?? 'application/octet-stream';
+}
+
+/**
+ * Stream a media file, with byte-range support.
+ *
+ * A `<video>` that cannot seek cannot be reviewed: the player asks for ranges
+ * the moment the user drags the scrubber. Shared by the artifact endpoint and
+ * the motion endpoint so a second media route cannot quietly lose that — the
+ * same reason the artifact route says it never takes a path from the query.
+ */
+function streamMedia(req: IncomingMessage, res: ServerResponse, filePath: string, type: string): void {
+  const size = statSync(filePath).size;
+  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
+  if (range) {
+    const start = range[1] ? Number(range[1]) : 0;
+    const end = range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (start >= size || end < start) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+      res.end();
+      return;
+    }
+    res.writeHead(206, {
+      'Content-Type': type,
+      'Content-Length': String(end - start + 1),
+      'Content-Range': `bytes ${start}-${end}/${size}`,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store',
+    });
+    createReadStream(filePath, { start, end }).pipe(res);
+    return;
+  }
+  res.writeHead(200, {
+    'Content-Type': type,
+    'Content-Length': String(size),
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'no-store',
+  });
+  createReadStream(filePath).pipe(res);
 }
 
 function loadAlwaysWatchQuotaFlag(): void {
@@ -4060,6 +4099,27 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // ── Motion — the renders this workspace has made. Discoverability, not
+  // rendering: the page plays back what a chat turn (or `nuvira motion render`)
+  // produced, because an artifact nobody can find is an artifact nobody has.
+  if (pathname === '/api/motion') {
+    writeJson(res, 200, motionRenders());
+    return;
+  }
+
+  // The bytes for ONE render. The id is resolved through OUR OWN manifest store
+  // (`motionRenderFile`), never a path from the query string, so this endpoint
+  // cannot be asked for an arbitrary file.
+  if (pathname === '/api/motion-file') {
+    const file = motionRenderFile(url.searchParams.get('id') ?? '');
+    if (!file) {
+      writeJson(res, 404, { ok: false, error: 'No such motion render.' });
+      return;
+    }
+    streamMedia(req, res, file.path, file.mime);
+    return;
+  }
+
   // ── An artifact's BYTES — how the Artifacts tab shows a rendered video rather
   // than a filename. The path is looked up in OUR OWN artifact store by (session,
   // artifact id) and is never taken from the query string, so a caller cannot ask
@@ -4074,36 +4134,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       writeJson(res, 404, { ok: false, error: 'No such artifact file.' });
       return;
     }
-    const size = statSync(artifact.path).size;
-    const type = artifactFileMime(artifact.path, artifact.mime);
-    // Range support, because a <video> that cannot seek cannot be reviewed: a
-    // player asks for byte ranges the moment the user drags the scrubber.
-    const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
-    if (range) {
-      const start = range[1] ? Number(range[1]) : 0;
-      const end = range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
-      if (start >= size || end < start) {
-        res.writeHead(416, { 'Content-Range': `bytes */${size}` });
-        res.end();
-        return;
-      }
-      res.writeHead(206, {
-        'Content-Type': type,
-        'Content-Length': String(end - start + 1),
-        'Content-Range': `bytes ${start}-${end}/${size}`,
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'no-store',
-      });
-      createReadStream(artifact.path, { start, end }).pipe(res);
-      return;
-    }
-    res.writeHead(200, {
-      'Content-Type': type,
-      'Content-Length': String(size),
-      'Accept-Ranges': 'bytes',
-      'Cache-Control': 'no-store',
-    });
-    createReadStream(artifact.path).pipe(res);
+    streamMedia(req, res, artifact.path, artifactFileMime(artifact.path, artifact.mime));
     return;
   }
 

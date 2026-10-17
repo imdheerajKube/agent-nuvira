@@ -145,7 +145,7 @@ itself as **skipped**, with the reason:
 | Missing | What you see |
 |---|---|
 | FFmpeg | The motion renderer stops before encoding and names ffmpeg; audio/video skills say the tool is unavailable |
-| Chromium | `motion_render` and the `browser_*` tools refuse with the install command; web research falls back to a plain fetch |
+| Chromium | `motion_render` (HTML/preset route) and the `browser_*` tools refuse with the install command; a `frames_dir` render still works, since it only encodes |
 | FFmpeg without libass | The video is written, the `.srt` is written, and the render says the burn was skipped |
 | edge-tts / Piper | Narration is reported as skipped — the video is produced silent, not produced with a silent failure |
 | Whisper | `transcribe` says no local backend is available |

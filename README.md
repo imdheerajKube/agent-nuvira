@@ -812,9 +812,27 @@ The animation must be **seekable** — `window.__motion = { seek(tMs) }`, or CSS
 `requestAnimationFrame` loop, all stepped by the renderer — because frames are captured from the
 timeline instead of recorded in real time; that is what makes a re-edit (`revise` the stored render)
 reproducible. Presets: `title-card`, `bar-race`, `line-reveal`, `code-walkthrough`. Output goes to
-`.nuvira/artifacts/motion/` and appears in the dashboard's **Artifacts** tab, where it plays inline.
+`.nuvira/artifacts/motion/` and plays inline on the dashboard's **Motion** page (`/motion`).
 A missing chromium or ffmpeg is reported by name with the command that installs it, and narration
 that could not be synthesized is reported as skipped rather than silently dropped.
+
+##### From the command line — no model needed
+
+A preset plus your data is a deterministic render, so it does not need a provider, a prompt or
+token spend:
+
+```bash
+nuvira motion                 # what has been rendered in this workspace (the default action)
+nuvira motion presets         # the four scenes, and which ones need a data file
+nuvira motion render --preset bar-race --data quarterly-revenue.csv --aspect 9:16 --duration 12000
+nuvira motion render --preset title-card --title "Q3 revenue" --subtitle "by region" --narration "…"
+nuvira motion render --html ./my-animation.html --out quarterly --format mp4
+nuvira motion doctor          # chromium + ffmpeg check, with this OS's install command
+nuvira motion open [id]       # play a render in the system viewer (latest when omitted)
+```
+
+`nuvira motion doctor` is the answer to "why did nothing render": the renderer needs chromium for
+frames and ffmpeg to encode, and the command reports whichever is missing rather than failing later.
 
 `nuvira doctor` lists every optional tool with its status and the command for your OS;
 `nuvira doctor --fix` installs the missing ones. The full list is in

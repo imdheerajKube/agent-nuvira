@@ -122,7 +122,7 @@ returning an empty result — but a machine with them does more.
 
 | Tool | What it unlocks | macOS | Linux (apt) |
 |---|---|---|---|
-| **FFmpeg** | Encode the motion renderer's frames; video/audio trim, merge, transcode | `brew install ffmpeg-full` | `sudo apt-get update && sudo apt-get install -y ffmpeg` |
+| **FFmpeg** | Encode the motion renderer's frames; video/audio trim, merge, transcode. Only caption BURNING needs a build with libass (`brew install ffmpeg-full`) — the tool finds that build by itself when it is installed, and `NUVIRA_FFMPEG` points it at any other | `brew install ffmpeg-full` | `sudo apt-get update && sudo apt-get install -y ffmpeg` |
 | **Chromium (Playwright)** | `browser_*` tools and the motion renderer's frame capture | `npx playwright install chromium` | `npx playwright install chromium` |
 | **Ollama** | Local models — no key, no cost, works offline | `brew install ollama` | `curl -fsSL https://ollama.com/install.sh \| sh` |
 | **edge-tts** | Narration for `speak` and a render's voice-over | `pip3 install --user edge-tts` | `pip3 install --user edge-tts` |
@@ -965,6 +965,12 @@ file". Categories below are descriptive; run `nuvira tools list` for the live re
 **Execution** — `run_terminal`, `run_cli`, `code_execution` (sandboxed), `docker`,
 `process_registry`, `daemon_pool`, `cronjob`, `checkpoint`.
 
+Docker-sandboxed skill runs (`nuvira sandbox`) pick their image from the script's runtime — a
+`.py` skill needs an image with python3, which the Node default image does not have — and the
+script is staged in `~/.nuvira/sandbox` before it is mounted, because a Docker VM shares `$HOME`
+and not the OS temp dir (mounting from an unshared path yields an empty directory, not an error).
+Set `NUVIRA_SANDBOX_DIR` if your shared root is somewhere else.
+
 **Web & browser** — `web_search`, `read_page`, `browser` (live page automation),
 `browser_supervisor`, `browser_dialog`, `camofox`, `url_safety`, `computer_use`
 (desktop control without stealing focus).
@@ -973,17 +979,66 @@ file". Categories below are descriptive; run `nuvira tools list` for the live re
 `speak`, `transcribe`, `tts_streaming`, `neutts_synth`, `wake_word`, `voice_mode`.
 
 **`motion_render` — an animated video from CODE.** Use it where the video models cannot
-reach: an animated chart of YOUR numbers, a kinetic title, a short explainer. It needs
-chromium (playwright) and ffmpeg and no API key, and it must be **seekable** —
+reach: an animated chart of YOUR numbers, a kinetic title, a short explainer. Three routes,
+all API-key-free: a **preset**, a **self-contained HTML page**, or **`frames_dir`** — a folder
+of PNGs that YOUR OWN renderer produced (Python/PIL, matplotlib, Manim, Blender, ffmpeg), which
+needs ffmpeg and **not** chromium, because the animation already happened in your program. State
+the fps with frames: a folder of images cannot know the rate it was authored at, and
+`frameCount / fps` is the duration it will report. Any renderer therefore drives the encode —
+the tool is the encoder and the verifier, not the renderer, and the frame path is the honest
+one: it warns that it has no seek hook, so reproducibility is the renderer's contract. Attach a
+music or SFX bed with `audio_path` (mp4 only; gif is silent).
+
+**Record `renderer_command` with those frames** (`"python render.py"`) and the render becomes
+revisable: `revise` re-runs that command to get FRESH frames and re-encodes them. Without it a
+frames revision is REFUSED, deliberately — re-encoding the frames already on disk would return
+the same video under a new id and call it a revision. A revision also refuses when the recorded
+script changed since the render was made, because its output is a different animation rather
+than a revision (`allow_renderer_change` overrides). And before encoding, a frame directory is
+MEASURED rather than trusted: several interleaved sequences, a numbering gap, mixed formats,
+unnamed frames and frames sitting in subdirectories each produce a video that plays while being
+wrong, so each is reported by name — a nested layout is refused with the directory the frames
+are actually in.
+
+The HTML route needs chromium (playwright) and ffmpeg and must be **seekable** —
 `window.__motion = { seek(tMs) }`, or CSS/Web Animations, or a `requestAnimationFrame`
 loop (both are stepped for you) — because frames are captured from the animation's timeline
 instead of recorded in real time: that is why the same source renders the same file, and
 why `revise` (`source_id`) re-renders the STORED source rather than re-inventing it. Presets:
 `title-card`, `bar-race`, `line-reveal` (charts from `data`/`data_path`), `code-walkthrough`.
-The render lands in `.nuvira/artifacts/motion/`, is recorded as an artifact, and plays in the
-dashboard's Artifacts tab. `burn_captions` needs an ffmpeg built with libass (macOS:
-`brew install ffmpeg-full`); without one the `.srt` is still written and the render says the
-burn was skipped rather than pretending. The result reports frames, duration, size, the seek mechanism it
+The render lands in `.nuvira/artifacts/motion/`, is recorded as an artifact, and plays on the
+dashboard's **Motion** page (`/motion`), which lists every render in the workspace with its
+length, size, frame and source.
+
+The same thing is available without a model in the loop — a preset plus a data file is a
+deterministic render, and a frame sequence is one too, so `nuvira motion render` needs no
+provider and no token spend:
+
+```bash
+nuvira motion                 # renders in this workspace (the default action)
+nuvira motion presets         # the four scenes, and which need --data
+nuvira motion render --preset bar-race --data numbers.csv --aspect 9:16
+nuvira motion doctor          # chromium + ffmpeg check, with this OS's install command
+nuvira motion open [id]       # play a render in the system viewer
+nuvira motion render --frames ./frames --fps 30 --renderer "python render.py"  # encode + record
+nuvira motion revise <id> --fps 30        # re-run the recorded renderer, re-encode fresh frames
+nuvira motion revise <id> --preview       # show what that WOULD run, and change nothing
+nuvira motion list                        # says which frames renders are revisable
+```
+A frames revision RUNS the recorded command, so `--preview` prints the command, its working
+directory, whether it needs a shell and which files it tracks (and whether they changed) before
+anything happens. A command that is just an argv is executed WITHOUT a shell, so nothing in it
+can be re-interpreted as a subshell or a redirect, and each run is appended to the render's
+audit trail. If the renderer's script or another tracked file changed since the render was
+made, the revision is refused — its output is a different animation, not a revision — unless
+`--allow-renderer-change` says otherwise. A run that produces an identical frame set is
+reported as a re-encode of the same animation rather than presented as new work.
+
+`burn_captions` needs an ffmpeg built with libass, which the lean Homebrew `ffmpeg` is not
+(`brew install ffmpeg-full`); with `ffmpeg-full` installed, the burn FINDS it even when your
+PATH points at the lean build, and `NUVIRA_FFMPEG` overrides the binary outright. With no
+libass anywhere the `.srt` is still written and the render says the burn was skipped and what
+to install, rather than pretending. The result reports frames, duration, size, the seek mechanism it
 found and every warning — `STATIC (not seekable)` means the video is a still sequence (a bug
 to fix, not a result), and narration that could not be synthesized says it was skipped.
 

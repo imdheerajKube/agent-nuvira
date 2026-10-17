@@ -9,6 +9,7 @@ import type {
   ConsentPictureData,
   SessionGrantInfo,
   CapabilitiesData,
+  MotionData,
   LearnedCommandInfo,
   AdminAuthStatus,
   AdminCachePayload,
@@ -664,6 +665,18 @@ export class DashboardAPI {
       const data = (await parseJsonOrNull(res)) as { ok?: boolean; picture?: ConsentPictureData } | null;
       if (!data || data.ok !== true || !data.picture || !data.picture.denied) return null;
       return data.picture;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Motion — the workspace's rendered videos, newest first (null = unreadable). */
+  async fetchMotion(): Promise<MotionData | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/motion`, { signal: AbortSignal.timeout(8000) });
+      const data = (await parseJsonOrNull(res)) as MotionData | null;
+      if (!data || data.ok !== true || !Array.isArray(data.renders)) return null;
+      return data;
     } catch {
       return null;
     }

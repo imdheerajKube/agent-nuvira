@@ -2260,6 +2260,39 @@ export interface LearnedCommandInfo {
   learnedAt: number;
 }
 
+/**
+ * Motion — `GET /api/motion`: the animated videos this workspace has rendered.
+ *
+ * The render history already existed in `.nuvira/motion` (source and settings
+ * per render); this is the HUMAN view of it, so a video the agent made is
+ * playable and findable instead of being a path in a transcript.
+ */
+export interface MotionRenderInfo {
+  id: string;
+  createdAt: number;
+  /** `preset` scene · `html` authored page · `frames` encoded from another renderer's frames. */
+  source: 'preset' | 'html' | 'frames';
+  preset: string | null;
+  title: string | null;
+  durationMs: number;
+  fps: number;
+  width: number;
+  height: number;
+  format: string;
+  bytes: number;
+  revisions: number;
+  captions: boolean;
+  /** Absolute path on the machine serving the dashboard. */
+  path: string;
+  file: string;
+}
+
+export interface MotionData {
+  ok?: boolean;
+  home: string;
+  renders: MotionRenderInfo[];
+}
+
 /** Bundle 48 — `GET /api/capabilities`: verbs, readiness, missing executables. */
 export interface CapabilitiesData {
   ok?: boolean;

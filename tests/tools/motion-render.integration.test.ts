@@ -21,7 +21,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, existsSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { renderMotion } from '../../src/tools/modality/motion.js';
+import { ffmpegWithSubtitles, renderMotion } from '../../src/tools/modality/motion.js';
 import { isBrowserAvailable } from '../../src/tools/modality/browser.js';
 import { binaryOnPath, resetProbeCache } from '../../src/tools/modality/shared.js';
 import { presetHtml } from '../../src/tools/modality/motion-presets.js';
@@ -42,11 +42,10 @@ const why = !isBrowserAvailable()
  * subtitles=…` died with "No such filter". The narration + burn test below is
  * gated on this rather than failing on a machine that cannot do it.
  */
-const hasSubtitlesFilter = (() => {
-  if (!hasFfmpeg) return false;
-  const res = spawnSync('ffmpeg', ['-hide_banner', '-filters'], { encoding: 'utf-8' });
-  return /^ .. (subtitles|ass) +V->V/m.test(`${res.stdout ?? ''}${res.stderr ?? ''}`);
-})();
+// Asked of the PRODUCT, not of PATH: `ffmpegWithSubtitles()` is what the burn itself
+// uses, so this gate runs wherever a caption burn would actually succeed (a machine
+// with only the `ffmpeg-full` keg, for instance, which PATH ffmpeg would miss).
+const hasSubtitlesFilter = ffmpegWithSubtitles() !== null;
 
 /** A local speech engine (`speak` uses edge-tts or Piper) — both free, both optional. */
 const hasTts = binaryOnPath('edge-tts') || binaryOnPath('piper');
@@ -202,7 +201,7 @@ describe.skipIf(!ready)('a real render', () => {
     expect(info.height).toBe(320);
   }, 120_000);
 
-  it.skipIf(!hasTts || !hasSubtitlesFilter)(
+  it.skipIf(!hasTts || !hasSubtitlesFilter || !ready)(
     'narrates AND burns captions: the audio survives and the words are in the pixels',
     async () => {
       // Two failures live in this combination, and neither shows up in a result

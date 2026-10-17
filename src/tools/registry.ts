@@ -605,11 +605,48 @@ const imageGenSchema = z.object({
  */
 const motionRenderSchema = z.object({
   action: z
-    .enum(['render', 'revise', 'list', 'presets'])
+    .enum(['render', 'revise', 'list', 'presets', 'inspect'])
     .optional()
-    .describe("Default 'render'. 'revise' re-renders a previous render (source_id) with edits — deterministic because the stored source is re-rendered, not re-invented; 'list' shows this workspace's renders; 'presets' lists the ready-made scenes."),
+    .describe(
+      "Default 'render'. 'inspect' renders a contact sheet of keyframes (one PNG) so you can LOOK at the animation with describe_image before delivering it; 'revise' re-renders a previous render (source_id) with edits — deterministic because the stored source is re-rendered, not re-invented (for a frames render it re-runs the recorded renderer_command to get fresh frames); 'list' shows this workspace's renders; 'presets' lists the ready-made scenes.",
+    ),
   html: z.string().optional().describe('A self-contained HTML animation (no network: inline CSS/JS/SVG). Must be seekable — see the motion skill.'),
   html_path: z.string().optional().describe('Path to an HTML animation file instead of inline html'),
+  frames_dir: z
+    .string()
+    .optional()
+    .describe(
+      'A directory of frames YOUR OWN program already rendered (Python/PIL, Manim, Blender, Three.js, Remotion, a video-editing export). Use this when the animation is not a browser page: write the renderer yourself, run it, then pass the frames here to be encoded, captioned and registered. Takes the place of html; needs only ffmpeg.',
+    ),
+  frames_pattern: z
+    .string()
+    .optional()
+    .describe(
+      "Glob over the frame filenames when the directory holds more than one sequence, e.g. 'f_*.png'. A pattern containing '/' selects across subdirectories, e.g. '**/*.png'.",
+    ),
+  audio_path: z.string().optional().describe('An existing audio file (music bed, SFX, a recorded voice-over) muxed onto the video. Combines with narration rather than replacing it.'),
+  renderer_command: z
+    .string()
+    .optional()
+    .describe(
+      "The command that produced frames_dir, e.g. 'python render.py'. RECORD IT: it is stored with the render and re-run by action:'revise' so a revision gets fresh frames instead of re-encoding the old ones. A revise with no recorded command refuses (re-encoding would return the same video and call it a revision); pass it on a revise to make an existing frames render revisable.",
+    ),
+  renderer_cwd: z.string().optional().describe('Directory renderer_command runs in (defaults to the working directory it was recorded from)'),
+  renderer_timeout_ms: z.number().int().min(1000).max(1800000).optional().describe('How long renderer_command may run before it is killed (default 600000)'),
+  allow_renderer_change: z
+    .boolean()
+    .optional()
+    .describe(
+      'action:revise — proceed even though the recorded renderer changed since the render was made. Without it, a changed script is refused, because its output is a different animation rather than a revision.',
+    ),
+  preview: z
+    .boolean()
+    .optional()
+    .describe(
+      "action:revise on a frames render — show exactly what WOULD run (the command, its directory, whether it needs a shell, the files it tracks and whether they changed) and change NOTHING. Use it before the first revision of a render whose command you did not write.",
+    ),
+  tiles: z.number().int().min(2).max(24).optional().describe('action:inspect — keyframes on the contact sheet (default 12)'),
+  tile_width: z.number().int().min(120).max(960).optional().describe('action:inspect — pixels per tile (default 480)'),
   preset: z
     .enum(['title-card', 'bar-race', 'line-reveal', 'code-walkthrough'])
     .optional()
@@ -3382,7 +3419,7 @@ registerTool({
   name: 'motion_render',
   capability: { effectClass: 'local-write', reversible: true },
   description:
-    'Render an ANIMATED video from code: a self-contained HTML/CSS/SVG animation (html or html_path) or a ready-made scene (preset + data). Use for animated explainers, animated charts of the user\'s own data, kinetic titles and code walkthroughs — the output is deterministic (frames are captured from the animation timeline, not recorded), so a revise re-renders the stored source. Needs chromium (playwright) and ffmpeg; a missing one is named with its install command. Optional narration is synthesized locally and muxed in; captions are written as .srt. The video is saved to the sandbox motion/ dir and, in a gateway context, sent back to the originating channel.',
+    'Render an ANIMATED video from code — the animation is a PROGRAM, not a video model, so labels are spelled correctly, the user\'s data is their data, and the same source always renders the same file. Three sources: a self-contained HTML/CSS/SVG animation (html or html_path; must be seekable — see the motion skill), a ready-made scene (preset + data), or frames_dir — PNG frames YOUR OWN renderer already wrote (Python/PIL, Manim, Blender, Three.js, Remotion…), which needs only ffmpeg. Record renderer_command alongside frames_dir (\'python render.py\') so action:\'revise\' can RE-RUN it for fresh frames: with no recorded command a frames revision refuses rather than re-encoding the frames already on disk, because the same video under a new id is not a revision. action:\'inspect\' renders a contact sheet of keyframes: LOOK at it with describe_image before delivering, because a frame count is not a review. Optional narration (synthesized locally) and an existing audio_path (music/SFX) are muxed in; captions are written as .srt and can be burned. The video is saved to the sandbox motion/ dir and, in a gateway context, sent back to the originating channel.',
   category: 'workflow',
   inputSchema: motionRenderSchema,
   endsAgentStep: false,
@@ -3408,7 +3445,11 @@ registerTool({
         });
       }
       const caption = parsed.title ?? parsed.narration ?? undefined;
-      const delivered = await tryAutoDeliver(result.media.path, caption, ctx, 'video');
+      // Auto-delivery is for a finished VIDEO. A contact sheet is for the model's
+      // own eyes; sending it to the user as "the video" would be a lie.
+      const delivered = /^video\//.test(result.media.mime)
+        ? await tryAutoDeliver(result.media.path, caption, ctx, 'video')
+        : '';
       return `${result.text}${delivered}`;
     }
     return result.text;

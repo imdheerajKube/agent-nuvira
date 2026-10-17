@@ -16,30 +16,48 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import {
   MOTION_INIT_SCRIPT,
   MOTION_READY_SCRIPT,
   MOTION_SEEK_SCRIPT,
+  ffmpegWithSubtitles,
   injectRunner,
   seekScript,
+  setSubtitlesProbeForTests,
+  supportsSubtitles,
   buildFfmpegArgs,
   buildFramePlan,
   buildMuxArgs,
   buildSrt,
+  captureRendererRecipe,
+  collectFrameFiles,
   formatSrtTime,
+  frameScanHint,
+  frameScanWarnings,
   frameTimestampMs,
+  gridFor,
+  inspectMotion,
   listMotionManifests,
+  loadMotionManifest,
+  measureFrameSequence,
   motionAvailability,
   renderMotion,
   resolveFrameSize,
+  sampleFrames,
+  parseRendererCommand,
+  runRendererRecipe,
+  scanFrameDirectory,
   setFfmpegRunnerForTests,
+  setFramesAvailabilityForTests,
   setMotionAvailabilityForTests,
   setMotionLauncherForTests,
+  setRendererRunnerForTests,
   setSpeakForTests,
+  verifyRendererRecipe,
   type MotionPageLike,
 } from '../../src/tools/modality/motion.js';
 import { runMotionTool } from '../../src/tools/modality/motion-tool.js';
@@ -66,6 +84,9 @@ afterEach(() => {
   setMotionLauncherForTests(null);
   setFfmpegRunnerForTests(null);
   setMotionAvailabilityForTests(null);
+  setFramesAvailabilityForTests(null);
+  setRendererRunnerForTests(null);
+  setSubtitlesProbeForTests(null);
   setSpeakForTests(null);
   rmSync(workDir, { recursive: true, force: true });
 });
@@ -638,5 +659,807 @@ describe('motion_render — source resolution and the render history', () => {
     const listed = await runMotionTool({ action: 'list' }, ctx());
     expect(listed.text).toContain('custom html');
     expect(listed.text).toContain('revise');
+  });
+});
+
+/**
+ * THE CALLER'S OWN RENDERER — and the reason the encoder was never the gap.
+ *
+ * A live run on this product produced a 600-frame paper-craft commercial by
+ * writing Python and shelling out to ffmpeg: the frames and the encode were
+ * never the hard part. Two things were missing, and they are what this block
+ * pins: the frames could not enter the motion machinery at all (no render id, no
+ * history, no captions, no narration, no reporting, and a failed encode left
+ * whatever ffmpeg left behind), and the run could not LOOK at what it made — a
+ * model cannot watch an MP4, so it delivered 600 frames it had never seen.
+ */
+describe("frames from the caller's own renderer", () => {
+  /** A file with a real PNG header, so the size is read and not assumed. */
+  function pngFrame(width: number, height: number): Buffer {
+    const b = Buffer.alloc(32);
+    b.write('\x89PNG\r\n\x1a\n', 0, 'binary');
+    b.writeUInt32BE(13, 8);
+    b.write('IHDR', 12, 'ascii');
+    b.writeUInt32BE(width, 16);
+    b.writeUInt32BE(height, 20);
+    return b;
+  }
+
+  function frameDir(names: string[], width = 640, height = 360): string {
+    const dir = mkdtempSync(join(tmpdir(), 'nuvira-motion-frames-'));
+    for (const name of names) writeFileSync(join(dir, name), pngFrame(width, height));
+    return dir;
+  }
+
+  beforeEach(() => {
+    // The frames path must not touch a browser. A launcher that throws is how
+    // that is PROVEN rather than assumed.
+    setMotionLauncherForTests(async () => {
+      throw new Error('chromium must not be launched for a frame sequence');
+    });
+    setFramesAvailabilityForTests({ ok: true, missing: [], hint: '' });
+    setFfmpegRunnerForTests(async (args) => {
+      writeFileSync(args[args.length - 1]!, Buffer.from('fake-video'));
+      return { code: 0, stderr: '' };
+    });
+  });
+
+  it('orders frames the way a person numbers them, not lexicographically', () => {
+    const dir = frameDir(['f_10.png', 'f_2.png', 'f_1.png', 'notes.txt', '.DS_Store']);
+    const files = collectFrameFiles(dir);
+    expect(files.map((f) => basename(f))).toEqual(['f_1.png', 'f_2.png', 'f_10.png']);
+  });
+
+  it('takes a glob, so one directory can hold several sequences', () => {
+    const dir = frameDir(['shot_a_0001.png', 'shot_a_0002.png', 'shot_b_0001.png']);
+    expect(collectFrameFiles(dir, 'shot_a_*.png')).toHaveLength(2);
+    expect(collectFrameFiles(dir, 'missing_*.png')).toHaveLength(0);
+  });
+
+  it('measures the real size and reports frames that disagree with it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nuvira-motion-mixed-'));
+    writeFileSync(join(dir, 'f_0001.png'), pngFrame(640, 360));
+    writeFileSync(join(dir, 'f_0002.png'), pngFrame(640, 360));
+    writeFileSync(join(dir, 'f_0003.png'), pngFrame(128, 128));
+    const sequence = measureFrameSequence(collectFrameFiles(dir))!;
+    expect(sequence.width).toBe(640);
+    expect(sequence.height).toBe(360);
+    expect(sequence.mismatched).toBe(1);
+    expect(sequence.files).toHaveLength(3);
+  });
+
+  it('encodes the sequence and states what it measured', async () => {
+    const dir = frameDir(['f_0001.png', 'f_0002.png', 'f_0003.png']);
+    const result = await renderMotion({ framesDir: dir, fps: 30, out_name: 'external' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.frameSource).toBe('frames');
+    expect(result.seek).toBe('external');
+    expect(result.frameCount).toBe(3);
+    expect(result.width).toBe(640);
+    expect(result.height).toBe(360);
+    // The animation already happened in the caller's program, so the "not
+    // seekable" warning — which is about a PAGE — must not appear.
+    expect(result.warnings.join(' ')).not.toContain('not seekable');
+    expect(result.warnings.join(' ')).toContain("caller's renderer");
+    expect(existsSync(result.file)).toBe(true);
+  });
+
+  it('needs ffmpeg and NO chromium — a machine without playwright still renders', async () => {
+    // The browser report says the page renderer is unavailable; the frames render
+    // is not a page render, and refusing it would be a false blocker.
+    setMotionAvailabilityForTests({ ok: false, missing: ['chromium (playwright)'], hint: 'npx playwright install chromium' });
+    const dir = frameDir(['f_0001.png', 'f_0002.png']);
+    const result = await renderMotion({ framesDir: dir, fps: 30 });
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses when ffmpeg is missing, naming it', async () => {
+    setFramesAvailabilityForTests({ ok: false, missing: ['ffmpeg'], hint: 'brew install ffmpeg' });
+    const dir = frameDir(['f_0001.png']);
+    const result = await renderMotion({ framesDir: dir, fps: 30 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('ffmpeg');
+    expect(result.hint).toContain('brew install ffmpeg');
+  });
+
+  it('refuses an empty directory instead of encoding nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nuvira-motion-empty-'));
+    const result = await renderMotion({ framesDir: dir, fps: 30 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('no image frames found');
+    expect(result.error).toContain('.png');
+  });
+
+  it('muxes an audio bed, and says so when the file is not there', async () => {
+    const dir = frameDir(['f_0001.png', 'f_0002.png']);
+    const audio = join(dir, 'bed.m4a');
+    writeFileSync(audio, Buffer.from('audio'));
+    const argv: string[][] = [];
+    setFfmpegRunnerForTests(async (args) => {
+      argv.push(args);
+      writeFileSync(args[args.length - 1]!, Buffer.from('fake-video'));
+      return { code: 0, stderr: '' };
+    });
+
+    await renderMotion({ framesDir: dir, fps: 30, audioPath: audio });
+    expect(argv[0]).toContain(audio);
+    expect(argv[0]).toContain('aac');
+
+    const missing = await renderMotion({ framesDir: dir, fps: 30, audioPath: join(dir, 'gone.mp3') });
+    expect(missing.ok).toBe(true);
+    if (missing.ok) expect(missing.warnings.join(' ')).toContain('does not exist');
+  });
+});
+
+describe('the contact sheet — looking at what was made', () => {
+  function frameDir(names: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), 'nuvira-motion-sheet-'));
+    for (const name of names) writeFileSync(join(dir, name), Buffer.from('png'));
+    return dir;
+  }
+
+  it('lays the tiles out readably, whatever the count', () => {
+    expect(gridFor(12)).toEqual({ cols: 4, rows: 3 });
+    expect(gridFor(9)).toEqual({ cols: 3, rows: 3 });
+    expect(gridFor(2)).toEqual({ cols: 2, rows: 1 });
+    expect(gridFor(24)).toEqual({ cols: 4, rows: 6 });
+  });
+
+  it('samples evenly and always keeps both ends', () => {
+    const picks = sampleFrames([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 4);
+    expect(picks[0]).toBe(1);
+    expect(picks[picks.length - 1]).toBe(10);
+    expect(picks).toHaveLength(4);
+    expect(sampleFrames([1, 2], 12)).toEqual([1, 2]);
+  });
+
+  it('tiles a frame sequence into one PNG, and needs no browser to do it', async () => {
+    setMotionLauncherForTests(async () => {
+      throw new Error('chromium must not be launched to inspect frames');
+    });
+    setFramesAvailabilityForTests({ ok: true, missing: [], hint: '' });
+    const argv: string[][] = [];
+    setFfmpegRunnerForTests(async (args) => {
+      argv.push(args);
+      writeFileSync(args[args.length - 1]!, Buffer.from('png'));
+      return { code: 0, stderr: '' };
+    });
+
+    const dir = frameDir(Array.from({ length: 60 }, (_, i) => `f_${String(i + 1).padStart(4, '0')}.png`));
+    const result = await inspectMotion({ framesDir: dir, fps: 30, tiles: 12, tile_width: 480 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.cols).toBe(4);
+    expect(result.rows).toBe(3);
+    expect(result.tiles).toBe(12);
+    expect(result.totalFrames).toBe(60);
+    expect(result.frameSource).toBe('frames');
+    // 2s of footage across 12 tiles.
+    expect(result.secondsPerTile).toBeCloseTo(2 / 11, 4);
+    const filter = argv[0]![argv[0]!.indexOf('-vf') + 1]!;
+    expect(filter).toContain('tile=4x3');
+    expect(filter).toContain('scale=480:-2');
+    expect(result.file.endsWith('.png')).toBe(true);
+  });
+
+  it('refuses an empty source rather than writing a sheet of nothing', async () => {
+    setFramesAvailabilityForTests({ ok: true, missing: [], hint: '' });
+    setFfmpegRunnerForTests(async (args) => {
+      writeFileSync(args[args.length - 1]!, Buffer.from('png'));
+      return { code: 0, stderr: '' };
+    });
+    const result = await inspectMotion({ html: '   ' });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('nothing to inspect');
+  });
+});
+
+/**
+ * BURNING CAPTIONS IS GATED ON LIBASS, NOT ON THE USER KNOWING THAT.
+ *
+ * Measured 2026-10-17: Homebrew's `ffmpeg` (9.0.2) has no libass, `ffmpeg-full`
+ * next to it does. The tool used to run the burn through PATH ffmpeg and then warn
+ * "this ffmpeg may lack libass" — advice the user cannot act on when the capable
+ * build is already installed. These pin both halves: it FINDS the capable build, and
+ * when there genuinely is none it names the install instead of guessing.
+ */
+describe('captions burn through an ffmpeg that can actually burn them', () => {
+  function pngFrame(): Buffer {
+    const b = Buffer.alloc(32);
+    b.write('\x89PNG\r\n\x1a\n', 0, 'binary');
+    b.writeUInt32BE(13, 8);
+    b.write('IHDR', 12, 'ascii');
+    b.writeUInt32BE(320, 16);
+    b.writeUInt32BE(180, 20);
+    return b;
+  }
+
+  function frames(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'nuvira-motion-burn-'));
+    for (const name of ['f_0001.png', 'f_0002.png']) writeFileSync(join(dir, name), pngFrame());
+    return dir;
+  }
+
+  const captions = [{ from_ms: 0, to_ms: 1000, text: 'hello' }];
+
+  beforeEach(() => {
+    setFramesAvailabilityForTests({ ok: true, missing: [], hint: '' });
+  });
+
+  it('finds and uses the libass-capable build instead of PATH ffmpeg', async () => {
+    setSubtitlesProbeForTests((binary) => binary.includes('ffmpeg-full'));
+    const chosen = ffmpegWithSubtitles();
+    expect(chosen).toContain('ffmpeg-full');
+
+    const binaries: (string | undefined)[] = [];
+    setFfmpegRunnerForTests(async (args, binary) => {
+      binaries.push(binary);
+      writeFileSync(args[args.length - 1]!, Buffer.from('video'));
+      return { code: 0, stderr: '' };
+    });
+
+    const result = await renderMotion({
+      framesDir: frames(),
+      fps: 10,
+      captions,
+      burn_captions: true,
+      cwd: workDir,
+    });
+    expect(result.ok, !result.ok ? result.error : '').toBe(true);
+    if (!result.ok) return;
+    // The FIRST encode runs on the ordinary binary; the BURN is the one that must use
+    // the build with libass.
+    expect(binaries).toContain(chosen);
+    expect(result.srt).toBeTruthy();
+    expect(result.warnings.join(' ')).not.toContain('could NOT be burned');
+  });
+
+  it('names the install rather than guessing when no ffmpeg can burn', async () => {
+    setSubtitlesProbeForTests(() => false);
+    expect(ffmpegWithSubtitles()).toBeNull();
+
+    setFfmpegRunnerForTests(async (args) => {
+      writeFileSync(args[args.length - 1]!, Buffer.from('video'));
+      return { code: 0, stderr: '' };
+    });
+
+    const result = await renderMotion({
+      framesDir: frames(),
+      fps: 10,
+      captions,
+      burn_captions: true,
+      cwd: workDir,
+    });
+    // The render still SUCCEEDS — the .srt is written and the video is real. Only the
+    // burn is missing, and it says why and what to install.
+    expect(result.ok, !result.ok ? result.error : '').toBe(true);
+    if (!result.ok) return;
+    expect(result.warnings.join(' ')).toContain('brew install ffmpeg-full');
+    expect(result.warnings.join(' ')).toContain('NUVIRA_FFMPEG');
+    expect(existsSync(result.srt!)).toBe(true);
+  });
+
+  it('probes a real binary and reports what it supports', () => {
+    setSubtitlesProbeForTests(null);
+    // The keg this machine has, when it has it — and PATH ffmpeg is allowed either way,
+    // so this asserts the PROBE works rather than what any build happens to carry.
+    expect(typeof supportsSubtitles('ffmpeg')).toBe('boolean');
+  });
+});
+
+describe('a frames render is honest about what it cannot revise', () => {
+  it('names the missing renderer and both fixes, instead of properly re-encoding stale frames', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nuvira-motion-revise-'));
+    writeFileSync(join(dir, 'f_0001.png'), Buffer.from('png'));
+    setFramesAvailabilityForTests({ ok: true, missing: [], hint: '' });
+    setFfmpegRunnerForTests(async (args) => {
+      writeFileSync(args[args.length - 1]!, Buffer.from('fake-video'));
+      return { code: 0, stderr: '' };
+    });
+
+    // One workspace for both calls: the render's manifest is what the revision
+    // has to fail to find a renderer for.
+    const workCwd = mkdtempSync(join(tmpdir(), 'nuvira-motion-ws-'));
+    const ctxFor = { configManager: {} as never, cwd: workCwd };
+
+    const rendered = await runMotionTool({ frames_dir: dir, fps: 30, out_name: 'external' }, ctxFor);
+    expect(rendered.text).toContain('custom source');
+    // A frames render with no recorded command says so AT RENDER TIME, so the
+    // caller learns it before they need a revision rather than after.
+    expect(rendered.text).toContain('no renderer_command was recorded');
+    const id = /source_id:'([^']+)'/.exec(rendered.text)?.[1];
+    expect(id).toBeTruthy();
+
+    const revised = await runMotionTool({ action: 'revise', source_id: id }, ctxFor);
+    // The refusal has to say WHY (re-encoding would fake a revision) and give both
+    // ways out — a refusal that only says no is a dead end.
+    expect(revised.text).toContain('NO renderer command was recorded');
+    expect(revised.text).toContain('call it a revision');
+    expect(revised.text).toContain('frames_dir');
+    expect(revised.text).toContain("renderer_command:'python render.py'");
+    expect(loadMotionManifest(id!, workCwd)!.revisions).toBe(0);
+  });
+});
+
+/**
+ * A FRAMES REVISION THAT IS ACTUALLY A REVISION.
+ *
+ * The old behaviour refused every frames revision, which was honest but made the
+ * frames route a dead end for iteration. Running the recorded renderer is what a
+ * revision MEANS for a program that produced the frames, and these tests pin the
+ * three ways that can go: it re-runs, it refuses a changed renderer, and it fails
+ * loudly when the renderer itself fails.
+ */
+describe('revising a frames render by re-running its renderer', () => {
+  let workCwd = '';
+  let dir = '';
+  let script = '';
+
+  function pngFrame(): Buffer {
+    const b = Buffer.alloc(32);
+    b.write('\x89PNG\r\n\x1a\n', 0, 'binary');
+    b.writeUInt32BE(13, 8);
+    b.write('IHDR', 12, 'ascii');
+    b.writeUInt32BE(640, 16);
+    b.writeUInt32BE(360, 20);
+    return b;
+  }
+
+  /** The caller's "renderer": a script whose only job is to rewrite the frames. */
+  function writeRenderer(frames: number): void {
+    writeFileSync(script, '#!/bin/sh\necho rendered $(date +%s)\n', 'utf-8');
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    for (let i = 1; i <= frames; i += 1) {
+      writeFileSync(join(dir, `f_${String(i).padStart(4, '0')}.png`), pngFrame());
+    }
+  }
+
+  beforeEach(() => {
+    workCwd = mkdtempSync(join(tmpdir(), 'nuvira-motion-revws-'));
+    dir = join(workCwd, 'frames');
+    script = join(workCwd, 'render.py');
+    mkdirSync(dir, { recursive: true });
+    setFramesAvailabilityForTests({ ok: true, missing: [], hint: '' });
+    setMotionLauncherForTests(async () => {
+      throw new Error('chromium must not be launched to re-encode frames');
+    });
+    setFfmpegRunnerForTests(async (args) => {
+      writeFileSync(args[args.length - 1]!, Buffer.from('fake-video'));
+      return { code: 0, stderr: '' };
+    });
+  });
+
+  afterEach(() => {
+    setRendererRunnerForTests(null);
+    setFfmpegRunnerForTests(null);
+    setMotionLauncherForTests(null);
+    setFramesAvailabilityForTests(null);
+    rmSync(workCwd, { recursive: true, force: true });
+  });
+
+  const ctxFor = (): { configManager: never; cwd: string } =>
+    ({ configManager: {} as never, cwd: workCwd });
+
+  it('re-runs the recorded renderer, re-encodes the FRESH frames, and says what it ran', async () => {
+    writeRenderer(3);
+    let ran = 0;
+    setRendererRunnerForTests(async (recipe) => {
+      ran += 1;
+      // The renderer is what produces the NEW frames — 5 this time, not 3.
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir, { recursive: true });
+      for (let i = 1; i <= 5; i += 1) writeFileSync(join(dir, `f_${String(i).padStart(4, '0')}.png`), pngFrame());
+      expect(recipe.command).toBe('python render.py');
+      return { ok: true, code: 0, output: 'rendered', timedOut: false };
+    });
+
+    const first = await runMotionTool(
+      { frames_dir: dir, fps: 30, renderer_command: 'python render.py' },
+      ctxFor(),
+    );
+    expect(first.text).toContain('Renderer recorded: python render.py');
+    expect(first.text).toContain('3 frames');
+    const id = /source_id:'([^']+)'/.exec(first.text)![1]!;
+
+    const second = await runMotionTool({ action: 'revise', source_id: id }, ctxFor());
+    expect(ran).toBe(1);
+    expect(second.text).toContain('Re-ran your renderer for fresh frames');
+    expect(second.text).toContain('python render.py');
+    // The re-encode used the frames the renderer just wrote, not the old three.
+    expect(second.text).toContain('5 frames');
+    expect(second.text).toContain('0.17s');
+    const manifest = loadMotionManifest(id, workCwd)!;
+    expect(manifest.revisions).toBe(1);
+    expect(manifest.renderer?.command).toBe('python render.py');
+  });
+
+  it('makes an existing frames render revisable when the command is supplied on the revise', async () => {
+    writeRenderer(2);
+    setRendererRunnerForTests(async () => ({ ok: true, code: 0, output: '', timedOut: false }));
+
+    const first = await runMotionTool({ frames_dir: dir, fps: 30 }, ctxFor());
+    const id = /source_id:'([^']+)'/.exec(first.text)![1]!;
+    expect(loadMotionManifest(id, workCwd)!.renderer).toBeUndefined();
+
+    const revised = await runMotionTool(
+      { action: 'revise', source_id: id, renderer_command: 'python render.py' },
+      ctxFor(),
+    );
+    expect(revised.text).toContain('Re-ran your renderer');
+    expect(loadMotionManifest(id, workCwd)!.renderer?.command).toBe('python render.py');
+  });
+
+  it('refuses when the renderer CHANGED, because its output is a different animation', async () => {
+    writeRenderer(2);
+    let ran = 0;
+    setRendererRunnerForTests(async () => {
+      ran += 1;
+      return { ok: true, code: 0, output: '', timedOut: false };
+    });
+
+    const first = await runMotionTool(
+      { frames_dir: dir, fps: 30, renderer_command: 'python render.py' },
+      ctxFor(),
+    );
+    const id = /source_id:'([^']+)'/.exec(first.text)![1]!;
+
+    // The script is edited after the render was made: identical command, different
+    // program. A revision of the old animation is no longer what this produces.
+    writeFileSync(script, '#!/bin/sh\necho TOTALLY DIFFERENT\n', 'utf-8');
+
+    const refused = await runMotionTool({ action: 'revise', source_id: id }, ctxFor());
+    expect(refused.text).toContain('the renderer changed since');
+    expect(refused.text).toContain('allow_renderer_change:true');
+    expect(ran).toBe(0);
+    expect(loadMotionManifest(id, workCwd)!.revisions).toBe(0);
+
+    const forced = await runMotionTool(
+
+      { action: 'revise', source_id: id, allow_renderer_change: true },
+      ctxFor(),
+    );
+    expect(ran).toBe(1);
+    expect(forced.text).toContain('run despite the renderer having changed');
+  });
+
+  it('reports a FAILED renderer as a failure and leaves the previous render alone', async () => {
+    writeRenderer(2);
+    setRendererRunnerForTests(async () => ({
+      ok: false,
+      code: 1,
+      output: 'Traceback: no module named PIL',
+      timedOut: false,
+    }));
+
+    const first = await runMotionTool(
+      { frames_dir: dir, fps: 30, renderer_command: 'python render.py' },
+      ctxFor(),
+    );
+    const id = /source_id:'([^']+)'/.exec(first.text)![1]!;
+
+    const manifest = loadMotionManifest(id, workCwd)!;
+    const before = readFileSync(manifest.artifact, 'utf-8');
+
+    const failed = await runMotionTool({ action: 'revise', source_id: id }, ctxFor());
+    expect(failed.text).toContain('exited with code 1');
+    expect(failed.text).toContain('no module named PIL');
+    expect(failed.media).toBeUndefined();
+    expect(loadMotionManifest(id, workCwd)!.revisions).toBe(0);
+    // "Untouched" is the claim that matters, so it is the artifact's CONTENT that is
+    // compared — not merely that a file exists, which the first render already left.
+    expect(readFileSync(manifest.artifact, 'utf-8')).toBe(before);
+  });
+
+  it('refuses a renderer_command with no frames to render it from', async () => {
+    const result = await runMotionTool({ html: '<html></html>', renderer_command: 'python render.py' }, ctxFor());
+    expect(result.text).toContain('only applies to a frames render');
+  });
+
+  it('records the files the command names, and detects the script changing', () => {
+    writeFileSync(script, 'print(1)\n', 'utf-8');
+    const data = join(workCwd, 'data.csv');
+    writeFileSync(data, 'a,b\n', 'utf-8');
+
+    const recipe = captureRendererRecipe('python render.py --data data.csv --fps 30', workCwd);
+    expect(recipe.files.map((f) => basename(f.path)).sort()).toEqual(['data.csv', 'render.py']);
+    // Flags and bare numbers are skipped: only what the command POINTS AT is recorded.
+    expect(recipe.files.some((f) => f.path.includes('--fps'))).toBe(false);
+    expect(verifyRendererRecipe(recipe)).toEqual({ ok: true });
+
+    writeFileSync(script, 'print(2)\n', 'utf-8');
+    const check = verifyRendererRecipe(recipe);
+    expect(check.ok).toBe(false);
+    if (check.ok) return;
+    expect(check.changed.join(' ')).toContain('render.py');
+  });
+});
+
+/**
+ * A REVISION RUNS A STORED COMMAND — so it must be inspectable, minimal, and
+ * traceable.
+ *
+ * Three concrete risks, each closed here: the command used to be handed to a SHELL
+ * (so a stored string could be re-interpreted as subshells/redirects/chains), the
+ * only way to know what it would do was to let it run, and nothing recorded that it
+ * had run at all.
+ */
+describe('running a stored renderer command safely', () => {
+  it('treats a plain command as argv and needs no shell', () => {
+    expect(parseRendererCommand('python3 render.py --frames 20')).toEqual({
+      argv: ['python3', 'render.py', '--frames', '20'],
+      viaShell: false,
+    });
+    // Quotes are honoured rather than passed through to a shell.
+    expect(parseRendererCommand('python3 render.py --title "my video"')).toEqual({
+      argv: ['python3', 'render.py', '--title', 'my video'],
+      viaShell: false,
+    });
+    // A path with a space, quoted once, stays ONE argument.
+    expect(parseRendererCommand(`node "/tmp/my script.js"`).argv).toEqual(['node', '/tmp/my script.js']);
+  });
+
+  it('marks a command that genuinely needs a shell, instead of guessing', () => {
+    for (const command of [
+      'python3 render.py > log.txt',
+      'python3 render.py | tee log.txt',
+      'python3 render.py && python3 encode.py',
+      'python3 render.py --frames $(cat n.txt)',
+      'python3 render.py --out `date`.mp4',
+      'python3 render.py --out *.mp4',
+    ]) {
+      const parsed = parseRendererCommand(command);
+      expect(parsed.viaShell, command).toBe(true);
+      // Passed whole: a shell command cannot be split into argv without changing it.
+      expect(parsed.argv).toEqual([command]);
+    }
+  });
+
+  it('runs an argv command for real without a shell, and reports it', async () => {
+    // A real subprocess, because "no shell" is a claim about spawn, not about a string.
+    const script = join(workDir, 'renderer.js');
+    writeFileSync(script, 'console.log("ran without a shell");\n', 'utf-8');
+
+    const run = await runRendererRecipe({ command: `node ${script}`, cwd: workDir, files: [], capturedAt: Date.now() });
+    expect(run.ok, run.output).toBe(true);
+    expect(run.viaShell).toBe(false);
+    expect(run.output).toContain('ran without a shell');
+    expect(run.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('hashes ANY size, and notices an edit that keeps the size identical', () => {
+    // The old cap refused to hash over 8 MiB and compared sizes instead, so editing a
+    // large input LEFT THE FINGERPRINT UNCHANGED — "the renderer did not change" about
+    // a file that had.
+    const big = join(workDir, 'big.csv');
+    writeFileSync(big, Buffer.alloc(9 * 1024 * 1024, 'a'));
+    const recipe = captureRendererRecipe('python3 render.py --data big.csv', workDir);
+    const entry = recipe.files.find((f) => f.path === big)!;
+    expect(entry.sha256).toBeTruthy();
+    expect(entry.size).toBe(9 * 1024 * 1024);
+    expect(verifyRendererRecipe(recipe)).toEqual({ ok: true });
+
+    // One byte, same length: a size comparison cannot see this, a hash can.
+    const edited = Buffer.alloc(9 * 1024 * 1024, 'a');
+    edited[9 * 1024 * 1024 - 1] = 'b'.charCodeAt(0);
+    writeFileSync(big, edited);
+    expect(statSync(big).size).toBe(entry.size);
+    const check = verifyRendererRecipe(recipe);
+    expect(check.ok).toBe(false);
+  });
+
+  it('keeps an audit trail of every run, and tracks files the run CREATED', async () => {
+    const dir = join(workDir, 'frames');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'f_0001.png'), Buffer.from('png'));
+    const script = join(workDir, 'render.py');
+    // A renderer that writes a file it was given that does not exist YET, which is the
+    // case that used to go untracked.
+    writeFileSync(script, 'console.log(1)\n', 'utf-8');
+    const created = join(workDir, 'cache.json');
+
+    const ctx = { configManager: {} as never, cwd: workDir };
+    setFramesAvailabilityForTests({ ok: true, missing: [], hint: '' });
+    setFfmpegRunnerForTests(async (args) => {
+      writeFileSync(args[args.length - 1]!, Buffer.from('video'));
+      return { code: 0, stderr: '' };
+    });
+    setRendererRunnerForTests(async () => {
+      writeFileSync(created, 'cache\n', 'utf-8');
+      return { ok: true, code: 0, output: '', timedOut: false, viaShell: false, ms: 12 };
+    });
+
+    const first = await runMotionTool(
+      { frames_dir: dir, fps: 10, renderer_command: `node render.py ${created}` },
+      ctx,
+    );
+    const id = /source_id:'([^']+)'/.exec(first.text)![1]!;
+    // Not tracked yet: it did not exist when the command was recorded.
+    expect(loadMotionManifest(id, workDir)!.renderer!.files.some((f) => f.path === created)).toBe(false);
+
+    const second = await runMotionTool({ action: 'revise', source_id: id }, ctx);
+    expect(second.text).toContain('Re-ran your renderer');
+    const recipe = loadMotionManifest(id, workDir)!.renderer!;
+    // NOW tracked — re-fingerprinted after the run — and the run is on the record.
+    expect(recipe.files.some((f) => f.path === created && f.sha256)).toBe(true);
+    expect(recipe.runs).toHaveLength(1);
+    expect(recipe.runs![0]).toMatchObject({ code: 0, frames: 1, viaShell: false });
+    // And a file THIS run created is tracked from here on, so editing it is detected.
+    writeFileSync(created, 'changed\n', 'utf-8');
+    expect(verifyRendererRecipe(recipe).ok).toBe(false);
+
+    setRendererRunnerForTests(null);
+    setFfmpegRunnerForTests(null);
+  });
+
+  it('says a no-op run re-encoded the same animation instead of presenting it as new', async () => {
+    const dir = join(workDir, 'frames');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'f_0001.png'), Buffer.from('png'));
+    writeFileSync(join(workDir, 'render.py'), 'console.log(1)\n', 'utf-8');
+
+    const ctx = { configManager: {} as never, cwd: workDir };
+    setFramesAvailabilityForTests({ ok: true, missing: [], hint: '' });
+    setFfmpegRunnerForTests(async (args) => {
+      writeFileSync(args[args.length - 1]!, Buffer.from('video'));
+      return { code: 0, stderr: '' };
+    });
+    // A renderer that runs and changes nothing at all — the subtle failure: the frames
+    // are the old ones, and the report has to say so.
+    setRendererRunnerForTests(async () => ({ ok: true, code: 0, output: '', timedOut: false, viaShell: false, ms: 5 }));
+
+    const first = await runMotionTool({ frames_dir: dir, fps: 10, renderer_command: 'node render.py' }, ctx);
+    const id = /source_id:'([^']+)'/.exec(first.text)![1]!;
+    const second = await runMotionTool({ action: 'revise', source_id: id }, ctx);
+    expect(second.text).toContain('IDENTICAL to before this run');
+    expect(second.text).toContain('re-encodes the same animation');
+
+    setRendererRunnerForTests(null);
+    setFfmpegRunnerForTests(null);
+  });
+
+  it('previews what a revision would run, and changes NOTHING', async () => {
+    const dir = join(workDir, 'frames');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'f_0001.png'), Buffer.from('png'));
+    const script = join(workDir, 'render.py');
+    writeFileSync(script, 'console.log(1)\n', 'utf-8');
+
+    const ctx = { configManager: {} as never, cwd: workDir };
+    setFramesAvailabilityForTests({ ok: true, missing: [], hint: '' });
+    setFfmpegRunnerForTests(async (args) => {
+      writeFileSync(args[args.length - 1]!, Buffer.from('video'));
+      return { code: 0, stderr: '' };
+    });
+    let ran = 0;
+    setRendererRunnerForTests(async () => {
+      ran += 1;
+      return { ok: true, code: 0, output: '', timedOut: false, viaShell: false, ms: 1 };
+    });
+
+    const first = await runMotionTool({ frames_dir: dir, fps: 10, renderer_command: 'node render.py' }, ctx);
+    const id = /source_id:'([^']+)'/.exec(first.text)![1]!;
+    const before = loadMotionManifest(id, workDir)!;
+
+    const preview = await runMotionTool({ action: 'revise', source_id: id, preview: true }, ctx);
+    expect(preview.text).toContain('PREVIEW');
+    expect(preview.text).toContain('would run: node render.py');
+    expect(preview.text).toContain('no shell');
+    expect(preview.text).toContain('tracks 1 file');
+    expect(preview.text).toContain('unchanged');
+    expect(preview.media).toBeUndefined();
+
+    // Nothing ran, and nothing changed on disk.
+    expect(ran).toBe(0);
+    const after = loadMotionManifest(id, workDir)!;
+    expect(after.revisions).toBe(before.revisions);
+    expect(after.runs ?? after.renderer?.runs ?? []).toEqual(before.renderer?.runs ?? []);
+
+    setRendererRunnerForTests(null);
+    setFfmpegRunnerForTests(null);
+  });
+
+  it('previews the refusal when the render has no recorded renderer', async () => {
+    const dir = join(workDir, 'frames');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'f_0001.png'), Buffer.from('png'));
+    const ctx = { configManager: {} as never, cwd: workDir };
+    setFramesAvailabilityForTests({ ok: true, missing: [], hint: '' });
+    setFfmpegRunnerForTests(async (args) => {
+      writeFileSync(args[args.length - 1]!, Buffer.from('video'));
+      return { code: 0, stderr: '' };
+    });
+
+    const first = await runMotionTool({ frames_dir: dir, fps: 10 }, ctx);
+    const id = /source_id:'([^']+)'/.exec(first.text)![1]!;
+    const preview = await runMotionTool({ action: 'revise', source_id: id, preview: true }, ctx);
+    expect(preview.text).toContain('no recorded renderer');
+    expect(preview.text).toContain('renderer_command');
+    setFfmpegRunnerForTests(null);
+  });
+});
+
+/**
+ * WHAT THE DIRECTORY IS, before what is in it.
+ *
+ * Every case here produces a video that PLAYS while being wrong — two sequences
+ * spliced, a shorter timeline from a numbering gap, mixed formats, frames in a
+ * subdirectory silently skipped. None of them can be caught downstream, so the
+ * scan is the only place they can be caught at all.
+ */
+describe('telling the caller what their frame directory actually contains', () => {
+  function dirWith(names: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), 'nuvira-motion-scan-'));
+    for (const name of names) writeFileSync(join(dir, name), Buffer.from('png'));
+    return dir;
+  }
+
+  it('names several sequences that are about to be concatenated', () => {
+    const dir = dirWith(['frame_0001.png', 'frame_0002.png', 'frame_0003.png', 'shot2_0001.png']);
+    const scan = scanFrameDirectory(dir);
+    expect(scan.prefixes).toEqual(['frame_', 'shot2_']);
+    const warnings = frameScanWarnings(scan);
+    expect(warnings.join(' ')).toContain('2 different frame sequences');
+    expect(warnings.join(' ')).toContain('frames_pattern');
+  });
+
+  it('measures a numbering gap, and does not invent one for a sparse naming scheme', () => {
+    const gapped = dirWith(['f_0001.png', 'f_0002.png', 'f_0005.png']);
+    const scan = scanFrameDirectory(gapped);
+    expect(scan.missing).toEqual([3, 4]);
+    expect(scan.missingTotal).toBe(2);
+    expect(frameScanWarnings(scan).join(' ')).toContain('missing');
+
+    // 100, 200, 300 is how someone names three frames, not 197 dropped ones.
+    const sparse = dirWith(['f_100.png', 'f_200.png', 'f_300.png']);
+    expect(scanFrameDirectory(sparse).missingTotal).toBe(0);
+  });
+
+  it('flags mixed formats and unnumbered names', () => {
+    const mixed = dirWith(['a_0001.png', 'a_0002.jpg']);
+    expect(frameScanWarnings(scanFrameDirectory(mixed)).join(' ')).toContain('mix');
+
+    const unnumbered = dirWith(['IMG_alpha.png', 'IMG_beta.png']);
+    const scan = scanFrameDirectory(unnumbered);
+    expect(scan.unnumbered).toBe(2);
+    expect(frameScanWarnings(scan).join(' ')).toContain('ordered alphabetically');
+  });
+
+  it('says where the frames ARE when they are one level down', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'nuvira-motion-nested-'));
+    mkdirSync(join(parent, 'scene1'));
+    mkdirSync(join(parent, 'scene2'));
+    writeFileSync(join(parent, 'scene1', 'f_0001.png'), Buffer.from('png'));
+    writeFileSync(join(parent, 'scene2', 'f_0001.png'), Buffer.from('png'));
+
+    const scan = scanFrameDirectory(parent);
+    expect(scan.files).toHaveLength(0);
+    expect(scan.nested.map((n) => n.dir).sort()).toEqual(['scene1', 'scene2']);
+    const hint = frameScanHint(parent);
+    expect(hint).toContain('one level down');
+    expect(hint).toContain('scene1/');
+
+    // And the recursive pattern is the escape hatch, in tree order.
+    const recursive = scanFrameDirectory(parent, '**/*.png');
+    expect(recursive.files.map((f) => f.slice(parent.length + 1))).toEqual([
+      'scene1/f_0001.png',
+      'scene2/f_0001.png',
+    ]);
+  });
+
+  it('says frames in subdirectories were IGNORED when only some were used', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'nuvira-motion-partial-'));
+    mkdirSync(join(parent, 'extra'));
+    writeFileSync(join(parent, 'f_0001.png'), Buffer.from('png'));
+    writeFileSync(join(parent, 'extra', 'f_0002.png'), Buffer.from('png'));
+    const warnings = frameScanWarnings(scanFrameDirectory(parent)).join(' ');
+    expect(warnings).toContain('IGNORED');
+    expect(warnings).toContain('extra/');
   });
 });

@@ -58,6 +58,7 @@ import HooksPage from './components/HooksPage';
 // page is the human view: per-verb readiness, the executables that are missing,
 // and the live session grants.
 import CapabilitiesPage from './components/CapabilitiesPage';
+import MotionPage from './components/MotionPage';
 // MCP configuration (install / enable / caps / runtime overrides) — the
 // dashboard half of the `mcp.*` config the CLI writes.
 import MCPPage from './components/MCPPage';
@@ -169,6 +170,10 @@ export default function App() {
           <Route path="/traces" element={<TracePanel />} />
           <Route path="/hub" element={<AgentHub />} />
           <Route path="/capabilities" element={<CapabilitiesPage />} />
+          {/* Motion sits next to Capabilities: what the agent can DO, and the
+              output of one of those things. The page is the only link to a
+              rendered video other than a file path in a transcript. */}
+          <Route path="/motion" element={<MotionPage />} />
           <Route path="/tasks" element={<TasksPage />} />
           <Route path="/evals" element={<EvalsPage data={data} />} />
           <Route path="/platforms" element={<PlatformsPage />} />

@@ -61,6 +61,10 @@ export const NAV_GROUPS: NavGroup[] = [
       // missing executables, live session grants). It sits with the capabilities
       // a turn uses, next to the hub that enables them.
       { path: '/capabilities', label: 'Capabilities', icon: '📋' },
+      // Motion sits beside Capabilities on purpose: the capability is "render an
+      // animation", and this is where its OUTPUT lives. Before this link, a
+      // rendered video was reachable only as a file path in a chat transcript.
+      { path: '/motion', label: 'Motion', icon: '🎬' },
       { path: '/dag', label: 'Execution', icon: '🔀' },
       { path: '/routing', label: 'Routing', icon: '🤖' },
       { path: '/requests', label: 'Requests', icon: '📨' },
