@@ -917,7 +917,18 @@ export class ChatConsole {
       // this wrap a strictly-pinned conversation could still be substituted on a
       // background retry. Nesting inside the server's own `withStrictModel` is
       // harmless — the inner scope wins and carries the same value.
-      const answer = await withStrictModel(activePin?.strict === true, () => engine.answerOnce(clean, {
+      //
+      // BUT ONLY WHEN THIS CONVERSATION HAS A PIN (2026-10-16). The scope this
+      // sets OUTRANKS the environment, so wrapping an AUTO turn in
+      // `withStrictModel(false)` — the old `activePin?.strict === true`, which is
+      // `false` whenever `activePin` is undefined — silently un-strict'd every
+      // unattended dashboard turn in a deployment running
+      // `NUVIRA_STRICT_MODEL=1`. An Auto turn has no pair to hold, so it must say
+      // NOTHING here and let the environment answer (the same tri-state rule the
+      // server's route handler now applies to the request's flag).
+      const runUnderPinLock = <T>(fn: () => Promise<T>): Promise<T> =>
+        activePin ? withStrictModel(activePin.strict === true, fn) : fn();
+      const answer = await runUnderPinLock(() => engine.answerOnce(clean, {
         // P4 — the cancel signal rides into the turn.
         signal: controller.signal,
         // WS1 — a recorded finding, forwarded live and kept for the result.

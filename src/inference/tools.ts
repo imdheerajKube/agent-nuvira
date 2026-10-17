@@ -12,6 +12,7 @@
 import type { ToolArgumentsError, ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
 import { attachHttpContext } from './http-error.js';
 import { parseSSELine } from './sse.js';
+import { applyThinkingReplayInvariant } from './thinking-replay.js';
 
 /** OpenAI wire form of a tool call (arguments as a JSON string). */
 interface WireToolCall {
@@ -33,9 +34,19 @@ interface WireResponse {
 /**
  * Build the wire `messages` array: assistant messages carry `tool_calls`,
  * tool messages carry `tool_call_id`.
+ *
+ * This is the ONE place every tool conversation is rendered for the wire (both
+ * the streaming and non-streaming helpers below), so it is also the one place the
+ * thinking-mode REPLAY INVARIANT has to hold: in a conversation that already
+ * carries reasoning, every tool-call turn must carry it too, or the endpoint
+ * rejects the request — see {@link applyThinkingReplayInvariant}, which fills the
+ * gap the loop can leave behind. A conversation with no reasoning anywhere is
+ * returned exactly as given, so nothing here changes a shape that was already
+ * valid.
  */
 export function buildWireMessages(messages: ToolMessage[]): Array<Record<string, unknown>> {
-  return messages.map((m) => {
+  const { messages: replayable } = applyThinkingReplayInvariant(messages);
+  return replayable.map((m) => {
     // Reasoning replay: a thinking model (DeepSeek v4) requires its prior
     // `reasoning_content` echoed on the assistant turn that carried the tool
     // calls, or the NEXT request is rejected. Emitted only when present, so

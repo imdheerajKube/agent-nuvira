@@ -651,11 +651,30 @@ async function runToolLoop(
   // the durable hand-off block, so a subagent continues unfinished work in its
   // working directory instead of rediscovering it. Best-effort: '' adds nothing.
   const ctxBlock = await subagentContextBlock(config.cwd);
+
+  // The evidence protocol, when the DELEGATED ask is itself a findings request.
+  // Before this, a parent's rules never crossed the fork: a `delegate` call with
+  // "audit X and report the bugs" reached the child as a bare instruction, which
+  // is the same one-surface-only drift the in-process entries had. Gated inside
+  // the shared assembler — an ordinary delegated subtask adds nothing, and the
+  // child prompt is unchanged for every non-assessment delegation.
+  let assessmentBlock = '';
+  try {
+    const { buildAssessmentTurnContext } = await import('../learning/assessment-turn-context.js');
+    assessmentBlock = buildAssessmentTurnContext(config.goal, config.cwd ?? process.cwd()).block;
+  } catch {
+    assessmentBlock = ''; // best-effort — a missing protocol must not break the child
+  }
+
   const head: ToolMessage[] = [
     { role: 'system', content: buildSystemPrompt(config, allowed, transport) },
     ...(ctxBlock ? [{ role: 'user' as const, content: `[Project context]\n${ctxBlock}` }] : []),
   ];
-  let messages: ToolMessage[] = [...head, { role: 'user', content: config.goal }];
+  let messages: ToolMessage[] = [
+    ...head,
+    ...(assessmentBlock ? [{ role: 'user' as const, content: assessmentBlock }] : []),
+    { role: 'user', content: config.goal },
+  ];
 
   // Phase 4c — rehydrate a conversation a DEAD child left OPEN (same task, open
   // snapshot, and no replay of this child's own ledger — see the gate). The fresh

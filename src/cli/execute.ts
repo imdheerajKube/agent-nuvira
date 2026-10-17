@@ -421,11 +421,11 @@ export class ExecuteCommand extends BaseCommand {
       .addHelpText(
         'after',
         '\nModel routing:\n' +
-          '  Pinning -p/--provider (and -m/--model) does NOT stop the router from falling\n' +
-          '  over to another model if the pinned one is unavailable — auto routing takes\n' +
-          '  over and the run says so. To work with the pinned model ONLY, set\n' +
-          '  NUVIRA_STRICT_MODEL=1: a dead pin then fails with a message naming the pair\n' +
-          '  instead of substituting another model.\n',
+          '  Pinning -p/--provider (and -m/--model) HOLDS: the named model is the only one\n' +
+          '  that will serve the run, and a pin that cannot answer fails with a message\n' +
+          '  naming the pair instead of quietly substituting another model. To allow the\n' +
+          '  repair-and-announce behaviour instead (fall over to an available model and\n' +
+          '  report which one answered), set NUVIRA_STRICT_MODEL=0.\n',
       )
       .action(async (goal: string | undefined, options?: {
         provider?: string;

@@ -149,6 +149,49 @@ describe('exhaustion report — the honest verdict, and the levers', () => {
     expect(report.text).toContain('you do not need to trigger anything');
   });
 
+  it('under a HELD pin says nothing else will be tried — never that one comes next automatically', () => {
+    // The measured wording bug (2026-10-16, the real CLI): a pin held on a pair
+    // the provider does not serve produced "This was a routing gap, not a
+    // shortage… The next attempt routes to an untried model automatically — you
+    // do not need to trigger anything." The walk stopped after ONE model because
+    // the user's own contract forbade the other four, so every clause of that is
+    // false, and "wait for the automatic retry" is the worst advice available:
+    // the same run will refuse it.
+    const report = buildExhaustionReport(
+      input({
+        attempts: [{ provider: 'groq', model: 'ghost-model', kind: 'unknown', reason: 'failed' }],
+        poolSize: 5,
+        poolProviders: 5,
+        pinnedModel: 'ghost-model',
+        pinnedHeld: true,
+      }),
+    );
+    expect(report.routingGap).toBe(false);
+    // Not the CLAIM ("This was a routing gap") — that verdict belongs to an
+    // unpinned run whose pool went untouched, and this text must not borrow it.
+    expect(report.text).not.toContain('This was a routing gap');
+    expect(report.text).not.toContain('automatically');
+    expect(report.text).not.toContain('you do not need to trigger anything');
+    expect(report.text).toContain('Nothing else will be tried while the pin holds');
+    expect(report.text).toContain('ghost-model');
+    // The way out is named, because the user is the only one who can take it.
+    expect(report.text).toContain('NUVIRA_STRICT_MODEL=0');
+  });
+
+  it('an unpinned run keeps the routing-gap verdict it always had', () => {
+    // The guard against over-reach: the fix is scoped to a HELD pin, so the
+    // report for an auto run is byte-identical to before it.
+    const report = buildExhaustionReport(
+      input({
+        attempts: [{ provider: 'gemini', model: 'a', kind: 'empty-response', reason: 'answered with nothing' }],
+        poolSize: 538,
+        poolProviders: 23,
+      }),
+    );
+    expect(report.routingGap).toBe(true);
+    expect(report.text).toContain('This was a routing gap, not a shortage');
+  });
+
   it('calls an empty pool what it is', () => {
     const report = buildExhaustionReport(
       input({ attempts: [{ provider: 'gemini', model: 'a', kind: 'skipped', reason: 'ruled out', skipped: true }], poolSize: 0, poolProviders: 0 }),

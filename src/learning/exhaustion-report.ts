@@ -17,7 +17,10 @@
  *      WALL-CLOCK TIME each cooling one frees up (a wait length is unactionable;
  *      "free at 18:42" is something a person can plan around);
  *   3. what the system itself is doing about it (routing to an untried model,
- *      or waiting for a window) — stated as the system's job, not the user's;
+ *      or waiting for a window) — stated as the system's job, not the user's,
+ *      and NEVER a promise it cannot keep: under a HELD pin nothing else is
+ *      tried by design, so the report says that instead of "an untried model
+ *      comes next automatically" (see `pinnedHeld`);
  *   4. the concrete levers only the user can pull: recharge/replace a rejected
  *      credential, knowingly accept a weaker model, or narrow the ask.
  *
@@ -81,6 +84,26 @@ export interface ExhaustionInput {
    * says what releasing it would actually mean.
    */
   pinnedModel?: string;
+  /**
+   * True when that pin is HELD — the named model is the only one allowed to
+   * serve this turn, so no other model will be tried, now or on the next
+   * attempt.
+   *
+   * WHY THIS IS A SEPARATE INPUT FROM `pinnedModel`, and the bug it fixes. A pin
+   * is a contract about which model runs, and it is now the DEFAULT for a named
+   * pair — so the common case of a failed pinned turn is "stopped on purpose",
+   * not "ran out of pool". Measured on the real CLI (2026-10-16, model pinned to
+   * a pair the provider does not serve): the report still said *"This was a
+   * routing gap, not a shortage: only 1 of 5 eligible models were actually
+   * tried. The next attempt routes to an untried model automatically — you do
+   * not need to trigger anything."* Every clause of that is false while the pin
+   * holds. The walk stopped after one model because the USER's own contract
+   * forbade the other four, so it is neither a pool gap nor a shortage, and
+   * nothing at all happens next until the pin is released. Promising a silent
+   * automatic switch is the worst possible wording here: it tells the user to
+   * wait for a retry that the same run will refuse to perform.
+   */
+  pinnedHeld?: boolean;
   /**
    * The underlying failure line, when there is one (e.g. the provider's own
    * rejection text). Rendered as a `Reason:` line so a specific, actionable
@@ -212,7 +235,12 @@ export function buildExhaustionReport(input: ExhaustionInput): ExhaustionReport 
   // models remained untouched. Presenting that as an outage is the dishonesty
   // the user called out when a healthy pool sat unused behind "no model
   // available".
-  const routingGap = poolMeasured && triedAttempts.length > 0 && poolSize > triedAttempts.length;
+  // A held pin is NOT a routing gap: the untried models were left alone because
+  // the caller's pin forbids them, not because the walk fell short. Reporting it
+  // as a gap would also promise the automatic next attempt that the pin blocks.
+  const pinHeld = input.pinnedHeld === true;
+  const routingGap =
+    !pinHeld && poolMeasured && triedAttempts.length > 0 && poolSize > triedAttempts.length;
   const emptyPool = poolMeasured && poolSize === 0;
 
   const parts: string[] = [];
@@ -261,7 +289,11 @@ export function buildExhaustionReport(input: ExhaustionInput): ExhaustionReport 
 
   // ── What the SYSTEM is doing (never a question to the user) ──────────────
   parts.push('');
-  if (routingGap) {
+  if (pinHeld) {
+    parts.push(
+      `Nothing else will be tried while the pin holds: ${input.pinnedModel ? input.pinnedModel : 'the model you named'} is the only one that may serve this run, so this is a deliberate stop and not a model shortage.`,
+    );
+  } else if (routingGap) {
     parts.push(
       `This was a routing gap, not a shortage: only ${attemptCount} of ${poolSize} eligible models were actually tried. The next attempt routes to an untried model automatically — you do not need to trigger anything.`,
     );
@@ -299,9 +331,11 @@ export function buildExhaustionReport(input: ExhaustionInput): ExhaustionReport 
   }
   options.push({
     code: 'weaker-model',
-    text: input.pinnedModel
-      ? `You pinned ${input.pinnedModel}, so nothing was run on a weaker model — say so explicitly if you would rather allow a weaker or cheaper one for this task.`
-      : 'Allow a weaker or cheaper model for this task and accept that its answer may need more checking.',
+    text: pinHeld
+      ? `Release the pin to let another model answer — set NUVIRA_STRICT_MODEL=0 on the CLI, or turn the chat's lock off in the dashboard. Until you do, nothing else is tried, by design.`
+      : input.pinnedModel
+        ? `You pinned ${input.pinnedModel}, so nothing was run on a weaker model — say so explicitly if you would rather allow a weaker or cheaper one for this task.`
+        : 'Allow a weaker or cheaper model for this task and accept that its answer may need more checking.',
   });
   options.push({
     code: 'narrow',

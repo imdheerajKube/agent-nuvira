@@ -313,7 +313,7 @@ rather than a name-and-value box:
 |---|---|---|
 | `NUVIRA_ISOLATE` | a turn runs in the project directory | `nuvira chat --worktree` |
 | `NUVIRA_RESUME` | nothing is replayed | `nuvira chat --resume [id]` |
-| `NUVIRA_STRICT_MODEL` | a dead pin is substituted, and the swap is announced | — |
+| `NUVIRA_STRICT_MODEL` | a model you NAMED is the only one that serves the run; an unpinned run is substituted with the swap announced | — |
 | `NUVIRA_DEBUG_LOG` | no log is written | — |
 | `NUVIRA_OTEL` | the SDK is never imported | — |
 | `NUVIRA_TOOL_HOOK_BEFORE` / `_AFTER` / `_FAILED` | no hook for that phase | `tools.hooks` in `buffconfig.json` |
@@ -323,7 +323,8 @@ Three things the page is deliberately honest about:
 - **On writes the spelling the reader reads.** `NUVIRA_STRICT_MODEL` is enabled only by the
   literal `1`, so the page stores `1` rather than whatever was typed — `true` would look like a
   working switch while `strictModelMode()` compared it to `'1'` and ignored it. Values are
-  canonicalised (`true` → `1`, `no` → `0`) before they reach the file.
+  canonicalised (`true` → `1`, `no` → `0`) before they reach the file. Note what `0` means here:
+  not "unset", but the explicit *substitution is allowed* that releases a model you named.
 - **Unset is not the same as off**, and each row says what unset means. `NUVIRA_RESUME` is the
   clearest case: `1` asks for the record for this ask in this directory, any other non-falsey
   value *names* a checkpoint, and nothing at all declines.
@@ -340,15 +341,21 @@ place a user might paste a token, and it is not masked here the way a skill secr
 
 ### Pinning a model, and what happens when the pin cannot run
 
-A model pinned in the chat picker is a **preference**, not a guarantee, unless you say so:
+Naming a model is a **statement about which model must serve the turn**, not a preference — so it
+**holds** by default, on every surface:
 
-- **Default (`🔓 auto-fallback`).** If the pinned model is unavailable the router substitutes another
-  one, and the turn tells you — *"Auto routing took over: this turn ran on `groq/…` because your
-  pinned `gemini/…` was not available. To work with `gemini/…` only, enable strict model mode."*
-- **Strict (`🔒 strict`).** The turn runs on the pinned model or stops; it never substitutes. Choose
-  this when a result is only meaningful from that model. It is the same contract as
-  `NUVIRA_STRICT_MODEL=1` on the CLI, and per-chat on the dashboard it is scoped to the turn, so two
-  conversations can hold different pins.
+- **The pin (`🔒 pinned only`, the default).** The turn runs on the named model or stops; it never
+  substitutes. A pin that cannot answer says which model did not answer and that nothing was put in
+  its place, so a result is never attributed to a model that did not produce it. Named by
+  `-p/--provider` + `-m/--model` on the CLI, or picked in the dashboard's chat picker.
+- **Fallback allowed (`🔓 fallback allowed`).** Only when you ask for it. The lock is a per-chat
+  toggle in the dashboard (scoped to the turn, so two conversations can hold different pins) and
+  `NUVIRA_STRICT_MODEL=0` on the CLI. If the pinned model is unavailable the router substitutes
+  another one, and the turn tells you — *"Auto routing took over: this turn ran on `groq/…` because
+  your pinned `gemini/…` was not available. To work with `gemini/…` only, hold the pin: turn the
+  chat's lock back on, or set `NUVIRA_STRICT_MODEL=1`."*
+- **Auto.** Nothing named: the router picks, and it is free to pick again. `NUVIRA_STRICT_MODEL=1`
+  makes even an unpinned run refuse to substitute.
 - A **model id is validated before it is saved** (CLI and dashboard): an id the provider does not
   serve is refused with the closest matches, instead of being repaired by substitution at run time.
 
@@ -476,7 +483,8 @@ addressed to it*. Adding it does not turn off agent-nuvira's routing.
   `auto/fast`, `auto/cheap`, `auto/offline`). With a concrete `--provider`, `-m auto` now means
   **OmniRoute's own auto**, not agent-nuvira's auto-route — the two used to collide.
 - Turn it On in the dashboard and it can also be chosen by agent-nuvira's router like any provider.
-- Add `NUVIRA_STRICT_MODEL=1` to guarantee the run stays on the pinned pair.
+- The pair already holds: a named `--provider`/`--model` runs on that combo or stops, never
+  substituted. `NUVIRA_STRICT_MODEL=1` extends the same rule to runs that named nothing (auto).
 
 **Verify your own install.** Every line below is a real check with a real failure mode — run them in
 order and you know exactly which layer is wrong:

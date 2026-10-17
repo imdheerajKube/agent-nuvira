@@ -1321,7 +1321,10 @@ registerTool({
   endsAgentStep: false,
   run: async (args, ctx) => {
     const { action, goal, steps, id, status, note } = planTodoSchema.parse(args);
-    const { defaultPlanStore } = await import('./plan-store.js');
+    const { defaultPlanStore, planProvenanceFromActions } = await import('./plan-store.js');
+    // R1 — the tool result line that tells the model its claim was recorded as
+    // UNVERIFIED rather than as a done step. Empty for every other update.
+    let assertedNote = '';
     const store: import('./plan-store.js').PlanStoreLike = ctx.planStore ?? defaultPlanStore();
     // C4 — a re-declaration of the SAME goal carries the progress of the steps it
     // re-declares (see PlanStore.create). Disclosed rather than silent: a model
@@ -1370,7 +1373,26 @@ registerTool({
           );
         }
       }
-      store.update(resolved, status, note);
+      // ── R1 — WHAT STOOD BEHIND THIS CLAIM ───────────────────────────────────
+      // Marking a step done is a claim about the past, and the defect this closes
+      // is measured: a plan table reported `14 failed / 422 passed ✅ done` before
+      // any command in the transcript had run. When the loop supplied its action
+      // ledger, the claim is recorded AGAINST it — the backing call becomes the
+      // step's evidence, and an empty ledger marks the step `asserted`, which
+      // renders ⚠️ rather than ✅ from then on.
+      //
+      // The update is never REFUSED. A step whose proof is a decision rather than
+      // an execution is legitimate, and a tool that argues with the model instead
+      // of informing the reader would be a worse bug than the one being fixed;
+      // what changes is that the claim can no longer LOOK measured. The model is
+      // told which way it was recorded, so it can go and produce the evidence.
+      const provenance = planProvenanceFromActions(ctx.executedActions);
+      store.update(resolved, status, note, provenance);
+      if (status === 'done' && provenance.hasLedger && !provenance.evidence) {
+        assertedNote =
+          `\n⚠️ Step "${resolved}" is recorded as ASSERTED, not verified: no tool call has run in this turn, so nothing backs the claim yet. ` +
+          `Run the check that produces the result, then update the step again — or leave it asserted and say so in your answer.`;
+      }
     } else {
       return 'Error: plan_todo update needs id + status (pending|running|done|blocked).';
     }
@@ -1382,7 +1404,7 @@ registerTool({
         ctx.emit?.('plan:changed', snapshot);
       }
     }
-    return (store.toText ? store.toText() : `Plan updated (${action}).`) + carriedNote;
+    return (store.toText ? store.toText() : `Plan updated (${action}).`) + carriedNote + assertedNote;
   },
 });
 

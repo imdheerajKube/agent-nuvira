@@ -234,7 +234,10 @@ describe('PlanStore', () => {
     store.update('a', 'done');
     store.update('b', 'blocked');
     const p = store.progress();
-    expect(p).toEqual({ done: 1, blocked: 1, total: 4, percent: 25, complete: false, settled: false });
+    // `asserted` (R1) is a new field of the progress contract: how many `done` steps
+    // had no tool call behind them. It is 0 here because every update above is a
+    // direct store call with no action ledger — the case that must NOT demote.
+    expect(p).toEqual({ done: 1, blocked: 1, total: 4, percent: 25, asserted: 0, complete: false, settled: false });
     store.update('c', 'done');
     store.update('d', 'done');
     // A blocked step means no work is outstanding, but the plan is not "complete".

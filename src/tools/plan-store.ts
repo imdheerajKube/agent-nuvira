@@ -43,6 +43,26 @@ import { envBuff, resolveNuviraHome } from '../config/paths.js';
 /** Step statuses the model can set (pending is the default on create). */
 export type PlanStepStatus = 'pending' | 'running' | 'done' | 'blocked';
 
+/**
+ * What stood behind a `done` claim — the tool call that had actually run when the
+ * step was marked done. Same vocabulary as a finding's corroborating action
+ * (`findings/verdicts.ts` `ExecutedAction`), so the two provenance stories read
+ * alike.
+ */
+export interface PlanEvidence {
+  /** The tool that ran (e.g. `run_terminal`, `read_file`). */
+  tool: string;
+  /** The shell command, for an exec tool. */
+  command?: string;
+  /** The path, for a file tool. */
+  path?: string;
+  /** Whether that call reported success. Provenance does not require it — a
+   * failing command is real evidence about a failure — but a reader may weigh it. */
+  ok: boolean;
+  /** When it ran, so a stale citation is visible. */
+  at: number;
+}
+
 /** One ordered step in a plan. */
 export interface PlanStep {
   id: string;
@@ -55,6 +75,33 @@ export interface PlanStep {
    * the summary can say what each achieved step actually did.
    */
   note?: string;
+  /** The tool call that had run when this step was marked done (R1). */
+  evidence?: PlanEvidence;
+  /**
+   * R1 — the step was marked `done` in a turn whose action ledger was available
+   * and EMPTY of anything that could stand behind the claim.
+   *
+   * Set only by `update` when the caller passes `hasLedger: true` (see
+   * {@link PlanProvenance}); a direct store call, a test, a resume restore never
+   * sets it. Exactly the discipline `enforceEvidenceProvenance` documents for a
+   * finding: a context that cannot distinguish "nothing ran" from "no ledger"
+   * must not demote on the strength of an empty list.
+   */
+  asserted?: boolean;
+}
+
+/**
+ * What the caller knows about provenance when a step's status changes (R1).
+ *
+ * `hasLedger` is the load-bearing field: `false`/absent means "this call has no
+ * way to know", and then NO verdict is recorded — the step keeps whatever
+ * evidence or asserted flag it already had. Only a caller that genuinely holds the
+ * turn's executed-action ledger may pass `true`, and `evidence` is the entry from
+ * that ledger that backs the claim.
+ */
+export interface PlanProvenance {
+  hasLedger: boolean;
+  evidence?: PlanEvidence;
 }
 
 /** The whole plan — goal + ordered steps. */
@@ -83,13 +130,20 @@ export interface PlanProgress {
   complete: boolean;
   /** Every step is done or blocked — no work is left outstanding. */
   settled: boolean;
+  /**
+   * R1 — steps marked `done` with NO tool call behind the claim. Counted
+   * separately from `done` rather than subtracted from it: the model DID set the
+   * status, and hiding that would be its own dishonesty. What changes is what the
+   * reader is told it is worth.
+   */
+  asserted: number;
 }
 
 /** A store must be able to hand back its current state (or undefined). */
 export interface PlanStoreLike {
   snapshot(): Plan | null;
   create(goal: string, steps: Array<{ id: string; description: string }>): Plan;
-  update(id: string, status: PlanStepStatus, note?: string): Plan | null;
+  update(id: string, status: PlanStepStatus, note?: string, provenance?: PlanProvenance): Plan | null;
   /**
    * Map a model-supplied step reference onto a real step id, or null when it
    * names nothing in the plan. `plan_todo` calls this BEFORE `update` so an
@@ -124,17 +178,25 @@ function normalizeDescription(description: string): string {
   return description.trim().replace(/\s+/g, ' ').replace(/[.;]+$/, '').toLowerCase();
 }
 
-/** The one status glyph, shared by every renderer so they cannot drift. */
-function statusIcon(status: PlanStepStatus): string {
-  if (status === 'done') return '✅';
+/**
+ * The one status glyph, shared by every renderer so they cannot drift.
+ *
+ * A `done` step with NO evidence behind it renders as ⚠️ rather than ✅ (R1). The
+ * measured failure this closes: a plan table reported `14 failed / 422 passed ✅
+ * done` before any command in the transcript had run — a claim about a
+ * measurement, wearing the same tick as a measured result. The two are not the
+ * same thing and no longer look the same.
+ */
+function statusIcon(status: PlanStepStatus, asserted = false): string {
+  if (status === 'done') return asserted ? '⚠️' : '✅';
   if (status === 'running') return '🔄';
   if (status === 'blocked') return '⛔';
   return '⬜';
 }
 
 /** A short human word for a status (the table's Status cell). */
-function statusWord(status: PlanStepStatus): string {
-  if (status === 'done') return 'done';
+function statusWord(status: PlanStepStatus, asserted = false): string {
+  if (status === 'done') return asserted ? 'done (asserted)' : 'done';
   if (status === 'running') return 'in progress';
   if (status === 'blocked') return 'blocked';
   return 'pending';
@@ -150,11 +212,33 @@ function normalizeStep(raw: unknown, index: number): PlanStep | null {
     ? (record.status as PlanStepStatus)
     : 'pending';
   const note = typeof record.note === 'string' && record.note.trim() ? record.note.trim() : undefined;
+  const evidence = normalizeEvidence((raw as { evidence?: unknown }).evidence);
+  const asserted = (raw as { asserted?: unknown }).asserted === true;
   return {
     id: String(record.id ?? `step-${index + 1}`),
     description,
     status,
     ...(note ? { note } : {}),
+    ...(evidence ? { evidence } : {}),
+    // A persisted `asserted` survives a reload: it is a statement about what the
+    // reader should trust, and forgetting it on the next process start would
+    // quietly promote an unverified step back to a verified-looking one.
+    ...(asserted ? { asserted: true } : {}),
+  };
+}
+
+/** Validate one persisted evidence record (or drop it). */
+function normalizeEvidence(raw: unknown): PlanEvidence | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const r = raw as { tool?: unknown; command?: unknown; path?: unknown; ok?: unknown; at?: unknown };
+  const tool = typeof r.tool === 'string' ? r.tool.trim() : '';
+  if (!tool) return undefined;
+  return {
+    tool,
+    ...(typeof r.command === 'string' && r.command.trim() ? { command: r.command.trim() } : {}),
+    ...(typeof r.path === 'string' && r.path.trim() ? { path: r.path.trim() } : {}),
+    ok: r.ok === true,
+    at: Number(r.at) || 0,
   };
 }
 
@@ -229,10 +313,11 @@ export class PlanStore implements PlanStoreLike {
    * The rule, deliberately narrow:
    *   - a DIFFERENT goal is a NEW plan: the old one is replaced wholesale, exactly
    *     as before (the course-correction behaviour the existing test pins);
-   *   - an UNCHANGED goal carries a step's status + note by ID, and failing that by
-   *     an identical (normalized) description — so a genuine correction still
-   *     applies (new steps arrive `pending`, dropped steps disappear) while
-   *     finished work survives a re-declaration;
+   *   - an UNCHANGED goal carries a step's status + note by ID (and, with them, its
+   *     evidence/asserted provenance), and failing the ID by an identical
+   *     (normalized) description — so a genuine correction still applies (new steps
+   *     arrive `pending`, dropped steps disappear) while finished work survives a
+   *     re-declaration;
    *   - progress stays OVERRIDABLE: the model can `update` a carried step back to
    *     `pending` when it really means to redo it, and the `plan_todo` result says
    *     what was carried, so nothing happens silently.
@@ -259,6 +344,11 @@ export class PlanStore implements PlanStoreLike {
           ...s,
           status: match.status,
           ...(match.note ? { note: match.note } : {}),
+          // R1 — a re-declaration must not launder a claim's provenance either:
+          // carrying only the status would turn a measured `done` into an
+          // asserted one (or, worse, drop the warning off an asserted one).
+          ...(match.evidence ? { evidence: match.evidence } : {}),
+          ...(match.asserted ? { asserted: true } : {}),
         };
       });
     this.plan = {
@@ -311,7 +401,12 @@ export class PlanStore implements PlanStoreLike {
    * plan. Unknown reference → no-op (returns the unchanged plan); callers that
    * need to tell the two apart resolve first.
    */
-  update(reference: string, status: PlanStepStatus, note?: string): Plan | null {
+  update(
+    reference: string,
+    status: PlanStepStatus,
+    note?: string,
+    provenance?: PlanProvenance,
+  ): Plan | null {
     if (!this.plan) return null;
     if (!VALID_STATUSES.includes(status)) return this.snapshot();
     const id = this.resolveStepId(reference) ?? reference;
@@ -323,6 +418,39 @@ export class PlanStore implements PlanStoreLike {
         step.status = status;
         if (cleanNote !== undefined && step.note !== cleanNote) {
           step.note = cleanNote;
+          changed = true;
+        }
+        // ── R1 — EVIDENCE GATING, and it is a LABEL, never a refusal ──────────
+        //
+        // Marking a step done is a claim about the past. When the caller holds the
+        // turn's action ledger, the claim is recorded against what actually ran:
+        //
+        //   - a tool call stood behind it      → that call IS the evidence;
+        //   - a ledger was available and EMPTY → the step is marked `asserted`, and
+        //     renders as ⚠️ rather than ✅;
+        //   - no ledger (a direct call/probe)  → NO verdict is written at all.
+        //
+        // It deliberately does NOT refuse the update. A refusal would block a
+        // legitimate step whose proof is a decision rather than an execution, and
+        // would make the tool argue with the model instead of informing the
+        // reader — the failing this closes is a claim that LOOKS measured, not a
+        // step that got ticked. Moving a step off `done` retracts the claim, so the
+        // flag goes with it.
+        if (status === 'done' && provenance?.hasLedger) {
+          if (provenance.evidence) {
+            if (!step.evidence || step.evidence.at !== provenance.evidence.at) changed = true;
+            step.evidence = { ...provenance.evidence };
+            if (step.asserted) {
+              delete step.asserted;
+              changed = true;
+            }
+          } else if (!step.asserted) {
+            step.asserted = true;
+            changed = true;
+          }
+        } else if (status !== 'done' && step.asserted) {
+          // Withdrawn: `pending`/`running`/`blocked` is not a claim about a result.
+          delete step.asserted;
           changed = true;
         }
       }
@@ -347,6 +475,7 @@ export class PlanStore implements PlanStoreLike {
       blocked,
       total,
       percent,
+      asserted: steps.filter((s) => s.status === 'done' && s.asserted === true).length,
       complete: total > 0 && done === total,
       settled: total > 0 && steps.every((s) => isTerminal(s.status)),
     };
@@ -376,12 +505,23 @@ export class PlanStore implements PlanStoreLike {
     const rows = p.steps.map((s, i) => {
       const n = `${i + 1}`;
       const desc = s.description.replace(/\|/g, '\\|');
-      const cell = `${statusIcon(s.status)} ${statusWord(s.status)}`;
+      const cell = `${statusIcon(s.status, s.asserted)} ${statusWord(s.status, s.asserted)}`;
       if (!hasNotes) return `| ${n} | ${desc} | ${cell} |`;
       const note = (s.note ?? '').replace(/\|/g, '\\|');
       return `| ${n} | ${desc} | ${cell} | ${note} |`;
     });
-    return [`🗂️ Plan: ${p.goal} — ${prog.done}/${prog.total} done (${prog.percent}%)`, head, ...rows].join('\n');
+    // The asserted count rides the header rather than a separate paragraph: a
+    // reader who stops at the first line still learns that N of the ticks are not
+    // backed by a tool call.
+    const assertedNote =
+      prog.asserted > 0
+        ? `  ·  ⚠️ ${prog.asserted} asserted (no tool call behind the claim)`
+        : '';
+    return [
+      `🗂️ Plan: ${p.goal} — ${prog.done}/${prog.total} done (${prog.percent}%)${assertedNote}`,
+      head,
+      ...rows,
+    ].join('\n');
   }
 
   /**
@@ -394,10 +534,17 @@ export class PlanStore implements PlanStoreLike {
     if (!p) return 'No plan to summarise.';
     const prog = this.progress();
     if (prog.complete) {
+      const caveat =
+        prog.asserted > 0
+          ? `\n⚠️ ${prog.asserted} of those step(s) were ASSERTED, not verified: they were marked done with no tool call behind the claim. Treat them as unconfirmed until a command shows the result.`
+          : '';
       return [
         `✅ Plan complete — ${prog.done}/${prog.total} steps achieved (100%)`,
         this.toTable(),
-      ].join('\n');
+        caveat,
+      ]
+        .filter((l) => l !== '')
+        .join('\n');
     }
     const outstanding = p.steps.filter((s) => !isTerminal(s.status)).length;
     return [
@@ -423,6 +570,58 @@ export class PlanStore implements PlanStoreLike {
     }
     return this.summary();
   }
+}
+
+/** The registry name of the plan tool — one place, so the filter below and the
+ * tool definition cannot drift apart. */
+export const PLAN_TOOL_NAME = 'plan_todo';
+
+/**
+ * R1 — turn the loop's executed-action ledger into a {@link PlanProvenance}.
+ *
+ * Two deliberate behaviours:
+ *
+ *   - `undefined` ledger → `hasLedger: false`, so NO verdict is written. A direct
+ *     store call, a test and a rehydrated session all land here, and none of them
+ *     can tell "nothing ran" apart from "no ledger" — the same reasoning
+ *     `enforceEvidenceProvenance` documents for a finding's evidence.
+ *   - the plan tool's OWN calls are filtered out. `plan_todo` is how the claim is
+ *     made, not evidence for it; without this, marking a step done immediately
+ *     after creating the plan would cite the create call as proof.
+ *
+ * The LAST remaining action is the evidence: a plan advances as work happens, so
+ * the most recent thing that ran is what the step is being closed on.
+ */
+export function planProvenanceFromActions(
+  actions: readonly ExecutedActionLike[] | undefined,
+  at: number = Date.now(),
+): PlanProvenance {
+  if (actions === undefined) return { hasLedger: false };
+  const backing = actions.filter((a) => a.tool !== PLAN_TOOL_NAME);
+  const last = backing[backing.length - 1];
+  if (!last) return { hasLedger: true };
+  return {
+    hasLedger: true,
+    evidence: {
+      tool: String(last.tool),
+      ok: last.ok === true,
+      at,
+      ...(typeof last.command === 'string' && last.command.trim() ? { command: last.command } : {}),
+      ...(typeof last.path === 'string' && last.path.trim() ? { path: last.path } : {}),
+    },
+  };
+}
+
+/**
+ * The shape this module needs from the loop's ledger (`findings/verdicts.ts`
+ * `ExecutedAction`), declared structurally so `plan-store` keeps its
+ * "tiny and dependency-free" property and never imports the findings layer.
+ */
+export interface ExecutedActionLike {
+  tool: string;
+  ok: boolean;
+  command?: string;
+  path?: string;
 }
 
 /**

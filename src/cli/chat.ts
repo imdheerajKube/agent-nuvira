@@ -6,7 +6,7 @@ import { Command } from 'commander';
 import inquirer from 'inquirer';
 import { BaseCommand, getCliName } from './commands.js';
 import { resolveProvider } from './router.js';
-import { resolveRoute, strictModelMode, strictPinRefusal } from '../inference/route-resolver.js';
+import { resolveRoute, strictModelMode, strictPinPolicy, strictPinRefusal, withStrictModel } from '../inference/route-resolver.js';
 import { showModelPicker } from './model-picker.js';
 import { ContextParser } from '../context/parser.js';
 import { getCache } from '../context/cache.js';
@@ -61,6 +61,7 @@ import { UnusableModelResponseError } from '../learning/response-usability.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
 import { getAutoRouter, isAgentAutoRoute, isAutoModel, isAutoProvider, governanceVerdict, adminBudgetVerdict, isAgenticTask } from '../learning/auto-router.js';
 import { continuationSoftwareText } from '../learning/continuation-intent.js';
+import { buildAssessmentTurnContext } from '../learning/assessment-turn-context.js';
 import { TaskModelContinuity, taskSignature } from '../learning/task-model-continuity.js';
 import {
   describeFailureKind,
@@ -1810,14 +1811,31 @@ export class ChatCommand extends BaseCommand {
       .addHelpText(
         'after',
         '\nModel routing:\n' +
-          '  Pinning -p/--provider (and -m/--model) does NOT stop the router from falling\n' +
-          '  over to another model if the pinned one is unavailable — auto routing takes\n' +
-          '  over and the turn says so. To work with the pinned model ONLY, set\n' +
-          '  NUVIRA_STRICT_MODEL=1: a dead pin then fails with a message naming the pair\n' +
-          '  instead of substituting another model.\n',
+          '  Pinning -p/--provider (and -m/--model) HOLDS: the named model is the only one\n' +
+          '  that serves the turn, and a pin that cannot answer fails with a message\n' +
+          '  naming the pair instead of quietly substituting another model. To allow the\n' +
+          '  repair-and-announce behaviour instead (fall over to an available model and\n' +
+          '  report which one answered), set NUVIRA_STRICT_MODEL=0.\n',
       )
       .action(async (prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean }) => {
-        await this.execute(prompt, options || {});
+        const opts = options || {};
+        // ── ASK 1 — A NAMED PAIR HOLDS FOR THE WHOLE TURN ──────────────────
+        //
+        // `--provider`/`--model` name a model; they are not a hint. The `auto`
+        // sentinels are the opposite of a pin and are excluded. When a pair IS
+        // named, the pin's policy (see `strictPinPolicy`) is scoped over the whole
+        // turn — the one-shot answer, its picked followups and every REPL message —
+        // so route resolution, the loop engine's candidate walk and chat's own
+        // pinned-fallback path all read the same answer instead of each deciding
+        // for itself whether substituting is acceptable. `NUVIRA_STRICT_MODEL=0`
+        // is the explicit opt-out and keeps the old repair-and-announce behaviour.
+        const namedPair =
+          Boolean(opts.provider && !isAutoProvider(opts.provider)) || Boolean(opts.model && !isAutoModel(opts.model));
+        if (namedPair && strictPinPolicy(true)) {
+          await withStrictModel(true, () => this.execute(prompt, opts));
+          return;
+        }
+        await this.execute(prompt, opts);
       });
 
     return command;
@@ -2662,10 +2680,47 @@ export class ChatCommand extends BaseCommand {
      */
     const turnScope = ctxOverrides?.projectPath || process.cwd();
 
+    // ── ASSESSMENT TURN — one detector, three consumers ────────────────────
+    //
+    // The evidence protocol and everything it carries (the project's own
+    // discovered checks, the performance probes) comes from the SHARED assembler,
+    // which is also what `loop-executor.ts` and `pipeline-tool.ts` call — so
+    // `nuvira execute` and a gateway-run audit get the same rules as this surface
+    // instead of an unadorned ask. See `learning/assessment-turn-context.ts`.
+    //
+    // The symbol map in the ambient project context (which a findings turn repays
+    // and a change turn does not) and the response-cache bypass below read the SAME
+    // boolean, so they can never disagree about whether the turn is an assessment.
+    // Computed here because the cache check is the first thing that needs it.
+    //
+    // Deterministic and NARROW: the assembler tests the goal BEFORE it touches the
+    // filesystem, so a change request returns '' and does no discovery work — its
+    // turn is byte-identical to one from a build without any of this.
+    const assessmentContext = buildAssessmentTurnContext(message, turnScope);
+    const assessmentBlock = assessmentContext.block;
+    const assessmentTurn = assessmentContext.isAssessment;
+
     // Cache check first (same as the legacy path).
     const cache = getCache();
     const cacheModel = this.cacheModelFor(session);
-    if (cacheEnabled) {
+    // ASSESSMENT TURNS DO NOT REPLAY A CACHED ANSWER.
+    //
+    // A cached answer is a statement about the tree AS IT WAS when the entry was
+    // written, and an assessment is a statement about the tree NOW — so the key
+    // (prompt + model + provider + workspace) is exactly the four things that stay
+    // equal when the code has changed underneath. Observed on 2026-10-16: after a
+    // patched build was installed, the same audit prompt in the same directory
+    // returned `cache.hit {chars:5744}` — the PRE-patch report, identical down to a
+    // mid-sentence truncation, replayed as if it were a fresh look at the tree.
+    //
+    // The cost is one real turn where a replay used to be instant, and it is only
+    // paid by assessment turns: a change request, a question, a repeat of anything
+    // else keeps its cache hit. Truth over speed, in the one place the two can
+    // disagree about the same input.
+    if (cacheEnabled && assessmentTurn) {
+      debugLog?.event('cache.bypass', { reason: 'assessment turn — the tree may have changed', scope: turnScope });
+    }
+    if (cacheEnabled && !assessmentTurn) {
       try {
         // #30 — read the entry WITH its recorded activity, not just the text: a
         // replay that dropped `toolCalls` rendered no tool cards on the dashboard
@@ -2902,7 +2957,7 @@ export class ChatCommand extends BaseCommand {
     let ambientProjectContext: string | undefined;
     if (!ctxOverrides?.projectContext) {
       try {
-        const built = await buildLoopProjectContext(turnCwd);
+        const built = await buildLoopProjectContext(turnCwd, { symbolMap: assessmentTurn });
         if (built) ambientProjectContext = built;
       } catch {
         ambientProjectContext = undefined;
@@ -2927,6 +2982,7 @@ export class ChatCommand extends BaseCommand {
     } catch {
       knowledgeBlock = ''; // best-effort — a retrieval failure never breaks the turn
     }
+
 
     // G4 — carry THIS project's working state (files changed, verification debt,
     // user-reported regressions) into the turn, so the model does not re-derive
@@ -2968,6 +3024,8 @@ export class ChatCommand extends BaseCommand {
       // conversation stays contiguous, and it is a USER-TURN message rather than
       // system text, so the system prompt stays byte-stable and cacheable.
       ...(knowledgeBlock ? [{ role: 'user' as const, content: knowledgeBlock }] : []),
+      // The assessment protocol for this ask, when the ask IS an assessment.
+      ...(assessmentBlock ? [{ role: 'user' as const, content: assessmentBlock }] : []),
       // P4 — the recalled project context (prior sessions + facts) rides in
       // next, so the model starts from what this project was last doing.
       ...(ctxOverrides?.recallContext
@@ -3232,6 +3290,10 @@ export class ChatCommand extends BaseCommand {
           // Machine facts are FACTS about the host, not a recommendation, so they
           // drop LAST among the optional blocks (higher priority = kept longer).
           { name: 'machine-facts', chars: machineBlock.length, dropPriority: 15 },
+          // The assessment protocol governs how THIS turn's findings may be
+          // claimed, so it outranks every other optional block and is dropped only
+          // after the machine facts.
+          { name: 'assessment-protocol', chars: assessmentBlock.length, dropPriority: 18 },
           { name: 'working-state', chars: workingStateBlock.length, dropPriority: 25 },
           { name: 'decisions', chars: ctxOverrides?.decisionContext?.length ?? 0, dropPriority: 28 },
           { name: 'recall', chars: ctxOverrides?.recallContext?.length ?? 0, dropPriority: 30 },
@@ -3257,6 +3319,15 @@ export class ChatCommand extends BaseCommand {
             (trimmed.has('machine-facts') ? '' : machineBlock) +
             (trimmed.has('skill-hint') ? '' : skillHint),
         };
+      }
+      // Applied rather than merely reported (as the two system blocks above are):
+      // a protocol the budget says to drop must not still be in the thread, or the
+      // report and the wire disagree. Matched by exact content so no other
+      // user-turn block is ever touched.
+      if (trimmed.has('assessment-protocol') && assessmentBlock) {
+        for (let i = thread.length - 1; i >= 1; i--) {
+          if (thread[i].role === 'user' && thread[i].content === assessmentBlock) thread.splice(i, 1);
+        }
       }
       if (report.level !== 'ok') {
         recordTraceEvent(chatTraceId, {
@@ -3506,6 +3577,9 @@ export class ChatCommand extends BaseCommand {
         // and is now additionally gated on the model having the context for it.
         toolExposure: harness.exposure,
         maxParallelReads: harness.maxParallelReads,
+        // An assessment turn has no edits to verify, so the loop's self-review
+        // gate would never fire for it — see `selfReviewWhenUnchanged`.
+        ...(assessmentTurn ? { selfReviewWhenUnchanged: true } : {}),
         // WS3 — the turn span the loop hangs each tool call under.
         otel: otelSpan,
         // WS4 — the label a tool hook reports this call under.
@@ -3730,6 +3804,15 @@ export class ChatCommand extends BaseCommand {
             // respects the quality bar they set instead of inviting a downgrade
             // (see ExhaustionInput.pinnedModel).
             ...(session.model && session.model !== 'default' ? { pinnedModel: session.model } : {}),
+            // ...and whether that pin is HELD, which decides whether the report
+            // may promise an automatic next attempt at all. A held pin is the
+            // default for a named pair, so this is the common case, and telling
+            // the user to wait for a switch the pin forbids was the measured bug
+            // (see ExhaustionInput.pinnedHeld). Read from the same predicate
+            // routing obeys, in this turn's own scope.
+            ...(session.model && session.model !== 'default' && strictModelMode()
+              ? { pinnedHeld: true }
+              : {}),
             // The underlying line is kept as the REASON, so a specific,
             // actionable cause is never buried by the report.
             ...(result.generationFailed && result.content.trim() ? { cause: result.content } : {}),
@@ -3937,6 +4020,14 @@ export class ChatCommand extends BaseCommand {
           // flag system exists to close. A flagged turn re-derives instead.
           if (turnCarriesHonestyFlag(result)) {
             debugLog?.event('cache.skip', { reason: 'honesty-flag', scope: turnScope });
+          } else if (assessmentTurn) {
+            // Same rule as the honesty flag above, for the same reason: an
+            // assessment is a claim about the tree at THIS moment, so storing it
+            // lets a later read of that entry — another surface, or a path without
+            // this detector — replay it as a fresh look at code that may have
+            // changed underneath it. The turn is not replayed and not stored; it is
+            // re-derived.
+            debugLog?.event('cache.skip', { reason: 'assessment turn — tree-scoped claim', scope: turnScope });
           } else {
             // Keyed by the model that ACTUALLY answered (tryGenerate records it
             // on success), so a weak model's reply is never replayed as a strong

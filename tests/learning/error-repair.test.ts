@@ -65,9 +65,13 @@ describe('error-repair — an unfunded provider is definitive, not repairable', 
     // correctly showed the planner STILL burning its whole budget — because the
     // error that reached the repair loop was not the 402, it was the refusal
     // sentence `route-resolver.ts` emits when strict mode forbids substitution.
+    // Copied from `route-resolver.ts` verbatim. Its remedy clause now names
+    // `NUVIRA_STRICT_MODEL=0` rather than "unset" the variable that turned the
+    // rule on in the first place — but the classification below keys on the
+    // PIN, not the advice, so it must keep working across that wording change.
     const live = "Model 'deepseek/deepseek-v4.1-flash' is not available on 'openrouter', and strict " +
       'model mode forbids substituting another model. Pick a model this provider serves ' +
-      '(`nuvira models`), or unset NUVIRA_STRICT_MODEL to let the router repair it.';
+      '(`nuvira models`), or set NUVIRA_STRICT_MODEL=0 to let a substitute answer instead.';
     expect(classifyError(live)).toBe('pin-unavailable');
     expect(isRepairable('pin-unavailable')).toBe(false);
     expect(selectStrategy('pin-unavailable', 1, { maxRepairs: 3, repairMode: 'auto' })).toBe('skip-step');

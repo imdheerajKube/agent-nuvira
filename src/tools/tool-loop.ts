@@ -565,6 +565,23 @@ export interface ToolLoopOptions {
    */
   requireSelfReview?: boolean;
   /**
+   * SELF-REVIEW FOR A TURN THAT CHANGED NOTHING (default OFF).
+   *
+   * The gate above fires only when the turn mutated the workspace
+   * (`progress.mutatedPaths.length > 0`), which is right for a change: with no
+   * edit there is nothing to re-read. An ASSESSMENT turn is the exception the
+   * condition cannot express — its deliverable is a set of CLAIMS about code
+   * nobody changed, and "is every claim backed by a tool result from THIS turn?"
+   * is exactly as load-bearing there as it is after an edit. Measured: an
+   * assessment run on the same model published two findings about inputs the
+   * shipped UI cannot produce; no gate asks that question today.
+   *
+   * Off by default, so every existing caller is byte-identical — the assessment
+   * surface is what turns it on. Still bounded to ONE nudge, and still behind
+   * `SELF_REVIEW_MIN_STEPS`, so a short read-only turn pays nothing.
+   */
+  selfReviewWhenUnchanged?: boolean;
+  /**
    * G13b — DELIVERABLE GATE (default ON). When the request asks for an AUTHORED
    * deliverable to be produced ("write a 12 page story at /path/Mahagatha.md")
    * and the turn ends having written NOTHING to disk, the loop spends ONE
@@ -1799,7 +1816,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     if (selfReviewNudges >= 1) return null;
     if (opts.requireSelfReview === false) return null;
     if (steps < SELF_REVIEW_MIN_STEPS) return null;
-    if (progress.mutatedPaths.length === 0) return null;
+    // A turn that changed nothing has nothing to re-read — UNLESS the turn is an
+    // assessment, whose deliverable is claims rather than edits (see
+    // `selfReviewWhenUnchanged`).
+    if (progress.mutatedPaths.length === 0 && opts.selfReviewWhenUnchanged !== true) return null;
     // The verification gate owns "did you check it"; self-review only runs once
     // that question is settled, so the two can never both fire in one turn.
     const activity = assessEditActivity(

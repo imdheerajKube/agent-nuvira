@@ -30,6 +30,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { buildGitStateDigest } from './git-digest.js';
+import { buildCodeMapCached, countSourceFiles, formatCodeMapBrief } from '../cli/code-map.js';
 import { assessProject } from '../agents/prompt-assembly.js';
 import { handoffBlockFor } from '../agents/step-handoff.js';
 import { describeProjectInterpreter } from '../utils/project-env.js';
@@ -44,6 +45,26 @@ const MAX_TREE_DEPTH = 4;
 const MAX_ENTRIES_PER_DIR = 25;
 /** Overall block budget (~2K tokens ≈ 8K chars) — hard-truncated with a note. */
 const MAX_BLOCK_CHARS = 8_000;
+
+/**
+ * How many source files a project may have before the SYMBOL MAP is left out of
+ * the ambient context.
+ *
+ * WHY A CAP AT ALL (MEASURED 2026-10-16, this repository): `buildCodeMap` parses
+ * every source file through the AST engine and costs 4.4–4.6 s for 1 568 files
+ * (~2.9 ms/file), against 8–18 ms for the 16-file project the side-by-side audit
+ * ran on. The map is memoised per tree state (so later turns are ~free), but
+ * the FIRST turn of a session pays it — and an ambient context that adds seconds of
+ * synchronous work before the model's first token would make the agent slower, not
+ * faster, which is the opposite of what a symbol map is for.
+ *
+ * 300 files keeps that first call to well under a second on measured rates while
+ * covering the projects where exploration is actually the bottleneck. Past it the
+ * block names the command instead of the map: `nuvira code-map` is one tool call
+ * away, so the capability is available either way — only the AUTOMATIC copy is
+ * bounded. Honest omission, never a silent one.
+ */
+const MAX_SYMBOL_MAP_FILES = 300;
 
 /** Directories never worth showing in the ambient tree (build artifacts, deps). */
 const IGNORE_DIRS = new Set([
@@ -129,7 +150,17 @@ export function walkBoundedTree(dir: string): string[] {
  */
 export async function buildLoopProjectContext(
   dir: string,
-  opts: { goal?: string; sessionRecall?: boolean } = {},
+  opts: {
+    goal?: string;
+    sessionRecall?: boolean;
+    /**
+     * Include the SYMBOL MAP (functions/classes with line numbers) as well as the
+     * file tree. Off by default because it is the only section here that parses
+     * the tree; the caller turns it on for the turns whose cost it repays — an
+     * assessment, which would otherwise read files to find out what is in them.
+     */
+    symbolMap?: boolean;
+  } = {},
 ): Promise<string> {
   try {
     if (!looksLikeProject(dir)) return '';
@@ -214,6 +245,32 @@ export async function buildLoopProjectContext(
       }
     } catch {
       // Tree failure must never break the block — omit the section.
+    }
+
+    // ── Symbol map (opt-in: an ASSESSMENT turn asks for it) ──
+    //
+    // The tree says what EXISTS; the symbol map says what is IN the files, which
+    // is the difference between reading fourteen files to find out and knowing
+    // which one to read. It is opt-in because it is the only section here that
+    // parses the whole tree — `countSourceFiles` is the cheap pre-check that keeps
+    // the cost bounded (see MAX_SYMBOL_MAP_FILES), and the map itself is memoised
+    // per tree state so only the first turn of a session pays for it.
+    if (opts.symbolMap) {
+      try {
+        const fileCount = countSourceFiles(dir);
+        if (fileCount <= MAX_SYMBOL_MAP_FILES) {
+          const brief = formatCodeMapBrief(buildCodeMapCached(dir));
+          if (brief) lines.push('', brief);
+        } else {
+          lines.push(
+            '',
+            `## Symbol map — omitted: ~${fileCount} source files is past this turn's map budget.`,
+            'Run `nuvira code-map` (one tool call) for the full symbol map of this project.',
+          );
+        }
+      } catch {
+        // The map is an accelerator, never a dependency — omit it on failure.
+      }
     }
 
     // ── Git state digest (shared leaf module — same block the dashboard now

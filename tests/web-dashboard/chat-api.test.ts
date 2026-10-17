@@ -38,6 +38,7 @@ process.env.HOME = testDir;
 
 const { createDashboardServer, setChatConsoleForTest, runChatRetryDrainForTest } = await import('../../src/web-dashboard/server.js');
 const { ChatConsole } = await import('../../src/web-dashboard/chat-console.js');
+const { strictModelMode } = await import('../../src/inference/route-resolver.js');
 import type { ChatEngine } from '../../src/web-dashboard/chat-console.js';
 const { recordFailoverAttempt } = await import('../../src/learning/resilient-call.js');
 const { debugLogDir, sessionDebugLog } = await import('../../src/observability/debug-log.js');
@@ -101,8 +102,20 @@ class FakeEngine implements ChatEngine {
    * the user (which the API has to keep answerable after a reload).
    */
   askQuestion: { question: string; choices: Array<{ label: string }>; multiSelect?: boolean } | null = null;
+  /**
+   * Strict-model mode AS OBSERVED INSIDE the turn, read from the same predicate
+   * the engine's own routing asks.
+   *
+   * This is the only assertion that can prove the server's per-turn scope
+   * actually reached the engine: the notice is derived from the pin, but the
+   * SCOPE is what route resolution and the failover walk obey, and an
+   * `AsyncLocalStorage` override that never made it across the `await` would
+   * leave the notice right and the behaviour wrong.
+   */
+  strictDuringAnswer: boolean | null = null;
   async answerOnce(message: string, opts?: unknown): Promise<{ content: string; followups: unknown[]; provider?: string; model?: string; generationFailed?: boolean; turnReport?: import('../../src/learning/turn-report.js').TurnReport }> {
     this.calls.push({ message, opts });
+    this.strictDuringAnswer = strictModelMode();
     const o = opts as { onProgress?: (line: string) => void; onToolCall?: (phase: 'started' | 'called', info: { id?: string; tool: string; args?: Record<string, unknown>; ok?: boolean; result?: string; error?: string; durationMs?: number }) => void; onPlanChange?: (p: { goal: string; steps: Array<{ id: string; description: string; status: string }>; revision: number }) => void; onGitDiff?: (d: { files: Array<{ path: string; body: string }>; summary: string }) => void };
     for (const line of this.progressLines) o.onProgress?.(line);
     for (const t of this.toolCalls) {
@@ -428,11 +441,34 @@ describe('/api/chat', () => {
     expect(autoOpts.resume).toBe(true);
   });
 
-  it('strict model pin — a substituted pin reports auto routing, and names strict mode', async () => {
+  it('strict model pin — an EXPLICIT fallback turn reports auto routing, and names how to hold the pin', async () => {
     // The engine (always `groq/llama-3.3-70b`) stands in for a router that left
-    // the pinned model. With strict OFF the reader must be told auto routing
-    // took over AND how to force the pin; silence here is how a user concludes
-    // the pinned model actually ran.
+    // the pinned model. This turn RELEASED the pin (`strict: false`, the chat's
+    // lock switched off), so the reader must be told auto routing took over AND
+    // how to hold the pin; silence here is how a user concludes the pinned model
+    // actually ran. The explicit `false` is the whole point since 2026-10-16: a
+    // named pair HOLDS unless a turn says otherwise.
+    const res = await authedFetch('/api/chat', 'POST', {
+      message: 'do the pinned thing',
+      provider: 'gemini',
+      model: 'gemini-2.5-flash',
+      strict: false,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { routingNotice?: string };
+    expect(body.routingNotice).toContain('Auto routing took over');
+    expect(body.routingNotice).toContain('gemini/gemini-2.5-flash');
+    expect(body.routingNotice).toContain('hold the pin');
+  });
+
+  it('strict model pin — a pinned request that never mentions the flag HOLDS (the pair, not a preference)', async () => {
+    // THE CONTRACT OF A NAMED MODEL, at the API boundary. Naming a provider and
+    // a model is a statement about which model must serve the turn, so a request
+    // that omits `strict` must NOT be read as "substitution allowed" — that
+    // collapsing was how a pinned turn was answered by a model the caller never
+    // named. Under the hold the substitution notice must NOT appear: the engine
+    // still reports `groq/llama-3.3-70b` (the fake ignores the pin), and the
+    // strict branch reports the switch instead of auto routing taking over.
     const res = await authedFetch('/api/chat', 'POST', {
       message: 'do the pinned thing',
       provider: 'gemini',
@@ -440,9 +476,43 @@ describe('/api/chat', () => {
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { routingNotice?: string };
-    expect(body.routingNotice).toContain('Auto routing took over');
-    expect(body.routingNotice).toContain('gemini/gemini-2.5-flash');
-    expect(body.routingNotice).toContain('strict model mode');
+    expect(body.routingNotice).not.toContain('Auto routing took over');
+    expect(body.routingNotice).toContain('Strict model mode is on');
+    // And the contract reached the engine, not just the sentence.
+    expect(engine.strictDuringAnswer).toBe(true);
+  });
+
+  it('strict model pin — an explicit `strict: false` releases the pin for that turn', async () => {
+    const res = await authedFetch('/api/chat', 'POST', {
+      message: 'do the pinned thing',
+      provider: 'gemini',
+      model: 'gemini-2.5-flash',
+      strict: false,
+    });
+    expect(res.status).toBe(200);
+    expect(engine.strictDuringAnswer).toBe(false);
+  });
+
+  it('a dashboard deployment with NUVIRA_STRICT_MODEL=1 is NOT un-strict for turns that omit the flag', async () => {
+    // The scope the route handler sets OUTRANKS the environment inside
+    // `withStrictModel`, so the old `body?.strict === true` (absent → `false`)
+    // silently disabled the operator's own switch for every chat turn. An Auto
+    // turn is the case that exposes it: no pair to hold, so the environment is
+    // the only thing that can be in force.
+    const prior = process.env.NUVIRA_STRICT_MODEL;
+    process.env.NUVIRA_STRICT_MODEL = '1';
+    try {
+      const res = await authedFetch('/api/chat', 'POST', { message: 'just answer' });
+      expect(res.status).toBe(200);
+      const opts = engine.calls.at(-1)?.opts as { strict?: unknown };
+      expect(opts.strict).toBeUndefined();
+      // The operator's switch is what the ENGINE observed, not merely what the
+      // process has set.
+      expect(engine.strictDuringAnswer).toBe(true);
+    } finally {
+      if (prior === undefined) delete process.env.NUVIRA_STRICT_MODEL;
+      else process.env.NUVIRA_STRICT_MODEL = prior;
+    }
   });
 
   it('strict model pin — ON, a failed pinned turn stops instead of substituting', async () => {

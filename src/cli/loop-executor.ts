@@ -28,7 +28,7 @@
 import { ConfigManager } from '../config/manager.js';
 import { capabilityReasoningEffort, isMaxCapability } from '../config/capability-mode.js';
 import { resolveProvider } from './router.js';
-import { resolveRoute, servedRouteFrom, strictModelMode, type ServedRoute } from '../inference/route-resolver.js';
+import { resolveRoute, servedRouteFrom, strictModelMode, strictPinPolicy, type ServedRoute } from '../inference/route-resolver.js';
 import { debugLogNotice, sessionDebugLog } from '../observability/debug-log.js';
 // E3b — what the model SUGGESTED (its `suggest_followups` call, or the same list
 // written as prose when a weak model did not call the tool). A leaf module: no
@@ -90,6 +90,7 @@ import {
 } from '../learning/provider-fallback.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
+import { buildAssessmentTurnContext } from '../learning/assessment-turn-context.js';
 import { deliverablesNamedIn, formatHandoffs, recordStepHandoff } from '../agents/step-handoff.js';
 import { recordSessionTurn } from '../learning/session-digest.js';
 
@@ -563,9 +564,14 @@ export async function runLoopExecutor(
     candidatePairs.push({ provider: prov, model: m });
   };
   /**
-   * True when the caller explicitly pinned a provider (`--provider X`). A pin
-   * narrows WHICH failures justify leaving the requested provider (see the
-   * retryable gate in `callModel`); it never disables failover entirely.
+   * True when the caller explicitly pinned a provider (`--provider X`).
+   *
+   * TWO THINGS FOLLOW FROM IT, and they are no longer the same shape. The pin's
+   * own `strictPin` (below) is what decides whether the walk may leave the pair
+   * at all — and since a named pair HOLDS by default, a pinned run normally does
+   * NOT fail over. What is left for this flag on its own is the RETRYABLE gate in
+   * `callModel`: which failures even justify trying the config-declared fallback
+   * chain, for the caller who released the pin with `NUVIRA_STRICT_MODEL=0`.
    */
   const pinnedRun = Boolean(opts.provider && !isAutoProvider(opts.provider));
   /**
@@ -578,18 +584,43 @@ export async function runLoopExecutor(
    * forbids, so it collapses to the pinned pair alone and a failure surfaces
    * the real error instead of quietly running the user's job on another model.
    */
-  const strictPin = pinnedRun && strictModelMode();
+  // ASK 1 — the pin's own policy, not the process default: a pair named by the
+  // caller HOLDS unless `NUVIRA_STRICT_MODEL=0` says substitution is allowed.
+  // (See `strictPinPolicy`; a per-turn `withStrictModel` scope still wins.)
+  const strictPin = pinnedRun && strictPinPolicy(true);
   /** The ask as the user framed it, for a strict-pin failure message. */
   const strictPinLabel = (): string =>
     `${providerType}${model && model !== 'default' ? `/${model}` : ''}`;
   const strictPinError = (cause: unknown): Error =>
     new Error(
-      `Strict model mode is on (NUVIRA_STRICT_MODEL=1): the pinned model ${strictPinLabel()} ` +
-        `could not complete this step, and substituting another model is disabled. Cause: ${
+      `The pinned model ${strictPinLabel()} could not complete this step, and substituting ` +
+        `another model is disabled because the model was NAMED by the caller ` +
+        `(--provider/--model, or NUVIRA_STRICT_MODEL=1). Cause: ${
           cause instanceof Error ? cause.message : String(cause)
-        }. Pick a model this provider serves (\`nuvira models\`), or unset NUVIRA_STRICT_MODEL to ` +
-        'let the router fall over to another model.',
+        }. Name a model this provider serves (\`nuvira models\`), or set ` +
+        'NUVIRA_STRICT_MODEL=0 to allow a substitute to answer instead.',
     );
+  /**
+   * WHAT THE USER IS TOLD when a held pin fails.
+   *
+   * The generic reason alone ("I hit the model provider's rate limit — please try
+   * again in a moment") is the WRONG sentence here, and it was the measured
+   * behaviour: it names no model, hides that nothing was substituted, invites a
+   * blind retry, and never says how to get an answer by another route. A user who
+   * named a model needs to know three things — which model did not answer, that
+   * the pin is why nothing else did, and how to allow a substitute if they want
+   * one — so the pin's sentence is COMPOSED with the generic one rather than
+   * replacing it (the sanitised reason is still the useful part of the message).
+   */
+  const pinFailurePreamble = (): string =>
+    `Your pinned model ${strictPinLabel()} could not complete this step, so nothing was ` +
+    'substituted — a model you name with --provider/--model is the only one that serves the run. ';
+  /** The way OUT, stated once so every pinned failure offers the same two routes. */
+  const PIN_FAILURE_REMEDY =
+    ' To let the agent fall over to an available model instead, set NUVIRA_STRICT_MODEL=0; to try a ' +
+    'different model, name one this provider serves (`nuvira models`).';
+  const pinFailureText = (cause: unknown): string =>
+    strictPin ? `${pinFailurePreamble()}${toUserFacingGenerationError(cause)}${PIN_FAILURE_REMEDY}` : toUserFacingGenerationError(cause);
   /**
    * The pinned run's config-declared fallback chain, derived LAZILY on the
    * first failure — never at route time. Deriving it eagerly made every pinned
@@ -671,6 +702,11 @@ export async function runLoopExecutor(
         source: 'cli',
         task: 'interactive loop (pinned provider)',
         verifyOnDemand: isMaxCapability(configManager),
+        // ASK 1 — the pin's own policy reaches ROUTE RESOLUTION too, not only the
+        // candidate walk below: without this, a pinned id the provider no longer
+        // serves was silently repaired into a different model before the run's
+        // first call, which is the substitution a pin exists to forbid.
+        strict: strictPin,
       });
       model = pinned.model;
       // ── ADMIN BUDGET GATE (pinned path) ──────────────────────────────────
@@ -776,8 +812,10 @@ export async function runLoopExecutor(
     return finishResult(
       failureResult(
         // User-facing reason is sanitized (no provider wire text); the raw error
-        // rides along as the technical explanation below.
-        toUserFacingGenerationError(err),
+        // rides along as the technical explanation below. Under a HELD pin the
+        // sanitised sentence is composed with the pin's own explanation, so the
+        // user is never invited to retry something that cannot change.
+        pinFailureText(err),
         startedAt,
         opts.provider ?? 'auto',
         opts.model ?? 'default',
@@ -864,11 +902,32 @@ export async function runLoopExecutor(
   const { runToolLoop } = await import('../tools/tool-loop.js');
   const { getTool, TOOL_CONTRACT_JSON } = await import('../tools/registry.js');
 
+  // ── Assessment protocol (Phase parity — the SAME seam the chat engine uses) ──
+  // `nuvira execute` is the surface a scripted or batch audit actually runs on,
+  // and before this it carried NONE of the evidence rules: the block was assembled
+  // inline in chat.ts, so an audit reached through this entry got an unadorned ask.
+  // Assembled through the shared `learning/assessment-turn-context.ts` so the two
+  // entries cannot drift, and gated there — a non-assessment goal returns '' and
+  // does no filesystem work, so every ordinary execute turn is unchanged.
+  let assessmentBlock = '';
+  try {
+    assessmentBlock = buildAssessmentTurnContext(goal, turnCwd).block;
+  } catch {
+    assessmentBlock = ''; // best-effort — never breaks the turn
+  }
+
   const head: ToolMessage[] = [
     { role: 'system', content: buildExecuteLoopSystemPrompt(TOOL_CONTRACT_JSON) + machineBlock + skillHint },
     ...(projectContext ? [{ role: 'user' as const, content: `[Project context]\n${projectContext}` }] : []),
   ];
-  let thread: ToolMessage[] = [...head, { role: 'user', content: goal }];
+  // The protocol rides in the USER turn, never the system message: the system layer
+  // is the prompt-cache layer, and a per-ask rule set appended to it would make
+  // every audit turn a cache miss and change the system prompt of every other turn.
+  let thread: ToolMessage[] = [
+    ...head,
+    ...(assessmentBlock ? [{ role: 'user' as const, content: assessmentBlock }] : []),
+    { role: 'user', content: goal },
+  ];
 
   // Phase 4c — REHYDRATE on an explicit resume. A session snapshot left OPEN by
   // a process that died mid-turn is replayed as the conversation the loop starts
@@ -1555,7 +1614,15 @@ export async function runLoopExecutor(
       : followupsFromAnswerList(result.content);
 
     return finishResult({
-      content: result.content,
+      // A HELD PIN THAT FAILED SAYS SO. The loop's own text for a dead provider is
+      // a generic "try again in a moment", which names no model, hides that nothing
+      // was substituted, and invites a retry that cannot change the outcome. The
+      // pin's preamble and remedy are composed AROUND it so the sanitised reason is
+      // still there.
+      content:
+        strictPin && result.generationFailed === true
+          ? `${pinFailurePreamble()}${result.content}${PIN_FAILURE_REMEDY}`
+          : result.content,
       ...(followups.length > 0 ? { followups } : {}),
       generationFailed: result.generationFailed ?? false,
       bounded: result.bounded,
@@ -1598,7 +1665,7 @@ export async function runLoopExecutor(
     }
     return finishResult(
       failureResult(
-        toUserFacingGenerationError(err),
+        pinFailureText(err),
         startedAt,
         providerType,
         model,

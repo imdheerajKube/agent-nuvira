@@ -370,6 +370,72 @@ describe('ChatPage model picker — Auto by default, pin only routable models', 
     expect(opts.provider).toBe('groq');
     expect(opts.model).toBe('openai/gpt-oss-120b');
   });
+
+  it('HOLDS the picked pair by default — a chosen model is a named model, sent as strict: true', async () => {
+    // The contract at the surface the user actually clicks. Picking a model used
+    // to send the pair with strict OFF, so the server was free to answer with a
+    // different model and say so afterwards — a pin read as a preference, which
+    // is how a report a user trusted got written by a model they never named.
+    // The lock now ships ON with the pair, and `strict: true` is what carries it.
+    mockAuthed('admin');
+    vi.spyOn(dashboardAPI, 'fetchProcessEnv').mockResolvedValue([]);
+    vi.spyOn(dashboardAPI, 'listRoutableModels').mockResolvedValue([
+      { provider: 'groq', model: 'openai/gpt-oss-120b', capability: 0.9, band: 'high' },
+    ]);
+    mockChatStream();
+    const send = mockChatSend(OK_RESPONSE);
+    render(<ChatPage />);
+
+    const picker = await screen.findByLabelText('Model: Auto or a specific routable model');
+    await waitFor(() => expect(screen.getByRole('option', { name: /groq\/openai\/gpt-oss-120b/ })).toBeTruthy());
+    fireEvent.change(picker, { target: { value: 'groq|openai/gpt-oss-120b' } });
+
+    const lock = screen.getByLabelText('Strict model pin: use this model only');
+    expect(lock.getAttribute('aria-pressed')).toBe('true');
+    expect(lock.textContent).toContain('pinned only');
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'hello' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    const opts = send.mock.calls[0][2] as { provider?: string; model?: string; strict?: boolean };
+    expect(opts.provider).toBe('groq');
+    expect(opts.model).toBe('openai/gpt-oss-120b');
+    expect(opts.strict).toBe(true);
+  });
+
+  it('sends an EXPLICIT strict: false once the lock is turned off, rather than staying silent', async () => {
+    // `strict` is a tri-state at the server: OMITTED defers to the pin's policy
+    // and HOLDS it, so a released lock has to say `false` out loud. Omitting it
+    // would leave the server holding a pin this page had just shown the user
+    // was open — the control would be a lie.
+    mockAuthed('admin');
+    vi.spyOn(dashboardAPI, 'fetchProcessEnv').mockResolvedValue([]);
+    vi.spyOn(dashboardAPI, 'listRoutableModels').mockResolvedValue([
+      { provider: 'groq', model: 'openai/gpt-oss-120b', capability: 0.9, band: 'high' },
+    ]);
+    mockChatStream();
+    const send = mockChatSend(OK_RESPONSE);
+    render(<ChatPage />);
+
+    const picker = await screen.findByLabelText('Model: Auto or a specific routable model');
+    await waitFor(() => expect(screen.getByRole('option', { name: /groq\/openai\/gpt-oss-120b/ })).toBeTruthy());
+    fireEvent.change(picker, { target: { value: 'groq|openai/gpt-oss-120b' } });
+
+    const lock = screen.getByLabelText('Strict model pin: use this model only');
+    fireEvent.click(lock);
+    expect(lock.getAttribute('aria-pressed')).toBe('false');
+    expect(lock.textContent).toContain('fallback allowed');
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'hello' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    const opts = send.mock.calls[0][2] as { strict?: boolean };
+    expect(opts.strict).toBe(false);
+  });
 });
 
 describe('ChatPage', () => {

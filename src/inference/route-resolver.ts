@@ -144,6 +144,45 @@ export function strictModelMode(): boolean {
 }
 
 /**
+ * THE CONTRACT OF A NAMED MODEL — a pin HOLDS, and switching needs permission.
+ *
+ * WHY A SEPARATE PREDICATE FROM {@link strictModelMode}. That one answers "is
+ * this process/turn configured to refuse substitution?", which is OFF unless
+ * asked for — correct for an unpinned run, where the router picking a healthy
+ * model is the feature. It is the WRONG question for a run that NAMED a pair,
+ * because a pin is not a preference: the caller spent money and review time on a
+ * specific model, so "it ran on something else" is not a degraded answer, it is a
+ * different experiment. Measured (2026-10-16, this repository): a `-p deepseek
+ * -m deepseek-flash` assessment run slid to `local/deepseek-coder:latest` — a
+ * small local model — for its final synthesis, and the result was scored as if
+ * DeepSeek had produced it. The cost was not only the wasted paid tokens: the
+ * comparison it invalidated had to be thrown away, and the report a user would
+ * have trusted was written by a model they never named. `NUVIRA_STRICT_MODEL` was
+ * already able to prevent this; leaving it off-by-default for a NAMED pair put
+ * the burden on the operator to remember a second flag to get the contract they
+ * had already stated by pinning.
+ *
+ * SO: named pair + no explicit env choice ⇒ it holds. The tri-state env is how an
+ * operator overrides it:
+ *   - `NUVIRA_STRICT_MODEL=1` → hold, whatever the caller pinned (unchanged).
+ *   - `NUVIRA_STRICT_MODEL=0` → an EXPLICIT "substitution is allowed": the
+ *     documented repair-and-announce behaviour, for a job that would rather
+ *     deliver on a stand-in than not deliver.
+ *   - unset → `pinned`, i.e. a named pair holds while an unpinned run is
+ *     byte-identical to before this rule.
+ * A per-turn `withStrictModel` scope still outranks all three (the dashboard's
+ * per-chat "this model only" switch, and the CLI's own pin, both use it).
+ */
+export function strictPinPolicy(pinned: boolean): boolean {
+  const scoped = strictOverride.getStore();
+  if (scoped !== undefined) return scoped;
+  const env = process.env.NUVIRA_STRICT_MODEL;
+  if (env === '1') return true;
+  if (env === '0') return false;
+  return pinned;
+}
+
+/**
  * Substitutions already reported in this process, keyed by `provider::requested→served`.
  *
  * A substitution is a property of the PAIR, not of the call: the router selects
@@ -324,6 +363,14 @@ function verifiedEquivalent(model: string, excludeProvider: string): string | un
  * The wording is stable on purpose: `error-repair.ts` classifies on
  * `strict model mode` / `forbids substituting` to refuse spending repair
  * attempts on a pin only the user can change.
+ *
+ * THE REMEDY NAMES THE OPT-OUT THAT EXISTS (2026-10-16). It used to say "unset
+ * NUVIRA_STRICT_MODEL to let the router repair it" — and that is now wrong twice
+ * over: the variable is typically ALREADY unset (the pin itself is what turned the
+ * rule on), so the instruction asks for a change that changes nothing, and the
+ * real escape — `NUVIRA_STRICT_MODEL=0` — was never named. A refusal whose advice
+ * cannot work reads as the tool being stuck. So the sentence offers exactly the two
+ * routes that do work: name a model the provider serves, or set the variable to 0.
  */
 export function strictPinRefusal(
   providerType: string,
@@ -338,7 +385,7 @@ export function strictPinRefusal(
     'Strict model mode is on and forbids substituting another model. ' +
     (equivalent
       ? `The same model is verified on '${equivalent}' — pin that instead.`
-      : 'Pick a model this provider serves (`nuvira models`), or unset NUVIRA_STRICT_MODEL to let the router repair it.')
+      : 'Pick a model this provider serves (`nuvira models`), or set NUVIRA_STRICT_MODEL=0 to let a substitute answer instead.')
   );
 }
 
@@ -391,7 +438,7 @@ export async function resolveRoute(request: RouteRequest): Promise<ResolvedRoute
       throw new Error(
         `Model '${requested}' is not available on '${providerType}', and strict model mode ` +
           'forbids substituting another model. Pick a model this provider serves ' +
-          '(`nuvira models`), or unset NUVIRA_STRICT_MODEL to let the router repair it.',
+          '(`nuvira models`), or set NUVIRA_STRICT_MODEL=0 to let a substitute answer instead.',
       );
     }
     reportSubstitution({

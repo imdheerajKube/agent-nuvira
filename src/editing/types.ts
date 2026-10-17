@@ -48,15 +48,57 @@ export interface SourceRange {
   end: SourcePosition;
 }
 
-/** Converts a 0-based index position to SourcePosition by scanning the code */
+/**
+ * The line-start offsets of the string {@link offsetToPosition} was last asked
+ * about, so a position costs a binary search instead of a copy of the prefix.
+ */
+let cachedLineStartsCode: string | null = null;
+let cachedLineStarts: number[] = [];
+
+/**
+ * Converts a 0-based index position to SourcePosition by scanning the code.
+ *
+ * ONE INDEX PER FILE, NOT ONE PER POSITION (measured 2026-10-16). The plain
+ * implementation walked the string from the start on every single call
+ * (`code.slice(0, offset).split('\n')`), which is O(size) per position and so
+ * O(size × positions) per file. That is invisible on a hand-written file and
+ * fatal on a generated one: `analyzeStructure` over the dashboard's own
+ * committed bundle (`src/web-dashboard/public/assets/index-V0rIqVbg.js`, 1.5 MB
+ * on one line) took **64 s**, with 93.2% of the CPU samples inside this
+ * function, and `buildCodeMap` over this repository did not finish in 45 s. The
+ * dashboard builds that map SYNCHRONOUSLY while answering a request (the chat's
+ * project context, `getProjectBundle`), so the whole time was time the server
+ * answered nothing at all — which the browser reports, accurately but
+ * uselessly, as "Could not reach the dashboard server."
+ *
+ * The line starts are remembered for ONE string — the file being analyzed — as
+ * the offsets a line begins at, so the same input now costs one pass plus a
+ * binary search. Behavior is UNCHANGED, including the clamps the old arithmetic
+ * did implicitly: `offset <= 0` is still line 1 column 1, and an offset past the
+ * end still reports the last line and the column the end of the file sits at
+ * (`slice` stopped at the end). Memory is bounded by one file's index.
+ */
 export function offsetToPosition(code: string, offset: number): SourcePosition {
   if (offset <= 0) return { line: 1, column: 1 };
-  const before = code.slice(0, offset);
-  const lines = before.split('\n');
-  return {
-    line: lines.length,
-    column: lines[lines.length - 1].length + 1,
-  };
+  if (cachedLineStartsCode !== code) {
+    const starts: number[] = [0];
+    for (let i = 0; i < code.length; i += 1) {
+      if (code.charCodeAt(i) === 0x0a) starts.push(i + 1);
+    }
+    cachedLineStartsCode = code;
+    cachedLineStarts = starts;
+  }
+  const starts = cachedLineStarts;
+  const pos = Math.min(offset, code.length);
+  // Largest line start <= pos: that is the line `pos` falls on.
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid] <= pos) lo = mid;
+    else hi = mid - 1;
+  }
+  return { line: lo + 1, column: pos - starts[lo] + 1 };
 }
 
 /** Converts a SourcePosition back to a 0-based offset */

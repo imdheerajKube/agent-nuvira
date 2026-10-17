@@ -1189,7 +1189,11 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
    * routing takes over, and the server says so in `routingNotice`); on means
    * "this model or nothing", so the turn stops instead of substituting.
    */
-  const [strictPin, setStrictPin] = useState(false);
+  // DEFAULT ON (2026-10-16): a model you PICK is a model you named, so it holds.
+  // Off-by-default made the lock the exception and substitution the norm, which is
+  // how a pinned chat could be answered by a model the user never chose. The toggle
+  // is still right here for a chat that would rather fall back than stop.
+  const [strictPin, setStrictPin] = useState(true);
   /** The short routable list the picker offers (provider + model + capability). */
   const [routableModels, setRoutableModels] = useState<
     Array<{ provider: string; model: string; capability: number; band: 'high' | 'medium' | 'low' }>
@@ -2058,9 +2062,13 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
           // An explicit model pin, when the user chose one. Omitted for Auto, so
           // the server's router stays in charge (the default).
           ...(pinnedModel ? { provider: pinnedModel.provider, model: pinnedModel.model } : {}),
-          // The strict pin rides ONLY with a pin: with Auto there is no model to
-          // force, so the flag is meaningless and is not sent.
-          ...(pinnedModel && strictPin ? { strict: true } : {}),
+          // ...and its LOCK, sent EXPLICITLY in both positions. The pin rides ONLY
+          // with a pin (with Auto there is no model to force), but the LOCK is
+          // sent as a real boolean: the server reads `strict` as a tri-state, and
+          // OMITTED means "defer to the pin's policy" — which HOLDS the model. So
+          // a chat whose user turned the lock OFF must SAY so, or the server would
+          // hold a pin this client believes it released. `false` is that statement.
+          ...(pinnedModel ? { strict: strictPin } : {}),
           projectPath: attachedProject?.path,
           // `encoding` rides along so the server knows whether to read the content as
           // text or to decode base64 and extract it (P2).
@@ -2195,7 +2203,17 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
         setRailOpen(true);
       }
     },
-    [busy, attachedProject, attachments, isolate, keepWorktree, resume, resumeId, pinnedModel, commitRecoveredAnswer, recoverFromCeiling],
+    // `strictPin` BELONGS HERE (2026-10-16): `send` reads it to build the
+    // request's `strict`, and leaving it out froze the value the callback was
+    // created with. MEASURED, and it is the worst shape of this bug class:
+    // picking a model re-created the callback (the pin defaults to ON, so the
+    // captured value was `true`), and then turning the lock OFF changed only the
+    // button — the very next send went out with `strict: true`, so the turn was
+    // HELD by a lock the user had just released while the UI read "fallback
+    // allowed". A control that reports one thing and sends another is worse than
+    // no control. Pinned next to `pinnedModel` because the pair and its lock are
+    // one decision, and they must travel together.
+    [busy, attachedProject, attachments, isolate, keepWorktree, resume, resumeId, pinnedModel, strictPin, commitRecoveredAnswer, recoverFromCeiling],
   );
 
   /** P4 — cancel the in-flight turn (aborts the POST; the server cancels it). */
@@ -3226,9 +3244,11 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
               </select>
               {/*
                 Strict pin — only shown once a model is pinned (with Auto there
-                is nothing to force). OFF is the safe default: a dead pin falls
-                over to auto routing and the server reports that in a notice.
-                ON makes the pinned model the only model this chat may use.
+                is nothing to force). ON is the default, because a model you
+                picked is a model you named: the turn runs on it or stops and
+                says why, so an answer is never attributed to a model that did
+                not produce it. Turning it OFF is the deliberate act — the pin
+                may then be replaced and the server reports that in a notice.
               */}
               {pinnedModel ? (
                 <button
@@ -3239,12 +3259,12 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
                   disabled={busy}
                   title={
                     strictPin
-                      ? `Strict: this chat runs on ${pinnedModel.provider}/${pinnedModel.model} only. If it is unavailable the turn stops instead of substituting another model.`
-                      : `Auto routing may substitute another model if ${pinnedModel.provider}/${pinnedModel.model} is unavailable. Turn on strict mode to work with this model only.`
+                      ? `This chat runs on ${pinnedModel.provider}/${pinnedModel.model} only. If it is unavailable the turn STOPS and says which model did not answer, instead of substituting another one.`
+                      : `Fallback allowed: auto routing may substitute another model if ${pinnedModel.provider}/${pinnedModel.model} is unavailable. Turn the lock on to work with this model only.`
                   }
                   onClick={() => setStrictPin((v) => !v)}
                 >
-                  {strictPin ? '🔒 strict' : '🔓 auto-fallback'}
+                  {strictPin ? '🔒 pinned only' : '🔓 fallback allowed'}
                 </button>
               ) : null}
               {/*

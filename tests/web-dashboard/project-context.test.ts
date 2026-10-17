@@ -120,6 +120,28 @@ describe('buildProjectContext', () => {
     }
   });
 
+  /**
+   * The injected context must not spend the turn's budget mapping a bundle, and
+   * must not leave its absence unmentioned either — MEASURED (2026-10-16): the
+   * dashboard's own committed bundle cost 64 s of blocked event loop inside
+   * `analyzeStructure` while the dashboard was answering a request. `buildCodeMap`
+   * now skips generated/minified files; this asserts the context SAYS so, reading
+   * their absence as a decision rather than as "this project has no such file".
+   */
+  it('keeps generated/minified files out of the context, and names them', () => {
+    const dir = makeFixture();
+    try {
+      writeFileSync(join(dir, 'src', 'bundle.js'), 'var a=1;'.repeat(60_000));
+      const bundle = buildProjectContext(dir)!;
+      expect(bundle.codeMap).toContain('1 generated/minified file(s) not mapped');
+      expect(bundle.codeMap).not.toContain('src/bundle.js');
+      // The real source beside it is still described.
+      expect(bundle.codeMap).toContain('src/index.ts');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects missing paths and non-directories', () => {
     expect(buildProjectContext('/no/such/dir/anywhere')).toBeNull();
     const dir = makeFixture();

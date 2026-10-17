@@ -210,8 +210,9 @@ export const PROCESS_ENV_VARS: readonly ProcessEnvVarSpec[] = [
     kind: 'flag',
     rule: 'strict-one',
     description:
-      'Fail instead of substituting a model when a pinned one is unavailable, so "it ran on something else" cannot happen silently.',
-    unsetMeans: 'A dead pin is repaired by substituting an available model, and the swap is announced.',
+      'Fail instead of substituting a model when a pinned one is unavailable, so "it ran on something else" cannot happen silently. A model named with --provider/--model holds on its own; this variable forces the rule for UNPINNED runs too.',
+    unsetMeans:
+      'A named model holds (the pin fails loudly rather than being substituted). An unpinned run keeps its repair-and-announce behaviour, where a dead pair is substituted and the swap is announced. Set 0 to allow substitution even for a named model.',
   },
   {
     name: 'NUVIRA_DEBUG_LOG',

@@ -223,7 +223,23 @@ export async function runPipelineTool(
 
   try {
     const orchestrator = new Orchestrator(configManager);
-    const result = await orchestrator.execute(goal, {
+    // ── Assessment protocol (the gateway's engine — same seam as chat + loop) ──
+    // Appended HERE rather than to `goal` earlier on purpose: `goal` has already
+    // been routed, parsed (`parseRequestSync`) and turned into an acceptance
+    // contract by this point, and several kilobytes of reporting rules sitting in
+    // front of the router would change how the request is CLASSIFIED. The pipeline
+    // model reads the rules; the router never sees them. Gated inside the shared
+    // assembler, so a non-assessment goal appends nothing and this run is
+    // exactly what it was before.
+    let pipelineGoal = goal;
+    try {
+      const { buildAssessmentTurnContext } = await import('../learning/assessment-turn-context.js');
+      const assessmentBlock = buildAssessmentTurnContext(goal, process.cwd()).block;
+      if (assessmentBlock) pipelineGoal = `${goal}\n\n${assessmentBlock}`;
+    } catch {
+      /* best-effort — a missing protocol must never break a pipeline run */
+    }
+    const result = await orchestrator.execute(pipelineGoal, {
       provider,
       model,
       autoRouteModels: autoRoute,

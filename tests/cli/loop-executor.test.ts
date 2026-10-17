@@ -595,6 +595,27 @@ describe('loop executor — mid-turn failover (T1)', () => {
  * provider could plausibly answer justifies leaving an explicit choice.
  */
 describe('loop executor — pinned-provider failover (config fallback chain)', () => {
+  /**
+   * ASK 1 (2026-10-16) — THESE TESTS EXERCISE THE SUBSTITUTION PATH, which is now
+   * an explicit opt-in. A model NAMED by the caller holds by default (see
+   * `strictPinPolicy` in route-resolver.ts): the loop's candidate walk collapses
+   * to the pinned pair, so a pinned run no longer wanders to another provider
+   * unless `NUVIRA_STRICT_MODEL=0` permits the repair.
+   *
+   * The behaviour under test here is therefore the PERMISSIVE path, and asking
+   * for it is the honest way to keep testing it — rather than weakening any
+   * assertion. The new default has its own block at the end of this file.
+   */
+  let priorStrict: string | undefined;
+  beforeEach(() => {
+    priorStrict = process.env.NUVIRA_STRICT_MODEL;
+    process.env.NUVIRA_STRICT_MODEL = '0';
+  });
+  afterEach(() => {
+    if (priorStrict === undefined) delete process.env.NUVIRA_STRICT_MODEL;
+    else process.env.NUVIRA_STRICT_MODEL = priorStrict;
+  });
+
   beforeEach(() => {
     vi.resetModules();
   });
@@ -822,6 +843,41 @@ describe('loop executor — pinned-provider failover (config fallback chain)', (
     expect(fallbackIsAvailable.mock.calls.length).toBe(2);
     expect(fallbackCalls.n).toBe(0);
     expect(result.generationFailed).toBe(true);
+  });
+
+  /**
+   * ASK 1 — THE NEW DEFAULT: a model the caller NAMED is the only one that serves
+   * the turn. This is the contract the whole block above now opts OUT of.
+   *
+   * The failure this pins (2026-10-16): a `-p deepseek -m deepseek-flash` run had
+   * its synthesis answered by `local/deepseek-coder:latest`, so the paid tokens
+   * were spent on one model and the report was written by another. "It ran on
+   * something else" is not a degraded answer for a pinned run; it is a different
+   * experiment, and the caller cannot tell from the output.
+   */
+  it('HOLDS the named provider by default — a 429 does NOT substitute another model', async () => {
+    // The describe's beforeEach asks for the permissive path, because the tests
+    // above exercise substitution. THIS one is about the default a caller who
+    // named a model gets, so it unsets the dial.
+    delete process.env.NUVIRA_STRICT_MODEL;
+    const { fallbackCalls } = mockPinnedPair(new Error('429 rate limit exceeded'));
+    const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+    const result = await runLoopExecutor('do the thing', new ConfigManager(), {
+      provider: 'pinned',
+      skipProjectContext: true,
+      skipSkillHint: true,
+      quiet: true,
+    });
+
+    // NOTHING ELSE SERVED THE TURN — the fallback provider was never called.
+    expect(fallbackCalls.n).toBe(0);
+    // And the outcome says so: the pinned pair is named and the refusal is
+    // explicit, instead of the user receiving another model's answer as theirs.
+    expect(result.content).toMatch(/Your pinned model pinned/);
+    expect(result.content).toMatch(/nothing was substituted/);
+    // …and it says how to get an answer by another route, instead of inviting a
+    // blind retry against a model that cannot serve the turn.
+    expect(result.content).toMatch(/NUVIRA_STRICT_MODEL=0/);
   });
 });
 

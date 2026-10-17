@@ -230,6 +230,12 @@ export function formatProjectTree(filePaths: string[], maxLines: number, omitted
 function formatCodeMapCapped(map: CodeMap, maxSymbols: number, filesTruncated: boolean): string {
   const lines: string[] = [];
   lines.push(`${map.totalFiles} file(s) · ${map.totalSymbols} symbol(s) across the project`);
+  // Generated and minified files are deliberately NOT mapped (a bundle has no
+  // structure to describe — see `MAX_MAP_FILE_BYTES`); say so, so the model reads
+  // their absence as a decision rather than as "this project has no such file".
+  if (map.skipped.length > 0) {
+    lines.push(`${map.skipped.length} generated/minified file(s) not mapped (bundles and one-line output)`);
+  }
   let shown = 0;
   for (const file of map.files) {
     if (shown >= maxSymbols && file.symbols.length > 0) break;

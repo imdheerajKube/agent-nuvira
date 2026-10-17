@@ -50,7 +50,7 @@ import {
 } from '../learning/acceptance-model.js';
 import { readDecisions, recallDecisions, reviseDecision } from '../learning/decision-log.js';
 import { degradedCallsFromTraces } from '../learning/reasoning-trace.js';
-import { withStrictModel } from '../inference/route-resolver.js';
+import { strictPinPolicy, withStrictModel } from '../inference/route-resolver.js';
 import { readRecallHits } from '../context/session-recall.js';
 import { getRouterPromotion } from '../learning/router-promotion.js';
 import { AUTH_CLEAR_THRESHOLD } from '../learning/key-hygiene.js';
@@ -8344,7 +8344,25 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // only" switch). Scoped to the turn with AsyncLocalStorage rather than a
       // process env write, because two sessions can run concurrently and a
       // global mutation would leak one user's pin into the other's turn.
-      const strict = body?.strict === true;
+      //
+      // READ AS A TRI-STATE (2026-10-16) — same three cases, same reasoning, as
+      // `worktree`/`resume` below. `true` holds the pin; `false` is this turn's
+      // EXPLICIT permission to substitute; ABSENT defers to the pin's own policy,
+      // where a request that NAMED a provider+model HOLDS (the pair `pinOf`
+      // records) and an Auto turn has no pair to hold.
+      //
+      // Collapsing absent into `false` — the previous `body?.strict === true` —
+      // was wrong on both sides. A pinned API request that never mentioned the
+      // flag was substituted by default, i.e. a pin read as a preference, which
+      // is the contract `strictPinPolicy` exists to end. And because the scope
+      // set here OUTRANKS the environment inside `withStrictModel`, a dashboard
+      // deployment running with `NUVIRA_STRICT_MODEL=1` was silently un-strict
+      // for every chat turn that left the flag out — the operator's own switch,
+      // quietly ignored.
+      const strict =
+        typeof body?.strict === 'boolean'
+          ? body.strict
+          : strictPinPolicy(typeof provider === 'string' && typeof model === 'string');
       // WS5 (#27) — per-turn isolation and resume, from the GUI.
       //
       // Read as a strict TRI-state, because the three cases are genuinely
@@ -8602,7 +8620,12 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
             `We had to fall to a different model because no ${pinnedClass}-class model was available: ` +
             `your pinned ${requested} is ${pinnedClass} class, and this turn ran on ${served} (${servedClass} class).`;
         } else if (substituted) {
-          routingNotice = `Auto routing took over: this turn ran on ${served} because your pinned ${requested} was not available. To work with ${requested} only, enable strict model mode.`;
+          // Reachable now only when the turn EXPLICITLY allowed a substitute
+          // (`strict: false`, the chat's lock switched off) or the deployment set
+          // `NUVIRA_STRICT_MODEL=0`, because a named pair holds by default. So the
+          // instruction names the two controls that actually release it, instead
+          // of telling the user to enable something that is already the default.
+          routingNotice = `Auto routing took over: this turn ran on ${served} because your pinned ${requested} was not available. To work with ${requested} only, hold the pin: turn the chat's lock back on, or set NUVIRA_STRICT_MODEL=1.`;
         } else if (result.generationFailed === true) {
           // The turn ran on the pair the user pinned and stopped there. Saying
           // "auto routing may hand the work to another model" described the old

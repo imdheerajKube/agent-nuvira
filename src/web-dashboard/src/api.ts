@@ -1925,9 +1925,13 @@ export class DashboardAPI {
       model?: string;
       /**
        * Pin the selected provider/model for THIS turn alone: refuse to
-       * substitute another model. Honored only alongside `provider`;
-       * omitted/false means auto routing may take over (the server explains
-       * that in `routingNotice` when it does).
+       * substitute another model. Honored only alongside `provider`.
+       *
+       * TRI-STATE, like `worktree` below. `true` holds the pin; `false` is this
+       * turn's EXPLICIT permission for auto routing to take over (the server
+       * explains that in `routingNotice` when it does); OMITTED defers to the
+       * pin's own policy, which HOLDS a named pair — so a control that was
+       * switched OFF must send `false` rather than stay silent.
        */
       strict?: boolean;
       projectPath?: string;
@@ -2046,7 +2050,10 @@ export class DashboardAPI {
           message,
           provider: opts?.provider,
           model: opts?.model,
-          ...(opts?.strict === true ? { strict: true } : {}),
+          // Sent in BOTH positions — a `false` is a decision this turn made, and
+          // dropping it would let the server's pin policy hold a model the user
+          // had explicitly released (see the option doc).
+          ...(opts?.strict === undefined ? {} : { strict: opts.strict }),
           projectPath: opts?.projectPath,
           attachments: opts?.attachments,
           // WS5 — sent only when the caller decided something, so an untouched

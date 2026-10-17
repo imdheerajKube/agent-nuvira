@@ -90,7 +90,16 @@ function scriptedProvider(opts: {
 describe('loop engine — a DEV ask is never answered with the model\'s thinking', () => {
   let memDir: string;
 
+  /**
+   * ASK 1 (2026-10-16) — substitution is now an explicit opt-in, so the tests that
+   * exercise the failover WALK ask for it. Without this the walk collapses to the
+   * pinned pair (correct for a named model) and the walk these tests describe is
+   * never reached.
+   */
+  let priorStrict: string | undefined;
   beforeEach(() => {
+    priorStrict = process.env.NUVIRA_STRICT_MODEL;
+    process.env.NUVIRA_STRICT_MODEL = '0';
     vi.resetModules();
     memDir = mkdtempSync(join(tmpdir(), 'buff-loop-quality-'));
     process.env.NUVIRA_MEMORY_DIR = memDir;
@@ -102,6 +111,8 @@ describe('loop engine — a DEV ask is never answered with the model\'s thinking
 
   afterEach(() => {
     vi.restoreAllMocks();
+    if (priorStrict === undefined) delete process.env.NUVIRA_STRICT_MODEL;
+    else process.env.NUVIRA_STRICT_MODEL = priorStrict;
     delete process.env.NUVIRA_MEMORY_DIR;
     try {
       rmSync(memDir, { recursive: true, force: true });
