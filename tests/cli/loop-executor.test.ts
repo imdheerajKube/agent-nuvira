@@ -56,7 +56,13 @@ describe('loop executor — happy path (native transport)', () => {
     vi.resetModules();
   });
 
-  it('runs tools and returns the final answer with full telemetry', async () => {
+  // THE TIMEOUT IS ABOUT THE IMPORT, NOT THE TURN. `beforeEach` resets the module
+  // registry, so each case re-imports the executor's whole graph — and on the
+  // windows-latest runners that first import took longer than vitest's 15s default
+  // (measured 2026-10-30), failing a test whose assertions never ran. The work
+  // below is two scripted steps against an in-memory provider; 60s leaves room for
+  // a slow filesystem without turning a hang into a pass.
+  it('runs tools and returns the final answer with full telemetry', { timeout: 60_000 }, async () => {
     const provider = scriptedProvider({
       native: true,
       responses: [
@@ -84,7 +90,7 @@ describe('loop executor — happy path (native transport)', () => {
     expect(typeof result.engineExplanation).toBe('string');
   });
 
-  it('captures errored tools from tool:called events', async () => {
+  it('captures errored tools from tool:called events', { timeout: 60_000 }, async () => {
     const provider = scriptedProvider({
       native: true,
       responses: [

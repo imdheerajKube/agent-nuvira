@@ -1452,9 +1452,11 @@ describe('telling the caller what their frame directory actually contains', () =
     expect(hint).toContain('one level down');
     expect(hint).toContain('scene1/');
 
-    // And the recursive pattern is the escape hatch, in tree order.
+    // And the recursive pattern is the escape hatch, in tree order. The paths are
+    // real filesystem paths, so the separator is the host's; the ORDER and the
+    // subdirectory each frame belongs to are what this pins.
     const recursive = scanFrameDirectory(parent, '**/*.png');
-    expect(recursive.files.map((f) => f.slice(parent.length + 1))).toEqual([
+    expect(recursive.files.map((f) => f.slice(parent.length + 1).replace(/\\/g, '/'))).toEqual([
       'scene1/f_0001.png',
       'scene2/f_0001.png',
     ]);

@@ -883,6 +883,18 @@ function splitArgv(command: string): string[] {
 const SHELL_SYNTAX = /[|&;<>()`$\\*?[\]{}~!\n]/;
 
 /**
+ * The same set on Windows, where `\` is a PATH SEPARATOR rather than an escape.
+ *
+ * WHY IT IS A SEPARATE SET (measured 2026-10-30, windows-latest): the ordinary
+ * recipe `node C:\Users\runneradmin\Temp\work\renderer.js` tripped the POSIX set on
+ * its backslashes, so a plain argv was handed to cmd.exe and reported `viaShell` —
+ * a claim about HOW the process was started that was simply false there. `%` and
+ * `^` take the backslash's place in the "needs a shell" column, because cmd.exe
+ * expands one and escapes with the other.
+ */
+const SHELL_SYNTAX_WINDOWS = /[|&;<>()`$*?[\]{}~!\n%^]/;
+
+/**
  * Decide how to run a recorded command, preferring NOT to involve a shell at all.
  *
  * A recorded renderer is code the user already chose to run, but `shell: true` made
@@ -892,7 +904,8 @@ const SHELL_SYNTAX = /[|&;<>()`$\\*?[\]{}~!\n]/;
  * and a command that genuinely needs a shell is marked so it can be reported.
  */
 export function parseRendererCommand(command: string): { argv: string[]; viaShell: boolean } {
-  if (SHELL_SYNTAX.test(command)) return { argv: [command], viaShell: true };
+  const shellSyntax = process.platform === 'win32' ? SHELL_SYNTAX_WINDOWS : SHELL_SYNTAX;
+  if (shellSyntax.test(command)) return { argv: [command], viaShell: true };
   const argv = splitArgv(command);
   if (argv.length === 0) return { argv: [command], viaShell: true };
   return { argv, viaShell: false };

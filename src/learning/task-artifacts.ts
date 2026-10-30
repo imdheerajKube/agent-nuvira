@@ -225,6 +225,18 @@ export interface ArtifactCheck {
 }
 
 /**
+ * A path in the form every pattern in this module is written in: `/` separators.
+ *
+ * On Windows a backslash IS the separator, so the rewrite cannot merge two
+ * different paths. On POSIX a backslash is an ordinary filename character, so
+ * there it is left alone — normalising it away could match a file that is not
+ * the one the convention names.
+ */
+function asPosixPath(path: string): string {
+  return process.platform === 'win32' ? path.replace(/\\/g, '/') : path;
+}
+
+/**
  * Which of `requirements` the workspace satisfies.
  *
  * A named file is satisfied when it exists with real content. A test class is
@@ -239,8 +251,15 @@ export function verifyArtifacts(requirements: ArtifactRequirement[], cwd: string
   // A candidate is a test file when its NAME says so (any language) or it lives in a
   // test directory — a root-level `test_util.py` is a real pytest file that no
   // directory rule would have found.
+  //
+  // THE PATTERNS ARE POSIX, SO THE PATH IS COMPARED AS ONE. Both conventions above
+  // are written with `/` separators, and on Windows `walkProject` hands back
+  // `tests\test_format_duration.py`, which matches NEITHER — so `unit-tests` was
+  // reported missing on every Windows runner for a file that was right there
+  // (measured 2026-10-30), the exact false negative this matcher exists to prevent.
+  // The real path is kept for reading; only the comparison is normalised.
   const testFiles = files.filter(
-    (f) => UNIT_TEST_FILE.test(f.path) || /(^|\/)(__tests__|tests?|spec)\//i.test(f.path),
+    (f) => UNIT_TEST_FILE.test(asPosixPath(f.path)) || /(^|\/)(__tests__|tests?|spec)\//i.test(asPosixPath(f.path)),
   );
 
   for (const requirement of requirements) {
@@ -254,7 +273,8 @@ export function verifyArtifacts(requirements: ArtifactRequirement[], cwd: string
     const found =
       !!testClass &&
       testFiles.some((f) => {
-        if (testClass.match.test(f.path) || testClass.match.test(basename(f.path))) return true;
+        const path = asPosixPath(f.path);
+        if (testClass.match.test(path) || testClass.match.test(basename(f.path))) return true;
         // Content check, size-bounded: "integration" often lives in the test body.
         if (f.size > 200_000) return false;
         try {

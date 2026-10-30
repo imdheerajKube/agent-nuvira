@@ -61,7 +61,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, extname, join } from 'node:path';
 
 import { detectMachineFacts, type MachineFacts } from './machine-facts.js';
 
@@ -117,15 +117,42 @@ export function safeRelativePath(p: string): string {
   return /^[A-Za-z0-9_./@\- ]+$/.test(value) ? value : '';
 }
 
+/**
+ * The names a bare program name can have on Windows.
+ *
+ * WHY THE EXTENSIONS ARE TRIED (measured 2026-10-30, windows-latest):
+ * `executableOnPath('node')` returned false on every Windows runner, because the
+ * file on PATH is `node.EXE` and a bare `node` is not a file there. The probe then
+ * reported no Node runtime and no `timeout`/`gtimeout`, so every Windows probe
+ * claimed `runtime: none` and its numbers were refused as unmeasured — a fact
+ * about the search, reported as a fact about the machine. `PATHEXT` is the
+ * platform's own answer to "which extensions does a bare name expand to", so it is
+ * read first and the standard list is the fallback.
+ */
+const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
+
 /** Does this executable exist anywhere on PATH? (Never spawns a process.) */
 export function executableOnPath(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
   if (!name) return false;
+  const extensions =
+    process.platform === 'win32' && !extname(name)
+      ? (env.PATHEXT || DEFAULT_PATHEXT)
+          .split(';')
+          .map((ext) => ext.trim())
+          .filter(Boolean)
+      : [];
+  const candidates = [name, ...extensions.map((ext) => `${name}${ext}`)];
   const dirs = (env.PATH || '').split(delimiter).filter(Boolean);
   for (const dir of dirs) {
-    try {
-      if (existsSync(join(dir, name))) return true;
-    } catch {
-      // An unreadable PATH entry tells us nothing — keep looking.
+    for (const candidate of candidates) {
+      try {
+        const path = join(dir, candidate);
+        // A DIRECTORY named `node` is not an executable, and `existsSync` alone
+        // would call it one.
+        if (existsSync(path) && !statSync(path).isDirectory()) return true;
+      } catch {
+        // An unreadable PATH entry tells us nothing — keep looking.
+      }
     }
   }
   return false;

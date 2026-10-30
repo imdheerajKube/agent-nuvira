@@ -19,6 +19,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  rmdirSync,
   symlinkSync,
   unlinkSync,
   utimesSync,
@@ -124,7 +125,9 @@ describe('createWorkspaceCheckpoint', () => {
   it('records a symlink as a link and never follows it', () => {
     const outside = mkdtempSync(join(tmpdir(), 'ckpt-outside-'));
     writeFileSync(join(outside, 'secret.txt'), 'outside the tree\n');
-    symlinkSync(outside, join(project, 'link-out'));
+    // The TYPE is named because Windows has no typeless link: without it, this
+    // creates a FILE link to a directory and the test measures a different thing.
+    symlinkSync(outside, join(project, 'link-out'), process.platform === 'win32' ? 'dir' : undefined);
 
     const checkpoint = createWorkspaceCheckpoint(project, { storeDir });
     const link = checkpoint.entries.find((e) => e.path === 'link-out');
@@ -132,7 +135,14 @@ describe('createWorkspaceCheckpoint', () => {
     expect(link?.linkTarget).toBe(outside);
     expect(checkpoint.entries.some((e) => e.path.startsWith('link-out/'))).toBe(false);
 
-    rmSync(join(project, 'link-out'));
+    // `rmSync` refuses a link to a DIRECTORY on Windows ("Path is a directory"), and
+    // unlinking or rmdir-ing removes the link itself, never the tree it names.
+    const linkPath = join(project, 'link-out');
+    try {
+      unlinkSync(linkPath);
+    } catch {
+      rmdirSync(linkPath);
+    }
     restoreWorkspaceCheckpoint(checkpoint.id, { storeDir });
     expect(lstatSync(join(project, 'link-out')).isSymbolicLink()).toBe(true);
     rmSync(outside, { recursive: true, force: true });
@@ -213,10 +223,16 @@ describe('createWorkspaceCheckpoint', () => {
     chmodSync(script, 0o755);
 
     const checkpoint = createWorkspaceCheckpoint(project, { storeDir });
+    // What the OS actually kept is the value the checkpoint recorded, and it is
+    // what a restore has to hand back. On POSIX that is 0o755; on Windows there is
+    // no executable bit to keep and the platform reports 0o666 for every writable
+    // file, so the round trip — not the literal — is the claim that holds on both.
+    const recorded = lstatSync(script).mode & 0o777;
     chmodSync(script, 0o644);
     restoreWorkspaceCheckpoint(checkpoint.id, { storeDir });
-    expect(lstatSync(script).mode & 0o777).toBe(0o755);
+    expect(lstatSync(script).mode & 0o777).toBe(recorded);
     expect(checkpoint.entries.find((e) => e.path === 'run.sh')?.mode).toBeTruthy();
+    if (process.platform !== 'win32') expect(lstatSync(script).mode & 0o777).toBe(0o755);
   });
 });
 

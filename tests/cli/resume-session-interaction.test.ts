@@ -143,7 +143,12 @@ describe('an explicit resume survives a leftover OPEN session snapshot', () => {
     ).not.toBeNull();
   };
 
-  it('replays every recorded step with zero model calls, despite the open snapshot', async () => {
+  // Same reason as `tests/cli/loop-executor.test.ts`: `run()` resets the module
+  // registry before every run, so this case imports the executor's whole graph
+  // twice — over vitest's 15s default on windows-latest (measured 2026-10-30),
+  // which failed the test before its first assertion. Both turns are scripted, so
+  // a generous cap cannot hide a hang.
+  it('replays every recorded step with zero model calls, despite the open snapshot', { timeout: 90_000 }, async () => {
     // Turn 1 writes the record (and closes its own session).
     const first = recordingProvider(TWO_STEPS);
     const recorded = await run(first.provider, { resume: true });
@@ -165,7 +170,7 @@ describe('an explicit resume survives a leftover OPEN session snapshot', () => {
     expect(second.calls()).toBe(0);
   });
 
-  it('still rehydrates an open snapshot when nothing replays (checkpoint-only run)', async () => {
+  it('still rehydrates an open snapshot when nothing replays (checkpoint-only run)', { timeout: 90_000 }, async () => {
     // A run that only SAVES the record (no replay) — the default `execute` policy.
     const first = recordingProvider(TWO_STEPS);
     await run(first.provider, { checkpoint: true });

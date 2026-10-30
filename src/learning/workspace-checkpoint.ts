@@ -43,8 +43,10 @@ import {
   readlinkSync,
   renameSync,
   rmSync,
+  rmdirSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
@@ -269,6 +271,68 @@ function writeAtomic(path: string, data: string | Buffer, mode?: number): void {
 /** Relative, POSIX-style — so a manifest written on Windows restores on macOS. */
 function relPosix(root: string, absolute: string): string {
   return relative(root, absolute).split(sep).join('/');
+}
+
+/**
+ * Remove whatever is at `path` when it is a LINK, without following it.
+ *
+ * WHY NOT `rmSync` (measured 2026-10-30, windows-latest): a link whose target is a
+ * DIRECTORY is a reparse point, and `rmSync` refuses it (`Path is a directory`) — so
+ * restoring a checkpoint that held a directory link threw before it recreated
+ * anything. `unlink` removes a file link and `rmdir` removes a directory link, each
+ * deleting the LINK and never the tree it names; one of the two is the right call on
+ * every platform.
+ */
+function removeLinkIfPresent(path: string): void {
+  try {
+    // `lstat`, not `exists`: a DANGLING link is present at this path and would make
+    // the recreate fail with EEXIST, while `existsSync` follows the link and says
+    // there is nothing there.
+    lstatSync(path);
+  } catch {
+    return;
+  }
+  try {
+    unlinkSync(path);
+  } catch {
+    try {
+      rmdirSync(path);
+    } catch {
+      // Not a link we can remove (or already gone) — the restore below reports it.
+    }
+  }
+}
+
+/**
+ * Recreate a recorded link at `path`, naming its type where the host needs one.
+ *
+ * Windows has no typeless link: `symlinkSync` with no `type` creates a FILE link, so
+ * recreating a link to a directory failed there. The recorded kind is a link either
+ * way, so the type is derived from the target that is present now, and the other
+ * type is tried when that guess is wrong (a target that has moved or gone).
+ */
+function recreateSymlink(linkTarget: string, path: string): void {
+  if (process.platform !== 'win32') {
+    symlinkSync(linkTarget, path);
+    return;
+  }
+  let isDirectory = false;
+  try {
+    isDirectory = statSync(linkTarget).isDirectory();
+  } catch {
+    // A dangling target's type is unknowable — try both below.
+  }
+  const types: Array<'dir' | 'file'> = isDirectory ? ['dir', 'file'] : ['file', 'dir'];
+  let lastError: unknown;
+  for (const type of types) {
+    try {
+      symlinkSync(linkTarget, path, type);
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
 
 function shouldIgnore(name: string): boolean {
@@ -619,10 +683,10 @@ export function restoreWorkspaceCheckpoint(id: string, options: RestoreOptions =
   for (const entry of checkpoint.entries) {
     const target = join(cwd, entry.path);
     if (entry.kind === 'symlink') {
-      rmSync(target, { force: true });
+      removeLinkIfPresent(target);
       mkdirSync(dirname(target), { recursive: true });
       try {
-        symlinkSync(entry.linkTarget ?? '', target);
+        recreateSymlink(entry.linkTarget ?? '', target);
         result.links += 1;
       } catch (err) {
         logger.warn(`[checkpoint] could not recreate symlink ${entry.path}: ${(err as Error).message}`);
