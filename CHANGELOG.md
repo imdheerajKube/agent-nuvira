@@ -61,6 +61,19 @@ the model to deliver "a large document … in sections across several calls", wh
 is why 6 files took 16 calls. It now states the threshold (~8,000 characters in
 one call), forbids re-sending content already on disk, and sends changes to
 `edit_file`.
+- **Windows reads the same facts as everywhere else.** Four checks that were red on
+  every `windows-latest` run were asking the host a question it answers differently,
+  not finding a defect:
+  `learning/perf-probe.ts` looked for a file literally named `node`, so the machine
+  facts reported no Node runtime and every probe was refused as unmeasured
+  (`node.EXE` is what is on PATH); `learning/task-artifacts.ts` matched test
+  filenames against POSIX-shaped patterns, so `unit-tests` read as missing for
+  `tests\test_x.py` — the exact false negative v3.5.13 removed on POSIX;
+  `tools/modality/motion.ts` treated a Windows path's backslashes as shell escapes,
+  so a plain renderer argv went through `cmd.exe` and reported `viaShell`;
+  `learning/workspace-checkpoint.ts` could not restore a link to a DIRECTORY, which
+  Windows expresses as a typed reparse point. Each is now decided by the platform's
+  own rules, and the suite pins the ones a host can host.
 
 ## v3.5.13 — the loop stops charging for checks it cannot finish
 
