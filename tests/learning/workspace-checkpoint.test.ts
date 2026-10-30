@@ -152,6 +152,16 @@ describe('createWorkspaceCheckpoint', () => {
     // turn's first write (measured 1.4s for this repo's 13,944 files / 268 MB), and
     // almost none of those files had changed. `(size, mtime)` is what `make` trusts
     // to answer the same question.
+    // PIN THE MTIME TO A WHOLE SECOND FIRST. Restoring a mtime through `utimesSync`
+    // takes seconds-as-float, so an original mtime with a sub-millisecond component
+    // does not survive the round trip on every filesystem — the reuse key then misses
+    // for a reason that has nothing to do with the cache. Measured on CI (2026-10-30):
+    // this test failed on ext4 and on Bun while passing on APFS. An integer-second
+    // mtime is expressible everywhere, so the scenario under test is the scenario that
+    // runs.
+    const file = join(project, 'src', 'app.ts');
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+
     const first = createWorkspaceCheckpoint(project, { storeDir });
     const before = readCheckpoint(first.id, { storeDir })!;
     expect(before.entries.every((e) => e.kind === 'symlink' || e.mtimeMs !== undefined)).toBe(true);
@@ -160,10 +170,10 @@ describe('createWorkspaceCheckpoint', () => {
     // unchanged, so the recorded hash is reused and the new checkpoint describes the
     // content it can see. This is the documented limit of the reuse, pinned rather
     // than left implicit.
-    const file = join(project, 'src', 'app.ts');
     const original = before.entries.find((e) => e.path === 'src/app.ts')!;
+    expect(original.mtimeMs).toBe(1_700_000_000_000);
     writeFileSync(file, 'export const a = 9;\n');
-    utimesSync(file, original.mtimeMs! / 1000, original.mtimeMs! / 1000);
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
     const sameStat = createWorkspaceCheckpoint(project, { storeDir });
     expect(sameStat.entries.find((e) => e.path === 'src/app.ts')?.sha).toBe(original.sha);
 
