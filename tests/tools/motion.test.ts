@@ -133,6 +133,13 @@ function installFakes(
   const viewports: Array<{ width: number; height: number }> = [];
   const ffmpegArgs: string[][] = [];
   setMotionAvailabilityForTests({ ok: true, missing: [], hint: '' });
+  // CAPTION BURNING IS THE SUBJECT, NOT THE HOST. `ffmpegWithSubtitles()` probes the
+  // real binary for the `subtitles` filter, so on a CI runner with no ffmpeg it
+  // returned null, the render added a "can't burn captions" warning, and this suite
+  // failed on exactly the assertion it exists to hold (the burn/mux ORDER) while
+  // passing on a laptop that happens to have libass. A test seam that pins three of
+  // the four host capabilities is not isolated; pin the fourth.
+  setSubtitlesProbeForTests(() => true);
   setMotionLauncherForTests(async (viewport) => {
     viewports.push(viewport);
     return {

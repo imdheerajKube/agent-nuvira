@@ -1791,6 +1791,15 @@ export async function inspectMotion(req: MotionInspectRequest): Promise<MotionIn
   const scan = framesDir ? scanFrameDirectory(framesDir, req.framesPattern) : null;
   const sequence = scan ? measureFrameSequence(scan.files) : null;
 
+  // INPUT FIRST, ENVIRONMENT SECOND. "Pass html or frames_dir" is the answer whether
+  // or not this machine has ffmpeg, and installing ffmpeg would not fix an empty
+  // source — so naming the missing binary first sends the caller to the wrong task.
+  // (It also made an existing test host-dependent: on a CI runner without ffmpeg the
+  // empty-source case reported `missing ffmpeg` instead of `nothing to inspect`.)
+  const htmlInput = String(req.html ?? '');
+  if (!framesDir && !htmlInput.trim()) {
+    return { ok: false, error: 'motion: nothing to inspect — pass html (or html_path) or frames_dir.' };
+  }
   const availability = framesDir ? framesAvailability() : motionAvailability();
   if (!availability.ok) {
     return { ok: false, error: `motion: cannot inspect — missing ${availability.missing.join(', ')}.`, hint: availability.hint };
@@ -1798,10 +1807,7 @@ export async function inspectMotion(req: MotionInspectRequest): Promise<MotionIn
   if (framesDir && !sequence) {
     return { ok: false, error: `motion: ${frameScanHint(framesDir, req.framesPattern)}` };
   }
-  const html = String(req.html ?? '');
-  if (!framesDir && !html.trim()) {
-    return { ok: false, error: 'motion: nothing to inspect — pass html (or html_path) or frames_dir.' };
-  }
+  const html = htmlInput;
 
   const workDir = mkdtempSync(join(tmpdir(), 'nuvira-motion-inspect-'));
   const warnings: string[] = [];
