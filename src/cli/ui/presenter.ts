@@ -20,7 +20,7 @@ import { renderMarkdown, renderCard, type CardOptions } from './render.js';
 import { attachShellCards, gitDiffCard, toolCallCard, type ToolCallCardInfo } from './cards.js';
 import { resolveTheme, type Theme, type ThemeName, type ThemeRole } from './theme.js';
 import type { GitDiffPayload } from '../../tools/git-tool.js';
-import { LiveAnswer } from './answer-view.js';
+import { LiveAnswer, type LivePlanView } from './answer-view.js';
 import { isJsonLogMode } from '../../enterprise/log.js';
 
 export interface PresenterOptions {
@@ -157,8 +157,18 @@ export interface StreamMeta {
 export interface RunStreamOverrides extends CardSinkOverrides {
   /** Verbatim model tokens: the answer as it is written. */
   onToken?: (token: string) => void;
+  /** The model's working notes (`reasoning_content`), streamed verbatim. */
+  onReasoning?: (token: string) => void;
   /** The step the run is on — the executor's own progress line. */
   onProgress?: (line: string) => void;
+  /**
+   * The turn's plan, on every mutation — the live panel's content.
+   *
+   * It is a SEPARATE seam from `onProgress` because the plan is state and the
+   * progress line is an event: a `run_terminal` note replaces the previous note,
+   * while the plan stays on screen and updates in place for the whole turn.
+   */
+  onPlanChange?: (snapshot: { goal: string; steps: ReadonlyArray<{ description: string; status: 'pending' | 'running' | 'done' | 'blocked' }> }) => void;
 }
 
 /**
@@ -197,6 +207,15 @@ export interface RunStream {
 
 /** The note shown while the model is working and nothing has arrived yet. */
 export const THINKING_NOTE = 'thinking…';
+
+/**
+ * How much of a reasoning stream the live frame keeps.
+ *
+ * A model's `reasoning_content` can run to thousands of tokens. The frame shows
+ * the TAIL — what the model is working through NOW — because keeping the whole
+ * stream pushes the answer off-screen exactly when it arrives.
+ */
+const REASONING_TAIL_CHARS = 800;
 
 export function createRunStream(meta: StreamMeta = {}, opts: PresenterOptions = {}): RunStream {
   if (!shouldUseRichUi(opts)) {
@@ -239,6 +258,14 @@ export function createRunStream(meta: StreamMeta = {}, opts: PresenterOptions = 
         stream.setNote(undefined);
         stream.append(token);
       },
+      onReasoning: (token) => {
+        if (!started) {
+          started = true;
+          stream.begin(meta);
+        }
+        stream.setNote(undefined);
+        stream.appendReasoning(token);
+      },
       onProgress: (line) => noteFor(line),
       onToolCall: (phase, info) => {
         if (phase === 'started') {
@@ -261,6 +288,13 @@ export function createRunStream(meta: StreamMeta = {}, opts: PresenterOptions = 
         );
       },
       onGitDiff: (payload) => stream.card(gitDiffCard(payload)),
+      onPlanChange: (snapshot) => {
+        if (!started) {
+          started = true;
+          stream.begin(meta);
+        }
+        stream.setPlan(snapshot);
+      },
     },
     start: (note?: string) => noteFor(note ?? THINKING_NOTE),
     commit: (content) => {
@@ -292,6 +326,10 @@ export function createRunStream(meta: StreamMeta = {}, opts: PresenterOptions = 
 export class AnswerStream {
   private readonly r: Resolved;
   private text = '';
+  /** The model's working notes for the CURRENT step (display only). */
+  private reasoning = '';
+  /** The turn's plan, shown in the frame for the whole turn. */
+  private plan: LivePlanView | undefined;
   private meta: StreamMeta;
   private ink: Instance | null = null;
   private flushTimer: NodeJS.Timeout | null = null;
@@ -312,7 +350,27 @@ export class AnswerStream {
 
   /** Append streamed text. Safe to call with empty/undefined deltas. */
   append(delta: string | undefined): this {
-    if (delta) this.text += delta;
+    if (delta) {
+      // The answer has begun: the working notes have done their job, and keeping
+      // both in one frame makes a long turn scroll the reply off-screen.
+      this.reasoning = '';
+      this.text += delta;
+    }
+    this.scheduleFlush();
+    return this;
+  }
+
+  /**
+   * Append a reasoning delta (`reasoning_content`).
+   *
+   * Display only, and RICH OUTPUT ONLY: a piped/CI stream must keep exactly the
+   * bytes it produced before this channel existed, so off a terminal this is
+   * inert. The last {@link REASONING_TAIL_CHARS} characters are shown — a
+   * model's stream of thought is unbounded and the frame is not.
+   */
+  appendReasoning(delta: string | undefined): this {
+    if (!this.r.rich || !delta) return this;
+    this.reasoning = (this.reasoning + delta).slice(-REASONING_TAIL_CHARS);
     this.scheduleFlush();
     return this;
   }
@@ -320,6 +378,19 @@ export class AnswerStream {
   /** Replace the inline note (e.g. "thinking…" → "writing…"). */
   setNote(note: string | undefined): this {
     this.meta = { ...this.meta, note };
+    this.scheduleFlush();
+    return this;
+  }
+
+  /**
+   * Replace the plan panel's content.
+   *
+   * The panel is STATE, not an event: it stays in the frame across steps, across a
+   * long command, and across the model's own preamble being reset — which is the
+   * whole reason it exists (see `LivePlanView`).
+   */
+  setPlan(plan: LivePlanView | undefined): this {
+    this.plan = plan;
     this.scheduleFlush();
     return this;
   }
@@ -333,6 +404,7 @@ export class AnswerStream {
    */
   reset(): this {
     this.text = '';
+    this.reasoning = '';
     this.scheduleFlush();
     return this;
   }
@@ -413,6 +485,8 @@ export class AnswerStream {
       header: this.meta.header,
       headerColor: this.meta.headerColor,
       note: note ?? this.meta.note,
+      reasoning: this.reasoning,
+      ...(this.plan ? { plan: this.plan } : {}),
     });
   }
 

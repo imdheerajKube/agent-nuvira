@@ -58,6 +58,14 @@ issues/
 !/UPGRADE_ROADMAP.md
 !docs/benchmarks/INDEX.md
 !docs/benchmarks/m2b-*.md
+# The two benchmark reports from this session. They are the only place the endpoint and
+# documentation deltas (and the enterprise run's per-phase evidence) are written down; left
+# untracked they live in /tmp and disappear with it.
+!docs/BENCH_HEADTOHEAD_2026-10-27.md
+!docs/BENCH_ENTERPRISE_2026-10-27.md
+# The GREENFIELD head-to-head: one prompt, one pinned model, both arms graded by
+# the same script.
+!docs/BENCH_GREENFIELD_2026-10-30.md
 !docs/GATEWAY.md
 !docs/ASSESSMENT_CAPABILITY_GAPS.md
 !docs/IMPLEMENTATION_BRIEFS.md

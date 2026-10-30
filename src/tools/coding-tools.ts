@@ -52,6 +52,15 @@ import { sessionGrantCovers } from '../learning/session-grant.js';
 import { grantCategoryOfTool } from './capability-registry.js';
 
 /** Max characters returned by read_file (a 40MB file must not flood context). */
+/**
+ * Cap on the unified diff returned by a successful `edit_file`.
+ *
+ * The diff replaces a re-read, so it has to be cheap: a 4,000-line hunk set can
+ * run to hundreds of KB, which would cost more than the read it saves. Beyond
+ * the cap the model is told to read the range instead.
+ */
+const MAX_EDIT_DIFF_CHARS = 8_000;
+
 const MAX_READ_CHARS = 60000;
 /** Max lines returned per read_file call (mirrors the agent's own windowing). */
 const MAX_READ_LINES = 2000;
@@ -735,15 +744,27 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
     }, 'tool-loop');
   }
 
-  // Compute the diff once (used by dry_run and the multi-pair result).
-  const needDiff = multi || dryRun;
-  const diff = needDiff ? formatUnifiedDiff(content.split('\n'), working.split('\n'), { path: gated.rel }) : null;
+  // Compute the diff once — for EVERY successful result, single pair included.
+  //
+  // WHY (measured, 2026-10-25 head-to-head): the single-pair path used to answer
+  // "Written N chars. Re-read the file to verify the change." That sentence buys
+  // a whole model round-trip — the model re-reads the file it just edited, and on
+  // a long turn that read re-sends the entire thread. The diff is already computed
+  // here for `dry_run` and batches; returning it means the model can SEE the
+  // change instead of asking for the file again.
+  const diff = formatUnifiedDiff(content.split('\n'), working.split('\n'), { path: gated.rel });
+  /** A single hunk set is bounded, but a 4k-line diff still costs tokens — cap it. */
+  const shownDiff = diff === null
+    ? '(diff omitted — the file is too large to summarize inline; the edit itself applied)'
+    : diff.length > MAX_EDIT_DIFF_CHARS
+      ? `${diff.slice(0, MAX_EDIT_DIFF_CHARS)}\n[diff truncated at ${MAX_EDIT_DIFF_CHARS} chars — read the file range if you need the rest]`
+      : diff;
 
   if (dryRun) {
     return [
       `edit_file (dry_run): ${pairs.length} replacement(s) validated for '${gated.rel}' — nothing written.`,
       ...outcomes.map(formatOutcomeLine),
-      diff ? `\n${diff}` : '\n(diff omitted — file too large to summarize inline)',
+      `\n${shownDiff}`,
     ].join('\n');
   }
 
@@ -760,7 +781,13 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
     const what = o.occurrences! > 1 && pairs[0].allow_multiple
       ? `all ${o.occurrences} occurrences`
       : `lines ${o.startLine}${o.endLine !== o.startLine ? `–${o.endLine}` : ''}`;
-    result = `edit_file: applied to '${gated.rel}' (${what}). Written ${pairs[0].new_string.length} chars. Re-read the file to verify the change.`;
+    result = [
+      `edit_file: applied to '${gated.rel}' (${what}). Written ${pairs[0].new_string.length} chars.`,
+      // The hunk IS the verification of what was written. Saying "re-read the
+      // file" here is what turned one edit into two round-trips.
+      'The hunk below is exactly what changed — do NOT re-read the file to confirm it; re-read only if the hunk looks wrong.',
+      shownDiff,
+    ].join('\n');
   } else {
     const oldLineCount = logicalLineCount(content);
     const newLineCount = logicalLineCount(working);
@@ -768,7 +795,7 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
     result = [
       `edit_file: applied ${pairs.length} replacement(s) to '${gated.rel}' (${oldLineCount} → ${newLineCount} lines, ${delta >= 0 ? '+' : ''}${delta}).`,
       ...outcomes.map(formatOutcomeLine),
-      diff ? `\n${diff}` : '\n(diff omitted — file too large to summarize inline)',
+      `\n${shownDiff}`,
     ].join('\n');
   }
   if (!decidedAutonomously) return result;

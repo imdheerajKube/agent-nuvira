@@ -3,10 +3,12 @@
  *
  * Drawn from the live Aukat_check failure: a project virtualenv existed, but a
  * build ran against the system interpreter (missing PyQt6), produced a broken
- * app, and still reported success. These tests pin the two rules that prevent
- * it — canonical discovery/pinning, and the pre-run refusal of (a) installs
- * outside the project env and (b) builds against an interpreter lacking the
- * declared dependencies.
+ * app, and still reported success. These tests pin what actually prevents it —
+ * canonical discovery/pinning, the pre-run refusal of an INSTALL that would
+ * mutate an interpreter outside the project env, and a missing declared
+ * dependency reported as a fact beside a run/build instead of a refusal (a
+ * refusal cannot be satisfied when the wheel does not exist for this platform,
+ * and a bundler's silent failure is caught by launching its artifact).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -327,14 +329,84 @@ describe('guardCommandEnvironment — the live failure, prevented', () => {
     expect(v.action === 'proceed' && v.venv?.dir).toBe(join(root, '.venv'));
   });
 
-  it('refuses a BUILD when the interpreter lacks a declared dependency', () => {
+  it('names a missing dependency on a BUILD and lets it run (a bundler is caught by launching its artifact)', () => {
+    // The refusal this replaces predicted the Aukat_check failure but blocked
+    // the fix for it: on a machine where the wheel does not exist, the build
+    // could never be attempted at all. The gap is now a FACT beside the command,
+    // and the silent-failure case is caught by observation — a bundler that
+    // exits 0 around a missing import produces an artifact that CRASHES, which
+    // `effect-verification` launches and reports with its stderr.
     const root = tmp();
     makeVenv(root, '.venv');
     writeFileSync(join(root, 'requirements.txt'), 'PyQt6\npynput\n');
     const probe = (): string[] => ['PyQt6'];
     const v = guardCommandEnvironment('pyinstaller AukatCheck.spec', root, { probe });
-    expect(v.action).toBe('refuse');
-    expect(v.action === 'refuse' && v.reason).toContain('PyQt6');
+    expect(v.action).toBe('proceed');
+    expect(v.action === 'proceed' && v.note).toContain('PyQt6');
+    // The note says WHY proceeding is safe, so the turn can still be honest.
+    expect(v.action === 'proceed' && v.note).toContain('launched');
+  });
+
+  it('PROCEEDS for a run/test in the project venv that is missing an uninstallable dependency', () => {
+    // Measured: auditing a Windows-only wxPython app on macOS, where neither
+    // wxPython nor sherpa-onnx has a wheel, the guard refused EVERY interpreter
+    // call, so the review could not execute a single module. The project's own
+    // venv is the right interpreter even when it is incomplete — a run fails
+    // loudly on the import it actually needs, while a packaging command would
+    // bundle past it (that case still refuses, above).
+    const root = tmp();
+    makeVenv(root, '.venv');
+    writeFileSync(join(root, 'requirements.txt'), 'wxPython\nsherpa-onnx\n');
+    const v = guardCommandEnvironment('.venv/bin/python -m pytest -q', root, { probe: () => ['wxPython'] });
+    expect(v.action).toBe('proceed');
+    expect(v.action === 'proceed' && v.note).toContain('wxPython');
+  });
+
+  it('never decides from the command NAME — a packaging command gets the same fact as any other', () => {
+    // There used to be a hardcoded list of bundler names that kept the refusal.
+    // It was a gate on spelling: an unlisted bundler slipped through, and a
+    // listed one was blocked even when the missing wheel was irrelevant to the
+    // work. The band-aid is gone; the observable (launch the artifact) is the
+    // check, for every build command alike.
+    const root = tmp();
+    makeVenv(root, '.venv');
+    writeFileSync(join(root, 'requirements.txt'), 'wxPython\n');
+    for (const cmd of ['pyinstaller app.spec', 'python -m PyInstaller app.spec', 'nuitka app.py']) {
+      const v = guardCommandEnvironment(cmd, root, { probe: () => ['wxPython'] });
+      // Never refused. (`nuitka` is outside the guard's Python-toolchain shape,
+      // so it is `not-applicable` — which is also a pass-through, and is the
+      // honest answer: the guard does not pretend to know that program.)
+      expect(v.action, cmd).not.toBe('refuse');
+      if (v.action === 'proceed' && v.note) expect(v.note).toContain('wxPython');
+    }
+  });
+
+  it('reads a DECORATED command, so the documented bypass works from inside one', () => {
+    // The refusal message tells the model `NUVIRA_ENV_GUARD=off` bypasses the
+    // guard — but the variable was set for the CHILD process only, so the model
+    // that wrote exactly that (three times, in one measured turn) kept being
+    // refused, and could not see why. The command's own assignment counts.
+    const root = tmp();
+    writeFileSync(join(root, 'requirements.txt'), 'PyQt6\n');
+    const v = guardCommandEnvironment('NUVIRA_ENV_GUARD=off python3 -m unittest tests.x', root);
+    expect(v.action).toBe('not-applicable');
+    // …and an assignment the user did NOT write does not switch anything off.
+    expect(guardCommandEnvironment('FOO=1 python3 -m unittest tests.x', root).action).toBe('proceed');
+  });
+
+  it('sees a decorated interpreter as a Python command at all', () => {
+    // Before: the toolchain check read the raw first token, so an assignment or
+    // a wrapper hid the interpreter from the guard entirely — it decided
+    // `not-applicable` for a command that really does run project code.
+    const root = tmp();
+    makeVenv(root, '.venv');
+    writeFileSync(join(root, 'requirements.txt'), 'PyQt6\n');
+    for (const cmd of ['sudo python3 main.py', 'FOO=1 python3 main.py', 'env BAR=baz pytest -q']) {
+      expect(isPythonToolchainCommand(cmd), cmd).toBe(true);
+      const v = guardCommandEnvironment(cmd, root, { probe: () => ['PyQt6'] });
+      // Proceeding is the rule for a run; the point is that the guard SAW it.
+      expect(v.action === 'proceed' && v.note, cmd).toContain('PyQt6');
+    }
   });
 
   it('proceeds with a build when the interpreter has every dependency', () => {

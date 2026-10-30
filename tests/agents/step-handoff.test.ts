@@ -408,4 +408,15 @@ describe('deliverablesNamedIn', () => {
     expect(found.length).toBeLessThanOrEqual(8);
     expect(new Set(found).size).toBe(found.length);
   });
+
+  it('reads a very long message without backtracking (gateway e2e "very long message" hang)', () => {
+    // Measured: the single-pattern scan backtracked EXPONENTIALLY on a long run
+    // of word characters with no dot, so the gateway e2e case of a 10 000-char
+    // message sat at 100 % CPU until the process was killed. This helper runs on
+    // every user message in the tool loop, so the scan must stay linear.
+    const started = Date.now();
+    expect(deliverablesNamedIn('a'.repeat(10_000))).toEqual([]);
+    expect(deliverablesNamedIn('b'.repeat(50_000))).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
 });

@@ -2256,6 +2256,104 @@ describe('self-review — the wrong-direction catch', () => {
     });
     expect(events.filter((e) => e.kind === 'gate' && e.gate === 'self-review')).toHaveLength(0);
   });
+
+  it('does NOT fire after an ACCEPTED finish — `finish` already did the review', async () => {
+    // Measured 2026-10-30 (DEV-FEATURE, 3 runs): the nudge fired after an accepted
+    // `finish` in 3/3 runs, and each time the model re-read a file it had just
+    // written and re-called `suggest_followups` — one model round-trip per run for
+    // no finding. The completion contract has already judged the claim against the
+    // turn's own ledgers, so re-reading the result is a second opinion on a closed
+    // question, paid for with the most expensive thing the loop spends.
+    const { events, sink } = collect();
+    const files = ['src/a.js', 'src/b.js', 'src/c.js', 'src/d.js', 'src/e.js'];
+    const deps: ToolLoopDeps = {
+      callModel: vi.fn(async (messages: readonly { role: string; content?: string }[]) => {
+        const tools = messages.filter((m) => m.role === 'tool').length;
+        if (tools < files.length) {
+          return {
+            content: '',
+            toolCalls: [{ id: `e${tools}`, name: 'edit_file', arguments: { path: files[tools], old_string: 'x', new_string: 'y' } }],
+          };
+        }
+        if (tools === files.length) {
+          return { content: '', toolCalls: [{ id: 'v1', name: 'run_terminal', arguments: { command: 'npm test' } }] };
+        }
+        if (tools === files.length + 1) {
+          return { content: '', toolCalls: [{ id: 'f1', name: 'finish', arguments: { summary: 'Refactor complete.', requirements: [] } }] };
+        }
+        return { content: 'Refactor complete and the tests pass.', toolCalls: [] };
+      }),
+      executeTool: vi.fn(async (name: string) => {
+        if (name === 'finish') return 'Completion accepted — 0/0 requirement(s) satisfied, 0 unknown.';
+        return name === 'run_terminal' ? 'all tests passed' : 'ok';
+      }),
+      onEvent: vi.fn(),
+    };
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'refactor the calculator so every operation works, and make sure the tests pass' }],
+      context: ctx,
+      deps,
+      onTraceEvent: sink,
+    });
+
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'self-review')).toHaveLength(0);
+    expect(result.content).toContain('Refactor complete');
+  });
+
+  it('does NOT re-ask for verification after an accepted finish — one ledger, one verdict', async () => {
+    // Measured 2026-10-30 (DEV-FEATURE): a suite that had run and PASSED was called
+    // unverified, and the model re-ran it three times plus two `finish` calls. The
+    // two readers of the same check ledger — `judgeCompletion` and this gate —
+    // disagreed, so the gate re-opened a question the contract had settled.
+    //
+    // The case pinned here is the honest one: files changed, NO check run, and the
+    // model ends with `verified:false` naming the gap. `finish` accepts that ending
+    // on purpose (honesty over greenness); nagging it afterwards turns candour into
+    // an extra step.
+    const { events, sink } = collect();
+    const files = ['src/a.js', 'src/b.js', 'src/c.js', 'src/d.js', 'src/e.js'];
+    const deps: ToolLoopDeps = {
+      callModel: vi.fn(async (messages: readonly { role: string; content?: string }[]) => {
+        const tools = messages.filter((m) => m.role === 'tool').length;
+        if (tools < files.length) {
+          return {
+            content: '',
+            toolCalls: [{ id: `e${tools}`, name: 'edit_file', arguments: { path: files[tools], old_string: 'x', new_string: 'y' } }],
+          };
+        }
+        if (tools === files.length) {
+          return {
+            content: '',
+            toolCalls: [
+              {
+                id: 'f1',
+                name: 'finish',
+                arguments: { summary: 'Edits applied; nothing was run.', verified: false, unmet: ['the test suite was not run'] },
+              },
+            ],
+          };
+        }
+        return { content: 'Applied the edits; the suite was not run, as flagged.', toolCalls: [] };
+      }),
+      executeTool: vi.fn(async (name: string) =>
+        name === 'finish'
+          ? 'Completion accepted — 0/0 requirement(s) satisfied, 1 unmet: the test suite was not run.'
+          : 'ok',
+      ),
+      onEvent: vi.fn(),
+    };
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'refactor the calculator so every operation works' }],
+      context: ctx,
+      deps,
+      onTraceEvent: sink,
+    });
+
+    expect(events.filter((e) => e.kind === 'gate' && e.gate === 'verification')).toHaveLength(0);
+    expect(result.content).toContain('the suite was not run');
+  });
 });
 
 // ─── ZERO-ACTION gate ───────────────────────────────────────────────────────
@@ -2299,15 +2397,27 @@ describe('tool loop — ZERO-ACTION gate (a directed work request answered with 
   });
 
   it('does NOT fire when a tool already succeeded (a read-only answer)', async () => {
+    const threads: Array<Array<{ role: string; content: string }>> = [];
     const deps = mockDeps(
       [
         { content: '', toolCalls: [{ id: 'r1', name: 'read_file', arguments: { path: 'math.js' } }] },
         { content: 'Here is what math.js does.', toolCalls: [] },
+        { content: 'Here is what math.js does.', toolCalls: [] },
       ],
       async () => 'const x = 1;',
     );
+    const callModel = deps.callModel;
+    deps.callModel = async (messages, schemas, onToken, signal, onReasoning) => {
+      threads.push(messages.map((m) => ({ role: m.role, content: String(m.content ?? '') })));
+      return callModel(messages, schemas, onToken, signal, onReasoning);
+    };
     const result = await runToolLoop({ messages: [{ role: 'user', content: WORK_ASK }], context: ctx, deps });
-    expect(deps.callModel).toHaveBeenCalledTimes(2);
+    // The ZERO-ACTION gate stays silent (a read succeeded, so the turn is not a
+    // non-answer) — that is what this test is about. The COMPLETION gate does fire:
+    // the ask said "write test.js … and run the test", and a read plus a description
+    // leaves both outstanding. One bounded nudge, naming the check that never ran.
+    expect(threads).toHaveLength(3);
+    expect(threads[2].some((m) => m.content.includes('the test suite must actually RUN'))).toBe(true);
     // The flag is set only when nothing was done (the codebase convention for
     // honesty flags); a turn that acted leaves it absent.
     expect(result.noActionTaken).toBeUndefined();
@@ -2861,6 +2971,11 @@ describe('tool loop — mid-turn model handoff (P2)', () => {
       ],
       context: ctx,
       deps: { callModel, executeTool: vi.fn(), onEvent, requestModelSwitch, threadBudgetAfterSwitch },
+      // A CACHING route on purpose: the one-shot compaction asserted below is the
+      // strategy for a provider that keeps a prompt prefix cache. On an unknown or
+      // non-caching route the same breach is paid with per-call trimming (see
+      // `learning/prompt-cache.ts` and tests/tools/tool-loop-prefix-cache.test.ts).
+      servedRoute: () => ({ providerType: 'deepseek', model: 'deepseek-flash' }),
       // The budget the turn BEGAN with — large enough that nothing is trimmed yet.
       threadBudgetChars: 5_000_000,
       maxSteps: 30,
@@ -2873,12 +2988,17 @@ describe('tool loop — mid-turn model handoff (P2)', () => {
     // The change is DISCLOSED, both numbers named — a budget can decide whether a
     // turn fits, so a reader must be able to see it move.
     expect(onEvent.mock.calls.map((c) => String(c[0])).some((l) => l.includes('5000K → 30K'))).toBe(true);
-    // ...and APPLIED: the replacement model's own prompt carries the trimmed
-    // result, not the 40K one the failed model was given.
+    // ...and APPLIED: the replacement model's prompt no longer carries the 40K
+    // result the failed model was given. Since the 2026-10-25 cache fix the old
+    // span is COLLAPSED into one digest message (one prefix rewrite per breach,
+    // not one per call), so the bound is what this asserts — a prompt that fits
+    // the 30K window, with the ask intact and the compacted output recoverable.
     const lastThread = callModel.mock.calls.at(-1)![0] as Array<{ role: string; content: string }>;
-    const toolMsg = lastThread.find((m) => m.role === 'tool');
-    expect(toolMsg).toBeDefined();
-    expect(toolMsg!.content.length).toBeLessThan(bigResult.length);
+    const totalChars = lastThread.reduce((a, m) => a + m.content.length, 0);
+    expect(totalChars).toBeLessThan(bigResult.length);
+    expect(lastThread.some((m) => m.content.includes('[context compacted'))).toBe(true);
+    // The ask itself is never compacted away.
+    expect(lastThread.map((m) => m.content).join('\n')).toContain('do the work');
   });
 
   it('leaves the budget alone when the caller reports no window after a switch', async () => {
@@ -3098,10 +3218,129 @@ describe('tool loop — delivery persistence + named termination (P3)', () => {
       deps: { callModel, executeTool: vi.fn(async () => 'ok') },
       maxSteps: 2,
       maxContinuations: 0,
+      // This test pins the pre-fix ENDING; the progress-gated extension is
+      // covered separately below (it would keep this turn alive otherwise).
+      maxStepExtensions: 0,
     });
 
     expect(result.bounded).toBe(true);
     expect(result.termination).toBe('budget-exhausted');
+  });
+
+  it('extends past the continuation budget while the plan is open and work keeps landing', async () => {
+    // MEASURED (trace-1792233823139-egmqc9): a healthy pinned model was still
+    // writing and verifying when the blind continuation count ran out at 80
+    // steps, and the turn ended with 2 of 9 plan steps open. The extension is
+    // gated on the PLAN being open and on NEW successful work, so a live turn
+    // keeps its road while an aimless loop does not.
+    let n = 0;
+    const callModel = vi.fn(async (): Promise<StepResponse> => {
+      n += 1;
+      // A DIFFERENT read each step. The extension is gated on NEW successful
+      // work, and an identical repeat of a read-only call on an unchanged
+      // workspace is now refused by the waste guard — correctly, because it
+      // returns exactly what the first call returned (see
+      // tool-loop-waste-guard.test.ts). This test pins the extension road, so it
+      // has to model reads that are actually new.
+      return { content: '', toolCalls: [{ id: `c${n}`, name: 'list_dir', arguments: { path: `./dir-${n}` } }] };
+    });
+    const executeTool = vi.fn(async () => 'ok');
+    const openPlan: ToolContext = {
+      ...ctx,
+      planStore: {
+        snapshot: () => ({
+          goal: 'two-repo comparison',
+          revision: 1,
+          steps: [
+            { id: 'survey', description: 'Survey both repos', status: 'done' },
+            { id: 'write', description: 'Write the comparison doc', status: 'pending' },
+          ],
+        }),
+      } as unknown as ToolContext['planStore'],
+    };
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: openPlan,
+      deps: { callModel, executeTool, onEvent: vi.fn() },
+      maxSteps: 2,
+      maxContinuations: 0,
+      continuationSteps: 1,
+      maxStepExtensions: 2,
+    });
+
+    // 2 base + 2 extensions × 1 step — the turn used the whole enhanced road.
+    expect(callModel).toHaveBeenCalledTimes(4);
+    expect(result.bounded).toBe(true);
+    expect(result.termination).toBe('budget-exhausted');
+    // The ending is VISIBLE and actionable rather than a bare "step limit".
+    expect(result.content).toContain('step ceiling (4 model calls)');
+    expect(result.content).toContain('harness limit');
+    expect(result.content).toContain('still open: Write the comparison doc');
+    expect(result.content).toContain('continue');
+  });
+
+  it('does not extend a turn whose tool calls all fail', async () => {
+    let n = 0;
+    const callModel = vi.fn(async (): Promise<StepResponse> => {
+      n += 1;
+      return { content: '', toolCalls: [{ id: `c${n}`, name: 'run_terminal', arguments: { command: 'false' } }] };
+    });
+    const executeTool = vi.fn(async () => {
+      throw new Error('command failed');
+    });
+    const openPlan: ToolContext = {
+      ...ctx,
+      planStore: {
+        snapshot: () => ({
+          goal: 'g',
+          revision: 1,
+          steps: [{ id: 'a', description: 'act', status: 'pending' }],
+        }),
+      } as unknown as ToolContext['planStore'],
+    };
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: openPlan,
+      deps: { callModel, executeTool, onEvent: vi.fn() },
+      // ONE step isolates the extension gate from the loop's separate
+      // "same action failed twice → diagnose" credit (+1 step).
+      maxSteps: 1,
+      maxContinuations: 0,
+      maxStepExtensions: 4,
+    });
+
+    // No successful work → no extension: the bound stays 1.
+    expect(callModel).toHaveBeenCalledTimes(1);
+    expect(result.bounded).toBe(true);
+  });
+
+  it('does not extend a turn whose plan is already complete', async () => {
+    let n = 0;
+    const callModel = vi.fn(async (): Promise<StepResponse> => {
+      n += 1;
+      return { content: '', toolCalls: [{ id: `c${n}`, name: 'list_dir', arguments: { path: '.' } }] };
+    });
+    const finishedPlan: ToolContext = {
+      ...ctx,
+      planStore: {
+        snapshot: () => ({
+          goal: 'g',
+          revision: 1,
+          steps: [{ id: 'a', description: 'act', status: 'done' }],
+        }),
+      } as unknown as ToolContext['planStore'],
+    };
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: finishedPlan,
+      deps: { callModel, executeTool: vi.fn(async () => 'ok'), onEvent: vi.fn() },
+      maxSteps: 2,
+      maxContinuations: 0,
+      maxStepExtensions: 4,
+    });
+
+    expect(callModel).toHaveBeenCalledTimes(2);
+    expect(result.bounded).toBe(true);
   });
 
   it('names a delivered turn and a cancelled turn explicitly', async () => {

@@ -337,7 +337,7 @@ export class ConfigCommand extends BaseCommand {
       if (key === 'defaultProvider') {
         this.configManager.save({ defaultProvider: value as ProviderType });
       } else {
-        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  providers.<name>.billingTier paid|free|subscription|unknown  (what this account is billed)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)\n  routing.contextWindows.<model> 16384  (M2.5 context preflight)\n  routing.nuviraSidecar.enabled  (P5 sidecar flag, default false)\n  routing.compression.enabled  (M4.4 conservative compression, default false)`);
+        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  providers.<name>.billingTier paid|free|subscription|unknown  (what this account is billed)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  turn.maxMinutes 30  (how long ONE turn may run; 0 = no wall clock)\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)\n  routing.contextWindows.<model> 16384  (M2.5 context preflight)\n  routing.nuviraSidecar.enabled  (P5 sidecar flag, default false)\n  routing.compression.enabled  (M4.4 conservative compression, default false)`);
         return;
       }
     } else if (parts.length === 2 && parts[0] === 'history') {
@@ -744,6 +744,24 @@ export class ConfigCommand extends BaseCommand {
       this.configManager.save({
         routing: { gatewayTelemetry: { ...existing, [field]: typedValue } },
       } as Partial<BuffConfig>);
+    } else if (key === 'turn.maxMinutes') {
+      // WALL-CLOCK BUDGET — how long one turn may run (`learning/turn-budget.ts`).
+      // Validated here because a bad number is silent: `NaN` would read as "not set"
+      // and the default would quietly apply, which is the opposite of what a user
+      // typing "about 90" wants.
+      const minutes = Number(value.trim());
+      if (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440) {
+        logger.error(
+          `Invalid turn.maxMinutes: "${value}". Use a whole number of minutes (0 = no wall clock, 1–1440).`,
+        );
+        return;
+      }
+      this.configManager.save({ turn: { maxMinutes: minutes } } as Partial<BuffConfig>);
+      logger.info(
+        minutes === 0
+          ? '  The turn wall clock is OFF — step budgets only, as before.'
+          : `  Each turn may run ${minutes} minute(s); the last ~20% is reserved for closing the deliverable.`,
+      );
     } else if (parts[0] === 'mcp') {
       // MCP configuration surface (`src/mcp/settings.ts` owns defaults + bounds).
       // This is the "nothing requires code" rule made literal: caps, auto-connect,
@@ -780,7 +798,7 @@ export class ConfigCommand extends BaseCommand {
     } else if (key === 'dashboard.cwd.clear') {
       this.configManager.save({ dashboard: { cwd: undefined } } as Partial<BuffConfig>);
     } else {
-      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  providers.<name>.billingTier paid|free|subscription|unknown\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  fallback.enabled\n  fallback.providers\n  modality.image.provider\n  modality.image.model\n  dashboard.cwd "<dir>"  (working dir for unattached dashboard chat turns)\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled\n  routing.compression.enabled  (M4.4, DEFAULT FALSE)\n  routing.gatewayTelemetry.enabled  (M7.4, DEFAULT FALSE)`);
+      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  providers.<name>.billingTier paid|free|subscription|unknown\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  turn.maxMinutes 30  (how long ONE turn may run; 0 = no wall clock)\n  fallback.enabled\n  fallback.providers\n  modality.image.provider\n  modality.image.model\n  dashboard.cwd "<dir>"  (working dir for unattached dashboard chat turns)\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled\n  routing.compression.enabled  (M4.4, DEFAULT FALSE)\n  routing.gatewayTelemetry.enabled  (M7.4, DEFAULT FALSE)`);
       return;
     }
 

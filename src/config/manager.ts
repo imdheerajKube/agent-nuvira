@@ -355,6 +355,17 @@ export class ConfigManager {
       };
     }
 
+    // Merge the turn wall-clock budget. `0` is meaningful ("no wall clock"), so
+    // the value is copied when it is DEFINED rather than when it is truthy — a
+    // truthiness check here would resurrect the default on every restart, which is
+    // the setting silently not applying.
+    if (userConfig.turn) {
+      config.turn = {
+        ...(config.turn || {}),
+        ...(userConfig.turn.maxMinutes !== undefined ? { maxMinutes: userConfig.turn.maxMinutes } : {}),
+      };
+    }
+
     // Merge toolsets config (deep per toolset — separate toggles preserve
     // each other; a missing entry means enabled).
     if (userConfig.tools) {
@@ -762,6 +773,13 @@ export class ConfigManager {
         ...(config.skills.disabled !== undefined ? { disabled: config.skills.disabled } : {}),
         ...(config.skills.registries !== undefined ? { registries: config.skills.registries } : {}),
       };
+    }
+
+    if (config.turn) {
+      // WALL-CLOCK BUDGET (`learning/turn-budget.ts`). Whole-key replace: `0` is a
+      // meaningful value ("no wall clock"), so it must survive a save rather than be
+      // read as "not set" — which is exactly how a budget silently stops applying.
+      this.config.turn = { ...(this.config.turn || {}), ...config.turn };
     }
 
     if (config.modality) {

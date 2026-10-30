@@ -47,6 +47,70 @@ export interface UnverifiedPath {
   at: number;
 }
 
+/**
+ * How deeply a path was examined — the one dimension the ledger never held.
+ *
+ * WHY DEPTH AND NOT A BOOLEAN. "I saw this file in a directory listing", "I read
+ * it" and "I ran something against it" are three different amounts of evidence,
+ * and the whole cost of a re-audit is re-establishing conclusions that were only
+ * ever drawn at the shallow end. Collapsing them into `seen: true` would let a
+ * `list_dir` hit look like a read conclusion, which is the more expensive lie:
+ * the next run skips the file believing someone read it.
+ *
+ * Ordered: `listed` < `read` < `executed`. Depth only ever ESCALATES while the
+ * file is unchanged — a later listing cannot demote a read.
+ */
+export type CoverageDepth = 'listed' | 'read' | 'executed';
+
+/** Rank for {@link CoverageDepth}; higher is deeper. */
+const DEPTH_RANK: Record<CoverageDepth, number> = { listed: 0, read: 1, executed: 2 };
+
+/**
+ * What the ledger remembers about one examined path.
+ *
+ * `size` + `mtime` are the STALENESS STAMP, not decoration: they are what lets a
+ * later run tell "the conclusion recorded here still describes this file" from
+ * "the file changed and that conclusion is about older content". A content hash
+ * would be stricter, but this runs on the read path of every turn, and a re-stat
+ * is cheap enough to do without thinking about it.
+ */
+export interface CoverageEntry {
+  /** How deeply it was examined, at the recorded content. */
+  depth: CoverageDepth;
+  /** The conclusion reached, when the caller recorded one. Never trusted once stale. */
+  verdict?: string;
+  /** Which run examined it (`trace-…` when the caller has one). */
+  runId: string;
+  /** Bytes at record time — part of the staleness stamp. */
+  size: number;
+  /** mtime (ms) at record time — part of the staleness stamp. */
+  mtime: number;
+  /** Epoch ms this entry was last written. */
+  at: number;
+}
+
+/** One path to record as examined. The caller supplies what it actually did. */
+export interface CoverageNote {
+  path: string;
+  depth: CoverageDepth;
+  /** What was concluded at this depth (`"no null check on the token"`). */
+  verdict?: string;
+}
+
+/**
+ * A coverage entry as a READER sees it: the record plus whether it still holds.
+ *
+ * `stale` is computed from the filesystem on every read -- the stored entry is
+ * never mutated for it, because the fact "this WAS read at that content" stays
+ * true forever. What changes is whether a later run may rely on the conclusion,
+ * and that is the whole point of keeping the two apart.
+ */
+export interface CoverageView extends CoverageEntry {
+  path: string;
+  /** True when the file is gone or its stamp no longer matches the record. */
+  stale: boolean;
+}
+
 /** One project's working state — everything worth remembering between turns. */
 export interface ProjectWorkingState {
   /** Absolute project path (the ledger key). */
@@ -76,6 +140,17 @@ export interface ProjectWorkingState {
    * re-derive next turn.
    */
   openIssues: string[];
+  /**
+   * Paths already EXAMINED in this project, keyed project-relative (see
+   * {@link CoverageEntry}). This is the record that makes a second run over the
+   * same tree cheaper than the first: it says what was looked at, how deeply, and
+   * what was concluded, so the work is not re-derived from zero after a crash, a
+   * new turn or a new conversation.
+   *
+   * Optional on purpose: a ledger written before this field existed parses as
+   * "nothing recorded" rather than as "nothing examined".
+   */
+  coverage?: Record<string, CoverageEntry>;
   /** How many turns carried a regression signal ("still", "same issue"...). */
   corrections: number;
   /** Epoch ms of the last write. */
@@ -102,6 +177,13 @@ export interface TurnRecord {
   unverifiedPaths?: readonly string[];
   /** The user's message for this turn (scanned for a regression signal). */
   userMessage?: string;
+  /**
+   * The run id to stamp on coverage the turn adds (`trace-…` when the surface has
+   * one). Recorded so a coverage entry, a finding in the trace and the turn's
+   * report can be tied to the same run — an unattributed ledger is only a
+   * reminder that something was looked at, not evidence of what was concluded.
+   */
+  runId?: string;
 }
 
 interface WorkingStateFile {
@@ -120,6 +202,20 @@ export const MAX_ISSUES = 8;
 export const MAX_TOOLS = 24;
 /** Cap on outstanding unverified paths (oldest drop first). */
 export const MAX_UNVERIFIED_PATHS = 40;
+/** Cap on remembered examined paths (oldest drop first). */
+export const MAX_COVERAGE = 300;
+/**
+ * How many mid-turn coverage notes accumulate before they are flushed to disk.
+ *
+ * The point of recording coverage DURING the turn rather than at its end is the
+ * run that never reaches its end: a crash, a cancelled turn or a quota kill has
+ * no end-of-turn write, and those are exactly the runs where knowing what had
+ * already been examined saves the most. Batching keeps the write cost off the
+ * read path; `COVERAGE_FLUSH_MS` bounds how much a hard kill can lose.
+ */
+const COVERAGE_FLUSH_NOTES = 20;
+/** Flush pending coverage at most this often, even when the note count is low. */
+const COVERAGE_FLUSH_MS = 4_000;
 /** Git read timeout — a repository read must never stall a turn. */
 const GIT_TIMEOUT_MS = 2_500;
 
@@ -144,6 +240,9 @@ function readFileSafe(): WorkingStateFile {
     // `unverifiedPaths`, and every reader treats it as a list.
     for (const project of Object.values(data.projects)) {
       if (!Array.isArray(project.unverifiedPaths)) project.unverifiedPaths = [];
+      // Same for the coverage map: absent means "this ledger predates it", and a
+      // reader must not be handed `undefined` where it expects an object.
+      if (!project.coverage || typeof project.coverage !== 'object') project.coverage = {};
     }
     return data;
   } catch {
@@ -240,6 +339,247 @@ export function getWorkingState(projectPath: string): ProjectWorkingState | null
   return data.projects[normalizeProjectPath(projectPath)] ?? null;
 }
 
+/** The empty ledger entry for a project — one definition, so every creator agrees. */
+function emptyState(key: string, now: number): ProjectWorkingState {
+  return {
+    projectPath: key,
+    filesTouched: [],
+    toolsUsed: [],
+    turns: 0,
+    unverifiedEdits: 0,
+    unverifiedPaths: [],
+    openIssues: [],
+    corrections: 0,
+    coverage: {},
+    updatedAt: now,
+  };
+}
+
+/**
+ * A project-relative key for a path, or null when it lies outside the project.
+ *
+ * Keying relative is what makes the record survive a clone, a rename of the
+ * checkout's parent, or a run started from a subdirectory — an absolute key would
+ * silently stop matching and the ledger would read as empty at the exact moment
+ * it was most needed. A path outside the project (`~/.nuvira/...`, `/etc/...`)
+ * has no project-relative identity and is refused rather than recorded under a
+ * misleading key.
+ */
+function coverageKey(root: string, path: string): string | null {
+  if (!path || typeof path !== 'string') return null;
+  try {
+    const abs = isAbsolute(path) ? path : resolve(root, path);
+    const rel = relative(root, abs).split('\\').join('/');
+    if (!rel || rel === '.' || rel.startsWith('../')) return null;
+    return rel;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The staleness stamp of a path on disk, or null when it is not a readable file.
+ *
+ * A directory, a missing path or an unreadable one yields null, and a null stamp
+ * means the caller records NOTHING: "examined" is a claim about content, and a
+ * path whose content could not be stat'ed was not examined.
+ */
+function fileStamp(abs: string): { size: number; mtime: number } | null {
+  try {
+    const stat = statSync(abs);
+    if (!stat.isFile()) return null;
+    return { size: stat.size, mtime: Math.round(stat.mtimeMs) };
+  } catch {
+    return null;
+  }
+}
+
+/** Keep the newest {@link MAX_COVERAGE} entries (oldest examined drop first). */
+function capCoverage(map: Record<string, CoverageEntry>): Record<string, CoverageEntry> {
+  const entries = Object.entries(map);
+  if (entries.length <= MAX_COVERAGE) return map;
+  entries.sort((a, b) => b[1].at - a[1].at);
+  return Object.fromEntries(entries.slice(0, MAX_COVERAGE));
+}
+
+/**
+ * Merge coverage notes into a map, preserving what the notes do not overwrite.
+ *
+ * The three rules, and why each one is a decision rather than a detail:
+ *  1. A path that is not a file on disk is dropped — see {@link fileStamp}.
+ *  2. Depth only escalates WHILE THE FILE IS UNCHANGED. When the stamp differs,
+ *     the old depth described different content, so it is replaced by what the
+ *     note actually did, and a stale `verdict` is dropped rather than carried
+ *     forward onto a file it was never about.
+ *  3. `runId` is the note's, so a reader can find the run that made the claim.
+ */
+function mergeCoverage(
+  map: Record<string, CoverageEntry>,
+  notes: readonly CoverageNote[],
+  runId: string,
+  root: string,
+  now: number,
+): Record<string, CoverageEntry> {
+  const next: Record<string, CoverageEntry> = { ...map };
+  for (const note of notes) {
+    const key = coverageKey(root, note?.path);
+    if (!key) continue;
+    const stamp = fileStamp(resolve(root, key));
+    if (!stamp) continue;
+    const prev = next[key];
+    const unchanged = Boolean(prev) && prev!.size === stamp.size && prev!.mtime === stamp.mtime;
+    const depth =
+      unchanged && DEPTH_RANK[prev!.depth] > DEPTH_RANK[note.depth] ? prev!.depth : note.depth;
+    const entry: CoverageEntry = {
+      depth,
+      runId: runId || prev?.runId || 'unattributed',
+      size: stamp.size,
+      mtime: stamp.mtime,
+      at: now,
+    };
+    // A verdict survives only on unchanged content; an inherited one would be a
+    // conclusion about a file the current content is not.
+    if (note.verdict) entry.verdict = note.verdict;
+    else if (unchanged && prev?.verdict) entry.verdict = prev.verdict;
+    next[key] = entry;
+  }
+  return capCoverage(next);
+}
+
+// ─── Coverage — what this project has already had examined ──────────────────
+
+/** One project's unflushed coverage notes. */
+interface PendingCoverage {
+  notes: CoverageNote[];
+  runId: string;
+  since: number;
+}
+
+const pendingCoverage = new Map<string, PendingCoverage>();
+
+/**
+ * Record that a path was examined, DURING the turn.
+ *
+ * The reason this exists beside {@link recordWorkingState}: a run that dies —
+ * crash, cancel, quota, timeout — never reaches its end-of-turn write, and the
+ * half-finished run is precisely the one whose findings a next run most needs. So
+ * notes accumulate in memory and flush on a small bound instead of waiting for a
+ * turn that may never finish. Best-effort throughout: recording coverage must
+ * never be the thing that breaks a turn.
+ *
+ * `depth` is the caller's HONEST report of what happened: a `read_file` result is
+ * `read`, a check that exercised the file is `executed`, a `list_dir` is `listed`.
+ */
+export function noteCoverage(
+  projectPath: string,
+  note: CoverageNote | readonly CoverageNote[],
+  opts: { runId?: string; root?: string; now?: number } = {},
+): void {
+  try {
+    if (!projectPath) return;
+    // The same rule the ledger states for its own writes: a home directory or a
+    // filesystem root is not a project, so the block would claim "carried from
+    // previous turns in THIS project" about a container of unrelated checkouts.
+    if (!isProjectLedgerDir(projectPath)) return;
+    const key = normalizeProjectPath(projectPath);
+    const notes = (Array.isArray(note) ? [...note] : [note]) as CoverageNote[];
+    if (notes.length === 0) return;
+    const now = opts.now ?? Date.now();
+    const pending = pendingCoverage.get(key) ?? {
+      notes: [],
+      // `root` is the project the RELATIVE keys are measured against; it defaults
+      // to the ledger key, and a caller running in a subdirectory passes it so
+      // `src/a.ts` is recorded once, not once per working directory.
+      runId: opts.runId ?? 'unattributed',
+      since: now,
+    };
+    pending.notes.push(...notes);
+    if (opts.runId) pending.runId = opts.runId;
+    pendingCoverage.set(key, pending);
+    const due = pending.notes.length >= COVERAGE_FLUSH_NOTES || now - pending.since >= COVERAGE_FLUSH_MS;
+    if (due) flushCoverage(key, opts.root);
+  } catch {
+    // Best-effort — coverage bookkeeping never breaks a turn.
+  }
+}
+
+/**
+ * Write the pending coverage for one project (or all of them) to the ledger.
+ *
+ * Called on the flush bounds above and at the end of a turn. It creates the
+ * project's entry when the ledger has none yet: a first run that only READ files
+ * still has something worth remembering, and dropping its notes because nothing
+ * was edited would be the ledger forgetting on a technicality.
+ */
+export function flushCoverage(projectPath?: string, root?: string): void {
+  const keys = projectPath ? [normalizeProjectPath(projectPath)] : [...pendingCoverage.keys()];
+  for (const key of keys) {
+    const pending = pendingCoverage.get(key);
+    if (!pending || pending.notes.length === 0) {
+      pendingCoverage.delete(key);
+      continue;
+    }
+    pendingCoverage.delete(key);
+    try {
+      const data = readFileSafe();
+      const now = Date.now();
+      const state = data.projects[key] ?? emptyState(key, now);
+      state.coverage = mergeCoverage(state.coverage ?? {}, pending.notes, pending.runId, root ?? key, now);
+      state.updatedAt = now;
+      data.projects[key] = state;
+      writeFileSafe(data);
+    } catch {
+      // Best-effort — a lost flush costs one batch, never the turn.
+    }
+  }
+}
+
+/**
+ * The examined paths of a project, as a reader should see them.
+ *
+ * `stale` is computed here, from the filesystem, and never written back: the
+ * stored entry records what happened, the view says whether it still holds. A
+ * stale entry is degraded to `listed` with its verdict dropped — the honest
+ * reading is "something looked at this file once, before the content changed",
+ * not "someone read this file", and the difference is the whole cost of
+ * re-deriving a conclusion that no longer applies.
+ */
+export function coverageFor(
+  projectPath: string,
+  opts: { max?: number } = {},
+): CoverageView[] {
+  try {
+    return coverageViews(getWorkingState(projectPath), projectPath, opts.max);
+  } catch {
+    return [];
+  }
+}
+
+/** The reader-side projection of a state's coverage map (shared with the block). */
+function coverageViews(
+  state: ProjectWorkingState | null,
+  projectPath: string,
+  max?: number,
+): CoverageView[] {
+  const map = state?.coverage ?? {};
+  const root = normalizeProjectPath(projectPath || state?.projectPath || '');
+  const views: CoverageView[] = [];
+  for (const [path, entry] of Object.entries(map)) {
+    const stamp = root ? fileStamp(resolve(root, path)) : null;
+    const stale = !stamp || stamp.size !== entry.size || stamp.mtime !== entry.mtime;
+    if (stale) {
+      // Degrade, do not delete: the record stays in the file, the READER stops
+      // trusting the depth and the conclusion it carried.
+      const { verdict: _dropped, ...rest } = entry;
+      views.push({ ...rest, path, stale: true, depth: 'listed' });
+    } else {
+      views.push({ ...entry, path, stale: false });
+    }
+  }
+  views.sort((a, b) => b.at - a.at);
+  return max && max > 0 ? views.slice(0, max) : views;
+}
+
 /**
  * Record a finished turn and return the updated state. Best-effort: on any
  * failure the caller still gets a usable (possibly unchanged) state.
@@ -255,19 +595,7 @@ export function recordWorkingState(projectPath: string, turn: TurnRecord): Proje
   const key = normalizeProjectPath(projectPath);
   const data = readFileSafe();
   const now = Date.now();
-  const prev: ProjectWorkingState =
-    data.projects[key] ??
-    {
-      projectPath: key,
-      filesTouched: [],
-      toolsUsed: [],
-      turns: 0,
-      unverifiedEdits: 0,
-      unverifiedPaths: [],
-      openIssues: [],
-      corrections: 0,
-      updatedAt: now,
-    };
+  const prev: ProjectWorkingState = data.projects[key] ?? emptyState(key, now);
 
   const next: ProjectWorkingState = {
     ...prev,
@@ -275,6 +603,7 @@ export function recordWorkingState(projectPath: string, turn: TurnRecord): Proje
     toolsUsed: [...prev.toolsUsed],
     unverifiedPaths: [...(prev.unverifiedPaths ?? [])],
     openIssues: [...prev.openIssues],
+    coverage: { ...(prev.coverage ?? {}) },
   };
   next.turns = prev.turns + 1;
   next.updatedAt = now;
@@ -338,6 +667,37 @@ export function recordWorkingState(projectPath: string, turn: TurnRecord): Proje
     const short = msg.replace(/\s+/g, ' ').slice(0, 200);
     if (!next.openIssues.includes(short)) next.openIssues.push(short);
     if (next.openIssues.length > MAX_ISSUES) next.openIssues = next.openIssues.slice(-MAX_ISSUES);
+  }
+
+  // ── Coverage: the paths a CHECK exercised ───────────────────────────────
+  // `verifiedPaths` is the caller's report of which changed paths a test/typecheck
+  // /browser run actually covered. That is the only honest source of `executed`
+  // depth: it is a fact the harness measured, not a claim the model made, and it
+  // is recorded here so the NEXT run knows this file has already been run against
+  // something — the depth that makes re-reading it cheaper to skip.
+  const executed = (turn.verifiedPaths ?? []).filter(Boolean);
+  if (executed.length > 0) {
+    next.coverage = mergeCoverage(
+      next.coverage ?? {},
+      executed.map((path) => ({ path, depth: 'executed' as CoverageDepth })),
+      turn.runId ?? 'unattributed',
+      key,
+      now,
+    );
+  }
+  // Anything this turn examined mid-flight and has not flushed yet lands with it,
+  // so a single write keeps the file consistent and the turn's reads are not lost
+  // to a flush that happens to fall between the turn's last read and its write.
+  const pending = pendingCoverage.get(key);
+  if (pending && pending.notes.length > 0) {
+    next.coverage = mergeCoverage(
+      next.coverage ?? {},
+      pending.notes,
+      pending.runId,
+      key,
+      now,
+    );
+    pendingCoverage.delete(key);
   }
 
   data.projects[key] = next;
@@ -576,6 +936,27 @@ export function formatWorkingState(
   }
   if (state.lastVerifiedAt !== undefined) {
     lines.push(`• Last verified: ${relativeAge(state.lastVerifiedAt, now)} (a test/typecheck/browser run passed).`);
+  }
+  // What has ALREADY been examined here — the record that makes a second run over
+  // this tree cheaper than the first. One line for the current entries and one for
+  // the stale ones, because it rides in every prompt and a verbose block would
+  // recreate the drift it exists to prevent. The stale line is separate on purpose:
+  // "these were read" and "these no longer describe the file" are different
+  // instructions, and a single line would blur them into "someone looked at it".
+  const examined = coverageViews(state, state.projectPath, 80);
+  const current = examined.filter((c) => !c.stale);
+  if (current.length > 0) {
+    const shown = current.slice(0, 6).map((c) => `${c.path} (${c.depth}, ${relativeAge(c.at, now)})`);
+    lines.push(
+      `• Already examined (${current.length} path(s), still current): ${shown.join(', ')}${current.length > shown.length ? ', …' : ''} — a conclusion recorded against these is already on the ledger; do not re-derive it.`,
+    );
+  }
+  const gone = examined.filter((c) => c.stale);
+  if (gone.length > 0) {
+    const shown = gone.slice(0, 5).map((c) => c.path);
+    lines.push(
+      `• ⚠️ Changed since examined (${gone.length}): ${shown.join(', ')}${gone.length > shown.length ? ', …' : ''} — the earlier conclusion was about older content; re-read before relying on it.`,
+    );
   }
   // What GIT says the workspace holds, when it disagrees with (or adds to) the
   // ledger's own report. Capped: this rides in every prompt.

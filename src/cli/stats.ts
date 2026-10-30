@@ -6,6 +6,7 @@
  *   nuvira stats cost                     — Show cost tracking details
  *   nuvira stats cost --clear             — Reset cost tracking data
  *   nuvira stats cost reconcile ...       — compare the ledger to a provider invoice
+ *   nuvira stats cost bill ...            — ask the providers for their OWN figures (live)
  *   nuvira stats cost reprice             — re-price legacy rows (dry run; --apply writes)
  *   nuvira stats history                  — Show conversation history stats
  *
@@ -22,6 +23,13 @@
  * `reprice` is the explicit, dry-run-default repair of the rows already on disk
  * (legacy prices from the retired hardcoded table, test-origin rows). Both are
  * documented in `learning/cost-reconcile.ts` and `learning/cost-ledger-maintenance.ts`.
+ *
+ * `bill` is the missing third leg: instead of asking the operator to type a
+ * number, it asks the PROVIDER for its own (DeepSeek balance, OpenRouter key
+ * usage, OpenAI/Anthropic organization cost reports). It is deliberately separate
+ * from `reconcile`: a balance is not a bill, and an organization-wide report is
+ * not this key's spend, so neither is auto-fed into a comparison that would then
+ * look authoritative. See `learning/provider-billing.ts`.
  */
 
 import { Command } from 'commander';
@@ -40,6 +48,15 @@ import {
   reconciliationLedgerPath,
 } from '../learning/cost-reconcile.js';
 import { formatMaintenanceReport, maintainCostLedger } from '../learning/cost-ledger-maintenance.js';
+import {
+  fetchProviderStatement,
+  formatStatements,
+  hasBillingSource,
+  providerLabel,
+  BILLING_SOURCES,
+  DEFAULT_BILLING_WINDOW_DAYS,
+  type ProviderStatement,
+} from '../learning/provider-billing.js';
 import { CATALOG_PROVIDER_IDS } from '../inference/provider-catalog.js';
 import { getChatHistory } from '../context/history.js';
 import { logger } from '../utils/logger.js';
@@ -62,6 +79,12 @@ interface RepriceOptions {
   apply?: boolean;
   keepTestRows?: boolean;
   file?: string;
+  json?: boolean;
+}
+
+interface BillOptions {
+  provider?: string;
+  days?: string;
   json?: boolean;
 }
 
@@ -95,6 +118,18 @@ export class StatsCommand extends BaseCommand {
         .option('--json', 'machine-readable JSON report')
         .action(async (options: ReconcileOptions) => {
           await this.reconcileCost(options);
+        }),
+    );
+
+    // ── cost bill ────────────────────────────────────────────────────────
+    costCmd.addCommand(
+      new Command('bill')
+        .description("Ask each provider for its OWN spend/balance figure (live; DeepSeek, OpenRouter, OpenAI, Anthropic)")
+        .option('-p, --provider <id>', 'only this provider id (default: every configured provider with a billing endpoint)')
+        .option('--days <n>', `window for window-scoped reports, in days (default: ${DEFAULT_BILLING_WINDOW_DAYS})`)
+        .option('--json', 'machine-readable JSON report')
+        .action(async (options: BillOptions) => {
+          await this.showProviderBills(options);
         }),
     );
 
@@ -364,6 +399,112 @@ export class StatsCommand extends BaseCommand {
     } else {
       logger.info('  Calls for this provider are now $0 billed by evidence; their list price is reported as value, never spend.');
     }
+  }
+
+  /**
+   * `stats cost bill` — the provider's own figure, fetched live.
+   *
+   * PROVIDER SELECTION. `--provider X` asks X (even when X has no configured key,
+   * which then reports "no API key" rather than silently vanishing). Otherwise it
+   * asks every CONFIGURED provider: those are the accounts the user actually
+   * holds, and a provider whose key came from the environment is in the config
+   * too (ConfigManager maps every catalog env var into `providers.<id>`).
+   *
+   * NO AUTO-RECONCILE. The output hands the user the exact `reconcile` command
+   * instead of writing a reconciliation itself: an OpenAI/Anthropic report is
+   * ORG-wide and a DeepSeek balance is not a charge, so auto-comparing either to
+   * this ledger would manufacture a delta that means nothing.
+   */
+  private async showProviderBills(options: BillOptions): Promise<void> {
+    const days = options.days === undefined ? DEFAULT_BILLING_WINDOW_DAYS : Number(options.days);
+    if (!Number.isFinite(days) || days <= 0) {
+      logger.error(`Invalid --days "${options.days}". Pass a positive number of days.`);
+      return;
+    }
+
+    const config = this.configManager.getAll();
+    const providers = config.providers || {};
+    const apiKeyOf = (id: string): string | undefined => {
+      const key = providers[id]?.apiKey;
+      return typeof key === 'string' && key.trim() !== '' ? key : undefined;
+    };
+
+    // Vault-stored keys (`vault:<account>`) are refs until the vault is attached.
+    // Attach + hydrate here, exactly as startup does, so a keychain-backed profile
+    // can bill itself instead of reporting "no API key". Best-effort: a missing
+    // keyring must not break the command.
+    if (Object.keys(providers).some((id) => apiKeyOf(id)?.startsWith('vault:') === true)) {
+      try {
+        const { Vault } = await import('../enterprise/vault.js');
+        this.configManager.attachVault(Vault.open({}));
+        await this.configManager.hydrateVaultRefs();
+      } catch {
+        // Best-effort — the per-provider error below will name the problem.
+      }
+    }
+
+    let targets: string[];
+    if (options.provider) {
+      const requested = options.provider.trim().toLowerCase();
+      const known = new Set<string>([...Object.keys(BILLING_SOURCES), ...Object.keys(providers)]);
+      if (!known.has(requested)) {
+        logger.error(
+          `Unknown provider "${options.provider}". Known ids: ${[...known].sort().join(', ')}`,
+        );
+        logger.info(
+          `  Live billing is available for: ${Object.keys(BILLING_SOURCES).sort().join(', ')} — other providers are reported as unsupported.`,
+        );
+        return;
+      }
+      targets = [requested];
+    } else {
+      targets = Object.keys(providers).filter((id) => apiKeyOf(id) !== undefined);
+    }
+
+    if (targets.length === 0) {
+      logger.info(
+        'No provider with a key is configured — set DEEPSEEK_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY (or add providers.<id>.apiKey) and run this again.',
+      );
+      return;
+    }
+
+    const until = Date.now();
+    const since = until - days * DAY_MS;
+    const statements: ProviderStatement[] = [];
+    for (const provider of targets) {
+      const id = provider.trim().toLowerCase();
+      const key = apiKeyOf(id);
+      if (!key) {
+        // `--provider` on a provider with no key: say so instead of skipping it.
+        statements.push({
+          provider: id,
+          label: providerLabel(id),
+          status: 'error',
+          kind: hasBillingSource(id) ? BILLING_SOURCES[id]!.kind : 'spend',
+          scope: hasBillingSource(id) ? BILLING_SOURCES[id]!.scope : 'snapshot',
+          details: [],
+          error: 'no API key is configured for this provider',
+          fetchedAt: until,
+        });
+        continue;
+      }
+      statements.push(
+        await fetchProviderStatement({
+          provider: id,
+          apiKey: key,
+          ...(providers[id]?.baseUrl ? { baseUrl: providers[id]!.baseUrl } : {}),
+          since,
+          until,
+        }),
+      );
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify({ statements, fetchedAt: until, windowDays: days }, null, 2));
+      return;
+    }
+
+    console.log(`\n${formatStatements(statements, until)}`);
   }
 
   /**

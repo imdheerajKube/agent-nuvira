@@ -547,6 +547,62 @@ export function handoffBlockFor(projectPath: string, options: { limit?: number }
  * concrete to check even then. Best-effort and deliberately narrow: only paths
  * with a file extension are taken, capped, and never invented.
  */
+/** Characters a deliverable path is built from (word chars, dot, slash, ~, -). */
+const PATH_CHAR = /[~\w./-]/;
+/** An extension's first character, and the rest of a hyphenated extension. */
+const EXT_HEAD = /[a-z0-9]/i;
+const EXT_TAIL = /[a-z0-9-]/i;
+
+/**
+ * Every `name.ext` / `name.ext.ext2` substring of `text`, with its path prefix.
+ *
+ * WHY THIS IS A SCAN AND NOT ONE REGEX (measured): the natural pattern,
+ * `[~./\w-]*[\w.-]+\.(?:[a-z0-9][a-z0-9-]{0,15})(?:\.[a-z0-9]{2,8})?`, puts two
+ * unbounded character classes over overlapping alphabets next to each other and
+ * then demands a literal dot. A message of 10 000 word characters with no dot in
+ * it therefore backtracks EXPONENTIALLY — the gateway e2e case "very long
+ * message is handled" sat at 100 % CPU with no output until it was killed. Since
+ * this runs on every user message in the tool loop, any long paste could hang a
+ * turn.
+ *
+ * The scan below is linear: it looks at each dot once, parses forward from it
+ * (one extension, then an optional second one), and walks back over the path
+ * prefix with a fixed cap. It accepts the same shapes the pattern accepted —
+ * including an INTERNAL hyphen, because the deliverable in the live failure was
+ * `.nvda-addon`.
+ */
+export function extensionBearingNames(text: string): string[] {
+  /** Longest path prefix kept ahead of a filename — a deliverable is not a novel. */
+  const MAX_PREFIX = 240;
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '.') continue;
+    if (i === 0 || !PATH_CHAR.test(text[i - 1]!)) continue; // needs a name before it
+    let j = i + 1;
+    if (j >= text.length || !EXT_HEAD.test(text[j]!)) continue;
+    j += 1;
+    let tail = 0;
+    while (j < text.length && tail < 15 && EXT_TAIL.test(text[j]!)) {
+      j += 1;
+      tail += 1;
+    }
+    // Optional second extension (`.tar.gz`), 2-8 alphanumerics.
+    if (text[j] === '.' && j + 1 < text.length && EXT_HEAD.test(text[j + 1]!)) {
+      let k = j + 1;
+      let n = 0;
+      while (k < text.length && n < 8 && EXT_HEAD.test(text[k]!)) {
+        k += 1;
+        n += 1;
+      }
+      if (n >= 2) j = k;
+    }
+    let start = i;
+    while (start > 0 && i - start < MAX_PREFIX && PATH_CHAR.test(text[start - 1]!)) start -= 1;
+    out.push(text.slice(start, j));
+  }
+  return out;
+}
+
 export function deliverablesNamedIn(goal: string): string[] {
   const found: string[] = [];
   const seen = new Set<string>();
@@ -562,7 +618,7 @@ export function deliverablesNamedIn(goal: string): string[] {
   //    The extension group allows an INTERNAL hyphen, because the deliverable
   //    in the live failure was `.nvda-addon` — the one extension that matters
   //    here is the one a plain `[a-z0-9]` class cannot match.
-  const withExt = (goal || '').match(/[~./\w-]*[\w.-]+\.(?:[a-z0-9][a-z0-9-]{0,15})(?:\.[a-z0-9]{2,8})?/gi) ?? [];
+  const withExt = extensionBearingNames(goal || '');
   for (const raw of withExt) {
     const path = raw.replace(/^['"]|['"]$/g, '').trim();
     if (!path || !path.includes('.')) continue;

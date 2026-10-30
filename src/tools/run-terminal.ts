@@ -32,8 +32,9 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { resolve as resolvePath } from 'node:path';
 import {
   applyRemediationAutoFixes,
   diagnoseFailure,
@@ -60,7 +61,6 @@ import {
 import {
   loadRuns,
   processIdentityCheck,
-  outputWindow,
   saveRun,
   spoolBytes,
   spoolPath,
@@ -75,11 +75,20 @@ import { envelopeCoversAction } from '../learning/intent-envelope.js';
 import { sessionGrantCovers } from '../learning/session-grant.js';
 import { grantCategoryForEffect } from './capability-registry.js';
 import { applyProjectEnvironment, guardCommandEnvironment } from '../utils/project-env.js';
+import { isVerificationInvocation, splitChain, unwrapCommand } from '../utils/command-shape.js';
+import { guardGuiTests, guiCrashNote } from '../utils/gui-test-guard.js';
 import { formatEffectVerdict, isBuildCommand, verifyBuildEffect } from '../utils/effect-verification.js';
 import { lookupMemo, memoNotice, storeMemo } from './command-memo.js';
+import { TERMINAL_OUTPUT_CAP, windowOutput } from './output-caps.js';
 
-/** Cap on how much terminal output is fed back to the model. */
-const MAX_OUTPUT_CHARS = 6000;
+/**
+ * Cap on how much terminal output is fed back to the model.
+ *
+ * The number lives in `output-caps.ts` so every tool agrees on it; 24 K (up from
+ * 6 K) is what stops the model re-running a failing suite to see its summary. See
+ * that module for the measurement behind the change.
+ */
+const MAX_OUTPUT_CHARS = TERMINAL_OUTPUT_CAP;
 /** Default timeout for a terminal command (tests/builds are slow). */
 const DEFAULT_TIMEOUT_MS = 120_000;
 /**
@@ -699,9 +708,13 @@ function pruneDetachedRuns(): void {
   }
 }
 
-/** The tail of a buffer, capped like the output this tool returns. */
+/**
+ * A buffer as the model should see it: whole when it fits, head+tail when it does
+ * not, with a notice that says how much was dropped and how to narrow the command
+ * instead of re-running it (see `output-caps.ts`).
+ */
 function outputTail(s: string): string {
-  return s.trim().length > MAX_OUTPUT_CHARS ? s.trim().slice(-MAX_OUTPUT_CHARS) : s.trim();
+  return windowOutput(s.trim(), MAX_OUTPUT_CHARS, { tool: 'run_terminal' }).text.trim();
 }
 
 /** `45s` / `3m 05s` — how long, for a human reading the tool result. */
@@ -724,7 +737,7 @@ function runOutputText(run: DetachedRun): string {
   if (!run.truncatedOutput && !run.reattached && (run.out || run.err)) return outputTail(run.out || run.err);
   const spooled = readSpool(run.id);
   if (spooled) {
-    const window = outputWindow(spooled, MAX_OUTPUT_CHARS);
+    const window = windowOutput(spooled, MAX_OUTPUT_CHARS, { tool: 'run_terminal' });
     if (window.text.trim()) return window.text.trim();
   }
   return outputTail(run.out || run.err);
@@ -1042,7 +1055,7 @@ const TEXT_PROCESSOR_PREFIXES = new Set(['awk']);
  * classified. `for f in *; do rm -rf $f; done` still scores confirm (`rm`), so
  * the autonomy is bounded by what the body actually runs.
  */
-const SHELL_STRUCTURAL_KEYWORDS = new Set(['for', 'done', 'fi', 'esac', 'case', '{', '}', '!', 'time', 'function']);
+const SHELL_STRUCTURAL_KEYWORDS = new Set(['for', 'done', 'fi', 'esac', 'case', '{', '}', '!', 'time', 'function', 'cd']);
 /** Keywords that PREFIX the real command within their own segment. */
 const SHELL_BODY_KEYWORDS = new Set(['do', 'then', 'else', 'elif', 'while', 'until', 'if']);
 
@@ -1251,10 +1264,23 @@ function leadingTokens(lower: string, n: number): string[] {
  *
  * Substitutions are split on too, so a body is classified as the command it is;
  * an unrecognised body falls through to `confirm` (the safe direction).
+ *
+ * The operator split is QUOTE-AWARE (`splitChain`). Splitting on a bare `|`
+ * everywhere cut a `grep -E '^(FAIL|ERROR):|^Ran |^OK'` filter into fragments
+ * like `ERROR):`, which matched no known command — so a test run piped through
+ * grep scored `confirm` and was refused in a headless turn. Measured on the
+ * 2026-10-28 bench build: four steps of one turn went to re-running the same
+ * suite through a different filter after that refusal.
  */
-function splitSegments(lower: string): string[] {
-  return lower
-    .split(/&&|\|\||;|\n|\||\$\(|`/)
+function splitSegments(command: string): string[] {
+  const out: string[] = [];
+  for (const segment of splitChain(command)) {
+    // A substitution (`$(…)`, `` `…` ``) really does run its body, so its
+    // contents are classified as its own pieces wherever the shell would run
+    // them. Deny-first already scans the whole line, so nothing can hide here.
+    out.push(...segment.text.split(/\$\(|`/));
+  }
+  return out
     .map((s) => s.replace(/\)+/g, ' ').trim())
     .filter(Boolean);
 }
@@ -1270,6 +1296,21 @@ function classifySegment(segment: string): CommandClass {
     body = segment.slice(head.length).trim();
     if (!body) return 'verify';
   }
+
+  // Read the SHAPE, not the spelling: `NUVIRA_ENV_GUARD=off sudo -E python3 -m
+  // unittest x` is the command `python3 -m unittest x`, and it is verification.
+  //
+  // WHY THIS EXISTS (measured 2026-10-27). A bench turn lost three steps to
+  // this parse: they prefixed a test run with the documented env-guard bypass,
+  // the raw first token was `nuvira_env_guard=off`, nothing matched, the segment
+  // scored `confirm` as an UNKNOWN state-changing command, and the turn was told
+  // to ask a human about running its own test suite. Cline asked nobody and ran
+  // it. See src/utils/command-shape.ts.
+  const shape = unwrapCommand(body);
+  if (!shape.text) return 'verify';
+  if (isVerificationInvocation(shape.text)) return 'verify';
+  body = shape.text.toLowerCase();
+
   const toks = leadingTokens(body, 3);
   for (const prefix of VERIFY_PREFIXES) {
     const pt = prefix.split(' ');
@@ -1538,8 +1579,25 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
       `or run a different check entirely.`
     );
   }
+  // ── GUI-suite containment (src/utils/gui-test-guard.ts) ────────────────────
+  // Running a desktop app's own suite is how an audit measures it, and on macOS
+  // a wx teardown crash puts a "Python quit unexpectedly" dialog on the user's
+  // screen for every attempt. The guard turns on faulthandler (Qt also gets a
+  // real offscreen backend), suppresses the dialog for the lifetime of this one
+  // command, and restores the preference when the child exits — including when
+  // the run is handed off to monitoring.
+  const guiGuard = guardGuiTests(command, ctx.cwd || process.cwd());
+  if (guiGuard.applies) {
+    runEnv = { ...(runEnv ?? process.env), ...guiGuard.env };
+  }
+  // The guard may leave widget-building test modules out of the run when the
+  // runner has a flag for it (`--ignore=` on pytest, spliced into the run's own
+  // segment — never appended to the end of the line, which put it on `tail`).
+  // When the runner has no such flag the suite runs whole and `guiGuard.note`
+  // says so; the command is then left exactly as the model wrote it.
+  const effectiveCommand = guiGuard.applies ? guiGuard.effectiveCommand : command;
   const startedAt = Date.now();
-  const outcome = await execCommand(command, ctx.cwd, waitMs, runEnv);
+  const outcome = await execCommand(effectiveCommand, ctx.cwd, waitMs, runEnv, guiGuard.restore);
 
   // ── A command that outlived the wait budget is NOT a failure ────────────────
   // It is still running, its output is still accumulating, and the turn can
@@ -1559,11 +1617,16 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
       `${RUN_TERMINAL_INCOMPLETE_PREFIX}` +
       waitBudgetGuidance(command, outcome.id, waitMs, assessed, outcome.bytes, outcome.quietMs, reapAfterMs) +
       `\nMonitored as run_terminal[${outcome.id}].\n` +
-      longRunDiagnosis(outcome.bytes, outcome.quietMs)
+      longRunDiagnosis(outcome.bytes, outcome.quietMs) +
+      guiGuard.note
     );
   }
 
   const output = outcome.output;
+  // A GUI suite that segfaults at exit is evidence about the project, not a
+  // harness failure — say so once, so the model reports it instead of re-running
+  // the same crashing module and raising another dialog.
+  const guiNote = guiGuard.note + guiCrashNote(command, output, ctx.cwd || process.cwd());
   // A real non-zero exit is the only thing that counts as a failure now.
   const failureStreak = output.startsWith('Error:') ? recordCommandFailure(streakKey, Date.now()) : 0;
   if (!output.startsWith('Error:')) clearCommandFailure(streakKey);
@@ -1651,7 +1714,7 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
   // with `poll`, and its output is stored when it lands.)
   if (!output.startsWith('Error:')) storeMemo(ctx.commandMemo, command, output, memoWhere);
 
-  if (!decidedAutonomously) return outputWithNotes + effectNote + envNote + remediationNote + autoApplyNote + missingNote;
+  if (!decidedAutonomously) return outputWithNotes + effectNote + envNote + remediationNote + autoApplyNote + missingNote + guiNote;
   // Reported, never silent — a judgment call the user cannot see is
   // indistinguishable from a bug.
   return (
@@ -1660,8 +1723,42 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
     envNote +
     remediationNote +
     autoApplyNote +
-    missingNote
+    missingNote +
+    guiNote
   );
+}
+
+/**
+ * Files the command's own redirection would create or truncate.
+ *
+ * WHY THIS EXISTS (measured): a turn wrote its deliverable with
+ * `cat > ../REPORT.md <<'EOF' … EOF`. The heredoc body never reached the shell,
+ * so the redirect ran with an empty stdin and produced a **0-byte file that the
+ * tool reported as a success** — the turn then spent its remaining budget
+ * "moving" a report that did not exist. A redirection to a file that comes back
+ * empty is the one failure a plain exit code cannot see, so it is checked here
+ * and reported next to the output.
+ *
+ * Deliberately narrow: only plain `>` / `>>` targets, at most four, skipping
+ * `/dev/null` and fd duplications (`2>&1`). Anything it cannot resolve is
+ * simply not checked, because a false warning here is worse than none.
+ */
+function emptyRedirectTargets(command: string, cwd: string): string[] {
+  const targets: string[] = [];
+  const re = /(?:^|[\s;&|(])(>>?)\s*(['"]?)([^\s;&|<>()'"]+)\2/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(command)) !== null) {
+    const raw = match[3];
+    if (!raw || raw === '/dev/null' || raw.startsWith('&')) continue;
+    const abs = raw.startsWith('/') ? raw : resolvePath(cwd, raw);
+    try {
+      if (statSync(abs).isFile() && statSync(abs).size === 0) targets.push(abs);
+    } catch {
+      // Not created, or not readable: the exit code / stderr already covers it.
+    }
+    if (targets.length >= 4) break;
+  }
+  return targets;
 }
 
 /**
@@ -1685,6 +1782,7 @@ function execCommand(
   cwd: string | undefined,
   waitMs: number,
   envOverride?: Record<string, string | undefined>,
+  onChildExit?: () => void,
 ): Promise<ExecOutcome> {
   return new Promise((resolve) => {
     // On Windows, use Git Bash for cross-platform shell commands (pwd, touch, etc.)
@@ -1791,6 +1889,7 @@ function execCommand(
     child.stderr?.on('data', (b: Buffer) => note(b, 'err'));
     child.on('error', (e) => {
       clearTimeout(timer);
+      onChildExit?.();
       run.status = 'done';
       run.err += `\n${e.message}`;
       settleRun();
@@ -1800,12 +1899,18 @@ function execCommand(
     });
     child.on('exit', (code) => {
       clearTimeout(timer);
+      onChildExit?.();
       run.status = 'done';
       run.exitCode = code;
       settleRun();
       if (answered) return; // already handed off — the poll reports the result
       answered = true;
-      const body = (run.out || run.err).trim().slice(0, MAX_OUTPUT_CHARS);
+      // Head + tail, not head-only: a failing suite's VERDICT is in its last
+      // lines, and a head-only window was how the model ended up re-running the
+      // command to find it.
+      const body = windowOutput((run.out || run.err).trim(), MAX_OUTPUT_CHARS, {
+        tool: 'run_terminal',
+      }).text;
       const masked = maskSenderId(body);
       // `code === null` now means the process was terminated by something ELSE
       // (a signal, the OOM killer, the user) — the tool no longer kills it, so
@@ -1822,11 +1927,16 @@ function execCommand(
       // counts a successful run_terminal as proof — so a non-zero exit (or a
       // termination) MUST carry the prefix, or a failing test/build would mark
       // the turn "verified". The real output is preserved for diagnosis.
+      const empties = ok ? emptyRedirectTargets(command, cwd || process.cwd()) : [];
+      const emptyNote = empties.length
+        ? `\n⚠️ ${empties.join(', ')} ${empties.length === 1 ? 'exists' : 'exist'} but ${empties.length === 1 ? 'is' : 'are'} 0 bytes: the redirection produced no content (a heredoc body that never reached the shell does this). If you meant to write a file, use write_file and confirm its size before calling the work done.`
+        : '';
       resolve({
         kind: 'finished',
         output:
           `${ok ? '' : 'Error: '}run_terminal: \`${maskSenderId(command)}\` ${status}.\n` +
-          (masked ? `Output:\n${masked}` : '(no output)'),
+          (masked ? `Output:\n${masked}` : '(no output)') +
+          emptyNote,
       });
     });
   });

@@ -2364,7 +2364,9 @@ export class DashboardAPI {
         if (
           finding &&
           typeof finding.claim === 'string' &&
-          (finding.verdict === 'CONFIRMED' || finding.verdict === 'PLAUSIBLE')
+          (finding.verdict === 'CONFIRMED' ||
+            finding.verdict === 'PLAUSIBLE' ||
+            finding.verdict === 'WITHDRAWN')
         ) {
           handlers.onFinding?.({
             claim: finding.claim,

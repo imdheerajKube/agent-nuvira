@@ -51,6 +51,18 @@ export const NOT_A_DOC_CITATION = new Map([
     'RELEASE_NOTES.md',
     'the notes file `github-release-agent` writes into the working directory (src/agents/agents/github-release-agent.ts)',
   ],
+  [
+    'CHANGE_REQUEST.md',
+    'the change event `scripts/bench/platform/inject-events.mjs` writes into a run workspaces to exercise adaptability',
+  ],
+  [
+    'CHANGE_REQUESTS.md',
+    'the append-only log of events the same harness writes, so a re-read cannot lose one',
+  ],
+  [
+    'BUGS_FOUND.md',
+    'the audit report the `BUG-SEEDED` task asks the agent to produce (`docs/BUGS_FOUND.md`), which the named-deliverable gate checks for on disk — an artifact, never a doc this repo ships',
+  ],
 ]);
 
 /**

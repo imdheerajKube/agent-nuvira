@@ -89,6 +89,7 @@ import {
   isRetryableError,
 } from '../learning/provider-fallback.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
+import { resolveTurnBudget } from '../learning/turn-budget.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
 import { buildAssessmentTurnContext } from '../learning/assessment-turn-context.js';
 import { deliverablesNamedIn, formatHandoffs, recordStepHandoff } from '../agents/step-handoff.js';
@@ -287,6 +288,15 @@ export interface LoopExecutorOptions {
   /** Live `git diff` payload — parity with the chat surfaces' `onGitDiff`. */
   onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
   /**
+   * The run's plan, on every mutation — the live panel's content.
+   *
+   * Parity with the chat surfaces: without it the `execute` loop printed the plan
+   * as a table into the scrollback and then had nothing on screen while a long
+   * command ran. Absent ⇒ the plan keeps going through the log, so a piped or CI
+   * run keeps its exact bytes.
+   */
+  onPlanChange?: (snapshot: import('../tools/plan-store.js').PlanSnapshot) => void;
+  /**
    * P7 — live progress line for a MOUNTED live view (the step the run is on).
    *
    * The same lines the logger carries when there is no view. They are given to
@@ -395,7 +405,6 @@ export async function runLoopExecutor(
   // traces in `nuvira trace list` — the old gap was that an `execute` run
   // wrote NOTHING here, so the engine that runs by default was the one
   // engine with no evidence trail.
-  const traceId = beginTrace({ goal, source: 'loop' });
   /** Refusals/gates recorded this turn — reported in the CLI summary. */
   const recorded = { refusals: 0, gateDecisions: 0 };
   /** Per-call tool outcomes, in call order (see LoopExecutorResult.toolOutcomes). */
@@ -431,6 +440,10 @@ export async function runLoopExecutor(
    * original tree is not isolated, it is confused.
    */
   const turnCwd = worktree?.dir ?? projectDir;
+  // The trace opens here, once the directory is known: still before routing (so a
+  // run that dies in routing leaves one), but with the project it worked on, which
+  // is what makes its findings readable by the next run (see findings/ledger.ts).
+  const traceId = beginTrace({ goal, source: 'loop', workingDirectory: turnCwd });
   // A2 — a resume request OR an explicit `--checkpoint` opens the record. The
   // difference is what the request carries: `--checkpoint` alone opens the
   // record for THIS ask with nothing to replay (writing it forward is the point),
@@ -1322,11 +1335,27 @@ export async function runLoopExecutor(
       // Read fresh on every step: a mid-turn failover must be visible to the
       // model, not just to the log (see the route feed).
       servedRoute: () => servedRoute,
+      // Stamped on the coverage entries this run writes (learning/working-state.ts).
+      runId: traceId,
       maxSteps: opts.maxSteps ?? 16,
       // Model-window-aware thread budget: a 1M-token model keeps its whole
       // window instead of being trimmed to the fixed ~50K-token default.
       // Undefined (unknown window) leaves the tool-loop default untouched.
       threadBudgetChars: resolveThreadBudgetChars({ provider: providerType, model }),
+      // AUTO-VERIFY — when a turn edits files and is about to end unverified,
+      // run the project's OWN check (tests/typecheck/build) and hand the model
+      // the verdict. On by default in the CLI: the alternative is a delivery
+      // with no observed result, which is exactly what a competing agent wins
+      // on (measured 2026-10-25: it quoted the project's suite, this loop had no
+      // verdict to quote). A project that declares no check is untouched.
+      autoVerify: true,
+      // WALL CLOCK — see `learning/turn-budget.ts`. The loop's other budgets count
+      // steps; this one states the time the user actually allocated, so the close is
+      // a handover instead of an external `timeout`.
+      ...(() => {
+        const budget = resolveTurnBudget(configManager);
+        return budget.enabled ? { maxDurationMs: budget.ms } : {};
+      })(),
       toolExposure: harness.exposure,
       maxParallelReads: harness.maxParallelReads,
       // WS3 (#25) — the turn span the loop hangs each tool call under.
@@ -1383,6 +1412,8 @@ export async function runLoopExecutor(
             });
           } else if (event === 'git:diff') {
             opts.onGitDiff?.(data as import('../tools/git-tool.js').GitDiffPayload);
+          } else if (event === 'plan:changed' && opts.onPlanChange) {
+            opts.onPlanChange(data as import('../tools/plan-store.js').PlanSnapshot);
           }
           // WS1 — a finding the turn recorded, with the gate's verdict.
           if (event === FINDING_EVENT) {
@@ -1494,6 +1525,9 @@ export async function runLoopExecutor(
     const loopOutcome = buildTraceOutcome({
       generationFailed: result.generationFailed,
       cancelled: result.cancelled,
+      // A step-ceiling ending is `incomplete`, never `acted` (see
+      // TraceOutcome.bounded — measured on a truncated chat turn).
+      bounded: result.bounded,
       tools: result.successfulToolCalls ?? result.toolCalls,
       unverifiedActionClaim: result.unverifiedActionClaim,
       unfulfilledPromise: result.unfulfilledPromise,

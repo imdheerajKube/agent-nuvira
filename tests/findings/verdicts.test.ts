@@ -22,6 +22,7 @@ import {
   summarizeVerdicts,
   toWire,
   unsupportedConfirmations,
+  withdrawFinding,
   type Finding,
 } from '../../src/findings/verdicts.js';
 
@@ -213,5 +214,36 @@ describe('rendering', () => {
     expect(demoted.verdict).toBe('PLAUSIBLE');
     expect(demoted.outcome).toContain('the evidence was withdrawn');
     expect(demoteFinding(demoted, 'again')).toEqual(demoted);
+  });
+});
+
+describe('a withdrawal is a verdict, not a deletion', () => {
+  it('records WITHDRAWN with the reason, and KEEPS the evidence it was checked with', () => {
+    const confirmed = confirmFinding(claim(), [CHECKED], { outcome: 'raised' }).finding;
+    const withdrawn = withdrawFinding(confirmed, 'three reruns showed 3, 4 and 5 failures');
+
+    expect(withdrawn.verdict).toBe('WITHDRAWN');
+    expect(withdrawn.outcome).toContain('withdrawn — three reruns showed');
+    // The checks stay: a retraction without its basis is indistinguishable from a
+    // claim someone got bored of, and the next reader would have to re-check it.
+    expect(evidenceOf(withdrawn)).toHaveLength(1);
+    expect(describeFinding(withdrawn)).toContain('⛔');
+    expect(describeFinding(withdrawn)).toContain('checked: ran npx vitest run tests/parity');
+  });
+
+  it('is not a demotion: WITHDRAWN and PLAUSIBLE say different things', () => {
+    const confirmed = confirmFinding(claim(), [CHECKED]).finding;
+    expect(demoteFinding(confirmed, 'unverified again').verdict).toBe('PLAUSIBLE');
+    expect(withdrawFinding(confirmed, 'disproved').verdict).toBe('WITHDRAWN');
+  });
+
+  it('survives the wire round trip and is counted separately in a summary', () => {
+    const confirmed = confirmFinding(claim(), [CHECKED]).finding;
+    const withdrawn = withdrawFinding(plausibleFinding({ claim: 'a guess', outcome: 'raised', source: 'audit' }), 'wrong');
+    const restored = fromWire(toWire(withdrawn));
+    expect(restored?.verdict).toBe('WITHDRAWN');
+
+    const summary = summarizeVerdicts([confirmed, claim(), withdrawn]);
+    expect(summary).toBe('3 finding(s): 1 confirmed, 1 plausible, 1 withdrawn');
   });
 });

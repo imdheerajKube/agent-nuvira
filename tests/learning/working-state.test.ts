@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -19,6 +19,9 @@ import {
   normalizeProjectPath,
   reconcileWithWorkspace,
   workingStateBlock,
+  noteCoverage,
+  flushCoverage,
+  coverageFor,
 } from '../../src/learning/working-state.js';
 
 let dir: string;
@@ -343,5 +346,95 @@ describe('formatWorkingState', () => {
     const text = formatWorkingState(getWorkingState(PROJECT));
     expect(text).not.toContain('NEVER verified');
     expect(text).toContain('Last verified');
+  });
+});
+
+describe('coverage — what this project has already had examined', () => {
+  let project: string;
+
+  beforeEach(() => {
+    project = join(dir, 'proj');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'a.ts'), 'export const a = 1;\n');
+    writeFileSync(join(project, 'b.ts'), 'export const b = 2;\n');
+  });
+
+  it('records a read and surfaces it in the injected block', () => {
+    noteCoverage(project, { path: 'a.ts', depth: 'read' }, { runId: 'trace-1' });
+    flushCoverage(project);
+
+    const entry = getWorkingState(project)?.coverage?.['a.ts'];
+    expect(entry?.depth).toBe('read');
+    expect(entry?.runId).toBe('trace-1');
+
+    const block = workingStateBlock(project);
+    expect(block).toContain('Already examined');
+    expect(block).toContain('a.ts (read');
+    expect(block).toContain('do not re-derive');
+  });
+
+  it('escalates depth while the file is unchanged, and never downgrades it', () => {
+    noteCoverage(project, { path: 'a.ts', depth: 'read' }, { runId: 'r1' });
+    noteCoverage(project, { path: 'a.ts', depth: 'executed' }, { runId: 'r2' });
+    // A later listing is not evidence that the read did not happen.
+    noteCoverage(project, { path: 'a.ts', depth: 'listed' }, { runId: 'r3' });
+    flushCoverage(project);
+
+    expect(getWorkingState(project)?.coverage?.['a.ts']?.depth).toBe('executed');
+  });
+
+  it('marks an entry stale and stops trusting it once the content changes', () => {
+    noteCoverage(project, { path: 'a.ts', depth: 'read', verdict: 'no null check' }, { runId: 'r1' });
+    flushCoverage(project);
+    // Different length guarantees a different size stamp, so the test does not
+    // depend on mtime resolution.
+    writeFileSync(join(project, 'a.ts'), 'export const a = 12345; // rewritten\n');
+
+    const view = coverageFor(project).find((v) => v.path === 'a.ts');
+    expect(view?.stale).toBe(true);
+    expect(view?.depth).toBe('listed');
+    expect(view?.verdict).toBeUndefined();
+
+    // The RECORD is untouched: it really was read, at that content.
+    expect(getWorkingState(project)?.coverage?.['a.ts']?.depth).toBe('read');
+
+    const block = workingStateBlock(project);
+    expect(block).toContain('Changed since examined');
+    expect(block).not.toContain('Already examined');
+  });
+
+  it('refuses a path outside the project', () => {
+    noteCoverage(project, { path: '../outside.ts', depth: 'read' }, { runId: 'r1' });
+    flushCoverage(project);
+
+    expect(getWorkingState(project)?.coverage ?? {}).not.toHaveProperty('../outside.ts');
+    expect(getWorkingState(project)?.coverage ?? {}).not.toHaveProperty('outside.ts');
+  });
+
+  it('keeps coverage from a run that never reached its end-of-turn write', () => {
+    // No recordWorkingState: the batch bound flushes the notes to disk anyway,
+    // which is the whole point on a crash/cancel path.
+    for (let i = 0; i < 25; i += 1) {
+      const name = `f${i}.ts`;
+      writeFileSync(join(project, name), `export const n = ${i};\n`);
+      noteCoverage(project, { path: name, depth: 'read' }, { runId: 'crashed-run' });
+    }
+
+    const recorded = Object.keys(getWorkingState(project)?.coverage ?? {});
+    expect(recorded.length).toBeGreaterThan(0);
+    expect(recorded).toContain('f0.ts');
+  });
+
+  it('records a path a check actually exercised as executed', () => {
+    recordWorkingState(project, {
+      filesTouched: ['a.ts'],
+      verifiedPaths: ['a.ts'],
+      unverifiedPaths: [],
+      runId: 'trace-9',
+    });
+
+    const entry = getWorkingState(project)?.coverage?.['a.ts'];
+    expect(entry?.depth).toBe('executed');
+    expect(entry?.runId).toBe('trace-9');
   });
 });

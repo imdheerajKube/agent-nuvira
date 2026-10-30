@@ -72,7 +72,7 @@ export const TOOLSETS: ToolsetDef[] = [
     name: 'experience',
     label: 'Experience',
     description: 'In-loop UX tools: clarification (ask_user), requirement verification, end-of-response follow-ups, loading reusable capability packs (skill), and recording a finding whose verdict the gate computes from the evidence supplied.',
-    tools: ['ask_user', 'suggest_followups', 'verify_requirement', 'skill', 'finding'],
+    tools: ['ask_user', 'suggest_followups', 'verify_requirement', 'skill', 'finding', 'finish'],
   },
   {
     name: 'code',
@@ -83,8 +83,8 @@ export const TOOLSETS: ToolsetDef[] = [
   {
     name: 'coding',
     label: 'Coding',
-    description: 'Interactive file access + verification for the agent loop: read files, list directories, glob, edit/write files, run terminal commands (tests/typecheck/build) — deny-first, workspace-scoped; state-changing actions are confirmation-gated — and the plan/todo checklist that tracks multi-step work.',
-    tools: ['read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo', 'terminal'],
+    description: 'Interactive file access + verification for the agent loop: read files, list directories, glob, edit/write files, run terminal commands (tests/typecheck/build) — deny-first, workspace-scoped; state-changing actions are confirmation-gated — the plan/todo checklist that tracks multi-step work, and generating an OpenAPI document from the routes the project registers.',
+    tools: ['read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo', 'terminal', 'api_spec'],
   },
   {
     name: 'web',
@@ -331,6 +331,9 @@ export const CORE_TOOL_NAMES: readonly string[] = [
   'read_extract',
   'ask_user',
   'suggest_followups',
+  // COMPLETION CONTRACT: 'finish' must be in the CORE set — a turn that cannot
+  // state completion in tiered exposure is a turn that cannot be checked.
+  'finish',
   'plan_todo',
   'finding',
   'skill',

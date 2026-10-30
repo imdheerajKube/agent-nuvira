@@ -30,6 +30,7 @@ import { EditCommand } from './edit.js';
 import { PlanCommand } from './plan.js';
 import { ConfigCommand } from './config.js';
 import { CacheCommand } from './cache.js';
+import { CheckpointCommand } from './checkpoint.js';
 import { ModelsCommand } from './models.js';
 import { ModelCommand } from './model.js';
 import { ExecuteCommand } from './execute.js';
@@ -138,6 +139,7 @@ export function createCLI(): Command {
   const adminCmd = new AdminCommand();
   const configCmd = new ConfigCommand();
   const cacheCmd = new CacheCommand();
+  const checkpointCmd = new CheckpointCommand();
   const modelsCmd = new ModelsCommand();
   const executeCmd = new ExecuteCommand();
 
@@ -147,6 +149,7 @@ export function createCLI(): Command {
   program.addCommand(planCmd.create());
   program.addCommand(configCmd.create());
   program.addCommand(cacheCmd.create());
+  program.addCommand(checkpointCmd.create());
   program.addCommand(modelsCmd.create());
   program.addCommand(executeCmd.create());
 

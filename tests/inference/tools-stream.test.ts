@@ -210,4 +210,89 @@ describe('chatCompletionsWithToolsStream', () => {
     expect(contentText).toBe('ok');
     expect(usage).toEqual({ promptTokens: 10, completionTokens: 5 });
   });
+
+  it('forwards the provider\'s cache-read tokens along with the usage', async () => {
+    // DeepSeek reports `prompt_cache_hit_tokens` on its usage object. Dropping
+    // it made a 99%-cached audit look like fresh compute in the cost ledger.
+    const onCost = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseResponse(
+          'data: {"choices":[{"delta":{"role":"assistant","content":"ok"}}]}',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+          'data: {"usage":{"prompt_tokens":1000,"completion_tokens":5,"prompt_cache_hit_tokens":960}}',
+          'data: [DONE]',
+        ),
+      ),
+    );
+
+    await chatCompletionsWithToolsStream(
+      { baseUrl: 'https://example.test/v1', headers: {}, model: 'm', messages: MESSAGES, tools: TOOLS, onCost },
+      () => {},
+    );
+
+    const [, , usage] = onCost.mock.calls[0] as [string, string, { cachedPromptTokens?: number }];
+    expect(usage.cachedPromptTokens).toBe(960);
+  });
+
+  it('accepts the OpenAI nested cached_tokens shape as the same figure', async () => {
+    const onCost = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseResponse(
+          'data: {"choices":[{"delta":{"role":"assistant","content":"ok"}}]}',
+          'data: {"usage":{"prompt_tokens":1000,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":640}}}',
+          'data: [DONE]',
+        ),
+      ),
+    );
+
+    await chatCompletionsWithToolsStream(
+      { baseUrl: 'https://example.test/v1', headers: {}, model: 'm', messages: MESSAGES, tools: TOOLS, onCost },
+      () => {},
+    );
+
+    const [, , usage] = onCost.mock.calls[0] as [string, string, { cachedPromptTokens?: number }];
+    expect(usage.cachedPromptTokens).toBe(640);
+  });
+
+  it('streams reasoning_content to onReasoning without mixing it into the answer', async () => {
+    // DeepSeek thinking models emit `delta.reasoning_content` before (and
+    // alongside) the reply. The two channels must stay separate: the CLI shows
+    // the former as the model's working notes and only the latter as the answer,
+    // and the reasoning is still returned for the wire replay contract.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseResponse(
+          'data: {"choices":[{"delta":{"reasoning_content":"The user wants "}}]}',
+          'data: {"choices":[{"delta":{"reasoning_content":"a file read."}}]}',
+          'data: {"choices":[{"delta":{"content":"Reading it now."}}]}',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+          'data: [DONE]',
+        ),
+      ),
+    );
+
+    const reasoning: string[] = [];
+    const tokens: string[] = [];
+    const result = await chatCompletionsWithToolsStream(
+      {
+        baseUrl: 'https://example.test/v1',
+        headers: {},
+        model: 'm',
+        messages: MESSAGES,
+        tools: TOOLS,
+        onReasoning: (t) => reasoning.push(t),
+      },
+      (t) => tokens.push(t),
+    );
+
+    expect(reasoning).toEqual(['The user wants ', 'a file read.']);
+    expect(tokens).toEqual(['Reading it now.']);
+    expect(result.content).toBe('Reading it now.');
+    expect(result.reasoningContent).toBe('The user wants a file read.');
+  });
 });

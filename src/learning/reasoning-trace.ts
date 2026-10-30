@@ -111,10 +111,25 @@ export interface TraceStep {
   responsePreview: string;
   /** Full response length in chars (accurate even when preview is truncated). */
   responseLength: number;
-  /** Estimated input tokens. */
+  /**
+   * Input tokens for this call.
+   *
+   * MEASURED when `tokensReported` is set, estimated (`chars/4`) otherwise. The
+   * distinction is the difference between a number a provider stated and a number
+   * inferred from text length, and a cost comparison that mixes the two is not a
+   * comparison — so it is recorded per step rather than left to the reader.
+   */
   inputTokens: number;
-  /** Estimated output tokens. */
+  /** Output tokens for this call — measured when `tokensReported`, else estimated. */
   outputTokens: number;
+  /**
+   * True when `inputTokens`/`outputTokens` are the PROVIDER's own counts.
+   *
+   * Absent means they are the character-based estimate every earlier row carried.
+   */
+  tokensReported?: boolean;
+  /** Input tokens the provider served from its prompt cache (a subset of input). */
+  cachedInputTokens?: number;
   /** Call duration in ms. */
   latencyMs: number;
   /** True when the call returned normally (errors are still recorded). */
@@ -156,6 +171,18 @@ export interface TraceOutcome {
    *                 success, and unlike `failed` there IS work to continue from.
    */
   kind: 'answered' | 'acted' | 'failed' | 'cancelled' | 'incomplete';
+  /**
+   * True when the STEP CEILING (not the task) ended the turn.
+   *
+   * MEASURED (trace-1792233823139-egmqc9, 2026-10-17): an 80-step turn wrote its
+   * document, was mid-verification with 2 of 9 plan steps open, and the trace
+   * still read `kind: acted`, `success: true` — because the outcome had no way
+   * to hear that the loop had run out of road. A reader of the trace (and any
+   * surface that colours a run green from it) was told the task concluded. A
+   * bounded turn is `incomplete`: work exists to continue from, and it must not
+   * be reported as finished.
+   */
+  bounded?: boolean;
   /** Names of the tools that actually executed this turn (in order). */
   tools?: string[];
   /**
@@ -271,12 +298,39 @@ export type TraceGateName =
   | 'permission'
   | 'verification'
   | 'deliverable'
+  // REQUIRED ARTIFACTS: the request named files or test classes (todo.md, README,
+  // e2e tests, …) and they do not exist in the workspace. Distinct from
+  // 'deliverable', which is about ONE authored file the ask pointed at; this is the
+  // ask's OWN list of artifacts, checked at the end of a build turn.
+  | 'required-artifacts'
+  // COMPLETION CONTRACT: the turn was ending with checkable work outstanding that
+  // the REQUEST named (an unmet requirement row, a check whose last run was red,
+  // or a module the turn wrote that no test imports) and was asked, once, to close
+  // it or state it with `finish({verified:false})`. Distinct from
+  // 'required-artifacts' (named files only) and 'self-review' (a prose re-read of
+  // the ask): this one is measured against a ledger, not a reflection.
+  | 'completion'
+  // DOCUMENTATION DUTY: the turn produced a runnable entry point with no followable
+  // README, or wrote documents whose claims name files/scripts that do not exist.
+  // Both are filesystem facts, which is why the loop can raise them and a reviewer
+  // cannot: it can see the tree the document describes.
+  | 'docs'
   | 'promise'
   | 'confirmation'
   | 'workspace'
   | 'autonomy'
   | 'repeat'
   | 'budget'
+  // The loop's PROGRESS-GATED EXTENSION: the continuation budget was spent but
+  // new successful tool calls kept landing, so the step budget was extended
+  // instead of ending a live turn mid-task (see ToolLoopOptions.maxStepExtensions).
+  | 'budget-extension'
+  // The ASSESSMENT budget's own ending: the step bound was reached and a whole
+  // round added no new finding to the report, so the turn stopped instead of
+  // spending another round on material it had already read (see
+  // `learning/finding-yield.ts`). Distinct from 'budget-extension' because the
+  // decision is made on YIELD, not on new tool calls.
+  | 'assessment-dry-round'
   // The loop's SELF-DIAGNOSIS nudge: the same action failed more than once and
   // the model was told to diagnose the cause instead of retrying it (see
   // RunTrace.repeatedFailure). A gate name rather than a new kind — it IS a
@@ -358,7 +412,85 @@ export type TraceGateName =
   // gate name because it is a bounded decision about the run's own behaviour; the
   // measured reason it exists is a turn that burned 81 steps and 59 identical
   // retries without ever naming the real cause.
-  | 'malformed-call';
+  | 'malformed-call'
+  // WIRE REPAIR (2026-10-25): the provider rejected the request with a 400 that
+  // named a message index, and the loop repaired THAT message (stubbed its
+  // content) and retried instead of re-sending the identical poisoned thread
+  // until the turn died. A gate name because it is a bounded decision the loop
+  // made about its own context; the measured reason it exists is an audit turn
+  // that lost 49 tool calls and 9 minutes to `unexpected end of hex escape`
+  // repeating verbatim on every retry, ending with no deliverable.
+  | 'wire-repair'
+  // REASONING REPLAY REPAIR (2026-10-29): the endpoint rejected the request with
+  // "The `reasoning_content` in the thinking mode must be passed back to the API"
+  // and the wire helper filled the missing reasoning on the tool-call turns that
+  // lacked it, then re-sent the SAME request once. A gate name because it is a
+  // bounded decision about our own context, made from the provider's own words.
+  // The measured reason it exists: every thinking-mode bench turn logged 4-5 of
+  // these rejections (each with a fresh request_id) and continued only through a
+  // mid-turn continuation — see `inference/thinking-replay.ts` for the two live
+  // requests that showed the rule is per-REQUEST, not per-thread.
+  | 'reasoning-replay-repair'
+  // COVERAGE round (2026-10-25): the assessment's step budget was spent and a
+  // round added no finding, but the coverage ledger showed the tree was
+  // under-read or that read files import files never opened — so one bounded
+  // READING round was granted instead of ending a narrow audit. A gate name
+  // because it is a decision the loop made from data it owns (the census, the
+  // opened set, the import frontier), not a nudge derived from prose.
+  | 'coverage'
+  // WASTE GUARD (2026-10-17): a read-only call repeated on a workspace that had
+  // not changed since the first one, so it was REFUSED instead of executed a
+  // second time. Measured in the Cline head-to-head: 49 tool calls / 51 model
+  // calls / 1.43 M input tokens on a task whose intrinsic shape is ~7 calls —
+  // `npm test` was run four times with a different output filter each time. A
+  // gate name because it is a decision the loop made about its own run.
+  | 'repeat-read'
+  // BATCHING nudge (2026-10-17): consecutive steps each spent a whole model
+  // round-trip on ONE information-gathering call, so the loop spent one bounded
+  // nudge asking for independent calls in a single step (the loop already
+  // executes them in parallel). Recorded so "why did this turn cost 51 calls?"
+  // is answerable from the trace instead of from a token invoice.
+  | 'batching'
+  // PLAN AUTO-ADVANCE (2026-10-17): a plan step the loop's OWN action ledger closed
+  // (the file it names was written, or the check it names actually ran) was marked
+  // done with that call as its evidence, so the model never spent a round-trip on
+  // `plan_todo` to say it. Measured: 9 of 34 tool calls in one release turn were
+  // that bookkeeping. Recorded so "why does this checklist advance without a plan
+  // call?" is answerable from the trace — and so the note is never mistaken for a
+  // model claim.
+  | 'plan-auto'
+  // DELIVERABLE COVERAGE (2026-10-26): the ask named a SURFACE of the product —
+  // a frontend, an API, a schema, end-to-end tests — and the tree contains none of
+  // it. Measured: two nuvira runs on the SaaS-platform prompt reached their step
+  // ceiling with every existing-artifact gate satisfied and one of them with NO
+  // FRONTEND AT ALL, because nothing asked about the parts that were absent rather
+  // than incomplete. A gate name because it is a filesystem verdict about what the
+  // turn produced, not a reflection on the answer.
+  | 'deliverables'
+  // CHANGE REQUEST (2026-10-26): `CHANGE_REQUEST.md` appeared (or changed) in the
+  // workspace while the turn was running, and the new requirement was delivered to
+  // the model mid-turn as a harness directive; or the turn is ending with bullets
+  // of that request that appear nowhere in the tree. A gate name because it is the
+  // loop accepting a new requirement without a second user message.
+  | 'change-request'
+  // WALL-CLOCK CLOSING WINDOW (2026-10-27): the caller stated a real time budget and
+  // the turn entered the last stretch of it, so it was told ONCE to stop opening
+  // work, to record a repeated tool failure as a known limitation instead of chasing
+  // it, and to spend the remaining steps on the handover and the answer. Measured:
+  // the nuvira arm used its final ten minutes on a Playwright runner that would not
+  // start and shipped no README, while the Cline arm closed at 48 minutes with an
+  // OpenAPI contract. Every other budget in the loop counts STEPS, which is why none
+  // of them could see this coming — a gate name because it is a decision the loop
+  // made about its own time.
+  | 'closing-window'
+  // PLAN DEPTH (2026-10-27): the plan this turn wrote gives one checkbox to several of
+  // the ask's named requirements (or none to some of them), so the loop asked ONCE for
+  // it to be split before the build continues. A gate name because it is a decision
+  // about the turn's own plan, taken from the ask's text and the plan's steps — and the
+  // measured reason it exists is an arm whose single step read "auth, RBAC, projects,
+  // tasks, documents, notifications, AI assistant, admin", closed as soon as the first
+  // module existed, and shipped 18 endpoints fewer than the arm that decomposed.
+  | 'plan-depth';
 
 /**
  * A NON-LLM fact about a turn: a tool call, a gate decision, or a refusal.
@@ -417,6 +549,18 @@ export interface ReasoningTrace {
   goal: string;
   /** Where the trace came from (orchestrator pipelines / chat turns / a gateway channel). */
   source: 'orchestrator' | 'chat' | string;
+  /**
+   * The project the run worked on, absolute.
+   *
+   * WHY IT IS ON THE TRACE. A trace could answer "what did this run do" but not
+   * "in which project", so a new run could not ask the one question that makes
+   * the second pass cheaper: what has already been confirmed HERE. Findings and
+   * turn reports were stored per RUN and therefore unreadable across runs — an
+   * audit's conclusions existed and were unusable. Absent on traces written
+   * before this existed; a reader must then treat the trace as unattributable
+   * rather than guess a project from its goal text.
+   */
+  workingDirectory?: string;
   /** Epoch ms when the trace began. */
   startedAt: number;
   /** Epoch ms when the trace ended (undefined = still running). */
@@ -624,7 +768,14 @@ function sha256Prefix(input: string, length = 16): string {
  * Callers pass the id to withTraceCapture and endTrace.
  */
 export function beginTrace(
-  meta: { goal: string; source?: 'orchestrator' | 'chat' | string; provider?: string; model?: string },
+  meta: {
+    goal: string;
+    source?: 'orchestrator' | 'chat' | string;
+    provider?: string;
+    model?: string;
+    /** The project the run works on — what makes findings readable across runs. */
+    workingDirectory?: string;
+  },
 ): string {
   const id = `trace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   // The run in progress, for recorders that hold no id (see recordTraceEvent).
@@ -634,6 +785,7 @@ export function beginTrace(
     id,
     goal: meta.goal,
     source: meta.source || 'orchestrator',
+    ...(meta.workingDirectory ? { workingDirectory: meta.workingDirectory } : {}),
     startedAt: Date.now(),
     provider: meta.provider,
     model: meta.model,
@@ -1019,6 +1171,8 @@ export function endTrace(traceId: string, success?: boolean, outcome?: TraceOutc
 export function buildTraceOutcome(input: {
   generationFailed?: boolean;
   cancelled?: boolean;
+  /** The loop hit its step ceiling — see {@link TraceOutcome.bounded}. */
+  bounded?: boolean;
   tools?: readonly string[];
   unverifiedActionClaim?: boolean;
   unfulfilledPromise?: boolean;
@@ -1053,6 +1207,10 @@ export function buildTraceOutcome(input: {
   const tools = [...(input.tools ?? [])];
   if (input.cancelled) return { kind: 'cancelled', tools };
   if (input.generationFailed) return { kind: 'failed', tools };
+  // A turn the STEP CEILING ended did not conclude, whatever it managed to do
+  // first. Checked before the "acted" classification below, which is exactly
+  // how the measured truncated turn was recorded as a success.
+  if (input.bounded) return { kind: 'incomplete', tools, bounded: true };
   const delivered = tools.includes('gateway_send');
   // A turn that CLAIMED work it did not do — or that was asked for a deliverable
   // and produced none — did not conclude. It is `incomplete`, and it must NOT be

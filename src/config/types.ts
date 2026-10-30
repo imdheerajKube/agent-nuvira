@@ -570,6 +570,18 @@ export interface BuffConfig {
    */
   tools?: ToolsConfig;
   /**
+   * Wall-clock budget for ONE turn (`learning/turn-budget.ts`).
+   *
+   *   turn.maxMinutes   minutes a turn may run (default 60; 0 = no wall clock)
+   *
+   * Every other loop budget counts steps, and a step is not a unit of time: measured
+   * 2026-10-27, a run spent its last ten minutes debugging a browser runner that would
+   * not start and closed with no README, while the arm that won finished in 48 minutes.
+   * When the budget runs low the loop stops opening work and reserves the last stretch
+   * for the handover and the answer.
+   */
+  turn?: TurnConfig;
+  /**
    * Skills config (skills-hub parity): per-skill disable flags + the
    * ordered multi-source registry list. The disabled list excludes skills from
    * runtime matching (I7 P0 bridge); registries[] wins over the legacy
@@ -652,6 +664,18 @@ export interface BuffConfig {
      */
     inboundAttachments?: { enabled?: boolean; maxBytes?: number };
   };
+}
+
+/**
+ * How long one turn may run, in minutes. See `learning/turn-budget.ts` for why a step
+ * count could not answer this.
+ */
+export interface TurnConfig {
+  /**
+   * Minutes a single turn may run (default 60). `0` disables the wall clock and
+   * restores step-only budgeting exactly.
+   */
+  maxMinutes?: number;
 }
 
 /**
@@ -829,6 +853,13 @@ export interface InferenceOptions {
    * `src/inference/reasoning-effort.ts`.
    */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * DISPLAY hook for a thinking model's `reasoning_content`, streamed as it
+   * arrives. Adapters that can stream reasoning call it token by token; the CLI
+   * renders the text as the model's working notes. Display only — it never
+   * changes what is sent, and absent → no behaviour change.
+   */
+  onReasoning?: (token: string) => void;
   /**
    * INTERNAL — probe mode. When true, the adapter emits its provider's
    * reasoning parameter UNCONDITIONALLY (bypassing the default-deny registry

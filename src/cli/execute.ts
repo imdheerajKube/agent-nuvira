@@ -1830,6 +1830,10 @@ export class ExecuteCommand extends BaseCommand {
         // Live token stream for the same preview the chat surfaces show.
         ...(live.overrides.onToken ? { onToken: live.overrides.onToken } : {}),
         ...(live.overrides.onGitDiff ? { onGitDiff: live.overrides.onGitDiff } : {}),
+        // The plan panel: same rule as the other live seams — only when the frame
+        // actually exists, so a piped or `--json-events` run keeps printing the
+        // plan TABLE exactly as before.
+        ...(live.overrides.onPlanChange ? { onPlanChange: live.overrides.onPlanChange } : {}),
         onFinding: (finding) => {
           findings.push(finding);
         },

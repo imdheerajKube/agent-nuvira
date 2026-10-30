@@ -140,6 +140,33 @@ export interface ToolCallResponse {
    * Carried so the loop can say WHY instead of guessing.
    */
   finishReason?: string;
+  /**
+   * How many tool-call turns this request had to have a
+   * `reasoning_content` placeholder filled into before the endpoint would accept
+   * it (see `isReasoningReplayRejection`). Present only when a repair happened,
+   * so the loop can record that the FIRST attempt was rejected instead of
+   * letting a repaired request look like one that was always valid.
+   */
+  repairedReasoningTurns?: number;
+  /**
+   * The provider's OWN token counts for this call, when it reported any.
+   *
+   * WHY IT IS CARRIED AND NOT JUST RECORDED. The wire already had the numbers and
+   * the adapter already handed them to the cost tracker, but nothing above that
+   * could see them: every trace row, every summary and every benchmark cost axis
+   * was a `chars/4` ESTIMATE of a number the provider had stated exactly. A
+   * comparison that quotes estimated tokens against another tool's
+   * provider-reported ones is not a comparison, which is what this field fixes.
+   *
+   * Absent when the endpoint reports no `usage` (a local model, a rebuilt cache
+   * hit): absent means "unknown", never zero.
+   */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    /** Input tokens the provider served from its prompt cache (a subset). */
+    cachedPromptTokens?: number;
+  };
 }
 
 /**

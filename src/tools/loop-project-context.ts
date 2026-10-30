@@ -35,6 +35,7 @@ import { assessProject } from '../agents/prompt-assembly.js';
 import { handoffBlockFor } from '../agents/step-handoff.js';
 import { describeProjectInterpreter } from '../utils/project-env.js';
 import { workingStateBlock as readWorkingStateBlock } from '../learning/working-state.js';
+import { findingsBlockFor } from '../findings/ledger.js';
 import { formatCrossSessionMemory } from '../learning/context-assembly.js';
 
 /** Hard budget: the tree block is truncated to this many lines (~1.5K tokens). */
@@ -148,6 +149,22 @@ export function walkBoundedTree(dir: string): string[] {
  *   ## File tree — bounded BFS walk, honestly truncated
  *   ## Git state — branch, dirty files, recent commits
  */
+/**
+ * Is this directory EMPTY (nothing to read, nothing to find)?
+ *
+ * Distinct from `!looksLikeProject`, which is also true for a home directory with
+ * a thousand unrelated files. Only a genuinely empty workspace (ignoring the
+ * directories nobody reads) makes "there is nothing here" a fact worth stating.
+ */
+function isEmptyWorkspace(dir: string): boolean {
+  try {
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) return false;
+    return readdirSync(dir).filter((entry) => !IGNORE_DIRS.has(entry)).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function buildLoopProjectContext(
   dir: string,
   opts: {
@@ -163,13 +180,27 @@ export async function buildLoopProjectContext(
   } = {},
 ): Promise<string> {
   try {
-    if (!looksLikeProject(dir)) return '';
+    if (!looksLikeProject(dir)) {
+      // AN EMPTY WORKSPACE IS A FACT, AND IT BELONGS IN THE PROMPT (measured
+      // 2026-10-30, GREENFIELD-API). A greenfield build was told nothing about its
+      // project, so the model spent its first steps reading the tree (`read_file`,
+      // `glob`, `list_dir`) and discovering there was nothing there — two of 31
+      // steps spent on a fact the loop already knew. `looksLikeProject` is false
+      // for a home directory too, so only a genuinely empty directory gets the
+      // line; everywhere else silence is still the right answer.
+      if (!isEmptyWorkspace(dir)) return '';
+      return [
+        '## Project',
+        `- path: ${dir}`,
+        '- empty/greenfield: this workspace has NO files yet.',
+        '- There is nothing here to read, list or search — do not spend a step exploring. Create what the request asks for, in this directory.',
+      ].join('\n');
+    }
 
     const lines: string[] = [];
 
     // ── Deterministic assessment (reuses the planner's own scanner) ──
-    try {
-      const a = assessProject(dir);
+    try {        const a = assessProject(dir);
       const bits: string[] = [];
       if (a.language) bits.push(`language: ${a.language}`);
       if (a.framework) bits.push(`framework: ${a.framework}`);
@@ -204,6 +235,20 @@ export async function buildLoopProjectContext(
       if (workingState) lines.push(workingState);
     } catch {
       // Working-state read is best-effort — omit on failure.
+    }
+
+    // ── Findings earlier runs in this project settled ──
+    // The working-state block above says what was TOUCHED; this one says what was
+    // CONCLUDED and checked. Without it a run's findings live on its own trace and
+    // the next pass over the same tree re-derives every one of them — and can
+    // re-raise a claim a previous pass already retracted (see findings/ledger.ts).
+    // Self-labelled, capped, and omitted entirely when nothing is settled, so a
+    // project with no history adds no prompt weight.
+    try {
+      const findings = findingsBlockFor(dir);
+      if (findings) lines.push('', findings);
+    } catch {
+      // Findings recall is best-effort — omit on failure.
     }
 
     // ── Cross-session memory (the ONE composer, shared with the orchestrator) ──

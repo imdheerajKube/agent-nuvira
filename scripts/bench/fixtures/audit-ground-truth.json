@@ -1,0 +1,198 @@
+{
+  "id": "ai_voice_studio-bc7b35e",
+  "repo": "ai_voice_studio",
+  "commit": "bc7b35e",
+  "note": "Defects verified by the reviewer against the pristine source (or by running the probe) in the 2026-10-25 head-to-head. `verified` = reproduced | source | plausible. `keywords` are deliberately specific: a keyword that appears in every report measures nothing. Matching is on finding LINES only, so prose that mentions a term does not earn recall.",
+  "requiredSections": [
+    "executive",
+    "scope",
+    "method",
+    "critical",
+    "high",
+    "medium",
+    "low",
+    "architecture",
+    "security",
+    "performance",
+    "recommend",
+    "appendix"
+  ],
+  "defects": [
+    {
+      "id": "GT-01",
+      "title": "A project named '..' resolves to the user-data root; Remove Project rmtrees models, settings and every other project",
+      "severity": "CRITICAL",
+      "file": "ai_voice_studio/paths.py",
+      "keywords": ["rmtree", "user-data root", "user data root", "_safe_dir_name"],
+      "verified": "reproduced"
+    },
+    {
+      "id": "GT-02",
+      "title": "Multi-voice Piper installs are unusable: every archive extracts into the same folder and the per-voice folder is never created (_organize_voice receives a list)",
+      "severity": "CRITICAL",
+      "file": "ai_voice_studio/downloader.py",
+      "keywords": ["_organize_voice", "per-voice", "per voice", "extracts into the same"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-03",
+      "title": "Two wx.App instances on first launch (terms dialog creates one, main() creates another) → teardown crash",
+      "severity": "HIGH",
+      "file": "ai_voice_studio/main.py",
+      "keywords": ["wx.app", "two app instances", "two wx"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-04",
+      "title": "Addon compatibility gate compares min_app_version against a hardcoded 0.1.0 while the app is 2026.3.7",
+      "severity": "HIGH",
+      "file": "ai_voice_studio/addons/__init__.py",
+      "keywords": ["min_app_version", "0.1.0", "hardcoded version"],
+      "verified": "reproduced"
+    },
+    {
+      "id": "GT-05",
+      "title": "set_accessible_name is unguarded off Windows — control.GetAccessible() raises on macOS/Linux",
+      "severity": "HIGH",
+      "file": "ai_voice_studio/gui/a11y.py",
+      "keywords": ["getaccessible", "set_accessible_name", "setaccessible"],
+      "verified": "reproduced"
+    },
+    {
+      "id": "GT-06",
+      "title": "np.load(..., allow_pickle=True) on voice-clone reference audio",
+      "severity": "HIGH",
+      "file": "ai_voice_studio/voicelab/worker.py",
+      "keywords": ["allow_pickle", "allow pickle"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-07",
+      "title": "Concurrent project.json read-modify-write loses completed segments (load outside the lock)",
+      "severity": "HIGH",
+      "file": null,
+      "keywords": ["mark_segment_done", "lost segments", "read-modify-write", "read modify write"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-08",
+      "title": "A failed venv probe caches 'not installed' for 300 s and overrides disk truth",
+      "severity": "HIGH",
+      "file": "ai_voice_studio/venv_packages.py",
+      "keywords": ["venv probe", "negative cache", "cached as not installed", "not installed for 300"],
+      "verified": "plausible"
+    },
+    {
+      "id": "GT-09",
+      "title": "No integrity verification on updates/models/runtimes/FFmpeg; packaging unsigned",
+      "severity": "HIGH",
+      "file": null,
+      "keywords": ["no integrity", "no digest", "unsigned", "no hash"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-10",
+      "title": "TERMS_VERSION (2026.3.1) vs APP_VERSION (2026.3.7): the re-accept-after-update promise never fires",
+      "severity": "MEDIUM",
+      "file": null,
+      "keywords": ["terms_version", "app_version", "re-accept"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-11",
+      "title": "Corrupt archive raises tarfile.ReadError, not DownloadError; bad bytes re-download forever",
+      "severity": "MEDIUM",
+      "file": "ai_voice_studio/downloader.py",
+      "keywords": ["tarfile.readerror", "readerror", "raw tarfile"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-12",
+      "title": "Resume overwrites processed_text.json with only the new segments",
+      "severity": "MEDIUM",
+      "file": null,
+      "keywords": ["processed_text", "processed text"],
+      "verified": "reproduced"
+    },
+    {
+      "id": "GT-13",
+      "title": "DAISY audio URIs are not XML-escaped",
+      "severity": "MEDIUM",
+      "file": null,
+      "keywords": ["daisy", "xml-escape", "xml escape"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-14",
+      "title": "EPUB hrefs are not URL-decoded / fragment-stripped, so valid EPUBs read as empty",
+      "severity": "MEDIUM",
+      "file": null,
+      "keywords": ["unquote", "urldefrag", "fragment", "href"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-15",
+      "title": "Even-length cp1252 text decoded as UTF-16 (codec order tries utf-16 before cp1252)",
+      "severity": "MEDIUM",
+      "file": "ai_voice_studio/parsers.py",
+      "keywords": ["utf-16", "utf 16", "cp1252", "codec order"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-16",
+      "title": "HTML parser ignores the declared charset and replaces non-UTF-8 bytes",
+      "severity": "MEDIUM",
+      "file": "ai_voice_studio/parsers.py",
+      "keywords": ["charset", "declared encoding", "meta charset"],
+      "verified": "plausible"
+    },
+    {
+      "id": "GT-17",
+      "title": "GUI test suite is not portable / order-dependent (125 failures)",
+      "severity": "MEDIUM",
+      "file": null,
+      "keywords": ["125 failed", "order-dependent", "order dependent", "gui suite"],
+      "verified": "plausible"
+    },
+    {
+      "id": "GT-18",
+      "title": "Downloads ignore 206 vs 200; a Range-ignoring server appends a full body; 416 bricks .part",
+      "severity": "MEDIUM",
+      "file": "ai_voice_studio/downloader.py",
+      "keywords": ["206", "416", "range", ".part"],
+      "verified": "plausible"
+    },
+    {
+      "id": "GT-19",
+      "title": "settings.json written non-atomically; truncation silently reverts to defaults",
+      "severity": "LOW",
+      "file": null,
+      "keywords": ["non-atomic", "not atomic", "settings.json", "truncat"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-20",
+      "title": "Shallow settings merge drops nested defaults (recording.pitch becomes None)",
+      "severity": "LOW",
+      "file": null,
+      "keywords": ["shallow merge", "nested default", "recording.pitch", "pitch"],
+      "verified": "reproduced"
+    },
+    {
+      "id": "GT-21",
+      "title": "SynthesisWorker.done_count returns the start index",
+      "severity": "LOW",
+      "file": null,
+      "keywords": ["done_count", "start index"],
+      "verified": "source"
+    },
+    {
+      "id": "GT-22",
+      "title": "An unparsable min_app_version (e.g. 1.0.0-beta) is treated as compatible",
+      "severity": "LOW",
+      "file": "ai_voice_studio/addons/__init__.py",
+      "keywords": ["unparsable", "beta", "_parse_version", "0, 0, 0", "(0,0,0)"],
+      "verified": "source"
+    }
+  ]
+}

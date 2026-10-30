@@ -510,6 +510,24 @@ code, so the same input always renders the same file and no provider is involved
   nuvira config init                          # interactive defaults (already set? shows them)
   ```
 
+### 4.2b The turn's time budget
+
+- **Objective:** State how long ONE turn may run, so the last stretch is spent closing the
+deliverable instead of chasing a tool. Every other budget counts steps, and a step is not a
+unit of time (measured 2026-10-27: a run spent its final ten minutes on a browser runner that
+would not start and closed with no README).
+- **Command:** `nuvira config set turn.maxMinutes <minutes>` · `nuvira config get turn.maxMinutes`
+- **Examples:**
+  ```bash
+  nuvira config set turn.maxMinutes 45    # 45-minute turns (default is 60)
+  nuvira config set turn.maxMinutes 0     # no wall clock: step budgets only (pre-3.5.12 behaviour)
+  ```
+- **Behaviour at the bell:** with 20% of the budget left (at least a minute), the turn is told
+  once to stop opening work, to record a tool that has already failed twice as a known
+  limitation, and to spend the remaining steps on the handover documents and the answer. The
+  loop refuses further step extensions from that point and stops where it stands when the time
+  is gone, so the turn ends with a reported result rather than an external `timeout`.
+
 ### 4.2c Size limits and the capability mode
 
 - **Objective:** Bound how much the agent reads/writes in one call, and choose how much
@@ -1353,7 +1371,7 @@ code, so the same input always renders the same file and no provider is involved
 ### 12.1 Stats & cost
 
 - **Objective:** Usage statistics and API cost tracking.
-- **Command:** `nuvira stats cost [--clear]` · `nuvira stats cost reconcile` · `nuvira stats cost reprice` · `nuvira stats history`
+- **Command:** `nuvira stats cost [--clear]` · `nuvira stats cost bill` · `nuvira stats cost reconcile` · `nuvira stats cost reprice` · `nuvira stats history`
 - **Examples:**
   ```bash
   nuvira stats cost
@@ -1368,6 +1386,26 @@ whose tier is undeclared — shown, not claimed), and **unpriced** (no price evi
 at all: an unknown provider, or a keyless pass-through gateway whose upstream bill
 this machine cannot see). There is no "total spent" line, because the ledger cannot
 see a provider's invoice.
+- **`stats cost bill`** asks the provider for ITS own figure, live, instead of
+estimating one. It queries only the endpoints that exist and that an inference key
+can actually reach: **DeepSeek** `GET /user/balance` (a **balance** — money left,
+not money billed), **OpenRouter** `GET /api/v1/key` (per-key credit **usage**, all
+time plus today/week/month, and the key's remaining limit), and **OpenAI**
+`/v1/organization/costs` + **Anthropic** `/v1/organizations/cost_report` (a
+window-scoped **spend** figure that requires an organization **admin** key; a
+normal project key is refused and the report says so). Every figure is labelled by
+what it is (`balance` / `spend`, `snapshot` / `all-time` / `window`) and carries
+what it is **not**; currencies are never converted or mixed. Providers with no
+billing API (Gemini → Cloud Billing, Bedrock → Cost Explorer, Azure → Cost
+Management, Groq/Mistral/NIM/xAI) are reported as unsupported *with the reason*,
+never as $0. It does not auto-reconcile — a balance is not a bill and an
+organization report is not this key — so it prints the exact `reconcile` command
+instead.
+  ```bash
+  nuvira stats cost bill                        # every configured provider
+  nuvira stats cost bill --provider deepseek    # one of them
+  nuvira stats cost bill --days 7 --json        # window for org cost reports
+  ```
 - **`stats cost reconcile`** compares that ledger to **the provider's own charge**
 for a stated window — the only figure here that is actual. A window is mandatory
 (default: the current calendar month; `--days`/`--since`/`--until` otherwise), the
@@ -1714,9 +1752,28 @@ Rows that already carry a classification are never rewritten.
 
 ---
 
-## 13. Cache & sandbox
+## 13. Cache, checkpoints & sandbox
 
-### 13.1 Inference cache
+### 13.1 Workspace checkpoints
+
+- **Objective:** Put a bad batch of edits back. A checkpoint copies the project's FILES (not the
+  agent's step state) at one moment; `restore` rewrites the recorded files from that copy. Use it
+  before a risky batch when the work is not committed — `git checkout --` has nothing to restore yet.
+- **Command:** `nuvira checkpoint create [label] [--dir <path>]` · `nuvira checkpoint list [--all] [--json]` · `nuvira checkpoint show <id> [--json]` · `nuvira checkpoint restore <id|latest> [--clean --yes] [--dry-run] [--force]` · `nuvira checkpoint delete <id>` · `nuvira checkpoint prune [--keep <n>]`
+- **Examples:**
+  ```bash
+  nuvira checkpoint create before-refactor
+  nuvira checkpoint restore latest --dry-run   # what would change, nothing touched
+  nuvira checkpoint restore latest             # recorded files go back; NEW files stay
+  nuvira checkpoint restore latest --clean --yes  # also delete files created since
+  ```
+- **First-timer detail:** content is stored once and shared, so a second checkpoint of an
+  unchanged tree costs only the files that changed. Files over the per-file cap (default 2 MB) are
+  listed as **skipped** when the checkpoint is created — a restore will not recreate them, and the
+  command says so rather than silently rolling back a partial tree. `--clean` deletes files, which
+  is the one part of a rollback no checkpoint undoes, so it needs `--yes`.
+
+### 13.2 Inference cache
 
 - **Objective:** Show or clear cached inference responses. Answers are cached per WORKSPACE
   (the project folder they are about), so `stats` names each folder and `clear` can drop one:
@@ -1734,7 +1791,7 @@ Rows that already carry a classification are never rewritten.
   is matched EXACTLY, so a parent directory never clears a subdirectory's answers. The dashboard's
   **Admin → Response Cache** section lists the same buckets with a Clear button.
 
-### 13.2 Docker sandbox
+### 13.3 Docker sandbox
 
 - **Objective:** Isolate code execution in Docker containers.
 - **Command:** `nuvira sandbox status` · `nuvira sandbox config [--enable|--disable] [--memory <m>] [--cpu <n>] [--timeout <s>] [--network <on|off>]` · `nuvira sandbox images` · `nuvira sandbox run "<cmd>" [--image <img>] [--project <p>]` · `nuvira sandbox cleanup`
@@ -1757,6 +1814,7 @@ nuvira edit          AI-assisted file editing
 nuvira plan          implementation plan for a task
 nuvira config        config get/set/list, secret vault, gateway transports & policies
 nuvira cache         inference cache stats / clear
+nuvira checkpoint    snapshot a project's files, and roll a batch of edits back
 nuvira models        list models, refresh/status/unblock/watch registry
 nuvira execute       multi-agent pipeline execution
 nuvira run           run a shell command

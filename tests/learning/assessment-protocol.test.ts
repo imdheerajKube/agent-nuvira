@@ -85,6 +85,27 @@ describe('isProjectAssessmentGoal — does NOT fire (the narrowness is the desig
     // "review" + "novel" is the deliverable taxonomy's business, not a bug hunt.
     expect(isProjectAssessmentGoal('write a review of this novel')).toBe(false);
   });
+
+  it('does not mistake a BUILD for an audit when the requirements say "analyse"', () => {
+    // The verbatim shape measured 2026-10-26 (Ultimate Agent Benchmark, SaaS
+    // platform): a build prompt whose step 1 is "Analyse requirements." and whose
+    // requirements name a backend, a frontend and an API. It classified as an
+    // assessment, so it got the bug-hunt protocol AND the assessment extension cap
+    // — sized by the source files already present, which for a greenfield turn is
+    // none (2 extensions, 115 steps, versus 178 on the build cap).
+    const BUILD_GOAL =
+      'You are the sole software engineer responsible for delivering a production-ready SaaS Operations Platform.\n' +
+      'Before writing any code: 1. Analyse requirements. 2. Create PRD. 3. Create architecture document.\n' +
+      'Requirements: Next.js frontend, Node.js backend, PostgreSQL, JWT Authentication, AI Assistant.\n' +
+      'Work autonomously.';
+    expect(isProjectAssessmentGoal(BUILD_GOAL)).toBe(false);
+    expect(assessmentProtocolBlock(BUILD_GOAL)).toBe('');
+  });
+
+  it('still catches an audit that asks to inspect, when nothing is being delivered', () => {
+    expect(isProjectAssessmentGoal('inspect the packages and evaluate the API')).toBe(true);
+    expect(isProjectAssessmentGoal('review the codebase, do not modify any files')).toBe(true);
+  });
 });
 
 describe('assessmentProtocolBlock', () => {
@@ -118,6 +139,35 @@ describe('assessmentProtocolBlock', () => {
     expect(block).toMatch(/CONSTANT/);
     expect(block).toMatch(/PARSED FIELD/);
     expect(block).toMatch(/PARTIAL input/);
+    // Seam G: the 2026-10-25 rerun found the traversal and the 416 but still
+    // graded `_organize_voice` LOW, because it called the function dead without
+    // reading `installed_voices()`, the code that expects its output. The sweep
+    // now names that check where the sweep — not a distant rule — is read.
+    expect(block).toMatch(/grep its callers/);
+    expect(block).toMatch(/reads the output it would have produced/);
+    // Seams H-L: the classes the measured run dropped because they were cheap to
+    // read and had no fixture — a control wired to nothing (pitch), an unguarded
+    // platform call (`wx.App`, GetAccessible), a gate whose escape is disabled
+    // (terms), a pickle/zip boundary, and per-run state that is truncated.
+    expect(block).toMatch(/every input that should change output/);
+    expect(block).toMatch(/platform-specific APIs/);
+    expect(block).toMatch(/ESCAPE \(Disagree, Skip, Cancel\)/);
+    expect(block).toMatch(/allow_pickle=True/);
+    expect(block).toMatch(/resume\/per-run state/);
+    // Rule 15: the false "pickle is absent" claim, which a grep for `pickle.load`
+    // produced while the project called `np.load(..., allow_pickle=True)`.
+    expect(block).toContain('"SAFE" IS A CLAIM: NAME THE SEARCH');
+    expect(block).toMatch(/never EXISTENCE|STILL REPORTED/);
+    // The MODULE PASS: the ten classes the measured run missed while following
+    // seams. Each is a reading task, not a fixture, which is why a checklist —
+    // not another rule — is what makes it happen.
+    expect(block).toContain('## MODULE PASS');
+    expect(block).toMatch(/control value read, then never applied/);
+    expect(block).toMatch(/disabled until the user satisfies/);
+    expect(block).toMatch(/page, index or offset assigned then overwritten/);
+    expect(block).toMatch(/parsed, then never used/);
+    expect(block).toMatch(/never installed by the installer/);
+    expect(block).toMatch(/one silently replaces the other/);
     // 7. Run the project's own shipped checks, and delegate with an exact target.
     expect(block).toContain('RUN WHAT THE PROJECT ALREADY SHIPS');
     expect(block).toMatch(/EXACT file or suite/);
@@ -168,10 +218,22 @@ describe('assessmentProtocolBlock', () => {
     // fit in the old one — the wording of the new rules was tightened first, and
     // several rules share a line — and it still leaves headroom, so it remains a
     // bound rather than a snapshot of today's prose.
+    // MEASURED after rules 13-14 and the SEAM SWEEP landed: 6971 chars / 117
+    // lines. The sweep is the part that earns the space: it names the six seams
+    // whose absence cost the 2026-10-25 audit its highest-value findings (path
+    // from a name made only of dots, the 416 on a complete `.part`, a version
+    // gate against a stale constant, a parsed-but-unread field, cancel-while-
+    // paused, and a posted event nobody binds). Ceilings move with a reason and
+    // keep headroom; they are bounds, not snapshots of today's prose.
+    // MEASURED after the MODULE PASS checklist (the ten classes a seam sweep does
+    // not reach: a control wired to nothing, a gate whose escape is disabled, a
+    // per-run file, two app objects, an overwritten index, an unbumped version
+    // constant, an unused flag, an uninstalled dependency, a name collision):
+    // 9714 chars / 156 lines.
     const block = assessmentProtocolBlock(REAL_AUDIT_GOAL);
     expect(block.length).toBeGreaterThan(800);
-    expect(block.length).toBeLessThanOrEqual(5120);
-    expect(block.split('\n').length).toBeLessThanOrEqual(88);
+    expect(block.length).toBeLessThanOrEqual(9900);
+    expect(block.split('\n').length).toBeLessThanOrEqual(156);
   });
 
   it('keeps every rule terse, so growth is a rule that had to be said, not prose', () => {
@@ -185,9 +247,22 @@ describe('assessmentProtocolBlock', () => {
     const headings = lines
       .map((line, i) => (/^\d+\.\s/.test(line) ? i : -1))
       .filter((i) => i >= 0);
-    expect(headings.length).toBe(11);
+    // 15 is deliberate: rule 12 (write the deliverable first) exists because a
+    // measured audit spent its whole budget and delivered a 0-byte report; rule
+    // 13 (read the consumer before calling a branch harmless) and rule 14 (prove
+    // every High with a fixture) are Cline's two measured advantages over this
+    // agent in the 2026-10-25 head-to-head.
+    expect(headings.length).toBe(15);
+    // The last rule's body ends where the SEAM SWEEP section begins; counting to
+    // the end of the block would score the sweep as that rule's prose.
+    const sweepStart = lines.findIndex((line) => line.startsWith('## SEAM SWEEP'));
     for (let i = 0; i < headings.length; i += 1) {
-      const end = i + 1 < headings.length ? headings[i + 1]! : lines.length;
+      const end =
+        i + 1 < headings.length
+          ? headings[i + 1]!
+          : sweepStart > headings[i]!
+            ? sweepStart
+            : lines.length;
       const body = lines.slice(headings[i]!, end).filter((line) => line.trim() !== '');
       expect(body.length, `rule \"${lines[headings[i]!]!}\"`).toBeLessThanOrEqual(8);
     }
@@ -200,8 +275,9 @@ describe('assessmentProtocolBlock', () => {
     const withChecks = assessmentProtocolBlock(REAL_AUDIT_GOAL, {
       selfChecks: Array.from({ length: 10 }, (_, i) => `- \`python tools/check_${i}.py\``).join('\n'),
     });
-    // MEASURED worst case on the audited project itself (10 checks): 5731 / 100.
-    expect(withChecks.length).toBeLessThanOrEqual(6400);
-    expect(withChecks.split('\n').length).toBeLessThanOrEqual(112);
+    // MEASURED worst case on the audited project itself (10 checks): 9995 / 167,
+    // after the MODULE PASS landed (8947 / 151 before it).
+    expect(withChecks.length).toBeLessThanOrEqual(10200);
+    expect(withChecks.split('\n').length).toBeLessThanOrEqual(167);
   });
 });

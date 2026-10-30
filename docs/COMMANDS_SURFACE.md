@@ -274,6 +274,40 @@ Show cache statistics
 Clear cached responses — all of them, or one workspace (project folder)
 
    - flags: `--unscoped`
+### `nuvira checkpoint`
+
+Snapshot a project’s files and roll a bad batch of edits back
+
+   - flags: `--dir <dir>`
+### `nuvira checkpoint create`
+
+Snapshot the project’s files now (cheap; unchanged files are stored once)
+
+   - flags: `--dir <dir>, --json, --max-file-bytes <max_file_bytes>`
+### `nuvira checkpoint list`
+
+List this project’s checkpoints, newest first
+
+   - flags: `--all, --dir <dir>, --json, --limit <limit>`
+### `nuvira checkpoint show`
+
+Show one checkpoint: what it recorded, and what it skipped
+
+   - flags: `--dir <dir>, --json`
+### `nuvira checkpoint restore`
+
+Put the files recorded by a checkpoint back
+
+   - flags: `--clean, --dir <dir>, --dry-run, --force, --json, --yes`
+### `nuvira checkpoint delete`
+
+Delete one checkpoint (its files are not touched)
+
+### `nuvira checkpoint prune`
+
+Keep the newest N checkpoints and delete the rest
+
+   - flags: `--keep <keep>`
 ### `nuvira models`
 
 List available models from inference providers
@@ -470,6 +504,11 @@ Show API cost tracking details
 Compare this ledger to a provider's OWN invoice for a window (the only 'actual' figure)
 
    - flags: `--amount <amount>, --days <days>, --declare-tier [declare_tier], --json, --note <note>, --provider <provider>, --since <since>, --until <until>`
+### `nuvira stats cost bill`
+
+Ask each provider for its OWN spend/balance figure (live; DeepSeek, OpenRouter, OpenAI, Anthropic)
+
+   - flags: `--days <days>, --json, --provider <provider>`
 ### `nuvira stats cost reprice`
 
 Re-price legacy ledger rows with the ONE price source; drop test rows (dry run by default)
@@ -1631,4 +1670,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*365 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*373 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

@@ -55,10 +55,17 @@ describe('answerOnce — suggest_followups reach the caller', () => {
     const provider = {
       name: 'Mock',
       // The model wrote the tool JSON in its content instead of a native call.
-      generateTools: vi.fn(async () => ({
-        content: `Hello!\n\n${JSON.stringify({ tool: 'suggest_followups', arguments: { followups: [{ prompt: 'Text next one' }] } })}`,
-        toolCalls: [],
-      })),
+      // The SECOND answer is a plain one: a mock that repeats the same content
+      // forever is salvaged into the same followup tool every step and runs to
+      // the step ceiling, which would mix the continuation chips into a test
+      // about followup PROPAGATION.
+      generateTools: vi
+        .fn()
+        .mockResolvedValueOnce({
+          content: `Hello!\n\n${JSON.stringify({ tool: 'suggest_followups', arguments: { followups: [{ prompt: 'Text next one' }] } })}`,
+          toolCalls: [],
+        })
+        .mockResolvedValue({ content: 'Hello!', toolCalls: [] }),
       generate: vi.fn().mockResolvedValue('Hello!'),
       isAvailable: vi.fn().mockResolvedValue(true),
       getInfo: () => 'Mock',

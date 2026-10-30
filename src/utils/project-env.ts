@@ -30,7 +30,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { leadingAssignments, unwrappedSegments } from './command-shape.js';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 
 /** Where the project marker files that describe Python deps live. */
@@ -397,13 +398,18 @@ export function hasPythonManifest(dir: string): boolean {
 
 // ─── Command classification ────────────────────────────────────────────────
 
-/** Split a shell line into the separately-run pieces (the `&&`/`;`/`|` chain). */
+/**
+ * Split a shell line into the separately-run pieces, with each piece's
+ * decorations peeled off.
+ *
+ * `NUVIRA_ENV_GUARD=off python3 -m unittest tests.x` is the command
+ * `python3 -m unittest tests.x`. Reading the raw text missed it entirely, so
+ * the guard did not apply the project venv AND the confirmation classifier did
+ * not recognize a test run: one measured bench turn lost three steps to that
+ * single misparse. See src/utils/command-shape.ts.
+ */
 function commandSegments(command: string): string[] {
-  return command
-    .toLowerCase()
-    .split(/&&|;|\|\||\n|\|/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return unwrappedSegments(command).map((s) => s.toLowerCase());
 }
 
 const PYTHON_TOOLCHAIN_RE =
@@ -513,10 +519,15 @@ export type EnvironmentVerdict =
   | { action: 'proceed'; venv: ProjectVenv | null; note?: string }
   | { action: 'refuse'; reason: string; hint: string };
 
+/** Does this value switch a guard off? */
+function switchesGuardOff(raw: string | undefined): boolean {
+  const value = (raw ?? '').trim().toLowerCase();
+  return value === 'off' || value === '0' || value === 'false' || value === 'no';
+}
+
 /** Is the guard disabled by the deployment? */
 export function envGuardDisabled(): boolean {
-  const raw = (process.env.NUVIRA_ENV_GUARD ?? process.env.BUFF_ENV_GUARD ?? '').trim().toLowerCase();
-  return raw === 'off' || raw === '0' || raw === 'false' || raw === 'no';
+  return switchesGuardOff(process.env.NUVIRA_ENV_GUARD ?? process.env.BUFF_ENV_GUARD);
 }
 
 /**
@@ -536,6 +547,15 @@ export function guardCommandEnvironment(
   options: { probe?: EnvironmentProbe; provision?: VenvProvisioner } = {},
 ): EnvironmentVerdict {
   if (envGuardDisabled()) return { action: 'not-applicable' };
+  // The bypass is documented as `NUVIRA_ENV_GUARD=off …` before the command —
+  // so it must work in that form. It could not: the variable was set for the
+  // CHILD process only, this process never saw it, and the refusal message told
+  // the model to do the very thing that kept being refused. Honour the
+  // assignment the command itself carries.
+  const inline = leadingAssignments(command);
+  if (switchesGuardOff(inline.NUVIRA_ENV_GUARD ?? inline.BUFF_ENV_GUARD)) {
+    return { action: 'not-applicable' };
+  }
   if (!isPythonToolchainCommand(command)) return { action: 'not-applicable' };
 
   let venv = getPinnedProjectVenv(cwd);
@@ -579,6 +599,23 @@ export function guardCommandEnvironment(
   }
 
   // Build/run: the interpreter must actually have the project's dependencies.
+  //
+  // A missing dependency is a FACT about this machine, not a property of the
+  // command, so the guard reports it and lets the command run. It used to
+  // refuse, which was measured to be the single most expensive decision in the
+  // harness: on a Windows-only wxPython app inspected on macOS (where those
+  // wheels cannot be installed at all) EVERY interpreter call was refused, so a
+  // review could not execute one module; and on a stdlib-only task the guard
+  // refused the test suite six times, which is why that bench turn spent 28
+  // model steps where Cline spent 17.
+  //
+  // Nothing is silently lost by proceeding, because the case the refusal existed
+  // for is caught by OBSERVATION instead of by prediction: a build that bundles
+  // around a missing import exits 0, and `effect-verification` then LAUNCHES the
+  // artifact and reports the crash with its stderr (the live Aukat_check
+  // failure). A test or a run that needs the missing wheel fails in the open.
+  // The note names the gap and who is missing it, so the turn can still say
+  // "this was not verified" honestly.
   const interpreter = venv?.python ?? interpreterOnPath();
   if (interpreter && names.length > 0) {
     const probe = options.probe ?? defaultEnvironmentProbe;
@@ -591,11 +628,15 @@ export function guardCommandEnvironment(
     if (missing.length > 0) {
       const label = venv ? 'the project venv' : 'the interpreter on PATH';
       return {
-        action: 'refuse',
-        reason: `${label} (${interpreter}) is missing ${missing.length} declared dependency(ies): ${missing.join(', ')}`,
-        hint: venv
-          ? `Install them into the venv first: \`${venv.python} -m pip install -r requirements.txt\`, then re-run this command.`
-          : 'Create a project venv (`python3 -m venv .venv`), install the requirements into it, then re-run.',
+        action: 'proceed',
+        venv,
+        note:
+          `${label} (${interpreter}) is missing ${missing.length} declared dependency(ies): ` +
+          `${missing.join(', ')} — commands that import them will fail loudly; everything ` +
+          'that does not need them still runs. A bundling command is the exception: it can ' +
+          'exit 0 around a missing import, so its artifact is launched before the build is ' +
+          'called a success. Install with ' +
+          `\`${interpreter} -m pip install -r requirements.txt\` where the wheel exists for this platform.`,
       };
     }
   }
@@ -604,20 +645,144 @@ export function guardCommandEnvironment(
 
 /** Forget memoized probes (tests; also after an install changes the env). */
 export function clearEnvironmentProbeCache(): void {
+  INTERPRETER_SHEET.clear();
   PROBE_CACHE.clear();
 }
 
+/** Memoize the interpreter sheet per directory: it costs subprocesses, and the
+ * answer cannot change inside one run. */
+const INTERPRETER_SHEET = new Map<string, string>();
+
+/** The importable package a project's tests exercise, or null. */
+function projectPackageName(dir: string): string | null {
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .filter((name) => !SKIP_PACKAGE_DIRS.has(name) && !name.startsWith('.'))
+      .sort();
+    for (const name of entries) {
+      if (existsSync(join(dir, name, '__init__.py'))) return name;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Directories that are never the project's own package. */
+const SKIP_PACKAGE_DIRS = new Set([
+  'node_modules', 'tests', 'test', 'build', 'dist', 'docs', 'doc', 'scripts',
+  'venv', 'env', '.venv', '.tox', 'site-packages', 'packaging', 'examples',
+]);
+
 /**
- * A one-line description of the project interpreter for the ambient project
- * context, so the model USES the pinned env instead of re-deriving it. '' when
- * the directory declares nothing Python.
+ * Measured facts about a project's Python runtime, for the ambient context.
+ *
+ * WHY THIS IS NOT A ONE-LINE GUESS ANY MORE. It used to answer from configuration
+ * alone — "no project venv found (create `.venv`)" — which sent an agent on a
+ * measured wild goose chase: it created a `.venv` inside the user's repository,
+ * wrote a shell script to run the tests, computed a suite delta by hand across four
+ * code-execution probes, and asked the user a question no one could answer. Eleven
+ * of that turn's twenty-eight model steps were spent re-deriving its environment.
+ *
+ * So this RUNS the candidates instead of describing them, and reports what actually
+ * happened: which interpreter can import the project's own package (and the first
+ * line of the failure when none can), the exact command that runs the project's
+ * tests, and what the environment guard will do with that command. Three cheap
+ * subprocesses, memoized per directory, inside a hard timeout — and still a list of
+ * FACTS, not an instruction: the model decides what to do with them.
  */
 export function describeProjectInterpreter(dir: string): string {
   try {
+    if (!hasPythonManifest(dir) && !projectPackageName(dir)) return '';
+    const cached = INTERPRETER_SHEET.get(dir);
+    if (cached !== undefined) return cached;
+
     const venv = getPinnedProjectVenv(dir);
-    if (!venv) return hasPythonManifest(dir) ? 'python: no project venv found (create `.venv`)' : '';
-    return `python: ${venv.python} (pinned for this project)`;
+    const pkg = projectPackageName(dir);
+    const candidates: string[] = [];
+    if (venv) candidates.push(venv.python);
+    const onPath = interpreterOnPath();
+    for (const candidate of [onPath, 'python3', 'python']) {
+      if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
+    }
+
+    const lines: string[] = [];
+    let usable: string | null = venv ? venv.python : null;
+    if (pkg) {
+      let firstFailure: { python: string; detail: string } | null = null;
+      for (const python of candidates) {
+        const result = probePackageImport(python, pkg, dir);
+        if (result.ok) {
+          usable = python;
+          break;
+        }
+        if (!firstFailure) firstFailure = { python, detail: result.detail };
+      }
+      if (usable) {
+        lines.push(`python: \`${usable}\` imports \`${pkg}\`${venv ? ' (the pinned project env)' : ''}`);
+      } else if (firstFailure) {
+        lines.push(
+          `python: no interpreter tried can import \`${pkg}\` — \`${firstFailure.python}\`: ${firstFailure.detail}`,
+        );
+      }
+    } else if (venv) {
+      lines.push(`python: \`${venv.python}\` (the pinned project env)`);
+    }
+
+    // The exact test command, from what the tree actually contains — not a guess.
+    const hasTests = existsSync(join(dir, 'tests'));
+    const pytestProject = ['pytest.ini', 'conftest.py', 'tox.ini'].some((f) => existsSync(join(dir, f)));
+    if (hasTests) {
+      const python = usable ?? candidates[0] ?? 'python3';
+      const command = pytestProject
+        ? `${python} -m pytest -q`
+        : `${python} -m unittest discover -s tests -p 'test_*.py'`;
+      lines.push(`tests: \`${command}\``);
+      // What the guard will do with it — the guard's OWN verdict, quoted, so the
+      // model does not have to discover a refusal by trying and failing.
+      try {
+        const verdict = guardCommandEnvironment(command, dir);
+        if (verdict.action === 'refuse') {
+          lines.push(`env guard: refuses \`${command}\` — ${verdict.reason}. ${verdict.hint}`);
+        }
+      } catch {
+        // A guard that cannot decide adds nothing; omit the line.
+      }
+    }
+
+    const sheet = lines.join('\n');
+    INTERPRETER_SHEET.set(dir, sheet);
+    return sheet;
   } catch {
     return '';
+  }
+}
+
+/** Does `python` import the project package? One subprocess, capped. */
+function probePackageImport(
+  python: string,
+  pkg: string,
+  dir: string,
+): { ok: boolean; detail: string } {
+  try {
+    const res = spawnSync(python, ['-c', `import ${pkg}`], {
+      cwd: dir,
+      encoding: 'utf-8',
+      timeout: 5_000,
+      windowsHide: true,
+    });
+    if (res.error) return { ok: false, detail: (res.error as Error).message.slice(0, 120) };
+    if (res.status === 0) return { ok: true, detail: 'ok' };
+    const text = `${res.stderr ?? ''}\n${res.stdout ?? ''}`;
+    const line = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && /Error|error:|No module/.test(l))
+      .pop();
+    return { ok: false, detail: (line ?? `exit ${res.status}`).slice(0, 160) };
+  } catch (err) {
+    return { ok: false, detail: (err as Error).message.slice(0, 120) };
   }
 }

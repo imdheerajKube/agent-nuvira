@@ -46,6 +46,7 @@ import {
   type ResumeOutcome,
 } from '../learning/step-checkpoint.js';
 import { applyActiveModel } from './model.js';
+import { resetMCPManager } from '../mcp/manager.js';
 import { ConfigManager } from '../config/manager.js';
 import { capabilityReasoningEffort, isMaxCapability } from '../config/capability-mode.js';
 import { InferenceProvider } from '../inference/interface.js';
@@ -59,6 +60,7 @@ import type { ComplexityLevel } from '../learning/hybrid-router.js';
 import { getRouterBandit } from '../learning/router-bandit.js';
 import { UnusableModelResponseError } from '../learning/response-usability.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
+import { resolveTurnBudget } from '../learning/turn-budget.js';
 import { getAutoRouter, isAgentAutoRoute, isAutoModel, isAutoProvider, governanceVerdict, adminBudgetVerdict, isAgenticTask } from '../learning/auto-router.js';
 import { continuationSoftwareText } from '../learning/continuation-intent.js';
 import { buildAssessmentTurnContext } from '../learning/assessment-turn-context.js';
@@ -832,6 +834,19 @@ export function buildToolSystemPrompt(parsed?: ParsedRequest): string {
     '- Some tools live OUTSIDE your visible list in domain toolsets (media, browser, channels, docker, …). If a tool you need is "unknown", call tool_search with {"action":"load","toolset":"<name>"} — its tools become callable immediately.',
     '- Always end with suggest_followups.',
     '',
+    // WHY THIS BLOCK EXISTS. The turn is legible only if the user can follow it.
+    // Measured in a head-to-head against Cline on the same repo: both agents did
+    // the work, but the transcript the user watched was tool cards with no stated
+    // intent, so a 90-second turn read as a machine doing unexplained things.
+    // One line of intent per batch, plus a plan that stays current, is what makes
+    // the same work reviewable WHILE it runs — and it costs a sentence, not a
+    // step. These are output-style rules, never a reason to skip a tool call or
+    // to repeat one.
+    '## Working out loud',
+    '- Before a batch of tool calls, write ONE line: what you are about to do and why.',
+    '- Keep the plan current — `plan_todo` at the start, updated when a step lands.',
+    '- While a long command runs, say what you are doing meanwhile instead of going silent. Findings get one line as you hit them; the explanation comes in the answer.',
+    '',
     // WHY THIS BLOCK EXISTS. A weak model, primed by an earlier "attach a
     // project folder" refusal, carried that refusal into a plain writing
     // request: asked to write an essay it answered with instructions for moving
@@ -1127,6 +1142,12 @@ export class ChatCommand extends BaseCommand {
      * step content at once. The CLI never passes it — pure dashboard opt-in.
      */
     onToken?: (token: string) => void;
+    /**
+     * Display-only stream of a thinking model's `reasoning_content`. Never
+     * mixed into the answer: it is the model's working notes, shown while the
+     * reply is still being formed.
+     */
+    onReasoning?: (token: string) => void;
     /**
      * P4 — external cancellation (the dashboard's Cancel button): the turn
      * stops at the next loop boundary and any in-flight provider request
@@ -1490,7 +1511,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, decisionContext: decisionBlock, projectPath: opts.projectPath, onToken: opts.onToken, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat', debugSession: opts.debugSession, worktree: opts.worktree, keepWorktree: opts.keepWorktree, resume: opts.resume },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, decisionContext: decisionBlock, projectPath: opts.projectPath, onToken: opts.onToken, onReasoning: opts.onReasoning, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat', debugSession: opts.debugSession, worktree: opts.worktree, keepWorktree: opts.keepWorktree, resume: opts.resume },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -1818,7 +1839,11 @@ export class ChatCommand extends BaseCommand {
           '  report which one answered), set NUVIRA_STRICT_MODEL=0.\n',
       )
       .action(async (prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean }) => {
-        const opts = options || {};
+        // R2 — when stdin is not a TTY this invocation is headless: nobody can
+        // type another message, so the process must exit once the turn is done
+        // instead of parking on an MCP child's pipes. Tests and library callers
+        // reach `execute()` directly and never get this flag.
+        const opts = { ...(options || {}), exitOnComplete: !process.stdin.isTTY };
         // ── ASK 1 — A NAMED PAIR HOLDS FOR THE WHOLE TURN ──────────────────
         //
         // `--provider`/`--model` name a model; they are not a hint. The `auto`
@@ -1889,8 +1914,25 @@ export class ChatCommand extends BaseCommand {
   ): {
     overrides: {
       onToken?: (token: string) => void;
+      /**
+       * The model's working notes, as they stream. Rendered dim above the
+       * answer frame and cleared when the answer itself begins, so the user
+       * reads the reasoning process instead of a screen of tool cards with no
+       * explanation of why they ran.
+       */
+      onReasoning?: (token: string) => void;
       onToolCall?: (phase: 'started' | 'called', info: ToolCallInfo) => void;
       onGitDiff?: (payload: import('../tools/git-tool.js').GitDiffPayload) => void;
+      /**
+       * The turn's plan, kept in the live frame instead of printed once.
+       *
+       * The plan used to reach the terminal only as a TABLE appended to the
+       * scrollback on each change, which meant the checklist answered "how far
+       * along?" exactly once and then scrolled away — while a long command ran,
+       * the frame showed one line and nothing else. A live panel is the same
+       * information, in the place the user is already looking.
+       */
+      onPlanChange?: (snapshot: import('../tools/plan-store.js').PlanSnapshot) => void;
     };
     stop: () => void;
     /**
@@ -1930,6 +1972,10 @@ export class ChatCommand extends BaseCommand {
           stream.setNote(undefined);
           stream.append(token);
         },
+        onReasoning: (token) => {
+          show(undefined);
+          stream.appendReasoning(token);
+        },
         onToolCall: (phase, info) => {
           if (phase === 'started') {
             // The step's preamble is not the answer: clear it so the preview
@@ -1944,6 +1990,10 @@ export class ChatCommand extends BaseCommand {
           stream.card(toolCallCard({ tool: info.tool, ok: info.ok, error: info.error, result: info.result, durationMs: info.durationMs, args: info.args }));
         },
         onGitDiff: (payload) => stream.card(gitDiffCard(payload)),
+        onPlanChange: (snapshot) => {
+          show(undefined);
+          stream.setPlan({ goal: snapshot.goal, steps: snapshot.steps });
+        },
       },
       start: (note?: string) => show(note ?? THINKING_NOTE),
       stop: () => {
@@ -1953,7 +2003,42 @@ export class ChatCommand extends BaseCommand {
     };
   }
 
-  private async execute(prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean }): Promise<void> {
+  /**
+   * R2 — end a HEADLESS one-shot turn deterministically.
+   *
+   * A one-shot answer used to `return` from `execute()` and rely on the event
+   * loop emptying. It does not: a stdio MCP server is a real child process
+   * (`StdioClientTransport`), and its pipes keep the loop referenced, so the
+   * answer printed and the process then sat at 0% CPU indefinitely. Measured
+   * 2026-10-17 during the Cline head-to-head: the turn finished in 126 s and
+   * `nuvira chat "<task>"` was still alive — with `quote-server.js` running —
+   * eight minutes later, until it was killed by hand. The same command exited
+   * cleanly when stdin was `/dev/null` (run.mjs) and hung when stdin was an open
+   * pipe that never EOF'd, which is why the failure looked intermittent.
+   *
+   * Teardown is the work the interactive exit path already does —
+   * `resetMCPManager()` disconnects every client, and `disconnectAll()` group-
+   * SIGKILLs the detached children — followed by an explicit exit code. It is
+   * only armed when the CLI OWNS the process (`exitOnComplete`, set from the
+   * command action when stdin is not a TTY); library callers and tests calling
+   * `execute()` directly keep the old return-and-continue behaviour, because
+   * exiting there would kill the host process.
+   */
+  private finishHeadless(exitOnComplete?: boolean): void {
+    if (!exitOnComplete) return;
+    try {
+      resetMCPManager();
+    } catch {
+      // Best-effort: the process is exiting and `process.on('exit')` reaps any
+      // child that survived this call.
+    }
+    // Best-effort memory/metrics drain is NOT attempted here: the one-shot path
+    // never accumulated them (they belong to the interactive session), and a
+    // pending timer would be another way to hang. Exit is the contract.
+    process.exit(0);
+  }
+
+  private async execute(prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean; exitOnComplete?: boolean }): Promise<void> {
     // Apply the active model state from `nuvira model switch` as defaults
     const activeOpts = applyActiveModel({ provider: options?.provider, model: options?.model });
     const mergedOpts = { ...options, provider: activeOpts.provider, model: activeOpts.model };
@@ -2126,6 +2211,7 @@ export class ChatCommand extends BaseCommand {
         // After pipeline execution, show followups and continue conversation
         // (don't just return — keep user engaged with next steps)
         if (!process.stdin.isTTY) {
+          this.finishHeadless(options?.exitOnComplete);
           return;
         }
         // Seed history with the pipeline result so followups have context
@@ -2151,6 +2237,7 @@ export class ChatCommand extends BaseCommand {
       }
       if (!process.stdin.isTTY) {
         await this.renderFollowups(answer.followups ?? [], false);
+        this.finishHeadless(options?.exitOnComplete);
         return;
       }
       // Seed the continuation history with turn 1 so a picked followup has
@@ -2500,6 +2587,8 @@ export class ChatCommand extends BaseCommand {
        * Delivered verbatim from the tool loop — see ToolLoopOptions.onToken.
        */
       onToken?: (token: string) => void;
+      /** Display-only stream of the model's reasoning (see `liveAnswer`). */
+      onReasoning?: (token: string) => void;
       /**
        * P4 — external cancellation (the dashboard Cancel button): passed to
        * the tool loop so an in-flight provider request aborts and the turn
@@ -2925,6 +3014,35 @@ export class ChatCommand extends BaseCommand {
       machineBlock = '';
     }
 
+    // MCP servers — NAMED once, with the call path.
+    //
+    // MEASURED (2026-10-17, the slugkit release task, `quote` MCP server): the
+    // model spent 8 of its 43 tool calls finding out how to reach a server whose
+    // NAME it already had from the ask — `tool_search` ×2, `mcp_tool list-servers`,
+    // `mcp_tool connect`, then FOUR shell calls (`ls ..`, `ls /private/tmp/base`,
+    // `find /private/tmp`, `grep -rl …`) hunting for where MCP is configured. None
+    // of it produced information the harness did not already have. One line here
+    // removes that whole detour: the servers that exist, the tool that calls them,
+    // the one connect step, and an explicit "do not go looking for the config".
+    // Best-effort and side-effect free: a discovery failure injects nothing.
+    let mcpBlock = '';
+    try {
+      const { getMCPManager } = await import('../mcp/manager.js');
+      const servers = getMCPManager()
+        .discoverConfigs()
+        .filter((c) => c.enabled !== false)
+        .map((c) => c.name)
+        .filter((n): n is string => typeof n === 'string' && n.length > 0);
+      if (servers.length > 0) {
+        mcpBlock =
+          '## MCP servers on this machine\n' +
+          `- Configured: ${servers.join(', ')}. Call their tools with \`mcp_tool\` (e.g. \`mcp_tool({"tool":"<tool-name>"})\`); if a call reports the server is not connected, run \`mcp_tool({"action":"connect","server":"<name>"})\` ONCE and retry.\n` +
+          '- Do NOT search the filesystem for MCP configuration, and do NOT use `list-servers` to discover what you were already told here — the harness reads the config directory itself.\n';
+      }
+    } catch {
+      mcpBlock = '';
+    }
+
     // `-f/--file` file-context parity: the legacy generateWithContext loaded
     // + retrieval-reduced file context. Inject it as a context message before
     // the user's message so the tool-loop path keeps the flag working.
@@ -3008,7 +3126,7 @@ export class ChatCommand extends BaseCommand {
     // turn, where it used to occupy ~80% of the ask on WhatsApp turns.
     const systemPolicyBlock = ctxOverrides?.systemPolicy ? `\n\n${ctxOverrides.systemPolicy}` : '';
     const thread: ToolMessage[] = [
-      { role: 'system', content: systemText + systemPolicyBlock + machineBlock + skillHint },
+      { role: 'system', content: systemText + systemPolicyBlock + machineBlock + mcpBlock + skillHint },
       // P3 — the attached project's bounded snapshot (path + file tree +
       // symbol map) rides in before the conversation, exactly like --file
       // context: the model knows what it is looking at without being told.
@@ -3231,6 +3349,8 @@ export class ChatCommand extends BaseCommand {
       // PINNED + STRICT: the escalation asks the USER when a pinned model will not
       // answer (keep trying / switch to a same-class model / name one / go auto).
       ctxOverrides?.askUser,
+      // Display-only: the model's working notes, when the surface renders them.
+      ctxOverrides?.onReasoning,
     );
 
     let result: ToolLoopResult;
@@ -3247,6 +3367,9 @@ export class ChatCommand extends BaseCommand {
       source: 'chat',
       provider: session.type,
       model: session.model,
+      // The project the turn works on: without it a finding is stored per run and
+      // unreachable from the next one (see `findings/ledger.ts`).
+      workingDirectory: turnCwd,
     });
     // G18 — the tool-context emit (declared above) now has somewhere to write.
     traceIdForEvents = chatTraceId;
@@ -3287,6 +3410,9 @@ export class ChatCommand extends BaseCommand {
           { name: 'system:identity+tool-contract', chars: systemText.length },
           { name: 'system:channel-policy', chars: systemPolicyBlock.length },
           { name: 'skill-hint', chars: skillHint.length, dropPriority: 10 },
+          // Which MCP servers exist is a FACT about this host (like the machine
+          // facts), and the block is tiny — kept ahead of the advisory hints.
+          { name: 'mcp-servers', chars: mcpBlock.length, dropPriority: 14 },
           // Machine facts are FACTS about the host, not a recommendation, so they
           // drop LAST among the optional blocks (higher priority = kept longer).
           { name: 'machine-facts', chars: machineBlock.length, dropPriority: 15 },
@@ -3310,13 +3436,17 @@ export class ChatCommand extends BaseCommand {
       // Apply the ladder steps: drop the optional system blocks the budget names,
       // rebuilding the system message from the survivors.
       const trimmed = new Set(report.trims);
-      if ((trimmed.has('skill-hint') || trimmed.has('machine-facts')) && (skillHint || machineBlock)) {
+      if (
+        (trimmed.has('skill-hint') || trimmed.has('machine-facts') || trimmed.has('mcp-servers')) &&
+        (skillHint || machineBlock || mcpBlock)
+      ) {
         thread[0] = {
           role: 'system',
           content:
             systemText +
             systemPolicyBlock +
             (trimmed.has('machine-facts') ? '' : machineBlock) +
+            (trimmed.has('mcp-servers') ? '' : mcpBlock) +
             (trimmed.has('skill-hint') ? '' : skillHint),
         };
       }
@@ -3351,7 +3481,19 @@ export class ChatCommand extends BaseCommand {
     const digestPrompt = (p: string): string => {
       try { return createHash('sha256').update(p).digest('hex').slice(0, 16); } catch { return String(p.length); }
     };
-    const recordChatStep = (prompt: string, output: string, latencyMs: number, ok: boolean, error?: string): void => {
+    // Provider-reported usage for the whole turn. `null` counts stay out of the
+    // total, so a turn on a provider that reports nothing is not silently scored
+    // as free — `reportedCalls` says how much of it is measured.
+    const turnUsage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reportedCalls: 0, calls: 0 };
+
+    const recordChatStep = (
+      prompt: string,
+      output: string,
+      latencyMs: number,
+      ok: boolean,
+      error?: string,
+      usage?: { promptTokens: number; completionTokens: number; cachedPromptTokens?: number },
+    ): void => {
       try {
         const digest = digestPrompt(prompt);
         if (seenStepDigests.has(digest)) return;
@@ -3379,8 +3521,19 @@ export class ChatCommand extends BaseCommand {
           promptPreview,
           responsePreview: output.slice(0, 1000),
           responseLength: output.length,
-          inputTokens: estimateTokens(prompt),
-          outputTokens: estimateTokens(output),
+          // The provider's own counts when it reported them; the estimate only when
+          // it did not. Recorded with `tokensReported` so a reader (and the live
+          // surfaces) can tell a measured number from an inferred one.
+          inputTokens: usage?.promptTokens ?? estimateTokens(prompt),
+          outputTokens: usage?.completionTokens ?? estimateTokens(output),
+          ...(usage
+            ? {
+                tokensReported: true,
+                ...(usage.cachedPromptTokens !== undefined
+                  ? { cachedInputTokens: usage.cachedPromptTokens }
+                  : {}),
+              }
+            : {}),
           latencyMs,
           success: ok,
           error,
@@ -3390,14 +3543,21 @@ export class ChatCommand extends BaseCommand {
         // Best-effort — a trace write must never break the turn.
       }
     };
-    const callModelWithTrace: ToolLoopDeps['callModel'] = async (threadMsgs, schemas2, tok, sig) => {
+    const callModelWithTrace: ToolLoopDeps['callModel'] = async (threadMsgs, schemas2, tok, sig, reasoning) => {
       const start = Date.now();
       const prompt = threadMsgs.map((m) => (m.role === 'system' ? `[System]\n${m.content}` : m.role === 'user' ? `[User]\n${m.content}` : m.role === 'assistant' ? `[Assistant]\n${m.content}` : `[Tool result]\n${m.content}`)).join('\n\n');
       try {
-        const resp = await callModel(threadMsgs, schemas2, tok, sig);
+        const resp = await callModel(threadMsgs, schemas2, tok, sig, reasoning);
         const ms = Date.now() - start;
         turnModelMs += ms;
-        recordChatStep(prompt, resp.content ?? '', ms, true);
+        turnUsage.calls += 1;
+        if (resp.usage) {
+          turnUsage.inputTokens += resp.usage.promptTokens;
+          turnUsage.outputTokens += resp.usage.completionTokens;
+          turnUsage.cachedInputTokens += resp.usage.cachedPromptTokens ?? 0;
+          turnUsage.reportedCalls += 1;
+        }
+        recordChatStep(prompt, resp.content ?? '', ms, true, undefined, resp.usage);
         return resp;
       } catch (err) {
         const ms = Date.now() - start;
@@ -3559,6 +3719,7 @@ export class ChatCommand extends BaseCommand {
         model: session.model,
         configExposure: getLoopExposureMode(this.configManager),
       });
+      const turnBudget = resolveTurnBudget(this.configManager);
       result = await runToolLoop({
         messages: thread,
         // The route the model is TOLD about itself. Read fresh each step from the
@@ -3584,10 +3745,18 @@ export class ChatCommand extends BaseCommand {
         otel: otelSpan,
         // WS4 — the label a tool hook reports this call under.
         surface: ctxOverrides?.debugSurface ?? 'cli-chat',
+        // Coverage is stamped with this run's trace id, so a path the turn read can
+        // be traced to the run that read it (see learning/working-state.ts).
+        runId: chatTraceId,
         // WS5 — the resume ledger, when this turn was asked to resume. Omitted
         // entirely otherwise, so an ordinary turn never consults it.
         ...(resume ? { resume: resume.ledger } : {}),
+        // WALL CLOCK — the budget the user actually has. Steps are not a unit of
+        // time; without this, a turn whose last ten minutes go into a broken browser
+        // runner ends at an external timeout with no handover (measured 2026-10-27).
+        ...(turnBudget.enabled ? { maxDurationMs: turnBudget.ms } : {}),
         onToken: ctxOverrides?.onToken,
+        onReasoning: ctxOverrides?.onReasoning,
         signal: ctxOverrides?.signal,
         // G18 — the same sink the execute loop uses: tool calls, gate decisions
         // and refusals land on the turn's trace, so the chat surface can answer
@@ -3837,6 +4006,10 @@ export class ChatCommand extends BaseCommand {
     const chatOutcome = buildTraceOutcome({
       generationFailed: result.generationFailed,
       cancelled: result.cancelled,
+      // A step-ceiling ending is `incomplete`, never `acted`: the measured
+      // truncated run (2 of 9 plan steps open) was recorded `success: true`
+      // because the outcome had no term for the ceiling.
+      bounded: result.bounded,
       // What actually RAN successfully, not what was attempted: a failed
       // `gateway_send` must not make the trace read
       // "✅ action performed — message sent".
@@ -3910,6 +4083,7 @@ export class ChatCommand extends BaseCommand {
             : {}),
           unverifiedEdit: result.unverifiedEdit === true,
           userMessage: message,
+          runId: chatTraceId,
         });
       }
     } catch {
@@ -4098,6 +4272,34 @@ export class ChatCommand extends BaseCommand {
       }
     }
 
+    // ── WHAT THE TURN COST, MEASURED WHEN THE PROVIDER SAID SO ──────────
+    //
+    // Every number this file recorded before was `chars/4`. A cost comparison
+    // against another agent that reports its own counts cannot be built on an
+    // estimate, and "nuvira does not print token usage" was the reason the
+    // benchmark fell back to one. One line per turn, on STDERR so it can never
+    // contaminate an answer that a script (or the CLI's own `--json`) reads.
+    if (turnUsage.reportedCalls > 0) {
+      const cached = turnUsage.cachedInputTokens > 0 ? ` (${turnUsage.cachedInputTokens} cached)` : '';
+      const scope =
+        turnUsage.reportedCalls === turnUsage.calls
+          ? 'provider-reported'
+          : `provider-reported for ${turnUsage.reportedCalls}/${turnUsage.calls} calls`;
+      process.stderr.write(
+        `🧮 tokens ${turnUsage.inputTokens} in${cached} / ${turnUsage.outputTokens} out — ${scope}\n`,
+      );
+      if (debugLog) {
+        debugLog.event('turn.usage', {
+          inputTokens: turnUsage.inputTokens,
+          outputTokens: turnUsage.outputTokens,
+          ...(turnUsage.cachedInputTokens > 0 ? { cachedInputTokens: turnUsage.cachedInputTokens } : {}),
+          calls: turnUsage.calls,
+          reportedCalls: turnUsage.reportedCalls,
+          source: 'provider',
+        });
+      }
+    }
+
     // Followups are rendered by the CALLER (after the answer is printed) so
     // the menu never appears before the content. We return them as data.
     //
@@ -4169,6 +4371,9 @@ export class ChatCommand extends BaseCommand {
     const chatOutcomeForFollowups = buildTraceOutcome({
       generationFailed: result.generationFailed,
       cancelled: result.cancelled,
+      // A bounded turn did not conclude — it must offer the way back in
+      // (Continue / Retry) exactly like a cancelled one.
+      bounded: result.bounded,
       tools: result.successfulToolCalls ?? result.toolCalls,
       unverifiedActionClaim: result.unverifiedActionClaim,
       unfulfilledPromise: result.unfulfilledPromise,
@@ -4625,8 +4830,10 @@ export class ChatCommand extends BaseCommand {
      * the strict refusal stands rather than anything being chosen for the user.
      */
     askUser?: ToolContext['askUser'],
+    /** Display-only reasoning sink (see ToolLoopOptions.onReasoning). */
+    onReasoning?: (token: string) => void,
   ): ToolLoopDeps['callModel'] {
-    return async (messages, schemas, stepOnToken, stepSignal) => {
+    return async (messages, schemas, stepOnToken, stepSignal, stepOnReasoning) => {
       // The effective token sink: the caller's stream wins; when a step-level
       // sink is also given (loop passthrough) they are the same channel.
       const sink = stepOnToken ?? onToken;
@@ -4804,7 +5011,22 @@ export class ChatCommand extends BaseCommand {
             // content delivered as a single chunk so the typewriter channel
             // still receives the answer (appears at once — today's behavior).
             if (sink && typeof prov.generateToolsStream === 'function') {
-              const result = await prov.generateToolsStream(messages, schemas, { ...options, model: effectiveModel, signal: abort, reasoningEffort: capabilityReasoningEffort(this.configManager) }, sink);
+              const reasoningSink = stepOnReasoning ?? onReasoning;
+              const result = await prov.generateToolsStream(
+                messages,
+                schemas,
+                {
+                  ...options,
+                  model: effectiveModel,
+                  signal: abort,
+                  reasoningEffort: capabilityReasoningEffort(this.configManager),
+                  // Stream the model's working notes when the step has a sink
+                  // for them; absent → the provider's reasoning stays internal
+                  // (still replayed on the wire, just not printed).
+                  ...(reasoningSink ? { onReasoning: reasoningSink } : {}),
+                },
+                sink,
+              );
               confuseCheck(result.content, result.toolCalls.length > 0);
               return answered({ ...result, transport: 'native' as const });
             }

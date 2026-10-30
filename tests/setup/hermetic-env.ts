@@ -89,6 +89,35 @@ for (const key of ['NUVIRA_SKILLS_DIR', 'BUFF_SKILLS_DIR']) {
   if (!process.env[key]) process.env[key] = skillsDir;
 }
 
+// The workspace-checkpoint store, for the same reason as the memory dir — and
+// this one had grown to be the suite's single largest cost.
+//
+// MEASURED (2026-10-30) on this repo: `~/.nuvira/checkpoints/workspaces` held
+// 1,120 checkpoints recording 4,582,545 file entries — ~966 MB of manifests —
+// because the agent's PRE-WRITE CHECKPOINT snapshots everything under its project
+// root on a turn's first write, and in a test that root is the repository. Every
+// test that drove a mutation therefore snapshotted the whole project into the
+// developer's real store. Two consequences, both observed:
+//   • the store grew with every run, and creating a checkpoint parsed all of it
+//     (`createWorkspaceCheckpoint` used `listCheckpoints` to pick an ordering
+//     timestamp), so the suite got slower the more it ran and the 15s floor
+//     started timing out a DIFFERENT test each run;
+//   • two files running at once shared that store, so the cost of one file's test
+//     depended on what the other three workers were doing.
+// The parse is gone (the id carries the timestamp), and this isolates the store.
+const checkpointDir = join(runDir, 'checkpoints');
+if (!process.env.NUVIRA_CHECKPOINT_DIR) process.env.NUVIRA_CHECKPOINT_DIR = checkpointDir;
+
+// …and the snapshot itself is OFF by default. Even isolated, it hashes every file
+// under the project root (measured 1.4s for this repo's 13,944 files / 268 MB),
+// which no flow test is asserting — it is 400+ files paying seconds each for a
+// feature they do not exercise, and under `maxWorkers` that is what pushed timing
+// budgets over the edge. The wiring has its own tests
+// (`tests/tools/checkpoint-wiring.test.ts`), which point the project root at a
+// two-file fixture and switch this back on. A test that wants the real thing sets
+// it to `1`.
+if (!process.env.NUVIRA_CHECKPOINT_BEFORE_WRITE) process.env.NUVIRA_CHECKPOINT_BEFORE_WRITE = '0';
+
 // State the provenance explicitly rather than relying on the runner being
 // detected: telemetry written from a test process is tagged `origin: 'test'` and
 // excluded from every number the dashboard reports. Defence in depth — the

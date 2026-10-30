@@ -125,12 +125,36 @@ describe('createRunStream', () => {
     expect(chunks.join('')).toBe('The limiter is fixed.\n');
   });
 
-  it('offers the live seams on a TTY (token stream, tool cards, progress note)', () => {
+  it('offers the live seams on a TTY (token stream, tool cards, progress note, plan)', () => {
     const run = createRunStream({ header: 'nuvira · execute' }, { stream: makeStream([], true), env: {}, color: false });
     expect(typeof run.overrides.onToken).toBe('function');
     expect(typeof run.overrides.onToolCall).toBe('function');
     expect(typeof run.overrides.onGitDiff).toBe('function');
     expect(typeof run.overrides.onProgress).toBe('function');
+    // The plan is its own seam because it is STATE, not an event: it stays in the
+    // frame for the whole turn, while a progress note is replaced per step.
+    expect(typeof run.overrides.onPlanChange).toBe('function');
+  });
+
+  it('keeps the plan after a note and a tool call REPLACE the frame’s text', () => {
+    const s = new AnswerStream({ header: 'nuvira' }, { stream: makeStream([], true), env: {}, color: false });
+    s.begin();
+    s.setPlan({
+      goal: 'Fix the limiter',
+      steps: [
+        { description: 'reproduce', status: 'done' },
+        { description: 'fix the burst cap', status: 'running' },
+      ],
+    });
+    // A tool starting clears the step's preamble — the plan must survive that, or
+    // the panel would vanish exactly when a long command runs.
+    s.reset();
+    s.setNote('⚙ run_terminal …');
+    const frame = (s as unknown as { element: () => unknown }).element();
+    const props = (frame as { props: { plan?: { goal: string }; note?: string } }).props;
+    expect(props.plan?.goal).toBe('Fix the limiter');
+    expect(props.note).toContain('run_terminal');
+    s.finish({ archive: false });
   });
 
   it('prints the FINAL answer once, even after tokens streamed', () => {

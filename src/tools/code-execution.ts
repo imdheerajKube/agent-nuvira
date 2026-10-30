@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { logger } from '../utils/logger.js';
 import { EventEmitter } from 'node:events';
+import { guardGuiTests } from '../utils/gui-test-guard.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -40,6 +41,8 @@ export interface ExecutionResult {
   durationMs: number;
   timedOut: boolean;
   error?: string;
+  /** Disclosure when a GUI test suite was contained (virtualenv/toolkit/offscreen). */
+  guiNote?: string;
 }
 
 // ─── Code Executor ────────────────────────────────────────────────────────
@@ -73,6 +76,11 @@ export class CodeExecutor extends EventEmitter {
 
     const { command, args, ext } = this.getCommand(config.language);
 
+    // A GUI project's test suite executed from here hits the same macOS crash
+    // dialog as one run through the terminal tool: contain it the same way (see
+    // src/utils/gui-test-guard.ts). Restored when this child exits.
+    const guard = guardGuiTests(config.code, config.cwd || process.cwd());
+
     // Write code to temp file
     const codeFile = join(this.execDir, `${id}${ext}`);
     await writeFile(codeFile, config.code, 'utf-8');
@@ -80,7 +88,7 @@ export class CodeExecutor extends EventEmitter {
     return new Promise((resolve) => {
       const child = spawn(command, [...args, codeFile], {
         cwd: config.cwd || process.cwd(),
-        env: { ...process.env, ...config.env },
+        env: { ...process.env, ...config.env, ...guard.env },
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: timeoutMs,
       });
@@ -107,6 +115,7 @@ export class CodeExecutor extends EventEmitter {
 
       child.on('close', (exitCode) => {
         clearTimeout(timer);
+        guard.restore();
         this.activeExecutions.delete(id);
 
         // Cleanup temp file
@@ -120,6 +129,7 @@ export class CodeExecutor extends EventEmitter {
           stderr: stderr.slice(0, maxOutputBytes),
           durationMs: Date.now() - startTime,
           timedOut,
+          ...(guard.note ? { guiNote: guard.note } : {}),
         };
 
         logger.debug(`[exec] ${config.language} completed in ${result.durationMs}ms (exit: ${exitCode})`);

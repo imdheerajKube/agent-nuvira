@@ -11,6 +11,19 @@
 import { logger } from '../utils/logger.js';
 import { pushDAGUpdate, updateDAGNode, resetDAG } from './dag-bridge.js';
 
+/**
+ * How much of an event's payload a debug line keeps.
+ *
+ * `tool:started` carries the tool's ARGUMENTS, which is the only place a command
+ * appears in the log. The short preview cut it at `cd … && python`, so the run that
+ * benchmarked the agent recorded 11 python invocations with their arguments
+ * unreadable — including whether they were `python -m pytest`. Everything else
+ * keeps the short form: `tool:called`'s `result` is unbounded output, and a debug
+ * log is meant to stay bounded.
+ */
+const EVENT_DEBUG_PREVIEW_CHARS = 200;
+const EVENT_DEBUG_ARGS_CHARS = 2_000;
+
 // ─── Event Types ────────────────────────────────────────────────────────────
 
 /** All event names emitted by the system */
@@ -691,7 +704,20 @@ export class LoggerConsumer implements EventBusConsumer {
 
           default:
             // For verbose mode, log all events at debug level
-            logger.debug(`[event] ${event}${src} ${JSON.stringify(data).slice(0, 200)}`);
+            // Arguments are kept nearly whole; every other payload keeps the short
+            // preview. A 200-char cut is fine for an event's shape and harmful for a
+            // command: MEASURED in the benchmark run log, `run_terminal({command: …})`
+            // stopped at `cd … && python`, so 11 python invocations were recorded and
+            // none of them could be read — a scorer looking for `python -m pytest`
+            // found nothing in a turn that had almost certainly run it, and the axis
+            // that exists to ask "did it check itself" answered no. `tool:called`
+            // keeps the short preview on purpose: its `result` is unbounded output.
+            // `String(event)` because the switch's union does not list every name the
+            // loop emits (`tool:started` reaches this branch at runtime, and TS would
+            // otherwise call the comparison impossible).
+            const previewChars =
+              String(event) === 'tool:started' ? EVENT_DEBUG_ARGS_CHARS : EVENT_DEBUG_PREVIEW_CHARS;
+            logger.debug(`[event] ${event}${src} ${JSON.stringify(data).slice(0, previewChars)}`);
             break;
         }
       }),

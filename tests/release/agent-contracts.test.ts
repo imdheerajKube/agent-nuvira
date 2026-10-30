@@ -50,8 +50,11 @@ describe('RELEASE GATE — system prompt budget', () => {
   });
 
   it('the base tool prompt stays within its budget', () => {
-    // ~8.5K measured; 12K leaves headroom for additions without budget creep.
-    expect(buildToolSystemPrompt().length).toBeLessThan(12_000);
+    // 12.3K measured after the `## Working out loud` clause (the "say what you are
+    // doing while you work" rule). The cap moves by exactly that clause rather than
+    // by a guess: 12.5K is the measured size plus a few hundred characters, so the
+    // next addition still has to justify itself here.
+    expect(buildToolSystemPrompt().length).toBeLessThan(12_500);
   });
 
   it('the DEFAULT skill hint for a software ask is small — the catalog is OPT-IN', async () => {
@@ -88,6 +91,16 @@ describe('RELEASE GATE — system prompt contract clauses', () => {
     expect(prompt).toMatch(/NOT sandboxed/);
     expect(prompt).toMatch(/run_terminal/);
     expect(prompt).toMatch(/command not found/);
+  });
+
+  it('asks the turn to say what it is doing WHILE it works, not only at the end', () => {
+    // The turn is reviewable only if its intent is visible while it runs. The
+    // rule is one line per batch plus a current plan — an output style, not a
+    // step: nothing here may be read as licence to skip a tool call.
+    const prompt = buildToolSystemPrompt();
+    expect(prompt).toMatch(/## Working out loud/);
+    expect(prompt).toMatch(/ONE line/);
+    expect(prompt).toMatch(/plan_todo/);
   });
 });
 

@@ -187,14 +187,83 @@ export interface LiveAnswerProps {
   done?: boolean;
   /** Inline note under the header (e.g. "thinking…"). */
   note?: string;
+  /**
+   * The model's working notes for the current step (`reasoning_content`),
+   * rendered dim above the answer and replaced when the answer text begins.
+   * Display only — never part of the answer or of what gets stored.
+   */
+  reasoning?: string;
+  /**
+   * The turn's plan, kept on screen while the turn runs.
+   *
+   * WHY THIS IS PART OF THE LIVE VIEW (measured, head-to-head vs Cline on the
+   * same repo). The plan used to be printed as a table ONCE, when it changed, and
+   * while a long command ran the frame showed only that command's one-line note —
+   * so a 90-second turn read as a machine doing unexplained things. The plan is
+   * the one piece of state that answers "how far along is this?", so it belongs
+   * in the frame that is on screen for the whole turn, not in the scrollback.
+   */
+  plan?: LivePlanView;
+}
+
+/** A plan as the live frame shows it: a goal, a progress count, ordered steps. */
+export interface LivePlanView {
+  goal: string;
+  steps: ReadonlyArray<{ description: string; status: 'pending' | 'running' | 'done' | 'blocked' }>;
+}
+
+/** How many plan rows the live frame shows before it summarises the rest. */
+const LIVE_PLAN_ROWS = 6;
+
+/** Status glyphs — the same vocabulary the plan table uses. */
+const PLAN_GLYPH: Record<LivePlanView['steps'][number]['status'], string> = {
+  done: '✔',
+  running: '▶',
+  pending: '⬜',
+  blocked: '✖',
+};
+
+/**
+ * The plan panel: what the turn is trying to do, and how far it has got.
+ *
+ * Bounded on purpose — the CURRENT step is what a watching user needs, so when a
+ * plan is longer than {@link LIVE_PLAN_ROWS} the window keeps the running step in
+ * view and says how many rows are hidden.
+ */
+function PlanPanel({ plan, theme }: { plan: LivePlanView; theme: Theme }): ReactElement {
+  const done = plan.steps.filter((s) => s.status === 'done').length;
+  const total = plan.steps.length;
+  const firstUnfinished = plan.steps.findIndex((s) => s.status === 'running' || s.status === 'pending');
+  const start = total <= LIVE_PLAN_ROWS ? 0 : Math.max(0, Math.min(firstUnfinished, total - LIVE_PLAN_ROWS));
+  const shown = plan.steps.slice(start, start + LIVE_PLAN_ROWS);
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      <Text color={colorOf(theme, 'muted')}>
+        🗂 {plan.goal} · {done}/{total}
+      </Text>
+      {shown.map((step, i) => (
+        <Text
+          key={`${start + i}-${step.description}`}
+          color={colorOf(theme, step.status === 'running' ? 'accent' : step.status === 'blocked' ? 'warn' : 'faint')}
+        >
+          {'  '}
+          {PLAN_GLYPH[step.status]} {step.description}
+        </Text>
+      ))}
+      {total > shown.length ? (
+        <Text color={colorOf(theme, 'faint')}>  … {total - shown.length} more step(s)</Text>
+      ) : null}
+    </Box>
+  );
 }
 
 /**
  * The live streaming view: a header line plus the markdown parsed so far.
  * Exported for tests (rendered via ink-testing-library).
  */
-export function LiveAnswer({ text, theme, header, headerColor = 'assistant', done, note }: LiveAnswerProps): ReactElement {
+export function LiveAnswer({ text, theme, header, headerColor = 'assistant', done, note, reasoning, plan }: LiveAnswerProps): ReactElement {
   const blocks = text.trim() ? parseMarkdown(text) : [];
+  const thoughts = (reasoning ?? '').trim();
   return (
     <Box flexDirection="column">
       {header ? (
@@ -204,6 +273,19 @@ export function LiveAnswer({ text, theme, header, headerColor = 'assistant', don
             {header}
           </Text>
           {note ? <Text color={colorOf(theme, 'muted')}>  {note}</Text> : null}
+        </Box>
+      ) : null}
+      {/*
+        * The model's WORKING, not its answer: shown above the reply in the
+        * muted roles so it can never be read as something the user will get.
+        * This is what turns a screen of tool cards into a visible process —
+        * why the call was made, not only that it was.
+        */}
+      {plan && plan.steps.length > 0 ? <PlanPanel plan={plan} theme={theme} /> : null}
+      {thoughts ? (
+        <Box flexDirection="column" marginBottom={1}>
+          <Text color={colorOf(theme, 'muted')}>✳ thinking</Text>
+          <Text color={colorOf(theme, 'faint')}>{thoughts}</Text>
         </Box>
       ) : null}
       {blocks.map((b, i) => (

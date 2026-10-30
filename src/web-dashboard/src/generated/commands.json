@@ -2,8 +2,8 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 305,
-  "groupCount": 59,
+  "commandCount": 312,
+  "groupCount": 60,
   "groups": [
     {
       "name": "admin",
@@ -337,6 +337,63 @@
       ]
     },
     {
+      "name": "checkpoint",
+      "description": "Snapshot a project’s files and roll a bad batch of edits back",
+      "commands": [
+        {
+          "name": "checkpoint create",
+          "description": "Snapshot the project’s files now (cheap; unchanged files are stored once)",
+          "flags": [
+            "--dir <dir>",
+            "--json",
+            "--max-file-bytes <max_file_bytes>"
+          ]
+        },
+        {
+          "name": "checkpoint list",
+          "description": "List this project’s checkpoints, newest first",
+          "flags": [
+            "--all",
+            "--dir <dir>",
+            "--json",
+            "--limit <limit>"
+          ]
+        },
+        {
+          "name": "checkpoint show",
+          "description": "Show one checkpoint: what it recorded, and what it skipped",
+          "flags": [
+            "--dir <dir>",
+            "--json"
+          ]
+        },
+        {
+          "name": "checkpoint restore",
+          "description": "Put the files recorded by a checkpoint back",
+          "flags": [
+            "--clean",
+            "--dir <dir>",
+            "--dry-run",
+            "--force",
+            "--json",
+            "--yes"
+          ]
+        },
+        {
+          "name": "checkpoint delete",
+          "description": "Delete one checkpoint (its files are not touched)",
+          "flags": []
+        },
+        {
+          "name": "checkpoint prune",
+          "description": "Keep the newest N checkpoints and delete the rest",
+          "flags": [
+            "--keep <keep>"
+          ]
+        }
+      ]
+    },
+    {
       "name": "models",
       "description": "List available models from inference providers",
       "commands": [
@@ -616,6 +673,15 @@
             "--provider <provider>",
             "--since <since>",
             "--until <until>"
+          ]
+        },
+        {
+          "name": "stats cost bill",
+          "description": "Ask each provider for its OWN spend/balance figure (live; DeepSeek, OpenRouter, OpenAI, Anthropic)",
+          "flags": [
+            "--days <days>",
+            "--json",
+            "--provider <provider>"
           ]
         },
         {

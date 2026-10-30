@@ -46,6 +46,8 @@ import { declareToolCapability } from './capability-registry.js';
 import type { ToolCapabilityDeclaration } from '../learning/capability-types.js';
 import { recordArtifact } from './artifact-append.js';
 import { checkStepArtifacts } from './step-artifact.js';
+import { runFinish } from './finish-tool.js';
+import { runApiSpec } from './api-spec-tool.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -193,6 +195,17 @@ export interface ToolContext {
    * original confirm-or-refuse behaviour exactly.
    */
   envelope?: import('../learning/intent-envelope.js').IntentEnvelope | null;
+  /**
+   * COMPLETION CONTRACT — the turn's live evidence, for the `finish` tool.
+   *
+   * Published by the loop as a FUNCTION because a tool call happens mid-turn and
+   * the ledger moves with every write: `finish` must judge the claim against the
+   * evidence as of NOW, not against a snapshot taken when the turn started.
+   *
+   * Absent (a direct tool call, a test, a surface that does not publish one) → the
+   * tool still normalizes the claim and says that it could not be checked.
+   */
+  turnLedger?: () => import('../learning/completion-contract.js').TurnLedgerSnapshot | null;
   /**
    * The run's OWN behaviour — every question asked, every refusal, every
    * mutation — so a gate can refuse to RE-ASK a question the user already
@@ -866,8 +879,13 @@ export const TOOL_CONTRACT = `You have tools available. Call them when appropria
 - To find code matching a pattern (context gathering, locating definitions/usages), call \`code_search\` with the pattern and optional globs.
 - To READ the project: call \`read_file\` to open a file (with line numbers), \`list_dir\` to see a directory's contents, or \`glob\` to find files by pattern. Always prefer reading the actual file over assuming its contents — a large file reports a line range, continue with offset/limit.
 - To CHANGE code (after reading it): call \`edit_file\` for a surgical exact-text replacement, or \`write_file\` to create/replace a file. CREATING a file the request asked for is applied directly — no confirmation needed, so just call it. An \`edit_file\` that is surgical (small relative to the file) also applies directly, as does one on a file the request names — the verify loop must not need a human between iterations. A whole-file write over existing content, or an edit that rewrites most of a file, refuses without confirm — call \`ask_user\` with a one-line summary, then retry with confirm:true.
+- WORK IN BATCHES — one call per step is the exception, not the habit. Put every independent call in the SAME step: several \`read_file\` calls together, or ONE \`run_terminal\` that chains what you need (\`ls -la; cat README.md; cat package.json; git status\`). Each step re-sends this whole conversation to the model, so one-call-per-step costs the user real money and buys no extra care. Batch first (only serialize when the next call's arguments depend on this result), then act.
+- KEEP THE PLAN MOVING IN THE SAME STEP as the work that closes it — and do not restate what the harness already watched: a step that names a file the turn wrote, or a check the turn actually ran, is advanced for you, with that call recorded as its evidence. Only settle what the harness cannot see (a decision, a step you are abandoning), and settle it alongside a real call, never as a step of its own.
+- RUN THE CHECK ONCE, not once per file. When you already know the remaining edits (a version bump, a changelog entry, the implementation), make them all FIRST and then run the project's check ONE time — three edits each followed by the same \`npm test\` is three full re-reads of the conversation for the same verdict. The exception, and it is the important one: when you are DEBUGGING a failure, change one thing and re-check, because there the check's result is what tells you what to do next.
+- NEVER repeat a call you already made. Do not re-run a command with only a different output filter (\`| head\`, \`| tail\`, \`| grep\`) — read the output you already have, or request the range you need in ONE call. Do not re-read a file you have not changed. Re-running is only for verifying work you just changed, and the loop refuses an identical repeat on an unchanged workspace rather than paying for it twice.
 - NEVER ask for permission to do work the user already asked for — not via \`ask_user\` and never in plain text. Decide it yourself, state the decision in your answer, and continue. Reserve \`ask_user\` for a decision that is genuinely the user's: it cannot proceed without an answer, it is high-impact AND irreversible, and there is no sensible default (overwriting existing work, deleting data, spending money, publishing).
 - To VERIFY code by actual invocation: call \`run_terminal\` with the real command (\`npx vitest run tests/x.test.ts\`, \`npx tsc --noEmit\`, \`npm run build\`, \`git diff\`). Read-only verify commands run directly, and so do recoverable workspace commands (\`npm/pnpm/yarn/bun install\`, \`pip install\`, \`mkdir\`, \`touch\`, \`cp\`, \`mv\`, \`git add\`, \`npm init\`) when the request authorized the work — the build you were asked for is your job to set up. Everything else state-changing (network fetches, arbitrary code, global installs, anything leaving the machine) needs confirm:true after the user approves via ask_user. Never guess that a test passes — run it and read the output. Use run_cli (not run_terminal) for buff/agent-nuvira control commands, and the \`git\` tool (not run_terminal) to commit.
+- WHEN DONE, STATE IT: call \`finish\` with a one-line \`summary\` and \`verified\` (true only if this turn's tool output proves the request is met). The claim is checked against the turn's own evidence: a RED check, or changed files with no check ever run, contradicts it and comes back refused. Unmet requirement rows and untested modules come back as OBSERVATIONS you may close or answer; they never refuse your ending. If something cannot be done, call it with \`verified:false\` and list it in \`unmet\`; that ending is accepted and the user is told.
 - END EVERY RESPONSE by calling \`suggest_followups\` with exactly 3 followups the user is likely to want next — natural next questions, deeper dives, or related directions that build on what you just said; specific to this conversation, not generic.
 - If you have nothing to add, answer directly and still end with suggest_followups.
 - ORDERING (non-negotiable): deliver the user's answer FIRST, then suggest_followups. The followup call must come only AFTER the complete answer is written — never before it, never instead of it. A bare lead-in ("Sure, I can help!") is NOT an answer; write the full answer in the same step as the followup call.`;
@@ -1242,6 +1260,69 @@ registerTool({
   },
 });
 
+/**
+ * COMPLETION CONTRACT — `finish` (see learning/completion-contract.ts).
+ *
+ * The one mechanism worth taking from Cline's harness: finishing is an ACT the
+ * model must perform, not the absence of another tool call. `verified` is not
+ * self-certified — the loop hands the tool its own evidence (requirement ledger,
+ * check ledger, test binding) and a contradicted claim comes back as work to do.
+ *
+ * `endsAgentStep: false` deliberately: an ending tool would skip every
+ * end-of-turn gate, which is the escape hatch the measured failure used.
+ */
+const finishSchema = z.object({
+  summary: z.string().describe('One line: what was actually delivered, in terms of the artifact, not the effort'),
+  verified: z
+    .boolean()
+    .describe(
+      'true only if tool output in THIS turn shows the request\'s requirements are met; false if you could not prove it — say so and list what is missing in `unmet` instead of claiming success',
+    ),
+  unmet: z
+    .array(z.string())
+    .optional()
+    .describe('What is NOT done (required when verified is false) — this list is shown to the user verbatim'),
+  requirements: z
+    .array(z.object({ id: z.string().optional(), how: z.string().optional() }))
+    .optional()
+    .describe('Optional per-requirement account: which requirement, and the command/output that satisfies it'),
+});
+
+registerTool({
+  name: 'api_spec',
+  capability: {
+    effectClass: 'local-write',
+    grantCategory: 'write',
+    reversibleHow: 'delete the generated document, or restore it from git',
+  },
+  description:
+    'Write an OpenAPI 3.0 document derived from the HTTP routes this project actually registers (`docs/openapi.yaml` by default). Paths, methods and parameter names are exact because they are read from the code; every summary is a TODO for you to fill. Refuses to overwrite an existing spec unless force:true — on refusal it reports the contract problems instead, so a stale document is fixed rather than replaced.',
+  category: 'workflow',
+  inputSchema: z.object({
+    path: z
+      .string()
+      .optional()
+      .describe('Workspace-relative output path (default docs/openapi.yaml)'),
+    force: z
+      .boolean()
+      .optional()
+      .describe('Replace an existing document with the generated skeleton (destroys hand-written descriptions)'),
+  }),
+  endsAgentStep: false,
+  run: async (args, ctx) => runApiSpec(args as unknown as Parameters<typeof runApiSpec>[0], ctx),
+});
+
+registerTool({
+  name: 'finish',
+  capability: { effectClass: 'read' },
+  description:
+    'State that the request is complete. Call this before suggest_followups on any turn that did work: the claim is checked against what the turn actually did. A red check, changed files with no check run, or a file the REQUEST named that is not on disk (e.g. "write docs/BUGS_FOUND.md") contradicts "verified" and comes back refused with the exact gap. Requirement rows and untested modules come back as observations you may close or explain. verified:false is an accepted ending — it must list the gaps in `unmet`.',
+  category: 'experience',
+  inputSchema: finishSchema,
+  endsAgentStep: false,
+  run: (args, ctx) => runFinish(args, ctx),
+});
+
 // ─── F2 code-search tool (ripgrep-fast project search) ─────────────────────
 // Code search is exposed to the agent for context gathering.
 // Backed by `src/utils/code-search.ts` (bundled ripgrep + fs fallback); no
@@ -1325,7 +1406,7 @@ registerTool({
 registerTool({
   name: 'write_file',
   capability: { effectClass: 'local-write', grantCategory: 'write', reversibleHow: "a create is undone by deleting the file; an overwrite is a git revert" },
-  description: 'Create a new file, overwrite one, or APPEND a section to one (parent directories are created). Use mode "append" to deliver a large document or file in sections across several calls — a payload too large for one model output cannot be sent at all, so split it. State-changing: confirm with the user via ask_user first, then retry with confirm:true.',
+  description: 'Create a new file, overwrite one, or append to one (parent directories are created). One call holds the COMPLETE file up to about 8,000 characters — write it in a single call at that size; splitting a file that fits costs a whole model round-trip. Past ~8,000 characters, where one model output cannot carry the payload: send the first part with no mode, then each later part with mode "append" containing ONLY the new tail, never re-sending what is already on disk. To change part of a file that exists, use edit_file (old_string → new_string) rather than rewriting the whole file. State-changing: confirm with the user via ask_user first, then retry with confirm:true.',
   category: 'workflow',
   inputSchema: writeFileSchema,
   endsAgentStep: false,
@@ -1352,7 +1433,7 @@ registerTool({
 
 registerTool({
   name: 'plan_todo',
-  description: 'Declare and track a multi-step plan as a live progress table: create ordered steps with descriptions, then update each step (running → done/blocked) as you work, ideally with a short note saying what happened. Use for any job with 2+ steps — the table persists across the whole conversation AND across sessions, so a later turn can reference "step N is done", and the plan closes out with an achieved summary. Call create once at the start, then update each step as it starts and again as it finishes.',
+  description: 'Declare and track a multi-step plan as a live progress table: create ordered steps with descriptions, then mark a step running when you start it, and blocked if it cannot finish. Use for any job with 2+ steps — the table persists across the whole conversation AND across sessions, so a later turn can reference "step N is done", and the plan closes out with an achieved summary. The loop advances a step to done BY ITSELF when its own action ledger closes it — a file the step names was written, or a check the step names ran and succeeded — so do NOT spend a call re-stating progress the trace already shows; call this only to declare the plan, to mark a step running, or to record blocked/other status the trace cannot show.',
   category: 'workflow',
   inputSchema: planTodoSchema,
   endsAgentStep: false,
@@ -2643,9 +2724,11 @@ registerTool({
     timeoutMs: z.number().optional().describe('Timeout in ms'),
   }),
   endsAgentStep: false,
-  run: (args) => import('./code-execution.js').then((m) => {
+  run: (args, ctx) => import('./code-execution.js').then((m) => {
     const { language, code, timeoutMs } = args as any;
-    return m.getCodeExecutor().execute({ language, code, timeoutMs }).then((r: any) => JSON.stringify(r));
+    // The project root matters: a GUI suite run from a temp cwd would not be
+    // recognised as a GUI project, and its crash dialog would go uncontained.
+    return m.getCodeExecutor().execute({ language, code, timeoutMs, cwd: ctx.cwd }).then((r: any) => JSON.stringify(r));
   }),
 });
 

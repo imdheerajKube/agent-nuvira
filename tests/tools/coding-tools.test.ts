@@ -262,10 +262,13 @@ describe('toolset gating — the coding toolset owns the perception tools', () =
       expect(toolsetForTool(name)?.name).toBe('coding');
     }
     // DELIBERATE: P0.7 added plan_todo to the coding toolset (the plan
-    // checklist tracks multi-step coding work). Updated intentionally, not by
-    // accident — this is the count test the brief says must break on purpose.
-    expect(TOOLSETS.find((t) => t.name === 'coding')?.tools).toEqual(['read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo', 'terminal']);
+    // checklist tracks multi-step coding work), and 2026-10-27 added api_spec — the
+    // OpenAPI document is generated from the routes the code registers, so it belongs
+    // with the tools that know the code, not with prose writing. Updated intentionally,
+    // not by accident — this is the count test that must break on purpose.
+    expect(TOOLSETS.find((t) => t.name === 'coding')?.tools).toEqual(['read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo', 'terminal', 'api_spec']);
     expect(toolsetForTool('plan_todo')?.name).toBe('coding');
+    expect(toolsetForTool('api_spec')?.name).toBe('coding');
   });
 
   it('the coding toolset is disabled → the tools are gated out', () => {
@@ -457,5 +460,40 @@ describe('write_file — create / overwrite (confirmation-gated)', () => {
     expect(await runWriteFile({ path: '../escape.txt', content: 'x', confirm: true }, ctx)).toContain('denied');
     expect(await runWriteFile({ path: '/tmp/abs.txt', content: 'x', confirm: true }, ctx)).toContain('denied');
     expect(await runWriteFile({ path: 'leakdir/evil.txt', content: 'x', confirm: true }, ctx)).toContain('denied');
+  });
+});
+
+/**
+ * The edit result must let the model SEE the change.
+ *
+ * Measured (2026-10-25, the Cline head-to-head): the single-pair result said
+ * "Written N chars. Re-read the file to verify the change." and carried no diff,
+ * so every edit cost a second round-trip — a full re-read of the file, which on a
+ * long turn re-sends the whole thread. The diff is already computed for `dry_run`
+ * and for batches; returning it is free.
+ */
+describe('edit_file — the result IS the verification', () => {
+  it('returns the applied hunk for a single replacement', async () => {
+    const { ctx } = makeWorkspace();
+    const result = await runEditFile(
+      {
+        path: 'src/index.ts',
+        old_string: 'export const root = 1;',
+        new_string: 'export const root = 42;',
+        confirm: true,
+      },
+      ctx,
+    );
+
+    expect(result).toContain('edit_file: applied');
+    // A real unified diff: header + the removed and added lines.
+    expect(result).toContain('@@');
+    expect(result).toContain('-export const root = 1;');
+    expect(result).toContain('+export const root = 42;');
+    // …and the guidance points at the hunk instead of at another read.
+    expect(result).toContain('do NOT re-read the file');
+    expect(result).not.toContain('Re-read the file to verify');
+    // The edit really happened.
+    expect(await runReadFile({ path: 'src/index.ts' }, ctx)).toContain('root = 42');
   });
 });

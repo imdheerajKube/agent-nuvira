@@ -2,6 +2,506 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.5.14 — a surface is proven by its code, not by its filename
+
+The head-to-head on a greenfield API task (`docs/BENCH_GREENFIELD_2026-10-30.md`):
+both arms passed **40/40** contract checks and **23/23** adversarial probes, and
+agent-nuvira still spent two closing steps proving to a checker that the server it
+had built existed. The project was `server.py` on `http.server` with notes in
+`sqlite3`. The deliverable-coverage gate reported **"backend / API and database /
+schema: absent"** — twice, after the completion contract had ACCEPTED the claim —
+because every evidence pattern in that table was a JS/TS filename (`server.ts`,
+`schema.prisma`, `migrations/`).
+
+- **Evidence before assertion** (`learning/deliverable-coverage.ts`). A surface can
+  now be proven by its RUNTIME SHAPE: path evidence is language-agnostic
+  (`server.py`, `app.rb`, `main.go`, `wsgi.py`, `*.sqlite`, any-language `routes/`),
+  and a bounded content scan (≤400 source files, ≤256 KB each) accepts the code
+  that IS the surface — `HTTPServer` / `serve_forever` / `@app.route` / `express(` /
+  `net/http` / `@RestController` for a backend, `CREATE TABLE` / `sqlite3` /
+  `psycopg` / `prisma.` / `@Entity` for a database. A tree holding only PROSE about
+  a REST API still reports both surfaces missing, which the suite pins.
+- **A settled verdict outranks a heuristic** (`tools/tool-loop.ts`). The closing
+  surface gate is silent once `finish` has been accepted — the rule the
+  documentation gate and the self-review pass already followed. Checked mid-build
+  (every 40 steps) it still fires, where there is budget to act on a real gap.
+
+Measured on the false-positive tree: `missingSurfaceGaps` went from `[backend,
+database]` to none, and across three further runs of the same prompt the gate
+fired **zero** times (it fired twice in the run that found it), with the delivery
+unchanged. The cost of the fix is NOT claimed: five runs of that prompt span
+168–414 s, so a before/after wall-clock number at n=1 would be generation noise
+wearing a mechanism's name.
+
+Also in this release, from the same head-to-head:
+
+- **Scope inflation stopped** (`learning/adoption-kit.ts`). The security-document
+  duty's vocabulary included `auth`, `jwt`, `oauth`, `rbac`, `token` and `tenant`,
+  so *implementing* authentication read as *commissioning* a threat model: both
+  runs wrote a `SECURITY.md` (61 and 106 lines) the task never asked for. The duty
+  now answers to the words that ask for the ARTEFACT (`security`, `threat model`,
+  `owasp`, `compliance`, `soc 2`, `gdpr`, `pii`, `pen test`) or to a production
+  posture (`production-ready`, `enterprise`, `saas`, `multi-tenant`) — the case it
+  was actually built for. Post-fix runs: no security document at all, and the
+  production-shaped ask still owes one (pinned by test).
+- **One ledger, one verdict** (`tools/tool-loop.ts`). Both verification gates now
+defer to an accepted `finish`, because `judgeCompletion` reads that same check
+ledger and has already settled it. The two readers disagreeing is what cost five
+steps on DEV-FEATURE, and re-asking also punishes an honest `verified:false`
+ending. The REQUIRED-ARTIFACTS gate deliberately does NOT defer: `finish` reads
+the single path the request named, this gate reads the artifact list, and
+silencing it would restore the 2026-10-25 failure.
+- **An empty workspace is stated, not explored** (`tools/loop-project-context.ts`).
+`looksLikeProject` is false for an empty directory, so a greenfield turn was told
+nothing and spent its first `read_file`/`glob` steps discovering the tree was
+empty. The block now says so — and says there is nothing to look for — while a
+directory that merely lacks markers still gets silence.
+- **`write_file` says how to write** (`tools/registry.ts`). Its description told
+the model to deliver "a large document … in sections across several calls", which
+is why 6 files took 16 calls. It now states the threshold (~8,000 characters in
+one call), forbids re-sending content already on disk, and sends changes to
+`edit_file`.
+
+## v3.5.13 — the loop stops charging for checks it cannot finish
+
+One task, one model, three runs per arm: **23 / 19 / 23 steps and 126 s against Cline's
+12 / 14 / 12 and 76 s.** The work was already competitive — in every run the helper and its
+test file were written, the suite was run, and the hidden tests passed by step 12. The other
+**eleven steps were the termination protocol**: `finding`, `finish`, `suggest_followups`, and
+three gates firing after the answer existed. Two of those gates could not be satisfied at
+all on the project the task was about, and a third could not see the check that had already
+run. None of the three was a tuning question.
+
+- **A check that can only fail is not a check** (`learning/task-artifacts.ts`). The
+  `unit-tests` requirement matched `*.test.ts` / `*.spec.ts` only, so on a PYTHON project a
+  real `tests/test_format_duration.py` never satisfied it: the gate fired twice per run
+  after the file had been written, and the model spent 3–5 further steps proving its own
+  file existed (`ls`, `git add`, a `finding` about it). The matcher now reads the standard
+  test filename of the ecosystem it is pointed at — `test_*.py`, `*_test.py`/`_go`/`_rb`,
+  `*Test.java`/`kt`/`cs`, `*_spec.rb` — and a root-level `test_x.py` is found as readily as
+  one under `tests/`. Presence is still all it decides; quality stays the reviewer's job.
+- **`python -m unittest` is verification** (`tools/edit-verification.ts`).
+  `GENERIC_VERIFY_RE` knew `pytest` as a bare word but not the module spelling, which is the
+  standard command on a plain-`unittest` project and the exact one this task asks for. A
+  turn wrote the helper, wrote the test, ran `python3 -m unittest discover`, PASSED — and was
+told "files were changed but nothing verified them", so it re-ran the same suite three times
+and re-filed `finish`. `src/utils/command-shape.ts` has always known this invocation shape;
+this regex was the second, drifting reader. The list now covers `python -m
+unittest|pytest|tox|mypy|…`, `tox`, `nox`, `phpunit`, `rspec`, `ctest`, `dotnet test`,
+`mix test`, `swift test` — while `echo hi` and `node -c` still open the gate, which the
+suite pins.
+- **`finish` IS the review** (`tools/tool-loop.ts`). The self-review nudge fired after an
+  ACCEPTED `finish` in 3/3 runs, and each time the model re-read a file it had just written
+  and re-called `suggest_followups` — one model round-trip per run, no finding. The
+  completion contract has already judged the claim against the turn's own requirement
+  ledger, check ledger and test bindings; asking for a second opinion on a settled verdict
+  is the most expensive thing the loop can spend. A turn that never calls `finish` still
+  gets the review, so the safety net stays where it is needed.
+
+Measured on the same snapshot and prompt (DEV-FEATURE, 3 reps before and after): **21.7 →
+14.3 steps (round one), 12.0 median after the verification fix**, wall clock **126 s → 85 s
+→ 75 s median**, output tokens **13.7k → 8.8k → 6.3k**, and every correctness axis of the
+12-axis scorecard unchanged at 100 (spec spot checks 8/8, no new suite failures). One run of
+the second round still wandered to 27 steps — a `finish` refused four times on the same
+contradiction sent the model through `code_execution` and `ask_user`; that path is a
+stubborn-gate defect in the completion contract, not something these three fixes touched.
+
+## v3.5.12 — the ASK decides when the turn is done
+
+Three runs, one prompt, one model, three different hardcoded step caps: **178 steps → 84,
+115 steps → 70, 210 steps → 85**. The lowest-scoring run was the one that got the fewest
+steps, and it was also the one that shipped **no test files at all**. A build's length is a
+property of the request — twelve features, a monorepo, three test classes, four tracking
+files — so a number somebody picked for a different task cannot be the thing that ends it.
+The 210-step run then showed the other half of the problem: every gate it owned was
+satisfied, because each one asked about something that EXISTED, and the product had **no
+frontend**.
+
+This release makes the requirement the budget, and the delivered surface the check.
+
+- **Requirement-driven budget** (`ToolLoopOptions.requirementDrivenBudget`, on by default
+  where no explicit `maxStepExtensions` is passed). A non-assessment turn is now extended
+  for as long as it is moving a REQUIREMENT — an unmet ledger row, an open plan step, an
+  artifact the ask named that is not on disk — with no extension count. It ends on a fact,
+  not a number: **two consecutive grants that moved no requirement** (satisfied rows and
+  files written both unchanged) is a stall, and the ceiling says so in those words.
+  `maxTotalSteps` (default 1000) remains as an absolute escape hatch, never a budget. An
+  explicit `maxStepExtensions` still means the fixed allowance, so every existing embedding
+  keeps its exact behaviour.
+- **Deliverable coverage** (`learning/deliverable-coverage.ts`). The ask's named surfaces —
+  frontend, API, schema, e2e, unit/integration tests — each with the words that demand it
+  and the files that prove it. A surface the ask named and the tree does not contain is
+  reported, **mid-build (every 40 steps) and at the end**, because a gate that only speaks
+  at the ceiling arrives after the budget was spent on the parts that already existed. A
+  dependency line is not evidence: `"next": "15"` in a package.json is not a UI, which is
+  the exact artifact that fooled the benchmark's own scorer into crediting a frontend that
+  did not exist.
+- **Change requests arrive mid-turn** (`learning/change-request.ts`). `CHANGE_REQUEST.md`
+  was written into the workspace by the benchmark harness for two rounds on the bet that the
+  agent re-reads its root at a milestone; measured, **none of three agents ever mentioned
+  it**, so adaptability could not be exercised at all. The loop now watches that file (one
+  `stat` per step), delivers a NEW or REVISED request to the model as a harness directive the
+  moment it appears — while there is still budget to act on it — and at the end reports the
+  bullets whose substance appears nowhere in the tree. The file itself never counts as
+  evidence of its own implementation.
+- **Thinking-mode replay survives compaction.** Measured live on `deepseek-flash` in the
+  smoke run for this benchmark: four consecutive `400 The reasoning_content in the thinking
+  mode must be passed back` rejections late in a long turn. The wire layer fills a gap only
+  when some assistant turn still carries reasoning, and the thread budget COMPACTS old
+  turns to fit the window — so once the reasoned steps were gone, nothing in the request
+  signalled "thinking conversation" any more. The turn now remembers that it has seen
+  reasoning, and when its thread no longer carries any, stamps the later tool-call turns
+  with `REASONING_NOT_RETAINED` — a true statement about our own bookkeeping, not invented
+  chain-of-thought. The transcript is otherwise exactly what the model returned, which is
+  what `thinking-replay-invariant.test.ts` has always pinned (it now also pins the
+  post-compaction case, with a real compaction rather than a simulated one).
+
+- **A production claim owes an operational artefact** (`productionReadinessDuty`). Measured
+  2026-10-26, the final bench: the documentation row is worth 100 (README 30, API 25, deployment 25,
+  architecture 20); the patched arm scored 75 with a 9,520-byte README and no deployment story — it
+  deleted its compose file when the mid-run SQLite change request landed and never replaced it —
+  against Cline's 100. Checked FIRST, because "add a gate" is a reflex: neither Cline nor Freebuff
+  has a documentation gate at all (Cline's shipped binary mentions README only in new-project
+  template lists and never `docker-compose`; Freebuff lost the README row in the other round) — so
+  this is a compensation for a place the model is unreliable, and it only earns its keep as a FACT
+  about the tree. Validated on all ten real workspaces: it asks for the missing artefact in the two
+  arms that lost the 25, asks for a POINTER in the one arm whose only artefact was `ops/`, and stays
+  silent for every tree that shipped a self-describing artefact (compose files in Cline, patched2
+  and the 26th's nuvira/Freebuff; Cline also has two Dockerfiles). The rule: an ask that says
+  production/deploy, on a runnable project, owes ONE artefact, and every honest form counts — a
+  compose file, a Dockerfile, a `deploy`/`k8s` directory, a deployment/runbook document, or a CI
+  workflow that actually deploys (a test-only one does not). An `infra`/`ops`/`helm`/`terraform`
+  directory counts as the artefact only once one line of documentation says what is inside it — a
+  bucket name is not a deployment story, and the patched arm's README that TALKS about deployment
+  while nothing deployable exists is exactly the inflation this row is meant to catch. A project
+  that never claimed production is untouched.
+- **…and the same fact reaches `finish`, the one exit that could bypass it.** `finish` is judged
+  before the closing gates run, so an accepted claim silenced the documentation gate: the README
+  duty travelled in the completion snapshot, the deployment duty did not. A `verified:true` claim
+  for a `production-ready` ask with no way to ship (or only an unnamed `infra/`-style bucket) is now
+  refused with the artefact named, while
+  `finish({verified:false, unmet:[…]})` stays an accepted ending — the gate asks for a decision
+  (ship it, or say plainly that it does not ship), never for a lie.
+- **Documentation is asked for MID-BUILD, not at the ceiling.** The round before that one scored 70,
+  70, 70 and 45 on the same row across four arms with NO README at all — and in the 210-step arm the
+  README nudge fired at step 209, one step before the ceiling, so it arrived with no budget to act
+  on. The duty is now resolved by one function that speaks at step 40/80/… as well as at the close
+  (shared counter, never the same fact twice), because documentation is the deliverable every agent
+  defers to "the end" — which is exactly when it cannot be written. And because one ask in a
+  600-call turn can simply be dropped, the mid-build ask is allowed to REPEAT once, two intervals
+  later, while the turn is still working — measured 2026-10-27: the ask landed at step 40, the model
+  wrote 20 more backend files, never mentioned the README again, and the run hit its wall-clock cap
+  with `readmeBytes: 0`. The total is still two messages.
+
+- **THE CONTRACT IS GENERATED FROM THE ROUTES** (`learning/api-spec.ts`, tool `api_spec`).
+  Verification catches a spec that has already drifted; it cannot stop one. Asking a model to
+  hand-maintain a 40-path document against 60 route registrations is bookkeeping it is measurably
+  bad at, and a spec that omits a route looks exactly like a complete one. So `api_spec` derives the
+  OpenAPI document from the SAME scanner the verifier uses — paths, methods and parameter names are
+  the code, not a transcription of it — and emits every summary as an explicit `TODO` carrying the
+  method, path and source file, because a guessed summary is a lie a client author builds against.
+  It REFUSES to overwrite an existing spec unless `force: true`: hand-written descriptions, schemas
+  and examples are worth more than a skeleton, so on refusal it reports the contract problems
+  instead, pointing the model at the drift rather than flattening the document. Round trip is pinned
+  as a test (generate → verify → zero problems), and on the real artefacts it produces 60 operations
+  across 43 paths for the winning tree and 36 across 28 for ours, both verifying clean.
+- **HAND-WRITTEN PROSE IS CITED, NOT ACCEPTED, as the API contract** (`learning/adoption-kit.ts`).
+  Measured in the 2026-10-27 head-to-head: the patched arm served **55 routes**, wrote a 159-line
+  `docs/API.md` by hand, and shipped **no machine-readable contract**, while Cline documented 59 of
+  its 60 routes in a 48 KB spec. A hand-written list of 55 routes is a document that has already
+  begun to drift — every route added afterwards is missing from it, silently, and prose that was
+  correct on the day it was typed looks exactly like prose that is correct now. So the prose
+  reference is still READ (it is evidence the routes exist, and it is quoted in the ask) but it no
+  longer settles the item: the ask becomes "derive the document", naming `api_spec`, which is one
+  call and cannot disagree with the code. Reading it also fixed a false negative that had been
+  hiding the best reference: route tables (`| GET | /api/tasks | … |`) were invisible to the
+  endpoint check, so a complete reference read as "nothing documented" — the one mistake that
+  teaches a model the ask is noise. Verified on the delivered tree: the gap now cites
+  `docs/API.md` as hand-written, `api_spec` on a copy writes 44 paths / 55 operations, verification
+  reports 0 problems, and the gap clears.
+- **PLAN DEPTH recurs at PHASE BOUNDARIES, not once.** A decomposition is not a one-time event: a
+  long build re-plans — a step is added for something newly discovered, the board is rewritten after
+  a change request, or four finished steps are quietly folded back into "finish the backend". A
+  check that fires only at creation would watch the good plan arrive and never look again. The loop
+  re-evaluates when the plan CHANGES (rewritten, or a step reached done — the two things that make a
+  phase boundary), bounded to three distinct asks a turn, and keyed on the COMPLAINT (the exact set
+  of bundled steps and missing requirements) so an unchanged coarse plan stays silent while a new
+  collapse is a new fact. Verified live on the re-run: the first plan put six named requirements in
+  one step and the gate asked before any code was written.
+- **PLAN DEPTH — a build's breadth is set by the granularity of its plan** (`learning/plan-depth.ts`).
+  The head-to-head (2026-10-27, identical prompt) ended 69 endpoints against 51, and the whole
+  difference was depth INSIDE modules both arms built: refresh rotation, logout-all, organization
+  switching, unread counts, read-all, notification preferences, document publish and version
+  history, audit logs, admin user status. The ask never named those, so no "does the word appear"
+  check can find them and no gate can invent them. What produced them was the plan: the winning
+  run's board had **15 phases and ~150 atomic tasks** (`T-080`…`T-229`, including
+  `T-082 Refresh token generation, hashing, rotation, reuse detection` and `T-086 Refresh, logout,
+  logout-all`), and it worked the board. The other arm's plan had seven steps, one of which read
+  "Implement backend: auth/JWT, RBAC, projects, tasks, documents, notifications, AI assistant,
+  admin" — **eight named requirements on one checkbox**, closed as soon as the first module
+  existed. So the loop now reads the ask's own requirement list (bullets under a requirements
+  heading, or a `Requirements: a, b, c` line, with technology and quality words excluded, and
+  requirements replaced by a mid-turn change request dropped) and checks the plan against it: a
+  step naming more than two requirements, or a requirement with no step, earns **one** bounded ask
+  to split the plan before the build continues. One, because the plan is the model's own statement
+  of the work — the loop may say it cannot be measured, not rewrite it. Silent for an ask with
+  fewer than four named requirements, and silent once the plan is mostly executed, where splitting
+  is theatre.
+- **CONTRACT VERIFICATION — does the spec describe the API that exists?** (`learning/api-contract.ts`).
+  The winning arm's `progress.md` claims its OpenAPI document was verified: "40 paths, 28 schemas,
+  zero unresolved `$ref`s". nuvira had no way to tell whether a spec it wrote was TRUE — and a stale
+  spec is worse than none, because nothing about it looks wrong: codegen builds clients for paths
+  that do not exist, and one dangling `$ref` stops the document loading at all. The document audit
+  now compares the spec with the code: dangling internal refs, **documented but never implemented**
+  paths, and **implemented but never documented** routes, with the file each route lives in. Mounts
+  are resolved (`/` in `modules/tasks/routes.ts` is really `/api/v1/tasks`) from the same
+  `app.use('<prefix>', router)` calls the server uses; when a mount cannot be resolved the comparison
+  falls back to a two-segment suffix rather than inventing a prefix, and receivers that are not
+  routers (`teamByKey.get('APOLLO')`) are ignored — both found by running it against the real trees,
+  where it reports the winning arm's 59 documented operations against its 60 registered routes with
+  exactly ONE finding (a served-but-undocumented `GET /api/v1`). JSON is parsed properly; YAML is
+  read structurally by indentation, because a gate must not add a runtime dependency, and a document
+  it cannot see paths in is reported as unparsed rather than as empty.
+- **A change request is read under either name** (`CHANGE_REQUEST.md` / `CHANGE_REQUESTS.md`).
+  Found while validating the above against the real trees: the harness wrote the PLURAL name in two
+  runs, and the reader only ever opened the singular one — so a requirement delivered under the name
+  the loop does not read is indistinguishable from one nobody sent, which is exactly the failure the
+  watcher exists to end.
+- **THE WALL CLOCK — a turn is now measured in time, not only in steps** (`learning/turn-budget.ts`,
+  `ToolLoopOptions.maxDurationMs`). Every budget the loop had counted steps, so nothing in it could
+  tell "this is productive" from "this is stuck": measured 2026-10-27, one arm spent its last ten
+  minutes debugging a Playwright runner that would not start and closed with no README, while the arm
+  that won finished in 48 minutes with a 42-path OpenAPI contract. The user's budget is minutes, so
+  that is what the loop is told: `turn.maxMinutes` (default 60, `0` = off). When 20% (at least a
+  minute) is left, the turn enters a **closing window** — one directive that says stop opening work,
+  treat a tool that has already failed twice as a KNOWN LIMITATION rather than something to keep
+  debugging, and spend the remaining steps on the handover documents and the answer. Extensions are
+  refused from that point, the window reserves its last two steps, and when the time is gone the turn
+  stops where it stands with what it has, instead of being killed from outside by `timeout`. Wired
+  into the chat and `execute` surfaces, traced as the `closing-window` gate, and off for any caller
+  that states no budget — so every existing embedding keeps its exact behaviour.
+- **DOCUMENTATION AS A MILESTONE, NOT A CADENCE.** The adoption kit below (and the README/deployment
+  duties before it) was asked on a 40-step timer, which fires whether or not anything works yet — and
+  a gate that fires on a clock is a nag, not a plan. Checked against the winning artefact instead of
+  against my notes: Cline's own tree has `docs/adr/ADR-002…006` at **14:23**, while the API was being
+  built, and then ARCHITECTURE, OPERATIONS, SECURITY and the root docs in **one batch at 14:57** —
+  mid-run, after the API and pages existed, before the last web work — with `docs/openapi.yaml`
+  written **last**, at 15:09, once the surface had stopped moving. Its `todo.md` lists "Requirements
+  analysis and PRD", "Architecture, seven ADRs…" and "OpenAPI, docs" as completed work next to the
+  code, and its `progress.md` verifies the spec ("40 paths, 28 schemas, zero unresolved `$ref`s").
+  That is a phase boundary, not a timer. nuvira now treats the **first green check with real work
+  behind it** as the moment to write the documentation pass — the point at which the project
+  actually works — with the step intervals kept only as a fallback for a build that never gets
+  green. The pass is asked once per boundary; the same fact is still never repeated twice in a row.
+- **The adoption kit — the documents that let a stranger USE the service.** Re-measured 2026-10-27,
+  the head-to-head that asked "who builds the better product": both arms were green (nuvira 73 unit
+  + 10 E2E, Cline 21 API + 13 web + 33 integration), and the entire verdict came down to what a person
+  who was not in the room could do with the artefact. Cline: 69 endpoints, an **OpenAPI contract with
+  40 paths**, an operations runbook, a threat model, 7 ADRs, two Dockerfiles, a README that gets you
+  running. nuvira: 51 endpoints, a 9.5 KB README, API prose, an architecture document — **no
+  machine-readable contract, no runbook, no security document, no decision record**. The existing
+  duties covered the two documents that were already being asked for (a README, and a deployment
+  artefact for a "production-ready" claim); nothing covered integration or operation.
+  `learning/adoption-kit.ts` now checks four facts against the tree and the ask:
+  **api-contract** (≥ 3 route registrations and neither an `openapi`/`swagger` file with `paths` nor a
+  reference that lists `METHOD /path`), **operations** (a service the runbook-less README cannot keep
+  alive — no markdown section on env vars, deployment, health or backups), **security** (the ask names
+  auth/JWT/tenancy/RBAC and there is no `SECURITY.md` or threat model) and **decisions** (the ask asks
+  for ADRs and there is no `docs/adr/`). Every item is silent when the document exists in any honest
+  form: an endpoint reference in prose counts, because the fact being checked is "a client can be
+  written", not "Cline's file shape was reproduced". A CLI, a library, a three-route toy, a question
+  and a narrow fix are never asked for any of it. It runs through the SAME bounded duty as the README
+  and the deployment story — the first gap at the milestone boundary, the whole remaining set as one
+  handover at the close (or at the wall-clock closing window), three messages a turn at most, never
+  the same fact twice in a row — and it is ordered last, so a reader who cannot yet run the project is
+  never handed an ADR instead.
+
+Pinned by 18 new tests (5 driving the real loop through a real service tree): the contract is asked
+for at step 40 with budget left and names the route count it saw; the mid-build ask is one document,
+not a checklist; an early close delivers the whole remaining set in one message; a tree with a spec,
+a security document and an ADR directory is never asked for anything; and the README duty still
+preempts the kit while it is owed.
+
+Pinned by 14 new tests driving the real loop: a frontend is reported when only an API exists
+and is silent once a component file does; a dependency line is not evidence; a question and a
+narrow change request are never asked to produce surfaces; the ask repeats at step 40; a
+mid-turn `CHANGE_REQUEST.md` reaches the model verbatim; unheard bullets are named and the
+request file is not counted as its own implementation; a turn extends past the old cap while
+requirements move and stops on two silent grants.
+
+**Deliverable coverage is a floor, not a grade.** A three-line `page.tsx` satisfies the
+frontend row. The claim it supports is narrower and still worth making: a named part of the
+product can no longer be absent while the turn describes the project as complete.
+
+**The harness's own banner is not the ask.** A messaging turn reaches the loop as
+`[Origin: WhatsApp chat — … (WhatsApp/Telegram/etc) …]` followed by what the user wrote, and
+the deliverable extractor read `/Telegram/etc` out of that banner as an absolute destination.
+A turn whose entire ask was "list the working directory" was therefore told it owed a file,
+made a second, useless trip to the model to say it had not written one, and — measured on the
+cross-surface parity suite — diverged from every other surface on `modelCalls` (2 on the CLI,
+3 on the gateway). Gates now read the ask with the injected banners stripped
+(`stripInjectedContext`, the same single rule `hybrid-router.ts` uses), and `currentAsk`
+strips them instead of skipping the whole message: the earlier skip threw the ask away
+entirely on every messaging turn, so those turns' gates were measuring nothing. One fewer
+model call per messaging turn, and the parity failure it caused is now a regression test.
+
+**A checkpoint cost a growing scan of every other checkpoint.** The pre-write workspace
+checkpoint needs one number from the store — "a timestamp later than everything already
+here" — and it got it by calling `listCheckpoints()`, which PARSES EVERY MANIFEST in the
+store. A manifest is one checkpoint's whole file list. Measured on this machine on
+2026-10-30: `~/.nuvira/checkpoints/workspaces` held **1,120 checkpoints recording 4,582,545
+entries — about 966 MB of JSON**, so taking a checkpoint spent **2.8 s** parsing other
+checkpoints before it walked the project at all, on every turn's first write. The id is
+`${createdAt.toString(36)}-${uuid}`, so the timestamp is in the NAME: it is now read from the
+directory listing (`newestCreatedAt`), and creating a checkpoint no longer depends on how
+many exist. On this repo, create went **~5.4 s → 1.5 s** and stopped growing.
+
+That growth was also the flakiness. In a test, the loop's project root is the repository, so
+every mutation-driving test snapshotted the whole tree into the developer's real store, and
+the store grew with every run — which is why the 327-file test batch failed a *different*
+test each time with a 15 s timeout while every one of them passed alone. Two of them paid
+it directly (4,071 ms and 3,625 ms; `plan-auto-advance`, `tool-loop`), which became **7 ms
+and 202 ms** once the checkpoint stopped being a repository-wide hash in tests: the harness
+now isolates `NUVIRA_CHECKPOINT_DIR` per test file, and switches the snapshot off by default
+(`NUVIRA_CHECKPOINT_BEFORE_WRITE=0`) because the wiring has its own tests, which point the
+project root at a two-file fixture. Four consecutive runs of the batch: **4/4 green, 94–152 s
+(was 181–208 s with failures)**.
+
+**The automatic checkpoints now bound themselves.** Cheap to read is not the same as safe to
+keep: that 966 MB was still on the disk the projects live on, and one checkpoint per writing
+turn with nothing ever removing them only ends one way. `pruneAutoCheckpoints` keeps the newest
+`DEFAULT_AUTO_KEEP` (20) and runs on every 10th automatic checkpoint, so the store cannot drift
+past 29 while the cost lands on a tenth of the turns instead of all of them. It deletes ONLY its
+own: the loop marks what it took (`origin: 'loop'` in the manifest plus an `auto` file in the
+directory, which is one `existsSync` per name to read and no manifest parsing at all), and a
+`nuvira checkpoint create` the user named — like anything written before the marker existed — is
+never a candidate. Blobs are left to `prune`, which is the command that already reclaims them:
+refcounting a delete means parsing every other manifest, the very scan removed above.
+
+**Tokens are now measured, and the estimate was wrong by 6×.** The wire always carried
+`usage` and the adapters always handed it to the cost tracker, but nothing above them could
+see it: every trace row, summary and benchmark cost axis was a `chars/4` guess at a number
+the provider had stated exactly. `ToolCallResponse.usage` now carries the provider's counts
+up, the trace records them with `tokensReported` so a measured number is never confused with
+an inferred one, and each turn prints `🧮 tokens N in (M cached) / K out — provider-reported`
+on **stderr** (diagnostics must not contaminate an answer a script reads).
+
+MEASURED on `DEV-FEATURE`, three runs per arm, all provider-reported: nuvira **626k in /
+13,266 out**, cline **259k in / 4,517 out** — against an earlier estimate of 172k / 2.2k for
+the same work. The estimate undercounted output by six. The comparison it supported was
+wrong in the direction it was reported, which is the whole argument for this change: after
+cache hits are separated, nuvira's PAID input is actually slightly lower (21,710 vs 23,637
+uncached) while its OUTPUT is 2.9× higher and the turn is 1.7× slower (median 124s vs 73s),
+at equal quality on every other axis. That is now visible instead of assumed.
+
+**A tool's arguments are no longer cut at 200 characters.** The debug line is the only place
+a command is recorded, and the preview stopped at `cd … && python`: 11 python invocations in
+a benchmark run had unreadable arguments, so the axis that asks "did it check itself" read
+zero for a turn that had run `python3 -m unittest discover` — the scorer greps that log.
+`tool:started` now keeps its arguments up to 2,000 characters; `tool:called` keeps the short
+preview because its `result` is unbounded output.
+
+**The rest of the turn path was audited and is bounded.** The other whole-project walks the loop
+performs were measured on this repo rather than assumed: the coverage census is 16 ms (capped at
+2,000 source files, computed once per turn) and one `snapshot()` is 9 ms. They are not the same
+class of cost as a checkpoint that re-hashed 13,944 files per test, so they are unchanged.
+
+## v3.5.11 — "the model stopped" is not a claim that the request is satisfied
+
+Measured on 2026-10-25, three agents, one 30-minute build task. agent-nuvira shipped a
+green build, 22 passing tests and five planning documents — in **14 of its 30 minutes** —
+with no README, no e2e spec and none of the four tracking files the prompt named. Its own
+log says why, twice:
+
+```
+🗺️ plan step "s6" → done (run_terminal ran `ls -la` and succeeded) — no plan call spent
+🗺️ plan step "s7" → done (run_terminal ran `ls -la` and succeeded) — no plan call spent
+```
+
+Step 7 named `todo/progress/issues/changelog` and was marked done by an `ls`. The plan then
+had nothing left to push, and the turn ended "complete" with the ask untouched. The root
+cause is architectural: **completion was the absence of another tool call**, so the loop had
+no representation of what the request asked for and could not tell "I am done" from "I
+stopped". Cline won those aspects because finishing there is an ACT (`submit_and_exit`) the
+harness checks; Freebuff failed the same README instruction as nuvira, which is the proof
+this is a harness job and not a model one.
+
+This release gives the loop a definition of satisfied, and makes the model state completion
+against it.
+
+- **`finish` — the completion contract.** A new core tool with `{summary, verified, unmet}`.
+  The claim is judged against the turn's OWN evidence: the requirement rows the request
+  named, any check whose last run was red, and any module the turn wrote that no test
+  imports. `verified: true` is REFUSED while the evidence contradicts it (the model keeps
+  working in the same turn — the tool is deliberately not `endsAgentStep`, which is the
+  escape hatch a quiet ending used). `verified: false` is an accepted ending, but it must
+  list the gaps, and that list reaches the user instead of being rounded up to "done".
+- **A requirement ledger (`learning/requirement-ledger.ts`).** The ask's own numbered items
+  become rows: named artifacts and test classes (reusing `task-artifacts.ts`), named
+  acceptance checks ("run the tests", "typecheck/lint/build", "fix what fails"), and
+  enumerated obligations ("- a working app with a database"). Only the first two are
+  enforceable; a behavioural row is reported, never turned into a nudge — the rule that
+  keeps the gate from nagging.
+- **Test binding (`learning/test-binding.ts`).** New source modules minus the modules any
+  test imports = the named gap. Measured: 2 test files against 29 written modules passed
+  every gate the loop owned (`tsc`, `next build`, and a tester sub-agent reporting "4/4
+  passed"). The check resolves relative, aliased and root-relative specifiers; a false
+  "unbound" costs one line in one bounded message, and a config/type/barrel file is never
+  counted.
+- **A red check must be answered (`learning/check-ledger.ts`).** Last-run-wins per command;
+  a failure the code changed after is STALE (re-run it), a failure that still stands is RED
+  (fix it or explain it). The turn can no longer edit past a failing suite and describe the
+  work as verified. Failed *experiments* (`node --check missing.js`) are not red checks —
+  only tests/typecheck/lint/build count.
+- **Documentation duty (`learning/doc-claims.ts`).** A turn that wrote a runnable entry
+  point (`package.json`, `Makefile`, compose file) and left no followable README is asked
+  for one — the one document all three agents skipped — and `finish({verified:true})` is refused
+  while it is missing, so the claim and the gate can never contradict each other. Separately, every markdown the turn
+  wrote is audited: `npm run <script>` must be a script in `package.json`, and a cited path
+  must exist. Measured antecedent: nuvira's own ROADMAP and RISK_REGISTER cited tests it
+  never wrote, and no agent checks a document against the tree it describes.
+- **Requirement yield on the result.** `ToolLoopResult.requirementYield` carries
+  total/satisfied/unmet/unknown plus the test-binding ratio, and
+  `tokensPerSatisfiedRequirement` when the caller reports usage — the denominator of the
+  cost metric any future gate has to justify itself against.
+- **Two new gates, both bounded once per turn** (`'completion'`, `'docs'`), both silent on a
+  turn with nothing checkable, and both skipping work another gate already named (the
+  artifacts gate owns missing files twice; the completion message does not repeat them —
+  they stay in `unmetRequirements` and in what `finish` refuses).
+
+`verified:false` is not just accepted — its gap list is appended to the delivered answer
+(`**Not done in this turn**`), because the tool tells the model that list will be shown and
+until now nothing rendered it.
+
+**Two fixes that only the re-bench could have found (2026-10-26).** A fresh 30-minute run of the
+same benchmark ended at its **step ceiling** — 178 steps, a monorepo, 10 test files — with the
+README and all four tracking files still missing. The gates were correct and **unreachable**: they
+lived on the two model-decided exits, and a run that keeps calling tools never takes one. So the
+ceiling now spends the same ask (`closingGates()`), once per category, and grants the single step
+that answering it costs. The second was a false positive the ceiling made visible: `project` and
+`app` counted as build signals on their own, so *"read the README and tell me what the project
+does"* was handed a README to write — a question is now never a delivery, whatever nouns it holds.
+
+**A third fix, from the same re-bench: a build is not an audit.** The benchmark prompt opens
+"1. Analyse requirements." and names a "Node.js backend", a "Next.js frontend" and an "AI
+Assistant API", so `analyse` + `backend` satisfied `isProjectAssessmentGoal` — and a greenfield
+BUILD was handed the bug-hunt protocol plus the **assessment** extension cap, which is sized by the
+source files already present. A greenfield turn starts with none, so it was granted 2 extensions
+(115 steps) instead of the build default of 8. Measured on the identical prompt and model: 115 vs
+210 steps, **70 vs 85**, 0 vs 13 test files, 0 vs 3 tracking files. A delivery verb (`build`,
+`implement`, `scaffold`, `create`, `ship`, …) now vetoes the verb branch of the classifier — an
+explicit finding ask ("find the bugs in this repo") still classifies as an assessment even when
+the same prompt also asks for the fix. See `docs/BENCH_ULTIMATE_2026-10-26.md` §5.
+
+Pinned by 55 new tests: the ledger extracts the measured ask and nothing from a
+conversation; a module reached through an alias binds while an untested one is named; a
+re-run green clears a red check while an edit after a failure makes it stale; a verified
+claim is refused on unmet rows, red checks, new untested modules, a write with no check and
+a runnable project with no README; `verified: false` without a gap list is refused; an
+accepted `verified:false` reaches the answer verbatim; and the live loop spends exactly ONE
+completion nudge on the measured ask, zero on a clean turn, and none after an accepted
+`finish`.
+
 ## v3.5.10 — a tool that was never probed is not a tool that is missing
 
 One false claim, measured on a machine that had Docker Desktop installed and its daemon

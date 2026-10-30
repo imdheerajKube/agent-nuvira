@@ -103,6 +103,26 @@ const WHATS_WRONG =
   /\bwhat(?:'s| is| are| s)\s+(?:wrong|broken|missing|bad|the\s+(?:bugs?|issues?|problems?|risks?|defects?))\b/i;
 
 /**
+ * Verbs that ask for something to be DELIVERED. A goal containing one is a change
+ * to the code, so it cannot be judgement about it, however many code nouns the
+ * requirements happen to name.
+ *
+ * WHY THIS EXISTS. Measured 2026-10-26 on the Ultimate Agent Benchmark (a SaaS
+ * platform task): the prompt opens "1. Analyse requirements." and then requires a
+ * "Node.js backend", a "Next.js frontend" and an "AI Assistant API". `analyse` +
+ * `backend` satisfied the verb branch below, so a BUILD was classified as an
+ * audit. The visible cost was the wrong protocol block; the measurable one was
+ * the budget: the assessment cap is sized by the SOURCE FILES ALREADY PRESENT
+ * (`assessmentExtensionCap`), and a greenfield turn starts with none, so the run
+ * was granted 2 extensions (115 steps) instead of the build default of 8 — and
+ * stopped at 69 files, 0 test files, versus 117 files and 14 test files for the
+ * identical prompt on the same model with the build cap. A cap keyed to ``how
+ * big is the tree`` cannot govern the turn that is supposed to create it.
+ */
+const BUILD_VERBS =
+  /\b(build|implement|scaffold|bootstrap|create|develop|deliver|ship|migrate|port)\b/i;
+
+/**
  * The block's rules, written as one message. Kept deterministic (an array of
  * lines joined here) so tests assert on the rules rather than on prose
  * formatting, and so a truncated edit cannot silently drop a rule.
@@ -177,6 +197,33 @@ export const ASSESSMENT_PROTOCOL_RULES: readonly string[] = [
   '11. LEAVE THE TREE AS YOU FOUND IT. Keep scratch files, probes and reports',
   '    OUTSIDE the audited repository (a temp dir) and say where; if a deliverable',
   '    must land in the tree, name every file you added and what to delete.',
+  '',
+  '12. WRITE THE DELIVERABLE FIRST, THEN IMPROVE IT. If the ask names a file,',
+  '    create it with every required heading early, append findings as they are',
+  '    verified, and stat it afterwards: a step bound or a truncated write that',
+  '    leaves a 0-byte file loses the whole turn.',
+  '',
+  '13. NO "HARMLESS" UNTIL YOU HAVE READ THE CONSUMER. A branch that never runs is',
+  '    only LOW once the code that READS what it would have produced is shown to',
+  '    tolerate the absence; quote that reader. Measured: a downloader branch that',
+  '    never created per-voice directories was filed as harmless dead code, while',
+  '    the reader it fed looked for files in a directory that therefore never',
+  '    existed — a Critical, not a Low.',
+  '',  '14. PROOF DECIDES SEVERITY, NOT EXISTENCE. A Critical needs the SMALLEST',
+  '    fixture that reaches it, run against the REAL module, with the output',
+  '    quoted — and never raise a severity on a mechanism you did not run. But a',
+  '    defect you read straight out of the source is STILL REPORTED, tagged',
+  '    `[I]` with the command that would prove it; never delete it because no',
+  '    fixture came together. After the sweep, walk each top-level module asking',
+  '    what its inputs are supposed to change: a no-op control or a disabled',
+  '    escape button costs the user the same whether or not you had time to run it.',
+  '',
+  '15. "SAFE" IS A CLAIM: NAME THE SEARCH. Every "no X found" line states the',
+  '    pattern and the paths it covered, and includes the SYNONYMS — "pickle"',
+  '    covers `np.load(allow_pickle=True)`, `torch.load`, `yaml.load`, `dill`;',
+  '    "no shell injection" covers `shell=True`, `os.system`, `eval`, `exec`.',
+  '    A grep with an exclude, or one directory searched, is not proof of',
+  '    absence — and a false "safe" is worse than a missing finding.',
 ];
 
 /**
@@ -200,6 +247,55 @@ export function assessmentProtocolBlock(
     'these evidence rules on top; a finding that breaks one is not yet a finding:',
     '',
     ...ASSESSMENT_PROTOCOL_RULES,
+    '',
+    '## SEAM SWEEP — answer every line before the report is finished',
+    'Each line is "safe" (with the file:line that proves it), "defect" (file:line,',
+    'severity), or "N/A" (why). An answer from memory is not an answer; a sweep',
+    'line left blank is an unexamined seam, and the missing findings live there.',
+    '- A. user text → path → delete/overwrite: the sanitizer, the join, the rmtree.',
+    '     Name the inputs that survive sanitising — a project/folder NAME that is',
+    '     only dots (`.`, `..`, `...`) has no separator to reject and joins above',
+    '     the root. Trace it to the delete/overwrite call.',
+    '- B. transfer → disk: status code (200 vs 206), resume/append, any size or',
+    '     digest check. Name the retry cases: a server ignoring `Range` (200 onto',
+    '     an appended `.part`) and an ALREADY-COMPLETE `.part` whose next request',
+    '     gets 416 — does the user recover, or is the download bricked?',
+    '- C. version or capability gates: the constant compared against, and what a',
+    '     realistic CURRENT value does to the feature it guards.',
+    '- D. every parsed config/manifest field: name its consumer, or it is a',
+    '     capability that does not exist.',
+    '- E. cancellation / pause / error: does the work stop before the NEXT unit?',
+    '- F. duplicate singletons and posted-but-unbound events: two app objects, an',
+    '     event nobody binds, a cache keyed on nothing.',
+    '- G. every function you are about to call dead/unreachable: grep its callers',
+    '     AND the code that reads the output it would have produced. A reader that',
+    '     expects that output makes it a LIVE defect, not dead code — grade it so.',
+    '- H. every input that should change output — a control, a flag, a setting, a',
+    '     catalog field: follow it to the sink; read-and-never-applied does nothing.',
+    '- I. platform-specific APIs (accessibility, AppKit/wx, Windows shell): unguarded',
+    '     they crash or silently disable the feature off-platform; count app objects.',
+    '- J. every gate that blocks the user: is the ESCAPE (Disagree, Skip, Cancel)',
+    '     enabled in every reachable state, or must the user satisfy the gate first?',
+    '- K. code-executing input (`pickle`, `np.load(allow_pickle=True)`, `eval`) and',
+    '     every zip/tar extraction: entry count, entry size, path containment.',
+    '- L. resume/per-run state: files rewritten from scratch each run, and values',
+    '     computed then overwritten before use (an index, an offset written late).',
+    '',
+    '',
+    '## MODULE PASS — one line per top-level module, before the report ends',
+    'Format: `module/ — the behaviour a user gets from it — class checked — finding',
+    '| safe (file:line)`. The classes below are the ones a seam sweep does not',
+    'reach, because they need the module read in order rather than a join traced:',
+    '- audio/DSP: a control value read, then never applied (rate, pitch, volume).',
+    '- dialogs: an action disabled until the user satisfies what it is meant to skip.',
+    '- persistence: a file rewritten from scratch each run that the resume path needs.',
+    '- singletons: two app objects, two settings objects, an event with no binder.',
+    '- pause/cancel: does the in-flight unit stop before the NEXT one starts?',
+    '- metadata: a page, index or offset assigned then overwritten or written late.',
+    '- version constants: the release bumped one and not the one the gate compares.',
+    '- CLI/worker flags: parsed, then never used.',
+    '- dependencies: declared in a manifest, never installed by the installer.',
+    '- naming: two entities can share a name and one silently replaces the other.',
     '',
     'Also: read the whole tree in as FEW passes as possible (one call listing many',
     'paths beats one call per file) BEFORE you start verifying, and record the exact',
@@ -240,5 +336,10 @@ export function isProjectAssessmentGoal(goal: string): boolean {
   // A long-form authored deliverable wins: the prose IS the deliverable here.
   if (isLongFormAuthoredGoal(g)) return false;
   if (FIND_FLAWS.test(g) || WHATS_WRONG.test(g)) return true;
+  // An explicit delivery ask is a change request, not a judgement: see BUILD_VERBS.
+  // Only the verb branch is vetoed — "find the bugs in this repo" stays an audit
+  // even when the same prompt also asks for the fix, because the finding shape is
+  // the explicit part of that ask.
+  if (BUILD_VERBS.test(g)) return false;
   return ASSESS_VERBS.test(g) && CODE_TARGETS.test(g);
 }

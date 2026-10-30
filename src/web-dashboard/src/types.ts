@@ -921,8 +921,13 @@ export interface RequestsInsights {
 
 // ─── Findings (WS1 #23) ─────────────────────────────────────────────────────
 
-/** The only two amounts a finding is worth — see `src/findings/verdicts.ts`. */
-export type FindingVerdict = 'CONFIRMED' | 'PLAUSIBLE';
+/**
+ * The amounts a finding is worth — see `src/findings/verdicts.ts`.
+ *
+ * `WITHDRAWN` is not a third confidence: it records that a claim was checked and
+ * retracted, which is what stops a later run re-raising a disproved one.
+ */
+export type FindingVerdict = 'CONFIRMED' | 'PLAUSIBLE' | 'WITHDRAWN';
 
 /**
  * One check that was actually performed. `ref` IS the evidence — the line, the

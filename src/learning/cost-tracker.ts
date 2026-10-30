@@ -70,6 +70,13 @@ export interface CostEntry {
   timestamp: number;
   /** Input tokens used */
   inputTokens: number;
+  /**
+   * The part of `inputTokens` the provider served from its PROMPT CACHE.
+   * Optional and absent when the endpoint reports no cache figure at all — so
+   * "no cache data" never reads as "nothing was cached". A subset of
+   * `inputTokens`, never additional tokens.
+   */
+  cachedInputTokens?: number;
   /** Output tokens generated */
   outputTokens: number;
   /** Total tokens */
@@ -158,6 +165,16 @@ export interface CostSummary {
   byModel: Record<string, number>;
   /** Total tokens consumed */
   totalTokens: number;
+  /** Input tokens served from the provider's prompt cache (subset of input). */
+  cachedInputTokens: number;
+  /** Total input tokens across the ledger — the denominator of `cacheHitRate`. */
+  inputTokens: number;
+  /**
+   * `cachedInputTokens / inputTokens`, 0 when the ledger has no input at all.
+   * The figure a Cline run reports as "99.3% cache read": without it, a long
+   * audit looks like fresh compute it never paid for.
+   */
+  cacheHitRate: number;
   /** Total requests made */
   totalRequests: number;
   /** Number of entries in the current session */
@@ -344,6 +361,7 @@ export class CostTracker {
     task?: string,
     measured?: boolean,
     reportedCostUsd?: number,
+    cachedInputTokens?: number,
   ): CostEntry {
     const costReported =
       typeof reportedCostUsd === 'number' && Number.isFinite(reportedCostUsd);
@@ -371,6 +389,12 @@ export class CostTracker {
       inputTokens,
       outputTokens,
       totalTokens: inputTokens + outputTokens,
+      // A cache figure is a SUBSET of the input tokens; clamped so a provider
+      // that reports nonsense cannot make the ledger claim more cached tokens
+      // than it sent.
+      ...(typeof cachedInputTokens === 'number' && Number.isFinite(cachedInputTokens) && cachedInputTokens > 0
+        ? { cachedInputTokens: Math.min(cachedInputTokens, inputTokens) }
+        : {}),
       costUsd: resolved.billedUsd,
       task,
       // M2.2: must be set BEFORE persist below — the entry is serialized in
@@ -441,10 +465,20 @@ export class CostTracker {
     outputTokens: number,
     task?: string,
     reportedCostUsd?: number,
+    cachedInputTokens?: number,
   ): CostEntry {
     // measured: true is set inside recordCall BEFORE the entry is persisted,
     // so the dashboard's measured-vs-estimated split reads correctly from disk.
-    const entry = this.recordCall(provider, model, inputTokens, outputTokens, task, true, reportedCostUsd);
+    const entry = this.recordCall(
+      provider,
+      model,
+      inputTokens,
+      outputTokens,
+      task,
+      true,
+      reportedCostUsd,
+      cachedInputTokens,
+    );
     // Write the exact measured tokens through to the registry (best-effort) so
     // getMeasuredUsage() feeds measured-cost routing scoring.
     try {
@@ -494,10 +528,14 @@ export class CostTracker {
     const byModel: Record<string, number> = {};
     let totalCost = 0;
     let totalTokens = 0;
+    let inputTokens = 0;
+    let cachedInputTokens = 0;
 
     for (const entry of allEntries) {
       totalCost += entry.costUsd || 0;
       totalTokens += entry.totalTokens || 0;
+      inputTokens += entry.inputTokens || 0;
+      cachedInputTokens += entry.cachedInputTokens || 0;
       byProvider[entry.provider] = (byProvider[entry.provider] || 0) + (entry.costUsd || 0);
       byModel[entry.model] = (byModel[entry.model] || 0) + (entry.costUsd || 0);
     }
@@ -523,6 +561,9 @@ export class CostTracker {
       byProvider,
       byModel,
       totalTokens,
+      inputTokens,
+      cachedInputTokens,
+      cacheHitRate: inputTokens > 0 ? cachedInputTokens / inputTokens : 0,
       totalRequests: allEntries.length,
       sessionRequests: this.sessionEntries.length,
       sessionCost: r6(sessionCost),
@@ -555,6 +596,16 @@ export class CostTracker {
       '── All Time ──',
       `   Requests: ${s.totalRequests}`,
       `   Tokens:   ${formatCount(s.totalTokens)}`,
+      // The cache figure is reported as its own line, next to the token count it
+      // qualifies: a 58M-input session that was 99% cache read is a very
+      // different bill from 58M fresh tokens, and only the provider can say which
+      // it was. Omitted entirely when no endpoint ever reported one.
+      ...(s.cachedInputTokens > 0
+        ? [
+            `   Cache read: ${formatCount(s.cachedInputTokens)} of ${formatCount(s.inputTokens)} input tokens ` +
+              `(${(s.cacheHitRate * 100).toFixed(1)}%)`,
+          ]
+        : []),
       '',
       '── Billed — what you owe, by evidence ──',
       `   🧾 provider-reported (exact):            ${usd(s.billedReportedUsd)}  (${s.billedReportedCalls} calls)`,
@@ -701,7 +752,12 @@ export function recordCallWithUsage(
   model: string,
   prompt: string,
   content: string,
-  usage?: { promptTokens?: number; completionTokens?: number; costUsd?: number },
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    costUsd?: number;
+    cachedPromptTokens?: number;
+  },
   reportedCostUsd?: number,
 ): void {
   // Prefer the explicit reported-cost argument, else the cost carried on the
@@ -713,7 +769,15 @@ export function recordCallWithUsage(
         ? usage.costUsd
         : undefined;
   if (usage && typeof usage.promptTokens === 'number' && typeof usage.completionTokens === 'number') {
-    costTracker.recordCallMeasured(provider, model, usage.promptTokens, usage.completionTokens, undefined, cost);
+    costTracker.recordCallMeasured(
+      provider,
+      model,
+      usage.promptTokens,
+      usage.completionTokens,
+      undefined,
+      cost,
+      usage.cachedPromptTokens,
+    );
   } else {
     // No measured tokens: estimate token counts, but still honor a
     // provider-reported cost when the endpoint gave us one.

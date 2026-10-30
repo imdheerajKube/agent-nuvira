@@ -955,7 +955,7 @@ nuvira workflow publish                # share your own
 
 ## 9. Beyond code: the tool surface
 
-The agent has **115 tools**. This is the honest list of what it can do that is not "write a
+The agent has **117 tools**. This is the honest list of what it can do that is not "write a
 file". Categories below are descriptive; run `nuvira tools list` for the live registry.
 
 **Filesystem & code** — `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`,
@@ -1059,7 +1059,17 @@ to fix, not a result), and narration that could not be synthesized says it was s
 **Meta** — `ask_user`, `approval`, `write_approval`, `interrupt`, `todo`,
 `tool_search`, `tool_output_limits`, `tool_result_storage`, `budget_config`,
 `analyze`, `build`, `document`, `repair`, `resume`, `test`, `website`,
-`finding`.
+`finding`, `finish`.
+
+**`finish` — completion is stated, then checked.** A turn that ends by going quiet
+cannot be told apart from a turn that ran out of things to say, so the agent states
+completion with `finish({summary, verified})` and the loop judges the claim against
+the turn's own evidence: the requirement rows the request named (files, test
+classes, "run the tests", "the build must pass"), any check whose last run was red,
+and any module the turn wrote that no test imports. A contradicted `verified: true`
+comes back as work to do; `verified: false` is an accepted ending but must list the
+gaps in `unmet`, which are shown to the user verbatim rather than rounded up to
+"done".
 
 **`finding` — what was CHECKED vs what is a guess.** The agent records a finding
 for anything its answer asserts that a second party could check, together with
@@ -2035,7 +2045,7 @@ re-checked against `src/learning/runtime-dependencies.ts` on every run of
 | Command surface = 289 / 48 groups | `node scripts/generate-commands-surface.mjs --check` | ✓ in sync |
 | Version 3.3.0 | `nuvira --version` | ✓ |
 | Node >= 18.18.0 | `package.json` `engines` | ✓ |
-| 115 tools | `nuvira tools list` | ✓ (re-checked 2026-10-15) |
+| 117 tools | `nuvira tools list` | ✓ (re-checked 2026-10-27) |
 | 7 runtime tools, each with an install command | `nuvira doctor` | ✓ (re-checked 2026-10-16) |
 | 22 providers, 4 live here | `nuvira provider list` | ✓ |
 | 520 models | `nuvira models` | ✓ |

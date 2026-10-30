@@ -55,9 +55,32 @@
  *
  * NARROWNESS. Nothing is added unless the conversation ALREADY carries reasoning
  * on some assistant turn — a non-thinking provider's thread is untouched, and the
- * wire stays byte-identical. Only turns that carry `tool_calls` are filled, which
- * is the turn class the contract names; a content-only assistant turn is left
- * alone because no rule requires it and inventing text there would be noise.
+ * wire stays byte-identical. Once it does, EVERY assistant turn without one is
+ * filled: measured 2026-10-29, a thinking thread with a plain prose turn that
+ * lacked reasoning was rejected exactly like a tool-call turn without it, so the
+ * narrower "tool-call turns only" rule left the request invalid.
+ *
+ * THE THREAD IS NOT THE SIGNAL (measured 2026-10-29). That narrowness was WRONG,
+ * and it cost four to five rejected model calls on every thinking-mode turn:
+ *
+ *   POST api.deepseek.com/chat/completions, deepseek-flash, tools present
+ *   · thread where NO assistant turn carries reasoning  → 400 "The
+ *     `reasoning_content` in the thinking mode must be passed back to the API"
+ *   · the same thread with reasoning on the ONE tool-call turn → 200
+ *
+ * So the endpoint decides from the REQUEST (a thinking model with tools), not
+ * from whether we have ever sent reasoning. Once a turn's reasoning is dropped —
+ * thread trimming, a mid-turn continuation that rebuilds the thread, a provider
+ * that omitted it for one step — the predicate above went quiet exactly when the
+ * rule started applying, and the loop retried the same invalid request (3-4
+ * "Model call failed mid-turn — resuming" lines per bench turn, each with a fresh
+ * request_id).
+ *
+ * Hence two ways to arm it: the thread's own evidence (predictive, unchanged), or
+ * the endpoint's rejection (`force`, applied once on a `isReasoningReplayRejection`
+ * and retried). The rejection is the reliable signal — it is the API stating the
+ * invariant, not us guessing which models enforce it — and it costs no extra
+ * model round trip, because the retry replaces a call that had already failed.
  */
 
 import type { ToolMessage } from './interface.js';
@@ -74,6 +97,17 @@ import type { ToolMessage } from './interface.js';
 export const REASONING_NOT_RETAINED = '(reasoning for this tool call was not retained)';
 
 /**
+ * What a CONTENT-ONLY gap is filled with.
+ *
+ * The endpoint's rule turned out to cover every assistant turn, not only the
+ * tool-call ones (measured 2026-10-29, see the module header): a thread with
+ * reasoning on one turn and a plain prose turn without it is rejected just the
+ * same. The placeholder is worded for the turn it lands on, because the model
+ * reads it back and must not be told something false.
+ */
+export const REASONING_NOT_RETAINED_TURN = '(reasoning for this turn was not retained)';
+
+/**
  * True when any assistant turn in the conversation carries reasoning.
  *
  * That is the signal that this is a thinking-mode conversation: the endpoint is
@@ -88,6 +122,20 @@ function conversationCarriesReasoning(messages: readonly ToolMessage[]): boolean
 }
 
 /**
+ * Is this the endpoint enforcing the replay rule?
+ *
+ * Matched on the provider's own words, not on a provider or model name: any
+ * endpoint that enforces the contract says so (DeepSeek's exact text is above;
+ * gateways in front of it relay the same sentence), and one that does not can
+ * never match. 400 and 422 are the codes an integration proxy uses for an
+ * invalid request body.
+ */
+export function isReasoningReplayRejection(status: number, body: string): boolean {
+  if (status !== 400 && status !== 422) return false;
+  return /reasoning_content/i.test(body) && /pass(?:ed)?\s*back|must be passed/i.test(body);
+}
+
+/**
  * Apply the invariant to a conversation, returning a NEW array only when a gap
  * had to be filled (otherwise the caller's array is returned unchanged, so a
  * valid conversation keeps the exact wire shape it had).
@@ -98,16 +146,33 @@ function conversationCarriesReasoning(messages: readonly ToolMessage[]): boolean
  */
 export function applyThinkingReplayInvariant(
   messages: readonly ToolMessage[],
+  opts: {
+    /**
+     * Fill even when the thread shows no reasoning. Set ONLY in response to the
+     * endpoint rejecting the request for a missing `reasoning_content`: the API
+     * has then stated the rule itself, and a thread that lost its reasoning is
+     * exactly the case the evidence-based check cannot see.
+     */
+    force?: boolean;
+  } = {},
 ): { messages: readonly ToolMessage[]; filled: number } {
-  if (!conversationCarriesReasoning(messages)) return { messages, filled: 0 };
+  if (!opts.force && !conversationCarriesReasoning(messages)) return { messages, filled: 0 };
 
   let filled = 0;
   const out = messages.map((m) => {
     if (m.role !== 'assistant') return m;
-    if (!m.toolCalls || m.toolCalls.length === 0) return m;
     if (m.reasoningContent) return m;
     filled += 1;
-    return { ...m, reasoningContent: REASONING_NOT_RETAINED };
+    // EVERY assistant turn, not only the tool-call ones. Measured against the
+    // endpoint: a thinking conversation with reasoning on one turn and a plain
+    // prose turn without it is rejected exactly like a missing tool-call
+    // reasoning (400, same sentence). Filling only the tool-call turns is what
+    // made the first repair of this rule incomplete — the loop kept failing on
+    // the turn that carried the answer.
+    return {
+      ...m,
+      reasoningContent: m.toolCalls && m.toolCalls.length > 0 ? REASONING_NOT_RETAINED : REASONING_NOT_RETAINED_TURN,
+    };
   });
 
   return { messages: filled > 0 ? out : messages, filled };

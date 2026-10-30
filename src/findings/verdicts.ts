@@ -26,6 +26,9 @@
  *              check) or PLAUSIBLE (a reasoned guess). Binary on purpose: a
  *              0.7 confidence invites arithmetic on a number nobody calibrated,
  *              and the interesting question is only ever "can this be checked".
+ *              WITHDRAWN is the one addition, and it is not a third amount of
+ *              confidence: it records that a claim WAS checked and retracted (see
+ *              `withdrawFinding`), so a later run can see the ground is settled.
  *   outcome  — what became of it (kept, corrected, dropped, not persisted). A
  *              finding with no outcome is a status report, not a finding.
  *   evidence — the concrete things that were checked: a verbatim line, a command
@@ -52,12 +55,23 @@
  */
 
 /**
- * What a finding is worth, in the only two amounts that matter.
+ * What a finding is worth, in the only amounts that matter.
  *
  * - `CONFIRMED` — something was produced that a second party could check.
  * - `PLAUSIBLE` — reasoned, not verified. The default, and never a failure.
+ * - `WITHDRAWN` — it was recorded, then retracted, and WHY is on it.
+ *
+ * WHY A THIRD STATE, when the model above argues for two. The binary is about
+ * CONFIDENCE — a 0.7 nobody calibrated invites arithmetic on a number no one can
+ * defend. A retraction is not a confidence: it is a FACT about a claim's history,
+ * and without it a withdrawal can only live as prose inside `outcome`, where no
+ * reader can query it. That matters most across runs: the expensive failure is not
+ * a wrong finding, it is the next run re-deriving a claim that was already checked
+ * and already shown to be false. `WITHDRAWN` is the state that stops that, and it
+ * is deliberately NOT a promotion (`confirmFinding` cannot produce it) nor a
+ * demotion to `PLAUSIBLE` (which means "still unverified", not "known false").
  */
-export type Verdict = 'CONFIRMED' | 'PLAUSIBLE';
+export type Verdict = 'CONFIRMED' | 'PLAUSIBLE' | 'WITHDRAWN';
 
 /**
  * The kinds of check that can produce evidence.
@@ -231,6 +245,34 @@ export function demoteFinding(finding: Finding, why: string): Finding {
   if (finding.verdict === 'PLAUSIBLE') return finding;
   const note = finding.outcome.includes(why) ? finding.outcome : `${finding.outcome} — ${why}`;
   return { ...finding, verdict: 'PLAUSIBLE', outcome: note };
+}
+
+/**
+ * Retract a finding: it was checked, or better evidence arrived, and it is not true.
+ *
+ * NOT a demotion. `demoteFinding` says "this was never verified"; this says "this
+ * WAS examined and it does not hold", which is a stronger and more useful record —
+ * it is the one that stops a later run from raising the same claim again. The
+ * evidence is KEPT on purpose: a withdrawal without its basis is indistinguishable
+ * from a claim someone got bored of, and the next reader would have to re-check it
+ * to know which one it was.
+ *
+ * A reason is required. A withdrawal with no why is a deletion wearing a verdict,
+ * and this module's whole premise is that a claim carries the checks behind it.
+ */
+export function withdrawFinding(
+  finding: Finding,
+  why: string,
+  options: { at?: number } = {},
+): Finding {
+  const reason = (why || '').trim();
+  const note = reason ? `withdrawn — ${reason}` : 'withdrawn';
+  return {
+    ...finding,
+    verdict: 'WITHDRAWN',
+    outcome: finding.outcome.includes(note) ? finding.outcome : `${finding.outcome} — ${note}`,
+    ...(options.at !== undefined ? { at: options.at } : {}),
+  };
 }
 
 /**
@@ -480,7 +522,8 @@ export function fromWire(value: unknown): Finding | undefined {
   if (typeof raw.claim !== 'string' || !raw.claim.trim()) return undefined;
   if (typeof raw.outcome !== 'string') return undefined;
   if (typeof raw.source !== 'string') return undefined;
-  if (raw.verdict !== 'CONFIRMED' && raw.verdict !== 'PLAUSIBLE') return undefined;
+  if (raw.verdict !== 'CONFIRMED' && raw.verdict !== 'PLAUSIBLE' && raw.verdict !== 'WITHDRAWN')
+    return undefined;
 
   const evidence: Evidence[] = Array.isArray(raw.evidence)
     ? raw.evidence
@@ -527,10 +570,18 @@ function describeEvidence(evidence: Evidence): string {
  * is how a report starts lying politely.
  */
 export function describeFinding(finding: Finding): string {
-  const head = `${finding.verdict === 'CONFIRMED' ? '✅' : '🔎'} ${finding.claim} — ${finding.outcome}`;
+  const icon =
+    finding.verdict === 'CONFIRMED' ? '✅' : finding.verdict === 'WITHDRAWN' ? '⛔' : '🔎';
+  const head = `${icon} ${finding.claim} — ${finding.outcome}`;
   const evidence = evidenceOf(finding);
   if (finding.verdict === 'CONFIRMED' && evidence.length > 0) {
     return `${head}\n  evidence: ${evidence.map(describeEvidence).join('; ')}`;
+  }
+  // A withdrawal keeps its evidence: what was checked is why it was retracted.
+  if (finding.verdict === 'WITHDRAWN') {
+    return evidence.length > 0
+      ? `${head}\n  checked: ${evidence.map(describeEvidence).join('; ')}`
+      : head;
   }
   return `${head}\n  no evidence — reported as PLAUSIBLE, not verified.`;
 }
@@ -544,6 +595,11 @@ export function describeFinding(finding: Finding): string {
  */
 export function summarizeVerdicts(findings: readonly Finding[]): string {
   const confirmed = findings.filter((f) => f.verdict === 'CONFIRMED' && hasEvidence(f)).length;
-  const plausible = findings.length - confirmed;
-  return `${findings.length} finding(s): ${confirmed} confirmed, ${plausible} plausible`;
+  const withdrawn = findings.filter((f) => f.verdict === 'WITHDRAWN').length;
+  const plausible = findings.length - confirmed - withdrawn;
+  // The withdrawal is reported, not folded into "plausible": a claim that was
+  // retracted and one that was never checked are different states of knowledge,
+  // and a summary that merges them lets a report look cleaner than it is.
+  const withdrawnPart = withdrawn > 0 ? `, ${withdrawn} withdrawn` : '';
+  return `${findings.length} finding(s): ${confirmed} confirmed, ${plausible} plausible${withdrawnPart}`;
 }

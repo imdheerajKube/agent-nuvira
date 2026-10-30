@@ -42,8 +42,73 @@ import { stepDigest, stepShape, type StepReplay } from '../learning/step-checkpo
 import type { UnusableResponseKind } from '../learning/response-usability.js';
 // P7 — the identical-command guard's memory. The loop drops it when a WRITE is
 // applied, so a repaired project can re-run its own check (see the context below).
+import { existsSync } from 'node:fs';
+import { basename, isAbsolute, relative, resolve } from 'node:path';
+
 import { RUN_TERMINAL_INCOMPLETE_PREFIX, resetTerminalFailureStreaks } from './run-terminal.js';
 import { createRunCommandMemo } from './command-memo.js';
+// Findings are the yield of an assessment (see `learning/finding-yield.ts`):
+// an audit's budget is extended while its report is GAINING defects and ends
+// when a whole round adds none. Imported here rather than computed in the loop
+// so the counting rule (and its tests) live in one module.
+import {
+  assessmentExtensionCap,
+  countSourceFiles,
+  readFindingYield,
+} from '../learning/finding-yield.js';
+import { isProjectAssessmentGoal } from '../learning/assessment-protocol.js';
+// Assessment BREADTH, as data the harness owns: what was opened, and the unread
+// files the opened ones import (see `learning/coverage-ledger.ts`).
+import { CoverageLedger } from '../learning/coverage-ledger.js';
+// What this turn EXAMINED, for the NEXT run: the project-relative coverage map in
+// the working-state ledger (see `learning/working-state.ts`). The breadth ledger
+// above is per-turn and in memory; this one survives the run.
+import { flushCoverage, isProjectLedgerDir, noteCoverage } from '../learning/working-state.js';
+// The safety net a bad batch of edits needs: a restorable copy of the tree, taken
+// BEFORE the first write of the turn (see `learning/workspace-checkpoint.ts`).
+import {
+  createWorkspaceCheckpoint,
+  DEFAULT_AUTO_KEEP,
+  formatBytes,
+  pruneAutoCheckpoints,
+} from '../learning/workspace-checkpoint.js';
+// REQUIRED ARTIFACTS — the files and test classes an ask NAMED (see
+// `learning/task-artifacts.ts`). Measured 2026-10-25: a 30-minute build task that
+// named todo/progress/issues/changelog, a README and e2e tests ended with none of
+// them, because the turn ends when the model stops calling tools.
+import { artifactsGateApplies, artifactsNudge, deliverableFirstNudge } from '../learning/task-artifacts.js';
+// A "production-ready" ask owes an operational artefact (see `learning/doc-claims.ts`):
+// the README says how to run it locally, which is not how it reaches a server.
+import { productionDutyNudge, productionReadinessDuty } from '../learning/doc-claims.js';
+// DELIVERABLE COVERAGE — the surfaces the ask NAMED (frontend, API, schema, e2e,
+// tests) checked against the tree (see `learning/deliverable-coverage.ts`).
+// Measured 2026-10-26: a 210-step build ended with every existing-artifact gate
+// satisfied and no frontend at all, because nothing asked about what was ABSENT.
+import { missingSurfaceGaps, surfaceGapsNudge } from '../learning/deliverable-coverage.js';
+// THE ADOPTION KIT — the documents that let a stranger USE the delivered service
+// (see `learning/adoption-kit.ts`). Measured 2026-10-27, the head-to-head: Cline
+// shipped an OpenAPI contract, an operations runbook, a threat model and ADRs;
+// nuvira shipped every suite green with none of them, and that — not the code —
+// was the whole difference in "a product is what a stranger can adopt".
+import { adoptionKitNudge, missingAdoptionItems } from '../learning/adoption-kit.js';
+// PLAN DEPTH — a build's breadth is set by the granularity of its plan (see
+// `learning/plan-depth.ts`). Measured 2026-10-27: the arm with 69 endpoints had a
+// 15-phase, ~150-task list; the arm with 51 had one step naming eight features.
+import { MAX_FEATURES_PER_STEP, planDepthIssue, planDepthNudge } from '../learning/plan-depth.js';
+// CHANGE REQUESTS — the requirement that arrives while the turn is still running,
+// delivered mid-turn instead of at the ceiling (see `learning/change-request.ts`).
+import {
+  changeRequestNudge,
+  changeRequestStatus,
+  changeRequestUnheardNudge,
+  readChangeRequest,
+} from '../learning/change-request.js';
+// The one-shot prefix compaction is gated on a provider that actually caches
+// prefixes; on anything else the loop keeps trimming per call (see the module).
+import { cacheStablePrefixPaysOff } from '../learning/prompt-cache.js';
+// A request the provider cannot PARSE is repaired, not repeated: see the catch
+// block below and `inference/wire-sanitize.ts`.
+import { poisonedMessageIndex, repairPoisonedMessage } from '../inference/wire-sanitize.js';
 // WS6 (#28) — the declared fault seam. `faultAt` is a null check when this
 // process declared no fault (`NUVIRA_INJECT_FAULT`), so an ordinary turn is
 // unaffected.
@@ -88,6 +153,7 @@ import { isMaxCapability } from '../config/capability-mode.js';
 import { isWorkDigestEnabled } from '../config/work-digest.js';
 import {
   assessEditActivity,
+  autoVerifyCheck,
   detectUnverifiedEditClaim,
   isVerificationTool,
   verificationNudgeFor,
@@ -96,9 +162,15 @@ import {
   deliverableNudge,
   type ToolCallEvidence,
 } from './edit-verification.js';
-import { createHarnessDirectiveSink } from './harness-directive.js';
+import { createHarnessDirectiveSink, type HarnessObservation } from './harness-directive.js';
+// The placeholder the wire layer uses when a thinking model's reasoning was not
+// retained; the loop stamps it once the turn is known to be in thinking mode (see
+// `thinkingModeSeen`).
+import { REASONING_NOT_RETAINED } from '../inference/thinking-replay.js';
+import type { PlanEvidence, PlanSnapshot } from './plan-store.js';
 import { effectiveToolJsonSchemas, coreToolJsonSchemas, isToolEnabled, toolsetForTool } from './toolsets.js';
 import { deliverablesNamedIn, recordStepHandoff } from '../agents/step-handoff.js';
+import { verifyArtifacts } from '../agents/artifact-verification.js';
 import { fenceUntrustedToolOutput } from './untrusted-content.js';
 import {
   installableToolsFromFailure,
@@ -113,6 +185,37 @@ import {
   formatPreflightFindings,
 } from '../learning/build-prerequisites.js';
 import type { TraceEvent, TraceGateName } from '../learning/reasoning-trace.js';
+import {
+  buildRequirementLedger,
+  describeUnmet,
+  resolveRequirementLedger,
+  type RequirementLedger,
+} from '../learning/requirement-ledger.js';
+import {
+  bindWrittenModulesToTests,
+  isSourceModule,
+  testBindingApplies,
+  type BindingReport,
+} from '../learning/test-binding.js';
+import { auditDocClaims, docClaimsNudge, quickstartDuty, quickstartNudge } from '../learning/doc-claims.js';
+import {
+  parseFailingCount,
+  redCheckNudge,
+  unansweredRedChecks,
+  type CheckRun,
+  type RedCheck,
+} from '../learning/check-ledger.js';
+import {
+  FINISH_ACCEPTED_MARKER,
+  completionNudge,
+  type TurnLedgerSnapshot,
+} from '../learning/completion-contract.js';
+import { isBuildShapedAsk } from '../learning/task-artifacts.js';
+// The harness's own banners (`[Origin: …]`, `[Image: …]`, …) are not part of the
+// ask. This is the ONE rule for removing them (measured in `hybrid-router.ts`:
+// 63 of 98 area hits were the harness reading its own scaffolding), reused here so
+// the gates that measure an ask — deliverables, shape, plan duty — read the user.
+import { stripInjectedContext } from '../learning/hybrid-router.js';
 
 /**
  * Tools that MUTATE the workspace. A refusal of one of these is the only
@@ -139,6 +242,25 @@ const PLAN_GATED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'write_file',
   'edit_file',
   'propose_change',
+]);
+
+/**
+ * Tools whose success is BOOKKEEPING, not work on the request.
+ *
+ * Used by the completion gate: a turn that only recorded a plan or a follow-up
+ * suggestion has not begun the ask, and asking it to close requirement rows would
+ * be the zero-action gate's job said twice. Deliberately small — a tool whose
+ * result carries evidence about the workspace (a read, a search, a check) is work.
+ */
+const CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'suggest_followups',
+  'ask_user',
+  'plan_todo',
+  'finish',
+  'finding',
+  'verify_requirement',
+  'skill',
+  'tool_search',
 ]);
 
 /** The path a mutating call was aimed at, when it named one. */
@@ -199,8 +321,13 @@ function currentAsk(opts: ToolLoopOptions): string {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const m = messages[i];
     if (m.role !== 'user') continue;
-    const text = (m.content ?? '').trim();
-    if (!text || text.startsWith('[')) continue;
+    // The harness's OWN banners (`[Origin: …]` from the gateway, `[Image: …]`,
+    // `[Attached: …]`) are stripped rather than treated as the ask's start: the
+    // message IS the user's, it just arrives behind a line this product wrote.
+    // Skipping the whole message (the earlier rule) threw the ask away on every
+    // messaging turn, so the loop's gates measured nothing there.
+    const text = stripInjectedContext(m.content ?? '').trim();
+    if (!text) continue;
     return text.slice(0, 600);
   }
   return '';
@@ -320,6 +447,12 @@ export function makeParallelSuggester(initialCounts: Record<string, number> = {}
 
 /** A step response — either a native tool-call response or parsed fallback. */
 export interface StepResponse {
+  /**
+   * The provider's own token counts for this step, when the endpoint reported
+   * any (see `ToolCallResponse.usage`). Carried through the loop so the surface
+   * can report a MEASURED cost instead of a `chars/4` estimate.
+   */
+  usage?: { promptTokens: number; completionTokens: number; cachedPromptTokens?: number };
   content: string;
   /** Parsed tool calls (empty = end turn). */
   toolCalls: Array<{
@@ -343,6 +476,13 @@ export interface StepResponse {
    * its own prior reasoning back — see {@link ToolMessage.reasoningContent}.
    */
   reasoningContent?: string;
+  /**
+   * How many tool-call turns this step's request had to have a reasoning
+   * placeholder filled into before the endpoint accepted it. Present only when
+   * the first attempt was rejected and repaired (inference/tools.ts), so the
+   * loop can report the repair instead of passing it off as a clean request.
+   */
+  repairedReasoningTurns?: number;
   /**
    * The provider's `finish_reason` for this step, when it reported one.
    * `'length'` means the response was cut at the output-token cap — the reason a
@@ -396,6 +536,12 @@ export interface ToolLoopDeps {
     toolSchemas: ToolJsonSchema[],
     onToken?: (token: string) => void,
     signal?: AbortSignal,
+    /**
+     * Display-only sink for the step's `reasoning_content` as it streams. The
+     * loop forwards ToolLoopOptions.onReasoning; a caller that does not stream
+     * reasoning simply ignores it.
+     */
+    onReasoning?: (token: string) => void,
   ): Promise<StepResponse>;
   /** Execute one tool call. Returns the tool-result text fed back to the model. */
   executeTool(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<string>;
@@ -482,8 +628,23 @@ export interface ToolLoopDeps {
 }
 
 export interface ToolLoopOptions {
+  /**
+   * Live sink for a thinking model's reasoning tokens (display only). The CLI
+   * renders them as the model's working notes; the model's ANSWER text keeps
+   * its own channel (onToken), so reasoning can never be mistaken for it.
+   */
+  onReasoning?: (token: string) => void;
   /** The full conversation history INCLUDING the current user message. */
   messages: ToolMessage[];
+  /**
+   * The run's id (`trace-…`) when the surface keeps one.
+   *
+   * Stamped on the coverage entries this turn writes, so a path the run examined
+   * can be traced back to the run that examined it — a ledger that says "someone
+   * read this" without saying who or when is nearly useless to the next reader
+   * (see `learning/working-state.ts`).
+   */
+  runId?: string;
   /** Tool names to expose (default: every registered tool). */
   tools?: string[];
   /**
@@ -622,6 +783,32 @@ export interface ToolLoopOptions {
    */
   requireAction?: boolean;
   /**
+   * COMPLETION CONTRACT (default ON). When a turn is about to END with checkable
+   * work outstanding — a requirement row from `learning/requirement-ledger.ts`
+   * that did not resolve, a check whose last run was red, or a module the turn
+   * wrote that no test imports — the loop spends ONE bounded nudge naming them,
+   * and offers the honest alternative (`finish` with `verified:false`).
+   *
+   * Why a nudge and not a refusal: the ending is still the model's to make. What
+   * the loop refuses is the SILENT version — "the model stopped" is not a claim
+   * that the request is satisfied, and after the measured 2026-10-25 run (a green
+   * build, 22 tests, and four named tracking files never written) that silence is
+   * the exact failure this option exists for.
+   *
+   * Empty ledger → no cost: an ask that names no artifact, check or obligation
+   * takes exactly the steps it took before.
+   */
+  requireCompletion?: boolean;
+  /**
+   * DOCUMENTATION DUTY (default ON). When a turn wrote a runnable entry point
+   * (`package.json`, `Makefile`, compose file) and left no README, or wrote a
+   * markdown document whose claims name files/scripts that do not exist, the loop
+   * spends ONE bounded nudge. Zero model calls to detect; at most one step.
+   * Measured: three agents on one prompt all shipped docs and none shipped a
+   * README, and nuvira's own ROADMAP cited tests it never wrote.
+   */
+  requireDocsAudit?: boolean;
+  /**
    * PLAN GATE (E2, default ON). When a request DIRECTS work on the workspace and
    * the turn is about to run its FIRST mutating tool call having declared no
    * plan, the loop spends ONE bounded nudge asking the model to declare a short
@@ -632,6 +819,16 @@ export interface ToolLoopOptions {
    * Set false to restore the pre-gate behaviour.
    */
   requirePlan?: boolean;
+  /**
+   * TOKENS this turn has spent so far, as the caller measures them.
+   *
+   * The loop does not meter usage (its provider seam does not report it), but the
+   * requirement yield it computes is the denominator of the one cost metric that
+   * makes a gate defensible: tokens per SATISFIED requirement. A surface that
+   * tracks usage passes this and gets the ratio on `requirementYield`; one that
+   * does not gets the counts only, and no invented number.
+   */
+  turnTokenCount?: () => number | undefined;
   /**
    * G18 — OBSERVABILITY SINK for the loop's non-LLM facts: every tool call that
    * ran (name, args, ok/error, duration), every gate DECISION (a nudge spent,
@@ -679,6 +876,133 @@ export interface ToolLoopOptions {
   maxContinuations?: number;
   /** Extra steps granted per continuation (default: 8). */
   continuationSteps?: number;
+  /**
+   * AUTO-VERIFY (default: false; the CLI turns it on).
+   *
+   * When the turn is about to end having MUTATED the workspace with nothing that
+   * observed the result, run the project's OWN check once (`autoVerifyCheck` —
+   * tests/typecheck/build declared by the project) and hand the model the
+   * verdict, instead of only asking it to verify.
+   *
+   * WHY (measured, 2026-10-25 head-to-head): the verification gate is a nudge, and
+   * a nudge is advice. On the audit task the other agent RAN the suite and could
+   * quote `125 failed / 476 passed`; this loop asked the model to run it, and the
+   * model sometimes did not — so the deliverable had no measured verdict. Bounded
+   * to two runs per turn (the first pass, plus one after the model reacts), and it
+   * never runs for a prose-only deliverable (`isProseArtifactPath`), because a
+   * written file is verified by its content, not by a test runner.
+   *
+   * Off by default so the loop's existing tests (and any caller that supplies its
+   * own verification) keep their exact behaviour.
+   */
+  autoVerify?: boolean;
+  /**
+   * Progress-gated extensions granted AFTER the continuation budget is spent
+   * (default: {@link MAX_PROGRESS_EXTENSIONS}).
+   *
+   * WHY THIS EXISTS. `maxContinuations` is a blind count: once it is spent the
+   * turn ends even when the model is demonstrably still working. MEASURED
+   * (trace-1792233823139-egmqc9, 2026-10-17, DeepSeek pinned, `max` capability):
+   * a two-repo comparison ran 80 steps — 16 base + 4 × 16 continuations — wrote
+   * the document, was mid-verification with 2 of 9 plan steps open, and stopped
+   * with "I reached my step limit for this request." The model was healthy and
+   * the budget was untouched; only the STEP COUNT ran out, and the first the
+   * user heard of it was a truncated turn.
+   *
+   * THE GATE IS THE PLAN, NOT THE STEP COUNT. An extension is granted only when
+   * (a) the turn's own plan still has a step that is not `done` and (b) a new
+   * successful tool call landed since the previous grant. Both are checkable
+   * facts: the plan is what the turn said the task IS, and new work is proof it
+   * is still serving it. A turn with no plan, or one whose plan is complete, is
+   * NOT extended — that is what keeps this from turning an endless read/search
+   * loop into a 200-step bill.
+   *
+   * 0 disables the behaviour (the pre-fix ending), which is what pins the old
+   * `budget-exhausted` test.
+   */
+  maxStepExtensions?: number;
+  /**
+   * REQUIREMENT-DRIVEN BUDGET (default: ON).
+   *
+   * WHY THIS REPLACES A STEP CAP. The extension count above is still a hardcoded
+   * number, and a number cannot know whether the ask was answered. Measured three
+   * times on one prompt (2026-10-26, SaaS platform): 178 steps → 84, 115 steps →
+   * 70, 210 steps → 85, with the LOWEST run being the one that got the fewest
+   * steps. A build's length is a property of the ASK — twelve features, a monorepo,
+   * three test classes, four tracking files — so the thing that should end the turn
+   * is the ask being satisfied (or the turn no longer advancing it), not a count
+   * somebody picked for a different task.
+   *
+   * So, when this is on and the turn is not an assessment (an audit has its own
+   * yield-based budget), the extension is UNBOUNDED while it is doing work that
+   * moves a REQUIREMENT: an unmet ledger row still open, an open plan step, an
+   * artifact the ask named that is not on disk. It stops in two cases, both facts
+   * rather than counts:
+   *
+   *   - two consecutive grants moved NO requirement (the turn is spinning: the
+   *     ledger's satisfied count, the files written and the green checks are all
+   *     unchanged), which is the stall the count was approximating;
+   *   - nothing is open any more, which is the honest end of a build.
+   *
+   * `maxTotalSteps` remains as an absolute escape hatch (a guard against a runaway
+   * cost, not a budget): it is far above any measured build and, when it binds, the
+   * message says so and names the flag. Setting this to false restores the old
+   * fixed-extension behaviour.
+   */
+  requirementDrivenBudget?: boolean;
+  /** Absolute escape hatch for the requirement-driven budget (default 1000). */
+  maxTotalSteps?: number;
+  /**
+   * ADVISORY NUDGES — the loop's OPINIONS (default: on).
+   *
+   * The loop emits two kinds of message. OBSERVATIONS are facts about the environment:
+   * a command failed, a check is red, a change request arrived, a tool returned an
+   * error. OPINIONS are predictions about the shape of a good answer, made before the
+   * repository was read: the plan is too coarse, the docs are missing, a module has no
+   * test with a static import, the deliverable list is incomplete.
+   *
+   * An observation is always true. An opinion is sometimes false in a way the model
+   * cannot argue with — measured 2026-10-27, an enterprise run ended at 9/100 while
+   * holding a test that passed 7/7, because that test imported its settings modules
+   * through `importlib` in a fresh interpreter and the static-import scanner could not
+   * see it. A prediction was allowed to overrule a command that had already proved the
+   * work, and the only ways out were to game the prediction or to stop.
+   *
+   * `false` silences the opinions and keeps the observations: the agent sets its own
+   * plan, chooses its own work, and ends when it judges the task done. The completion
+   * check still refuses a claim CONTRADICTED by a command, because that is evidence,
+   * not a prediction. Advisory gaps are still reported to the user at the end.
+   */
+  advisoryNudges?: boolean;
+  /**
+   * WALL-CLOCK BUDGET FOR ONE TURN (default: none).
+   *
+   * WHY A STEP COUNT IS NOT ENOUGH. Every budget above is denominated in steps, and
+   * a step is not a unit of time: measured 2026-10-27, the nuvira arm spent its last
+   * ten minutes debugging a Playwright runner that would not start, and closed the
+   * turn with no README — while the Cline arm finished in 48 minutes and shipped 42
+   * paths of OpenAPI. Nothing in the loop knew how much time was left, so nothing
+   * could prefer "close the deliverable" over "keep chasing this tool".
+   *
+   * So the caller may state the real budget. When the remaining time crosses the
+   * closing window (20% of the budget, at least a minute), the turn is told — ONCE —
+   * to stop opening work, to record a repeatedly-failing tool as a known limitation
+   * instead of chasing it, and to write the handover documents and the answer. The
+   * window also spends the last two steps and refuses further extensions, so the
+   * answer happens instead of the next attempt.
+   *
+   * Unset by default: a caller that has no wall clock keeps the exact step-only
+   * behaviour every existing test pins.
+   */
+  maxDurationMs?: number;
+  /**
+   * Clock for the wall-clock budget (default `Date.now`). Injectable so a test can
+   * drive a ten-minute turn in a millisecond, and so a caller that measures elapsed
+   * time itself (a resumed turn) can supply the same clock it used.
+   */
+  now?: () => number;
+  /** Watch for a mid-turn `CHANGE_REQUEST.md` (default: ON; see change-request.ts). */
+  watchChangeRequests?: boolean;
   /** Pause before re-attempting a failed step (default: 1500ms; tests set 0). */
   continuationDelayMs?: number;
   /** ToolContext for executions (configManager, followups sink, board, ...). */
@@ -733,6 +1057,14 @@ export interface ToolLoopResult {
    * "action performed — message sent".
    */
   deliveryConfirmed?: boolean;
+  /**
+   * The workspace checkpoint taken before this turn's first file write, if one was.
+   *
+   * It is on the RESULT, not only in an event, because the thing a user needs after
+   * a bad batch of edits is the id they can restore from — a message that scrolled
+   * past is not a safety net (see `learning/workspace-checkpoint.ts`).
+   */
+  workspaceCheckpointId?: string;
   /**
    * Stage 2 — what this turn did to the USER, as counts: how many questions it
    * asked them (`shownAsks`), how many of those repeated an earlier one
@@ -803,6 +1135,43 @@ export interface ToolLoopResult {
    * as "in progress".
    */
   unfulfilledPromise?: boolean;
+  /**
+   * COMPLETION CONTRACT — what the REQUEST named that this turn did NOT satisfy,
+   * as sentences ("README.md — what this is and how to run it (no such file)").
+   *
+   * Set by the loop on every ending, whatever the reason, and only when the ask
+   * named something checkable. A caller must not describe such a turn as finished:
+   * this is the residual signal behind the measured 2026-10-25 run, which ended
+   * "done" with four named tracking files never written.
+   */
+  unmetRequirements?: string[];
+  /**
+   * OBSERVATION CONTRACT — the gates that spoke this turn, and what the model said
+   * after each one. A gate here is an OBSERVATION the model was free to judge (see
+   * `harness-directive.ts`): the recorded answer is the model's own judgment, shown
+   * so a reader can see a gate was considered and dismissed on the record rather
+   * than silently obeyed or silently ignored. Absent when no gate spoke, so a clean
+   * turn carries nothing.
+   */
+  observations?: HarnessObservation[];
+  /**
+   * REQUIREMENT YIELD — the cost metric's denominator. How many of the ask's
+   * checkable rows resolved, how many did not, how many could not be checked, and
+   * how much of what the turn wrote has a test that imports it.
+   *
+   * Present only when the ask named at least one row, so a conversation turn
+   * carries no metric at all rather than a meaningless zero.
+   */
+  requirementYield?: {
+    total: number;
+    satisfied: number;
+    unmet: number;
+    unknown: number;
+    /** bound / written modules, when the turn wrote enough to ask the question. */
+    testBinding?: { modules: number; bound: number; ratio: number | null };
+    /** Tokens spent per satisfied requirement — only when the caller reports usage. */
+    tokensPerSatisfiedRequirement?: number;
+  };
   /**
    * G1 — VERIFICATION GATE — a workspace mutation (`edit_file`/`write_file`)
    * SUCCEEDED this turn and NOTHING that could observe the result
@@ -1178,6 +1547,353 @@ export function parallelSafeToolNames(): ReadonlySet<string> {
  *  lowers this to 1 for tiny models that cannot use interleaved results. */
 const MAX_PARALLEL_READS = 4;
 
+// ─── WASTE GUARD — do not pay twice for the same read ───────────────────────
+//
+// MEASURED (2026-10-17, the Cline head-to-head on the slugkit task): 49 tool
+// calls over 51 model calls on a task whose intrinsic shape is ~7 calls, 1.43 M
+// input tokens for 6,303 output tokens. The biggest single avoidable block in
+// the transcript was re-reading, not thinking: `npm test` run FOUR times with a
+// different output filter each time (`| tail -40`, `| grep -E "^# …"`, `| tail
+// -30`, `| head -20`), plus repeated listings of the same directory. Nothing had
+// changed between those calls, so the 2nd…4th could only return what the 1st
+// already returned — each one re-sent the whole thread to buy nothing.
+//
+// The contract now ASKS the model not to do this (registry.ts, TOOL_CONTRACT),
+// and this guard makes the ask enforceable: an identical read on an UNCHANGED
+// workspace is refused with the reason, instead of being executed again. The
+// instant the turn mutates anything the memo is invalid, so a repaired project
+// re-running its own check — the one repetition that is real work — is never
+// blocked (same rule as run_terminal's failure-streak guard).
+
+/** Tools whose result is a pure function of the workspace, so a repeat is waste. */
+const MEMOIZABLE_READ_TOOLS = new Set(['read_file', 'list_dir', 'glob', 'code_search']);
+
+/**
+ * Shell commands that only INSPECT (or run a project's own check). Repeated on
+ * an unchanged workspace they can only return what they already returned, so
+ * they are memoizable; anything not matching is treated as side-effecting and
+ * always runs. Deliberately a positive allowlist: an unknown command is never
+ * suppressed.
+ */
+// NOTE the allowlist is deliberately narrow on package scripts: `npm test` and
+// `npm run test` are the project's CHECK (re-running one on an unchanged
+// workspace is the observed waste), while `npm run build` / `npm run deploy` /
+// `npx some-cli` can WRITE and are never suppressed.
+const INSPECT_COMMAND =
+  /^(?:cd\s+[^&;]+\s*&&\s*)?(?:ls|cat|head|tail|grep|rg|find|pwd|wc|stat|file|which|printenv|env|node\s+-\S+|npm\s+test\b|npm\s+run\s+test\b|npx\s+(?:vitest|jest|tsc|eslint)\b|yarn\s+test\b|pnpm\s+test\b|bun\s+test\b|git\s+(?:status|diff|log|show|rev-parse|tag|branch|remote|describe|ls-files|ls-tree))\b/;
+
+/**
+ * Drop trailing OUTPUT-FILTER pipelines from a command: `npm test | tail -40`
+ * and `npm test | grep -E "^# pass"` are the same execution with a different
+ * view, which is exactly the repetition observed live. Only filters that cannot
+ * change the command's EFFECT are removed; a pipe the loop cannot classify
+ * leaves the command as-is (a conservative miss beats a wrong suppression).
+ */
+export function stripOutputFilters(command: string): string {
+  const FILTER = /^(?:tail|head|grep|rg|sort|uniq|wc|cut|tr|awk|sed|fold|column|jq|less|more)\b/;
+  const segments = command.split('|');
+  // Walk from the end, dropping filter stages; stop at the first non-filter.
+  while (segments.length > 1) {
+    const last = segments[segments.length - 1].trim().replace(/^(?:2>&1\s*)?/, '');
+    if (!FILTER.test(last)) break;
+    segments.pop();
+  }
+  // A leading `2>&1` on the surviving command is noise for identity purposes.
+  return segments.join('|').replace(/\s*2>&1\s*$/, '').trim();
+}
+
+/**
+ * The memo key for a call whose repetition would be pure waste, or `null` when
+ * the call must always run (a mutation, an unknown tool, a page fetch, …).
+ * Exported for the regression tests to pin both directions.
+ */
+export function memoizableReadSignature(name: string, args: unknown): string | null {
+  if (name === 'run_terminal' || name === 'terminal' || name === 'code_execution') {
+    // `code_execution` runs the SAME shell a model would otherwise reach for
+    // through run_terminal, so a repeated `npm test` through it is the same
+    // repetition — measured in the 2026-10-17 run of this very task: `npm test |
+    // tail` via run_terminal, then `npm test` again via code_execution. Only a
+    // snippet that IS an inspect command is memoizable; anything else (a script,
+    // a build, a mutation) is left to run.
+    const raw = name === 'code_execution'
+      ? (args as { code?: unknown } | undefined)?.code
+      : (args as { command?: unknown } | undefined)?.command;
+    if (typeof raw !== 'string') return null;
+    const base = stripOutputFilters(raw.replace(/\s+/g, ' '));
+    if (!base || !INSPECT_COMMAND.test(base)) return null;
+    return `inspect:${base}`;
+  }
+  if (!MEMOIZABLE_READ_TOOLS.has(name)) return null;
+  // Stable key: argument ORDER must not matter (`{paths, offset}` vs
+  // `{offset, paths}` are the same read), and `undefined` values are dropped so
+  // an omitted optional field cannot split one read into two keys.
+  let key: string;
+  try {
+    const entries = Object.entries((args ?? {}) as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b));
+    key = JSON.stringify(entries);
+  } catch {
+    return null; // unrepresentable args → never suppress
+  }
+  return `${name}:${key}`;
+}
+
+/**
+ * The refusal text for a repeated read. It does NOT repeat the result: the
+ * earlier tool result is already in the thread, and re-sending it is the exact
+ * cost this guard exists to remove.
+ */
+export function repeatReadRefusal(name: string): string {
+  return (
+    `Error: ${name} was already called this turn on the SAME, unchanged workspace — its result is the earlier tool ` +
+    'result above and nothing has changed since. Do NOT re-run it: use that result, call something different, or change ' +
+    'the workspace first. (Re-running only to see a differently filtered view of the same output is not allowed.)'
+  );
+}
+
+/**
+ * The batching nudge — one bounded directive when a turn is spending a whole
+ * model round-trip per read. It states the COST (every step re-sends the thread)
+ * and the exact alternative, and it explicitly does not relax verification: the
+ * turn still runs its real check, once.
+ */
+export function batchingNudge(steps: number, tool: string): string {
+  return (
+    `⚡ BATCHING — you have spent ${steps} model round-trips issuing ONE call per step (last: ${tool}), and each step ` +
+    're-sends this whole conversation. If your next calls do not depend on each other, put them ALL in this one step: ' +
+    'several read_file calls together, or ONE run_terminal chaining what you need ' +
+    '(`ls -la; cat README.md; cat package.json; git status`). Read the full output once instead of re-running a ' +
+    'command with a different filter (`| head`, `| tail`, `| grep`) — a repeat on an unchanged workspace is refused. ' +
+    'This does not change WHAT you verify: still run the real check, once, when the work is changed.'
+  );
+}
+
+/** A call that GATHERS information (so a step made of exactly one of these is a batching candidate). */
+export function isGatherCall(name: string): boolean {
+  return name === 'run_terminal' || name === 'terminal' || isParallelSafeTool(name);
+}
+
+// ─── PLAN AUTO-ADVANCE — the checklist advances from the loop's OWN ledger ───
+//
+// MEASURED (2026-10-17, the slugkit release task on the patched build): 9 of the
+// turn's 34 tool calls were `plan_todo` — the model spending a whole model
+// round-trip, with the entire conversation re-sent, to say "step 2 is done" about
+// work the LOOP had already watched happen (`edit_file` on the exact path the
+// step names). The same shape produced 7 plan calls on the Cline head-to-head and
+// 10 on T2. Bookkeeping about executed work does not need a model.
+//
+// So the loop advances the steps its own ledger can justify, and ONLY those:
+//
+//   - a step that NAMES a file the turn successfully wrote/edited → done, with
+//     that call recorded as the step's evidence (the store then renders ✅ rather
+//     than the ⚠️ it uses for a `done` with nothing behind it — see
+//     `plan-store.ts` R1);
+//   - a step that NAMES a check (test/verify/lint/build/…) → done, but only when
+//     a check of the KIND it names ACTUALLY SUCCEEDED this turn (see the
+//     classification below — a successful `ls` is not a successful test run);
+//   - never a step about reporting/delivering prose (there is no execution to
+//     stand behind "write the final report");
+//   - never a step nothing was observed for. An unattributable step stays open for
+//     the model to settle — the auto-advance may not invent progress.
+//
+// This can only REMOVE a round-trip, never a check: the verification gate, the
+// claim audit and the honesty flags are untouched, and a step marked done here
+// carries MORE provenance than one the model asserted.
+
+/** One step the loop's ledger closed, with the evidence that closes it. */
+export interface PlanStepAdvance {
+  id: string;
+  description: string;
+  /** One line saying WHAT was observed — the step note and the trace summary. */
+  reason: string;
+  evidence: PlanEvidence;
+}
+
+/**
+ * A step about REPORTING rather than doing: prose has no execution behind it, so
+ * the loop never advances it on the model's behalf.
+ */
+const REPORTING_STEP = /\b(report|summary|summarise|summarize|write[- ]up|explain|announce|deliver|tell the user|final answer)\b/i;
+
+/** A step that names a CHECK rather than a change. */
+const CHECK_STEP = /\b(run|re-?run|verify|verification|validate|test|tests|testing|check|checks|lint|typecheck|type-check|build|smoke)\b/i;
+
+// ─── WHAT A CHECK ACTUALLY WAS — read the COMMAND, not the tool name ───────
+//
+// MEASURED (2026-10-25, the three-agent platform build). The check rule below
+// used to accept ANY successful call to a verification TOOL, and `run_terminal`
+// is one of them. In that run the model's plan had
+//
+//   s6  "Write and RUN unit + integration tests; add E2E (Playwright) spec"
+//   s7  "Run typecheck/lint/build + test suite, fix failures, update
+//        todo/progress/issues/changelog"
+//
+// and BOTH were marked ✅ within seconds of an `ls -la`:
+//
+//   🗺️ plan step "s6" → done (run_terminal ran `ls -la` and succeeded)
+//   🗺️ plan step "s7" → done (run_terminal ran `ls -la` and succeeded)
+//
+// Two of seven steps were therefore closed before any test, typecheck, build or
+// tracking file existed, the plan rendered 29 % complete on a turn that had not
+// started, and the loop's own close-out gate then had nothing to push. That is
+// the mechanical half of the 2026-10-25 testing / task-management gap — not a
+// model that decided to skip the work.
+//
+// So a check is classified by what its COMMAND exercises. An inspection command
+// (`ls`, `cat`, `git status`, …) is not a check of anything: it observes the
+// workspace, never the artifact's behaviour. And a step that names SEVERAL kinds
+// ("typecheck/lint/build + test suite") is closed only when every kind it names
+// was actually run — "ran tsc" is not "ran the checks I listed".
+
+export type CheckKind = 'tests' | 'typecheck' | 'lint' | 'build' | 'other';
+
+/** The check kinds a command can exercise, in the order they are recognised. */
+const CHECK_KINDS: Array<[CheckKind, RegExp]> = [
+  ['tests', /\b(?:tests?|testing|vitest|jest|mocha|ava|tap|pytest|unittest|playwright|cypress|rspec|phpunit|node\s+--test|go\s+test|cargo\s+test|dotnet\s+test|mvn\s+test)\b/],
+  ['typecheck', /\b(?:tsc|typecheck|type-check|mypy|pyright|flow)\b/],
+  ['lint', /\b(?:lint|linting|eslint|ruff|flake8|pylint|stylelint|prettier)\b/],
+  ['build', /\b(?:build|compile)\b/],
+];
+
+/** A command that only LOOKS at the workspace — never a check of the artifact. */
+const INSPECTION_ONLY =
+  /^(?:ls|cat|head|tail|wc|grep|rg|find|pwd|echo|stat|file|which|printenv|env|diff|tree|du|df|git\s+(?:status|diff|log|show|rev-parse|branch|remote|ls-files|describe|tag))\b/;
+
+/**
+ * What a successful verification call actually exercised, derived from its
+ * COMMAND (never from the tool's name — `run_terminal` runs both `npm test` and
+ * `ls`). `inspectionOnly` is the flag the plan rule refuses.
+ */
+export function classifyCheck(
+  tool: string,
+  command?: string,
+): { kinds: CheckKind[]; inspectionOnly: boolean } {
+  if (tool === 'test') return { kinds: ['tests'], inspectionOnly: false };
+  if (tool !== 'run_terminal' && tool !== 'run_cli' && tool !== 'code_execution' && tool !== 'terminal') {
+    // browser, checkpoint diff, any other observer of the artifact
+    return { kinds: ['other'], inspectionOnly: false };
+  }
+  const text = String(command ?? '')
+    .replace(/^\s*cd\s+[^&;]+&&\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  if (!text) return { kinds: ['other'], inspectionOnly: false };
+  const kinds: CheckKind[] = [];
+  for (const [kind, re] of CHECK_KINDS) if (re.test(text)) kinds.push(kind);
+  if (kinds.length > 0) return { kinds, inspectionOnly: false };
+  return INSPECTION_ONLY.test(text)
+    ? { kinds: [], inspectionOnly: true }
+    : { kinds: ['other'], inspectionOnly: false };
+}
+
+/** The check kinds a step DESCRIPTION names (empty = "some check, any kind"). */
+export function stepCheckKinds(description: string): CheckKind[] {
+  const kinds: CheckKind[] = [];
+  for (const [kind, re] of CHECK_KINDS) if (re.test(description)) kinds.push(kind);
+  return kinds;
+}
+
+/**
+ * The check that CLOSES a step, or null. Every kind the step names must have
+ * been exercised by a non-inspection check; an unnamed kind accepts any real
+ * check. Returns the LAST check that contributed, so the step's evidence is a
+ * command the turn actually ran late.
+ */
+export function checkClosingStep(
+  checks: ReadonlyArray<{ tool: string; command?: string }>,
+  named: readonly CheckKind[],
+): { tool: string; command?: string } | null {
+  const usable = checks.filter((c) => !classifyCheck(c.tool, c.command).inspectionOnly);
+  if (usable.length === 0) return null;
+  if (named.length === 0) return usable[usable.length - 1];
+  const covered = new Set<CheckKind>();
+  let last: { tool: string; command?: string } | null = null;
+  for (const check of usable) {
+    const kinds = classifyCheck(check.tool, check.command).kinds;
+    let hit = false;
+    for (const kind of kinds) {
+      if (named.includes(kind) && !covered.has(kind)) {
+        covered.add(kind);
+        hit = true;
+      }
+    }
+    if (hit) last = check;
+  }
+  return covered.size === named.length ? last : null;
+}
+
+/** The file-ish token a step description names, when it names one. */
+function namedFileIn(description: string): string | null {
+  // `src/slugify.js`, `AUDIT.md`, `settings.py:150` — a path, or a bare filename
+  // with an extension. A word like "tests" is deliberately NOT a file token.
+  const m = description.match(/(?:[\w./-]*\/)?[\w.-]+\.[A-Za-z]{1,5}\b/);
+  return m ? m[0] : null;
+}
+
+/**
+ * Which of a plan's OPEN steps the turn's own ledger already closed. Pure, so the
+ * rule set is testable without a model, a store or a terminal.
+ */
+export function planStepsClosedByEvidence(input: {
+  snapshot: PlanSnapshot | null | undefined;
+  /** Successful file writes/edits this step, in call order. */
+  written: ReadonlyArray<{ tool: string; path: string }>;
+  /** Successful verification calls this step (`isVerificationTool`). */
+  checks: ReadonlyArray<{ tool: string; command?: string }>;
+  /** Epoch ms for the evidence stamp (injected so tests are deterministic). */
+  at: number;
+}): PlanStepAdvance[] {
+  const steps = input.snapshot?.steps ?? [];
+  if (steps.length === 0) return [];
+  const advances: PlanStepAdvance[] = [];
+  for (const step of steps) {
+    if (step.status === 'done' || step.status === 'blocked') continue;
+    const description = String(step.description ?? '');
+    if (!description.trim() || REPORTING_STEP.test(description)) continue;
+    const named = namedFileIn(description);
+    // 1. PATH RULE — the strongest: a call actually wrote the file the step names.
+    if (named) {
+      const base = named.split('/').pop() ?? named;
+      const hit = [...input.written].reverse().find((w) => {
+        const wBase = w.path.split('/').pop() ?? w.path;
+        return wBase === base || w.path === named || w.path.endsWith(`/${named}`);
+      });
+      if (hit) {
+        advances.push({
+          id: step.id,
+          description,
+          reason: `${hit.path} was written by ${hit.tool}`,
+          evidence: { tool: hit.tool, path: hit.path, ok: true, at: input.at },
+        });
+        continue;
+      }
+    }
+    // 2. CHECK RULE — a step that names a check, closed only by a check of the
+    // kind it names that RAN (never by an inspection command, and never by one
+    // kind standing in for the four the step listed).
+    if (CHECK_STEP.test(description) && input.checks.length > 0) {
+      const check = checkClosingStep(input.checks, stepCheckKinds(description));
+      if (!check) continue;
+      advances.push({
+        id: step.id,
+        description,
+        reason: check.command
+          ? `${check.tool} ran \`${check.command}\` and succeeded`
+          : `${check.tool} succeeded`,
+        evidence: {
+          tool: check.tool,
+          ...(check.command ? { command: check.command } : {}),
+          ok: true,
+          at: input.at,
+        },
+      });
+    }
+  }
+  return advances;
+}
+
 // ─── Bounded auto-continuation (mid-turn model death / step bound) ──────────
 // The loop used to give up the MOMENT a step's generation failed (all provider
 // candidates exhausted) or the step bound was reached: the user got a partial
@@ -1294,6 +2010,28 @@ export const PLAN_TODO_UPDATE_CAP = 64;
 export const DEFAULT_MAX_CONTINUATIONS = 2;
 /** Default extra steps granted per continuation. */
 export const DEFAULT_CONTINUATION_STEPS = 8;
+
+/**
+ * How many times a still-working turn may extend past its continuation budget.
+ *
+ * Finite on purpose: "never stop" must still be answerable. With the default
+ * 16-step base, 2 (or 4 in `max` mode) continuations and 8 extensions, the hard
+ * ceiling is 16 + 32 + 128 = 176 steps on a normal turn and 16 + 64 + 128 = 208
+ * in `max` mode. The measured turn needed fewer than 20 more.
+ */
+export const MAX_PROGRESS_EXTENSIONS = 8;
+
+/**
+ * The absolute escape hatch for a requirement-driven turn (see
+ * `ToolLoopOptions.requirementDrivenBudget`).
+ *
+ * NOT A BUDGET: it exists so a pathological loop cannot bill forever, and it sits
+ * far above every measured build (the SaaS-platform benchmark reached 210 steps in
+ * 16 minutes of real work). A loop that reaches it kept ADVANCING requirements the
+ * whole way, which is a task nobody could have finished — the message says so and
+ * names the flag rather than pretending the ask was answered.
+ */
+export const HARD_STEP_ESCAPE = 1000;
 /**
  * `max` capability mode — the loop's longest bounded reasoning budget. The
  * defaults above are sized to keep an ordinary turn responsive; under `max` the
@@ -1352,8 +2090,29 @@ async function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<voi
 export interface ToolLoopProgress {
   /** Names of tool calls that ran successfully this turn. */
   successfulToolCalls: string[];
+  /**
+   * CHECKS this turn ran, in order, with the write-count at each verdict — the
+   * evidence `check-ledger.ts` reads to tell a red check that was ANSWERED from
+   * one the turn simply outlived. Kept on the shared progress object (not loop
+   * locals) so the wrapper can judge the turn's ending from the same record.
+   */
+  checkRuns: Array<CheckRun & { kinds: string[] }>;
+  /**
+   * The model's OWN `finish({verified:false, unmet})` claim, when the contract
+   * accepted it. It is the only list the user is shown verbatim: a model that says
+   * "this could not be done" must not have that sentence swallowed by a turn that
+   * otherwise delivered (see the annotation in `runToolLoop`).
+   */
+  finishClaim?: { verified: false; unmet: string[] };
   /** True when a delivery tool reported an actual `✅` send. */
   deliveryConfirmed: boolean;
+  /**
+   * The pre-write workspace checkpoint, when one was taken (see
+   * `learning/workspace-checkpoint.ts`). Lives on the shared progress object so the
+   * wrapper can put it on the RESULT on every exit path — a cancelled turn that
+   * already wrote two files still needs its undo point.
+   */
+  workspaceCheckpointId?: string;
   /** Session 4 — paths mutated successfully this turn (for verification relevance). */
   mutatedPaths: string[];
   /**
@@ -1395,6 +2154,13 @@ export interface ToolLoopProgress {
  */
 async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgress): Promise<ToolLoopResult> {
   const { messages, tools: toolNames, maxSteps = 16, context, deps } = opts;
+  // Read once. Everything guarded by this is an opinion about the shape of the answer;
+  // nothing guarded by it is a fact the environment produced (see the option's comment).
+  const advisoryNudges = opts.advisoryNudges !== false;
+  // Advisory gaps seen during the turn. They are never enforced; they are reported at the
+  // end, because a user still deserves to know what the loop noticed and the agent did
+  // not act on.
+  const advisoryGaps: string[] = [];
   // Bounded auto-continuation state (see ToolLoopOptions.maxContinuations).
   // `max` capability mode raises the DEFAULT budget (an explicit option still
   // wins, so callers that pin a bound keep it). Read once per turn from the
@@ -1409,10 +2175,42 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     opts.continuationSteps ?? (maxCapability ? MAX_CAPABILITY_CONTINUATION_STEPS : DEFAULT_CONTINUATION_STEPS),
   );
   let continuations = 0;
+  // Progress-gated extensions past the continuation budget (see
+  // ToolLoopOptions.maxStepExtensions). `actionsAtLastGrant` is the count of
+  // successful tool calls at the previous grant, so "still working" is a fact
+  // about NEW work rather than an assumption from the step number.
+  const maxStepExtensions = Math.max(0, opts.maxStepExtensions ?? MAX_PROGRESS_EXTENSIONS);
+  /** The absolute escape hatch (never a budget): see `requirementDrivenBudget`. */
+  const maxTotalSteps = Math.max(1, opts.maxTotalSteps ?? HARD_STEP_ESCAPE);
+  let progressExtensions = 0;
+  let actionsAtLastGrant = 0;
+  // REQUIREMENT-DRIVEN BUDGET state: the requirement fingerprint at the last grant,
+  // and how many consecutive grants moved it not at all. Two silent grants is a
+  // stall — that, not a step count, is what ends a build that is going nowhere.
+  let fingerprintAtLastGrant = '';
+  let stalledGrants = 0;
+  // Did this turn ever see the model's reasoning? Once it has, every later
+  // tool-call turn is stamped with `reasoningContent` even when the step returned
+  // none, because the endpoint requires the field on tool-call turns and the only
+  // per-conversation signal the wire layer has can be trimmed away.
+  let thinkingModeSeen = false;
+  /** The "rejected for a missing reasoning_content, then repaired" line, once. */
+  let reasoningRepairReported = false;
+  /**
+   * WIRE REPAIRS spent this turn (see the generation-failure catch below).
+   *
+   * MEASURED (2026-10-25): a provider answered `400 … messages[36].content:
+   * unexpected end of hex escape` on every retry of the same thread, because the
+   * poisoned message stayed in it — 49 tool calls of work, no deliverable, exit
+   * 0. Two repairs are enough to recover a real turn (sanitise, then stub).
+   */
+  let wireRepairs = 0;
   // Bounded dangling-promise nudges spent this turn (see INTENT_PROMISE_RE).
   let intentNudges = 0;
   // G1 — bounded verification nudges spent this turn (see requireVerification).
   let verificationNudges = 0;
+  // AUTO-VERIFY runs executed this turn (see ToolLoopOptions.autoVerify).
+  let autoVerifies = 0;
   // G13 — bounded "the request already authorized this" nudges (see
   // detectPermissionSeeking).
   let permissionNudges = 0;
@@ -1459,9 +2257,83 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // G13b — bounded "the request asked for a file and none was written" nudges
   // (see wantsAuthoredArtifact).
   let deliverableNudges = 0;
+  // REQUIRED ARTIFACTS — bounded nudges for artifacts the request named that do
+  // not exist yet (see `learning/task-artifacts.ts`). Two, not one: a build task
+  // can name six files, and a single nudge that lists them is often acted on
+  // partially. Never unbounded — after the second the turn ends and the gap is
+  // reported in the trace rather than papered over.
+  let artifactNudges = 0;
   // ZERO-ACTION — bounded "the request directed work and NOTHING was done"
   // nudges (see requireAction / zeroActionGateApplies).
   let actionNudges = 0;
+  // COMPLETION CONTRACT — the `finish` mechanism. `finishAccepted` is set only by
+  // a tool result that the evidence accepted (a marker, never prose), and it is
+  // what silences the end-of-turn completion gate: a model that stated completion
+  // and had it checked does not need to be asked again.
+  let finishAccepted = false;
+  let finishCalls = 0;
+  let completionNudges = 0;
+  // DOCUMENTATION DUTY — one bounded pass for a missing quickstart and for doc
+  // claims that name artifacts which do not exist.
+  let docsNudges = 0;
+  /**
+   * The last documentation FACT this turn delivered, so the mid-build ask and the
+   * closing safety net cannot repeat it. Two messages about the same missing README
+   * are a nag; two about DIFFERENT gaps (a README, then a deployment artefact) are
+   * two facts.
+   */
+  let lastDocsSummary = '';
+  /** The step the last mid-build docs ask was made at (spacing for the one repeat). */
+  let lastDocsStep = 0;
+  /**
+   * The documentation pass was ALREADY asked for at a real boundary (the first green
+   * check). Measured 2026-10-26 against Cline's own tree: its docs were written in
+   * one batch at 14:57 — mid-run, after the API and pages existed, before the last
+   * web work — and its ADRs at 14:23 while the API was being built. That is a
+   * MILESTONE, not a cadence: the natural moment to write down what now exists. nuvira
+   * used a 40-step timer, which fires whether or not anything works yet.
+   */
+  let docsBoundaryUsed = false;
+  // WALL-CLOCK BUDGET — see `ToolLoopOptions.maxDurationMs`. `closingWindowMs` is
+  // how much time is RESERVED for closing; once it opens, the turn stops extending
+  // and the next two steps are for the handover and the answer.
+  const clock = opts.now ?? Date.now;
+  const turnStartedAt = clock();
+  const turnDurationMs = opts.maxDurationMs && opts.maxDurationMs > 0 ? opts.maxDurationMs : undefined;
+  const closingWindowMs =
+    turnDurationMs === undefined ? 0 : Math.min(turnDurationMs / 2, Math.max(60_000, Math.round(turnDurationMs * 0.2)));
+  let closingWindowAnnounced = false;
+  /** Steps granted inside the closing window: enough to write the handover and answer. */
+  const CLOSING_WINDOW_STEPS = 2;
+  // DELIVERABLE COVERAGE — bounded nudges for a surface the ask named and the tree
+  // does not contain (see `learning/deliverable-coverage.ts`). Two, for the same
+  // reason the artifacts gate gets two: a build can be missing a frontend AND an
+  // e2e suite, and one message that lists both is often acted on partially.
+  let surfaceNudges = 0;
+  /**
+   * How often the coverage check runs mid-build. A walk of up to `MAX_FILES` paths
+   * is cheap but not free, and the fact it reports (a whole app is missing) cannot
+   * change within a handful of steps — so it is sampled, not run per step.
+   */
+  const SURFACE_CHECK_EVERY = 40;
+  /** Two mid-build asks and one at the end, at most: enough to be heard, not a nag. */
+  const MAX_SURFACE_NUDGES = 2;
+  /**
+   * Documentation asks per turn. Two while there is budget (a quickstart, then the
+   * deployment story or the adoption kit), plus the closing safety net when neither
+   * ran. Measured 2026-10-27: the mid-build ask waits up to 80 steps for a repeat, so
+   * on a long build this is at most one message per 40-step interval — a cadence a
+   * 600-call turn cannot call a nag.
+   */
+  const MAX_DOCS_NUDGES = 3;
+  // CHANGE REQUEST — the signature of the last `CHANGE_REQUEST.md` content whose
+  // requirement was delivered to the model this turn (mid-turn, as a directive), so
+  // an unchanged file cannot be re-announced and a REVISED one is not missed.
+  let changeRequestSeen: string | null = null;
+  // The end-of-turn change-request gate spends one bounded ask.
+  let changeRequestNudges = 0;
+  // The checks this turn ran, shared with the wrapper via `progress`.
+  const checkRuns = progress.checkRuns;
   /**
    * G18 — the sink, wrapped so an observability failure can never become a
    * turn failure (a recorder that throws is a bug in the instrument, not in
@@ -1498,6 +2370,27 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   let planTodoUpdates = 0;
   // The PLAN CLOSE-OUT gate's own once-per-turn budget (see `planCloseoutNudge`).
   let planCloseoutNudges = 0;
+  /**
+   * PLAN DEPTH — bounded asks, re-checked at PHASE BOUNDARIES (see `learning/plan-depth.ts`).
+   * Measured: a plan with eight named features in one step is why one arm shipped 51
+   * endpoints and the other 69 — the step closed when the FIRST feature existed.
+   *
+   * WHY IT RECURS. A decomposition is not a one-time event: a long build re-plans — the
+   * model adds a step for something it just discovered, rewrites the board after a change
+   * request, or quietly folds four finished steps back into one "finish the backend". A
+   * check that fires once at creation would watch the good plan arrive and then never look
+   * again. So it is re-evaluated when the plan CHANGES (rewritten, or a step completed —
+   * the two things that make a phase boundary), still bounded, and never about a complaint
+   * it has already made: the signature is the exact set of bundled steps and missing
+   * requirements, so an unchanged plan is silent while a NEW collapse is a new fact.
+   */
+  let planDepthAsks = 0;
+  let lastPlanDepthSignature = '';
+  /** Plan state as of the last depth check, so "changed" is measured, not assumed. */
+  let lastPlanDone = (opts.context?.planStore?.snapshot?.()?.steps ?? []).filter((s) => s.status === 'done').length;
+  let lastPlanRevision = opts.context?.planStore?.snapshot?.()?.revision ?? -1;
+  /** Three distinct complaints per turn: enough for a plan rewritten twice, never a nag. */
+  const MAX_PLAN_DEPTH_ASKS = 3;
   // Every collected suggestion passes through the shared normalizer, so the
   // loop's output is ALWAYS clean + structured (1–3 items, deduped, no leaked
   // tool JSON, capped prompt/label) regardless of what the model emitted —
@@ -1519,6 +2412,89 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // gate exactly as it was.
   const requestText = lastUserText(opts.messages);
   const authorization = requestAuthorizesWrites(requestText);
+  /**
+   * COVERAGE LEDGER — assessment turns only (see `learning/coverage-ledger.ts`).
+   *
+   * It answers the one question the loop could not answer before: WHICH files did
+   * this turn actually open, and which files do those depend on that were never
+   * opened. The measured reason it exists: on an identical audit Cline found 24
+   * defects and nuvira 19, and the gap was breadth — nuvira declared ~8 K lines of
+   * parsers/DAISY/GUI "not covered" and stopped. Nothing in the agent knew what it
+   * had not read, so nothing could spend the cache savings (W1) on reading it.
+   *
+   * Constructed lazily for cost: the census walk happens on the first read or on
+   * the first snapshot, never for a turn that is not an assessment.
+   */
+  const projectRoot = opts.context?.cwd || process.cwd();
+  /**
+   * PRE-WRITE WORKSPACE CHECKPOINT — the undo button Cline has and this loop did not.
+   *
+   * The capability existed (`nuvira checkpoint create` / `restore`) and was simply
+   * never used automatically, so a turn that rewrote twenty files left the pre-edit
+   * contents unrecoverable: `git checkout --` only helps when the work was
+   * committed, and `git stash` refuses once the writes ARE the working tree.
+   *
+   * Taken ONCE per turn, immediately before the first tool call that is guaranteed
+   * to write. That ordering is the whole point — a snapshot after the write is an
+   * archive, not a rollback. Bounded and best-effort throughout: content addressing
+   * makes an unchanged file cost one hash, a file/dir tree that is not a project
+   * (HOME, `/`) is refused, and the caps live in the checkpoint module. Disable with
+   * `NUVIRA_CHECKPOINT_BEFORE_WRITE=0`. No model call, no tokens.
+   */
+  let workspaceCheckpointId: string | null = null;
+  let workspaceCheckpointAttempted = false;
+  const ensureWorkspaceCheckpoint = (toolName: string): void => {
+    if (workspaceCheckpointAttempted) return;
+    if (!PRE_WRITE_CHECKPOINT_TOOLS.has(toolName)) return;
+    if (process.env.NUVIRA_CHECKPOINT_BEFORE_WRITE === '0') return;
+    if (!isProjectLedgerDir(projectRoot)) return;
+    workspaceCheckpointAttempted = true;
+    try {
+      const started = Date.now();
+      const checkpoint = createWorkspaceCheckpoint(projectRoot, {
+        label: `before ${toolName}`,
+        origin: 'loop',
+      });
+      workspaceCheckpointId = checkpoint.id;
+      // Bound the automatic ones every 10th take (see `pruneAutoCheckpoints`): the
+      // bound is what stops the store growing without limit, and a tenth of the
+      // turns is enough to keep it within `DEFAULT_AUTO_KEEP + 9` without paying a
+      // directory listing on every write.
+      workspaceCheckpointsTaken += 1;
+      if (shouldPruneAutoStore(workspaceCheckpointsTaken)) {
+        const pruned = pruneAutoCheckpoints();
+        if (pruned.length > 0) {
+          deps.onEvent?.(`   🧹 pruned ${pruned.length} older automatic checkpoint(s) — the store keeps the newest ${DEFAULT_AUTO_KEEP}.`);
+        }
+      }
+      progress.workspaceCheckpointId = checkpoint.id;
+      const elapsed = Date.now() - started;
+      deps.onEvent?.(
+        `   🧷 Workspace checkpoint ${checkpoint.id} taken before the first write ` +
+          `(${checkpoint.totals.files} files, ${formatBytes(checkpoint.totals.bytes)}, ${elapsed} ms) — ` +
+          `undo with: nuvira checkpoint restore ${checkpoint.id}`,
+      );
+      traceEvent({
+        kind: 'gate',
+        gate: 'workspace',
+        summary:
+          `checkpoint ${checkpoint.id} taken before the first write ` +
+          `(${checkpoint.totals.files} files, ${formatBytes(checkpoint.totals.bytes)}, ${elapsed} ms; ` +
+          `${checkpoint.skipped.length} skipped)`,
+      });
+    } catch {
+      // Best-effort: a checkpoint failure must never block the write it protects.
+    }
+  };
+  // Constructed on EVERY turn, not only an assessment ask.
+  //
+  // It used to exist only where `isProjectAssessmentGoal` matched, which left the
+  // turns that CHANGE code with no breadth record at all — the exact turns where an
+  // unseen caller is a bug rather than a missed paragraph. Construction is free (no
+  // I/O until the first read), the census walk is bounded, and only the
+  // ROUND-GRANTING below stays assessment-only: a build is never extended for a
+  // coverage percentage, because breadth is not what a build owes.
+  const coverage = new CoverageLedger(projectRoot);
   // ── INTENT ENVELOPE (the durable grant) ──────────────────────────────────
   // `writesAuthorized` above answers "does the LAST message ask for files?" —
   // once per turn, and forgotten at the turn boundary. That is why permission
@@ -1611,6 +2587,348 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // memo (a test, or a longer-lived session scope), and then it is honoured.
     commandMemo: context.commandMemo ?? createRunCommandMemo(),
   };
+  // COMPLETION CONTRACT — publish the turn's live evidence to the `finish` tool.
+  // A function, not a value: a tool call happens mid-turn and the ledger moves
+  // with every write. Hoisted function declaration, so referencing it here is
+  // safe even though its body is defined below.
+  ctx.turnLedger = () => completionSnapshot();
+
+  // ── COMPLETION CONTRACT (requirement ledger + test binding + check ledger) ──
+  /**
+   * The turn's checkable state, computed from the filesystem and the turn's own
+   * evidence. Memoized against (mutations, checks) because the `finish` tool may
+   * ask more than once and each computation walks the project once.
+   */
+  let completionMemo: {
+    writes: number;
+    checks: number;
+    snapshot: TurnLedgerSnapshot;
+    ledger: RequirementLedger;
+    binding: BindingReport | null;
+    red: RedCheck[];
+  } | null = null;
+
+  function completionEvidence(): NonNullable<typeof completionMemo> {
+    const writes = progress.mutatedPaths.length;
+    const checks = checkRuns.length;
+    if (completionMemo && completionMemo.writes === writes && completionMemo.checks === checks) {
+      return completionMemo;
+    }
+    const cwd = ctx.cwd ?? process.cwd();
+    const ledger = resolveRequirementLedger(buildRequirementLedger(requestText), {
+      cwd,
+      checks: checkRuns.map((c) => ({
+        kinds: c.kinds,
+        ok: c.ok,
+        ...(c.command ? { command: c.command } : {}),
+        tool: c.tool,
+      })),
+      mutatedPaths: progress.mutatedPaths,
+    });
+    const written = [...new Set(progress.mutatedPaths)];
+    const sourceModules = written.filter((p) => isSourceModule(p, cwd));
+    const binding = testBindingApplies({
+      buildShapedAsk: isBuildShapedAsk(requestText),
+      moduleCount: sourceModules.length,
+    })
+      ? bindWrittenModulesToTests({ cwd, writtenPaths: sourceModules })
+      : null;
+    const red = unansweredRedChecks(checkRuns, writes);
+    // A runnable entry point with no followable README is a COMPLETION fact, not a
+    // style preference: `finish({verified:true})` is refused on it, so the claim and
+    // the docs gate cannot contradict each other.
+    const duty = quickstartDuty({ cwd, writtenPaths: written });
+    // The deployment fact travels with the completion snapshot for the same reason the
+    // quickstart does: without it, a model that calls `finish` before the closing gate
+    // runs ends the turn and the 25-point "how does it ship" row is never asked about.
+    // `finish({verified:false, unmet:[…]})` stays an accepted ending, so the gate asks
+    // for a decision (ship it, or say it does not ship), never for a lie.
+    const production = productionReadinessDuty({ ask: requestText, cwd, writtenPaths: written });
+    // THE DELIVERABLE THE ASK NAMED, checked as a fact (see
+    // `CompletionEvidence.namedDeliverables`). This is the file the user asked for by
+    // path — not the looser `required-artifacts` vocabulary — so `finish` can refuse a
+    // "done" that leaves it on the keyboard. Reads disk every time the memo misses,
+    // which is exactly when a write or a check changed the turn's state.
+    // Only work-shaped asks can be refused on it: "why is there no docs/x.md?" names a
+    // path too, and a question is answered, not delivered (the same guard the
+    // requirement ledger uses). An EXISTING named file is always evidence.
+    const workShaped = isBuildShapedAsk(askText);
+    const namedState = namedDeliverables
+      .map((path) => ({
+        path,
+        exists: (() => {
+          try {
+            return existsSync(resolve(cwd, path));
+          } catch {
+            return false;
+          }
+        })(),
+      }))
+      .filter((entry) => entry.exists || workShaped);
+    const snapshot: TurnLedgerSnapshot = {
+      unmet: describeUnmet(ledger.unmet),
+      ...(namedState.length > 0 ? { namedDeliverables: namedState } : {}),
+      redChecks: red.map((r) => ({
+        command: r.command,
+        stale: r.stale,
+        ...(r.preExisting ? { preExisting: true } : {}),
+      })),
+      unboundModules: binding?.unbound ?? [],
+      ...(duty.needed && duty.entry ? { quickstart: { entry: duty.entry } } : {}),
+      ...(production.needed && production.asked && production.entry
+        ? {
+            production: {
+              asked: production.asked,
+              entry: production.entry,
+              ...(production.pointerTo ? { pointerTo: production.pointerTo } : {}),
+            },
+          }
+        : {}),
+      wroteFiles: writes > 0,
+      checksRan: checks,
+      advisoryGates: advisoryNudges,
+      satisfied: ledger.satisfied.length,
+      total: ledger.rows.length,
+      unknown: ledger.unknown.length,
+    };
+    completionMemo = { writes, checks, snapshot, ledger, binding, red };
+    return completionMemo;
+  }
+
+  function completionSnapshot(): TurnLedgerSnapshot {
+    return completionEvidence().snapshot;
+  }
+
+  /**
+   * The last two bounded gates of a turn — evaluated at BOTH exits, at most one
+   * step each, and only when the evidence can NAME what is wrong.
+   *
+   * `completion` is the mechanism the measured run lacked: the request named work
+   * (tests, tracking files, a green build) and the turn ended with it outstanding.
+   * `docs` is separate because its advice is different (produce a quickstart,
+   * correct a document) and because it fires on a different trigger (a runnable
+   * entry point was written; a doc cites what does not exist).
+   */
+  /**
+   * THE DOCUMENTATION DUTY — one resolver, because it speaks TWICE.
+   *
+   * Measured 2026-10-26 on the 210-step benchmark turn: the README nudge fired at
+   * step 209, one step before the step ceiling, and the run ended with no README
+   * at all — while EVERY arm of every round deferred documentation to "the end"
+   * and never reached it. A gate that only speaks when the turn is already ending
+   * cannot win a row that is written at the end; it can only report the loss. The
+   * same three facts are therefore checked mid-build as well (see the periodic
+   * block below), when there are steps left to act on them.
+   *
+   * Both callers share `docsNudges`, so the duty still spends at most two
+   * messages: one while there is budget, one as the closing safety net.
+   */
+  function documentationGate(opts2: { allowRepeat?: boolean; closing?: boolean } = {}):
+    | { gate: 'docs'; nudge: string; summary: string; event: string }
+    | null {
+    if (opts.requireDocsAudit === false) return null;
+    if (finishAccepted) return null;
+    if (progress.mutatedPaths.length === 0) return null;
+    const cwd = ctx.cwd ?? process.cwd();
+    const written = [...new Set(progress.mutatedPaths)];
+    const duty = quickstartDuty({ cwd, writtenPaths: written });
+    let fact: { nudge: string; summary: string; event: string } | null = null;
+    if (duty.needed) {
+      fact = {
+        nudge: quickstartNudge(duty),
+        summary: `a runnable entry point (${duty.entry ?? 'package.json'}) was produced and no README a fresh clone could follow exists`,
+        event: '   📘 The turn made the project runnable without saying how to run it — asking for a quickstart.',
+      };
+    } else {
+      // THE PRODUCTION-CLAIM GATE. Only when the ask itself claims production/deploy,
+      // so an ordinary script or library is untouched. Measured 2026-10-26: the
+      // benchmark's "production-ready" ask shipped API docs and an architecture
+      // document and lost the deployment row with no operational artefact at all.
+      const production = productionReadinessDuty({ ask: requestText, cwd, writtenPaths: written });
+      if (production.needed && production.pointerTo) {
+        fact = {
+          nudge: productionDutyNudge(production),
+          summary: `the ask says \`${production.asked}\` and the only deployment artefact is \`${production.pointerTo}\`, whose name does not say what it is — asking for a pointer a reader can find`,
+          event: `   📘 The deployment story lives in \`${production.pointerTo}\` — asking for one discoverable line saying how it ships.`,
+        };
+      } else if (production.needed) {
+        fact = {
+          nudge: productionDutyNudge(production),
+          summary: `the ask says \`${production.asked}\` and the runnable project has no deployment artefact (compose/Dockerfile/deploy dir/deploy doc/deploy workflow)`,
+          event: '   📘 The project is runnable and claimed production-ready, with nothing that says how it ships — asking for an operational artefact.',
+        };
+      } else {
+        // THE ADOPTION KIT. Ordered after the two documents a reader needs first, so
+        // this never competes with the README or the deployment story for the single
+        // message a step can carry. Mid-build it names the ONE most valuable missing
+        // item; at the close it names the whole remaining set, because a handover that
+        // arrives one page per step is a handover nobody finishes.
+        const kit = missingAdoptionItems({ ask: requestText, cwd });
+        const gaps = opts2.closing ? kit : kit.slice(0, 1);
+        if (gaps.length > 0) {
+          fact = {
+            nudge: adoptionKitNudge(gaps, { closing: opts2.closing }),
+            summary: `the service is runnable and owes ${gaps.length === 1 ? 'a' : gaps.length} adoption document(s): ${gaps.map((g) => g.label).join(', ')}`,
+            event: `   📘 ${gaps.map((g) => g.label).join(', ')} ${gaps.length === 1 ? 'is' : 'are'} missing — nothing in the tree lets a stranger ${gaps.some((g) => g.id === 'api-contract') ? 'integrate with' : 'operate'} it.`,
+          };
+        } else {
+          const findings = auditDocClaims({ cwd, writtenPaths: written });
+          if (findings.length > 0) {
+            fact = {
+              nudge: docClaimsNudge(findings),
+              summary: `${findings.length} documentation claim(s) name artifacts that do not exist in the workspace`,
+              event: `   📘 ${findings.length} doc claim(s) cite things that do not exist — asking the model to create or correct them.`,
+            };
+          }
+        }
+      }
+    }
+    if (!fact) return null;
+    // The SAME fact twice is a nag — EXCEPT once, when a long turn ignored the first
+    // ask and kept working. That exception is measured, not hypothetical: the
+    // 2026-10-27 re-run of the benchmark asked for the README at step 40, the model
+    // wrote 20 more backend files, never mentioned it again, ran to the 60-minute
+    // wall-clock cap and shipped NO README (`readmeBytes: 0`, docs 70). One ask in a
+    // 600-call turn is a message the model can drop; two, 80 steps apart, is a
+    // requirement it can still act on. The caller decides when the repeat is allowed
+    // (mid-build only, never twice in a row at the close).
+    if (fact.summary === lastDocsSummary && !opts2.allowRepeat) return null;
+    lastDocsSummary = fact.summary;
+    return { gate: 'docs', ...fact };
+  }
+
+  function closingGates():
+    | { gate: 'completion' | 'docs' | 'deliverables' | 'change-request'; nudge: string; summary: string; event: string }
+    | null {
+    // A turn that has not STARTED is the zero-action gate's case: it is already told
+    // to do the work, and restating the requirement list to a model that has not
+    // touched anything is the duplication that makes gates ignorable. A turn that
+    // read something, wrote something or ran a check has begun, and owes the rest.
+    const didBeginWork =
+      progress.mutatedPaths.length > 0 ||
+      checkRuns.length > 0 ||
+      progress.successfulToolCalls.some((name) => !CONTROL_TOOL_NAMES.has(name));
+    const cwd = ctx.cwd ?? process.cwd();
+
+    // ── CHANGE REQUEST (a requirement that arrived DURING the turn) ──────────
+    // Ordered first because it is the newest requirement and it can invalidate the
+    // design the earlier gates are about to defend: asking a model to close 52
+    // requirement rows on a schema the user has just replaced is asking for the
+    // wrong work. Measured 2026-10-26: the harness had been writing
+    // `CHANGE_REQUEST.md` for two benchmark rounds and no agent ever mentioned it.
+    if (opts.requireCompletion !== false && changeRequestNudges < 1 && didBeginWork) {
+      const request = readChangeRequest(cwd);
+      if (request) {
+        const status = changeRequestStatus({ cwd, request });
+        if (status.unheard.length > 0) {
+          changeRequestNudges += 1;
+          return {
+            gate: 'change-request',
+            nudge: changeRequestUnheardNudge(status),
+            summary: `\`${request.path}\` arrived mid-turn and ${status.unheard.length} of its bullet(s) appear nowhere in the tree`,
+            event: `   📩 \`${request.path}\` asked for something the tree does not reflect (${status.unheard.length} bullet(s)) — asking the model to implement it.`,
+          };
+        }
+      }
+    }
+
+    // ── DELIVERABLE COVERAGE (a named surface the tree does not contain) ─────
+    // The gates below this one all ask about something that EXISTS (an unmet row, a
+    // cited file, a missing script). None of them could see the measured 2026-10-26
+    // failure: 210 steps of progress, 13 test files, a green suite — and no
+    // frontend, because nothing asked about the parts that were never started.
+    // NOT AFTER AN ACCEPTED `finish` (2026-10-30). Measured on the GREENFIELD-API
+    // head-to-head: the completion contract ACCEPTED the turn's claims, and this
+    // heuristic then reopened it twice with a factually wrong report — a working
+    // `server.py` on `http.server` and a `sqlite3` store were called "missing
+    // backend / API and database / schema" because every evidence pattern was a
+    // JS/TS filename. The model spent its closing steps running `ls server.py` to
+    // prove to a checker that the server existed. `documentationGate` and the
+    // self-review pass already stop at an accepted finish for the same reason: a
+    // settled verdict outranks a heuristic, and a gate that cries wolf is how
+    // every other gate becomes ignorable. Mid-build (below) still fires, where
+    // there is budget to act on a real gap.
+    if (advisoryNudges && opts.requireCompletion !== false && !finishAccepted && surfaceNudges < 2 && didBeginWork) {
+      const gaps = missingSurfaceGaps({ ask: requestText, cwd });
+      if (gaps.length > 0) {
+        surfaceNudges += 1;
+        return {
+          gate: 'deliverables',
+          nudge: surfaceGapsNudge(gaps),
+          summary: `${gaps.length} surface(s) the ask named are absent from the tree: ${gaps.map((g) => g.label).join(', ')}`,
+          event: `   🧱 The ask named ${gaps.length} surface(s) the tree does not contain (${gaps.map((g) => g.label).join(', ')}) — asking the model to build or state them.`,
+        };
+      }
+    }
+
+    if (opts.requireCompletion !== false && completionNudges < 1 && !finishAccepted && didBeginWork) {
+      const { snapshot, ledger } = completionEvidence();
+      // The REQUIRED-ARTIFACTS gate already named missing files (twice). Repeating
+      // them would be the nag that makes every gate ignorable, so this message
+      // keeps to what that gate does not own. The artifacts stay in the RESULT,
+      // and `finish` still refuses a claim that ignores them.
+      const unmet = artifactNudges > 0
+        ? ledger.unmet
+            .filter((row) => row.kind === 'check')
+            .map((row) => `${row.describe}${row.evidence ? ` (${row.evidence})` : ''}`)
+        : snapshot.unmet;
+      // A red check that an unmet REQUIREMENT row already reports would be the
+      // same fact twice in one message — the row carries its command and verdict.
+      const redChecks = snapshot.redChecks.filter(
+        (r) => !unmet.some((row) => row.includes(r.command)),
+      );
+      // Test binding is a PREDICTION (a static import may not be how a test reaches a
+      // module — see `advisoryNudges`), so it counts toward the ask only while
+      // advisories are on; unmet rows and red checks are evidence and always count.
+      const unbound = advisoryNudges ? snapshot.unboundModules : [];
+      // A file the ask NAMED by path. The required-artifacts gate owns the fixed
+      // vocabulary (todo.md, README, e2e…), so an arbitrary path like
+      // `docs/BUGS_FOUND.md` was nobody's: the turn could end with it unwritten and
+      // every gate stayed silent (measured 2026-10-29). Named here — and refused by
+      // `finish` — because the requested artifact is the deliverable.
+      const missingNamed = (snapshot.namedDeliverables ?? []).filter((entry) => !entry.exists);
+      const outstanding = unmet.length + unbound.length + redChecks.length + missingNamed.length;
+      if (outstanding > 0) {
+        completionNudges += 1;
+        const named = [
+          ...unmet.slice(0, 2),
+          ...unbound.slice(0, 2),
+          ...redChecks.slice(0, 2).map((r) => `${r.command} is red`),
+          ...missingNamed.slice(0, 2).map((d) => `${d.path} is missing`),
+        ];
+        return {
+          gate: 'completion',
+          nudge: completionNudge({
+            unmet,
+            unboundModules: unbound,
+            redChecks: redChecks.map((r) =>
+              r.stale ? `\`${r.command}\` FAILED and has not been re-run since the code changed` : `\`${r.command}\` is red`,
+            ),
+            extra: missingNamed.map(
+              (entry) =>
+                `\`${entry.path}\` is named in the request and is not on disk — write the file now, with the content the request described`,
+            ),
+          }),
+          summary: `${outstanding} checkable requirement(s) outstanding at the end of the turn: ${named.join('; ')}`,
+          event: `   ✅ The turn is ending with ${outstanding} outstanding requirement(s) — asking the model to close them or state them.`,
+        };
+      }
+    }
+
+    // Three docs asks at most: a quickstart first (a reader cannot even run it), the
+    // deployment story second (nobody said how it ships), then the adoption kit
+    // (nobody can integrate or operate it). Three is still a bound: the same fact is
+    // never repeated at the close (see `documentationGate`), so the third ask can only
+    // ever be about a document the turn has not been told about yet.
+    if (advisoryNudges && docsNudges < MAX_DOCS_NUDGES) {
+      const docs = documentationGate({ closing: true });
+      if (docs) {
+        docsNudges += 1;
+        return docs;
+      }
+    }
+    return null;
+  }
 
   // Resolve the tool set — stable JSON schemas for every native step
   // (derived from the registry's zod schemas, single source of truth).
@@ -1666,6 +2984,14 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // `system` directive that the model ACTS ON, deduped by gate within the turn,
   // instead of a `user` message it answers (see tools/harness-directive.ts).
   const harness = createHarnessDirectiveSink();
+  /**
+   * The observations this turn delivered, shaped for the result. Present only when a
+   * gate spoke — a clean turn must not carry an empty list that reads as "gates fired".
+   */
+  const observationsField = (): { observations?: HarnessObservation[] } => {
+    const log = harness.observations();
+    return log.length > 0 ? { observations: log } : {};
+  };
   /** Serving pairs the loop has already told the model about, oldest first. */
   const routeFeedState = { pairs: [] as string[] };
   // ── C4 residual: the plan the conversation ALREADY has is shown, not hidden ──
@@ -1711,9 +3037,43 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // C5 — `let`, not `const`: a mid-turn handoff can install a different model, and
   // the budget must follow it (see `threadBudgetAfterSwitch`).
   let budgetChars = opts.threadBudgetChars ?? DEFAULT_THREAD_BUDGET_CHARS;
+  /**
+   * W1 — the compaction WATERMARK (see `trimThreadBudget`). Everything before
+   * this index is part of the prompt prefix the provider has already cached, so
+   * it is frozen for the rest of the turn. `sealedThrough` is 0 until the first
+   * compaction, then it is the index of the single compaction message.
+   *
+   * MEASURED (2026-10-25, the Cline head-to-head audit): the old per-call
+   * trimming rewrote earlier messages 22 times in a 52-call run, and the
+   * provider's cache-read share collapsed from 99.8 % to 12–17 % on exactly
+   * those calls — re-billing ~90 K tokens each at 50× the cached rate.
+   */
+  let sealedThrough = 0;
+  /** One line, once per turn, when the prefix could not be frozen (see M5). */
+  let noCacheNoticeShown = false;
   // P3d — per-turn parallel suggester: after 2+ successful independent gather
   // steps, one advisory delegate suggestion fires (bounded, deterministic).
   const parallel = makeParallelSuggester();
+  /**
+   * WASTE GUARD — read-only calls already answered this turn, by signature, with
+   * the mutation count at which they ran (see `memoizableReadSignature`). A hit
+   * AT THE SAME mutation count is refused; any workspace write invalidates it.
+   */
+  const answeredReads = new Map<string, number>();
+  /** How many repeat reads this turn refused instead of paying for (reported). */
+  let repeatsAvoided = 0;
+  /**
+   * Steps that spent a whole model round-trip on ONE information-gathering call.
+   * TOTAL, not consecutive: measured in the 2026-10-17 run of the slugkit task,
+   * the one-call gather steps were interleaved with bookkeeping calls
+   * (`plan_todo`, `finding`), so a consecutive-only counter never reached 2 and
+   * the nudge never fired.
+   */
+  let singleGatherSteps = 0;
+  /** The batching nudge is spent at most once per turn. */
+  let batchingNudged = false;
+  /** Plan steps this turn already advanced from the ledger (never re-advanced). */
+  const planAutoAdvanced = new Set<string>();
   let steps = 0;
   /**
    * WS5 (#27) — model calls this run did NOT make because the checkpoint had a
@@ -1815,6 +3175,16 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   const selfReviewCorrection = (): string | null => {
     if (selfReviewNudges >= 1) return null;
     if (opts.requireSelfReview === false) return null;
+    // ALREADY REVIEWED — `finish` IS the review. The completion contract judged the
+    // turn's claim against its own requirement ledger, check ledger and test
+    // bindings, and ACCEPTED it; asking the model to re-read the result after a
+    // settled verdict is a second opinion on a closed question, paid for with the
+    // most expensive thing the loop spends: one model round-trip. Measured
+    // 2026-10-30 on DEV-FEATURE (3 runs): the nudge fired after an accepted `finish`
+    // in 3/3 runs, and each time the model re-read a file it had just written and
+    // re-called `suggest_followups` — one step, no finding. A turn that never called
+    // `finish` still gets the review, so the safety net stays where it is needed.
+    if (finishAccepted) return null;
     if (steps < SELF_REVIEW_MIN_STEPS) return null;
     // A turn that changed nothing has nothing to re-read — UNLESS the turn is an
     // assessment, whose deliverable is claims rather than edits (see
@@ -1832,6 +3202,136 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     return selfReviewNudge(currentAsk(opts));
   };
 
+  /**
+   * The artifacts the ASK itself names, resolved against the working directory.
+   *
+   * WHY THIS EXISTS (measured): an audit run spent its whole step budget and
+   * returned a report that was 0 bytes on disk — the model had staged the file
+   * inside the repo and never moved it out. The continuation budget could not
+   * help, because the progress-gated extension below additionally required an
+   * open PLAN, and a turn with no plan store never qualified. The deliverable
+   * is the better proxy for "work remaining": a turn that still owes the file
+   * it was asked to write has work left even when it has no plan.
+   *
+   * Only PLACED paths (containing a separator) are checked when the ask names
+   * any, so "REPORT.md in the parent directory" does not also make the bare
+   * `REPORT.md` inside the repo a phantom missing file.
+   */
+  // Assessment findings already CREDITED to the budget (see the yield block at
+  // the step bound). Reset per turn, like every other accumulator here.
+  const assessmentSeen = new Set<string>();
+  /**
+   * Bounds on the COVERAGE rounds (see `learning/coverage-ledger.ts`).
+   *
+   * Two rounds, each one `COVERAGE_ROUND_STEPS` steps, granted only where the
+   * assessment budget was already spent and the report had stopped improving. The
+   * saving that pays for them is produced earlier in the same run (the cache-stable
+   * prefix, W1) — so breadth is funded, not bolted on. A round that opens nothing
+   * new ends the turn: the stop condition is a measured fact, not a judgement.
+   */
+  const MAX_COVERAGE_ROUNDS = 2;
+  const COVERAGE_ROUND_STEPS = 6;
+  let coverageRounds = 0;
+  let openedAtLastCoverageRound = 0;
+  /**
+   * Bounds on the EDIT-BREADTH nudge (build and refactor turns).
+   *
+   * One shot, and it grants NO steps of its own — it rides on a continuation or an
+   * extension the turn was already given. That is deliberate: the assessment round
+   * above can widen a budget because a report that stopped yielding under-read
+   * evidence is a report that may be wrong. A build has no such argument, and the
+   * last thing this loop needs is a second ladder. So the fact is stated once, for
+   * free, and the turn is free to answer it with a reason instead of a read.
+   */
+  const MAX_EDIT_BREADTH_NUDGES = 1;
+  let editBreadthNudges = 0;
+  /** Whether this turn is an assessment (hoisted: the coverage gate asked once per bound). */
+  const assessmentTurn = isProjectAssessmentGoal(requestText);
+  // The USER's own words, not the composed prompt: a surface (the gateway, the
+  // dashboard) wraps the message with its own context, and a path that appears in
+  // that wrapper is not something the user asked to be written. Measured while
+  // adding the deliverable gate: reading the composed prompt made a gateway turn
+  // that only said "list the working directory" look like it owed a file, which
+  // cost an extra model step and broke surface parity.
+  const askText = (() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (message.role === 'user' && typeof message.content === 'string') {
+        // Stripped, not merely chosen: the gateway's user turn is this product's
+        // `[Origin: … (WhatsApp/Telegram/etc.)]` banner followed by the ask, and
+        // reading the banner as the ask made `/Telegram/etc` a "named deliverable"
+        // — a phantom file the turn was then nudged, twice, to go and write
+        // (measured 2026-10-29: one extra model step on every gateway turn).
+        const text = stripInjectedContext(message.content).trim();
+        if (text) return text;
+      }
+    }
+    return stripInjectedContext(requestText).trim();
+  })();
+  const namedInAsk = deliverablesNamedIn(askText);
+  const placedOnly = namedInAsk.filter((p) => p.includes('/') || p.includes('\\'));
+  const namedDeliverables = (placedOnly.length > 0 ? placedOnly : namedInAsk).slice(0, 8);
+  // ── DELIVERABLE-FIRST (measured 2026-10-29, BUG-SEEDED) ────────────────────
+  // A request that names a file, answered by a turn that fixes everything and writes
+  // no file, is the failure this says the order of work out loud for. Delivered as the
+  // turn's opening observation, once, when acting on it is still cheap.
+  if (namedDeliverables.length > 0 && isBuildShapedAsk(askText)) {
+    harness.push(thread, 'deliverable-first', deliverableFirstNudge(namedDeliverables));
+  }
+  /**
+   * Hand the turn ONE fact about the breadth of its own edit, when it is being
+   * continued anyway.
+   *
+   * The gap this closes: the coverage ledger used to run only on assessment asks,
+   * so the turns that CHANGE code had no breadth record at all — a refactor could
+   * alter a function and never open the file that calls it, and nothing in the loop
+   * knew. `unreadAround` answers both directions from the import graph (what the
+   * change calls, and what calls the change), and this pushes the answer into the
+   * thread while the turn still has steps to act on it.
+   *
+   * Bounded three ways: never on an assessment (its own round handles breadth),
+   * once per turn, and never with a step grant of its own — see
+   * `MAX_EDIT_BREADTH_NUDGES`. If no grant happens the turn simply ends, and the
+   * evidence is still recorded on the trace.
+   */
+  const maybeNudgeEditBreadth = (): void => {
+    if (!coverage || assessmentTurn || editBreadthNudges >= MAX_EDIT_BREADTH_NUDGES) return;
+    if (progress.mutatedPaths.length === 0) return;
+    let gaps;
+    try {
+      gaps = coverage.unreadAround(progress.mutatedPaths);
+    } catch {
+      return; // breadth is an accelerator, never a dependency
+    }
+    // The trace records the fact either way: a turn that ends before another grant
+    // still leaves its own breadth on the record (see `learning/reasoning-trace.ts`).
+    if (gaps.length === 0) return;
+    editBreadthNudges += 1;
+    const edited = new Set(progress.mutatedPaths).size;
+    deps.onEvent?.(
+      `   🔎 Breadth of this edit: ${gaps.length} related file(s) never opened ` +
+        `(${gaps.filter((g) => g.direction === 'dependent').length} caller(s) of the changed code) — named once.`,
+    );
+    traceEvent({
+      kind: 'gate',
+      gate: 'coverage',
+      summary:
+        `${edited} edited file(s) have ${gaps.length} never-opened relative(s) ` +
+        `(${gaps.map((g) => `${g.direction === 'dependent' ? 'caller ' : 'callee '}${g.file}`).join(', ')}) — ` +
+        `stated once with no extra steps granted`,
+    });
+    thread.push({ role: 'user', content: coverage.editBreadthNudge(gaps, edited) });
+  };
+
+  const deliverableUnfinished = (): boolean => {
+    if (namedDeliverables.length === 0) return false;
+    try {
+      return !verifyArtifacts(namedDeliverables, ctx.cwd ?? process.cwd()).ok;
+    } catch {
+      return false;
+    }
+  };
+
   for (;;) {
     // ── Bounded auto-continuation on the STEP BOUND ────────────────────────
     // The model still wanted to act when the budget ran out (a long build, a
@@ -1839,15 +3339,380 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // the SAME thread — completed tool calls are never re-run — instead of
     // telling the user "I reached my step limit" with the task unfinished.
     if (steps >= stepLimit + handoffAttemptCredit) {
+      // ── ASSESSMENT YIELD (see `learning/finding-yield.ts`) ────────────────
+      // An audit is not extended because time passed, or because a read landed:
+      // it is extended because the report GAINED a finding since the last grant,
+      // and it is stopped as soon as a whole round adds none. That is what makes
+      // the same budget right for both ends of the range — a small project ends
+      // after one dry round instead of spending every continuation on the same
+      // twelve files, and a large project keeps earning steps while it is still
+      // pulling real defects out of the parts of the tree nobody has opened yet.
+      const isAssessmentTurn = assessmentTurn;
+      const assessmentYield = isAssessmentTurn
+        ? readFindingYield({
+            content: lastContent || lastDeliveredAnswer,
+            reportPaths: namedDeliverables,
+            root: ctx.cwd ?? process.cwd(),
+            seen: assessmentSeen,
+          })
+        : null;
+      const freshFindings = assessmentYield?.fresh.length ?? 0;
+      // A dry round is only DRY once findings exist: a report that has been
+      // opened but has no defect in it yet is a report still being written, and
+      // stopping there would truncate the run before its Bug Discovery section.
+      const dryAssessmentRound =
+        assessmentYield !== null && assessmentSeen.size > 0 && freshFindings === 0;
+      // Size-scaled for assessments; the plan-driven cap for everything else.
+      const extensionCap = isAssessmentTurn
+        ? assessmentExtensionCap(countSourceFiles(ctx.cwd ?? process.cwd()))
+        : maxStepExtensions;
+      const rememberYield = (): void => {
+        for (const title of assessmentYield?.fresh ?? []) assessmentSeen.add(title);
+      };
+      if (dryAssessmentRound) {
+        // ── COVERAGE before stopping (see `learning/coverage-ledger.ts`) ─────
+        // A DRY round means the report stopped gaining findings, which can mean
+        // "nothing left to find" OR "read too little to find more". The ledger
+        // distinguishes them from data: coverage against the census, and the
+        // unread files the READ ones import. The gamble the earlier plan accepted
+        // ("the model will read more because reading is cheap") is replaced by
+        // three deterministic conditions: a budget was already spent, the tree is
+        // demonstrably under-read or has a live frontier, and the LAST coverage
+        // round actually opened something (otherwise it bought nothing and the
+        // turn stops).
+        if (
+          advisoryNudges &&
+          coverage &&
+          coverageRounds < MAX_COVERAGE_ROUNDS &&
+          coverage.openedCount() > openedAtLastCoverageRound
+        ) {
+          const artifacts = progress.authoredArtifacts.map((a) => a.content);
+          const unbacked = coverage.unbackedCitations([...artifacts, lastContent || lastDeliveredAnswer]);
+          const nudge = coverage.nudge({ unbacked });
+          if (nudge) {
+            const snapshot = coverage.snapshot();
+            coverageRounds += 1;
+            openedAtLastCoverageRound = coverage.openedCount();
+            stepLimit += COVERAGE_ROUND_STEPS;
+            deps.onEvent?.(
+              `   📚 Coverage ${Math.round(snapshot.coverage * 100)}% ` +
+                `(${snapshot.openedFiles}/${snapshot.totalFiles} source files), ` +
+                `${snapshot.frontier.length} unread dependenc${snapshot.frontier.length === 1 ? 'y' : 'ies'}` +
+                `${unbacked.length > 0 ? `, ${unbacked.length} finding(s) citing an unread file` : ''} — ` +
+                `spending one bounded reading round before stopping (${coverageRounds}/${MAX_COVERAGE_ROUNDS}).`,
+            );
+            traceEvent({
+              kind: 'gate',
+              gate: 'coverage',
+              summary:
+                `the step budget ran out with no new finding, but only ${snapshot.openedFiles} of ` +
+                `${snapshot.totalFiles} source files had been opened (${Math.round(snapshot.coverage * 100)}%) ` +
+                `with ${snapshot.frontier.length} unread dependenc${snapshot.frontier.length === 1 ? 'y' : 'ies'} — ` +
+                `one bounded reading round granted (${coverageRounds}/${MAX_COVERAGE_ROUNDS})`,
+            });
+            thread.push({ role: 'user', content: nudge });
+            continue;
+          }
+        }
+        deps.onEvent?.(
+          `   ✅ No new findings this round — stopping at ${assessmentSeen.size} finding(s) (assessment budget spent after ${steps} steps).`,
+        );
+        traceEvent({
+          kind: 'gate',
+          gate: 'assessment-dry-round',
+          summary:
+            `the step budget ran out and the last round added no new finding — stopped at ` +
+            `${assessmentSeen.size} finding(s) instead of spending another round`,
+        });
+        break;
+      }
       if (continuations < maxContinuations) {
         continuations += 1;
         stepLimit += continuationSteps;
+        maybeNudgeEditBreadth();
+        actionsAtLastGrant = progress.successfulToolCalls.length;
+        rememberYield();
         deps.onEvent?.(
-          `   🔄 Step bound reached with work remaining — continuing (continuation ${continuations}/${maxContinuations}, budget ${stepLimit} steps).`,
+          `   🔄 Step bound reached with work remaining — continuing (continuation ${continuations}/${maxContinuations}, budget ${stepLimit} steps` +
+            `${freshFindings > 0 ? `, ${freshFindings} new finding(s)` : ''}).`,
         );
         continue;
       }
+      // ── Progress-gated EXTENSION (see ToolLoopOptions.maxStepExtensions) ──
+      // The continuation COUNT is spent, but the turn's OWN PLAN still has open
+      // steps and a successful tool call landed since the last grant: the model
+      // is serving the task, not spinning. Stopping here would throw away a live
+      // thread mid-task (measured: 2 of 9 plan steps left, document written,
+      // verification running) — the exact failure this branch exists to remove.
+      const actionsNow = progress.successfulToolCalls.length;
+      const planStillOpen = (opts.context?.planStore?.snapshot?.()?.steps ?? []).some(
+        (step) => step.status !== 'done',
+      );
+      // A turn that still owes an artifact the ask named has work remaining even
+      // with no plan to point at (see `namedDeliverables` above).
+      const owesDeliverable = deliverableUnfinished();
+      // For an assessment, a NEW FINDING is the progress that counts. The plan
+      // half and the missing-deliverable half stay (a report not yet on disk is
+      // work remaining), but a report that is on disk and still yielding
+      // defects must keep going even with no plan and nothing left to place.
+      const gainedFindings = isAssessmentTurn && freshFindings > 0;
+      // An assessment that has not CREDITED a finding yet is still reading its
+      // way to the Bug Discovery section: a report that exists but carries no
+      // defect is work in progress, not a dry round. This half is bounded by the
+      // same extension cap, so "still looking" cannot outlive the budget.
+      const stillLooking = isAssessmentTurn && assessmentSeen.size === 0;
+      // ── REQUIREMENT-DRIVEN BUDGET (see ToolLoopOptions.requirementDrivenBudget) ──
+      //
+      // A build ends when the ASK is satisfied, not when a count is spent. So on a
+      // non-assessment turn the extension is bounded by the REQUIREMENT LEDGER, not
+      // by a number: the turn gets more steps while a requirement row is still
+      // unmet, a plan step is open, or a named artifact is missing — and stops when
+      // a whole granted round moved no requirement (a measured stall), or when the
+      // absolute escape hatch binds.
+      const openRows = (() => {
+        try {
+          return completionEvidence().ledger.unmet.length;
+        } catch {
+          return 0;
+        }
+      })();
+      // An EXPLICIT extension cap means the caller wants the fixed allowance (every
+      // pre-existing test and any embedding that sized its own turn does), so the
+      // requirement-driven road is the DEFAULT only where nobody pinned a number.
+      const requirementDriven =
+        (opts.requirementDrivenBudget ?? opts.maxStepExtensions === undefined) && !isAssessmentTurn;
+      // What "advancing the ask" means, as a fingerprint. Satisfied rows and written
+      // files are the two things every requirement row is ultimately evidenced by;
+      // a green check is in both, so it is not counted twice.
+      const requirementFingerprint = `${(() => {
+        try {
+          return completionEvidence().ledger.satisfied.length;
+        } catch {
+          return 0;
+        }
+      })()}|${progress.mutatedPaths.length}`;
+      const requirementOpen = openRows > 0 || planStillOpen || owesDeliverable;
+      const extensionReason = gainedFindings
+        ? `${freshFindings} new finding(s) in the report`
+        : openRows > 0
+          ? `${openRows} requirement(s) the ask named are still unmet`
+          : planStillOpen
+            ? 'the plan has open steps'
+            : owesDeliverable
+              ? `the deliverable ${namedDeliverables.join(', ')} is not on disk yet`
+              : 'the assessment has not credited a finding yet';
+      // A STALL is the count's real job, done from evidence: two consecutive grants
+      // that left every requirement row and the file count exactly where they were.
+      const stalled = requirementDriven && requirementFingerprint === fingerprintAtLastGrant;
+      if (stalled) stalledGrants += 1;
+      else stalledGrants = 0;
+      const withinBudget = requirementDriven
+        ? stalledGrants < 2 && steps < maxTotalSteps
+        : extensionCap > progressExtensions;
+      const wantsMore = requirementDriven
+        ? requirementOpen || gainedFindings || stillLooking
+        : planStillOpen || owesDeliverable || gainedFindings || stillLooking;
+      // A closing window refuses further extension on purpose: the budget the caller
+      // gave is the one thing the turn cannot earn back.
+      if (withinBudget && wantsMore && actionsNow > actionsAtLastGrant && !closingWindowAnnounced) {
+        const gained = actionsNow - actionsAtLastGrant;
+        progressExtensions += 1;
+        stepLimit += continuationSteps;
+        maybeNudgeEditBreadth();
+        actionsAtLastGrant = actionsNow;
+        fingerprintAtLastGrant = requirementFingerprint;
+        if (requirementDriven) stalledGrants = 0;
+        rememberYield();
+        deps.onEvent?.(
+          `   🔄 Still working — ${extensionReason} ` +
+            `and ${gained} new successful tool call(s) landed — extending the step budget ` +
+            `(extension ${progressExtensions}${requirementDriven ? ', no fixed cap: the ask decides when this turn is done' : `/${extensionCap}`}, budget ${stepLimit} steps).`,
+        );
+        traceEvent({
+          kind: 'gate',
+          gate: 'budget-extension',
+          summary:
+            `the continuation budget was spent but ${extensionReason} and ${gained} new successful ` +
+            `tool call(s) landed — extended to ${stepLimit} steps (extension ${progressExtensions}/${extensionCap})`,
+        });
+        continue;
+      }
+      /**
+       * LAST-MILE ASK — the ceiling is where the measured run actually ended.
+       *
+       * The end-of-turn gates live on the two MODEL-DECIDED exits (no tool calls,
+       * or a concluding follow-up). A run that keeps calling tools never reaches
+       * them: it hits the step ceiling instead. Measured 2026-10-26 on the
+       * benchmark build — 178 steps, a monorepo with 10 test files, and STILL no
+       * README and none of the four tracking files the prompt named, because the
+       * gates were correct and unreachable, which is worse than absent: it looks
+       * covered. So the ceiling gets the same ask, once per category, and grants
+       * the single step that answering it costs.
+       */
+      const lastMile = advisoryNudges ? closingGates() : null;
+      if (lastMile) {
+        stepLimit += 1;
+        deps.onEvent?.(lastMile.event);
+        traceEvent({ kind: 'gate', gate: lastMile.gate, summary: lastMile.summary });
+        // The thread already ends with this step's tool results, so the wire
+        // contract is intact; the directive is the only thing added.
+        harness.push(thread, lastMile.gate, lastMile.nudge);
+        continue;
+      }
       break;
+    }
+    // ── CHANGE REQUEST (mid-turn) ──────────────────────────────────────────
+    //
+    // A long autonomous turn has no second user message. `CHANGE_REQUEST.md` is the
+    // channel the benchmark harness (and a user watching the run) already writes,
+    // and until now it was a bet that the model re-reads its root at a milestone:
+    // measured 2026-10-26, none of three agents mentioned it. So the loop reads the
+    // file itself — one `stat` per step — and delivers a NEW requirement to the
+    // model as a harness directive THE MOMENT it appears, while there is still
+    // budget to act on it. Delivering at the ceiling would be a receipt, not a
+    // requirement. See `learning/change-request.ts`.
+    if (opts.watchChangeRequests !== false) {
+      const request = readChangeRequest(ctx.cwd ?? process.cwd());
+      if (request && request.signature !== changeRequestSeen) {
+        changeRequestSeen = request.signature;
+        harness.push(thread, `change-request:${request.signature}`, changeRequestNudge(request));
+        deps.onEvent?.(
+          `   📩 A change request arrived while you were working — \`${request.path}\`${request.title ? ` (“${request.title}”)` : ''} — delivered to the model now, not at the end.`,
+        );
+        traceEvent({
+          kind: 'gate',
+          gate: 'change-request',
+          summary: `\`${request.path}\` changed mid-turn (${request.bullets.length} bullet(s)); the new requirement was injected as a directive`,
+        });
+      }
+    }
+    // ── DELIVERABLE COVERAGE, MID-BUILD ────────────────────────────────────
+    //
+    // Checked periodically rather than only at the ceiling, because the ceiling is
+    // no longer a step count: on a requirement-driven turn the run can go for
+    // hundreds of steps, and a gate that only speaks at the end would arrive after
+    // the budget was spent on the parts that already existed. Measured 2026-10-26:
+    // 210 steps, a green suite, 13 test files — and no frontend, because nothing
+    // spoke while there was still time to build one.
+    if (
+      opts.requireCompletion !== false &&
+      surfaceNudges < MAX_SURFACE_NUDGES &&
+      steps > 0 &&
+      steps % SURFACE_CHECK_EVERY === 0
+    ) {
+      const gaps = advisoryNudges ? missingSurfaceGaps({ ask: requestText, cwd: ctx.cwd ?? process.cwd() }) : [];
+      if (gaps.length > 0) {
+        surfaceNudges += 1;
+        harness.push(thread, `deliverables:${surfaceNudges}`, surfaceGapsNudge(gaps));
+        deps.onEvent?.(
+          `   🧱 Still missing ${gaps.map((g) => g.label).join(', ')} — the ask named ${gaps.length === 1 ? 'it' : 'them'} and the tree does not contain ${gaps.length === 1 ? 'it' : 'them'} (asked mid-build, while there is budget left).`,
+        );
+        traceEvent({
+          kind: 'gate',
+          gate: 'deliverables',
+          summary: `${gaps.length} surface(s) the ask named are still absent at step ${steps}: ${gaps.map((g) => g.label).join(', ')}`,
+        });
+      }
+    }
+    // ── CLOSING WINDOW (wall clock) ────────────────────────────────────────
+    //
+    // Measured 2026-10-27: the nuvira arm spent its last ten minutes debugging a
+    // Playwright runner that would not start and closed with no README, while the
+    // Cline arm finished in 48 minutes with 42 paths of OpenAPI. Every budget in this
+    // loop counted STEPS, so nothing in it could prefer "close the deliverable" over
+    // "keep chasing this tool". When the caller states the real budget, the last
+    // stretch is reserved: one directive, no more extensions, two steps to close.
+    const remainingMs = turnDurationMs === undefined ? Infinity : turnDurationMs - (clock() - turnStartedAt);
+    if (remainingMs <= 0) {
+      deps.onEvent?.(
+        `   ⏳ The turn's ${Math.round((turnDurationMs ?? 0) / 60_000)}-minute budget is spent — stopping at step ${steps} instead of starting another action.`,
+      );
+      traceEvent({
+        kind: 'gate',
+        gate: 'closing-window',
+        summary: `the caller's wall-clock budget (${Math.round((turnDurationMs ?? 0) / 60_000)} min) was exhausted after ${steps} steps`,
+      });
+      break;
+    }
+    if (!closingWindowAnnounced && remainingMs <= closingWindowMs) {
+      closingWindowAnnounced = true;
+      const minutesLeft = Math.max(1, Math.round(remainingMs / 60_000));
+      // The per-step timer already asked for these when it could; at the wall clock
+      // this is the last chance, so the whole remaining set is named in one message.
+      const owedDocs = advisoryNudges ? documentationGate({ closing: true }) : null;
+      harness.push(
+        thread,
+        'closing-window',
+        [
+          `⏳ CLOSING WINDOW — about ${minutesLeft} min left of this turn's budget.`,
+          'Stop opening new work. A tool or test that has already failed twice this turn is a KNOWN LIMITATION now, not something to keep debugging: record it in the answer and move on.',
+          `${CLOSING_WINDOW_STEPS} steps to close: write the handover the project owes, run the ONE check you can report, and answer with what is delivered and what is not.`,
+          ...(owedDocs ? ['', owedDocs.nudge] : []),
+        ].join('\n'),
+      );
+      if (owedDocs) docsNudges += 1;
+      stepLimit = Math.min(stepLimit, steps + CLOSING_WINDOW_STEPS);
+      deps.onEvent?.(
+        `   ⏳ Closing window — about ${minutesLeft} min left; asked once to stop opening work and close the deliverable.`,
+      );
+      traceEvent({
+        kind: 'gate',
+        gate: 'closing-window',
+        summary: `${minutesLeft} min of the caller's wall-clock budget left at step ${steps} — one close-out directive, further extensions refused, ${CLOSING_WINDOW_STEPS} steps reserved for the handover and the answer`,
+      });
+    }
+    // ── DOCUMENTATION, MID-BUILD ───────────────────────────────────────────
+    //
+    // The docs duty used to exist ONLY as a closing gate, and a closing gate
+    // reports the loss instead of preventing it: measured 2026-10-26, the README
+    // nudge landed at step 209 of a 210-step budget and the turn ended with no
+    // README, after 210 steps of real work. Documentation is the one deliverable
+    // every agent defers to "the end", so the end is exactly when it cannot be
+    // written — it is asked for here as soon as a runnable entry point exists, and
+    // repeated ONCE two intervals later if the turn is still going and ignored it.
+    // Measured 2026-10-27: one ask at step 40 was dropped, the model kept building
+    // for another 40 minutes, and the run hit the wall-clock cap with no README at
+    // all. The closing gate stays as the safety net; both share `docsNudges`, so the
+    // turn still spends at most two messages on it.
+    // A MILESTONE, NOT A CADENCE. The step numbers (40/80/…) are a FALLBACK for turns
+    // that never get a green check. The primary trigger is the FIRST GREEN CHECK with
+    // real work behind it — the moment the project actually works — because that is
+    // when documentation is worth writing and when Cline's own run wrote its batch
+    // (14:57, mid-run, after the API and pages existed).
+    const greenBoundary =
+      !docsBoundaryUsed && checkRuns.some((run) => run.ok) && progress.mutatedPaths.length >= 5;
+    if (
+      opts.requireCompletion !== false &&
+      docsNudges < MAX_DOCS_NUDGES &&
+      !closingWindowAnnounced &&
+      (greenBoundary ||
+        (steps > 0 &&
+          steps % SURFACE_CHECK_EVERY === 0 &&
+          // Spaced, so the duty cannot become a per-interval drumbeat. The gate may run
+          // every interval (a NEW fact is worth saying at once — it is a different
+          // document), but the same fact is only repeated after two intervals, which is
+          // what `allowRepeat` below decides.
+          (docsNudges === 0 || steps - lastDocsStep >= SURFACE_CHECK_EVERY)))
+    ) {
+      const docs = advisoryNudges
+        ? documentationGate({
+            allowRepeat: docsNudges > 0 && steps - lastDocsStep >= SURFACE_CHECK_EVERY * 2,
+          })
+        : null;
+      // The boundary is spent by being EVALUATED, not by producing an ask: the check
+      // walks the tree (up to 60 file reads), and re-running it on every step after the
+      // first green check — because the project was already fully documented — would
+      // turn a milestone into a per-step filesystem scan.
+      if (greenBoundary) docsBoundaryUsed = true;
+      if (docs) {
+        docsNudges += 1;
+        lastDocsStep = steps;
+        harness.push(thread, `docs:${docsNudges}`, docs.nudge);
+        deps.onEvent?.(
+          `   📘 ${docs.event.trim().replace(/^📘\s*/, '')} (asked mid-build, at step ${steps}, while there is budget left).`,
+        );
+        traceEvent({ kind: 'gate', gate: 'docs', summary: `${docs.summary} — asked at step ${steps}` });
+      }
     }
     // P4 — check cancellation BEFORE each step (a pre-aborted signal never
     // spends a model call) and after tool executions (below).
@@ -1855,6 +3720,13 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       return { content: '', followups, toolCalls: toolCallsRun, steps, ...(opts.resume ? { replayedSteps } : {}), bounded: false, cancelled: true, termination: 'cancelled' };
     }
     steps += 1;
+    // ── ONE route read per iteration ───────────────────────────────────────
+    // The route decides the trimming strategy (above) AND is what the model is
+    // told about who is serving it (below). Reading it twice per step would make
+    // a caller's getter observable twice as often — a route that changes between
+    // the two reads would have the loop compact for one provider and announce
+    // another. Read once, use for both.
+    const stepRoute = readServedRoute(opts.servedRoute);
     // D1 — the work completed BEFORE this step's response is written. Snapshotted
     // at the TOP of the iteration, where the previous step's tool calls have
     // already run and been counted, so a step's OWN tool calls can never make its
@@ -1873,23 +3745,51 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // request never exceeds the window (deterministic — no LLM summarizer,
     // no latency, no drift; see trimThreadBudget).
     if (budgetChars > 0) {
-      const trimmedResult = trimThreadBudget(thread, budgetChars);
+      // Keep a memory of what the turn DID after its raw outputs are gone:
+      // without this, a long turn loses the VERDICTS (did the build pass?) and
+      // re-runs work it already finished. Deterministic and bounded — facts, no
+      // summarizer, no drift. Built BEFORE the trim because a compaction carries
+      // it inside the watermark message (see trimThreadBudget).
+      const digest = buildWorkDigest({
+        successfulTools: progress.successfulToolCalls,
+        mutatedPaths: progress.mutatedPaths,
+        executedActions: progress.executedActions,
+      });
+      // WHICH trimming strategy — decided from the route, every call, because a
+      // mid-turn handoff can move the turn to a provider that does not cache.
+      // A frozen prefix is only a discount where a prefix cache exists; see
+      // `learning/prompt-cache.ts`. Unknown routes keep the old per-call trim.
+      const prefixCacheable = stepRoute
+        ? cacheStablePrefixPaysOff(stepRoute.providerType, stepRoute.model)
+        : false;
+      if (!prefixCacheable && stepRoute && !noCacheNoticeShown) {
+        noCacheNoticeShown = true;
+        deps.onEvent?.(
+          `   🧠 ${stepRoute.providerType}${stepRoute.model ? `/${stepRoute.model}` : ''} has no known prompt ` +
+            'prefix cache — trimming old messages per call instead of freezing the prefix.',
+        );
+      }
+      const trimmedResult = trimThreadBudget(thread, budgetChars, {
+        sealedThrough,
+        digest,
+        preferTrim: !prefixCacheable,
+      });
       if (trimmedResult.trimmed > 0) {
         thread.length = 0;
         thread.push(...trimmedResult.thread);
-        // Keep a memory of what the turn DID after its raw outputs are gone:
-        // without this, a long turn loses the VERDICTS (did the build pass?) and
-        // re-runs work it already finished. Deterministic and bounded — the same
-        // philosophy as trimThreadBudget itself (facts, no summarizer, no drift).
-        if (isWorkDigestEnabled(context.configManager)) {
-          const digest = buildWorkDigest({
-            successfulTools: progress.successfulToolCalls,
-            mutatedPaths: progress.mutatedPaths,
-            executedActions: progress.executedActions,
-          });
-          if (digest) upsertWorkDigest(thread, digest);
+        sealedThrough = trimmedResult.sealed;
+        // A compaction already carries the digest; a plain trim (no safe cut) does
+        // not, so the digest still goes in on its own.
+        if (!trimmedResult.compacted && digest && isWorkDigestEnabled(context.configManager)) {
+          upsertWorkDigest(thread, digest);
         }
-        deps.onEvent?.(`   ✂️ ${trimmedResult.trimmed} message(s) trimmed to fit the ${Math.round(budgetChars / 1000)}K-char context budget.`);
+        deps.onEvent?.(
+          trimmedResult.compacted
+            ? `   🧠 compacted ${trimmedResult.trimmed} earlier message(s) into the work digest ` +
+              `(${Math.round(budgetChars / 1000)}K-char context budget) — everything before it is now frozen, ` +
+              'so the prompt prefix stays cacheable for the rest of the turn.'
+            : `   ✂️ ${trimmedResult.trimmed} message(s) trimmed to fit the ${Math.round(budgetChars / 1000)}K-char context budget.`,
+        );
       }
     }
     // ── The route feed, re-synced before every call ────────────────────────
@@ -1897,7 +3797,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // point before the call: a failover during step N must be visible at step
     // N+1, and a single up-front line would have the model answering about a
     // model that has since stopped serving it.
-    syncRouteFeed(thread, opts.servedRoute, routeFeedState);
+    syncRouteFeed(thread, stepRoute, routeFeedState);
     let response: StepResponse;
     try {
       // WS5 (#27) — a resumed run replays this step when its input is unchanged.
@@ -1915,7 +3815,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         replayedSteps += 1;
         deps.onEvent?.(`   ↩️ step ${steps} replayed from the checkpoint — no model call`);
       } else {
-        response = await deps.callModel(thread, schemas, opts.onToken, opts.signal);
+        response = await deps.callModel(thread, schemas, opts.onToken, opts.signal, opts.onReasoning);
         // Recorded AFTER the call, and only what the model actually returned: a
         // failed call records nothing, so a resume cannot inherit a failure as an
         // answer.
@@ -1929,10 +3829,46 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       if (!response || typeof response.content !== 'string' || !Array.isArray(response.toolCalls)) {
         throw new Error('model returned a malformed step response (no content/toolCalls)');
       }
+      // OBSERVATION CONTRACT — whatever the model said after the loop's last
+      // directive IS its answer to it, recorded without parsing: an action taken,
+      // a reason it does not apply, or both are all valid judgments. A step that
+      // answers with a CALL and no prose is recorded as the call, because acting is
+      // an answer and "(silent)" would read as a gate nobody saw. See
+      // `harness-directive.ts`.
+      harness.answerLast(
+        response.content.trim() ||
+          (response.toolCalls.length > 0
+            ? `called ${response.toolCalls.map((c) => c.name).join(', ')}`
+            : ''),
+        steps,
+      );
       // R2 — the transport the caller reported for THIS step. Recorded before
       // anything can return, so a turn that dies mid-way still attributes the
       // transport that served the steps it did complete.
       if (response.transport) progress.transport = response.transport;
+      // A rejected-then-repaired request is a fact about THIS conversation, not a
+      // detail of the wire layer: the endpoint refused the first attempt for a
+      // missing `reasoning_content` and the helper filled the gap and re-sent it
+      // (inference/tools.ts). Say so once per turn — a repair nobody can see is
+      // indistinguishable from a request that was always valid, and the count is
+      // the cheapest evidence available for whether compaction is dropping
+      // reasoning the wire contract requires.
+      if (response.repairedReasoningTurns && !reasoningRepairReported) {
+        reasoningRepairReported = true;
+        deps.onEvent?.(
+          `   🩹 the endpoint rejected this request for a missing \`reasoning_content\`; filled ${response.repairedReasoningTurns} tool-call turn(s) and re-sent it.`,
+        );
+        traceEvent({
+          kind: 'gate',
+          gate: 'reasoning-replay-repair',
+          summary: `${response.repairedReasoningTurns} tool-call turn(s) in the request carried no reasoning_content after a thinking-mode turn had produced some — filled with the "not retained" placeholder and re-sent once`,
+        });
+      }
+      // THINKING MODE, rememberered for the REST OF THE TURN: the wire contract is
+      // per conversation, but compaction can remove the messages that carried the
+      // evidence, so the fact is kept here and stamped on every later tool-call turn
+      // (see the assistant-message construction below).
+      if (response.reasoningContent) thinkingModeSeen = true;
     } catch (err) {
       // P4 — an abort (the dashboard Cancel button) is a clean stop, NOT a
       // generation failure: the caller discards the turn. No error text, no
@@ -1948,6 +3884,35 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // never re-runs work (e.g. the model already called `build`, and a later
       // step's generation died — the pipeline must NOT run twice).
       const message = err instanceof Error ? err.message : String(err);
+      // ── WIRE REPAIR — a request the provider rejected as unparsable ────────
+      // The retry used to send the SAME bytes, so the same message poisoned every
+      // attempt until the turn died with nothing delivered. Repair the message
+      // the provider NAMED (sanitise its content, or stub it) and try again: a bad
+      // code unit costs one message, not three quarters of an hour of work.
+      if (wireRepairs < 2 && !opts.signal?.aborted) {
+        const poisoned = poisonedMessageIndex(message);
+        if (poisoned !== null) {
+          const repaired = repairPoisonedMessage(thread, poisoned);
+          if (repaired.repaired) {
+            wireRepairs += 1;
+            stepLimit += 1;
+            deps.onEvent?.(
+              `   🩹 The provider rejected message ${poisoned} as unparsable — ` +
+                `${repaired.sanitised ? 'sanitised it in place' : 'replaced its content with a stub'} and retrying ` +
+                `(repair ${wireRepairs}/2).`,
+            );
+            traceEvent({
+              kind: 'gate',
+              gate: 'wire-repair',
+              summary:
+                `the provider refused the request because message ${poisoned} was unparsable — ` +
+                `${repaired.sanitised ? 'its content was sanitised' : 'its content was stubbed'} and the request retried ` +
+                `(repair ${wireRepairs}/2), instead of re-sending the same bytes until the turn died`,
+            });
+            continue;
+          }
+        }
+      }
       // The RAW provider text is for the log/trace ONLY. It used to be
       // interpolated straight into the delivered answer, which is how a
       // WhatsApp/dashboard sender ended up reading a provider JSON dump
@@ -2094,8 +4059,14 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         thread.push({
           role: 'assistant',
           content: response.content,
-          // Keep the thinking model's reasoning with the turn it belongs to.
-          ...(response.reasoningContent ? { reasoningContent: response.reasoningContent } : {}),
+          // Keep the thinking model's reasoning with the turn it belongs to (and,
+          // when compaction has removed every trace of it, say so — see the same
+          // rule at the tool-call turn below).
+          ...(response.reasoningContent
+            ? { reasoningContent: response.reasoningContent }
+            : thinkingModeSeen && !thread.some((m) => m.role === 'assistant' && Boolean(m.reasoningContent))
+              ? { reasoningContent: REASONING_NOT_RETAINED }
+              : {}),
         });
         thinkContinues += 1;
         // AN EMPTY RESPONSE IS A FAILURE, NOT REASONING. `isThinkOnlyResponse('')`
@@ -2553,6 +4524,112 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         harness.push(thread, 'deliverable', deliverableNudge(authorization.requestedPath));
         continue;
       }
+      // REQUIRED-ARTIFACTS GATE (no-tools path). The request NAMED files or test
+      // classes; the turn built something and they do not exist. This is the exact
+      // gap measured on 2026-10-25: an agent finished a build task in 14 of its 30
+      // minutes, green build and green tests, with no todo.md, progress.md,
+      // issues.md, changelog.md, README or e2e tests — because nothing in the loop
+      // compared the RESULT against the ask's own list. Bounded to two nudges.
+      if (artifactNudges < 2) {
+        const missing = artifactsGateApplies({
+          request: requestText,
+          cwd: ctx.cwd ?? process.cwd(),
+          didWork: progress.mutatedPaths.length > 0,
+        });
+        if (missing) {
+          artifactNudges += 1;
+          stepLimit += 1;
+          deps.onEvent?.(`   📋 The request named ${missing.length} artifact(s) that do not exist yet — asking the model to produce them.`);
+          traceEvent({
+            kind: 'gate',
+            gate: 'required-artifacts',
+            summary: `the request named artifact(s) that are missing from the workspace: ${missing
+              .map((m) => m.describe)
+              .join('; ')}`,
+          });
+          thread.push({ role: 'assistant', content: response.content });
+          // Distinct keys: the harness sink delivers ONE directive per gate, so a
+          // second nudge under the same key would be dropped while the loop still
+          // spent a step waiting for a reply to a message the model never saw.
+          if (advisoryNudges) {
+            harness.push(thread, artifactNudges === 1 ? 'artifacts' : 'artifacts-again', artifactsNudge(missing));
+          } else {
+            // Still observed, never enforced: the gap is kept for the closing report.
+            advisoryGaps.push(...missing.map((m) => `${m.describe ?? m.id ?? 'artifact'} was not found`));
+          }
+          continue;
+        }
+      }
+      //
+      // AUTO-VERIFY — run the project's OWN check instead of only asking.
+      //
+      // A nudge is advice, and a model that ignores it leaves the turn with no
+      // observed result (measured: the same audit produced a report with 19 bugs
+      // and no test verdict, while the competing agent RAN the suite and could
+      // quote `125 failed / 476 passed`). This executes the check the project
+      // itself declares — chosen exactly as `verificationNudgeFor` chooses it —
+      // records the outcome in the turn's ledger, and hands the model the verdict
+      // in the same thread. Bounded to two runs (the first, plus one after it
+      // reacts), and skipped for a prose-only deliverable.
+      if (
+        opts.autoVerify === true &&
+        opts.requireVerification !== false &&
+        autoVerifies < 2 &&
+        schemas.length > 0 &&
+        assessEditActivity(
+          progress.successfulToolCalls,
+          progress.verificationEvidence,
+          progress.mutatedPaths,
+          ctx.cwd ?? process.cwd(),
+        ).needsVerification
+      ) {
+        const check = autoVerifyCheck(ctx.cwd ?? process.cwd(), progress.mutatedPaths);
+        if (check) {
+          autoVerifies += 1;
+          stepLimit += 1;
+          deps.onEvent?.(
+            `   🧪 Auto-verify — running the project's own check: ${check.command} (${check.label})`,
+          );
+          let output: string;
+          try {
+            output = await deps.executeTool('run_terminal', { command: check.command }, ctx);
+          } catch (err) {
+            output = `Error: ${(err as Error).message}`;
+          }
+          // The loop's established success convention: a failed run_terminal (or a
+          // cancellation) is prefixed `Error:` (see run-terminal's exit handler),
+          // so this reads the same evidence the rest of the loop reads.
+          const ok = !output.startsWith('Error:');
+          recordExecutedAction(executedActions, 'run_terminal', { command: check.command }, ok);
+          checkRuns.push({
+            command: check.command,
+            tool: 'run_terminal',
+            ok,
+            afterWrites: progress.mutatedPaths.length,
+            kinds: classifyCheck('run_terminal', check.command).kinds,
+            // The failure count is what tells a regression from a repo that was
+            // already red when the turn arrived (see check-ledger preExisting).
+            ...(ok ? {} : { failing: parseFailingCount(output) }),
+          });
+          if (ok) {
+            progress.verificationEvidence.push({
+              tool: 'run_terminal',
+              args: { command: check.command },
+              result: output,
+            });
+          }
+          traceEvent({
+            kind: 'gate',
+            gate: 'verification',
+            summary:
+              `auto-verify ran the project's own check \`${check.command}\` (${check.label}) — ` +
+              `${ok ? 'it passed' : 'it FAILED'}`,
+          });
+          thread.push({ role: 'assistant', content: response.content });
+          harness.push(thread, 'verification', autoVerifyReport(check, output, ok));
+          continue;
+        }
+      }
       //
       // G1 — VERIFICATION GATE: before the turn can end, if it MUTATED the
       // workspace and ran nothing that observed the result, spend ONE bounded
@@ -2560,7 +4637,14 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // hard block: a task with no runnable check (a prose answer, a config
       // edit outside the workspace) must still be deliverable — the residual
       // `unverifiedEdit` flag carries the honesty for that case.
+      //
+      // ONE LEDGER, ONE VERDICT — the same guard as the concluding exit below.
+      // `judgeCompletion` reads this exact evidence (the check ledger) and has
+      // already settled it if it accepted the claim; re-asking here is the two
+      // readers disagreeing about one fact, which is what cost five steps on
+      // DEV-FEATURE. It also punishes an honest `verified:false` ending.
       if (
+        !finishAccepted &&
         verificationNudges < 1 &&
         opts.requireVerification !== false &&
         schemas.length > 0 &&
@@ -2625,6 +4709,18 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           continue;
         }
       }
+      // COMPLETION / DOCS — the two bounded gates that ask whether the ASK is
+      // satisfied, not whether the work was observed (the gates above own that).
+      // Spent LAST, so every earlier gate settles its own question first.
+      const closing = closingGates();
+      if (closing) {
+        stepLimit += 1;
+        deps.onEvent?.(closing.event);
+        traceEvent({ kind: 'gate', gate: closing.gate, summary: closing.summary });
+        thread.push({ role: 'assistant', content: response.content });
+        harness.push(thread, closing.gate, closing.nudge);
+        continue;
+      }
       return {
         content: response.content.length >= lastContent.length ? response.content : lastContent,
         followups,
@@ -2634,6 +4730,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         bounded: false,
         continuations,
         ...(modelHandoffs > 0 ? { modelHandoffs } : {}),
+        ...observationsField(),
         termination: 'delivered',
       };
     }
@@ -2654,7 +4751,29 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       })),
       // Thinking-mode reasoning is echoed back with the assistant turn that
       // carried these calls — DeepSeek v4 rejects the next request without it.
-      ...(response.reasoningContent ? { reasoningContent: response.reasoningContent } : {}),
+      //
+      // MEASURED 2026-10-26 (`deepseek-flash`, live): the per-step rule is not
+      // enough on a LONG turn. The wire layer fills a missing `reasoning_content`
+      // only when SOME assistant turn in the current thread still carries one
+      // (`inference/thinking-replay.ts`), and the thread budget trims old turns to
+      // fit the context window. Once compaction had dropped the earlier reasoned
+      // steps, nothing left in the thread signalled "thinking conversation" — four
+      // identical `400 The reasoning_content in the thinking mode must be passed
+      // back` rejections, one per remaining continuation.
+      //
+      // So the stamp is used ONLY once the evidence is gone: a turn that returns no
+      // reasoning, in a turn that has seen some, in a thread that no longer carries
+      // any. The transcript otherwise stays exactly what the model returned (which
+      // is what `thinking-replay-invariant.test.ts` pins), and the one thing added
+      // is a statement of fact — the reasoning for that call was not retained.
+      ...(() => {
+        if (response.reasoningContent) return { reasoningContent: response.reasoningContent };
+        if (!thinkingModeSeen) return {};
+        const threadStillHasReasoning = thread.some(
+          (m) => m.role === 'assistant' && Boolean(m.reasoningContent),
+        );
+        return threadStillHasReasoning ? {} : { reasoningContent: REASONING_NOT_RETAINED };
+      })(),
     });
 
     let endedAfterConcluding = false;
@@ -2673,6 +4792,16 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // tool-call group is complete. Kept as {gate, content} so the same channel
     // (and the same per-turn dedupe) covers them.
     const deferredUserNudges: Array<{ gate: string; content: string }> = [];
+
+    // PLAN AUTO-ADVANCE — what THIS step's successful calls can stand behind, so
+    // the checklist can advance without spending a model round-trip on it (see
+    // planStepsClosedByEvidence).
+    const stepWritten: Array<{ tool: string; path: string }> = [];
+    const stepChecks: Array<{ tool: string; command?: string }> = [];
+    // Turn-level check ledger: plan auto-advance judges the step against every
+    // check that succeeded this turn, so a step listing four checks is closed
+    // when all four ran — even across separate steps.
+    const turnChecks: Array<{ tool: string; command?: string }> = [];
 
     // ── Phase 1 — decide, in order (deterministic) ─────────────────────────
     // Guards count calls that came BEFORE this one. Pushing the name first made
@@ -2781,6 +4910,24 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // I1 execution gate: a disabled tool is rejected at runtime even if
         // the model hallucinated its name — the toggle is never cosmetic.
         return { call, refuse: `Error: tool "${call.name}" is disabled — its toolset is turned off. Enable it with \`nuvira tools toolsets\`.` };
+      }
+      // WASTE GUARD — a read this turn already answered, on a workspace that has
+      // not changed since, cannot return anything new (see answeredReads).
+      const signature = memoizableReadSignature(call.name, call.arguments);
+      if (signature !== null) {
+        const ranAtMutations = answeredReads.get(signature);
+        if (ranAtMutations !== undefined && ranAtMutations === progress.mutatedPaths.length) {
+          repeatsAvoided += 1;
+          traceEvent({
+            kind: 'refusal',
+            gate: 'repeat-read',
+            tool: call.name,
+            summary:
+              `${call.name} repeated on an UNCHANGED workspace — refused instead of paying for the same result twice ` +
+              `(${repeatsAvoided} repeat read(s) avoided this turn)`,
+          });
+          return { call, refuse: repeatReadRefusal(call.name) };
+        }
       }
       return { call };
     });
@@ -2898,6 +5045,9 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           // handed the fault's own words. With no declaration this is a null check.
           const injected = faultAt('tool', call.name);
           if (injected) return `Error: ${injected.message}`;
+          // The undo point is taken HERE: after every gate above has approved the
+          // call and immediately before it can touch a file.
+          ensureWorkspaceCheckpoint(call.name);
           return deps.executeTool(call.name, call.arguments, ctx);
         });
         // I3: a tool that returns {artifact, result} gets its deliverable
@@ -3134,8 +5284,68 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         progress.successfulToolCalls.push(call.name);
         stepAnySuccess = true;
       }
+      // BREADTH, recorded from what actually happened: a file counts as OPENED
+      // only when its content came back through a successful `read_file` — not a
+      // grep hit, not a `list_dir`, not a path the model mentioned. A truncated
+      // read still counts (its head entered the thread), which is the honest
+      // reading: the audit saw part of the file.
+      if (ranOk && coverage && call.name === 'read_file') {
+        const a = call.arguments as { path?: unknown; paths?: unknown } | undefined;
+        if (typeof a?.path === 'string') coverage.recordRead(a.path);
+        if (Array.isArray(a?.paths)) {
+          for (const entry of a.paths) {
+            if (typeof entry === 'string') coverage.recordRead(entry);
+            else if (entry && typeof entry === 'object' && typeof (entry as { path?: unknown }).path === 'string') {
+              coverage.recordRead((entry as { path: string }).path);
+            }
+          }
+        }
+      }
+      // COVERAGE FOR THE NEXT RUN — recorded as the reads land rather than at the
+      // end of the turn, because the run that never reaches its end (crash,
+      // cancel, quota) is the one whose reading a later run most needs back. Depth
+      // is `read`: the content entered the thread. `executed` is never inferred
+      // from a read — it is recorded by the turn's verification report, from what
+      // a check actually covered.
+      if (ranOk && call.name === 'read_file') {
+        const a = call.arguments as { path?: unknown; paths?: unknown } | undefined;
+        const read: string[] = [];
+        if (typeof a?.path === 'string') read.push(a.path);
+        if (Array.isArray(a?.paths)) {
+          for (const entry of a.paths) {
+            if (typeof entry === 'string') read.push(entry);
+            else if (entry && typeof entry === 'object' && typeof (entry as { path?: unknown }).path === 'string') {
+              read.push((entry as { path: string }).path);
+            }
+          }
+        }
+        if (read.length > 0) {
+          noteCoverage(
+            projectRoot,
+            read.map((path) => ({ path, depth: 'read' as const })),
+            { ...(opts.runId ? { runId: opts.runId } : {}), root: projectRoot },
+          );
+        }
+      }
       if (call.name === 'gateway_send' && deliveryResultSucceeded(rawResult)) {
         progress.deliveryConfirmed = true;
+      }
+      // COMPLETION CONTRACT — the `finish` tool's verdict, read from its RESULT
+      // marker (never from prose). An accepted claim is what lets the turn end
+      // without the completion gate asking once more; a refused one is a normal
+      // tool result and the model keeps working in the same turn.
+      if (call.name === 'finish') {
+        finishCalls += 1;
+        if (rawResult.includes(FINISH_ACCEPTED_MARKER)) {
+          finishAccepted = true;
+          const claim = call.arguments as { verified?: unknown; unmet?: unknown } | undefined;
+          const unmet = Array.isArray(claim?.unmet)
+            ? claim.unmet.map((u) => String(u ?? '').trim()).filter(Boolean)
+            : [];
+          if (claim?.verified === false && unmet.length > 0) {
+            progress.finishClaim = { verified: false, unmet };
+          }
+        }
       }
       // Session 4 — capture the EVIDENCE the gate needs to judge whether a
       // verification actually exercised the changed artifact: the mutated
@@ -3146,6 +5356,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           const p = a?.path ?? a?.file_path ?? a?.file;
           if (typeof p === 'string' && p) {
             progress.mutatedPaths.push(p);
+            stepWritten.push({ tool: call.name, path: p });
             // Bundle 19 — keep what was WRITTEN, so the turn can be judged on its
             // artifact. Capped: a turn cannot grow the loop's memory without bound.
             if (progress.authoredArtifacts.length < AUTHORED_ARTIFACT_MAX) {
@@ -3168,6 +5379,25 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           }
         } else if (isVerificationTool(call.name)) {
           progress.verificationEvidence.push({ tool: call.name, args: call.arguments, result: rawResult });
+          // PLAN AUTO-ADVANCE — a check that RAN is what closes a step that names
+          // a check (see planStepsClosedByEvidence).
+          const cmd = (call.arguments as { command?: unknown } | undefined)?.command;
+          const entry = { tool: call.name, ...(typeof cmd === 'string' && cmd ? { command: cmd } : {}) };
+          stepChecks.push(entry);
+          turnChecks.push(entry);
+          // CHECK LEDGER — what this check actually exercised, and how many writes
+          // had landed when it returned, so a later edit makes the verdict STALE
+          // rather than answered (see learning/check-ledger.ts).
+          const ranKind = classifyCheck(call.name, typeof cmd === 'string' ? cmd : undefined);
+          if (!ranKind.inspectionOnly) {
+            checkRuns.push({
+              command: typeof cmd === 'string' && cmd.trim() ? cmd.trim() : call.name,
+              tool: call.name,
+              ok: true,
+              afterWrites: progress.mutatedPaths.length,
+              kinds: ranKind.kinds,
+            });
+          }
         }
       } else if (refusal !== null || rawResult.startsWith('Error:')) {
         // SELF-DIAGNOSIS — record an action that RAN and FAILED (a non-zero
@@ -3180,6 +5410,27 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // below; this one is for the calls that actually executed.
         if (refusal === null) {
           runTrace.recordFailure(call.name, failureActionOf(call), rawResult);
+          // CHECK LEDGER — a check that RAN and FAILED is the verdict the turn has
+          // to answer (fix and re-run, or say why it stands). A command still
+          // running under monitoring has no verdict yet, so it is not recorded.
+          if (!stillRunning && isVerificationTool(call.name)) {
+            const failedCmd = (call.arguments as { command?: unknown } | undefined)?.command;
+            const failedKind = classifyCheck(call.name, typeof failedCmd === 'string' ? failedCmd : undefined);
+            if (!failedKind.inspectionOnly) {
+              checkRuns.push({
+                command: typeof failedCmd === 'string' && failedCmd.trim() ? failedCmd.trim() : call.name,
+                tool: call.name,
+                ok: false,
+                afterWrites: progress.mutatedPaths.length,
+                kinds: failedKind.kinds,
+                // Fell out of the run: the count is how a later run proves the turn
+                // did not make it worse (see `unansweredRedChecks`).
+                ...(parseFailingCount(rawResult) !== undefined
+                  ? { failing: parseFailingCount(rawResult) as number }
+                  : {}),
+              });
+            }
+          }
         }
         // Stage 2 — the other half of noticing a loop: the SAME refusal, twice.
         // The run records it with its reason, so a later step (or a self-report)
@@ -3221,6 +5472,23 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         }
       }
       let resultText = executed[i];
+      // ── STAGING DISCIPLINE (W4e) ─────────────────────────────────────────
+      // MEASURED (2026-10-25 audit): the model wrote `REPORT.md` INSIDE the audited
+      // tree three times and only a later move put it at `../REPORT.md`. A failed
+      // move would have left the deliverable in a repository the task said not to
+      // modify — the tree it was asked to leave clean was the one it dirtied.
+      // The write is allowed (a staged draft is not a crime); the result says, in
+      // the same step, where the deliverable actually belongs and what to clean up.
+      if (ranOk && call.name === 'write_file') {
+        const written = (call.arguments as { path?: unknown } | undefined)?.path;
+        if (typeof written === 'string' && written) {
+          const staging = stagedDeliverableNote(written, ctx.cwd ?? process.cwd(), namedDeliverables);
+          if (staging) {
+            resultText = `${resultText}\n\n${staging}`;
+            deps.onEvent?.(`   📄 \`${written}\` is inside the workspace but the deliverable belongs outside it — told the model to write it at the final path.`);
+          }
+        }
+      }
       // P3 — fence EXTERNAL content (web pages/search hits) as DATA, so a page
       // cannot smuggle instructions into the context. Local tool output is
       // untouched, and a tool's own failure text is left as it is.
@@ -3307,13 +5575,144 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         result: previewToolResult(rawResult),
         ok: ranOk,
         ...(durationMs !== undefined ? { durationMs } : {}),
-      });      thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
+      });
+      // WASTE GUARD — record what this read answered, so the identical call on
+      // this same workspace state is refused instead of executed again.
+      if (ranOk && plans[i].refuse === undefined) {
+        const answered = memoizableReadSignature(call.name, call.arguments);
+        if (answered !== null) answeredReads.set(answered, progress.mutatedPaths.length);
+      }
+      thread.push({ role: 'tool', toolCallId: call.id, content: resultText });
     }
 
     // Flush the planning-time nudges now that the assistant's tool_calls group is
     // complete (every call id has a `tool` result). This is the first point a
     // user/system message may safely follow the batch.
     for (const nudge of deferredUserNudges) harness.push(thread, nudge.gate, nudge.content);
+
+    // ── PLAN AUTO-ADVANCE — the loop advances what its own ledger closed ───
+    // A `plan_todo` call re-sends the entire conversation to say "step 2 is done"
+    // about a call the loop already watched succeed. Measured 2026-10-17: 9 of
+    // the turn's 34 tool calls were that bookkeeping. So the steps the ledger can
+    // justify are advanced HERE, with the call recorded as their evidence (the
+    // store then renders a real ✅ rather than the ⚠️ it uses for a done with
+    // nothing behind it), and the model is left to settle only what it alone can
+    // judge. Best-effort: a store that cannot update, or a plan that does not
+    // cover this work, changes nothing.
+    if (stepWritten.length > 0 || stepChecks.length > 0) {
+      try {
+        const planStore = context.planStore;
+        const snapshot = planStore?.snapshot?.() ?? null;
+        const advances = planStepsClosedByEvidence({
+          snapshot,
+          written: stepWritten,
+          checks: turnChecks,
+          at: Date.now(),
+        }).filter((a) => !planAutoAdvanced.has(a.id));
+        for (const advance of advances) {
+          planAutoAdvanced.add(advance.id);
+          planStore?.update?.(advance.id, 'done', `done from observed work: ${advance.reason}`, {
+            hasLedger: true,
+            evidence: advance.evidence,
+          });
+          deps.onEvent?.(
+            `   🗺️ plan step "${advance.id}" → done (${advance.reason}) — no plan call spent ` +
+              `(${planAutoAdvanced.size} advanced this turn).`,
+          );
+          traceEvent({
+            kind: 'gate',
+            gate: 'plan-auto',
+            summary:
+              `plan step "${advance.id}" was advanced to done from the turn's own action ledger — ${advance.reason} — ` +
+              'instead of spending a model round-trip on plan_todo',
+          });
+        }
+      } catch {
+        // Best-effort: plan bookkeeping must never break a turn.
+      }
+    }
+
+    // ── PLAN DEPTH (bounded, ONCE per turn) ────────────────────────────────
+    //
+    // Runs on the step that CREATED the plan, because the plan is what the rest of the
+    // turn is measured against: a coarse plan makes every later gate agree that the
+    // work is done. See `learning/plan-depth.ts` for the measurement (one step naming
+    // eight of the ask's requirements) and for why this is one ask rather than a rule.
+    if (planDepthAsks < MAX_PLAN_DEPTH_ASKS && opts.requirePlan !== false) {
+      const snapshot = context.planStore?.snapshot?.() ?? null;
+      if (snapshot) {
+        const doneNow = snapshot.steps.filter((s) => s.status === 'done').length;
+        // A PHASE BOUNDARY: the plan was rewritten this step, or a step reached done. Not a
+        // timer — the plan is what changed, and that is when its depth is worth re-reading.
+        const phaseBoundary =
+          planTodoCreates > 0 || planTodoUpdates > 0 || doneNow > lastPlanDone || snapshot.revision !== lastPlanRevision;
+        if (phaseBoundary) {
+          lastPlanDone = doneNow;
+          lastPlanRevision = snapshot.revision;
+          // A requirement the user replaced mid-turn is not a missing step.
+          const changeRequest = readChangeRequest(ctx.cwd ?? process.cwd());
+          const issue = planDepthIssue({
+            ask: requestText,
+            steps: snapshot.steps,
+            ...(changeRequest?.text ? { changeRequest: changeRequest.text } : {}),
+          });
+          // The signature is the COMPLAINT, not the plan: an unchanged coarse plan is
+          // silent, a newly collapsed one is a new fact worth saying.
+          const signature = issue
+            ? `${issue.bundled.map((b) => b.step).sort().join(',')}|${[...issue.missing].sort().join(',')}`
+            : '';
+          if (issue && signature !== lastPlanDepthSignature) {
+            lastPlanDepthSignature = signature;
+            planDepthAsks += 1;
+            // One step, so the rewrite costs the turn nothing it was not already spending.
+            stepLimit += 1;
+            if (advisoryNudges) harness.push(thread, 'plan-depth', planDepthNudge(issue));
+            deps.onEvent?.(
+              `   🗺️ The plan gives one checkbox to ${issue.bundled[0]?.features.length ?? 0} named requirement(s) — asking for it to be split (${planDepthAsks}/${MAX_PLAN_DEPTH_ASKS} this turn).`,
+            );
+            traceEvent({
+              kind: 'gate',
+              gate: 'plan-depth',
+              summary:
+                `the plan does not decompose the ask: ${issue.bundled.length} step(s) bundle more than ` +
+                `${MAX_FEATURES_PER_STEP} of its ${issue.features.length} named requirement(s), ` +
+                `${issue.missing.length} requirement(s) have no step — checked at step ${steps}, ` +
+                `ask ${planDepthAsks}/${MAX_PLAN_DEPTH_ASKS}`,
+            });
+          }
+        }
+      }
+    }
+    // ── BATCHING nudge (bounded, ONCE per turn) ───────────────────────────
+    // The loop already EXECUTES several calls per step in parallel when the
+    // model sends them (`⚡ N read-only tool calls in parallel`). What was
+    // missing is telling the model that it may, and what a one-call-per-step
+    // habit costs: at ~29 K input tokens per step, a turn that reads three files
+    // one at a time pays three times for the same context. Fire once, after the
+    // SECOND consecutive whole-step-for-one-gather, and stay quiet after that —
+    // the model decides, and this is advice, never a requirement (verification
+    // rules are untouched: the real check still runs, once).
+    const ranCalls = plans.filter((p) => p.refuse === undefined);
+    const ranSingleGather = ranCalls.length === 1 && isGatherCall(ranCalls[0].call.name);
+    if (ranSingleGather) singleGatherSteps += 1;
+    if (advisoryNudges && !batchingNudged && singleGatherSteps >= 2 && maxParallelReads > 1) {
+      batchingNudged = true;
+      // NO extra step is granted, unlike the other gates: this directive rides on
+      // the NEXT model call the turn was already going to make (the step that just
+      // ran tools continues), so it forces no additional round-trip. Granting one
+      // would silently lengthen every affected turn's budget.
+      deps.onEvent?.(
+        `   🧺 ${singleGatherSteps} steps spent one call each — asking the model to batch independent calls.`,
+      );
+      traceEvent({
+        kind: 'gate',
+        gate: 'batching',
+        summary:
+          `${singleGatherSteps} consecutive steps ran exactly ONE information-gathering call (last: ${ranCalls[0].call.name}) — ` +
+          'one bounded nudge to batch independent calls into a single step (the loop executes them in parallel)',
+      });
+      harness.push(thread, 'batching', batchingNudge(steps, ranCalls[0].call.name));
+    }
 
     // Track the generalized stall: a step that RAN tools but succeeded at none
     // of them extends the streak; any success clears it. A text-only step (no
@@ -3449,6 +5848,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         bounded: false,
         continuations,
         ...(modelHandoffs > 0 ? { modelHandoffs } : {}),
+        ...observationsField(),
         termination: 'delivered',
       };
     }
@@ -3479,7 +5879,19 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // model calls suggest_followups after editing), so the gate must fire on
       // this exit too or it would be inert in practice. Bounded exactly once,
       // same as the no-tools exit above.
+      //
+      // ONE LEDGER, ONE VERDICT (2026-10-30). `judgeCompletion` refuses a
+      // `verified:true` claim when files changed and nothing observed them, and
+      // ACCEPTS `verified:false` together with the gap it names — either way an
+      // accepted `finish` has already read this exact evidence (the check ledger)
+      // and settled it. Re-asking the same question here, from the same ledger, is
+      // how the two readers contradicted each other: measured on DEV-FEATURE, a
+      // suite that had run and passed was called unverified, and the model re-ran
+      // it three times. It also punishes honesty — an accepted `verified:false`
+      // ending says "not checked" out loud, and nagging it turns candour into a
+      // step. So the gate speaks only when no verdict has been recorded.
       if (
+        !finishAccepted &&
         verificationNudges < 1 &&
         opts.requireVerification !== false &&
         schemas.length > 0 &&
@@ -3523,6 +5935,43 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         thread.push({ role: 'assistant', content: response.content });
         harness.push(thread, 'deliverable', deliverableNudge(authorization.requestedPath));
         continue;
+      }
+      // REQUIRED-ARTIFACTS GATE (concluding path) — same check, same bound, for a
+      // turn that ends through the follow-up exit instead of the no-tools one.
+      //
+      // IT DOES NOT DEFER TO AN ACCEPTED `finish`, unlike the verification gate
+      // above, and the difference is deliberate: `finish` reads the path the request
+      // NAMED (`docs/BUGS_FOUND.md`), while this gate reads the artifact list
+      // (`todo.md`, `README`, test classes) — `completion-contract.ts` says so in its
+      // own header. They are two ledgers, so an accepted claim here answers a
+      // different question, and silencing this one would restore the measured
+      // 2026-10-25 failure (a green build with none of the named tracking files).
+      // Guard a gate only where its premise IS the contract's evidence; where the
+      // evidence differs, the gate must keep its own voice.
+      if (artifactNudges < 2) {
+        const missing = artifactsGateApplies({
+          request: requestText,
+          cwd: ctx.cwd ?? process.cwd(),
+          didWork: progress.mutatedPaths.length > 0,
+        });
+        if (missing) {
+          artifactNudges += 1;
+          stepLimit += 1;
+          deps.onEvent?.(`   📋 The request named ${missing.length} artifact(s) that do not exist yet — asking the model to produce them.`);
+          traceEvent({
+            kind: 'gate',
+            gate: 'required-artifacts',
+            summary: `the request named artifact(s) that are missing from the workspace: ${missing
+              .map((m) => m.describe)
+              .join('; ')}`,
+          });
+          thread.push({ role: 'assistant', content: response.content });
+          // Distinct keys: the harness sink delivers ONE directive per gate, so a
+          // second nudge under the same key would be dropped while the loop still
+          // spent a step waiting for a reply to a message the model never saw.
+          harness.push(thread, artifactNudges === 1 ? 'artifacts' : 'artifacts-again', artifactsNudge(missing));
+          continue;
+        }
       }
       // ZERO-ACTION gate (concluding exit) — the same bounded pass as the
       // no-tools exit, for a turn that concluded (suggest_followups) without
@@ -3583,6 +6032,16 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           continue;
         }
       }
+      // COMPLETION / DOCS — same two bounded gates as the no-tools exit.
+      const closing = closingGates();
+      if (closing) {
+        stepLimit += 1;
+        deps.onEvent?.(closing.event);
+        traceEvent({ kind: 'gate', gate: closing.gate, summary: closing.summary });
+        thread.push({ role: 'assistant', content: response.content });
+        harness.push(thread, closing.gate, closing.nudge);
+        continue;
+      }
       const content = response.content.length >= lastContent.length ? response.content : lastContent;
       return {
         content,
@@ -3593,6 +6052,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         bounded: false,
         continuations,
         ...(modelHandoffs > 0 ? { modelHandoffs } : {}),
+        ...observationsField(),
         termination: 'delivered',
       };
     }
@@ -3612,8 +6072,47 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     );
   } else if (exitTermination === 'reasoning-spin') {
     deps.onEvent?.('   🧠 Reasoning-only output kept repeating — ending the turn instead of spinning.');
+  } else if (stalledGrants >= 2) {
+    // The requirement-driven ending, said in its own words: this turn did not run
+    // out of an allowance, it stopped ADVANCING the ask. Two granted rounds left the
+    // ledger and the file count exactly where they were, which is the measured
+    // definition of spinning — and a count would have hidden which one it was.
+    deps.onEvent?.(
+      `   ⚠️ Two consecutive budget extensions moved no requirement — ending at ${steps} steps because the turn stopped advancing the ask, not because a cap was hit.`,
+    );
+  } else if (steps >= maxTotalSteps) {
+    deps.onEvent?.(
+      `   ⚠️ Absolute step guard reached (${maxTotalSteps}) — the turn was still advancing requirements. Raise \`maxTotalSteps\` to continue past it.`,
+    );
   } else {
     deps.onEvent?.(`   ⚠️ Tool loop reached its ${stepLimit}-step budget — returning the last response.`);
+  }
+  /**
+   * THE LAST WORK WAS NOT THE ANSWER, SO SAY WHY IT ENDED.
+   *
+   * A bounded turn used to deliver its final step's preamble as if it were the
+   * reply (measured: "Data collection is complete. Writing the document now."
+   * followed by silence, and a separate case whose whole answer was "I reached
+   * my step limit for this request."). The user cannot tell a finished turn
+   * from a truncated one, which is exactly what a "it stopped mid-way" report
+   * is about. The notice is appended to whatever the model had written, so the
+   * ending is visible in every surface without hiding the model's own words.
+   */
+  const planSteps = opts.context?.planStore?.snapshot?.()?.steps ?? [];
+  const endingNotice =
+    exitTermination === null
+      ? boundedEndingNotice({
+          stepLimit,
+          planSteps,
+          changedPaths: [...new Set(progress.mutatedPaths)],
+        })
+      : null;
+  if (endingNotice) {
+    // The console line carries the same fact as the delivered text, so a
+    // `--json-events` reader and a human see one story.
+    deps.onEvent?.(
+      `   ⚠️ Step ceiling reached with the task still open — delivering what exists plus how to resume.`,
+    );
   }
   // P3 — BUG SIGNAL. Nothing was delivered and the caller could still have
   // handed the work to another model, so this ending is a GAP IN THE ROAD, not a
@@ -3644,7 +6143,9 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       : `the step budget (${stepLimit}) was reached — the turn ended on its last response instead of finishing`,
   });
   return {
-    content: lastContent || 'I reached my step limit for this request.',
+    content: lastContent
+      ? `${lastContent}${endingNotice ? `\n\n${endingNotice}` : ''}`
+      : (endingNotice ?? 'I reached my step limit for this request.'),
     followups,
     toolCalls: toolCallsRun,
     steps,
@@ -3652,6 +6153,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     bounded: true,
     continuations,
     ...(modelHandoffs > 0 ? { modelHandoffs } : {}),
+    ...observationsField(),
     // An exit the empty/think path chose says exactly why; otherwise the road
     // simply ran out, and `budget-exhausted` admits that rather than dressing it
     // up as a model shortage.
@@ -3663,6 +6165,51 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
 // Tools whose successful execution is what actually performs an outbound
 // delivery. If one of these ran, a "sent it" sentence is truthful.
 const DELIVERY_TOOL_NAMES = new Set(['gateway_send']);
+
+/**
+ * The tools that are GUARANTEED to change a file — the only ones that justify
+ * snapshotting the tree first.
+ *
+ * Deliberately narrower than `FILE_WRITE_CAPABLE_TOOLS`: that set includes the
+ * shell, and most shell commands read. Snapshotting before an `ls` would pay the
+ * walk for nothing, and the walk is the only cost this net has.
+ */
+const PRE_WRITE_CHECKPOINT_TOOLS: ReadonlySet<string> = new Set([
+  'write_file',
+  'edit_file',
+  'multi_edit',
+  'apply_patch',
+  'patch_file',
+]);
+
+/**
+ * Bound the AUTOMATIC checkpoints: every Nth take prunes the store back to
+ * `DEFAULT_AUTO_KEEP`.
+ *
+ * The net is one checkpoint per turn that writes, and nothing used to remove them —
+ * MEASURED (2026-10-30): a few weeks of use left 1,120 checkpoints / ~966 MB of
+ * manifests, which is the disk the projects live on. Pruning needs a directory
+ * listing, so it is paid on a tenth of the turns: without a bound the store grows
+ * without limit, and on every turn is a cost the write path does not owe. The
+ * newest `keep` are exactly the ones a rollback of "what the agent just did" wants.
+ *
+ * Only checkpoints this loop marked (`origin: 'loop'`) are candidates — a
+ * checkpoint the USER asked for is never auto-deleted.
+ */
+const AUTO_CHECKPOINT_PRUNE_EVERY = 10;
+
+/**
+ * Whether the Nth automatic checkpoint (1-based) is the one that bounds the store.
+ *
+ * A function rather than an inline `%` so the rule can be pinned without driving
+ * ten turns first — the arithmetic is the part that can be wrong.
+ */
+export function shouldPruneAutoStore(taken: number): boolean {
+  return taken > 0 && taken % AUTO_CHECKPOINT_PRUNE_EVERY === 0;
+}
+
+/** Automatic checkpoints taken by this process (module-level: one CLI = one store). */
+let workspaceCheckpointsTaken = 0;
 
 /**
  * True when a delivery-tool RESULT reports an actual delivery.
@@ -4082,19 +6629,25 @@ export function detectFailedBuildSuccessClaim(
  * A caller with no route supplies nothing; a caller whose route resolves to the
  * same fact as last step gets no write.
  */
+/**
+ * Read the served route, safely. A caller's getter is application code: a throw
+ * there must never break a turn, and "unknown route" is a fact the loop can act
+ * on (it falls back to per-call trimming — see `learning/prompt-cache.ts`).
+ */
+function readServedRoute(read: (() => ServedRoute | null) | undefined): ServedRoute | null {
+  if (!read) return null;
+  try {
+    return read() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function syncRouteFeed(
   thread: ToolMessage[],
-  read: (() => ServedRoute | null) | undefined,
+  route: ServedRoute | null,
   observed: { pairs: string[] },
 ): void {
-  if (!read) return;
-  let route: ServedRoute | null = null;
-  try {
-    route = read();
-  } catch {
-    // A route read must never break the turn; an unknown route is a fact too.
-    return;
-  }
   if (!route) return;
 
   // The loop OWNS the failover history, because the loop is the only thing that
@@ -4149,12 +6702,26 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     authoredArtifacts: [],
     verificationEvidence: [],
     executedActions: [],
+    checkRuns: [],
   };
-  const result = await runToolLoopInner(opts, progress);
+  // COVERAGE, DURABLE AT THE TURN BOUNDARY. The notes recorded during the turn
+  // are flushed here on EVERY exit path — an answer, a cancellation, or a throw —
+  // so what was examined survives a turn that never reached its own end. This is
+  // the write half of "a broken run is n times faster": the next run reads it.
+  const result = await runToolLoopInner(opts, progress).finally(() => {
+    try {
+      flushCoverage();
+    } catch {
+      // Best-effort — coverage bookkeeping never breaks a turn.
+    }
+  });
   // R2 — relay the transport the caller's seam reported. Attached on EVERY
   // exit path, including a cancelled/failed turn: if a model call happened over
   // the JSON fallback before the turn died, that is a fact about the run.
   if (progress.transport) result.transport = progress.transport;
+  // The undo point travels on the result, so a surface that prints nothing but the
+  // answer still carries the id a user needs to roll a bad batch back.
+  if (progress.workspaceCheckpointId) result.workspaceCheckpointId = progress.workspaceCheckpointId;
   if (!result.cancelled && !result.generationFailed) {
     result.successfulToolCalls = [...progress.successfulToolCalls];
     result.deliveryConfirmed = progress.deliveryConfirmed;
@@ -4197,6 +6764,59 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<ToolLoopResult
     // could not tell — it recorded a count, so any verification settled the lot.
     result.verifiedPaths = activity.verifiedPaths;
     result.unverifiedPaths = activity.unverifiedPaths;
+    // COMPLETION CONTRACT — what the ask named and this turn did NOT satisfy.
+    // Computed here, on ONE path, so every ending (delivered, bounded, silence)
+    // reports the same residual instead of each exit deciding for itself.
+    const ledgerAsk = currentAsk(opts);
+    const askRows = buildRequirementLedger(ledgerAsk);
+    if (askRows.length > 0) {
+      const cwd = opts.context.cwd ?? process.cwd();
+      const ledger = resolveRequirementLedger(askRows, {
+        cwd,
+        checks: progress.checkRuns.map((c) => ({
+          kinds: c.kinds,
+          ok: c.ok,
+          ...(c.command ? { command: c.command } : {}),
+          tool: c.tool,
+        })),
+        mutatedPaths: progress.mutatedPaths,
+      });
+      if (ledger.unmet.length > 0) result.unmetRequirements = describeUnmet(ledger.unmet, 8);
+      const writtenSources = [...new Set(progress.mutatedPaths)].filter((p) => isSourceModule(p, cwd));
+      const binding = testBindingApplies({
+        buildShapedAsk: isBuildShapedAsk(ledgerAsk),
+        moduleCount: writtenSources.length,
+      })
+        ? bindWrittenModulesToTests({ cwd, writtenPaths: writtenSources })
+        : null;
+      const tokens = opts.turnTokenCount?.();
+      const satisfied = ledger.satisfied.length;
+      // THE MODEL'S OWN GAP LIST REACHES THE USER. `finish({verified:false, unmet})`
+      // tells the model the list "will be given to the user verbatim"; without this
+      // annotation that promise would be false on the one path where it matters.
+      // Appended here, on the single exit the caller reads, so no surface has to
+      // remember to render it.
+      const claimUnmet = progress.finishClaim?.unmet ?? [];
+      if (claimUnmet.length > 0) {
+        result.unmetRequirements = [
+          ...new Set([...(result.unmetRequirements ?? []), ...claimUnmet]),
+        ];
+        const list = claimUnmet.slice(0, 8).map((u) => `- ${u}`).join('\n');
+        result.content = `${result.content.trimEnd()}\n\n**Not done in this turn**\n${list}`.trim();
+      }
+      result.requirementYield = {
+        total: ledger.rows.length,
+        satisfied,
+        unmet: ledger.unmet.length,
+        unknown: ledger.unknown.length,
+        ...(binding
+          ? { testBinding: { modules: binding.written.length, bound: binding.bound.length, ratio: binding.ratio } }
+          : {}),
+        ...(typeof tokens === 'number' && tokens > 0 && satisfied > 0
+          ? { tokensPerSatisfiedRequirement: Math.round(tokens / satisfied) }
+          : {}),
+      };
+    }
     // Bundle 21/25 — the authored-document demotion, applied WHERE THE FLAGS ARE
     // SET so every surface agrees without a per-caller conditional: the trace
     // outcome, the console warning, the working-state ledger and the turn report all
@@ -4599,6 +7219,88 @@ function countProductiveWork(progress: ToolLoopProgress): number {
   let n = 0;
   for (const name of progress.successfulToolCalls) if (!NON_PRODUCTIVE_TOOLS.has(name)) n += 1;
   return n;
+}
+
+/**
+ * The message an AUTO-VERIFY run leaves in the thread.
+ *
+ * It says who ran the check (the harness, not the model), what the verdict IS,
+ * and what to do next — the three things a bare tool result does not say. The
+ * output is bounded: the point is the verdict and the first failure, not a full
+ * log the model will pay to re-read.
+ */
+export function autoVerifyReport(
+  check: { command: string; label: string },
+  output: string,
+  ok: boolean,
+  maxChars = 4_000,
+): string {
+  const body = output.trim();
+  const shown =
+    body.length > maxChars
+      ? `${body.slice(0, maxChars)}\n[... output truncated — re-run a narrower command if you need the rest]`
+      : body;
+  return [
+    `🧪 AUTO-VERIFY — this turn changed files and had not verified them, so the project's own check was run FOR you: ` +
+      `\`${check.command}\` (${check.label}).`,
+    `Result: ${ok ? '✅ passed' : '❌ FAILED'}.`,
+    shown,
+    ok
+      ? 'The change is verified. State that in your answer, naming this command — do not re-run it.'
+      : 'Fix the failure above, then re-run this exact command yourself. Do not repeat an unchanged run, and do not ' +
+        'report the work as complete while this check fails.',
+  ].join('\n');
+}
+
+/**
+ * The closing notice of a turn that ran out of steps.
+ *
+ * It answers four questions, because a truncated turn that answers none of them
+ * reads as a bug or (worse) as a completed task: WHAT ended it, WHAT is still
+ * open, WHAT was already written, and HOW to continue.
+ */
+function boundedEndingNotice(input: {
+  stepLimit: number;
+  planSteps: ReadonlyArray<{ description: string; status: string }>;
+  changedPaths: readonly string[];
+}): string {
+  const open = input.planSteps.filter((step) => step.status !== 'done');
+  const lines: string[] = [];
+
+  if (input.planSteps.length > 0 && open.length === 0) {
+    // Every step is marked done but the turn never closed itself out. Claiming
+    // "unfinished" here would be its own false statement; the honest one is
+    // that the plan says done and the turn did not get to confirm it.
+    lines.push(
+      `I stopped because this turn reached its step ceiling (${input.stepLimit} model calls) just after the plan's last step. ` +
+        'The plan says every step is done, but the turn did not close itself out — review the result before relying on it.',
+    );
+  } else {
+    lines.push(
+      `I stopped because this turn reached its step ceiling (${input.stepLimit} model calls) before the task was finished. ` +
+        'That is a harness limit, not a model or provider failure — the work so far is preserved.',
+    );
+  }
+
+  if (input.planSteps.length > 0 && open.length > 0) {
+    const done = input.planSteps.length - open.length;
+    const named = open.slice(0, 4).map((step) => step.description);
+    lines.push(
+      `Plan: ${done}/${input.planSteps.length} done — still open: ${named.join('; ')}` +
+        `${open.length > named.length ? ` (+${open.length - named.length} more)` : ''}.`,
+    );
+  }
+
+  if (input.changedPaths.length > 0) {
+    const named = input.changedPaths.slice(0, 5);
+    lines.push(
+      `Files changed this turn: ${named.join(', ')}` +
+        `${input.changedPaths.length > named.length ? ` (+${input.changedPaths.length - named.length} more)` : ''}.`,
+    );
+  }
+
+  lines.push('Nothing was lost — reply "continue" and I will pick up from here.');
+  return lines.join('\n');
 }
 
 /**
@@ -5096,36 +7798,161 @@ function clampToolResult(content: string, cap: number, tool?: string): string {
   return head + clampNotice(tool, Math.max(0, middle.length - headLen), errors) + content.slice(tailStart);
 }
 
+/** Marker identifying the single compaction message inside a live thread. */
+export const COMPACTION_MARKER = '[context compacted — earlier steps of this turn]';
+
 /**
- * Deterministically trim a thread to `maxChars`:
- * 1. Never touch the system prompt or the FIRST user message (the ask).
- * 2. Never touch the last `RECENT_KEEP` messages (recent context) — except for
- *    the tail clamps in steps 4–5, which run ONLY when the oldest-first passes
- *    could not pay for the overage.
- * 3. Oldest-first pays FIRST, and only as much as the deficit needs: tool
- *    results longer than 500 chars collapse to the stub; if still over budget,
- *    remaining old tool results collapse entirely; then oversized old user
- *    messages shrink.
- * 4. Only if the thread is STILL over does the protected tail pay: an oversized
- *    recent tool result is clamped to head + rescued error lines + tail, and
- *    then clamped harder, so the prompt actually fits the window it goes to.
- *    The ORDER is what protects delivery: recent context is the model's working
- *    memory, so it is spent only when nothing older can cover the overage.
- * Returns a NEW array (input untouched) + how many messages were trimmed.
+ * The note a `write_file` result carries when the deliverable was staged INSIDE
+ * the workspace but the request names a path OUTSIDE it.
+ *
+ * MEASURED (2026-10-25 audit): `write_file({path: "REPORT.md"})` three times inside
+ * the audited tree, then a move to `../REPORT.md`. Only the later move kept the
+ * tree clean — and the task had said, verbatim, "do not modify the repository".
+ * The staging write is not blocked (a draft inside the tree is recoverable); the
+ * result now says where the deliverable belongs and what to remove, in the same
+ * step, so the model does not have to remember a rule from the prompt.
+ *
+ * Returns null for the ordinary case: either the write is already outside, or the
+ * ask names no outside path with that basename.
+ */
+export function stagedDeliverableNote(
+  writtenPath: string,
+  cwd: string,
+  named: readonly string[],
+): string | null {
+  if (!writtenPath || named.length === 0) return null;
+  const writtenAbs = resolve(cwd, writtenPath);
+  const writtenRel = relative(cwd, writtenAbs);
+  // Already at (or outside) the final location — nothing to warn about.
+  if (writtenRel.startsWith('..') || isAbsolute(writtenRel)) return null;
+  const base = basename(writtenAbs).toLowerCase();
+
+  for (const candidate of named) {
+    if (!candidate) continue;
+    const target = resolve(cwd, candidate);
+    const targetRel = relative(cwd, target);
+    const outside = targetRel.startsWith('..') || isAbsolute(targetRel);
+    if (!outside) continue;
+    if (basename(target).toLowerCase() !== base) continue;
+    return (
+      `⚠️ STAGING: \`${writtenPath}\` is INSIDE the workspace, but the request names the deliverable at ` +
+      `\`${candidate}\` — outside it. A task that says not to modify the project means the staging copy ` +
+      `counts. Write the deliverable directly to \`${candidate}\` (one \`write_file\`), then delete ` +
+      `\`${writtenPath}\` if it still exists. Do not leave a copy inside the tree.`
+    );
+  }
+  return null;
+}
+
+/** State a caller carries between calls so the prefix is compacted ONCE per breach. */
+export interface ThreadTrimOptions {
+  /**
+   * Index of the compaction message already in the thread (0 when none).
+   *
+   * Everything BEFORE it is FROZEN. This is the whole point of the parameter:
+   * the provider caches the prompt prefix, and it can only do that while the
+   * prefix is byte-identical to what it cached. Re-stubbing an older message —
+   * what the pre-compaction code did on every call — invalidates the cache from
+   * the first changed message onward, which is billed at the FRESH input rate
+   * (50× the cached rate on DeepSeek: $0.15/M vs $0.003/M).
+   *
+   * MEASURED (2026-10-25, audit head-to-head, 52 model calls): 22 trim events
+   * and a cache-read share that fell from 99.8 % to 12–17 % on the calls that
+   * followed a trim. The same run's cost attributable to those rewrites was
+   * ≈$0.21 of a ≈$0.28 bill.
+   */
+  sealedThrough?: number;
+  /** Facts to preserve inside the compaction message (see `buildWorkDigest`). */
+  digest?: string;
+  /**
+   * FALLBACK for a route with NO prefix cache: skip the one-shot compaction and
+   * use the oldest-first trimming passes instead.
+   *
+   * Freezing a prefix is a discount only where the provider caches it. On a
+   * local runner, a gateway route or an unknown provider, every call pays full
+   * price for the whole frozen span and nothing ever shrinks it — strictly worse
+   * than trimming. The loop decides this from `learning/prompt-cache.ts` and
+   * passes `true` when the cache is not known to exist.
+   *
+   * An EXISTING watermark is still honoured (those messages were already
+   * compacted away; there is nothing to re-expand), so a mid-turn handoff to a
+   * non-caching provider cannot resurrect a span that no longer exists.
+   */
+  preferTrim?: boolean;
+}
+
+export interface ThreadTrimResult {
+  thread: ToolMessage[];
+  /** Messages replaced (compaction) or rewritten (single-result clamps). */
+  trimmed: number;
+  /** True when a whole span was replaced by ONE compaction message. */
+  compacted: boolean;
+  /** Index of the compaction message in the RETURNED thread; pass it back in. */
+  sealed: number;
+}
+
+/**
+ * The single message a compacted span leaves behind.
+ *
+ * It states three things the model cannot see for itself once the transcript is
+ * gone: that the turn is continuing (nothing restarted, nothing undone), what
+ * the span contained in numbers (`N message(s)`, `X chars`), and HOW to get any
+ * of it back (`read_file` it, or re-run the command). Without the last part a
+ * compaction turns `read_file` into the only way to rediscover anything — and
+ * that is exactly what a long turn cannot afford.
+ */
+function compactionMessage(input: { messages: number; chars: number; digest: string; errors: string[] }): string {
+  const facts = input.digest.replace(WORK_DIGEST_MARKER, '').trim();
+  return [
+    COMPACTION_MARKER,
+    `${input.messages} earlier message(s) (${withThousands(input.chars)} chars) from THIS turn were collapsed ` +
+      'into the facts below to keep the context inside its budget. Nothing was restarted and no work was undone.',
+    'The old transcript is gone but every result is recoverable: `read_file` the path again, or re-run the ' +
+      'command, to see its output. Do not re-run work whose result is recorded below.',
+    facts || '• No actions had been recorded when the context was compacted.',
+    // WHY the compacted output failed survives the compaction: a clamp already
+    // rescues error lines, and a compaction that dropped them would be strictly
+    // worse than the clamp it replaces — the model would rediscover the reason
+    // with another command instead of fixing it.
+    ...(input.errors.length > 0
+      ? ['• Failure reasons kept from the compacted output:', ...input.errors.map((line) => `  ${line}`)]
+      : []),
+  ].join('\n');
+}
+
+/**
+ * Deterministically bound a thread to `maxChars`.
+ *
+ * Order of payment:
+ * 0. ONE compaction of the whole old span (everything between the watermark and
+ *    the protected tail) into a single message carrying the work digest. This is
+ *    the only pass allowed to rewrite the prefix, so it happens once per breach
+ *    instead of once per call (see `ThreadTrimOptions.sealedThrough`).
+ * 1–3. FALLBACK, only when no safe cut exists (a thread with no message that
+ *    can end the span without orphaning a `tool` result): the oldest tool
+ *    results collapse to the stub, then entirely, then oversized old user turns.
+ * 4–5. The protected tail pays LAST: an oversized recent tool result is clamped
+ *    to head + rescued error lines + tail, so the prompt actually fits.
+ *
+ * Never touched: the system prompt, the FIRST user message (the ask), anything
+ * before the watermark, and the last `RECENT_KEEP` messages (except the 4–5
+ * clamps). Returns a NEW array (input untouched).
  */
 export function trimThreadBudget(
   thread: ToolMessage[],
   maxChars: number = DEFAULT_THREAD_BUDGET_CHARS,
-): { thread: ToolMessage[]; trimmed: number } {
+  opts: ThreadTrimOptions = {},
+): ThreadTrimResult {
   const total = thread.reduce((a, m) => a + messageChars(m), 0);
-  if (total <= maxChars) return { thread, trimmed: 0 };
+  const sealed = Math.max(0, Math.min(opts.sealedThrough ?? 0, thread.length));
+  if (total <= maxChars) return { thread, trimmed: 0, compacted: false, sealed };
 
   const out = [...thread];
   // Indices eligible for trimming: skip the system prompt, the first user
-  // message, and the RECENT_KEEP tail.
+  // message, the RECENT_KEEP tail, and everything the watermark already froze.
   const firstUserIdx = thread.findIndex((m) => m.role === 'user');
   const eligible: number[] = [];
-  for (let i = 0; i < out.length - RECENT_KEEP; i++) {
+  for (let i = sealed; i < out.length - RECENT_KEEP; i++) {
     if (out[i].role === 'system') continue;
     if (i === firstUserIdx) continue;
     eligible.push(i);
@@ -5133,9 +7960,58 @@ export function trimThreadBudget(
 
   let over = total - maxChars;
   let trimmed = 0;
+  let compacted = false;
+  let sealIndex = sealed;
   // A single result may never exceed half the budget, whatever the passes below
   // do (see MIN_TOOL_RESULT_CHARS).
   const perMessageCap = Math.max(MIN_TOOL_RESULT_CHARS, Math.floor(maxChars / 2));
+
+  // ── Pass 0 — ONE compaction instead of N prefix rewrites ───────────────────
+  // The span ends at the protected tail, and it may never end between an
+  // assistant `tool_calls` block and its results: a provider rejects a request
+  // whose tool result has lost its parent.
+  if (over > 0 && eligible.length > 0 && opts.preferTrim !== true) {
+    const start = eligible[0];
+    const tailStart = Math.max(start, out.length - RECENT_KEEP);
+    let cut = tailStart;
+    while (cut > start && out[cut]?.role === 'tool') cut -= 1;
+    while (cut > start && (out[cut - 1]?.toolCalls?.length ?? 0) > 0) cut -= 1;
+    if (cut - start >= 2) {
+      const span = out.slice(start, cut);
+      const spanChars = span.reduce((a, m) => a + messageChars(m), 0);
+      const rescued: string[] = [];
+      let rescuedChars = 0;
+      for (const m of span) {
+        if (m.role !== 'tool' || m.content.length <= 500) continue;
+        for (const line of errorLinesFrom(m.content)) {
+          if (rescued.includes(line)) continue;
+          if (rescued.length >= CLAMP_ERROR_LINES || rescuedChars + line.length > CLAMP_ERROR_CHARS) break;
+          rescued.push(line);
+          rescuedChars += line.length;
+        }
+      }
+      const marker: ToolMessage = {
+        role: 'user',
+        content: compactionMessage({
+          messages: span.length,
+          chars: spanChars,
+          digest: opts.digest ?? '',
+          errors: rescued,
+        }),
+      };
+      out.splice(start, span.length, marker);
+      over -= spanChars - messageChars(marker);
+      trimmed += span.length;
+      compacted = true;
+      sealIndex = start;
+    }
+  }
+
+  // ── Passes 1–3 — fallback for a thread with no safe cut ────────────────────
+  // Deliberately skipped once a compaction happened: those passes rewrite
+  // messages AFTER the watermark, which is the per-call churn the compaction
+  // exists to remove. The tail clamps below still bound the prompt.
+  if (over > 0 && !compacted) {
 
   // Pass 1: collapse long OLD tool results to the stub (keep the first 500
   // chars so the model retains the gist of what it did).
@@ -5176,6 +8052,7 @@ export function trimThreadBudget(
       trimmed++;
     }
   }
+}
   // ── Pass 4 — only NOW does the PROTECTED TAIL pay ─────────────────────────
   // Nothing older could cover the deficit, so an oversized RECENT tool result
   // must be clamped — otherwise the prompt goes out verbatim and either the
@@ -5230,7 +8107,9 @@ export function trimThreadBudget(
       trimmed++;
     }
   }
-  return { thread: out, trimmed };
+  // Index of the compaction message in the RETURNED thread. A tail clamp does
+  // not move it, so the watermark survives unchanged until the next compaction.
+  return { thread: out, trimmed, compacted, sealed: sealIndex };
 }
 
 // ─── Within-turn work digest (the memory a trimmed thread keeps) ────────────

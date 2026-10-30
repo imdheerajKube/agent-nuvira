@@ -30,6 +30,23 @@ afterEach(() => {
   for (const d of createdDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
+describe('a redirection that produces an empty file is reported, not silently accepted', () => {
+  it('warns when a redirect leaves a 0-byte file', async () => {
+    const { ctx } = makeWorkspace();
+    // The measured failure: `cat > report.md <<'EOF' … EOF` whose body never
+    // reached the shell, leaving a 0-byte file the tool called a success.
+    const out = await runTerminalTool({ command: "printf '' > report.md", confirm: true }, ctx);
+    expect(out).toContain('0 bytes');
+    expect(out).toMatch(/write_file/);
+  });
+
+  it('does not warn when the redirect wrote content', async () => {
+    const { ctx } = makeWorkspace();
+    const out = await runTerminalTool({ command: "printf 'real content' > report.md", confirm: true }, ctx);
+    expect(out).not.toContain('0 bytes');
+  });
+});
+
 describe('classifyCommand — deny-first three-class model', () => {
   it('denies destructive/system commands outright (even with confirm)', () => {
     for (const cmd of [
@@ -83,6 +100,56 @@ describe('classifyCommand — deny-first three-class model', () => {
     ]) {
       expect(classifyCommand(cmd), cmd).toBe('verify');
     }
+  });
+
+  it('classifies a DECORATED verification run as verify (the shape, not the spelling)', () => {
+    // Measured 2026-10-27, bench `DEV-FEATURE` (`deepseek-flash`, 28 model steps
+    // against Cline's 17). The turn ran `NUVIRA_ENV_GUARD=off python3 -m unittest
+    // …`; the raw first token was an assignment, nothing matched, the segment
+    // scored confirm as an UNKNOWN state-changing command, and the turn was told
+    // to ask a human before running its own test suite. It asked, no user was
+    // reachable, and the answer was assumed. Two wasted steps and a lost turn on
+    // a `cd … && ls` and a `pytest` run. The criterion is EFFECT — a test or a
+    // check reports a verdict and writes only workspace caches — so the runner
+    // is recognized from its shape, whatever language it belongs to.
+    for (const cmd of [
+      'cd /tmp/repo && ls',
+      'python3 -m unittest tests.test_util -v',
+      'NUVIRA_ENV_GUARD=off python3 -m unittest discover -s tests -p "test_*.py"',
+      'FOO=1 BAR=2 pytest -q',
+      'uv run pytest -q',
+      'poetry run pytest',
+      'pytest',
+      'python3 tests/test_util.py',
+      '/usr/local/bin/python3 -m mypy src',
+      'cargo test --all',
+      'go test ./...',
+      'dotnet test',
+      'npx vitest run',
+      'make test',
+      'deno test',
+    ]) {
+      expect(classifyCommand(cmd), cmd).toBe('verify');
+    }
+    // The boundary is "runs a check", not "mentions python": arbitrary code, a
+    // project entry point and an unknown script keep the confirm gate, and a
+    // runner handed an arbitrary body after `--` is not verification.
+    expect(classifyCommand('python3 -c "import os; os.remove(1)"')).toBe('confirm');
+    expect(classifyCommand('python3 main.py')).toBe('confirm');
+    expect(classifyCommand('sh run_tests_tmp.sh')).toBe('confirm');
+    expect(classifyCommand('tox -- python3 evil.py')).toBe('confirm');
+    // Deny still wins through the decorations — peeling them off must never
+    // hide what the command IS.
+    expect(classifyCommand('NUVIRA_ENV_GUARD=off rm -rf /')).toBe('deny');
+    expect(classifyCommand('sudo -E python3 -m pytest tests/')).toBe('deny');
+    expect(classifyCommand('FOO=1 npm publish')).toBe('confirm');
+    expect(classifyCommand('command -v cargo')).toBe('verify');
+    // A pipeline and an fd redirect are decorations too. Both of these were
+    // refused in a headless turn (the `|` inside the grep pattern and the `&` in
+    // `2>&1` were read as command separators), and re-running the suite through
+    // a different filter is how that turn spent four steps on one check.
+    expect(classifyCommand(`pytest -q 2>&1 | grep -E '^(FAIL|ERROR):|^Ran |^OK'`)).toBe('verify');
+    expect(classifyCommand('pytest -q 2>&1 | tail -20')).toBe('verify');
   });
 
   it('classifies read-only PARSE checks as verify (they were the ask loop)', () => {
@@ -293,10 +360,10 @@ describe('toolset gating — run_terminal joins the coding toolset', () => {
     expect(tool!.endsAgentStep).toBe(false);
   });
 
-  it('owns run_terminal in the coding toolset (eight tools — terminal joined)', () => {
+  it('owns run_terminal in the coding toolset (nine tools — terminal and api_spec joined)', () => {
     expect(toolsetForTool('run_terminal')?.name).toBe('coding');
     expect(TOOLSETS.find((t) => t.name === 'coding')?.tools).toEqual([
-      'read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo', 'terminal',
+      'read_file', 'list_dir', 'glob', 'edit_file', 'write_file', 'run_terminal', 'plan_todo', 'terminal', 'api_spec',
     ]);
   });
 

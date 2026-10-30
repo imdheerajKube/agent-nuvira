@@ -699,6 +699,10 @@ export class Orchestrator {
       source: 'orchestrator',
       provider: auditRoute.provider,
       model: auditRoute.model,
+      // The project this run works on, so its findings are readable by the NEXT
+      // run in the same tree (see `findings/ledger.ts`). Best-effort: the cwd of
+      // the pipeline is the workspace it edits.
+      workingDirectory: process.cwd(),
     });
     let result: OrchestrationResult | undefined;
     try {
@@ -746,6 +750,9 @@ export class Orchestrator {
           unverifiedPaths: verifiedAll ? [] : changed,
           unverifiedEdit: changed.length > 0 && !verifiedAll,
           userMessage: goal,
+          // The run's trace id, stamped on the coverage entries so a path marked
+          // `executed` can be traced to the pipeline that ran a check against it.
+          ...(this.activeTraceId ? { runId: this.activeTraceId } : {}),
         });
       } catch {
         // Best-effort — a ledger write must never break result delivery.

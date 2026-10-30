@@ -103,12 +103,23 @@ export interface ToolCallEvidence {
  * `npm test`, a typecheck, a build, a linter — these observe the artifact even
  * when they never name the changed file.
  *
+ * PYTHON MODULE RUNNERS ARE HERE ON PURPOSE (added 2026-10-30). The list knew
+ * `pytest` as a bare word but not `python3 -m unittest` — the standard spelling on
+ * a plain-unittest project, and the exact command the DEV-FEATURE bench task asks
+ * for. Measured consequence: the turn wrote the helper and its test file, ran
+ * `python3 -m unittest discover`, PASSED, and the verification gate still fired
+ * ("files were changed but nothing verified them"), so the model re-ran the same
+ * suite three times and re-filed `finish` — five steps spent proving a check it
+ * had already run. `src/utils/command-shape.ts` has always known this invocation
+ * shape (`isVerificationInvocation`); this regex is the second, drifting reader,
+ * and the gap between the two was the cost.
+ *
  * `node --check` USED to be in this list, which is what let the calculator
  * session report "verified" after running `node -c script.js`. See
  * `PARSE_ONLY_RE` below for why that cannot count.
  */
 const GENERIC_VERIFY_RE =
-  /\b(?:npm|pnpm|yarn|bun)\s+(?:--prefix[=\s]+\S+\s+)?(?:run\s+)?(?:test|build|lint|typecheck|check|ci)\b|\b(?:tsc|vitest|jest|pytest|mocha|cargo\s+test|go\s+test|gradle|mvn|make)\b/i;
+  /\b(?:npm|pnpm|yarn|bun)\s+(?:--prefix[=\s]+\S+\s+)?(?:run\s+)?(?:test|build|lint|typecheck|check|ci)\b|\b(?:tsc|vitest|jest|pytest|mocha|cargo\s+test|go\s+test|gradle|mvn|make)\b|\bpython[0-9.]*\s+-m\s+(?:unittest|pytest|tox|nose2?|doctest|mypy|pyright|ruff|flake8|pylint|coverage)\b|\b(?:tox|nox|phpunit|rspec|ctest|dotnet\s+test|mix\s+test|swift\s+test)\b/i;
 
 /**
  * Commands that only PARSE the files they are handed. They prove the source is
@@ -697,6 +708,50 @@ export function isProseArtifactPath(path: string): boolean {
   return PROSE_ARTIFACT_EXTENSIONS.has(clean.slice(dot));
 }
 
+/** Does this check's package actually CONTAIN one of the changed files? */
+function checkCoversFiles(check: AvailableCheck, changed: readonly string[], cwdAbs: string): boolean {
+  if (changed.length === 0) return false;
+  const root = check.root ?? cwdAbs;
+  return changed.some((f) => {
+    const abs = resolve(cwdAbs, f);
+    if (relative(cwdAbs, abs).startsWith('..')) return false;
+    return pathCoveredByRoot(abs, root) && relative(root, abs) !== '';
+  });
+}
+
+/**
+ * The single check a AUTO-VERIFY pass should run, or `null` when running one
+ * would be wrong.
+ *
+ * WHY THIS EXISTS (measured, 2026-10-25 head-to-head): the loop asked the model
+ * to verify (`verificationNudgeFor`) and the model usually complied — but
+ * sometimes it did not, and Cline's advantage in that audit was precisely that
+ * it RAN the suite and had numbers to quote. A nudge is advice; a check that
+ * runs is evidence. The check is picked the same way the nudge picks it
+ * (covering first, then strength), so the two never disagree.
+ *
+ * Returns `null` when:
+ * - nothing changed (`mutatedPaths` is empty — there is nothing to verify),
+ * - everything changed is PROSE (`isProseArtifactPath`) — a written deliverable
+ *   is verified by its content, not by a test runner,
+ * - the project declares no runnable check at all.
+ */
+export function autoVerifyCheck(cwd: string, changedFiles: readonly string[] = []): AvailableCheck | null {
+  const cwdAbs = resolve(cwd);
+  const changed = changedFiles.filter(Boolean);
+  if (changed.length === 0) return null;
+  if (changed.every((f) => isProseArtifactPath(f))) return null;
+  const checks = [...detectAvailableChecks(cwd)].sort(
+    (a, b) =>
+      Number(checkCoversFiles(b, changed, cwdAbs)) - Number(checkCoversFiles(a, changed, cwdAbs)) ||
+      b.strength - a.strength,
+  );
+  // Prefer a check that COVERS the change; fall back to the project's strongest
+  // check, which is still better evidence than none (the same order the nudge
+  // describes to the model).
+  return checks.find((c) => checkCoversFiles(c, changed, cwdAbs)) ?? checks[0] ?? null;
+}
+
 export function verificationNudgeFor(cwd: string, changedFiles: readonly string[] = []): string {
   const cwdAbs = resolve(cwd);
   const allChanged = changedFiles.filter(Boolean);
@@ -706,15 +761,7 @@ export function verificationNudgeFor(cwd: string, changedFiles: readonly string[
   // for the project (`npm test`) is not the check that covers the file that
   // changed — the nested package's own suite is. Preferring a check the files are
   // not under would send the model to run a suite that cannot see its change.
-  const coversChanged = (c: AvailableCheck): boolean => {
-    if (allChanged.length === 0) return false;
-    const root = c.root ?? cwdAbs;
-    return allChanged.some((f) => {
-      const abs = resolve(cwdAbs, f);
-      if (relative(cwdAbs, abs).startsWith('..')) return false;
-      return pathCoveredByRoot(abs, root) && relative(root, abs) !== '';
-    });
-  };
+  const coversChanged = (c: AvailableCheck): boolean => checkCoversFiles(c, allChanged, cwdAbs);
   const checks = [...detectAvailableChecks(cwd)].sort(
     (a, b) => Number(coversChanged(b)) - Number(coversChanged(a)) || b.strength - a.strength,
   );

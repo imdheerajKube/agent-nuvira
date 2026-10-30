@@ -47,6 +47,47 @@ function runSet(cmd: ReturnType<typeof makeCommand>, key: string, value: string)
   cli.parse(['node', 'buff', 'config', 'set', key, value]);
 }
 
+/**
+ * `turn.maxMinutes` — the wall-clock budget one turn is given.
+ *
+ * It is settable from the CLI on purpose: a budget that only exists in the type system
+ * is not a budget a user can act on, and a bad number here fails SILENTLY (NaN reads as
+ * "not set", so the default would quietly apply while the user believes they set 90).
+ */
+describe('ConfigCommand set — turn.* wall-clock budget', () => {
+  beforeEach(() => {
+    saved = null;
+    configState = { defaultProvider: 'local', providers: {} } as BuffConfig;
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('stores minutes as a number', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'turn.maxMinutes', '45');
+    expect(saved?.turn?.maxMinutes).toBe(45);
+  });
+
+  it('accepts 0 as "no wall clock" rather than treating it as unset', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'turn.maxMinutes', '0');
+    expect(saved?.turn?.maxMinutes).toBe(0);
+  });
+
+  it('refuses a value that would silently become the default', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'turn.maxMinutes', 'about 90');
+    expect(saved).toBeNull();
+    expect(console.error).toHaveBeenCalled();
+    runSet(cmd, 'turn.maxMinutes', '2000');
+    expect(saved).toBeNull();
+  });
+});
+
 describe('ConfigCommand set — mcp.* configuration surface', () => {
   beforeEach(() => {
     saved = null;

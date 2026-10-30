@@ -429,6 +429,38 @@ describe('assessEditActivity — the single gate decision', () => {
   it('never needs verification when nothing was mutated', () => {
     expect(assessEditActivity(['read_file'], [], []).needsVerification).toBe(false);
   });
+
+  it('accepts a PYTHON module runner as the project check', () => {
+    // Measured 2026-10-30 (DEV-FEATURE, 3 runs): the turn wrote the helper and its
+    // unittest file, ran `python3 -m unittest discover`, PASSED — and the gate still
+    // fired, because this list knew `pytest` as a bare word and not the module
+    // spelling. The model then re-ran the same suite three times and re-filed
+    // `finish`: five steps proving a check it had already run. `command-shape.ts`
+    // has always known this shape; this regex was the drifting second reader.
+    const a = assessEditActivity(
+      ['edit_file', 'run_terminal'],
+      [
+        {
+          tool: 'run_terminal',
+          args: { command: "cd /repo && /usr/local/bin/python3 -m unittest discover -s tests -p 'test_*.py'" },
+          result: 'OK',
+        },
+      ],
+      ['ai_voice_studio/util.py', 'tests/test_format_duration.py'],
+      '/repo',
+    );
+    expect(a.needsVerification).toBe(false);
+  });
+
+  it('still refuses a bare echo on a Python project', () => {
+    const a = assessEditActivity(
+      ['edit_file', 'run_terminal'],
+      [{ tool: 'run_terminal', args: { command: 'echo hi' }, result: 'ok' }],
+      ['ai_voice_studio/util.py'],
+      '/repo',
+    );
+    expect(a.needsVerification).toBe(true);
+  });
 });
 
 /**

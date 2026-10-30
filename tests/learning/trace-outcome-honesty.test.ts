@@ -20,6 +20,21 @@ describe('buildTraceOutcome — kinds', () => {
     expect(buildTraceOutcome({ generationFailed: true }).kind).toBe('failed');
   });
 
+  it('records a STEP-CEILING turn as incomplete + bounded, never as acted', () => {
+    // MEASURED (trace-1792233823139-egmqc9): a turn that wrote its document and
+    // was mid-verification with 2 of 9 plan steps open hit the step ceiling and
+    // was recorded `kind: acted`, `success: true` — the trace vouched for a task
+    // the harness had cut off. Work exists to continue from, so the kind is
+    // `incomplete` and the ceiling is named on the outcome.
+    const o = buildTraceOutcome({
+      tools: ['read_file', 'write_file', 'run_terminal'],
+      bounded: true,
+    });
+    expect(o.kind).toBe('incomplete');
+    expect(o.bounded).toBe(true);
+    expect(traceOutcomeSucceeded(o)).toBe(false);
+  });
+
   it('records acted when tools ran and nothing is outstanding', () => {
     const o = buildTraceOutcome({ tools: ['read_file', 'edit_file'] });
     expect(o.kind).toBe('acted');

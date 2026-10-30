@@ -26,7 +26,8 @@
 import { InferenceProvider, ModelDescriptor, ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
 import { InferenceOptions, ProviderConfig } from '../config/types.js';
 import { logger } from '../utils/logger.js';
-import { streamCompletion } from './sse.js';
+import { cachedPromptTokensOf, streamCompletion, type WireUsage } from './sse.js';
+import { sanitizeWireValue } from './wire-sanitize.js';
 import { chatCompletionsWithTools, chatCompletionsWithToolsStream } from './tools.js';
 import { attachHttpContext } from './http-error.js';
 import { getModelTags } from './model-catalog.js';
@@ -74,11 +75,7 @@ interface ChatCompletionResponse {
   choices?: Array<{
     message?: { content?: string };
   }>;
-  usage?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    total_tokens?: number;
-  };
+  usage?: WireUsage;
 }
 
 /** Normalize a base URL: strip trailing slashes, keep the /v1 suffix. */
@@ -259,13 +256,18 @@ export class OpenAICompatAdapter implements InferenceProvider {
     const response = await fetch(chatUrl(this.baseUrl, model, this.meta), {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        model,
-        messages: buildMessages(prompt, options),
-        temperature,
-        max_tokens: maxTokens,
-        ...reasoningBody,
-      }),
+      body: JSON.stringify(
+        // WIRE SANITISE — a lone surrogate is not JSON-representable, and a
+        // provider that cannot parse the body rejects the whole request (see
+        // inference/wire-sanitize.ts). A clean prompt is byte-identical.
+        sanitizeWireValue({
+          model,
+          messages: buildMessages(prompt, options),
+          temperature,
+          max_tokens: maxTokens,
+          ...reasoningBody,
+        }),
+      ),
       // A dead endpoint should fail fast and let the shared failover walk move
       // on — never hang a pipeline for minutes. 30s generous cap; callers with
       // tighter needs set config.timeoutMs (enforced at the fetch layer).
@@ -292,6 +294,9 @@ export class OpenAICompatAdapter implements InferenceProvider {
 
     // Cost tracking (M2.2 wire-token metering): when the endpoint reports exact
     // `usage` we record MEASURED tokens; otherwise the length-based estimate.
+    // Cache-read tokens ride along when the endpoint reports them, so the cost
+    // ledger can show how much of the input the provider served from cache.
+    const cachedPromptTokens = cachedPromptTokensOf(data.usage);
     try {
       recordCallWithUsage(
         getCostTracker(),
@@ -300,7 +305,11 @@ export class OpenAICompatAdapter implements InferenceProvider {
         prompt,
         content,
         data.usage
-          ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens }
+          ? {
+              promptTokens: data.usage.prompt_tokens,
+              completionTokens: data.usage.completion_tokens,
+              ...(cachedPromptTokens !== undefined ? { cachedPromptTokens } : {}),
+            }
           : undefined,
       );
     } catch {
@@ -389,6 +398,9 @@ export class OpenAICompatAdapter implements InferenceProvider {
         timeoutMs: this.config.timeoutMs ?? 30_000,
         // P4 — external cancellation (the dashboard Cancel button).
         signal: options?.signal,
+        // Display-only: stream the model's reasoning_content to the caller (see
+        // the CLI's live view) while the reply is still being formed.
+        onReasoning: options?.onReasoning,
         // Cost parity with generate(): tool-calling turns are metered.
         onCost: (promptText, contentText, usage) => {
           try {
@@ -426,7 +438,7 @@ export class OpenAICompatAdapter implements InferenceProvider {
     // for MEASURED cost recording over the estimate.
     // P4 M4.2: reasoning deltas are captured and cached per (provider, model,
     // conversation) so a retry to this provider can re-inject them.
-    let streamUsage: { promptTokens?: number; completionTokens?: number } | undefined;
+    let streamUsage: { promptTokens?: number; completionTokens?: number; cachedPromptTokens?: number } | undefined;
     const reasoningChunks: string[] = [];
     const conversationKey = buildConversationKey([{ role: 'user', content: prompt }]);
     const fullContent = await withReasoningFallback({

@@ -11,8 +11,11 @@
 
 import type { ToolArgumentsError, ToolCallResponse, ToolMessage, ToolSchema } from './interface.js';
 import { attachHttpContext } from './http-error.js';
-import { parseSSELine } from './sse.js';
-import { applyThinkingReplayInvariant } from './thinking-replay.js';
+import { cachedPromptTokensOf, parseSSELine, type WireUsage } from './sse.js';
+// Every outbound string is made JSON-safe before it goes on the wire (see the
+// module header: one unpaired surrogate made a whole request unparsable).
+import { sanitizeWireValue } from './wire-sanitize.js';
+import { applyThinkingReplayInvariant, isReasoningReplayRejection } from './thinking-replay.js';
 
 /** OpenAI wire form of a tool call (arguments as a JSON string). */
 interface WireToolCall {
@@ -28,7 +31,7 @@ interface WireResponse {
     finish_reason?: string | null;
   }>;
   /** Endpoint-reported token usage (and, for OpenRouter, the exact cost). */
-  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+  usage?: WireUsage;
 }
 
 /**
@@ -115,11 +118,24 @@ export function parseToolCallResponse(data: WireResponse): ToolCallResponse {
       : undefined;
   const finishReason =
     typeof data.choices?.[0]?.finish_reason === 'string' ? data.choices[0].finish_reason : undefined;
+  // The provider's own counts, carried up so the trace/report can stop estimating
+  // a number the endpoint already stated (see `ToolCallResponse.usage`).
+  const usage = data.usage;
+  const cached = cachedPromptTokensOf(usage);
+  const reportedUsage =
+    usage && typeof usage.prompt_tokens === 'number' && typeof usage.completion_tokens === 'number'
+      ? {
+          promptTokens: usage.prompt_tokens,
+          completionTokens: usage.completion_tokens,
+          ...(cached !== undefined ? { cachedPromptTokens: cached } : {}),
+        }
+      : undefined;
   return {
     content,
     toolCalls,
     ...(reasoningContent ? { reasoningContent } : {}),
     ...(finishReason ? { finishReason } : {}),
+    ...(reportedUsage ? { usage: reportedUsage } : {}),
   };
 }
 
@@ -149,6 +165,15 @@ export async function chatCompletionsWithTools(opts: {
    */
   signal?: AbortSignal;
   /**
+   * Reasoning-token hook. DeepSeek-style thinking models stream
+   * `delta.reasoning_content` alongside (or before) `delta.content`; the CLI
+   * renders it as the model's working notes rather than leaving the screen to
+   * tool cards alone. Display only — the accumulated text is ALSO returned as
+   * `reasoningContent` for the reasoning-replay contract, and a provider that
+   * emits none simply never calls this.
+   */
+  onReasoning?: (token: string) => void;
+  /**
    * Cost-recording hook (quota ledger / cost tracker parity with generate()):
    * invoked with the flattened prompt + response content after a successful
    * call so adapters record wire-metered (or estimated) cost exactly like
@@ -167,43 +192,89 @@ export async function chatCompletionsWithTools(opts: {
   const maxTokens = opts.maxTokens ?? 4096;
   const url = opts.url || `${opts.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...opts.headers },
-    body: JSON.stringify({
-      model: opts.model,
-      messages: buildWireMessages(opts.messages),
-      temperature,
-      max_tokens: maxTokens,
-      tools: opts.tools.map((t) => ({
-        type: 'function',
-        function: { name: t.name, description: t.description, parameters: t.parameters },
-      })),
-      ...(opts.reasoningBody || {}),
-    }),
-    signal: opts.signal ?? AbortSignal.timeout(opts.timeoutMs ?? 30_000),
-  });
+  const post = (messages: readonly ToolMessage[], signal: AbortSignal | undefined): Promise<Response> =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...opts.headers },
+      body: JSON.stringify(
+        // WIRE SANITISE — an unpaired surrogate anywhere in the thread is not
+        // JSON-representable and a provider 400s the whole request (see
+        // inference/wire-sanitize.ts). Applied to the FINAL body, so no field can
+        // be forgotten. A clean payload is byte-identical, so the prompt cache is
+        // unaffected.
+        sanitizeWireValue({
+          model: opts.model,
+          messages: buildWireMessages([...messages]),
+          temperature,
+          max_tokens: maxTokens,
+          tools: opts.tools.map((t) => ({
+            type: 'function',
+            function: { name: t.name, description: t.description, parameters: t.parameters },
+          })),
+          ...(opts.reasoningBody || {}),
+        }),
+      ),
+      signal: signal ?? AbortSignal.timeout(opts.timeoutMs ?? 30_000),
+    });
 
+  let response = await post(opts.messages, opts.signal);
+  let repairedReasoningTurns = 0;
   if (!response.ok) {
     const errorBody = await response.text();
-    // Headers attached so extractRetryAfterMs() can read Retry-After /
-    // x-ratelimit-reset-* and park for the provider's ACTUAL reset time.
-    throw attachHttpContext(new Error(`Tool-calling API error (${response.status}): ${errorBody}`), response.status, response.headers);
+    // THE ENDPOINT STATING THE RULE (2026-10-29). A thinking model with tools
+    // rejects a tool-call turn that carries no `reasoning_content`, even when no
+    // earlier turn ever carried one — so a thread that lost its reasoning to
+    // trimming or a continuation is rejected no matter what the thread's own
+    // evidence says. Fill the gaps and send the SAME request once more: this
+    // replaces a call that had already failed, so it costs no model round trip,
+    // and it is what stops the 3-5 wasted calls per thinking turn. See
+    // inference/thinking-replay.ts for the measured requests.
+    const repair = isReasoningReplayRejection(response.status, errorBody)
+      ? applyThinkingReplayInvariant(opts.messages, { force: true })
+      : { messages: opts.messages, filled: 0 };
+    // Opt-in diagnosis (`NUVIRA_WIRE_DEBUG=1`): the request shape that the
+    // endpoint refused, as roles plus whether each turn carried reasoning. This is
+    // what made the remaining gap visible — the filled count looked right while a
+    // turn of another kind was still missing its field.
+    if (process.env.NUVIRA_WIRE_DEBUG) {
+      const shape = opts.messages
+        .map((m) => `${m.role}${m.toolCalls?.length ? `(${m.toolCalls.length})` : ''}${m.reasoningContent ? '+' : ''}`)
+        .join(' ');
+      console.error(`[wire-debug] ${response.status} rejected-for-reasoning filled=${repair.filled} ${shape}`);
+    }
+    if (repair.filled === 0) {
+      // Headers attached so extractRetryAfterMs() can read Retry-After /
+      // x-ratelimit-reset-* and park for the provider's ACTUAL reset time.
+      throw attachHttpContext(new Error(`Tool-calling API error (${response.status}): ${errorBody}`), response.status, response.headers);
+    }
+    repairedReasoningTurns = repair.filled;
+    response = await post(repair.messages, opts.signal);
+    if (!response.ok) {
+      throw attachHttpContext(
+        new Error(`Tool-calling API error (${response.status}): ${await response.text()}`),
+        response.status,
+        response.headers,
+      );
+    }
   }
 
   const data = (await response.json()) as WireResponse;
   const result = parseToolCallResponse(data);
+  if (repairedReasoningTurns > 0) result.repairedReasoningTurns = repairedReasoningTurns;
   if (opts.onCost) {
     try {
       // M2.2: pass the endpoint's own usage when it reported one (tokens and,
       // on OpenRouter, the exact cost) so adapters record MEASURED cost instead
       // of a length-based estimate.
       const usage = data.usage;
+      const cached = cachedPromptTokensOf(usage);
       const reported =
         usage && typeof usage.prompt_tokens === 'number' && typeof usage.completion_tokens === 'number'
           ? {
               promptTokens: usage.prompt_tokens,
               completionTokens: usage.completion_tokens,
+              // DeepSeek's cache hit count (or OpenAI's nested equivalent).
+              ...(cached !== undefined ? { cachedPromptTokens: cached } : {}),
               ...(typeof usage.cost === 'number' ? { costUsd: usage.cost } : {}),
             }
           : undefined;
@@ -238,7 +309,7 @@ interface WireStreamChunk {
     delta?: { content?: string | null; reasoning_content?: string | null; tool_calls?: WireStreamToolCallDelta[] };
     finish_reason?: string | null;
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+  usage?: WireUsage;
 }
 
 /** Accumulator for one streaming tool call (fragments joined per index). */
@@ -279,42 +350,68 @@ export async function chatCompletionsWithToolsStream(
   const maxTokens = opts.maxTokens ?? 4096;
   const url = opts.url || `${opts.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...opts.headers },
-    body: JSON.stringify({
-      model: opts.model,
-      messages: buildWireMessages(opts.messages),
-      temperature,
-      max_tokens: maxTokens,
-      tools: opts.tools.map((t) => ({
-        type: 'function',
-        function: { name: t.name, description: t.description, parameters: t.parameters },
-      })),
-      stream: true,
-      // OpenAI convention for measured usage in the final chunk (Groq and
-      // OpenRouter support it; providers that ignore it just omit usage).
-      stream_options: { include_usage: true },
-      // OpenRouter only reports `usage.cost` for streams when explicitly asked;
-      // providers that don't understand this field ignore it.
-      usage: { include: true },
-      ...(opts.reasoningBody || {}),
-    }),
-    // P4 — external cancellation (the dashboard Cancel button). The streaming
-    // path historically had no timeout; an explicit signal is the ONLY way to
-    // stop it mid-stream.
-    signal: opts.signal,
-  });
+  const post = (messages: readonly ToolMessage[]): Promise<Response> =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...opts.headers },
+      body: JSON.stringify(
+        // WIRE SANITISE — see inference/wire-sanitize.ts. A lone surrogate in one
+        // tool result made the whole request unparsable for the provider and the
+        // turn unrecoverable; every string in the final body is made JSON-safe.
+        sanitizeWireValue({
+          model: opts.model,
+          messages: buildWireMessages([...messages]),
+          temperature,
+          max_tokens: maxTokens,
+          tools: opts.tools.map((t) => ({
+            type: 'function',
+            function: { name: t.name, description: t.description, parameters: t.parameters },
+          })),
+          stream: true,
+          // OpenAI convention for measured usage in the final chunk (Groq and
+          // OpenRouter support it; providers that ignore it just omit usage).
+          stream_options: { include_usage: true },
+          // OpenRouter only reports `usage.cost` for streams when explicitly asked;
+          // providers that don't understand this field ignore it.
+          usage: { include: true },
+          ...(opts.reasoningBody || {}),
+        }),
+      ),
+      // P4 — external cancellation (the dashboard Cancel button). The streaming
+      // path historically had no timeout; an explicit signal is the ONLY way to
+      // stop it mid-stream.
+      signal: opts.signal,
+    });
 
+  let response = await post(opts.messages);
+  let repairedReasoningTurns = 0;
   if (!response.ok) {
     const errorBody = await response.text();
-    // Same attachHttpContext treatment as the non-streaming helper so shared
-    // failover/classification (Retry-After / x-ratelimit-reset) works.
-    throw attachHttpContext(
-      new Error(`Tool-calling streaming API error (${response.status}): ${errorBody}`),
-      response.status,
-      response.headers,
-    );
+    // Same one-shot repair as the non-streaming helper (see the reasoning there):
+    // the endpoint enforcing the replay rule is the signal, and the thread's own
+    // evidence is not, because a thinking turn can lose its reasoning to
+    // trimming or a continuation and then be rejected on every retry.
+    const repair = isReasoningReplayRejection(response.status, errorBody)
+      ? applyThinkingReplayInvariant(opts.messages, { force: true })
+      : { messages: opts.messages, filled: 0 };
+    if (repair.filled === 0) {
+      // Same attachHttpContext treatment as the non-streaming helper so shared
+      // failover/classification (Retry-After / x-ratelimit-reset) works.
+      throw attachHttpContext(
+        new Error(`Tool-calling streaming API error (${response.status}): ${errorBody}`),
+        response.status,
+        response.headers,
+      );
+    }
+    repairedReasoningTurns = repair.filled;
+    response = await post(repair.messages);
+    if (!response.ok) {
+      throw attachHttpContext(
+        new Error(`Tool-calling streaming API error (${response.status}): ${await response.text()}`),
+        response.status,
+        response.headers,
+      );
+    }
   }
 
   const reader = response.body?.getReader();
@@ -330,7 +427,9 @@ export async function chatCompletionsWithToolsStream(
   // M2.2: capture the endpoint-reported usage from the final chunk
   // (stream_options.include_usage convention) so onCost records MEASURED cost
   // instead of a length-based estimate — the generateStream parity pattern.
-  let streamUsage: { promptTokens?: number; completionTokens?: number; costUsd?: number } | undefined;
+  let streamUsage:
+    | { promptTokens?: number; completionTokens?: number; costUsd?: number; cachedPromptTokens?: number }
+    | undefined;
   // The provider's own verdict on WHY it stopped. `'length'` is the one the
   // caller needs: a tool call whose arguments were cut off by the output budget
   // must be reported as TRUNCATED, not as a call the model sent with no
@@ -373,15 +472,21 @@ export async function chatCompletionsWithToolsStream(
           const chunkFinish = parsed?.choices?.[0]?.finish_reason;
           if (typeof chunkFinish === 'string' && chunkFinish) finishReason = chunkFinish;
           const reasoningDelta = parsed?.choices?.[0]?.delta?.reasoning_content;
-          if (typeof reasoningDelta === 'string' && reasoningDelta) reasoningParts.push(reasoningDelta);
+          if (typeof reasoningDelta === 'string' && reasoningDelta) {
+            reasoningParts.push(reasoningDelta);
+            // Live display of the model's working notes (see `onReasoning`).
+            opts.onReasoning?.(reasoningDelta);
+          }
           if (
             parsed?.usage &&
             typeof parsed.usage.prompt_tokens === 'number' &&
             typeof parsed.usage.completion_tokens === 'number'
           ) {
+            const cached = cachedPromptTokensOf(parsed.usage);
             streamUsage = {
               promptTokens: parsed.usage.prompt_tokens,
               completionTokens: parsed.usage.completion_tokens,
+              ...(cached !== undefined ? { cachedPromptTokens: cached } : {}),
               ...(typeof parsed.usage.cost === 'number' ? { costUsd: parsed.usage.cost } : {}),
             };
           }
@@ -451,5 +556,6 @@ export async function chatCompletionsWithToolsStream(
     toolCalls: parsedCalls,
     ...(reasoningContent ? { reasoningContent } : {}),
     ...(finishReason ? { finishReason } : {}),
+    ...(repairedReasoningTurns > 0 ? { repairedReasoningTurns } : {}),
   };
 }

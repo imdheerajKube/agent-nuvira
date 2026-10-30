@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { buildWireMessages, parseToolCallResponse } from '../../src/inference/tools.js';
-import { REASONING_NOT_RETAINED } from '../../src/inference/thinking-replay.js';
+import { REASONING_NOT_RETAINED, REASONING_NOT_RETAINED_TURN } from '../../src/inference/thinking-replay.js';
 
 describe('buildWireMessages', () => {
   it('passes system/user messages through', () => {
@@ -100,13 +100,23 @@ describe('buildWireMessages', () => {
     expect(wire[2]).toEqual({ role: 'assistant', content: 'done' });
   });
 
-  it('does not invent reasoning for a content-only turn in a thinking conversation', () => {
+  it('fills a CONTENT-ONLY turn too, once the conversation is in thinking mode', () => {
+    // MEASURED 2026-10-29 against the live endpoint: the rule covers every
+    // assistant turn, not only the tool-call ones — a plain prose turn without
+    // reasoning is rejected exactly like a tool-call turn without it (400, same
+    // sentence). Filling only tool-call turns is what left one live repair
+    // incomplete: the loop kept failing on the turn that carried the answer.
     const wire = buildWireMessages([
       { role: 'assistant', content: 'thinking out loud', reasoningContent: 'real reasoning' },
       { role: 'assistant', content: 'a plain answer turn' },
     ]);
-    expect(wire[1]).toEqual({ role: 'assistant', content: 'a plain answer turn' });
-    expect(Object.keys(wire[1] as object)).not.toContain('reasoning_content');
+    expect(wire[1]).toEqual({
+      role: 'assistant',
+      content: 'a plain answer turn',
+      reasoning_content: REASONING_NOT_RETAINED_TURN,
+    });
+    // The model's OWN reasoning is never overwritten.
+    expect(wire[0]).toMatchObject({ reasoning_content: 'real reasoning' });
   });
 });
 
@@ -136,6 +146,22 @@ describe('parseToolCallResponse', () => {
     });
     expect(resp.content).toBe('hi');
     expect(resp.toolCalls[0].arguments).toEqual({});
+  });
+
+  it('carries the provider-reported usage up, so a cost is measured and not estimated', () => {
+    // The wire had these numbers all along and nothing above the adapter could see
+    // them: every trace row and every cost axis was `chars/4`. A comparison against
+    // an agent that reports its own tokens cannot be built on an estimate.
+    const resp = parseToolCallResponse({
+      choices: [{ message: { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'x', arguments: '{}' } }] } }],
+      usage: { prompt_tokens: 1234, completion_tokens: 56, prompt_tokens_details: { cached_tokens: 1000 } },
+    } as never);
+    expect(resp.usage).toEqual({ promptTokens: 1234, completionTokens: 56, cachedPromptTokens: 1000 });
+
+    // No `usage` on the wire ⇒ absent, never zero: "unknown" and "free" are not
+    // the same claim.
+    const silent = parseToolCallResponse({ choices: [{ message: { content: 'done' } }] });
+    expect(silent.usage).toBeUndefined();
   });
 
   it('returns an empty toolCalls array when the model ends the turn', () => {
