@@ -401,30 +401,26 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
   },
   {
     id: 'partial-resume',
-    message: 'list the parity harness directory, then answer',
+    message: 'list the working directory, then answer',
     // WS5 (#27) — a RESUMED run, on every surface: the harness runs this ask
     // twice, the second time against the record the first one wrote, and what is
     // compared is what the second run did NOT pay for. The tool is READ-ONLY on
     // purpose: a write would change the working state the next turn carries in its
     // context, which is a REAL change to the input — the replay would rightly miss,
-    // and the row would measure that instead of the resume.
+    // and the row would measure that instead of the resume. A READ of a FILE would
+    // do the same thing by a side door: the ledger records what a turn examined, so
+    // turn 2's context would carry a `[Working state]` block turn 1 did not have
+    // (measured). A listing records nothing.
     //
-    // AND IT LISTS A FIXED DIRECTORY, NOT THE WORKING DIRECTORY (measured
-    // 2026-10-30, test-unix and test-windows). This scenario used `list_dir` on
-    // `.` — the project root, which every other test in the suite is free to
-    // create entries in while this pair runs. One entry appearing between the two
-    // turns made the SECOND model call's input differ by thirteen characters (one
-    // listing row), so the ledger correctly declined to replay it and the row
-    // reported `replayed 1, made 1` on whichever surface straddled the change. The
-    // resume was right; the SCENARIO was not reproducible, and a claim about
-    // replaying UNCHANGED input cannot be measured on input that changes under it.
-    //
-    // This directory is part of the harness itself: no turn writes it, so the pair
-    // sees the same listing, and the entry count is small enough to read. Outside
-    // this repository the same call degrades to the SAME refusal in both turns
-    // (the directory does not exist), which is equally deterministic — the probe
-    // needs an input that does not move, not one that succeeds.
-    toolCall: { tool: 'list_dir', args: { path: 'src/parity' } },
+    // WHAT MAKES THE LISTING STABLE IS THE DRIVER, NOT THE PATH. The probe's pair
+    // runs in the harness's own empty directory (`probeDir` in `src/parity/
+    // drivers.ts`), because this row is a claim about input that did not change
+    // and the project the harness is run from is not such an input: on CI, entries
+    // appeared in it mid-pair and the ambient snapshot shifted by two characters,
+    // both of which made the ledger DECLINE to replay (correctly) and the row
+    // report a divergence (incorrectly). `.` is the right ask here because the
+    // directory it names is the one nothing else writes.
+    toolCall: { tool: 'list_dir', args: { path: '.' } },
     answer: 'Listed.',
     resume: true,
   },

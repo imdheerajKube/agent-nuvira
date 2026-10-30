@@ -76,17 +76,22 @@ one call), forbids re-sending content already on disk, and sends changes to
   `learning/workspace-checkpoint.ts` could not restore a link to a DIRECTORY, which
   Windows expresses as a typed reparse point. Each is now decided by the platform's
   own rules, and the suite pins the ones a host can host.
-- **The resume probe measures an input that does not move** (`cli/parity.ts`). The
-  `partial-resume` row ran `list_dir` on `.` — the project root, which the rest of
-  a busy test suite is free to write to. One entry appearing between the probe's
-  two turns made the second model call's input differ by thirteen characters, so
-  the ledger correctly declined to replay it and the row read `replayed 1, made 1`
-  on whichever surface straddled the change. The capability was right and the
-  scenario was not reproducible: a claim about replaying UNCHANGED input cannot be
-  measured on input that changes under it. The probe now lists the harness's own
-  directory — nothing writes it, so both turns see the same bytes (and outside this
-  repository it degrades to the same refusal in both). Reproduced by creating and
-  removing a directory in the root across the pair, and pinned by the fixed target.
+- **The resume probe measures an input that does not move** (`parity/drivers.ts`).
+  The `partial-resume` row asks whether the second of two identical turns replays
+  the first one's steps, but it asked that question from the project the harness
+  happened to be run in — which, on CI, is a checkout that 600 other test files are
+  writing to. An entry appearing between the pair's turns made one listing row
+  differ (thirteen characters), and two characters of ambient context drifted
+  between two other turns; in both cases the ledger correctly declined to replay
+  and the row reported a divergence. The capability was right and the measurement
+  was not: a claim about replaying UNCHANGED input cannot be taken from input that
+  moves. The probe's pair now runs in an empty directory inside the harness's own
+  throwaway root, where the tree, the git state and the memory block are the same
+  in both turns. Reproduced by creating and removing a directory in the project
+  root across the pair. That surfaced a second, real defect: a forked child spawned
+  into a directory outside this project could not resolve `--import tsx` and died
+  before its first model call — the loader is now an absolute specifier, so a
+  child's cwd no longer decides whether it can start.
 
 ## v3.5.13 — the loop stops charging for checks it cannot finish
 

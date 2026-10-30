@@ -15,6 +15,8 @@
  */
 
 import { fork, type ChildProcess } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { resolveNuviraDataPath } from '../config/paths';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream, existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, readdirSync, unlinkSync } from 'node:fs';
@@ -272,10 +274,31 @@ function resolveChildEntry(): { entry: string; execArgv?: string[] } {
   const compiled = join(dir, 'child-agent-entry.js');
   if (existsSync(compiled)) return { entry: compiled };
   const source = join(dir, 'child-agent-entry.ts');
-  if (existsSync(source)) return { entry: source, execArgv: ['--import', 'tsx'] };
+  if (existsSync(source)) return { entry: source, execArgv: ['--import', tsxLoaderSpecifier()] };
   throw new Error(
     `subagent entry not found beside ${dir} (expected child-agent-entry.js or .ts) — the build is incomplete`,
   );
+}
+
+/**
+ * The tsx loader as an ABSOLUTE specifier, so the child does not need a working
+ * directory that can resolve the package.
+ *
+ * MEASURED (2026-10-30): `--import tsx` is resolved by the CHILD, from the child's
+ * cwd — which is `config.cwd` when the caller names one (a worktree, or the parity
+ * harness's own probe directory). In a directory outside this project that lookup
+ * fails and the child dies before its first model call, which reads as "the surface
+ * failed" rather than "the loader was not found". Resolved here instead, where the
+ * module that needs it actually lives.
+ */
+function tsxLoaderSpecifier(): string {
+  try {
+    return pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
+  } catch {
+    // Not installed beside this module: the bare name is the only thing to say,
+    // and the child reports the same load failure it reported before.
+    return 'tsx';
+  }
 }
 
 export class SubagentManager extends EventEmitter {

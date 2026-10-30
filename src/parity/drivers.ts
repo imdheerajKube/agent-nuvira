@@ -682,6 +682,7 @@ const CHECKPOINT_ENABLE_ENV = 'NUVIRA_CHECKPOINT';
 async function withTurnEnvelope(
   scenario: ParityScenario,
   surface: SurfaceId,
+  probeDir: string,
   body: () => Promise<TurnObservation>,
 ): Promise<TurnObservation> {
   const askedIsolation = scenario.isolation === true;
@@ -711,7 +712,27 @@ async function withTurnEnvelope(
    * which is also the path an operator uses to resume a named run.
    */
   const resumeId = `parity-${scenario.id}-${surface}`;
+  /**
+   * THE RESUME PAIR RUNS IN A DIRECTORY THAT CANNOT MOVE (see `probeDir`).
+   *
+   * Both turns of the probe are asked the same question, and the ledger's answer
+   * depends on their threads being byte-identical. The harness's own project is
+   * not that: the ambient snapshot, the git digest and the memory block are
+   * rebuilt per turn, so anything writing to the tree between the two turns makes
+   * the pair differ for a reason that is not the capability under test. A turn
+   * that works in an empty directory has nothing to rebuild: the tree block, the
+   * listing the scenario asks for, and the git state are the same in both turns.
+   *
+   * `process.chdir` is process-wide and every surface resolves its profile through
+   * ABSOLUTE paths (env, `config/paths.ts`), so this moves the WORKING DIRECTORY
+   * the tools and the ambient context see — which is exactly the variable that let
+   * the probe drift — without moving where anything is read from or written to.
+   * Restored with the other declarations, so a later scenario measures its own
+   * directory.
+   */
+  const previousCwd = process.cwd();
   try {
+    if (askedResume) process.chdir(probeDir);
     set(WORKTREE_ENABLE_ENV, askedIsolation ? '1' : undefined);
     // BOTH turns are asked to resume, and that is not a formality: the FIRST one is
     // what WRITES the record the second replays. A probe whose first turn ran
@@ -731,6 +752,7 @@ async function withTurnEnvelope(
     // scenario is read from the first one, which is the turn that reached a model.
     return { ...first, resume: second.resume };
   } finally {
+    if (askedResume) process.chdir(previousCwd);
     set(WORKTREE_ENABLE_ENV, previousIsolation);
     set(RESUME_ENABLE_ENV, previousResume);
     set(FAULT_ENV, previousFault);
@@ -747,6 +769,22 @@ interface ParityWorkspace {
   memoryDir: string;
   /** The hook script every declared hook command runs (WS4). */
   hookScript: string;
+  /**
+   * THE RESUMED PROBE'S WORKING DIRECTORY — empty, and writable by nothing.
+   *
+   * The resume row asks "does the second turn replay the first one's steps?",
+   * which is a question about input that DID NOT CHANGE. The project the harness
+   * happens to be run from is not such an input: its file tree, git state and
+   * memory blocks are rebuilt on every turn, and on a checkout that anything else
+   * is writing to (a test suite, a watcher, an editor) the second turn's thread
+   * differs from the first one's for reasons that have nothing to do with the
+   * ledger — measured, twice, on CI (a `list_dir` row appearing, then two
+   * characters of ambient context). So the probe's pair runs HERE instead: a
+   * directory inside the run's own throwaway root, where the only thing that can
+   * change between the two turns is the turn itself. Created once per run and
+   * left empty on purpose (see `withTurnEnvelope`).
+   */
+  probeDir: string;
   /** Point the config at `baseUrl`'s stub — rewritten whenever a stub starts. */
   useStub(baseUrl: string): void;
 }
@@ -783,11 +821,16 @@ function createWorkspace(): ParityWorkspace {
   // only come from the declaration, not from the script.
   const hookScript = join(root, 'tool-hook.mjs');
   writeFileSync(hookScript, TOOL_HOOK_SCRIPT);
+  // WS5 — the resumed probe's working directory (see `probeDir`): created here,
+  // never written again, so the probe's two turns see the same tree.
+  const probeDir = join(root, 'probe');
+  mkdirSync(probeDir, { recursive: true });
   const workspace: ParityWorkspace = {
     root,
     configDir,
     memoryDir,
     hookScript,
+    probeDir,
     useStub(baseUrl: string): void {
       // The config file is resolved, never spelled: `ConfigManager` reads it
       // through `config/paths.ts`, and writing a second name here would leave
@@ -1629,7 +1672,7 @@ export async function createParityHarness(): Promise<ParityHarness> {
       // is an assertion about a declaration the harness actually made. OUTSIDE
       // the hook wrapper because the resume probe runs the turn twice, and each
       // of those two turns is a whole turn of its own.
-      return withTurnEnvelope(scenario, surface, () =>
+      return withTurnEnvelope(scenario, surface, workspace.probeDir, () =>
         // WS4 — the operator's hooks are DECLARED around the turn (and undeclared
         // again after it), so "this surface ran the hook" is an assertion about a
         // declaration the harness actually made.
