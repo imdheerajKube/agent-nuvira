@@ -780,7 +780,12 @@ describe('WS0 parity — every surface, real provider, transport-depth stub', ()
     // same ask twice and the assertions are on what the SECOND turn avoided. The
     // tool is read-only on purpose: a write would change the working state the
     // next turn carries, which is a genuine change to the input, and the replay
-    // would rightly miss.
+    // would rightly miss. And it lists a FIXED directory the harness owns rather
+    // than the working directory, for the same reason at one remove: the project
+    // root is not stable across the pair while the rest of the suite runs
+    // (measured — see the scenario's own comment in `src/cli/parity.ts`), and an
+    // input that changes under the probe cannot measure a replay of unchanged
+    // input.
     const scenario = PARITY_SCENARIOS.find((s) => s.id === 'partial-resume');
     expect(scenario, 'the CLI no longer drives a partial-resume scenario').toBeDefined();
     expect(scenario!.resume, 'the scenario no longer declares a resume').toBe(true);

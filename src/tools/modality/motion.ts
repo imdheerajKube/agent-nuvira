@@ -891,8 +891,15 @@ const SHELL_SYNTAX = /[|&;<>()`$\\*?[\]{}~!\n]/;
  * a claim about HOW the process was started that was simply false there. `%` and
  * `^` take the backslash's place in the "needs a shell" column, because cmd.exe
  * expands one and escapes with the other.
+ *
+ * `~` IS ALSO GONE (measured 2026-10-30, windows-latest, second run): a runner's
+ * temp path is `C:\Users\RUNNER~1\AppData\Local\Temp\…`, so the 8.3 short name
+ * alone kept handing a plain `node <script>` to cmd.exe — the same false claim,
+ * one character further along. cmd.exe does not expand `~` (that is a POSIX shell
+ * quoting rule, which is why the POSIX set still has it); in a Windows command it
+ * is an ordinary path character.
  */
-const SHELL_SYNTAX_WINDOWS = /[|&;<>()`$*?[\]{}~!\n%^]/;
+const SHELL_SYNTAX_WINDOWS = /[|&;<>()`$*?[\]{}!\n%^]/;
 
 /**
  * Decide how to run a recorded command, preferring NOT to involve a shell at all.

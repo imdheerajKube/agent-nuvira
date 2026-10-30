@@ -70,10 +70,23 @@ one call), forbids re-sending content already on disk, and sends changes to
   filenames against POSIX-shaped patterns, so `unit-tests` read as missing for
   `tests\test_x.py` — the exact false negative v3.5.13 removed on POSIX;
   `tools/modality/motion.ts` treated a Windows path's backslashes as shell escapes,
-  so a plain renderer argv went through `cmd.exe` and reported `viaShell`;
+  so a plain renderer argv went through `cmd.exe` and reported `viaShell` (and then
+  treated `~` the same way, which a runner's `C:\Users\RUNNER~1\…` temp path put in
+  every recipe — cmd.exe does not expand `~`, only a POSIX shell does);
   `learning/workspace-checkpoint.ts` could not restore a link to a DIRECTORY, which
   Windows expresses as a typed reparse point. Each is now decided by the platform's
   own rules, and the suite pins the ones a host can host.
+- **The resume probe measures an input that does not move** (`cli/parity.ts`). The
+  `partial-resume` row ran `list_dir` on `.` — the project root, which the rest of
+  a busy test suite is free to write to. One entry appearing between the probe's
+  two turns made the second model call's input differ by thirteen characters, so
+  the ledger correctly declined to replay it and the row read `replayed 1, made 1`
+  on whichever surface straddled the change. The capability was right and the
+  scenario was not reproducible: a claim about replaying UNCHANGED input cannot be
+  measured on input that changes under it. The probe now lists the harness's own
+  directory — nothing writes it, so both turns see the same bytes (and outside this
+  repository it degrades to the same refusal in both). Reproduced by creating and
+  removing a directory in the root across the pair, and pinned by the fixed target.
 
 ## v3.5.13 — the loop stops charging for checks it cannot finish
 

@@ -91,14 +91,26 @@ describe('runShell', () => {
   // not the grandchild node process holding the pipes — `timedOut` never
   // fires, so this assertion cannot pass there (pre-existing Windows-only
   // limitation; the AbortSignal test below does run on Windows).
+  // The child's OWN lifetime (60s) is longer than this test's budget (15s), not
+  // shorter, and that is the fix for a measured flake: it used to sleep 5s, and on
+  // a saturated CI runner the call came back `timedOut: false` — a loaded runner
+  // can delay the 150ms deadline past a child that has already exited on its own,
+  // which is a race in the TEST (which of two nearly simultaneous events lands
+  // first), not in runShell: a process that cannot exit before the deadline cannot
+  // win that race, so `timedOut` is the only possible reading. The failure now
+  // names the result, so a future flake says why.
   it.skipIf(process.platform === 'win32')('kills the process when the timeout is exceeded', async () => {
-    const result = await runShell('node -e "setTimeout(() => {}, 5000)"', {
+    const result = await runShell('node -e "setTimeout(() => {}, 60000)"', {
       timeoutMs: 150,
     });
 
-    expect(result.timedOut).toBe(true);
+    expect(
+      result.timedOut,
+      `expected a timeout, got exit ${result.exitCode} after ${result.durationMs}ms ` +
+        `(success ${result.success}, stderr: ${result.stderr.slice(0, 200)})`,
+    ).toBe(true);
     expect(result.success).toBe(false);
-  }, 10_000);
+  }, 15_000);
 
   it('aborts the process via AbortSignal', async () => {
     const controller = new AbortController();

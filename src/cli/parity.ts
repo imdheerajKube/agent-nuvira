@@ -401,14 +401,30 @@ export const PARITY_SCENARIOS: readonly ParityScenario[] = [
   },
   {
     id: 'partial-resume',
-    message: 'list the working directory, then answer',
+    message: 'list the parity harness directory, then answer',
     // WS5 (#27) — a RESUMED run, on every surface: the harness runs this ask
     // twice, the second time against the record the first one wrote, and what is
     // compared is what the second run did NOT pay for. The tool is READ-ONLY on
     // purpose: a write would change the working state the next turn carries in its
     // context, which is a REAL change to the input — the replay would rightly miss,
     // and the row would measure that instead of the resume.
-    toolCall: { tool: 'list_dir', args: { path: '.' } },
+    //
+    // AND IT LISTS A FIXED DIRECTORY, NOT THE WORKING DIRECTORY (measured
+    // 2026-10-30, test-unix and test-windows). This scenario used `list_dir` on
+    // `.` — the project root, which every other test in the suite is free to
+    // create entries in while this pair runs. One entry appearing between the two
+    // turns made the SECOND model call's input differ by thirteen characters (one
+    // listing row), so the ledger correctly declined to replay it and the row
+    // reported `replayed 1, made 1` on whichever surface straddled the change. The
+    // resume was right; the SCENARIO was not reproducible, and a claim about
+    // replaying UNCHANGED input cannot be measured on input that changes under it.
+    //
+    // This directory is part of the harness itself: no turn writes it, so the pair
+    // sees the same listing, and the entry count is small enough to read. Outside
+    // this repository the same call degrades to the SAME refusal in both turns
+    // (the directory does not exist), which is equally deterministic — the probe
+    // needs an input that does not move, not one that succeeds.
+    toolCall: { tool: 'list_dir', args: { path: 'src/parity' } },
     answer: 'Listed.',
     resume: true,
   },

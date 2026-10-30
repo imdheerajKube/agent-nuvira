@@ -15,7 +15,7 @@
  * ffmpeg; the real binaries are exercised in `motion-render.integration.test.ts`.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -1225,6 +1225,25 @@ describe('running a stored renderer command safely', () => {
       expect(parsed.viaShell, command).toBe(true);
       // Passed whole: a shell command cannot be split into argv without changing it.
       expect(parsed.argv).toEqual([command]);
+    }
+  });
+
+  it('treats a Windows short path (8.3 name) as argv, not as shell syntax', () => {
+    // MEASURED 2026-10-30, windows-latest: the runner's temp path is
+    // `C:\Users\RUNNER~1\…`, so the `~` in a POSIX shell set handed a plain
+    // `node <script>` to cmd.exe and reported `viaShell: true` — a false claim
+    // about HOW the process was started. Pinned on every platform by asking the
+    // parser to look at the Windows set, so this rule is tested where the runner's
+    // own path shape is not available.
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try {
+      const command = 'node C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\renderer.js';
+      expect(parseRendererCommand(command)).toEqual({
+        argv: ['node', 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\renderer.js'],
+        viaShell: false,
+      });
+    } finally {
+      platform.mockRestore();
     }
   });
 
