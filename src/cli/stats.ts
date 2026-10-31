@@ -322,7 +322,12 @@ export class StatsCommand extends BaseCommand {
     }
 
     const startOfMonth = new Date(since);
-    if (until > now - 60_000 && startOfMonth.getDate() === 1) {
+    // NOT under --json. The caveat is for a human reading a report; a
+    // machine-readable one has to be nothing but JSON, and a line printed ahead
+    // of it makes every `--json` consumer parse `ℹ    Note:` instead of the
+    // report (MEASURED: `JSON.parse` threw on exactly that). The window it warns
+    // about is in the report itself as `since`/`until`, so nothing is lost.
+    if (!options.json && until > now - 60_000 && startOfMonth.getDate() === 1) {
       logger.info(
         '   Note: the window runs up to now, so if this billing period has not closed the invoice may still be partial.',
       );
