@@ -122,7 +122,7 @@ describe('ChatPage — a question that outlived the page that heard it', () => {
     expect(screen.getByText(/Which source should I use for the photos\?/)).toBeTruthy();
     expect(screen.getByText('Remote URLs')).toBeTruthy();
     // …and the false sentence is not on screen at the same time.
-    expect(screen.queryByText(/Still working on the server/)).toBeNull();
+    expect(screen.queryByText(/elapsed on this turn/)).toBeNull();
   });
 
   it('does not invent a question when the resumed turn is simply working', async () => {
@@ -136,7 +136,7 @@ describe('ChatPage — a question that outlived the page that heard it', () => {
     });
     render(<ChatPage />);
 
-    await waitFor(() => expect(screen.getByText(/Still working on the server/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/elapsed on this turn/)).toBeTruthy());
     expect(screen.queryByText(/Waiting for your answer/)).toBeNull();
     expect(screen.queryByPlaceholderText(/Or type your own answer/)).toBeNull();
   });
@@ -170,7 +170,7 @@ describe('ChatPage — a question that outlived the page that heard it', () => {
     // negative is anchored on the notice's own phrasing — a bare /0s elapsed/,
     // would also match "3**0s elapsed**", i.e. the very number being asserted.)
     await waitFor(() => expect(screen.getByText(/6m 3\ds elapsed/)).toBeTruthy());
-    expect(screen.queryByText(/server — 0s elapsed/)).toBeNull();
+    expect(screen.queryByText(/^0s elapsed on this turn$/)).toBeNull();
   });
 });
 
@@ -240,7 +240,7 @@ describe('ChatPage — a turn that outlives the 5-minute POST ceiling', () => {
 
     // The turn is live on the server: the page says so (and not that it failed),
     // with the elapsed wait on screen so a long wait is visibly alive.
-    await waitFor(() => expect(screen.getByText(/Still working on the server/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/elapsed on this turn/)).toBeTruthy());
     expect(screen.getByText(/elapsed/)).toBeTruthy();
     // No Retry while the turn runs: re-sending is refused by the busy server, and
     // offering it was the dead end this replaces.
@@ -250,7 +250,7 @@ describe('ChatPage — a turn that outlives the 5-minute POST ceiling', () => {
     // transcript with no reload and no second request from the user.
     turn.land();
     await waitFor(() => expect(screen.getByText(/Finished after the ceiling/)).toBeTruthy());
-    await waitFor(() => expect(screen.queryByText(/Still working on the server/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/elapsed on this turn/)).toBeNull());
     expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
   });
 
@@ -265,7 +265,7 @@ describe('ChatPage — a turn that outlives the 5-minute POST ceiling', () => {
     const box = await screen.findByPlaceholderText(/Message the agent/);
     fireEvent.change(box, { target: { value: 'a long job' } });
     fireEvent.submit(box.closest('form')!);
-    await waitFor(() => expect(screen.getByText(/Still working on the server/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/elapsed on this turn/)).toBeTruthy());
 
     // The server finishes and the stream carries the answer.
     stream.handlers?.onTurnDone?.({
@@ -277,7 +277,94 @@ describe('ChatPage — a turn that outlives the 5-minute POST ceiling', () => {
     // Nothing else could produce this bubble: the transcript read is null and the
     // poll is 60s away.
     await waitFor(() => expect(screen.getByText(/Streamed finish/)).toBeTruthy());
-    await waitFor(() => expect(screen.queryByText(/Still working on the server/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/elapsed on this turn/)).toBeNull());
+  });
+
+  /**
+   * Giving up on the POST must not give up on the TURN.
+   *
+   * MEASURED (2026-10-31, trace-1793432927549-s8xabt): a 15-minute turn kept
+   * producing steps and tool calls (83 steps, 184 events) while the page closed
+   * its own subscription at the 5-minute ceiling, threw away the half-written
+   * answer, and then polled the session every 3s for one boolean. For the
+   * remaining ten minutes the screen showed no work at all — the user's report
+   * was literally true, and the notice that explained it was all that was left.
+   * So the feed stays attached, what lands during the ceiling is rendered, and
+   * the stream's own `done` finishes the turn.
+   */
+  it('keeps the live feed attached after the ceiling and shows the work that lands', async () => {
+    mockAuthed('admin');
+    const handlers: { current?: Parameters<typeof dashboardAPI.subscribeChat>[1] } = {};
+    const unsub = vi.fn();
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((_id, h) => {
+      handlers.current = h;
+      return unsub;
+    });
+    mockChatSend(CEILING_RESULT);
+    // The poll must not be what keeps this page alive: it is parked far away.
+    vi.spyOn(dashboardAPI, 'getChatSession').mockResolvedValue(null);
+    render(<ChatPage ceilingRecovery={{ pollMs: 60_000 }} />);
+    const box = await screen.findByPlaceholderText(/Message the agent/);
+    fireEvent.change(box, { target: { value: 'a long job' } });
+    fireEvent.submit(box.closest('form')!);
+
+    await waitFor(() => expect(screen.getByText(/elapsed on this turn/)).toBeTruthy());
+    expect(unsub).not.toHaveBeenCalled();
+
+    // Work that lands AFTER the ceiling still reaches the page: the step, the
+    // tool that is running now, and the answer as it is written.
+    handlers.current?.onProgress?.('→ calling tool: read_file');
+    handlers.current?.onTool?.({
+      id: 'call_7',
+      tool: 'run_terminal',
+      phase: 'started',
+      args: '{command: npm test}',
+    });
+    await waitFor(() => expect(screen.getAllByText(/run_terminal/).length).toBeGreaterThan(0));
+    expect(screen.getAllByText(/npm test/).length).toBeGreaterThan(0);
+    handlers.current?.onToken?.('Half-written answer');
+    await waitFor(() => expect(screen.getByText(/Half-written answer/)).toBeTruthy());
+
+    // …and the turn ends through the stream, not through a reload.
+    handlers.current?.onTurnDone?.({
+      content: 'Done after the ceiling.',
+      followups: [],
+      generationFailed: false,
+    });
+    await waitFor(() => expect(screen.getByText(/Done after the ceiling/)).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText(/elapsed on this turn/)).toBeNull());
+    // The turn is over, so the feed is closed — once, at the end.
+    expect(unsub).toHaveBeenCalled();
+  });
+
+  /**
+   * A reload mid-turn inherits a RUNNING turn, not just a busy composer.
+   *
+   * Without a subscription the page could only report that the server was busy:
+   * no steps, no tool cards, no answer text — the same dead screen the ceiling
+   * produced, reached a different way. The stream is per SESSION, so attaching
+   * to it restores the work from that moment on.
+   */
+  it('reattaches the live feed to a running turn it inherited', async () => {
+    mockAuthed('admin');
+    const subscribed: string[] = [];
+    vi.spyOn(dashboardAPI, 'subscribeChat').mockImplementation((id) => {
+      subscribed.push(id);
+      return () => {};
+    });
+    const sessions = vi.spyOn(dashboardAPI, 'getChatSession').mockResolvedValue({
+      title: 'long job',
+      updatedAt: 1,
+      busy: true,
+      busySince: Date.now() - 60_000,
+      turns: [{ role: 'user' as const, content: 'a long job' }],
+    });
+    render(<ChatPage />);
+
+    await waitFor(() => expect(subscribed.length).toBe(1));
+    expect(subscribed[0]).toBe(sessions.mock.calls[0][0]);
+    // The restored turn reports its age from the SERVER's start, live.
+    await waitFor(() => expect(screen.getByText(/1m \d\ds elapsed on this turn/)).toBeTruthy());
   });
 
   it('offers a real Retry when the recovered turn ended without an answer', async () => {
@@ -288,13 +375,13 @@ describe('ChatPage — a turn that outlives the 5-minute POST ceiling', () => {
     const box = await screen.findByPlaceholderText(/Message the agent/);
     fireEvent.change(box, { target: { value: 'a long job' } });
     fireEvent.submit(box.closest('form')!);
-    await waitFor(() => expect(screen.getByText(/Still working on the server/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/elapsed on this turn/)).toBeTruthy());
 
     // The turn ENDED with no answer at all — that IS a failed turn, so the Retry
     // affordance is correct (and the server is no longer busy).
     turn.land();
     await waitFor(() => expect(screen.getByRole('button', { name: /↻ Retry/ })).toBeTruthy());
-    expect(screen.queryByText(/Still working on the server/)).toBeNull();
+    expect(screen.queryByText(/elapsed on this turn/)).toBeNull();
   });
 });
 
@@ -705,8 +792,11 @@ describe('ChatPage', () => {
 
     // read_file starts (running card) and completes (ok + duration).
     toolCb!({ id: 'call_1', tool: 'read_file', phase: 'started', args: "{path: 'src/foo.ts'}" });
-    await waitFor(() => expect(screen.getByText('read_file')).toBeTruthy());
-    expect(screen.getByText("{path: 'src/foo.ts'}")).toBeTruthy();
+    // Twice on purpose while it runs: the card for the call, and the live status
+    // line naming what is running NOW (with the tool's own elapsed). Both are
+    // readings of the same server event, so both must be there.
+    await waitFor(() => expect(screen.getAllByText('read_file').length).toBeGreaterThan(0));
+    expect(screen.getAllByText("{path: 'src/foo.ts'}").length).toBeGreaterThan(0);
     toolCb!({ id: 'call_1', tool: 'read_file', phase: 'called', ok: true, result: '1 | export const x = 1;', durationMs: 12 });
     await waitFor(() => expect(screen.getByText('12ms')).toBeTruthy());
 

@@ -44,8 +44,13 @@ const CEILING_RECOVERY_POLL_MS = 3000;
  * stop condition besides the turn finishing.
  */
 const CEILING_RECOVERY_MAX_MISSES = 10;
-/** How often the "still running" notice refreshes its elapsed time. */
-const STILL_RUNNING_TICK_MS = 5000;
+/**
+ * How often the live run panel refreshes its clocks (turn elapsed + the tool
+ * running now). One second, because these are seconds on screen: a five-second
+ * tick made "42s" jump straight to "47s", which reads like a stalled timer
+ * rather than a live one.
+ */
+const LIVE_TICK_MS = 1000;
 const PASTE_ATTACH_THRESHOLD = 2_000; // chars — larger pastes are offered as a chip
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -264,6 +269,14 @@ interface ToolStep {
   result?: string;
   error?: string;
   durationMs?: number;
+  /**
+   * Wall clock when this page first saw the call START, so a tool that has been
+   * running for two minutes can say so while it runs (the server's
+   * `durationMs` only exists once the call has returned). Client clock on
+   * purpose: "how long have I been looking at this spinner" is the user's
+   * question, and it must be answerable without the server's cooperation.
+   */
+  startedAt?: number;
 }
 
 /** Small icon per tool family for the card header. */
@@ -744,6 +757,9 @@ function ToolCards({ tools, live }: { tools: ToolStep[]; live?: boolean }) {
                 {running ? '⏳' : failed ? '✗' : '✓'}
               </span>
               {t.durationMs !== undefined && !running ? <span className="chat-tool-dur">{t.durationMs}ms</span> : null}
+              {running && typeof t.startedAt === 'number' ? (
+                <span className="chat-tool-dur chat-tool-dur-live">{formatElapsed(Date.now() - t.startedAt)}</span>
+              ) : null}
             </div>
             {t.error || t.result ? (
               <details className="chat-tool-detail">
@@ -754,6 +770,105 @@ function ToolCards({ tools, live }: { tools: ToolStep[]; live?: boolean }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * The work a LONG turn is doing, rendered inside the bubble that is doing it.
+ *
+ * WHY. A turn that ran past the dashboard's own 5-minute POST ceiling used to be
+ * described by a paragraph BELOW the thread — "⏳ Still working on the server —
+ * <n> elapsed … this is a long-running turn, not a failure" — i.e. a sentence
+ * about the page, printed where the work should be, while the server went on
+ * emitting steps, tool cards and answer tokens every few seconds. MEASURED
+ * (2026-10-31, trace-1793432927549-s8xabt): 83 steps / 184 events across a turn
+ * the page showed nothing of after the ceiling, because it had closed its own
+ * live feed. The user's complaint was not the wording of that sentence, it was
+ * that the sentence was all there was.
+ *
+ * So the wait explains itself with its own content: how long the turn has run,
+ * the tool running NOW and for how long, the plan's progress, how much has
+ * already been written, and findings recorded so far. Every line is derived from
+ * events the SERVER sent — nothing here is the client's guess about progress.
+ */
+function LiveTurnStatus({
+  elapsedMs,
+  steps,
+  tools,
+  plan,
+  findings,
+}: {
+  elapsedMs: number;
+  steps: string[];
+  tools: ToolStep[];
+  plan: PlanView | null;
+  findings: number;
+}) {
+  // The call in flight, if any: the newest card that has started and not landed.
+  const running = [...tools].reverse().find((t) => t.phase === 'started');
+  // Writes are the only progress a user can point at afterwards, so they get
+  // their own line — with the server's own args preview, never a parsed guess.
+  const writes = tools.filter(
+    (t) => (t.tool === 'write_file' || t.tool === 'edit_file' || t.tool === 'apply_patch') && t.ok === true,
+  );
+  const planTotal = plan?.steps.length ?? 0;
+  const planDone = plan?.steps.filter((s) => s.status === 'done').length ?? 0;
+  const lastStep = steps.length > 0 ? steps[steps.length - 1].trim() : '';
+  return (
+    <div className="chat-live-status" aria-live="polite">
+      <div className="chat-live-head">
+        <span className="chat-live-dot" aria-hidden="true">🔄</span>
+        <span className="chat-live-title">Working</span>
+        <span className="chat-live-elapsed">{formatElapsed(elapsedMs)} elapsed on this turn</span>
+        {steps.length > 0 ? (
+          <span className="chat-live-count">{steps.length} step{steps.length === 1 ? '' : 's'}</span>
+        ) : null}
+        <span className="chat-dots" />
+      </div>
+      {running ? (
+        <div className="chat-live-now">
+          <span className="chat-live-now-label">now</span>
+          <span className="chat-tool-icon" aria-hidden="true">{toolIcon(running.tool)}</span>
+          <span className="chat-live-now-tool">{running.tool}</span>
+          {running.args ? <code className="chat-live-args">{running.args}</code> : null}
+          {typeof running.startedAt === 'number' ? (
+            <span className="chat-live-now-elapsed">{formatElapsed(Date.now() - running.startedAt)}</span>
+          ) : null}
+        </div>
+      ) : null}
+      {lastStep ? (
+        <div className="chat-step-line chat-live-last">{lastStep}</div>
+      ) : running ? null : (
+        <div className="chat-step-line chat-live-last">waiting on the model — no tool has run yet</div>
+      )}
+      {planTotal > 0 ? (
+        <div className="chat-live-plan">
+          🗂️ plan {planDone}/{planTotal} steps · {Math.round((planDone / planTotal) * 100)}%
+        </div>
+      ) : null}
+      {writes.length > 0 ? (
+        <div className="chat-live-files">
+          ✏️ {writes.length} file {writes.length === 1 ? 'write' : 'writes'}:{' '}
+          <code>{writes.slice(-3).map((w) => w.args ?? w.tool).join(', ')}</code>
+        </div>
+      ) : null}
+      {findings > 0 ? (
+        <div className="chat-live-findings">
+          🔎 {findings} finding{findings === 1 ? '' : 's'} recorded so far
+        </div>
+      ) : null}
+      {steps.length > 1 ? (
+        // The newest step is already on screen above, so the log carries the
+        // EARLIER ones: the same line twice reads as two events, and a wall of
+        // every line the turn ever printed is what made the run unreadable.
+        <details className="chat-live-log">
+          <summary>{steps.length - 1} earlier step{steps.length - 1 === 1 ? '' : 's'}</summary>
+          <div className="chat-working-lines">
+            {steps.slice(0, -1).map((l, i) => <div key={i} className="chat-step-line">{l.trim()}</div>)}
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -1241,7 +1356,6 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
    * running on the server. Shown so the composer being busy is explained, and
    * so the user never mistakes a live turn for a failed one.
    */
-  const [stillRunning, setStillRunning] = useState(false);
   /** True while a ceiling recovery owns the thread (gate for the stream's `done`). */
   const recoveryRef = useRef(false);
   /** One commit per turn, whichever path delivers the answer first. */
@@ -1320,6 +1434,19 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const [browseFilter, setBrowseFilter] = useState('');
   const browseRefreshRef = useRef<NodeJS.Timeout | null>(null);
   const subRef = useRef<(() => void) | null>(null);
+  /**
+   * Whether this page's own `/api/chat` POST is still waiting for the turn.
+   *
+   * The POST is the turn's FAST path to the answer (it carries the worktree,
+   * resume, findings and turn report); the live stream is the path that never
+   * expires. Which one owns the finish depends on this: while the POST is in
+   * flight it is authoritative, and once it has given up the stream is. Without
+   * this flag the only way to know was `recoveryRef`, which is set AFTER the
+   * ceiling — so a stream `done` that arrived first was dropped.
+   */
+  const postPendingRef = useRef(false);
+  /** `subscribeLive`, addressable from the resume-on-mount effect (declared earlier). */
+  const subscribeLiveRef = useRef<((sessionId: string) => void) | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // P4b — ref to break the circular dependency between resumeSession and attachProject.
   const attachProjectRef = useRef<((path: string) => Promise<void>) | null>(null);
@@ -1595,7 +1722,12 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       // and the wait's age comes from the SERVER's turn start, not from this
       // page's arrival (a reload 10 minutes into a turn must not read "0s").
       if (rec.busy === true) waitStartedAtRef.current = rec.busySince ?? Date.now();
-      setStillRunning(rec.busy === true);
+      // A turn restored from the snapshot shows its WORK, not just its age:
+      // reattach the live feed while it runs. Without this a reload mid-turn
+      // came back to a busy composer with no steps, no tool cards and no answer
+      // text — the same dead screen the 5-minute ceiling produced, one reload
+      // later. The stream is per SESSION, so what lands from now on is real.
+      if (rec.busy === true && !subRef.current) subscribeLiveRef.current?.(id);
       // A question the RESUME missed is restored from the snapshot.
       //
       // The `question` event fires once, when the turn asks, and a page that
@@ -1622,24 +1754,27 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   }, [canChat]);
 
   /**
-   * Keep a long wait VISIBLY alive.
+   * Keep the run VISIBLY alive — and make its age honest.
    *
    * A turn may legitimately run for hours, and a still screen is indistinguishable
-   * from a broken one — so while the server is working, the notice counts up. That
-   * is this surface's equivalent of the heartbeat a long CLI command prints: proof
-   * the wait is progressing rather than a page that gave up.
+   * from a broken one, so the live status counts while the turn is BUSY (not
+   * only once this client has given up on its POST). Counting from `busy` is the
+   * fix for two separate lies: the number used to start at the 5-minute ceiling,
+   * and it used to be the only thing on screen after it. It now feeds the status
+   * line inside the working bubble, which also re-renders the per-tool elapsed
+   * from this same tick.
    */
   useEffect(() => {
-    if (!stillRunning) {
+    if (!busy) {
       setWaitElapsedMs(0);
       waitStartedAtRef.current = null;
       return;
     }
     const since = () => Date.now() - (waitStartedAtRef.current ?? Date.now());
     setWaitElapsedMs(since());
-    const timer = setInterval(() => setWaitElapsedMs(since()), STILL_RUNNING_TICK_MS);
+    const timer = setInterval(() => setWaitElapsedMs(since()), LIVE_TICK_MS);
     return () => clearInterval(timer);
-  }, [stillRunning]);
+  }, [busy]);
 
   // P4 — load the session sidebar once authenticated (admin/operator only).
   useEffect(() => {
@@ -1813,6 +1948,11 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       if (recoveredRef.current) return;
       recoveredRef.current = true;
       recoveryRef.current = false; // this turn is collected; the loop can end
+      postPendingRef.current = false; // nothing is waiting on a POST any more
+      // The turn is over and this is its answer: the feed has nothing left to
+      // carry, so close it here (the next turn opens its own).
+      subRef.current?.();
+      subRef.current = null;
       const content = answer.content || '(the agent produced no text — try rephrasing)';
       setMessages((m) => [
         ...m,
@@ -1838,7 +1978,6 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       // both wrong now.
       setError('');
       setRetryAsk(null);
-      setStillRunning(false);
       setBusy(false);
       // P8 — the turn resolved: bring the history rail back.
       setRailOpen(true);
@@ -1871,7 +2010,6 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
         if (!rec) {
           if (++missed >= maxMisses) {
             recoveryRef.current = false;
-            setStillRunning(false);
             setBusy(false);
             setError(
               'Lost contact with the server while this turn was running. The turn itself was not cancelled — its answer is in this conversation (reopen it) or in Traces.',
@@ -1898,7 +2036,6 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
           // The turn ended WITHOUT an answer (a refusal, a server-side failure):
           // that is a real failed turn, so it gets the real Retry.
           recoveryRef.current = false;
-          setStillRunning(false);
           setBusy(false);
           setRetryAsk(message);
         }
@@ -1907,6 +2044,117 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     },
     [commitRecoveredAnswer, ceilingRecovery?.pollMs, ceilingRecovery?.maxMisses],
   );
+
+  /**
+   * Attach the LIVE feed for a session — the turn's WORK as it happens: step
+   * lines, tool cards, plan revisions, diffs, findings, answer tokens, and the
+   * terminal `done` that carries the answer.
+   *
+   * Kept as one function because it is attached from TWO places: a turn this page
+   * starts (`send`), and a turn this page INHERITS (a reload that found the
+   * session busy — see the resume-on-mount effect). The events are per session,
+   * so both callers get the same stream with the same meaning.
+   */
+  const subscribeLive = useCallback((sessionId: string) => {
+    subRef.current?.();
+    subRef.current = dashboardAPI.subscribeChat(sessionId, {
+        // P4 — answer tokens typewrite into the live bubble; the POST response
+        // replaces them with the authoritative final content.
+        onToken: (text) => {
+          streamingRef.current += text;
+          setStreamingText(streamingRef.current);
+        },
+        onProgress: (line) => {
+          liveStepsRef.current = [...liveStepsRef.current, line];
+          setLiveSteps(liveStepsRef.current);
+        },
+        // P0.1 — the agent asked a clarifying question; show the choice card.
+        onQuestion: (q) => {
+          setPendingQuestion(q);
+          setQuestionSel(new Set());
+        },
+        // P0.6 — live tool card: `started` creates/updates the card, `called`
+        // completes it with ok/error + duration. Keyed by the stable call id.
+        onTool: (t) => {
+          const next = [...liveToolsRef.current];
+          const idx = next.findIndex((c) => c.id === t.id);
+          // `startedAt` is the CLIENT's clock, stamped when the call was first
+          // seen running: the server only reports `durationMs` once the call has
+          // returned, and "this tool has been running for 2m" is exactly what a
+          // long turn needs to say while it is still true.
+          const startedAt = t.phase === 'started'
+            ? (idx >= 0 ? next[idx].startedAt ?? Date.now() : Date.now())
+            : idx >= 0 ? next[idx].startedAt : undefined;
+          const card: ToolStep = { id: t.id, tool: t.tool, phase: t.phase, args: t.args, ok: t.ok, result: t.result, error: t.error, durationMs: t.durationMs, startedAt };
+          if (idx >= 0) next[idx] = card;
+          else next.push(card);
+          liveToolsRef.current = next;
+          setLiveTools(next);
+        },
+        // P0.7 — live checklist: each plan_todo mutation replaces the card
+        // (revision-ordered, in place). Snapshot into the final message.
+        onPlan: (p) => {
+          const view: PlanView = { goal: p.goal, steps: p.steps.map(toPlanStep), revision: p.revision };
+          livePlanRef.current = view;
+          setLivePlan(view);
+        },
+        // P3b — the git tool emitted a diff; render it as a card (latest wins
+        // — a turn may diff several times, each replaces the card).
+        onDiff: (d) => {
+          const view: DiffView = { files: d.files, summary: d.summary };
+          liveDiffRef.current = view;
+          setLiveDiff(view);
+        },
+        // P6a — skill_manage create/patch emitted a draft; render the /learn
+        // preview card (accept saves, edit re-drafts, reject discards).
+        onSkillDraft: (d) => {
+          const view: SkillDraftView = { name: d.name, description: d.description, markdown: d.markdown, updatedAt: d.updatedAt, status: 'pending' };
+          liveDraftRef.current = view;
+          setLiveDraft(view);
+        },
+        // WS1 (#23) — a finding was recorded this turn. Append its card (the
+        // gate's verdict plus the evidence behind it); a turn may legitimately
+        // record several, so they accumulate in call order.
+        onFinding: (finding) => {
+          liveFindingsRef.current = [...liveFindingsRef.current, finding];
+          setLiveFindings(liveFindingsRef.current);
+        },
+        // PA4 — a skill loaded but needs env vars; show notification card.
+        onSecretRequest: (d) => {
+          setSecretRequests((prev) => {
+            const idx = prev.findIndex((r) => r.skillName === d.skillName);
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = d;
+              return next;
+            }
+            return [...prev, d];
+          });
+        },
+        // Execution result from skill execution engine.
+        onExecutionResult: (d) => {
+          setExecutionResults((prev) => [...prev, d]);
+        },
+        // The turn FINISHED and the stream carried the answer.
+        //
+        // The POST is authoritative WHILE IT IS STILL IN FLIGHT (it carries the
+        // worktree, resume counts, findings and turn report), so a `done` that
+        // arrives during it is dropped — the POST is milliseconds behind and
+        // appending both would duplicate the bubble. Once the POST has given up
+        // (the 5-minute ceiling, a closed tab, a flaky network) the stream is the
+        // ONLY path home, so it commits. Gating on `recoveryRef` alone was the
+        // bug: that flag is set only at the ceiling, so a `done` that landed
+        // while this page had already stopped waiting was thrown away.
+        onTurnDone: (a) => {
+          if (postPendingRef.current) return;
+          commitRecoveredAnswer(a);
+        },
+    });
+  }, [commitRecoveredAnswer]);
+  // The resume-on-mount effect is declared ABOVE this callback (it runs on the
+  // first render), so the callback is reachable through a ref rather than by
+  // reordering the hooks.
+  subscribeLiveRef.current = subscribeLive;
 
   const send = useCallback(
     async (text: string, withAttachments?: AttachmentChip[]) => {
@@ -1971,90 +2219,12 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       // this turn's.
       recoveryRef.current = false;
       recoveredRef.current = false;
-      setStillRunning(false);
       // Subscribe to LIVE progress BEFORE the turn starts so no step is missed
-      // (EventSource auto-reconnects; the final answer arrives via the POST).
-      subRef.current?.();
-      subRef.current = dashboardAPI.subscribeChat(sessionId, {
-        // P4 — answer tokens typewrite into the live bubble; the POST response
-        // replaces them with the authoritative final content.
-        onToken: (text) => {
-          streamingRef.current += text;
-          setStreamingText(streamingRef.current);
-        },
-        onProgress: (line) => {
-          liveStepsRef.current = [...liveStepsRef.current, line];
-          setLiveSteps(liveStepsRef.current);
-        },
-        // P0.1 — the agent asked a clarifying question; show the choice card.
-        onQuestion: (q) => {
-          setPendingQuestion(q);
-          setQuestionSel(new Set());
-        },
-        // P0.6 — live tool card: `started` creates/updates the card, `called`
-        // completes it with ok/error + duration. Keyed by the stable call id.
-        onTool: (t) => {
-          const next = [...liveToolsRef.current];
-          const idx = next.findIndex((c) => c.id === t.id);
-          const card: ToolStep = { id: t.id, tool: t.tool, phase: t.phase, args: t.args, ok: t.ok, result: t.result, error: t.error, durationMs: t.durationMs };
-          if (idx >= 0) next[idx] = card;
-          else next.push(card);
-          liveToolsRef.current = next;
-          setLiveTools(next);
-        },
-        // P0.7 — live checklist: each plan_todo mutation replaces the card
-        // (revision-ordered, in place). Snapshot into the final message.
-        onPlan: (p) => {
-          const view: PlanView = { goal: p.goal, steps: p.steps.map(toPlanStep), revision: p.revision };
-          livePlanRef.current = view;
-          setLivePlan(view);
-        },
-        // P3b — the git tool emitted a diff; render it as a card (latest wins
-        // — a turn may diff several times, each replaces the card).
-        onDiff: (d) => {
-          const view: DiffView = { files: d.files, summary: d.summary };
-          liveDiffRef.current = view;
-          setLiveDiff(view);
-        },
-        // P6a — skill_manage create/patch emitted a draft; render the /learn
-        // preview card (accept saves, edit re-drafts, reject discards).
-        onSkillDraft: (d) => {
-          const view: SkillDraftView = { name: d.name, description: d.description, markdown: d.markdown, updatedAt: d.updatedAt, status: 'pending' };
-          liveDraftRef.current = view;
-          setLiveDraft(view);
-        },
-        // WS1 (#23) — a finding was recorded this turn. Append its card (the
-        // gate's verdict plus the evidence behind it); a turn may legitimately
-        // record several, so they accumulate in call order.
-        onFinding: (finding) => {
-          liveFindingsRef.current = [...liveFindingsRef.current, finding];
-          setLiveFindings(liveFindingsRef.current);
-        },
-        // PA4 — a skill loaded but needs env vars; show notification card.
-        onSecretRequest: (d) => {
-          setSecretRequests((prev) => {
-            const idx = prev.findIndex((r) => r.skillName === d.skillName);
-            if (idx >= 0) {
-              const next = [...prev];
-              next[idx] = d;
-              return next;
-            }
-            return [...prev, d];
-          });
-        },
-        // Execution result from skill execution engine.
-        onExecutionResult: (d) => {
-          setExecutionResults((prev) => [...prev, d]);
-        },
-        // The turn FINISHED and the stream carried the answer. Acted on ONLY
-        // when this client already gave up waiting on the POST: otherwise the
-        // POST response is authoritative, and appending here as well would
-        // duplicate the bubble.
-        onTurnDone: (a) => {
-          if (!recoveryRef.current) return;
-          commitRecoveredAnswer(a);
-        },
-      });
+      // (EventSource auto-reconnects; the POST is the FAST path to the answer,
+      // not the only one — see `onTurnDone` in `subscribeLive`).
+      subscribeLive(sessionId);
+      // Until this POST comes back, IT owns the turn's finish (see `onTurnDone`).
+      postPendingRef.current = true;
       const r = await dashboardAPI.chatSend(
         sessionId,
         clean || `(see ${chipList.length} attachment${chipList.length === 1 ? '' : 's'})`,
@@ -2091,13 +2261,27 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
         },
         controller.signal,
       );
+      postPendingRef.current = false;
       abortRef.current = null;
-      subRef.current?.();
-      subRef.current = null;
-      // P4 — the turn resolved: the streamed typewriter is replaced by the
-      // authoritative content (which the final message below renders).
-      streamingRef.current = '';
-      setStreamingText('');
+      // A POST that gave up at the ceiling is NOT the end of this turn's feed.
+      //
+      // MEASURED (2026-10-31, trace-1793432927549-s8xabt): a 15-minute turn kept
+      // producing steps and tool calls (83 steps, 184 events) while the page
+      // closed its own subscription at 5:00, threw away the half-written answer,
+      // and then polled the session every 3s for a single boolean. The user's
+      // screen went dead for the remaining ten minutes — "it stopped showing the
+      // work" was literally true, and the paragraph that explained it was the
+      // only thing left. So: keep the feed, keep the streamed text, and let the
+      // `done` event (or the transcript poll) finish the turn.
+      const gaveUpAtCeiling = r.ok === false && r.turnStillRunning === true;
+      if (!gaveUpAtCeiling) {
+        subRef.current?.();
+        subRef.current = null;
+        // P4 — the turn resolved: the streamed typewriter is replaced by the
+        // authoritative content (which the final message below renders).
+        streamingRef.current = '';
+        setStreamingText('');
+      }
       if (r.ok) {
         setMeta(r.generationFailed ? null : `${r.provider ?? 'provider'}${r.model ? ` / ${r.model}` : ' (auto-routed)'}`);
         setRoutingNotice(r.routingNotice ?? null);
@@ -2179,7 +2363,6 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
           // answer is collected from the stream or the transcript.
           setError('');
           setRetryAsk(null);
-          setStillRunning(true);
           recoveryRef.current = true;
           recoveredRef.current = false;
           void recoverFromCeiling(sessionId, clean);
@@ -2867,15 +3050,23 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
                     <Markdown text={streamingText} />
                   </div>
                 ) : null}
-                <div className="chat-working">
-                  {liveSteps.length > 0 ? (
-                    <span className="chat-working-lines">
-                      {liveSteps.map((l, i) => <div key={i} className="chat-step-line">{l.trim()}</div>)}
-                    </span>
-                  ) : (
-                    <>💭 thinking… <span className="chat-dots" /></>
-                  )}
-                </div>
+                {/*
+                  * The turn's WORK, inside the turn's bubble — not a paragraph
+                  * below the thread explaining that the turn is still alive.
+                  * Rendered while the page is busy at all, so a turn this client
+                  * gave up waiting for (or attached to from a reload) looks the
+                  * same as any other running turn: current tool and its age, the
+                  * plan's progress, what has been written, findings so far.
+                  */}
+                {pendingQuestion ? null : (
+                  <LiveTurnStatus
+                    elapsedMs={waitElapsedMs}
+                    steps={liveSteps}
+                    tools={liveTools}
+                    plan={livePlan}
+                    findings={liveFindings.length}
+                  />
+                )}
               </div>
             ) : null}
           </div>
@@ -2887,24 +3078,17 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
             *
             * MEASURED (2026-10-14, traces `…-wpm352` / `…-n1v1ue`): the agent asked a
             * clarifying question, the turn sat in `ask_user` waiting for the reply —
-            * 5m02s in the first, cancelled at the end — and this notice told the user
-            * "this is a long-running turn … the answer will appear here by itself",
-            * i.e. to keep waiting for something that was waiting for THEM. The same
-            * sentence appeared for a turn that had already finished in 12s. The two
-            * states need two sentences: one that says the server is busy, and one
-            * that says nothing is happening until a choice is made.
+            * 5m02s in the first, cancelled at the end — and the notice told the user
+            * to keep waiting for something that was waiting for THEM. So a held turn
+            * says so plainly, and it is the ONLY state that gets a notice below the
+            * thread: "this is taking a while" is not news, and it belongs in the
+            * bubble as the work itself (see LiveTurnStatus), not here as an apology.
             */}
-          {stillRunning && pendingQuestion ? (
+          {pendingQuestion ? (
             <div className="admin-row-msg chat-routing-notice">
               ❓ Waiting for <strong>your</strong> answer — choose one of the options above and the turn continues
               where it stopped. Nothing is stuck: the server is holding this turn open for you, and the agent has
               not been told anything yet (its own words: it asked instead of guessing).
-            </div>
-          ) : stillRunning ? (
-            <div className="admin-row-msg chat-routing-notice">
-              ⏳ Still working on the server — {formatElapsed(waitElapsedMs)} elapsed on this turn, counted from when it
-              started (not from when this page stopped waiting for the reply). This is a long-running turn, not a failure:
-              the answer will appear here by itself when it lands, and you can close this page and come back.
             </div>
           ) : null}
 
