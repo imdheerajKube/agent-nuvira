@@ -177,6 +177,11 @@ book/
 # .vscode/extensions.json into the version bump commit.
 .vscode/
 
+# Raw dashboard captures (the source for website/assets/screenshots/). They are
+# full browser windows with the operator's own bookmarks bar in them, and ~78MB
+# with the CLI recording — a release's `git add -A` must not sweep them in.
+Screenshot-agent-nuvira/
+
 # macOS
 .DS_Store
 src/file.ts
