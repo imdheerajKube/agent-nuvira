@@ -463,9 +463,15 @@ describe('P9 — a HANG is identified from evidence, and acted on', () => {
     // exit code arrives, so it is the only place the verdict can be right — and
     // a failing suite collected through `poll` must not be counted as a check
     // that passed.
-    const out = await runTerminal.run({ command: 'sleep 1; exit 7', timeout_ms: 500, confirm: true }, ctx());
+    //
+    // The command lives 3s against a 500ms budget — six times the margin it needs
+    // — because the hand-off is a `setTimeout`: on a starved runner that timer can
+    // fire hundreds of milliseconds late, and a fixture that died at 1s was
+    // sometimes collected as a FINISHED run instead of a monitored one (it failed
+    // that way on the Bun job).
+    const out = await runTerminal.run({ command: 'sleep 3; exit 7', timeout_ms: 500, confirm: true }, ctx());
     const id = monitoredId(out);
-    await sleep(1_600);
+    await sleep(3_600);
     const polled = await runTerminal.run({ action: 'poll', process_id: id, command: 'x' }, ctx());
     expect(polled).toContain('Error:');
     expect(polled).toContain('exit 7');
@@ -575,9 +581,11 @@ describe('P10 — a monitored run outlives the process that started it', () => {
   }, 40_000);
 
   it('reports the REAL exit code of a run that finished before the restart', async () => {
-    const out = await runTerminal.run({ command: 'sleep 1; exit 5', timeout_ms: 400, confirm: true }, ctx());
+    // 3s against a 400ms budget, so the hand-off timer cannot lose the race with
+    // the command's own exit on a loaded runner (see the test above).
+    const out = await runTerminal.run({ command: 'sleep 3; exit 5', timeout_ms: 400, confirm: true }, ctx());
     const id = monitoredId(out);
-    await sleep(1_400); // it finishes, and this process watches it finish
+    await sleep(3_400); // it finishes, and this process watches it finish
     resetDetachedRuns(); // …then the restart
 
     // The verdict is not lost with the process: "finished (exit 5)", still a

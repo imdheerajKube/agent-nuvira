@@ -396,10 +396,13 @@ describe('sampleProcessTree — the TREE, not just the shell we hold the handle 
       const idleCpu = idleSample.cpuMs ?? 0;
       const busyCpu = busySample.cpuMs ?? 0;
       expect(busyCpu).toBeGreaterThan(idleCpu);
-      // ≥1s, so the assertion is a statement about the CPU reading rather than
+      // ≥500ms, so the assertion is a statement about the CPU reading rather than
       // about how finely the platform can express it (Linux would floor >100ms of
-      // real CPU to 0).
-      expect(busyCpu).toBeGreaterThanOrEqual(1_000);
+      // real CPU to 0). Not a full second: a shared CI runner can give a fixture
+      // less than a core, and macOS reported 980ms for 2.5s of wall-clock burn —
+      // hundreds of ms is still an order of magnitude above the ~50ms a process
+      // spends starting up, which is the comparison being made.
+      expect(busyCpu).toBeGreaterThanOrEqual(500);
     } finally {
       // The TREE, not the shell: a bare `kill()` leaves the `sleep` grandchild
       // running, and this suite's own config names leaked children as the cause of
