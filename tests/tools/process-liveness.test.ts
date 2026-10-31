@@ -366,8 +366,16 @@ describe('sampleProcessTree — the TREE, not just the shell we hold the handle 
     // Spawned WITHOUT a shell, so the sampled tree is exactly one process on
     // every platform: this test is about the CPU READING, and the tree itself is
     // the subject of the test above.
-    const idle = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 8000)'], { stdio: 'ignore' });
-    const busy = spawn(process.execPath, ['-e', 'const t = Date.now(); while (Date.now() - t < 5000) {}'], {
+    //
+    // Both fixtures live for 20s, and that margin is load-bearing rather than
+    // padding: a sample is a SYNCHRONOUS `ps`/PowerShell start — ~1s on Windows,
+    // longer on a loaded runner — so a fixture that stopped burning at 5s could be
+    // GONE by the time the second sample ran. It failed exactly that way on the
+    // Windows runners: the busy pid was missing from the table, `?? 0` turned
+    // "gone" into "used no CPU", and the assertion read as a statement about the
+    // code when it was really a statement about how fast the runner is.
+    const idle = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], { stdio: 'ignore' });
+    const busy = spawn(process.execPath, ['-e', 'const t = Date.now(); while (Date.now() - t < 20000) {}'], {
       stdio: 'ignore',
     });
     try {
@@ -378,8 +386,15 @@ describe('sampleProcessTree — the TREE, not just the shell we hold the handle 
       // not hold on Linux no matter how the code behaved. 2.5s of CPU still being
       // ~2.5s at the sample is what makes the comparison meaningful on all three.
       await sleep(2_500);
-      const idleCpu = sampleProcessTree(idle.pid!).cpuMs ?? 0;
-      const busyCpu = sampleProcessTree(busy.pid!).cpuMs ?? 0;
+      const idleSample = sampleProcessTree(idle.pid!);
+      const busySample = sampleProcessTree(busy.pid!);
+      // "Could not measure" is not "measured zero": the sample says so with
+      // `cpuMs: null`, and coalescing that to 0 is how a vanished fixture passed
+      // for a sleeping one. Assert the reading exists before comparing it.
+      expect(idleSample.cpuMs, `idle sample: ${JSON.stringify(idleSample)}`).not.toBeNull();
+      expect(busySample.cpuMs, `busy sample: ${JSON.stringify(busySample)}`).not.toBeNull();
+      const idleCpu = idleSample.cpuMs ?? 0;
+      const busyCpu = busySample.cpuMs ?? 0;
       expect(busyCpu).toBeGreaterThan(idleCpu);
       // ≥1s, so the assertion is a statement about the CPU reading rather than
       // about how finely the platform can express it (Linux would floor >100ms of
@@ -392,7 +407,7 @@ describe('sampleProcessTree — the TREE, not just the shell we hold the handle 
       killProcessTree(idle.pid!, 'SIGKILL', idle);
       killProcessTree(busy.pid!, 'SIGKILL', busy);
     }
-  }, 20_000);
+  }, 30_000);
 
   it('a pid that is not a process yields an EMPTY sample, never the whole process table', () => {
     // `process.kill(-1, …)` signals every process the user can signal; the guard
