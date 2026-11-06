@@ -106,7 +106,16 @@ export async function driveResumableRun(
     maxFailedRounds?: number;
   } = {},
 ): Promise<ResumeOutcome> {
-  const deadlineMs = options.deadlineMs ?? DEFAULT_RESUME_DEADLINE_MS;
+  // A NON-POSITIVE deadline means "no cap was asked for", never "already
+  // expired". `0` slipped through `??` (it is not nullish), so the loop returned
+  // `deadline` before its first round: `nuvira resume run <id>` — the very command
+  // the stop message tells the user to run — reported "the 0-minute deadline
+  // expired" after 0 rounds and continued nothing. Every caller that wants a
+  // wall clock passes positive minutes; the rest get the documented default.
+  const deadlineMs =
+    typeof options.deadlineMs === 'number' && options.deadlineMs > 0
+      ? options.deadlineMs
+      : DEFAULT_RESUME_DEADLINE_MS;
   const maxRounds = options.maxRounds ?? DEFAULT_MAX_ROUNDS;
   const maxStalledRounds = options.maxStalledRounds ?? MAX_STALLED_ROUNDS;
   const maxFailedRounds = options.maxFailedRounds ?? MAX_FAILED_ROUNDS;
@@ -267,7 +276,11 @@ export class ResumeCommand extends BaseCommand {
               now: () => Date.now(),
               log: (line) => logger.info(line),
             }, {
-              deadlineMs: options.untilDone ? minutes * 60_000 : 0,
+              // `--until-done` bounds the LOOP (one round vs. many); the wall
+              // clock is a cap in both cases. Passing 0 for the one-round path
+              // made that path expire before it ran (see `driveResumableRun`),
+              // so `nuvira resume run <id>` without `--until-done` did nothing.
+              deadlineMs: minutes * 60_000,
               maxRounds: options.untilDone ? DEFAULT_MAX_ROUNDS : 1,
             }),
           );

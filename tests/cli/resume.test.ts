@@ -135,6 +135,20 @@ describe('driveResumableRun', () => {
     expect(deps.execute).not.toHaveBeenCalled();
   });
 
+  it('treats a 0 deadline as "no cap", not as an already-expired one', async () => {
+    const deps = harness({ results: [{ bounded: true, content: 'done' }], opens: [null] });
+
+    // The one-round path (`nuvira resume run <id>`, no --until-done) used to pass
+    // 0, which `??` did not catch: the loop reported `deadline` after 0 rounds and
+    // never ran the turn, so the command could not resume anything and told the
+    // user to run the same command again.
+    const out = await driveResumableRun(RUN, deps, { deadlineMs: 0, maxRounds: 1 });
+
+    expect(out.status).toBe('finished');
+    expect(out.rounds).toBe(1);
+    expect(deps.execute).toHaveBeenCalledTimes(1);
+  });
+
   it('a cancelled round ends the resume and leaves the snapshot for a later run', async () => {
     const deps = harness({
       results: [{ cancelled: true }],
